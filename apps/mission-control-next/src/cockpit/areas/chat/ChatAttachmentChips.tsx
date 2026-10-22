@@ -1,16 +1,9 @@
 import { X } from "lucide-react";
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
+import { presentAttachmentType } from "./chat-vocabulary";
 
 type PendingAttachment = Pick<ChatAttachmentRecord, "attachmentId" | "fileName" | "mimeType" | "sizeBytes">;
-
-/** A short file type for a chip: the extension when the name has one, otherwise the MIME subtype. */
-export function attachmentTypeLabel(attachment: Pick<PendingAttachment, "fileName" | "mimeType">): string {
-  const extension = /\.([a-z0-9]{1,8})$/i.exec(attachment.fileName)?.[1];
-  if (extension) return extension.toUpperCase();
-  const subtype = attachment.mimeType?.split("/")[1]?.split(/[;+]/)[0];
-  return subtype ? subtype.toUpperCase() : "File";
-}
 
 /** Files waiting to send with the next message, each with its type, size and a remove control. */
 export function ChatAttachmentChips({
@@ -24,7 +17,7 @@ export function ChatAttachmentChips({
 }) {
   if (!attachments.length) return null;
   return (
-    <div className="mb-2 flex flex-wrap gap-1.5" aria-label="Attached files">
+    <div className="mb-2 flex flex-wrap gap-1.5" role="group" aria-label="Attached files">
       {attachments.map((attachment) => (
         <span
           key={attachment.attachmentId}
@@ -32,7 +25,7 @@ export function ChatAttachmentChips({
         >
           <span className="max-w-36 truncate">{attachment.fileName}</span>
           <span className="text-fg-muted">
-            {attachmentTypeLabel(attachment)} · {formatBytes(attachment.sizeBytes)}
+            {presentAttachmentType(attachment)} · {formatBytes(attachment.sizeBytes)}
           </span>
           <button
             type="button"

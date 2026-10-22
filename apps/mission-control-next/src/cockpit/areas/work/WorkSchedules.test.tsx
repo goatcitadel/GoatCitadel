@@ -121,7 +121,7 @@ async function click(label: string): Promise<void> {
 async function review(): Promise<void> {
   await click("Review schedule");
   await vi.waitFor(() =>
-    expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain("0 9 * * *"),
+    expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain("Every day at 09:00"),
   );
 }
 

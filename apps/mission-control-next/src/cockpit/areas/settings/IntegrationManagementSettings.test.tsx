@@ -55,8 +55,13 @@ const button = (name: string) => view.root.findAllByType("button").find((node) =
 const click = async (name: string) => {
   await act(async () => button(name).props.onClick());
 };
-const change = async (name: string, value: string) => {
-  await act(async () => view.root.findByProps({ "aria-label": name }).props.onChange({ target: { value } }));
+// Fields are named by their visible <label> text alone (WCAG 2.5.3), so the helper finds them the same way.
+const field = (label: string) =>
+  view.root
+    .find((node) => node.type === "label" && [node.props.children].flat()[0] === label)
+    .find((node) => node.type === "input" || node.type === "select" || node.type === "textarea");
+const change = async (label: string, value: string) => {
+  await act(async () => field(label).props.onChange({ target: { value } }));
 };
 beforeEach(() => {
   vi.resetAllMocks();
@@ -93,7 +98,8 @@ describe("native integration management", () => {
       view = create(<IntegrationManagementSettings workspaceId="default" />);
     });
     await click("Add integration connection");
-    await change("Integration connection label", saved.label);
+    expect(field("Connection label").props["aria-label"]).toBeUndefined();
+    await change("Connection label", saved.label);
     await click("Review new connection");
     expect(api.createIntegrationConnection).not.toHaveBeenCalled();
     expect(text(view.root)).toContain(`Catalog: ${saved.catalogId}.`);

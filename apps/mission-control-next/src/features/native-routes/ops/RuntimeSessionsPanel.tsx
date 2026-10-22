@@ -44,7 +44,8 @@ export function RuntimeSessionsPanel({
                 </NativeButton>
                 <NativeButton
                   variant="outline"
-                  aria-label={`Inspect ${formatHumanSessionTitle(item)}`}
+                  // WCAG 2.5.3: the name starts with the visible "Details".
+                  aria-label={`Details: ${formatHumanSessionTitle(item)}`}
                   onClick={() => openInspection("session", item.sessionId)}
                 >
                   Details

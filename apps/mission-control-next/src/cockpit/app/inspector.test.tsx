@@ -79,7 +79,33 @@ describe("inspector", () => {
     });
     act(() => api.open({ title: "Run", body: <p>Steps</p> }));
     expect(container.querySelector('[aria-label="Inspector: Run"]')?.textContent).toContain("Steps");
-    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    act(() =>
+      container
+        .querySelector('[aria-label="Inspector: Run"] p')!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    );
+    expect(container.querySelector('[aria-label="Inspector: Run"]')).toBeNull();
+  });
+
+  it("Escape outside the inspector does not close it", () => {
+    act(() => {
+      root.render(
+        <InspectorProvider>
+          <Probe />
+          <button type="button">Page control</button>
+          <InspectorPanel />
+        </InspectorProvider>,
+      );
+    });
+    act(() => api.open({ title: "Run", body: <p>Steps</p> }));
+    const escape = (target: EventTarget) =>
+      act(() => target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    escape(container.querySelector("button")!);
+    escape(document.body);
+    escape(document);
+    expect(container.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
+    // Escape on the panel's own header controls still closes it.
+    escape(container.querySelector('[aria-label="Expand inspector"]')!);
     expect(container.querySelector('[aria-label="Inspector: Run"]')).toBeNull();
   });
 

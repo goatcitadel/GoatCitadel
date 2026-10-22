@@ -133,9 +133,9 @@ function BoardIndex({
       ) : null}
       {boards.data && !boards.isError ? (
         boards.data.items.length ? (
-          <ul className="grid gap-3 sm:grid-cols-2">
+          <ul className="divide-y divide-line-subtle">
             {boards.data.items.map((board) => (
-              <li key={board.boardId} className="rounded-lg border border-line bg-raised p-4">
+              <li key={board.boardId} className="py-3">
                 <h2 className="text-sm font-semibold text-fg">
                   {board.name}
                   {board.status === "archived" ? (

@@ -469,7 +469,9 @@ describe("risk approval action", () => {
       root.render(<RiskApprovalAction approval={approval(undefined)} pending={false} onApprove={onApprove} />),
     );
     expect(container.querySelector("button")).toBeNull();
-    expect(container.textContent).toContain("Review the persisted approval");
+    expect(container.textContent).toContain(
+      "Risk is unavailable, so Approve once is off. Check the approval summary above, or use Deny.",
+    );
     expect(onApprove).not.toHaveBeenCalled();
   });
 });

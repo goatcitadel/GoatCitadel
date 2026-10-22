@@ -12,15 +12,23 @@ export function ChatConversationsSheet({
   onOpenChange,
   rail,
   projectOptions,
+  onOpenProjects,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   rail: MissionThreadedRenderSurfaceInput["sessionRail"];
   projectOptions?: readonly ChatProjectFilterOption[];
+  onOpenProjects?: () => void;
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title="Conversations">
-      <ConversationListPanel rail={rail} projectOptions={projectOptions} inSheet onDone={() => onOpenChange(false)} />
+      <ConversationListPanel
+        rail={rail}
+        projectOptions={projectOptions}
+        inSheet
+        onDone={() => onOpenChange(false)}
+        onOpenProjects={onOpenProjects}
+      />
     </Sheet>
   );
 }

@@ -157,7 +157,7 @@ describe("cockpit scope owner", () => {
   it("shows the current canonical Citadel name before opening its picker, including a Citadel without a Charter", async () => {
     await render();
     await vi.waitFor(() =>
-      expect(document.querySelector('[aria-label="Change Citadel and workspace"]')?.textContent).toContain(
+      expect(document.querySelector('[aria-label$=", change Citadel and workspace"]')?.textContent).toContain(
         "Personal operations",
       ),
     );
@@ -165,9 +165,27 @@ describe("cockpit scope owner", () => {
     expect(mocks.currentCitadel).toHaveBeenCalledTimes(1);
     expect(mocks.currentCitadel.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
   });
+  it("accessible name starts with the visible text", async () => {
+    await render();
+    const trigger = () => document.querySelector<HTMLButtonElement>('[aria-label$=", change Citadel and workspace"]');
+    await vi.waitFor(() => expect(trigger()?.textContent).toContain("Personal operations"));
+    const visible = trigger()!.textContent!.trim();
+    expect(trigger()!.getAttribute("aria-label")).toBe(`${visible}, change Citadel and workspace`);
+    await act(async () => trigger()!.click());
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"][data-state="open"] select')).not.toBeNull());
+    // The pickers take their names from the visible <label> text, with no aria-label overriding it.
+    for (const [name, label] of [
+      ["scope-citadel", "Citadel"],
+      ["scope-workspace", "Workspace"],
+    ] as const) {
+      const select = document.querySelector(`[role="dialog"][data-state="open"] select[name="${name}"]`)!;
+      expect(select.hasAttribute("aria-label")).toBe(false);
+      expect(select.closest("label")?.textContent?.trim().startsWith(label)).toBe(true);
+    }
+  });
   it("keeps the last known Citadel name while the Citadel is read again (NV-03)", async () => {
     await render();
-    const trigger = () => document.querySelector('[aria-label="Change Citadel and workspace"]')?.textContent;
+    const trigger = () => document.querySelector('[aria-label$=", change Citadel and workspace"]')?.textContent;
     await vi.waitFor(() => expect(trigger()).toContain("Personal operations"));
     let release!: () => void;
     mocks.currentCitadel.mockImplementationOnce(
@@ -222,23 +240,25 @@ describe("cockpit scope owner", () => {
     });
     await render();
     await vi.waitFor(() =>
-      expect(document.querySelector('[aria-label="Change Citadel and workspace"]')?.textContent).toContain(
+      expect(document.querySelector('[aria-label$=", change Citadel and workspace"]')?.textContent).toContain(
         "Citadel unavailable",
       ),
     );
-    expect(document.querySelector('[aria-label="Change Citadel and workspace"]')?.textContent).not.toContain("foreign");
+    expect(document.querySelector('[aria-label$=", change Citadel and workspace"]')?.textContent).not.toContain(
+      "foreign",
+    );
   });
   it("shares the authorized Citadel name read for the visible phone scope label", async () => {
     width = 390;
     await render();
     await vi.waitFor(() => expect(mocks.currentCitadel).toHaveBeenCalledTimes(1));
     // SH-22: the scope line lives in the More sheet, not in the bottom chrome.
-    expect(document.querySelector('[aria-label="Current operating scope"]')).toBeNull();
+    expect(document.querySelector("[data-cockpit-scope-line]")).toBeNull();
     await act(async () => {
       document.querySelector<HTMLButtonElement>('[aria-label="More areas and settings"]')!.click();
     });
     const scopeLine = await vi.waitFor(() => {
-      const line = document.querySelector('[aria-label="Current operating scope"]');
+      const line = document.querySelector("[data-cockpit-scope-line]");
       expect(line).not.toBeNull();
       return line!;
     });
@@ -335,7 +355,7 @@ describe("cockpit scope owner", () => {
     await act(async () => {
       draft.setValue({ text: "Dirty" });
     });
-    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Change Citadel and workspace"]')!;
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-label$=", change Citadel and workspace"]')!;
     await act(async () => {
       owner.select("cit-b", "ws-b");
       trigger.click();
@@ -414,12 +434,12 @@ describe("cockpit scope owner", () => {
     await vi.waitFor(() =>
       expect(
         document.querySelector(
-          '[role="dialog"][data-state="open"] [aria-label="Scope Citadel"] option[value="cit-b"]:not(:disabled)',
+          '[role="dialog"][data-state="open"] select[name="scope-citadel"] option[value="cit-b"]:not(:disabled)',
         ),
       ).not.toBeNull(),
     );
     const citadelSelect = document.querySelector<HTMLSelectElement>(
-      '[role="dialog"][data-state="open"] [aria-label="Scope Citadel"]',
+      '[role="dialog"][data-state="open"] select[name="scope-citadel"]',
     )!;
     await act(async () => {
       citadelSelect.value = "cit-b";
@@ -428,12 +448,12 @@ describe("cockpit scope owner", () => {
     await vi.waitFor(() =>
       expect(
         document.querySelector(
-          '[role="dialog"][data-state="open"] [aria-label="Scope Workspace"] option[value="ws-b"]:not(:disabled)',
+          '[role="dialog"][data-state="open"] select[name="scope-workspace"] option[value="ws-b"]:not(:disabled)',
         ),
       ).not.toBeNull(),
     );
     const workspaceSelect = document.querySelector<HTMLSelectElement>(
-      '[role="dialog"][data-state="open"] [aria-label="Scope Workspace"]',
+      '[role="dialog"][data-state="open"] select[name="scope-workspace"]',
     )!;
     await act(async () => {
       workspaceSelect.value = "ws-b";
@@ -519,7 +539,7 @@ describe("cockpit scope owner", () => {
 
   it("restores the live scope opener on keyboard dismissal without stealing focus from leave consent", async () => {
     await render();
-    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Change Citadel and workspace"]')!;
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-label$=", change Citadel and workspace"]')!;
     await act(async () => {
       trigger.focus();
       trigger.click();
@@ -536,12 +556,12 @@ describe("cockpit scope owner", () => {
     await vi.waitFor(() =>
       expect(
         document.querySelector(
-          '[role="dialog"][data-state="open"] [aria-label="Scope Citadel"] option[value="cit-b"]:not(:disabled)',
+          '[role="dialog"][data-state="open"] select[name="scope-citadel"] option[value="cit-b"]:not(:disabled)',
         ),
       ).not.toBeNull(),
     );
     const citadelSelect = document.querySelector<HTMLSelectElement>(
-      '[role="dialog"][data-state="open"] [aria-label="Scope Citadel"]',
+      '[role="dialog"][data-state="open"] select[name="scope-citadel"]',
     )!;
     await act(async () => {
       citadelSelect.value = "cit-b";
@@ -550,12 +570,12 @@ describe("cockpit scope owner", () => {
     await vi.waitFor(() =>
       expect(
         document.querySelector(
-          '[role="dialog"][data-state="open"] [aria-label="Scope Workspace"] option[value="ws-b"]:not(:disabled)',
+          '[role="dialog"][data-state="open"] select[name="scope-workspace"] option[value="ws-b"]:not(:disabled)',
         ),
       ).not.toBeNull(),
     );
     const workspaceSelect = document.querySelector<HTMLSelectElement>(
-      '[role="dialog"][data-state="open"] [aria-label="Scope Workspace"]',
+      '[role="dialog"][data-state="open"] select[name="scope-workspace"]',
     )!;
     await act(async () => {
       workspaceSelect.value = "ws-b";
@@ -578,7 +598,7 @@ describe("cockpit scope owner", () => {
       await act(async () => {
         draft.setValue({ text: "Retained" });
       });
-      const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Change Citadel and workspace"]')!;
+      const trigger = document.querySelector<HTMLButtonElement>('[aria-label$=", change Citadel and workspace"]')!;
       await act(async () => {
         trigger.focus();
         trigger.click();
@@ -586,12 +606,12 @@ describe("cockpit scope owner", () => {
       await vi.waitFor(() =>
         expect(
           document.querySelector(
-            '[role="dialog"][data-state="open"] [aria-label="Scope Citadel"] option[value="cit-b"]:not(:disabled)',
+            '[role="dialog"][data-state="open"] select[name="scope-citadel"] option[value="cit-b"]:not(:disabled)',
           ),
         ).not.toBeNull(),
       );
       const citadelSelect = document.querySelector<HTMLSelectElement>(
-        '[role="dialog"][data-state="open"] [aria-label="Scope Citadel"]',
+        '[role="dialog"][data-state="open"] select[name="scope-citadel"]',
       )!;
       await act(async () => {
         citadelSelect.value = "cit-b";
@@ -600,12 +620,12 @@ describe("cockpit scope owner", () => {
       await vi.waitFor(() =>
         expect(
           document.querySelector(
-            '[role="dialog"][data-state="open"] [aria-label="Scope Workspace"] option[value="ws-b"]:not(:disabled)',
+            '[role="dialog"][data-state="open"] select[name="scope-workspace"] option[value="ws-b"]:not(:disabled)',
           ),
         ).not.toBeNull(),
       );
       const workspaceSelect = document.querySelector<HTMLSelectElement>(
-        '[role="dialog"][data-state="open"] [aria-label="Scope Workspace"]',
+        '[role="dialog"][data-state="open"] select[name="scope-workspace"]',
       )!;
       await act(async () => {
         workspaceSelect.value = "ws-b";

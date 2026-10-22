@@ -227,3 +227,50 @@ describe("WK-12 New task focus", () => {
     expect(document.activeElement).toBe(newTask());
   });
 });
+
+describe("WK-N05 empty board", () => {
+  it("shows one board-level empty state with New task instead of empty columns", async () => {
+    vi.mocked(fetchTasks).mockResolvedValue({ items: [] } as never);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <WorkBoard />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.textContent).toContain("No tasks or runs yet"));
+    for (const title of ["Active", "Needs attention", "Failed runs", "Done"])
+      expect(container.querySelector(`section[aria-label="${title}"]`)).toBeNull();
+    expect(container.textContent).not.toContain("No recent work in this state.");
+    expect(container.querySelector('input[type="search"]')).toBeNull();
+    // Bulk selection hides until there are rows.
+    expect(
+      [...container.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Select tasks"),
+    ).toBe(false);
+    const empty = [...container.querySelectorAll("section")].find((section) =>
+      section.textContent?.startsWith("No tasks or runs yet"),
+    )!;
+    const action = [...empty.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "New task",
+    )!;
+    await vi.waitFor(() => expect(action.disabled).toBe(false));
+    await act(async () => action.click());
+    expect(container.textContent).toContain("Close new task");
+  });
+
+  it("keeps the columns once any task is loaded", async () => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <WorkBoard />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.textContent).toContain("Outline release"));
+    expect(container.textContent).not.toContain("No tasks or runs yet");
+    expect(container.querySelector('section[aria-label="Needs attention"]')).not.toBeNull();
+    expect(
+      [...container.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Select tasks"),
+    ).toBe(true);
+  });
+});

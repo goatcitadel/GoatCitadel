@@ -90,7 +90,7 @@ export function PersonalitySettings() {
             </select>
           </label>
           {selected ? (
-            <div className="space-y-2 rounded-md border border-line-subtle bg-sunken p-3 text-sm text-fg-secondary">
+            <div className="space-y-2 border-t border-line-subtle pt-3 text-sm text-fg-secondary">
               <p>{selected.description || "No description."}</p>
               <dl className="grid gap-1">
                 <dt className="font-medium text-fg">Tone</dt>

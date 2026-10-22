@@ -32,6 +32,19 @@ describe("conversation starters", () => {
     expect(document.activeElement?.id).toBe("cockpit-chat-draft");
     expect(container.querySelector('a[href^="/library/knowledge"]')).not.toBeNull();
   });
+  it("lists the starters as plain secondary buttons, not bordered cards (CH-N23)", () => {
+    mount();
+    const list = container.querySelector('ul[aria-label="Starting prompts"]')!;
+    expect(list).not.toBeNull();
+    expect(list.className).not.toContain("grid");
+    const buttons = [...list.querySelectorAll("li > button")];
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Explain this project",
+      "Plan a change",
+      "Draft or summarize",
+    ]);
+    for (const button of buttons) expect(button.className).not.toMatch(/\brounded-lg\b/);
+  });
   it.each([{ draft: "keep this" }, { historicalReadOnly: true }, { sending: true }])(
     "never overwrites or starts work in a restricted state %o",
     (overrides) => {

@@ -28,9 +28,9 @@ export function QualityGates({
     <div className="space-y-4">
       <QualitySource title="Security quality gates" {...gates}>
         {gates.items.length ? (
-          <ul className="grid gap-2">
+          <ul className="divide-y divide-line-subtle">
             {gates.items.map((gate) => (
-              <li key={gate.gateId} className="rounded-md border border-line-subtle p-3">
+              <li key={gate.gateId} className="py-3">
                 <h3 className="font-medium text-fg">{gate.title}</h3>
                 <p className="mt-1 text-sm text-fg-secondary">{formatSecurityGateStatus(gate.status)}</p>
                 <Button
@@ -48,7 +48,7 @@ export function QualityGates({
           <p className="text-sm text-fg-muted">No security gates were returned.</p>
         )}
         {gateId ? (
-          <section aria-label="Selected quality gate" className="space-y-3 rounded-md border border-line bg-sunken p-3">
+          <section aria-label="Selected quality gate" className="space-y-3 border-t border-line-subtle pt-3">
             {selected ? (
               <>
                 <h3 className="font-medium text-fg">{selected.title}</h3>
@@ -98,7 +98,7 @@ export function QualityGates({
             className="h-80"
           >
             {(pack) => (
-              <article className="rounded-md border border-line-subtle p-3">
+              <article className="border-b border-line-subtle py-3">
                 <h3 className="font-medium text-fg">{pack.name}</h3>
                 <p className="mt-1 text-sm text-fg-muted">
                   {typeof pack.testCount === "number"
@@ -133,9 +133,9 @@ export function QualityGates({
       </QualitySource>
       <QualitySource title="Security execution coverage" {...snapshot.securityExecution}>
         {snapshot.securityExecution.items.length ? (
-          <ul className="grid gap-2">
+          <ul className="divide-y divide-line-subtle">
             {snapshot.securityExecution.items.map((item) => (
-              <li key={item.packKey} className="space-y-2 rounded-md border border-line-subtle p-3">
+              <li key={item.packKey} className="space-y-2 py-3">
                 <h3 className="font-medium text-fg">{item.title}</h3>
                 <p className="text-sm text-fg-secondary">{formatSecurityExecutionState(item.state)}</p>
                 <QualityFacts

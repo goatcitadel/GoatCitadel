@@ -72,7 +72,7 @@ export function WorkTaskCreate({
   }
 
   return (
-    <section aria-label="New task" className="grid gap-3 rounded-lg border border-line-strong bg-raised p-4">
+    <section aria-label="New task" className="grid gap-3 border-t border-line-subtle pt-4">
       <div>
         <h2 className="text-base font-semibold text-fg">New task</h2>
         <p className="text-sm text-fg-secondary">

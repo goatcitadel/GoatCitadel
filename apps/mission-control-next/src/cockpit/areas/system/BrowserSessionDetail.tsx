@@ -81,7 +81,7 @@ export function BrowserSessionDetail({
   const record = session.data!;
   if (record.workspaceId !== workspaceId)
     return (
-      <Callout tone="warning">
+      <Callout announce={false} tone="warning">
         This browser session belongs to {record.workspaceId ? "another workspace" : "no workspace"}, not the selected
         one. Switch workspace to manage it.
       </Callout>
@@ -161,9 +161,9 @@ export function BrowserSessionDetail({
               onKeyDown={handleEvidenceScrollKeyDown}
               className="max-h-96 min-w-0 overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
             >
-              <ol className="grid min-w-0 grid-cols-1 gap-2">
+              <ol className="grid min-w-0 grid-cols-1 divide-y divide-line-subtle">
                 {events.data.map((event) => (
-                  <li key={event.eventId} className="min-w-0 rounded-md border border-line p-2 text-sm wrap-anywhere">
+                  <li key={event.eventId} className="min-w-0 py-2 text-sm wrap-anywhere">
                     <p className="font-medium">{BROWSER_SESSION_EVENT[event.eventType] ?? "Session event"}</p>
                     <TimeText value={event.createdAt} className="text-fg-secondary" />
                     <p>{describeEventPayload(event)}</p>
@@ -236,15 +236,15 @@ function SessionPosture({
         remaining = undefined;
       }
       if (!operation.current()) return;
-      const closedAt = formatTime(receipt.closedAt) ?? "";
+      const closedTime = formatTime(receipt.closedAt) ?? "";
       setOutcome({
         error: remaining !== 0,
         text:
           remaining === undefined
-            ? `Session closed ${closedAt}, but GoatCitadel could not confirm whether any grant is still active. Refresh the session to check.`
+            ? `Session closed ${closedTime}, but GoatCitadel could not confirm whether any grant is still active. Refresh the session to check.`
             : remaining
-              ? `Session closed ${closedAt}, but an active grant is still recorded. Review closing again to finish revoking it.`
-              : `Session closed ${closedAt}. No active grant remains.`,
+              ? `Session closed ${closedTime}, but an active grant is still recorded. Review closing again to finish revoking it.`
+              : `Session closed ${closedTime}. No active grant remains.`,
       });
       await onChanged();
     } catch (cause) {

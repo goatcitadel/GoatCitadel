@@ -83,7 +83,10 @@ it("shows only the pending turn while the first message sends (CH-04)", async ()
       })}
     />,
   );
-  expect(container.textContent).toContain("First question · Sending…");
+  // The message being sent is a user bubble with a Sending badge, not a line of grey text.
+  const bubble = container.querySelector(".cockpit-chat-user-bubble")!;
+  expect(bubble.textContent).toContain("First question");
+  expect(bubble.querySelector('[data-tone="running"]')?.textContent).toBe("Sending");
   expect(container.textContent).not.toContain("No messages in this view.");
 });
 

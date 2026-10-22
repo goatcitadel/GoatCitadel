@@ -247,12 +247,12 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
           </label>
           <section aria-label="Saved channel connections">
             <h3 className="font-semibold">Connections</h3>
-            <ul className="mt-2 space-y-2">
+            <ul className="mt-2 divide-y divide-line-subtle">
               {data?.connections
                 .filter((item) => matches(`${item.label} ${item.key}`))
                 .slice(0, limit)
                 .map((item) => (
-                  <li key={item.connectionId} className="rounded-md border border-line p-3">
+                  <li key={item.connectionId} className="py-3">
                     <h4 className="font-medium">{item.label}</h4>
                     <p className="text-sm text-fg-secondary">
                       {item.key} · {item.enabled ? "Enabled" : "Disabled"} · observed {item.status}
@@ -276,15 +276,12 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
           </section>
           <section aria-label="Saved channel drafts">
             <h3 className="font-semibold">Drafts</h3>
-            <ul className="mt-2 space-y-2">
+            <ul className="mt-2 divide-y divide-line-subtle">
               {data?.drafts
                 .filter((item) => matches(`${item.label ?? ""} ${item.catalogId}`))
                 .slice(0, limit)
                 .map((item) => (
-                  <li
-                    key={item.draftId}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line p-3"
-                  >
+                  <li key={item.draftId} className="flex flex-wrap items-center justify-between gap-2 py-3">
                     <span className="text-sm">
                       {item.label || item.catalogId} · revision {item.revision} · {item.lifecycleMode}
                     </span>
@@ -304,7 +301,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
             <Button onClick={() => setLimit((value) => value + 20)}>Show more channels</Button>
           ) : null}
           {owner.panel === "connection" && selectedConnection ? (
-            <section aria-label="Selected channel connection" className="space-y-3 rounded-md border border-line p-3">
+            <section aria-label="Selected channel connection" className="space-y-3 border-t border-line-subtle pt-4">
               <h3 className="font-semibold">{selectedConnection.label}</h3>
               <p className="text-sm">
                 {selectedConnection.lastError ?? "No last error recorded. This does not prove current connectivity."}

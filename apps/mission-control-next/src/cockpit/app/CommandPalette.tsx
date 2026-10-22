@@ -136,11 +136,11 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       });
     });
   };
-  const onChooseModel = () => run(() => navigate("/settings/models?shell=cockpit#providers"));
+  const onChooseModel = () => run(() => navigate("/settings/models#providers"));
   const onTheme = (next: UiTheme) => run(() => setTheme(next));
   const onDensity = () => run(() => setDensity(density === "compact" ? "comfortable" : "compact"));
   const onClassic = () => run(shellSwitch.request);
-  const onDestination = (path: string) => run(() => navigate(`${path}?shell=cockpit`));
+  const onDestination = (path: string) => run(() => navigate(path));
   const onSetting = (href: string) => run(() => navigate(href));
   const creationNotice = visibleAttempt ? (
     <div role="status" className="mb-2 px-3 text-sm text-fg-secondary">

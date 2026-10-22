@@ -251,14 +251,14 @@ describe("cockpit text composer", () => {
     const props = composerProps();
     await act(async () => root.render(<ChatTextComposer props={props} />));
     await act(async () =>
-      (container.querySelector('button[aria-label="Model and reasoning options"]') as HTMLButtonElement).click(),
+      (container.querySelector('button[aria-label$="Model and reasoning options"]') as HTMLButtonElement).click(),
     );
     await vi.waitFor(() => {
-      const button = document.body.querySelector<HTMLButtonElement>('button[aria-label="Open personality settings"]');
+      const button = document.body.querySelector<HTMLButtonElement>('button[aria-label$="Open personality settings"]');
       expect(button).toBeInstanceOf(HTMLButtonElement);
       expect(button?.disabled).toBe(false);
     });
-    const button = document.body.querySelector('button[aria-label="Open personality settings"]') as HTMLButtonElement;
+    const button = document.body.querySelector('button[aria-label$="Open personality settings"]') as HTMLButtonElement;
     expect(button.textContent?.trim()).toBe("Personality");
     await act(async () => button.click());
     expect(props.onOpenPersonalitiesSettings).toHaveBeenCalledOnce();
@@ -266,7 +266,7 @@ describe("cockpit text composer", () => {
       root.render(<ChatTextComposer props={composerProps({ onOpenPersonalitiesSettings: undefined })} />),
     );
     expect(
-      (document.body.querySelector('button[aria-label="Open personality settings"]') as HTMLButtonElement).disabled,
+      (document.body.querySelector('button[aria-label$="Open personality settings"]') as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 
@@ -308,12 +308,12 @@ describe("cockpit text composer", () => {
     await act(async () => sendButton().click());
     expect(props.onSend).toHaveBeenCalledOnce();
     // The chip names the file's type and size, and removes through a lucide icon button, not a glyph.
-    expect(container.querySelector('[aria-label="Attached files"]')?.textContent).toContain("TXT · 1 B");
+    expect(container.querySelector('[aria-label="Attached files"]')?.textContent).toContain("Text · 1 B");
     expect(container.querySelector('button[aria-label="Remove a.txt"] svg')).not.toBeNull();
     await act(async () => (container.querySelector('button[aria-label="Remove a.txt"]') as HTMLButtonElement).click());
     expect(props.onRemoveAttachment).toHaveBeenCalledWith("a");
     await act(async () =>
-      (container.querySelector('button[aria-label="Model and reasoning options"]') as HTMLButtonElement).click(),
+      (container.querySelector('button[aria-label$="Model and reasoning options"]') as HTMLButtonElement).click(),
     );
     await vi.waitFor(() => {
       const select = document.body.querySelector<HTMLSelectElement>('select[aria-label="Model"]');
@@ -368,6 +368,35 @@ describe("cockpit text composer", () => {
     );
     expect(committed.onSend).toHaveBeenCalledOnce();
     expect(committed.onApplyDraftCommand).not.toHaveBeenCalled();
+  });
+
+  it("Escape closes the slash menu and keeps the draft", async () => {
+    const commandSuggestions = [
+      { key: "status", command: "/status", description: "Show status", applyValue: "/status" },
+    ];
+    const props = composerProps({ draft: "/", commandSuggestions });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(container.querySelector('[role="listbox"]')).not.toBeNull();
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+    expect(textarea.value).toBe("/");
+    expect(textarea.hasAttribute("aria-controls")).toBe(false);
+    expect(props.onDraftChange).not.toHaveBeenCalled();
+    // A dismissed menu does not apply its hidden suggestion on Enter.
+    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(props.onApplyDraftCommand).not.toHaveBeenCalled();
+    // The next keystroke brings the menu back.
+    await act(async () => root.render(<ChatTextComposer props={{ ...props, draft: "/s" }} />));
+    expect(container.querySelector('[role="listbox"]')).not.toBeNull();
+  });
+
+  it("the draft is text-md at every width", async () => {
+    await act(async () => root.render(<ChatTextComposer props={composerProps()} />));
+    const classes = (container.querySelector("textarea") as HTMLTextAreaElement).className.split(/\s+/);
+    expect(classes).toContain("text-md");
+    // No breakpoint shrinks it back below 16px, so phones never zoom on focus.
+    expect(classes.filter((name) => /(?:^|:)text-(?:xs|sm)$/.test(name))).toEqual([]);
   });
 
   it("opens the schedule owner without a model turn for the exact provider-free command", async () => {
@@ -686,7 +715,7 @@ describe("touch and phone composer", () => {
     const options = row.querySelector<HTMLButtonElement>('button[aria-label="Options"]')!;
     expect(options.getAttribute("aria-expanded")).toBe("false");
     // Mode, model, web and voice controls are not stacked above the draft.
-    expect(container.querySelector('button[aria-label="Model and reasoning options"]')).toBeNull();
+    expect(container.querySelector('button[aria-label$="Model and reasoning options"]')).toBeNull();
     expect(container.querySelector('select[aria-label="Web search"]')).toBeNull();
     expect(container.textContent).not.toContain("Voice and images");
     expect(container.textContent).not.toContain("Commands and context");
@@ -697,7 +726,7 @@ describe("touch and phone composer", () => {
     await act(async () => options.click());
     const sheet = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Message options"]')!;
     expect(options.getAttribute("aria-expanded")).toBe("true");
-    expect(sheet.querySelector('button[aria-label="Model and reasoning options"]')).not.toBeNull();
+    expect(sheet.querySelector('button[aria-label$="Model and reasoning options"]')).not.toBeNull();
     expect(sheet.querySelector('button[aria-label="Attach files"]')).not.toBeNull();
     expect(sheet.textContent).toContain("Voice and images");
     expect(sheet.querySelectorAll('input[aria-label="Choose files to attach"]')).toHaveLength(0);

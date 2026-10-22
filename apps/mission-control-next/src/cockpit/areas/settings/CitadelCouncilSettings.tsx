@@ -7,6 +7,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { CitadelAccessReview } from "./CitadelAccessReview";
 import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
+import { TimeText } from "../../ui/TimeText";
 
 export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
   const c = useCitadelCouncil(citadelId),
@@ -69,7 +70,7 @@ export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
           Restore this Citadel before changing access rules.
         </p>
       ) : null}
-      <details className="rounded-md border border-line-subtle bg-sunken p-3">
+      <details className="border-t border-line-subtle pt-3">
         <summary className="cursor-pointer text-sm font-medium text-fg">Manage Council seats</summary>
         <div className="mt-3 space-y-3">
           <label htmlFor={selectId} className="block text-sm text-fg-secondary">
@@ -129,11 +130,11 @@ export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
           </div>
         </div>
       </details>
-      <ul aria-label="Seated agents" className="max-h-96 space-y-2 overflow-y-auto">
+      <ul aria-label="Seated agents" className="max-h-96 divide-y divide-line-subtle overflow-y-auto">
         {c.council.items.map((seat) => {
           const profile = c.council.agents.find((agent) => agent.agentId === seat.agentId);
           return (
-            <li key={seat.assignmentId} className="rounded-md border border-line-subtle bg-sunken p-3">
+            <li key={seat.assignmentId} className="py-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h4 className="break-words font-medium text-fg">{profile?.name ?? seat.agentId}</h4>
@@ -171,7 +172,9 @@ export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
             <dt>Seat</dt>
             <dd className="font-mono text-xs">{c.selectedSeat?.assignmentId}</dd>
             <dt>Created</dt>
-            <dd>{c.selectedSeat?.createdAt}</dd>
+            <dd>
+              <TimeText value={c.selectedSeat?.createdAt} />
+            </dd>
           </dl>
           <Button
             variant="danger"

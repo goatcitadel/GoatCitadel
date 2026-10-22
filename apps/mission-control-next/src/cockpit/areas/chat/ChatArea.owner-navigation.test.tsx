@@ -78,15 +78,15 @@ describe("cockpit Chat owner navigation", () => {
     // System › Health owns runtime status, so the Ops runtime no longer hands off to Classic either.
     host.onOpenOpsRuntime();
     expect(mocks.navigate.mock.calls.map(([href]) => href)).toEqual([
-      "/inbox?shell=cockpit",
-      "/work?shell=cockpit",
-      "/settings/first-run?shell=cockpit",
-      "/settings/general?shell=cockpit#work-personality",
-      "/settings/models?shell=cockpit#providers",
-      "/settings/models?shell=cockpit#local-ai",
-      "/library/artifacts?shell=cockpit",
-      "/library/knowledge?shell=cockpit#external-sources",
-      "/system?shell=cockpit",
+      "/inbox",
+      "/work",
+      "/settings/first-run",
+      "/settings/general#work-personality",
+      "/settings/models#providers",
+      "/settings/models#local-ai",
+      "/library/artifacts",
+      "/library/knowledge#external-sources",
+      "/system",
     ]);
     expect(assign).not.toHaveBeenCalled();
     expect(mocks.switchShell).not.toHaveBeenCalled();
@@ -96,7 +96,7 @@ describe("cockpit Chat owner navigation", () => {
     await render();
     mocks.hostProps!.onOpenApprovals("approval/one?two");
     expect(mocks.navigate.mock.calls.map(([href]) => href)).toEqual([
-      "/inbox?item=approval:approval%2Fone%3Ftwo&workspaceId=workspace-a&shell=cockpit",
+      "/inbox?item=approval:approval%2Fone%3Ftwo&workspaceId=workspace-a",
     ]);
     expect(mocks.switchShell).not.toHaveBeenCalled();
   });

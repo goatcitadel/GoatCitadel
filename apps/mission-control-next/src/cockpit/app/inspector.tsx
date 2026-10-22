@@ -31,6 +31,8 @@ import {
 // Controls that use Escape themselves. Checkboxes, radios and button-like inputs do not, so Escape still closes.
 const ESCAPE_OWNERS =
   'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="range"], [type="color"], [type="file"]), textarea, select, [contenteditable]:not([contenteditable="false"]), [role="menu"], [role="listbox"], [role="combobox"]';
+/** The docked or overlay panel (its header and body), or the body inside the phone sheet or expanded dialog. */
+const INSPECTOR_SURFACE = '[data-inspector-mode], [data-inspector-body="true"]';
 
 export function InspectorProvider({ children }: { children: ReactNode }) {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
@@ -114,8 +116,10 @@ export function InspectorProvider({ children }: { children: ReactNode }) {
       ];
       if (modals.some((modal) => !modal.querySelector('[data-inspector-body="true"]'))) return;
       if (event.key === "Escape" && content) {
+        // SH-09: Escape pressed elsewhere on the page belongs to that page; only Escape inside the inspector closes it.
+        if (!(event.target instanceof Element) || !event.target.closest(INSPECTOR_SURFACE)) return;
         // Escape in a text field, menu, listbox or combobox belongs to that control (clear, close the menu).
-        if (event.target instanceof Element && event.target.closest(ESCAPE_OWNERS)) return;
+        if (event.target.closest(ESCAPE_OWNERS)) return;
         close();
         return;
       }

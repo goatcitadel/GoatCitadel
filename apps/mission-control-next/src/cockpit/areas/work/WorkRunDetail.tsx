@@ -30,6 +30,8 @@ import { RunWorkspaceContext } from "./RunWorkspaceContext";
 import { RunLineage } from "./RunLineage";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
+import { presentErrorText } from "../../lib/present-error";
 import { EVIDENCE_STATE_WORDS, RUN_ERROR_SOURCES } from "./work-vocabulary";
 import { ListLimitFooter, useListLimit } from "./WorkListLimit";
 
@@ -147,10 +149,13 @@ export function WorkRunDetail({ runId }: { runId: string }) {
           </p>
           <WorkRunControls runId={runId} />
           {run.lastError || run.recoverySummary ? (
-            <p role="alert" className="rounded-md border border-line p-3 text-sm text-status-failed">
-              {run.lastError}
-              {run.recoverySummary ? ` ${run.recoverySummary}` : ""}
-            </p>
+            <div className="grid gap-2">
+              <p role="alert" className="rounded-md border border-line p-3 text-sm text-status-failed">
+                {run.lastError ? presentErrorText(run.lastError).summary : null}
+                {run.recoverySummary ? ` ${run.recoverySummary}` : ""}
+              </p>
+              <RecordedErrorDetails error={run.lastError} />
+            </div>
           ) : null}
           <div className="grid gap-2">
             <p className="text-sm text-fg-secondary">

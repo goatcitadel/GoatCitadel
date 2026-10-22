@@ -233,7 +233,15 @@ describe("local Claude Code CLI login readiness", () => {
 });
 
 describe("built-in providers an older config lacks", () => {
-  const saved = { providerId: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt", apiStyle: "openai-responses", models: [], sanitizedEndpointIdentity: "" };
+  const saved = {
+    providerId: "openai",
+    label: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    defaultModel: "gpt",
+    apiStyle: "openai-responses",
+    models: [],
+    sanitizedEndpointIdentity: "",
+  };
 
   it("offers the Claude Code CLI provider with its template profile when the saved config lacks it", () => {
     const options = withAddableBuiltinProviders([saved] as never, true);
@@ -281,7 +289,15 @@ describe("addable built-in providers need a loaded catalog", () => {
 });
 
 describe("finding the Claude Code CLI provider", () => {
-  const option = (providerId: string) => ({ providerId, label: providerId, baseUrl: "https://example.test", defaultModel: "m", apiStyle: "openai-responses", models: [], sanitizedEndpointIdentity: "" });
+  const option = (providerId: string) => ({
+    providerId,
+    label: providerId,
+    baseUrl: "https://example.test",
+    defaultModel: "m",
+    apiStyle: "openai-responses",
+    models: [],
+    sanitizedEndpointIdentity: "",
+  });
 
   it("lists the missing CLI provider right after the Claude Code token route, not at the end", () => {
     const ids = withAddableBuiltinProviders(
@@ -314,10 +330,22 @@ describe("finding the Claude Code CLI provider", () => {
 });
 
 describe("grouped provider choices", () => {
-  const base = { baseUrl: "https://example.test", defaultModel: "m", apiStyle: "openai-responses", models: [], sanitizedEndpointIdentity: "" };
+  const base = {
+    baseUrl: "https://example.test",
+    defaultModel: "m",
+    apiStyle: "openai-responses",
+    models: [],
+    sanitizedEndpointIdentity: "",
+  };
   const providers = [
     { ...base, providerId: "openai", label: "OpenAI" },
-    { ...base, providerId: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)", authMode: "codex-oauth", hasApiKey: true },
+    {
+      ...base,
+      providerId: "openai-codex",
+      label: "OpenAI Codex (ChatGPT OAuth)",
+      authMode: "codex-oauth",
+      hasApiKey: true,
+    },
     { ...base, providerId: "anthropic", label: "Anthropic" },
     { ...base, providerId: "claude-code", label: "Claude Code (Claude subscription)", authMode: "claude-code-oauth" },
     { ...base, providerId: "vertex", label: "Google Vertex AI", authMode: "google-adc" },
@@ -338,7 +366,9 @@ describe("grouped provider choices", () => {
 
   it("hides a retired provider unless it is the current selection", () => {
     const ids = (selected: string) =>
-      groupGuidedProviders(providers, [selected]).flatMap((group) => group.providers.map((provider) => provider.providerId));
+      groupGuidedProviders(providers, [selected]).flatMap((group) =>
+        group.providers.map((provider) => provider.providerId),
+      );
     expect(ids("openai-codex")).not.toContain("npu-local");
     expect(ids("npu-local")).toContain("npu-local");
   });
@@ -351,7 +381,9 @@ describe("grouped provider choices", () => {
   });
 
   it("names each option by how it is paid for", () => {
-    expect(guidedProviderOptionLabel({ providerId: "anthropic", label: "Anthropic" })).toBe("Anthropic API (Console key)");
+    expect(guidedProviderOptionLabel({ providerId: "anthropic", label: "Anthropic" })).toBe(
+      "Anthropic API (Console key)",
+    );
     expect(guidedProviderOptionLabel({ providerId: "openai", label: "OpenAI" })).toBe("OpenAI API (platform key)");
     expect(guidedProviderOptionLabel({ providerId: "claude-code", label: "Claude Code (Claude subscription)" })).toBe(
       "Claude Code token (may be rejected)",

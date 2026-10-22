@@ -3,6 +3,7 @@ import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 import {
   presentApprovalAction,
   presentDelegationRunStatus,
+  presentAttachmentType,
   presentDelegationStepStatus,
   presentFileType,
   presentToolRunStatus,
@@ -40,5 +41,12 @@ describe("chat vocabulary", () => {
     expect(presentFileType("image/png")).toBe("Image");
     expect(presentFileType("text/plain; charset=utf-8")).toBe("Text");
     expect(presentFileType("application/x-unknown")).toBe("File");
+  });
+
+  it("names an attachment's type the same way for chips and sent messages", () => {
+    expect(presentAttachmentType({ fileName: "a.txt", mimeType: "text/plain" })).toBe("Text");
+    expect(presentAttachmentType({ fileName: "brief.pdf", mimeType: "application/pdf" })).toBe("PDF");
+    expect(presentAttachmentType({ fileName: "data.parquet", mimeType: "application/octet-stream" })).toBe("PARQUET");
+    expect(presentAttachmentType({ fileName: "blob", mimeType: undefined })).toBe("File");
   });
 });

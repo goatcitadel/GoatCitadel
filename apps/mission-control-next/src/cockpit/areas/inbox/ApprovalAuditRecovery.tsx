@@ -27,6 +27,8 @@ import { Dialog } from "../../ui/Dialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TimeText } from "../../ui/TimeText";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
+import { presentErrorText } from "../../lib/present-error";
 import {
   presentActor,
   presentApprovalEffectKind,
@@ -190,17 +192,22 @@ function AuditRecovery({
               </ol>
               <p>Pending action: {presentPendingActionResolution(audit.data.replay.pendingAction?.resolutionStatus)}</p>
               {audit.data.replay.effects.map((effect) => (
-                <p key={effect.effectId}>
-                  Follow-on work: {presentApprovalEffectKind(effect.effectKind)} ·{" "}
-                  {presentApprovalEffectStatus(effect.status).label}
-                  {effect.lastError ? ` · ${effect.lastError}` : ""}
-                </p>
+                <div key={effect.effectId}>
+                  <p>
+                    Follow-on work: {presentApprovalEffectKind(effect.effectKind)} ·{" "}
+                    {presentApprovalEffectStatus(effect.status).label}
+                    {effect.lastError ? ` · ${presentErrorText(effect.lastError).summary}` : ""}
+                  </p>
+                  <RecordedErrorDetails error={effect.lastError} />
+                </div>
               ))}
               {run ? (
                 <>
                   <p>
-                    Original linked work: {presentRunStatus(run.status).label}. {run.lastError}
+                    Original linked work: {presentRunStatus(run.status).label}.{" "}
+                    {run.lastError ? presentErrorText(run.lastError).summary : null}
                   </p>
+                  <RecordedErrorDetails error={run.lastError} />
                   <Button
                     disabled={
                       run.status !== "paused" ||
@@ -283,7 +290,8 @@ function AuditRecovery({
             Workspace {workspaceId} · Run {run?.runId}
           </p>
         </TechnicalDetails>
-        <p>{run?.lastError}</p>
+        {run?.lastError ? <p>{presentErrorText(run.lastError).summary}</p> : null}
+        <RecordedErrorDetails error={run?.lastError} />
         <div className="mt-3 flex flex-wrap gap-2">
           <Button
             disabled={busy || checking || !canReview || audit.isFetching || audit.isError}

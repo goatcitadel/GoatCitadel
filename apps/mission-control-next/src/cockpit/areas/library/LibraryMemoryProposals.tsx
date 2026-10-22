@@ -163,7 +163,7 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
         <div className="grid gap-3">
           <p>Applies to this workspace.</p>
           <p className="whitespace-pre-wrap break-words">{review?.item.proposedInsight}</p>
-          <Callout tone="warning">
+          <Callout announce={false} tone="warning">
             {review?.action === "promote"
               ? "Promotion writes this proposed insight into trusted long-term memory."
               : "Rejection leaves this proposal unpromoted."}

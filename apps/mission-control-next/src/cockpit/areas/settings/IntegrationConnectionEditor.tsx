@@ -28,7 +28,7 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
   return (
     <section
       aria-label={creating ? "New integration connection" : "Edit integration connection"}
-      className="space-y-4 rounded-md border border-line p-4"
+      className="space-y-4 border-t border-line-subtle pt-4"
     >
       <h3 className="font-semibold">
         {creating ? "Add integration" : `Edit ${s.selectedConnection?.label ?? "connection"}`}
@@ -71,7 +71,6 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
       <label className="block text-sm">
         Connection label
         <input
-          aria-label="Integration connection label"
           className={integrationInputClass}
           value={creating ? s.createLabel : s.detailForm.label}
           disabled={s.saving}
@@ -99,7 +98,6 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
         <label className="block text-sm">
           Saved status
           <select
-            aria-label="Integration saved status"
             className={integrationInputClass}
             disabled={s.saving}
             value={s.detailForm.status}
@@ -120,7 +118,6 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
         <label className="block text-sm">
           Advanced configuration JSON
           <textarea
-            aria-label="Advanced integration configuration JSON"
             className={`${integrationInputClass} font-mono`}
             rows={8}
             readOnly

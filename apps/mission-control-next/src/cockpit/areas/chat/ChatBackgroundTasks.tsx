@@ -108,9 +108,9 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
       {rail.snapshot ? (
         <>
           {rail.snapshot.tasks.length ? (
-            <ol className="space-y-2">
+            <ol className="divide-y divide-line-subtle">
               {rail.snapshot.tasks.map((task) => (
-                <li key={task.watcherId} className="rounded-md border border-line bg-raised p-3">
+                <li key={task.watcherId} className="py-3">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
                       <h3 className="font-medium text-fg">{task.label}</h3>
@@ -137,7 +137,7 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
                   ) : null}
                   <div className="mt-3 flex flex-wrap gap-3 text-xs">
                     <NativeOwnerLink
-                      href={`/work/runs/${encodeURIComponent(task.childRunId)}?shell=cockpit`}
+                      href={`/work/runs/${encodeURIComponent(task.childRunId)}`}
                       scope={[
                         active.workspaceId,
                         active.selectedSessionId,

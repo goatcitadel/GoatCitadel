@@ -125,10 +125,7 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
               ))}
             </ol>
           </nav>
-          <article
-            className="space-y-4 rounded-md border border-line p-3"
-            aria-labelledby={`native-channel-step-${step.id}`}
-          >
+          <article className="space-y-4" aria-labelledby={`native-channel-step-${step.id}`}>
             <h4
               id={`native-channel-step-${step.id}`}
               ref={wizard.stepHeadingRef}

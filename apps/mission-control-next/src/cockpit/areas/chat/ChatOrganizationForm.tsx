@@ -6,16 +6,14 @@ import { Field } from "../../ui/Field";
 type Dock = NonNullable<MissionThreadedRenderSurfaceInput["contextDockProps"]>;
 type OrganizationDock = Pick<
   Dock,
-  | "folderName"
-  | "tagsValue"
-  | "onFolderNameChange"
-  | "onTagsValueChange"
-  | "onSaveOrganization"
-  | "sessionControlPending"
-  | "selectedSession"
->;
+  "folderName" | "tagsValue" | "onFolderNameChange" | "onTagsValueChange" | "sessionControlPending" | "selectedSession"
+> & {
+  /** Resolves true or false with the save's own outcome; a rejection is a failure. */
+  onSaveOrganization: () => Promise<boolean | void>;
+};
+type Outcome = "saved" | "failed";
 
-const INPUT = "block w-full rounded-md border border-line-control bg-canvas p-2";
+const INPUT = "block w-full rounded-md border border-line-control bg-canvas p-2 text-md sm:text-sm";
 
 function parseTags(value: string): string[] {
   return value
@@ -36,23 +34,25 @@ function savedMatchesDraft(dock: OrganizationDock): boolean {
 }
 
 /**
- * Folder and tags for the selected conversation. The save action reports failures through the conversation's
- * error notice and resolves either way, so the outcome is read from the saved conversation itself.
+ * Folder and tags for the selected conversation. The outcome comes from the save itself: true or false from the
+ * action, or a rejection. Only an action that still resolves without a result falls back to comparing the saved
+ * conversation with the draft. Failure details stay in the conversation's error notice.
  */
 export function ChatOrganizationForm({ dock }: { dock: OrganizationDock }) {
-  const [settled, setSettled] = useState(false);
+  const [settled, setSettled] = useState<Outcome | "unreported" | null>(null);
   const saving = dock.sessionControlPending === "organization";
-  const outcome = settled && !saving ? (savedMatchesDraft(dock) ? "saved" : "failed") : null;
+  const outcome: Outcome | null =
+    !settled || saving ? null : settled === "unreported" ? (savedMatchesDraft(dock) ? "saved" : "failed") : settled;
   return (
     <form
       className="space-y-2"
       onSubmit={(event) => {
         event.preventDefault();
         if (saving) return;
-        setSettled(false);
+        setSettled(null);
         void dock.onSaveOrganization().then(
-          () => setSettled(true),
-          () => setSettled(true),
+          (result) => setSettled(result === true ? "saved" : result === false ? "failed" : "unreported"),
+          () => setSettled("failed"),
         );
       }}
     >
@@ -61,9 +61,10 @@ export function ChatOrganizationForm({ dock }: { dock: OrganizationDock }) {
           <input
             {...field}
             className={INPUT}
+            readOnly={saving}
             value={dock.folderName}
             onChange={(event) => {
-              setSettled(false);
+              setSettled(null);
               dock.onFolderNameChange(event.target.value);
             }}
           />
@@ -74,9 +75,10 @@ export function ChatOrganizationForm({ dock }: { dock: OrganizationDock }) {
           <input
             {...field}
             className={INPUT}
+            readOnly={saving}
             value={dock.tagsValue}
             onChange={(event) => {
-              setSettled(false);
+              setSettled(null);
               dock.onTagsValueChange(event.target.value);
             }}
           />

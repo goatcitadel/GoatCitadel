@@ -18,6 +18,8 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useLibraryOperation } from "../library/use-library-operation";
 import { ReportEvidence } from "./ImprovementReportEvidence";
 import { TimeText } from "../../ui/TimeText";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
+import { presentErrorText } from "../../lib/present-error";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
@@ -79,7 +81,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
             {inbox.data && !suggestions.length ? (
               <p className="text-sm text-fg-muted">No improvement suggestions.</p>
             ) : null}
-            <ul className="grid min-w-0 grid-cols-1 gap-2">
+            <ul className="grid min-w-0 grid-cols-1 divide-y divide-line-subtle">
               {suggestions.map((item) => (
                 <Suggestion key={item.candidate.candidateId} item={item} workspaceId={workspaceId} />
               ))}
@@ -176,7 +178,7 @@ function Suggestion({ item, workspaceId }: { item: CuratorReviewItem; workspaceI
     }
   };
   return (
-    <li className="grid min-w-0 gap-2 rounded-md border border-line p-3 text-sm wrap-anywhere">
+    <li className="grid min-w-0 gap-2 py-3 text-sm wrap-anywhere">
       <strong>{item.candidate.summary}</strong>
       <p>{item.proposedChange ?? item.observedIssue ?? "Review the linked records before deciding."}</p>
       <p className="text-fg-secondary">
@@ -332,8 +334,9 @@ function ReplayDetail({ runId, identity }: { runId: string; identity: string }) 
             ) : (
               " · not finished"
             )}
-            {run.error ? ` · error: ${run.error}` : ""}
+            {run.error ? ` · failed: ${presentErrorText(run.error).summary}` : ""}
           </p>
+          <RecordedErrorDetails error={run.error} />
           <p className="text-sm">
             {plural(replay.data.findings.length, "finding")} · {plural(replay.data.items.length, "scored item")} ·{" "}
             {plural(replay.data.autoTunes.length, "auto-tune")}

@@ -289,7 +289,7 @@ export function FilesystemWriteRootsControl() {
                   spellCheck={false}
                   autoComplete="off"
                   placeholder="D:\Scratch"
-                  className="block min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 font-mono text-sm text-fg"
+                  className="block min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 font-mono text-md text-fg sm:text-sm"
                   value={addDraft.value.path}
                   disabled={locked}
                   onChange={(event) => {

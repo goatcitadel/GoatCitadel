@@ -57,9 +57,9 @@ export function McpElicitationRequests({ workspaceId }: { workspaceId: string })
             Showing up to 20 of {scoped.length} matching records in the loaded list. GoatCitadel returns at most 200
             records; this is not a complete history.
           </p>
-          <ul className="space-y-2">
+          <ul className="divide-y divide-line-subtle">
             {scoped.slice(0, 20).map((item) => (
-              <li key={item.elicitationId} className="rounded-md border border-line p-3">
+              <li key={item.elicitationId} className="py-3">
                 <p>{item.prompt.text.slice(0, 180)}</p>
                 <p>
                   {item.status} · {item.owner.workspaceId ? "Selected workspace" : "No workspace attached"}

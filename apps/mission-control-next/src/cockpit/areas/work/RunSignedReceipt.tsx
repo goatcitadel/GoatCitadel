@@ -122,7 +122,7 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
       ) : null}
       {receipt && verification ? (
         <div className="mt-4 grid gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line-subtle bg-sunken p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm font-medium text-fg">
               {verification.valid ? "Signature valid" : "Verification failed"}
             </p>

@@ -67,7 +67,7 @@ describe("MobileStatusStrip", () => {
   });
 });
 
-it("exposes replay recovery and transport degradation accessibly", async () => {
+it("exposes replay recovery and transport degradation with the visible label as the name", async () => {
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -76,7 +76,7 @@ it("exposes replay recovery and transport degradation accessibly", async () => {
     ),
   );
   expect(container.querySelector('[data-stream-state="open"]')?.getAttribute("aria-label")).toBe(
-    "Live updates: Streaming (replay recovery)",
+    "Updates connected · Catching up",
   );
   expect(container.textContent).toContain("Updates connected · Catching up");
   await act(async () =>
@@ -87,7 +87,7 @@ it("exposes replay recovery and transport degradation accessibly", async () => {
     ),
   );
   expect(container.querySelector('[data-stream-state="retrying"]')?.getAttribute("aria-label")).toBe(
-    "Live updates: Polling fallback",
+    "Reconnecting to updates",
   );
   expect(container.textContent).toContain("Reconnecting to updates");
 });

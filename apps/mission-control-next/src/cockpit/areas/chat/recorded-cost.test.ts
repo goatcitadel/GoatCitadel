@@ -10,6 +10,6 @@ describe("recorded turn cost", () => {
   it("distinguishes reported, estimated, and incomplete cost", () => {
     expect(recordedCostLabel(0, "provider_reported")).toBe("$0.00");
     expect(recordedCostLabel(0.25, "estimated")).toBe("About $0.25");
-    expect(recordedCostLabel(0.25, undefined)).toBe("$0.25+");
+    expect(recordedCostLabel(0.25, undefined)).toBe("at least $0.25");
   });
 });

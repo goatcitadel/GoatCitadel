@@ -10,6 +10,7 @@ import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
 import { RiskBadge } from "../../ui/RiskBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
 
 const GRANT_HEADINGS: Record<AutonomousActivationGrantRecord["status"], string> = {
   active: "Active project grant",
@@ -38,7 +39,9 @@ export function ProjectFanout({
       {owner.message ? <Callout>{owner.message}</Callout> : null}
       {owner.loading ? <p role="status">Reading project grants…</p> : null}
       {project.lifecycleStatus !== "active" ? (
-        <Callout tone="warning">Archived projects cannot authorize automatic fan-out.</Callout>
+        <Callout tone="warning" announce={false}>
+          Archived projects cannot authorize automatic fan-out.
+        </Callout>
       ) : null}
       <Button disabled={owner.busy || owner.loading} onClick={() => void owner.load()}>
         Refresh grants
@@ -132,7 +135,9 @@ export function ProjectFanout({
           <p>
             {owner.review?.input.maxActivations} child activations · ${owner.review?.input.budgetUsd} ceiling
           </p>
-          <p className="break-all">Expires {owner.review?.input.expiresAt}</p>
+          <p>
+            <TimeText value={owner.review?.input.expiresAt} absolute prefix="Expires" />
+          </p>
           <p className="break-words">{owner.review?.input.reason}</p>
           <p className="text-sm">
             Chat only, automatic child work only. This permits child dispatch within the limits above. GoatCitadel

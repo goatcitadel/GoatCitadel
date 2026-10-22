@@ -53,7 +53,7 @@ export async function runCockpitIntegrationManagementProof({ context, browser, s
         await management.getByRole("button", { name: "Add integration connection", exact: true }).click();
         const editor = management.getByRole("region", { name: "New integration connection", exact: true });
         await editor.getByRole("combobox", { name: "Integration catalog", exact: true }).selectOption(fixture.catalogId);
-        await editor.getByLabel("Integration connection label", { exact: true }).fill(label);
+        await editor.getByLabel("Connection label", { exact: true }).fill(label);
         await editor.getByRole("region", { name: `${fixture.formSchema.title} configuration`, exact: true }).waitFor();
         assert.equal(await editor.getByRole("checkbox", { name: "Integration connection enabled", exact: true }).isChecked(), false);
         stage = "cancel creation review without a write";
@@ -78,7 +78,7 @@ export async function runCockpitIntegrationManagementProof({ context, browser, s
         await management.getByRole("button", { name: "Edit integration connection", exact: true }).click();
         const edit = management.getByRole("region", { name: "Edit integration connection", exact: true });
         const editedLabel = `${label} edited`;
-        await edit.getByLabel("Integration connection label", { exact: true }).fill(editedLabel);
+        await edit.getByLabel("Connection label", { exact: true }).fill(editedLabel);
         await edit.getByRole("button", { name: "Review connection changes", exact: true }).click();
         const editReview = page.getByRole("dialog", { name: "Apply integration connection changes?", exact: true });
         await editReview.waitFor(); assert.deepEqual(await read(), initial);

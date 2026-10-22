@@ -3,6 +3,8 @@ import type { ObserveRunTraceResponse } from "@goatcitadel/mission-control-share
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
+import { presentErrorText } from "../../lib/present-error";
 import { useModelLabel } from "../../data/use-model-label";
 import { recordedCostLabel } from "../chat/recorded-cost";
 import {
@@ -33,7 +35,7 @@ function tokenCount(count: number | undefined, noun: string): string {
 function ModelUsageRow({ item }: { item: ModelUsageItem }) {
   const model = useModelLabel(item.providerId, item.model);
   return (
-    <li className="rounded-md border border-line-subtle p-3 text-sm">
+    <li className="py-3 text-sm">
       <p className="font-medium text-fg">{item.providerId || item.model ? model : "Model not recorded"}</p>
       <p className="mt-1 text-xs text-fg-muted">
         {tokenCount(item.usage?.inputTokens, "input token")} · {tokenCount(item.usage?.outputTokens, "output token")} ·
@@ -61,9 +63,9 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
             Plan details are {EVIDENCE_STATE_WORDS[trace.lifecycle.state] ?? "unknown"}.
           </p>
         ) : plans.length ? (
-          <ol className="grid gap-3">
+          <ol className="divide-y divide-line-subtle">
             {plans.map((plan) => (
-              <li key={plan.planId} className="rounded-md border border-line-subtle p-3">
+              <li key={plan.planId} className="py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-medium text-fg">{plan.objective}</p>
                   <StatusBadge status={presentFrom(PLAN_STATUSES, plan.status)} />
@@ -100,9 +102,9 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
             Delegation details are {EVIDENCE_STATE_WORDS[trace.lifecycle.state] ?? "unknown"}.
           </p>
         ) : delegations.length ? (
-          <ol className="grid gap-3">
+          <ol className="divide-y divide-line-subtle">
             {delegations.map((run) => (
-              <li key={run.runId} className="rounded-md border border-line-subtle p-3">
+              <li key={run.runId} className="py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-medium text-fg">{run.objective}</p>
                   <StatusBadge status={presentFrom(DELEGATION_RUN_STATUSES, run.status)} />
@@ -119,7 +121,12 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
                             <StatusBadge status={presentFrom(DELEGATION_STEP_STATUSES, step.status)} />
                           </div>
                           {step.summary ? <p className="mt-1 text-fg-secondary">{step.summary}</p> : null}
-                          {step.error ? <p className="mt-1 text-status-failed">{step.error}</p> : null}
+                          {step.error ? (
+                            <>
+                              <p className="mt-1 text-status-failed">{presentErrorText(step.error).summary}</p>
+                              <RecordedErrorDetails error={step.error} />
+                            </>
+                          ) : null}
                           {step.durableRunId ? (
                             <NativeOwnerLink
                               scope={[trace.runId, step.stepId, step.durableRunId]}
@@ -149,12 +156,9 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
             Tool details are {EVIDENCE_STATE_WORDS[trace.toolCalls.state] ?? "unknown"}.
           </p>
         ) : trace.toolCalls.items.length ? (
-          <ol className="grid gap-2">
+          <ol className="divide-y divide-line-subtle">
             {trace.toolCalls.items.map((tool) => (
-              <li
-                key={tool.toolRunId}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line-subtle p-3 text-sm"
-              >
+              <li key={tool.toolRunId} className="flex flex-wrap items-center justify-between gap-2 py-3 text-sm">
                 <span className="min-w-0 text-fg">
                   {tool.toolName}
                   {tool.reused ? " · Reused" : ""}
@@ -173,7 +177,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
             Model usage is {EVIDENCE_STATE_WORDS[trace.providerUsage.state] ?? "unknown"}.
           </p>
         ) : trace.providerUsage.items.length ? (
-          <ol className="grid gap-2">
+          <ol className="divide-y divide-line-subtle">
             {trace.providerUsage.items.map((item) => (
               <ModelUsageRow key={item.turnId} item={item} />
             ))}

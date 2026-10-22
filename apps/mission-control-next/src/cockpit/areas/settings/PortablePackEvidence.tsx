@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { CapabilityPackPreview } from "@goatcitadel/contracts";
 import type { PortablePacksOwner } from "../../../features/native-routes/settings/sections/use-portable-packs";
 import { Button } from "../../ui/Button";
+import { TimeText } from "../../ui/TimeText";
 
 const human = (value: string) => value.replaceAll("_", " ");
 export function PortablePackPreview({ preview }: { preview: CapabilityPackPreview }) {
@@ -37,9 +38,9 @@ export function PortablePackPreview({ preview }: { preview: CapabilityPackPrevie
         {human(preview.policyChanges.memoryWriteAuthority)}; redaction {preview.policyChanges.redactionMode}; auto-run{" "}
         {preview.policyChanges.autoRunEnabled ? "requested" : "off"}. These labels do not change policy.
       </p>
-      <ul aria-label="Preview assets" className="space-y-2">
+      <ul aria-label="Preview assets" className="divide-y divide-line-subtle">
         {preview.installPlan.slice(0, limit).map((item) => (
-          <li key={item.assetId} className="rounded-md border border-line p-3 text-sm text-fg-secondary">
+          <li key={item.assetId} className="py-3 text-sm text-fg-secondary">
             <p className="break-words font-medium text-fg">
               {manifest.assets.find((asset) => asset.id === item.assetId)?.label ?? item.assetId}
             </p>
@@ -82,20 +83,22 @@ export function PortablePackStagedEvidence({ owner }: { owner: PortablePacksOwne
       <p className="text-xs text-fg-muted">
         Sample from the latest 100 installation records. This is not a complete pack history or a readiness count.
       </p>
-      <ul className="space-y-2">
+      <ul className="divide-y divide-line-subtle">
         {items.slice(0, limit).map((item, index) => (
-          <li
-            key={item.evidenceEnvelopeId ?? `unbound-${index}`}
-            className="space-y-2 rounded-md border border-line p-3 text-sm text-fg-secondary"
-          >
+          <li key={item.evidenceEnvelopeId ?? `unbound-${index}`} className="space-y-2 py-3 text-sm text-fg-secondary">
             <p className="break-words font-semibold text-fg">{item.name}</p>
             <p>
-              {item.version} · Staged {item.stagedAt} · {item.stagedAssets.length} assets
+              {item.version} · <TimeText prefix="Staged" value={item.stagedAt} /> · {item.stagedAssets.length} assets
             </p>
             <p>
-              {item.latestMaterialization
-                ? `Review recorded ${item.latestMaterialization.materializedAt}; availability unchanged.`
-                : "Staged for review; no activation is established."}
+              {item.latestMaterialization ? (
+                <>
+                  <TimeText prefix="Review recorded" value={item.latestMaterialization.materializedAt} />; availability
+                  unchanged.
+                </>
+              ) : (
+                "Staged for review; no activation is established."
+              )}
             </p>
             <details>
               <summary className="cursor-pointer">Record identity</summary>

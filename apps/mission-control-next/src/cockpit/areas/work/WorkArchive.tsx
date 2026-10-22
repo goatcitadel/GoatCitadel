@@ -158,7 +158,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
       {listed?.length ? (
         <WindowedRecordList label="Archive tasks" items={listed} itemKey={(task) => task.taskId}>
           {(task) => (
-            <article className="rounded-md border border-line p-3">
+            <article className="border-b border-line-subtle py-3">
               <h2 className="text-sm font-medium text-fg">{task.title}</h2>
               <p className="flex flex-wrap items-center gap-2 text-xs text-fg-secondary">
                 Operator task <StatusBadge status={presentTaskStatus(task.status)} />

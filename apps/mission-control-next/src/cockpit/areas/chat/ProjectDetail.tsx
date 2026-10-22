@@ -175,15 +175,21 @@ export function ProjectDetail({
         {!sessions.isPending && !sessions.error && !projectSessions.length ? (
           <p>No active conversations in the loaded history.</p>
         ) : null}
-        {projectSessions.map((session) => (
-          <Button
-            key={session.sessionId}
-            className="h-auto justify-start whitespace-normal break-words py-2 text-left"
-            onClick={() => route.navigate(`/chat?sessionId=${encodeURIComponent(session.sessionId)}`)}
-          >
-            {session.title || "Untitled conversation"}
-          </Button>
-        ))}
+        {projectSessions.length ? (
+          <ul aria-label="Conversations in this project" className="divide-y divide-line-subtle">
+            {projectSessions.map((session) => (
+              <li key={session.sessionId} className="py-1">
+                <Button
+                  variant="ghost"
+                  className="h-auto w-full justify-start whitespace-normal break-words py-2 text-left"
+                  onClick={() => route.navigate(`/chat?sessionId=${encodeURIComponent(session.sessionId)}`)}
+                >
+                  {session.title || "Untitled conversation"}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <label className="grid gap-1 text-sm">
           Conversation to assign
           <select

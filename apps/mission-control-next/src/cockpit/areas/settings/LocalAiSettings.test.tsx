@@ -57,6 +57,9 @@ describe("native Local AI settings", () => {
     await render();
     expect(container.textContent).toContain("GPU memory not measured");
     expect(container.textContent).toContain("records approval intent only");
+    expect(container.textContent).toContain("Windows, 64-bit");
+    expect(container.textContent).not.toContain("win32");
+    expect(container.textContent).not.toContain(owner.hardware.checkedAt);
     expect(container.querySelectorAll("pre")).toHaveLength(0);
     expect(button("Request download approval").disabled).toBe(false);
     await click("Hardware details");

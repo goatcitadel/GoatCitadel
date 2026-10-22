@@ -1,6 +1,7 @@
 import type {
   ChangePlanStatus,
   CompanionPrincipalPurpose,
+  DemoBootstrapStatus,
   DeviceAccessRequestDeviceType,
   DeploymentProfile,
   GatewayCurrentAccess,
@@ -276,4 +277,33 @@ const hookDeliveryStatuses: Record<HookDeliveryStatus, StatusPresentation> = {
 };
 export function presentHookDeliveryStatus(value: HookDeliveryStatus): StatusPresentation {
   return hookDeliveryStatuses[value] ?? status("Unknown", "neutral");
+}
+
+const HOST_PLATFORM_LABELS = new Map([
+  ["win32", "Windows"],
+  ["darwin", "macOS"],
+  ["linux", "Linux"],
+]);
+const HOST_ARCH_LABELS = new Map([
+  ["x64", "64-bit"],
+  ["arm64", "ARM 64-bit"],
+]);
+
+/** The host operating system in plain words ("Windows, 64-bit"); an unknown platform or arch shows as given. */
+export function presentHostOs(os: { platform?: string | null; arch?: string | null }): string {
+  const platform = os.platform?.trim() ?? "";
+  const arch = os.arch?.trim() ?? "";
+  const parts = [HOST_PLATFORM_LABELS.get(platform) ?? platform, HOST_ARCH_LABELS.get(arch) ?? arch];
+  return parts.filter(Boolean).join(", ") || "Not reported";
+}
+
+const DEMO_STATUS_LABELS: Record<DemoBootstrapStatus, string> = {
+  ready: "Ready",
+  partial: "Partly prepared",
+  not_started: "Not prepared",
+};
+
+/** The sample-records preparation state in words (ST-N15); unchecked reads "Not checked". */
+export function presentDemoStatus(status: DemoBootstrapStatus | undefined): string {
+  return status ? (DEMO_STATUS_LABELS[status] ?? "Unknown") : "Not checked";
 }

@@ -120,13 +120,13 @@ function ScopeSelection({
             setSearch(event.target.value);
             setLimit(30);
           }}
-          className="mt-1 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent"
+          className="mt-1 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-md sm:text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent"
         />
       </label>
       {items.length ? (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-line-subtle">
           {items.slice(0, limit).map((item) => (
-            <li key={item.resourceRef} className="rounded-md border border-line-subtle px-3 py-2">
+            <li key={item.resourceRef} className="py-2">
               <label className="flex items-start gap-3 text-sm text-fg">
                 <input
                   type="checkbox"

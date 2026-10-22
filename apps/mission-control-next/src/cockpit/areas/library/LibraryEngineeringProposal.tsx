@@ -158,7 +158,7 @@ export function LibraryEngineeringProposal({
       </Field>
       {!runs.isPending &&
       !runs.data?.items.some((run) => run.workspaceId === workspaceId && run.verification?.status === "verified") ? (
-        <Callout>
+        <Callout announce={false}>
           No current verified source is available. Complete the governed code work and its named verification in Chat;
           text or an arbitrary run identifier cannot substitute for this verification.
         </Callout>

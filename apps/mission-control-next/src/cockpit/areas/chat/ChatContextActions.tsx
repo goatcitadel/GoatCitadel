@@ -115,7 +115,7 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
   const pageCount = Math.max(1, Math.ceil(dock.learnedMemory.length / 8));
   const currentPage = Math.min(memoryPage, pageCount - 1);
   return (
-    <div className="space-y-3" aria-label="Conversation context actions">
+    <div role="group" className="space-y-3" aria-label="Conversation context actions">
       {!ownersCurrent ? (
         <p role="status">
           Select a current conversation in this workspace and review its access before changing context.
@@ -137,14 +137,14 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
           Draft candidates for review or activate a catalog specialist for this conversation. Activation remains
           manual-only and governed by GoatCitadel.
         </p>
-        <ul className="space-y-3">
+        <ul className="divide-y divide-line-subtle">
           {dock.specialistSuggestions.map((suggestion) => {
             const fingerprint: Review["fingerprint"] = (current) => {
               const value = current.specialistSuggestions.find((item) => item.candidateId === suggestion.candidateId);
               return value ? JSON.stringify(value) : undefined;
             };
             return (
-              <li key={suggestion.candidateId} className="space-y-2 rounded-md border border-line bg-canvas p-3">
+              <li key={suggestion.candidateId} className="space-y-2 py-3">
                 <strong>{suggestion.title}</strong>
                 <p>{suggestion.summary}</p>
                 <p className="text-sm text-fg-muted">{suggestion.reason}</p>
@@ -220,14 +220,14 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
           {dock.learnedMemory.length} loaded records. Inspection refreshes a bounded session list and does not establish
           historical completeness.
         </p>
-        <ul className="space-y-3">
+        <ul className="divide-y divide-line-subtle">
           {dock.learnedMemory.slice(currentPage * 8, currentPage * 8 + 8).map((item) => {
             const fingerprint: Review["fingerprint"] = (current) => {
               const value = current.learnedMemory.find((record) => record.itemId === item.itemId);
               return value ? JSON.stringify(value) : undefined;
             };
             return (
-              <li key={item.itemId} className="space-y-2 rounded-md border border-line bg-canvas p-3">
+              <li key={item.itemId} className="space-y-2 py-3">
                 <p className="break-words">{item.content}</p>
                 <p className="text-sm text-fg-muted">Status: {item.status}</p>
                 <div className="flex flex-wrap gap-2">

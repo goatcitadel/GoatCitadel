@@ -44,7 +44,7 @@ export function MobileStatusStrip({
       <div
         role="group"
         title={stream.label}
-        aria-label={stream.ariaLabel}
+        aria-label={stream.label}
         data-stream-state={streamState}
         className={`${ROW} text-sm text-fg`}
       >

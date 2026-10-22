@@ -89,7 +89,7 @@ export function WorkScheduleEditor({
     }
   }
   return (
-    <section aria-label="Edit schedule" className="grid gap-3 rounded-md border border-line p-3">
+    <section aria-label="Edit schedule" className="grid gap-3 border-t border-line-subtle pt-4">
       <h3 className="font-medium text-fg">Edit schedule</h3>
       <UnattributedDraftRecovery editor={editor} />
       <p className="text-sm text-fg-secondary">

@@ -12,6 +12,7 @@ import { cockpitInputClass } from "../../ui/input-class";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { ProviderConnectionEvidence } from "./ProviderConnectionEvidence";
+import { TimeText } from "../../ui/TimeText";
 
 const MODEL_PAGE_SIZE = 40;
 
@@ -163,10 +164,7 @@ export function ProviderCatalogSettings() {
                   catalog.config?.providerConfigs?.find((item) => item.providerId === provider.providerId)?.request
                 }
               />
-              <div
-                className="mt-4 rounded-md border border-line bg-raised p-3"
-                aria-busy={refreshingId === provider.providerId}
-              >
+              <div className="mt-4 border-t border-line-subtle pt-3" aria-busy={refreshingId === provider.providerId}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h4 className="text-sm font-semibold text-fg">
                     {refreshingId === provider.providerId ? "Checking catalog…" : evidence.label}
@@ -182,9 +180,7 @@ export function ProviderCatalogSettings() {
                 <p className="mt-2 text-sm text-fg-secondary">{evidence.detail}</p>
                 <p className="mt-1 text-xs text-fg-muted">
                   {provider.modelProbeCheckedAt ? (
-                    <>
-                      Last check: <time dateTime={provider.modelProbeCheckedAt}>{provider.modelProbeCheckedAt}</time>
-                    </>
+                    <TimeText prefix="Last check" value={provider.modelProbeCheckedAt} />
                   ) : (
                     "No model check recorded."
                   )}

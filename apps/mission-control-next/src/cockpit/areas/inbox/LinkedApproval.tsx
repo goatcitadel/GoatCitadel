@@ -1,6 +1,7 @@
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
+import { useInspector } from "../../app/inspector";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -13,8 +14,46 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
 import { nullWhenMissing } from "./inbox-record-read";
 
-/** Resolve a canonical record, including records outside the bounded pending projection. */
+/**
+ * An exact `?approvalId=` link opens its record in the inspector, as selecting an Inbox row does (IN-N07), so the
+ * page never shows a second decision bar for one record. The inspector keeps the record-scope checks below. Once the
+ * inspector is closed (Escape, Close, or a dismissed phone sheet) the page offers one way back to it.
+ */
 export function LinkedApproval({ approvalId }: { approvalId: string }) {
+  const { open, content } = useInspector();
+  const source = `inbox:approval:${approvalId}`;
+  useEffect(() => {
+    open({ source, title: "Linked approval", body: <LinkedApprovalDetail approvalId={approvalId} /> });
+  }, [open, approvalId, source]);
+  const showing = content?.source === source;
+  const wasShowing = useRef(false);
+  const reopen = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    // The inspector opened from the URL, so it has no opener to hand focus back to. When it closes and focus is
+    // left on the page body, keyboard users land on the way back instead.
+    const active = document.activeElement;
+    if (wasShowing.current && !showing && (!active || active === document.body)) reopen.current?.focus();
+    wasShowing.current = showing;
+  }, [showing]);
+  if (showing) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm text-fg-secondary">
+      <span>This link points to one approval.</span>
+      <Button
+        ref={reopen}
+        size="sm"
+        onClick={() =>
+          open({ source, title: "Linked approval", body: <LinkedApprovalDetail approvalId={approvalId} /> })
+        }
+      >
+        Open linked approval
+      </Button>
+    </div>
+  );
+}
+
+/** Resolve a canonical record, including records outside the bounded pending projection. */
+export function LinkedApprovalDetail({ approvalId }: { approvalId: string }) {
   const { search, hash } = useCockpitRoute();
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
   const workspaceName = useWorkspaceNameLookup(activeCitadelId);

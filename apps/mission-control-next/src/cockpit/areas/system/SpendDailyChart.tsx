@@ -34,6 +34,14 @@ export function SpendDailyChart({ summary }: { summary: CostSummaryResponse }) {
   const periodMax = Math.max(0, ...bars.map((bar) => bar.amount));
   const scaleMax = niceScaleMax(periodMax);
   const missingDays = bars.filter((bar) => bar.state === "unknown" || bar.state === "no_data").length;
+  // The highest known day (exact or a lower bound, $0.00 included) keeps its own label, so a lower bound stays
+  // "At least …" in the footer too.
+  const highest = bars.reduce<(typeof bars)[number] | undefined>(
+    (best, bar) =>
+      (bar.state === "exact" || bar.state === "lower_bound") && (!best || bar.amount > best.amount) ? bar : best,
+    undefined,
+  );
+  const noUsage = bars.every((bar) => bar.state === "no_data");
   if (!bars.length) return <p className="text-sm text-fg-muted">No daily usage is recorded for this period.</p>;
   return (
     <>
@@ -43,7 +51,11 @@ export function SpendDailyChart({ summary }: { summary: CostSummaryResponse }) {
           const width = bar.amount > 0 ? Math.max(1, Math.round((bar.amount / scaleMax) * 100)) : 0;
           return (
             <li key={bar.key} data-day-state={bar.state} className="flex items-center gap-2 text-xs sm:text-sm">
-              <time dateTime={bar.key} title={bar.label} className="w-24 shrink-0 text-fg-secondary">
+              <time
+                dateTime={bar.key}
+                title={`${formatUtcDay(bar.key)} (UTC)`}
+                className="w-24 shrink-0 text-fg-secondary"
+              >
                 {formatUtcDay(bar.key)}
               </time>
               {missing ? (
@@ -61,7 +73,7 @@ export function SpendDailyChart({ summary }: { summary: CostSummaryResponse }) {
                 </span>
               )}
               <span
-                className={`w-16 shrink-0 text-right tabular-nums sm:w-20 ${missing ? "text-fg-muted" : "text-fg"}`}
+                className={`w-28 shrink-0 text-right tabular-nums sm:w-32 ${missing ? "text-fg-muted" : "text-fg"}`}
               >
                 {bar.costLabel}
               </span>
@@ -70,8 +82,12 @@ export function SpendDailyChart({ summary }: { summary: CostSummaryResponse }) {
         })}
       </ol>
       <p className="mt-2 text-xs text-fg-muted">
-        Scale $0 to {formatCostUsd(scaleMax)} · highest day {formatCostUsd(periodMax)}
-        {missingDays
+        {highest
+          ? `Scale $0 to ${formatCostUsd(scaleMax)} · highest day ${highest.costLabel}`
+          : noUsage
+            ? "No usage recorded in this period"
+            : "No day has a known amount"}
+        {missingDays && !noUsage
           ? ` · ${plural(missingDays, "day")} without a known amount, shown dashed and left out of the scale`
           : ""}
       </p>

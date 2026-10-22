@@ -115,7 +115,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
                   setSearch(event.target.value);
                   setLimit(PAGE_SIZE);
                 }}
-                className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-sm text-fg"
+                className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-md sm:text-sm text-fg"
               />
             )}
           </Field>
@@ -123,7 +123,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
             Showing {Math.min(limit, filtered.length)} of {filtered.length} loaded integrations
             {connections.data!.items.length === 300 ? " · Showing the first 300 records" : ""}.
           </p>
-          <ul className="space-y-2">
+          <ul className="divide-y divide-line-subtle">
             {filtered.slice(0, limit).map((connection) => (
               <IntegrationRow
                 key={connection.connectionId}
@@ -191,7 +191,7 @@ function IntegrationRow({
   const attempt = useIntegrationConnectionMutation(connection.connectionId);
   const [notice, setNotice] = useState<string | null>(null);
   return (
-    <li className="rounded-md border border-line-subtle bg-sunken p-3">
+    <li className="py-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <h4 className="break-words text-sm font-semibold text-fg">{connection.label}</h4>

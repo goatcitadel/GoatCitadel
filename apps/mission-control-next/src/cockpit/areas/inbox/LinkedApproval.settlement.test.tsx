@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
-import { LinkedApproval } from "./LinkedApproval";
+import { LinkedApprovalDetail as LinkedApproval } from "./LinkedApproval";
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
 const api = vi.hoisted(() => ({ read: vi.fn(), replay: vi.fn(), run: vi.fn(), lifecycle: vi.fn(), resolve: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({

@@ -80,9 +80,7 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
             <p className="break-all font-mono text-xs">Revision {plan.revision}</p>
           </TechnicalDetails>
           {confirmation ? (
-            <p className="rounded-md border border-line bg-sunken p-3 whitespace-pre-wrap break-words text-fg-secondary">
-              {confirmation.confirmationText}
-            </p>
+            <p className="whitespace-pre-wrap break-words text-fg-secondary">{confirmation.confirmationText}</p>
           ) : null}
           {plan.expiresAt && !canConfirmInboxChangePlan(plan) && plan.status === "awaiting_confirmation" ? (
             <p className="text-fg-secondary">This confirmation has expired. Refresh before taking another action.</p>

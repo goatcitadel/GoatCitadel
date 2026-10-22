@@ -113,7 +113,7 @@ function LineageEvidence({ snapshot }: { snapshot: DurableBackgroundTaskRailResp
   );
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line-subtle p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-medium text-fg">This parent run</p>
         <StatusBadge status={presentRunStatus(snapshot.parent.status)} />
       </div>
@@ -133,7 +133,7 @@ function LineageEvidence({ snapshot }: { snapshot: DurableBackgroundTaskRailResp
         </p>
       ) : null}
       {children.length ? (
-        <ol className="grid gap-3 border-l border-line pl-3" aria-label="Watched child runs">
+        <ol className="divide-y divide-line-subtle border-l border-line pl-3" aria-label="Watched child runs">
           {children.slice(0, MAX_CHILDREN).map((task) => (
             <li key={task.watcherId}>
               <ChildEvidence task={task} />
@@ -149,7 +149,7 @@ function LineageEvidence({ snapshot }: { snapshot: DurableBackgroundTaskRailResp
           {children.length - MAX_CHILDREN === 1 ? "is" : "are"} outside this display.
         </p>
       ) : null}
-      <section aria-label="Recorded synthesis sources" className="min-w-0 rounded-md border border-line-subtle p-3">
+      <section aria-label="Recorded synthesis sources" className="min-w-0 border-t border-line-subtle pt-3">
         <h3 className="text-sm font-semibold text-fg">Parent synthesis</h3>
         <p className="mt-1 text-sm text-fg-secondary">{SYNTHESIS_LABELS[snapshot.synthesis.availability]}</p>
         {snapshot.synthesis.summary ? (
@@ -211,7 +211,7 @@ function ChildEvidence({ task }: { task: DurableBackgroundTaskItem }) {
       ? { label: "Status unavailable", tone: "neutral" as const }
       : presentRunStatus(task.canonicalStatus);
   return (
-    <article className="min-w-0 rounded-md border border-line-subtle p-3">
+    <article className="min-w-0 py-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <h3 className="break-words text-sm font-medium text-fg">{task.label}</h3>
         <StatusBadge status={status} />
@@ -250,7 +250,7 @@ function LineageLinks({ links }: { links: DurableBackgroundTaskSemanticLink[] })
           link.kind === "durable_run"
             ? `/work/runs/${encodeURIComponent(link.id)}`
             : link.kind === "chat_session"
-              ? `/chat?sessionId=${encodeURIComponent(link.id)}&shell=cockpit`
+              ? `/chat?sessionId=${encodeURIComponent(link.id)}`
               : null;
         return href ? (
           <NativeOwnerLink

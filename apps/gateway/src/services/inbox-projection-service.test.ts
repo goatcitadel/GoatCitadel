@@ -934,3 +934,48 @@ it("projects bounded readable approval targets without assuming preview payload 
   const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
   expect(projection.items.find((item) => item.id === "approval:a")?.summary).toBe("Targets: workspace/report.md");
 });
+
+it("names a knowledge write's action and title, and nothing new for other titled previews (IN-L02)", async () => {
+  const deps = dependencies();
+  const approval = (approvalId: string, preview: Record<string, unknown>) => ({
+    approvalId,
+    kind: "tool_invoke",
+    status: "pending",
+    riskLevel: "caution",
+    createdAt: "2026-10-06T00:00:00Z",
+    preview,
+  });
+  vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
+    items: [
+      // The shapes knowledgeApprovalPreview (policy-engine) produces.
+      approval("titled", {
+        toolName: "memory.write",
+        target: "Memory namespace: demo.goatcitadel",
+        title: "Operator preference: visible proof",
+      }),
+      approval("untitled", {
+        toolName: "memory.write",
+        target: "Memory namespace: demo.goatcitadel",
+        title: "memory.write",
+      }),
+      approval("ingest", {
+        reviewKind: "knowledge.operation",
+        toolName: "docs.ingest",
+        target: "Knowledge namespace: handbook",
+        title: "docs.ingest",
+      }),
+      // Other previews carry a title that describes the request, not a target.
+      approval("mail", { title: "Send mail draft" }),
+      approval("peer", { title: "Delegate to peer", target: "peer-7f3a" }),
+    ],
+  } as never);
+  const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+  const summary = (id: string) => projection.items.find((item) => item.id === `approval:${id}`)?.summary;
+  expect(summary("titled")).toBe("Writes memory · Operator preference: visible proof");
+  expect(summary("untitled")).toBe("Writes memory · Memory namespace: demo.goatcitadel");
+  expect(summary("ingest")).toBe("Ingests a document · Knowledge namespace: handbook");
+  const generic =
+    "Review the requested action and its policy reason. Target details are available in the approval record.";
+  expect(summary("mail")).toBe(generic);
+  expect(summary("peer")).toBe(generic);
+});

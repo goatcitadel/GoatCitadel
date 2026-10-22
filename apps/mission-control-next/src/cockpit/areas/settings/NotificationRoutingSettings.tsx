@@ -15,6 +15,7 @@ import {
   NOTIFICATION_LIFECYCLE_LABELS,
   NOTIFICATION_TARGET_KIND_LABELS,
 } from "./notification-vocabulary";
+import { presentErrorText } from "../../lib/present-error";
 
 export function NotificationRoutingSettings({
   workspaceId,
@@ -95,7 +96,7 @@ export function NotificationRoutingSettings({
           <section aria-label="Notification destinations" className="space-y-2">
             <h4 className="font-semibold">Destinations</h4>
             {s.targets.slice(0, limit).map((target) => (
-              <details className="rounded-md border border-line-subtle p-3" key={target.targetId}>
+              <details className="border-t border-line-subtle py-3" key={target.targetId}>
                 <summary className="cursor-pointer break-words text-sm">
                   {target.label} · {NOTIFICATION_LIFECYCLE_LABELS[target.lifecycleState] ?? "Unknown"}
                 </summary>
@@ -144,7 +145,7 @@ export function NotificationRoutingSettings({
           <section aria-label="Notification rules" className="space-y-2">
             <h4 className="font-semibold">Rules</h4>
             {s.rules.slice(0, limit).map((rule) => (
-              <details className="rounded-md border border-line-subtle p-3" key={rule.ruleId}>
+              <details className="border-t border-line-subtle py-3" key={rule.ruleId}>
                 <summary className="cursor-pointer break-words text-sm">
                   {rule.label} · {NOTIFICATION_LIFECYCLE_LABELS[rule.lifecycleState] ?? "Unknown"}
                 </summary>
@@ -193,7 +194,7 @@ export function NotificationRoutingSettings({
                   <p className="text-xs text-fg-muted">
                     <TimeText value={delivery.updatedAt} />
                   </p>
-                  {delivery.lastError ? <p>{delivery.lastError}</p> : null}
+                  {delivery.lastError ? <DeliveryError error={delivery.lastError} /> : null}
                 </li>
               ))}
             </ul>
@@ -244,4 +245,19 @@ function notificationReviewLabel(review: NotificationReview): string {
 
 function lifecycleVerb(state: string | undefined): string {
   return state === "disabled" || state === "archived" ? LIFECYCLE_VERB[state] : "Restore";
+}
+
+/** A delivery's recorded error: one plain line, with the recorded text in technical details. */
+function DeliveryError({ error }: { error: string }) {
+  const { summary, detail } = presentErrorText(error);
+  return (
+    <>
+      <p>{summary}</p>
+      {detail ? (
+        <TechnicalDetails label="Recorded error">
+          <p className="break-all font-mono text-xs">{detail}</p>
+        </TechnicalDetails>
+      ) : null}
+    </>
+  );
 }

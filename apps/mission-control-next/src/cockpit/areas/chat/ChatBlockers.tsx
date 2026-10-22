@@ -77,7 +77,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
       : pendingApproval;
   const input = props.pendingUserInput;
   const expiry = approvalExpiryLabel(approval?.expiresAt);
-  function continuationHref(destination: "/chat" | "/inbox", selectedApprovalId?: string) {
+  function continuationHref(destination: "/inbox", selectedApprovalId?: string) {
     const parameters = new URLSearchParams(search);
     parameters.set("workspaceId", workspaceId);
     if (props.selectedSessionId) parameters.set("sessionId", props.selectedSessionId);
@@ -169,22 +169,14 @@ export function ChatBlockers({ props }: { props: Blockers }) {
           </NativeOwnerLink>
         </section>
       ) : null}
+      {/* CH-N06: blockers only render inside the Chat transcript, so no "open in Chat" link. */}
       {input ? (
-        <>
-          <ChatPendingQuestion
-            key={input.promptId}
-            prompt={input}
-            pending={props.userInputPending}
-            onSubmit={props.onSubmitUserInput}
-          />
-          <NativeOwnerLink
-            href={continuationHref("/chat")}
-            scope={JSON.stringify([workspaceId, props.selectedSessionId, input.promptId])}
-            className="mt-2 inline-block text-xs font-medium text-accent hover:underline"
-          >
-            Open this conversation in Chat
-          </NativeOwnerLink>
-        </>
+        <ChatPendingQuestion
+          key={input.promptId}
+          prompt={input}
+          pending={props.userInputPending}
+          onSubmit={props.onSubmitUserInput}
+        />
       ) : null}
     </div>
   );

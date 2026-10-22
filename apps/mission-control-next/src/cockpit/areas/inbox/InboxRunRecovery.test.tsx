@@ -153,8 +153,14 @@ describe("Inbox run recovery", () => {
     expect(api.retryDurableRun).toHaveBeenCalledOnce();
     expect(api.retryDurableRun).toHaveBeenCalledWith("run-a", { reason: "operator_inbox_retry" });
     expect(container.textContent).toContain(
-      "Recovery requested. Run status: Queued. Use Open run to check what it did.",
+      "Recovery requested. Run status: Queued. Open the run to check what it did.",
     );
+    // The sentence that points at the run carries the link itself.
+    const notice = [...container.querySelectorAll('[role="status"]')].find((node) =>
+      node.textContent?.startsWith("Recovery requested."),
+    );
+    expect(notice?.querySelector("a")?.textContent).toBe("Open the run");
+    expect(notice?.querySelector("a")?.getAttribute("href")).toContain("/work/runs/run-a");
     expect(api.recoverDurableDeadLetter).not.toHaveBeenCalled();
   });
 
@@ -174,6 +180,9 @@ describe("Inbox run recovery", () => {
     await act(async () => button("Confirm retry run").click());
     expect(api.retryDurableRun).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("Recovery outcome is uncertain");
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.querySelector("a")?.textContent).toBe("Open the run");
+    expect(alert?.textContent).toContain("Open the run to check its status before taking another action.");
     expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Retry run")).toBe(false);
   });
 
@@ -191,7 +200,7 @@ describe("Inbox run recovery", () => {
     await act(async () => button("Confirm retry run").click());
     expect(api.retryDurableRun).toHaveBeenCalledTimes(2);
     expect(container.textContent).toContain(
-      "Recovery requested. Run status: Queued. Use Open run to check what it did.",
+      "Recovery requested. Run status: Queued. Open the run to check what it did.",
     );
   });
 

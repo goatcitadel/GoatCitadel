@@ -175,8 +175,29 @@ describe("Chat turn actions", () => {
   });
 
   it("counts every tool that may change things", async () => {
-    await renderWithTools([{ toolName: "a" }, { toolName: "b", effectPotential: "unknown" }]);
+    await renderWithTools([
+      { toolName: "a", effectPotential: "unknown" },
+      { toolName: "b", effectPotential: "unknown" },
+    ]);
     await act(async () => button("Retry")!.click());
+    expect(document.body.querySelector('[role="dialog"]')!.textContent).toContain(
+      "2 tools in this answer may change things outside the chat.",
+    );
+  });
+
+  it("asks before retry only when a tool's effectPotential is a write or side effect", async () => {
+    // A tool recorded as a read ("none") retries at once.
+    const quiet = await renderWithTools([{ toolName: "read", effectPotential: "none" }]);
+    await act(async () => button("Retry")!.click());
+    expect(quiet.onRetryTurn).toHaveBeenCalledExactlyOnceWith("turn-1");
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    // A tool that may write ("unknown"), or one with no recorded potential, might change things: ask first.
+    const effectful = await renderWithTools([
+      { toolName: "write", effectPotential: "unknown" },
+      { toolName: "legacy" },
+    ]);
+    await act(async () => button("Retry")!.click());
+    expect(effectful.onRetryTurn).not.toHaveBeenCalled();
     expect(document.body.querySelector('[role="dialog"]')!.textContent).toContain(
       "2 tools in this answer may change things outside the chat.",
     );

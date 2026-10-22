@@ -32,7 +32,7 @@ export function ProviderChangeStatus({
   return (
     <section
       aria-label="Provider change status"
-      className="space-y-2 rounded-md border border-line p-3 text-sm text-fg-secondary"
+      className="space-y-2 border-t border-line-subtle pt-3 text-sm text-fg-secondary"
     >
       <p role="status">
         <strong>{presentChangeStatusLabel(change.receipt.status)}</strong> · {change.message}

@@ -299,7 +299,7 @@ function ApprovalDecisionReview({
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">
       <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
-      <div aria-label="Approval decisions" className="flex flex-wrap gap-2">
+      <div role="group" aria-label="Approval decisions" className="flex flex-wrap gap-2">
         <span ref={approveRef} className="inline-flex">
           <RiskApprovalAction
             workspaceId={workspaceId}

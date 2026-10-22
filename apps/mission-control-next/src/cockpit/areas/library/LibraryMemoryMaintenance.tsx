@@ -44,7 +44,7 @@ export function MemoryMaintenanceView({
   return (
     <>
       {!data?.maintenanceEnabled || !data.maintenanceDurableReady ? (
-        <Callout>
+        <Callout announce={false}>
           Memory maintenance needs the maintenance and resumable runs features turned on. Controls stay locked.
         </Callout>
       ) : (
@@ -80,7 +80,7 @@ export function MemoryMaintenanceView({
             Review maintenance run
           </Button>
           <h3 className="font-semibold">Maintenance recommendations</h3>
-          <ul className="grid min-w-0 max-w-full grid-cols-1 gap-2">
+          <ul className="grid min-w-0 max-w-full grid-cols-1 divide-y divide-line-subtle">
             {data.maintenanceRecommendations.map((item) => (
               <RecommendationItem
                 key={item.recommendationId}
@@ -108,7 +108,7 @@ export function MemoryMaintenanceView({
               <NativeOwnerLink
                 className="inline-flex min-h-11 max-w-full items-center wrap-anywhere"
                 scope={ownerScope}
-                href={"/work/runs/" + encodeURIComponent(run.durableRunId) + "?shell=cockpit"}
+                href={"/work/runs/" + encodeURIComponent(run.durableRunId)}
               >
                 Open maintenance run
               </NativeOwnerLink>
@@ -135,7 +135,7 @@ function RecommendationItem({
   request: RequestReview;
 }) {
   return (
-    <li className="rounded-md border border-line p-3">
+    <li className="py-3">
       <h4>{item.summary}</h4>
       <p>{item.rationale}</p>
       <div className="flex flex-wrap items-center gap-1">

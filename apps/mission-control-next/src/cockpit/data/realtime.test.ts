@@ -3,8 +3,22 @@ import { resolveChatRefreshPlan } from "@goatcitadel/threaded-surface-core/pure-
 import { QueryClient } from "@tanstack/react-query";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { subscribeRefresh, type RefreshSignal } from "@goatcitadel/mission-control-shared/state/refresh-bus";
-import { createRealtimeSink, invalidateForEvent, realtimeRefreshSignal, UNMAPPED_TOPIC_INTERVAL_MS } from "./realtime";
+import {
+  createRealtimeSink,
+  inboxToastDuration,
+  invalidateForEvent,
+  realtimeRefreshSignal,
+  UNMAPPED_TOPIC_INTERVAL_MS,
+} from "./realtime";
 import { queryKeys } from "./query-keys";
+
+describe("inboxToastDuration", () => {
+  it("error toasts expire after 10 seconds", () => {
+    expect(inboxToastDuration("error")).toBe(10_000);
+    expect(Number.isFinite(inboxToastDuration("error"))).toBe(true);
+    for (const tone of ["warning", "info", "success"]) expect(inboxToastDuration(tone)).toBe(6_000);
+  });
+});
 
 const base = {
   eventId: "e1",
@@ -175,16 +189,18 @@ describe("unmapped event throttle", () => {
   });
 });
 
-
-it.each(["chat_session_deleted", "session_deleted"])("maps %s through the actual Chat refresh owner without reloading another transcript", (eventType) => {
-  const event = { ...base, eventType, source: "chat", links: { sessionId: "deleted" } };
-  const plans: unknown[] = [];
-  const s = sink();
-  s.refresh.mockImplementation((topic, mapped) => {
-    expect(topic).toBe("chat");
-    plans.push(resolveChatRefreshPlan(realtimeRefreshSignal(mapped), false, false, "selected"));
-  });
-  invalidateForEvent(event, s);
-  expect(s.unmapped).not.toHaveBeenCalled();
-  expect(plans).toEqual([{ refreshSidebar: true, refreshSession: "none" }]);
-});
+it.each(["chat_session_deleted", "session_deleted"])(
+  "maps %s through the actual Chat refresh owner without reloading another transcript",
+  (eventType) => {
+    const event = { ...base, eventType, source: "chat", links: { sessionId: "deleted" } };
+    const plans: unknown[] = [];
+    const s = sink();
+    s.refresh.mockImplementation((topic, mapped) => {
+      expect(topic).toBe("chat");
+      plans.push(resolveChatRefreshPlan(realtimeRefreshSignal(mapped), false, false, "selected"));
+    });
+    invalidateForEvent(event, s);
+    expect(s.unmapped).not.toHaveBeenCalled();
+    expect(plans).toEqual([{ refreshSidebar: true, refreshSession: "none" }]);
+  },
+);

@@ -7,6 +7,13 @@ import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
+import {
+  presentChamberSensitivity,
+  presentMasonAnswerKey,
+  presentMasonAnswerValue,
+  presentModelPolicy,
+  presentRiskPosture,
+} from "./citadel-vocabulary";
 
 export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
   const control = useMasonEditor(citadelId),
@@ -45,9 +52,15 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
         </p>
       ) : null}
       {!control.session ? (
-        <Button disabled={control.locked || !citadelId || control.loading} onClick={() => void control.startSession()}>
-          Start setup
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="primary"
+            disabled={control.locked || !citadelId || control.loading}
+            onClick={() => void control.startSession()}
+          >
+            Start setup
+          </Button>
+        </div>
       ) : (
         <>
           <TechnicalDetails label="Session details">
@@ -96,7 +109,7 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
               Discard answer changes
             </Button>
           </div>
-          <details className="rounded-md border border-line-subtle p-3 text-sm text-fg-secondary">
+          <details className="border-t border-line-subtle pt-3 text-sm text-fg-secondary">
             <summary>Ask the configured model to interpret an answer</summary>
             <p className="mt-2">
               This sends your message and captured answers to the configured model. Do not include secrets. Structured
@@ -112,7 +125,7 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
               disabled={control.locked}
               value={control.messageDraft.value}
               onChange={(event) => control.changeMessage(event.target.value)}
-              className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg"
+              className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-md sm:text-sm text-fg"
             />
             <div className="mt-2 flex flex-wrap gap-2">
               <Button
@@ -148,25 +161,30 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
         Refresh Mason session
       </Button>
       {control.review ? (
-        <div className="space-y-3 rounded-md border border-line bg-sunken p-3" aria-label="Drafted Blueprint">
+        <div
+          className="space-y-3 rounded-md border border-line bg-sunken p-3"
+          role="group"
+          aria-label="Drafted Blueprint"
+        >
           <h4 className="text-sm font-semibold text-fg">{control.review.summary.name}</h4>
           <p className="text-sm text-fg-secondary">{control.review.blueprint.charter.purpose}</p>
           <p className="text-sm text-fg-secondary">
-            Risk setting: {control.review.blueprint.charter.riskPosture}. Model policy:{" "}
-            {control.review.blueprint.charter.modelPolicyDefault}.
+            Risk setting: {presentRiskPosture(control.review.blueprint.charter.riskPosture)}. Model policy:{" "}
+            {presentModelPolicy(control.review.blueprint.charter.modelPolicyDefault)}.
           </p>
           <dl className="space-y-2 text-sm text-fg-secondary">
             {(["goals", "boundaries", "successDefinition"] as const).map((key) => (
               <div key={key}>
-                <dt>{key}</dt>
-                <dd className="break-words">{control.review?.blueprint.charter[key].join("; ") || "None specified"}</dd>
+                <dt>{presentMasonAnswerKey(key)}</dt>
+                <dd className="break-words">{presentMasonAnswerValue(key, control.review?.blueprint.charter[key])}</dd>
               </div>
             ))}
           </dl>
           <ul className="space-y-1 text-sm text-fg-secondary" aria-label="Reviewed Chambers">
             {control.review.blueprint.chambers.map((chamber, index) => (
               <li key={index}>
-                {chamber.name} · {chamber.sensitivity} · {chamber.sealed ? "Sealed" : "Not sealed"}
+                {chamber.name} · {presentChamberSensitivity(chamber.sensitivity)} ·{" "}
+                {chamber.sealed ? "Sealed" : "Not sealed"}
               </li>
             ))}
           </ul>
@@ -202,8 +220,8 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
         <dl className="mt-3 space-y-2 text-sm text-fg-secondary">
           {Object.entries(control.answerPatch).map(([key, value]) => (
             <div key={key}>
-              <dt>{key}</dt>
-              <dd className="break-words">{Array.isArray(value) ? value.join("; ") : String(value)}</dd>
+              <dt>{presentMasonAnswerKey(key)}</dt>
+              <dd className="break-words">{presentMasonAnswerValue(key, value)}</dd>
             </div>
           ))}
         </dl>

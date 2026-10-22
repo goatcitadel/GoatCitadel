@@ -83,14 +83,14 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
         const scope = () => page.evaluate(() => ({ citadelId: window.localStorage.getItem("goatcitadel.ui.citadel_id.v1"), workspaceId: window.localStorage.getItem("goatcitadel.ui.workspace_id.v1") }));
         const showScope = async () => {
           if (variant === "mobile") { await page.getByRole("button", { name: "More areas and settings", exact: true }).click(); await page.getByRole("dialog", { name: "More", exact: true }).getByRole("button", { name: "Change Citadel and workspace", exact: true }).click(); }
-          else await page.getByRole("button", { name: "Change Citadel and workspace", exact: true }).click();
+          else await page.getByRole("button", { name: /, change Citadel and workspace$/u }).click();
           const picker = page.getByRole("dialog", { name: "Change operating scope", exact: true }); await picker.waitFor();
-          assert.equal(await picker.getByRole("combobox", { name: "Scope Citadel", exact: true }).inputValue(), source.citadelId);
+          assert.equal(await picker.getByRole("combobox", { name: "Citadel", exact: true }).inputValue(), source.citadelId);
           return picker;
         };
         const openScope = async workspaceId => {
           const picker = await showScope();
-          await picker.getByRole("combobox", { name: "Scope Workspace", exact: true }).selectOption(workspaceId);
+          await picker.getByRole("combobox", { name: "Workspace", exact: true }).selectOption(workspaceId);
           await picker.getByRole("button", { name: "Switch scope", exact: true }).click();
           await picker.waitFor({ state: "hidden" });
           const consent = page.getByRole("dialog", { name: "Unsaved changes", exact: true });
@@ -157,15 +157,15 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
         const pickerBounds = await picker.boundingBox(); assert.ok(pickerBounds && pickerBounds.x >= 0 && pickerBounds.x + pickerBounds.width <= viewport.width + 1);
         await capture("scope-picker");
         await picker.getByRole("button", { name: "Close dialog", exact: true }).click(); await picker.waitFor({ state: "hidden" });
-        await page.waitForFunction(label => document.activeElement?.getAttribute("aria-label") === label,
-          variant === "mobile" ? "More areas and settings" : "Change Citadel and workspace");
+        await page.waitForFunction(label => (document.activeElement?.getAttribute("aria-label") ?? "").endsWith(label),
+          variant === "mobile" ? "More areas and settings" : ", change Citadel and workspace");
         await page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "Safety", exact: true }).click();
         await page.getByRole("tab", { name: "Tools", exact: true }).click();
         const { field, value } = await fillNavigationGrantDraft(page), sourceSettingsUrl = page.url();
         await reviewNavigationDraft(page, () => openScope(target.workspaceId), "Cancel");
         assert.equal(page.url(), sourceSettingsUrl); assert.equal(await field.inputValue(), value);
-        await page.waitForFunction(label => document.activeElement?.getAttribute("aria-label") === label,
-          variant === "mobile" ? "More areas and settings" : "Change Citadel and workspace");
+        await page.waitForFunction(label => (document.activeElement?.getAttribute("aria-label") ?? "").endsWith(label),
+          variant === "mobile" ? "More areas and settings" : ", change Citadel and workspace");
         assert.deepEqual(await scope(), { citadelId: source.citadelId, workspaceId: source.workspaceId });
         assert.deepEqual(await read("/api/v1/tools/grants?limit=400"), before); assert.deepEqual(writes, []);
         await reviewNavigationDraft(page, () => openScope(target.workspaceId), "Keep draft and close");

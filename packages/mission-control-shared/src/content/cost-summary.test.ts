@@ -25,7 +25,7 @@ describe("formatCostUsd", () => {
         { key: "2026-09-27", tokenInput: 0, tokenOutput: 0, tokenCachedInput: 0, tokenTotal: 5, costUsd: 0.000123 },
       ],
     };
-    expect(projectUsageCostSummary(summary).costLabel).toBe("$0.00012+");
+    expect(projectUsageCostSummary(summary).costLabel).toBe("At least <$0.01");
   });
 });
 
@@ -74,7 +74,7 @@ describe("projectDailyCostBars", () => {
     };
 
     const bars = projectDailyCostBars(summary);
-    expect(bars.map((bar) => bar.costLabel)).toEqual(["Unknown", "$1.25+", "$2.50"]);
+    expect(bars.map((bar) => bar.costLabel)).toEqual(["Unknown", "At least $1.25", "$2.50"]);
     expect(bars.map((bar) => bar.percent)).toEqual([0, 50, 100]);
   });
 });
@@ -101,7 +101,14 @@ describe("projectProviderCostRows", () => {
       ],
     };
     expect(projectProviderCostRows(summary)).toEqual([
-      { providerKey: "a", label: "Alpha", tokenTotal: 30, knownCostUsd: 3, costLabel: "$3.00+", models: ["m1", "m2"] },
+      {
+        providerKey: "a",
+        label: "Alpha",
+        tokenTotal: 30,
+        knownCostUsd: 3,
+        costLabel: "At least $3.00",
+        models: ["m1", "m2"],
+      },
       { providerKey: "b", label: "Beta", tokenTotal: 20, knownCostUsd: 0, costLabel: "Unknown", models: ["m3"] },
     ]);
     const complete = {

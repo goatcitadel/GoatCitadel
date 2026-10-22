@@ -1,5 +1,6 @@
 import { useProviderAdvice } from "../../../features/native-routes/settings/sections/use-provider-advice";
 import { Button } from "../../ui/Button";
+import { TimeText } from "../../ui/TimeText";
 
 export function ProviderAdviceSettings() {
   const { state, load } = useProviderAdvice();
@@ -20,7 +21,7 @@ export function ProviderAdviceSettings() {
       {state.data ? (
         <div className="mt-3 space-y-3 text-sm text-fg-secondary">
           <p>
-            Observed {state.data.generatedAt}.{" "}
+            <TimeText prefix="Observed" value={state.data.generatedAt} />.{" "}
             {state.data.advisoryOnly && !state.data.mutationPerformed
               ? "Advisory only; no settings mutation."
               : "The response did not confirm advisory-only execution."}
@@ -29,12 +30,9 @@ export function ProviderAdviceSettings() {
             <p key={warning}>{warning}</p>
           ))}
           {Array.isArray(state.data.candidates) ? (
-            <ul className="space-y-3">
+            <ul className="divide-y divide-line-subtle">
               {state.data.candidates.slice(0, 5).map((candidate) => (
-                <li
-                  key={`${candidate.providerId}:${candidate.model}`}
-                  className="rounded-md border border-line-subtle p-3"
-                >
+                <li key={`${candidate.providerId}:${candidate.model}`} className="py-3">
                   <strong className="text-fg">
                     {candidate.providerLabel} · {candidate.model}
                   </strong>

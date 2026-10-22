@@ -66,9 +66,9 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
           Refresh rules
         </Button>
       </div>
-      <ul aria-label="Configured Wards" className="max-h-96 space-y-2 overflow-y-auto">
+      <ul aria-label="Configured Wards" className="max-h-96 divide-y divide-line-subtle overflow-y-auto">
         {c.wards.items.map((ward) => (
-          <li key={ward.wardId} className="rounded-md border border-line-subtle bg-sunken p-3">
+          <li key={ward.wardId} className="py-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <h4 className="break-words font-medium text-fg">{ward.name}</h4>

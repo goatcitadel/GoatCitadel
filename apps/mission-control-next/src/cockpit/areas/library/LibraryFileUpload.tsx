@@ -177,9 +177,11 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
               Checking whether a file already exists at this path…
             </p>
           ) : replaces ? (
-            <Callout tone="warning">{replaces} GoatCitadel enforces access and path restrictions.</Callout>
+            <Callout announce={false} tone="warning">
+              {replaces} GoatCitadel enforces access and path restrictions.
+            </Callout>
           ) : existing.data === null ? null : (
-            <Callout tone="warning">
+            <Callout announce={false} tone="warning">
               {existing.isError ? "The file check could not run. " : ""}This writes a shared file and may replace
               existing content at this path. GoatCitadel enforces access and path restrictions.
             </Callout>

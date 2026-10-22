@@ -89,9 +89,9 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
           }}
         />
       </label>
-      <ul className="space-y-2">
+      <ul className="divide-y divide-line-subtle">
         {items.slice(0, limit).map((pack) => (
-          <li key={pack.packId} className="rounded-md border border-line p-3">
+          <li key={pack.packId} className="py-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="min-w-0 flex-1">
                 <h4 className="break-words text-sm font-semibold text-fg">{pack.name}</h4>

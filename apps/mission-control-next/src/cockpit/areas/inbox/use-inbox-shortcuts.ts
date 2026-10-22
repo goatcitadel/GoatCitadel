@@ -41,7 +41,9 @@ export function useInboxShortcuts({
       if (!enabled || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !orderedItems.length) return;
       const target = event.target;
       if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable='true']")) return;
-      if (document.querySelector('[role="dialog"]')) return;
+      // Any dialog pauses the shortcuts except the phone inspector sheet, which shows the selected Inbox item.
+      const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+      if (dialogs.some((dialog) => !dialog.querySelector('[data-inspector-body="true"]'))) return;
       const key = event.key.toLowerCase();
       if (!KEYS.includes(key)) return;
       const currentIndex = orderedItems.findIndex((item) => item.id === selectedId);

@@ -141,6 +141,16 @@ describe("native Citadel Overview", () => {
     await click("Edit Charter · Unsaved");
     expect(view!.root.findByType("textarea").props.value).toBe("Retained native draft");
   });
+  it("renders rows as hairline-separated items, not bordered cards", async () => {
+    await render();
+    await click("Chambers");
+    const row = view!.root.findAllByType("li").find((node) => text(node).includes("Retained"))!;
+    expect(String(row.parent!.props.className)).toContain("divide-y");
+    expect(String(row.props.className)).not.toMatch(/\brounded-md\b|\bborder\b|\bp-3\b/);
+    await click("Gatehouse");
+    const list = view!.root.findAllByType("dl").find((node) => text(node).includes("External writes"))!;
+    expect(String(list.props.className)).toContain("divide-y");
+  });
   it("withholds stale native purpose before dispatch and presents current owner for explicit rebase", async () => {
     await render();
     await click("Edit Charter");

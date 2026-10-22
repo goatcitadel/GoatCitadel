@@ -129,7 +129,7 @@ export function CapabilitySettings({
         <div
           role="group"
           aria-label="Confirm skill state request"
-          className="space-y-2 rounded-md border border-line bg-sunken p-3"
+          className="space-y-2 border-t border-line-subtle pt-3"
         >
           <p>
             Request a change to {skillStateLabel(target.state)} for {title}? GoatCitadel will create an approval. This

@@ -342,7 +342,7 @@ describe("CommandPalette", () => {
     expect(controls.create).toHaveBeenCalledTimes(1);
     expect(controls.navigate).not.toHaveBeenCalled();
     click("Choose default model");
-    expect(controls.navigate).toHaveBeenCalledWith("/settings/models?shell=cockpit#providers");
+    expect(controls.navigate).toHaveBeenCalledWith("/settings/models#providers");
     click("Switch to compact density");
     expect(controls.setDensity).toHaveBeenCalledWith("compact");
     // GL-15: the palette offers the theme choices that are not already saved, including Match system.

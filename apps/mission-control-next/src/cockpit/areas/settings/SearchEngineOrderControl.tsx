@@ -64,12 +64,9 @@ export function SearchEngineOrderControl({ settings }: { settings: UseQueryResul
       />
       {ready ? (
         <>
-          <ol aria-labelledby="search-engine-order-title" className="mt-3 max-w-md space-y-2">
+          <ol aria-labelledby="search-engine-order-title" className="mt-3 max-w-md divide-y divide-line-subtle">
             {engineRows(order).map((row) => (
-              <li
-                key={row.engine}
-                className="flex min-h-11 items-center gap-2 rounded-md border border-line-subtle bg-sunken px-3"
-              >
+              <li key={row.engine} className="flex min-h-11 items-center gap-2 py-1">
                 <label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-fg">
                   <input
                     type="checkbox"

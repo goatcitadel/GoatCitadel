@@ -133,6 +133,10 @@ const failureClasses: Record<ChatTurnFailureClass, string> = {
 };
 export const presentFailureClass = (value: ChatTurnFailureClass) => failureClasses[value] ?? "unknown";
 
+/** The composer's mode toggles, explained in one place for the tooltip, the screen-reader text and the options popover. */
+export const PLAN_HELP = "Plan before acting. GoatCitadel still governs every tool and approval.";
+export const REVIEW_HELP = "Request review of the answer before completion; availability follows the runtime.";
+
 const exactFileTypes: Record<string, string> = {
   "application/pdf": "PDF",
   "application/json": "JSON",
@@ -146,6 +150,17 @@ const fileTypeFamilies: Record<string, string> = { image: "Image", text: "Text",
 export function presentFileType(mimeType: string | undefined): string {
   const normalized = (mimeType ?? "").split(";")[0]!.trim().toLowerCase();
   return exactFileTypes[normalized] ?? fileTypeFamilies[normalized.split("/")[0]!] ?? "File";
+}
+
+/**
+ * The one file-type label for an attachment, used by the composer chips and the sent message alike: the friendly MIME
+ * family, or the file's extension when the MIME type says nothing more than "File".
+ */
+export function presentAttachmentType(file: { fileName: string; mimeType?: string }): string {
+  const type = presentFileType(file.mimeType);
+  if (type !== "File") return type;
+  const extension = /\.([a-z0-9]{1,8})$/i.exec(file.fileName)?.[1];
+  return extension ? extension.toUpperCase() : type;
 }
 
 const actionKinds: Record<string, string> = {

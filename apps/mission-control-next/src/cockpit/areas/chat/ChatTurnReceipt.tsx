@@ -1,14 +1,22 @@
 import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { formatDuration, plural } from "@goatcitadel/mission-control-shared/content/format";
-import { useInspector } from "../../app/inspector";
 import { useModelLabel } from "../../data/use-model-label";
-import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { recordedCostLabel } from "./recorded-cost";
 
-/** The compact model, tools, sources, latency and cost receipt under a completed answer; opens full message details. */
-export function TurnReceipt({ turn }: { turn: ChatThreadTurnRecord }) {
-  const { open } = useInspector();
+const RECEIPT_CLASS = "mt-2 inline-flex min-h-8 items-center text-left text-xs text-fg-muted max-sm:min-h-11";
+
+/**
+ * The compact model, tools, sources, latency and cost receipt under a completed answer. It opens the Message tab of
+ * the Chat inspector for this turn, so there is one message-details view; without that handler it is plain text.
+ */
+export function TurnReceipt({
+  turn,
+  onInspectTurn,
+}: {
+  turn: ChatThreadTurnRecord;
+  onInspectTurn?: (turnId: string) => void;
+}) {
   const usage = turn.trace.completion?.usage;
   const providerId = turn.trace.routing?.effectiveProviderId;
   const modelId = turn.trace.routing?.effectiveModel ?? turn.trace.model;
@@ -23,39 +31,9 @@ export function TurnReceipt({ turn }: { turn: ChatThreadTurnRecord }) {
   ]
     .filter(Boolean)
     .join(" · ");
+  if (!onInspectTurn) return <p className={RECEIPT_CLASS}>{details || status}</p>;
   return (
-    <button
-      type="button"
-      onClick={() =>
-        open({
-          title: "Message details",
-          body: (
-            <div className="space-y-3 text-sm text-fg-secondary">
-              <p>Status: {status}</p>
-              <p>Model: {modelId ? modelLabel : "Not recorded"}</p>
-              <p>Tools: {turn.toolRuns.length}</p>
-              <p>Sources: {turn.citations.length}</p>
-              <p>Cost: {recordedCostLabel(usage?.costUsd, usage?.costSource)}</p>
-              {turn.citations.length ? (
-                <ul className="space-y-1">
-                  {turn.citations.map((source) => (
-                    <li key={source.citationId}>{source.title ?? "Source"}</li>
-                  ))}
-                </ul>
-              ) : null}
-              {modelId || providerId ? (
-                <TechnicalDetails label="Model technical details">
-                  <p className="font-mono text-xs wrap-anywhere">
-                    Provider ID: {providerId ?? "Not recorded"} · Model ID: {modelId ?? "Not recorded"}
-                  </p>
-                </TechnicalDetails>
-              ) : null}
-            </div>
-          ),
-        })
-      }
-      className="mt-2 inline-flex min-h-8 items-center text-left text-xs text-fg-muted hover:text-accent max-sm:min-h-11"
-    >
+    <button type="button" onClick={() => onInspectTurn(turn.turnId)} className={`${RECEIPT_CLASS} hover:text-accent`}>
       {details || status}
       {/* The name starts with the visible receipt (WCAG 2.5.3), then says what the button does. */}
       <span className="sr-only"> · Open message details</span>

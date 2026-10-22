@@ -48,7 +48,8 @@ export function ChatTurnActions({
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const [confirmRetry, setConfirmRetry] = useState(false);
   const canRetry = canRetryTurn(turn) && !streaming && !readOnly;
-  // A tool that may change things (or did, or might have) can run again on retry, so the retry is confirmed first.
+  // Only a tool recorded as a read ("none") retries without asking. One that may write ("unknown"), has no recorded
+  // potential, or did or might have changed something can change things again on retry, so that retry is confirmed.
   const effectfulTools = (turn.toolRuns ?? []).filter(
     (run) =>
       run.effectPotential !== "none" || run.effectOutcomeKind === "concrete" || run.effectOutcomeKind === "uncertain",

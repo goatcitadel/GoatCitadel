@@ -89,7 +89,6 @@ export function NotificationRoutingFields({ owner: s }: { owner: NotificationRou
           <label className="block text-sm">
             Rule label
             <input
-              aria-label="Notification rule label"
               className={integrationInputClass}
               value={s.ruleForm.label}
               onChange={(event) => s.setRuleForm((value) => ({ ...value, label: event.target.value }))}
@@ -98,7 +97,6 @@ export function NotificationRoutingFields({ owner: s }: { owner: NotificationRou
           <label className="block text-sm">
             Delivery policy
             <select
-              aria-label="Notification delivery policy"
               className={integrationInputClass}
               value={s.ruleForm.deliveryPolicy}
               onChange={(event) =>

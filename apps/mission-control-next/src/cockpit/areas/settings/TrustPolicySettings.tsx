@@ -103,7 +103,7 @@ export function TrustPolicySettings() {
               </ul>
             </div>
           ) : null}
-          <details className="rounded-md border border-line-subtle p-3 text-sm text-fg-secondary">
+          <details className="border-t border-line-subtle pt-3 text-sm text-fg-secondary">
             <summary className="cursor-pointer">Sources and enforcement</summary>
             <ul className="mt-2 space-y-1">
               {data.snapshot.sources.map((source) => (

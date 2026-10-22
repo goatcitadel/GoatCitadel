@@ -27,9 +27,9 @@ export function MemoryGraphView({
   return (
     <>
       <h3 className="font-semibold">Entities</h3>
-      <ul className="grid min-w-0 max-w-full grid-cols-1 gap-2">
+      <ul className="grid min-w-0 max-w-full grid-cols-1 divide-y divide-line-subtle">
         {data?.memoryEntities.map((item) => (
-          <li key={item.id} className="rounded-md border border-line p-3">
+          <li key={item.id} className="py-3">
             <h4>{item.title}</h4>
             <p>{item.summary}</p>
             <dl className={FACTS}>
@@ -77,7 +77,7 @@ export function MemoryGraphView({
         ))}
       </ul>
       <h3 className="font-semibold">Decision journal</h3>
-      <ul className="grid min-w-0 max-w-full grid-cols-1 gap-2">
+      <ul className="grid min-w-0 max-w-full grid-cols-1 divide-y divide-line-subtle">
         {data?.memoryDecisions.map((item) => (
           <DecisionItem key={item.id} item={item} workspaceId={workspaceId} disabled={disabled} request={request} />
         ))}
@@ -98,7 +98,7 @@ function DecisionItem({
   request: RequestReview;
 }) {
   return (
-    <li className="rounded-md border border-line p-3">
+    <li className="py-3">
       <h4>{item.title}</h4>
       <p>{item.decision}</p>
       <dl className={FACTS}>

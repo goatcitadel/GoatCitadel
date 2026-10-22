@@ -104,6 +104,24 @@ describe("MobileTabBar", () => {
     await act(async () => tab("Work").click());
     expect(window.location.pathname).toBe("/work");
   });
+  it("accessible name starts with the visible text", async () => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <UiPreferencesProvider>
+            <CockpitNavigationProvider>
+              <MobileTabBar onOpenPalette={vi.fn()} />
+            </CockpitNavigationProvider>
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    // Work names itself "Work", not the running indicator's sentence, which is its description instead.
+    expect(tab("Work").getAttribute("aria-label")).toBe("Work");
+    expect(button("More").getAttribute("aria-label")).toMatch(/^More/);
+    const inbox = [...document.querySelectorAll("nav a")].find((link) => link.getAttribute("href")?.includes("/inbox"));
+    expect(inbox?.getAttribute("aria-label") ?? inbox?.textContent).toMatch(/^Inbox/);
+  });
   it("opens More as a sheet with System and appearance controls", async () => {
     await act(async () =>
       root.render(
@@ -156,7 +174,7 @@ describe("MobileTabBar", () => {
     );
     const chrome = container.querySelector("[data-cockpit-tabbar]")!.parentElement!;
     expect(chrome.className).toContain("cockpit-safe-bottom");
-    expect(chrome.querySelector('[aria-label="Current operating scope"]')).toBeNull();
+    expect(chrome.querySelector("[data-cockpit-scope-line]")).toBeNull();
     expect(chrome.querySelector('[aria-label="System status"]')).toBeNull();
     // A failing check marks More with a shaped icon and a description, not a coloured dot.
     const more = button("More");
@@ -168,7 +186,7 @@ describe("MobileTabBar", () => {
     const sheet = document.querySelector('[role="dialog"][aria-label="More"]')!;
     expect(sheet.querySelector('[aria-label="System status"]')?.textContent).toContain("1 check failing");
     expect(sheet.querySelector('[aria-label="System status"]')?.textContent).toContain("Updates connected");
-    const scope = sheet.querySelector('[aria-label="Current operating scope"]')?.textContent ?? "";
+    const scope = sheet.querySelector("[data-cockpit-scope-line]")?.textContent ?? "";
     expect(scope).not.toContain("Workspace name unavailable");
     expect(scope).not.toContain("Reading Citadel");
     await act(async () => button("Open System health").click());

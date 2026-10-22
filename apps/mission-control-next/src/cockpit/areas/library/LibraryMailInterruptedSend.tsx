@@ -103,6 +103,7 @@ export function useInterruptedSend<T extends { record: MailDraftRecord }>(option
 
   const panel: ReactNode = interrupted ? (
     <section className="grid min-w-0 grid-cols-1 gap-2" aria-label="Interrupted send request">
+      {/* The result of the operator's own send request, so it announces. */}
       <Callout tone="warning">{INTERRUPTED_SEND}</Callout>
       <p className="wrap-anywhere text-sm">
         To {interrupted.record.to.join(", ")} · {interrupted.record.subject}

@@ -207,7 +207,7 @@ function Registration({
     }
   }
   return (
-    <details className="min-w-0 max-w-full wrap-anywhere rounded-md border border-line p-3">
+    <details className="min-w-0 max-w-full wrap-anywhere border-t border-line-subtle pt-3">
       <summary>Register external source</summary>
       <div className="mt-3 grid min-w-0 grid-cols-1 gap-3">
         <p>

@@ -63,11 +63,7 @@ export function FirstRunModelStep({
             enterChatLabel="Continue to safety"
             showSteps={false}
           />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => leave.request(() => navigate("/settings/models?shell=cockpit#providers"))}
-          >
+          <Button variant="ghost" size="sm" onClick={() => leave.request(() => navigate("/settings/models#providers"))}>
             Advanced: edit provider profiles
           </Button>
         </>

@@ -126,7 +126,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
             Search Citadels
             <input
               type="search"
-              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg"
+              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-md text-fg sm:text-sm"
               value={search}
               onChange={(event) => {
                 setSearch(event.target.value);
@@ -137,7 +137,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
           <label className="block text-sm text-fg-secondary">
             Citadel lifecycle view
             <select
-              className="mt-1 block min-h-10 rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg"
+              className="mt-1 block min-h-10 rounded-md border border-line-control bg-canvas px-3 py-2 text-md sm:text-sm text-fg"
               value={filter}
               onChange={(event) => {
                 setFilter(event.target.value as typeof filter);
@@ -153,7 +153,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
             Showing {Math.min(limit, filtered.length)} of {filtered.length} loaded Citadels
             {records.length === 500 ? " · Directory limited to 500 records" : ""}.
           </p>
-          <ul className="space-y-2">
+          <ul className="divide-y divide-line-subtle">
             {filtered.slice(0, limit).map((record) => {
               const target: DirectoryLifecycleReview = {
                 kind: "citadel",
@@ -163,7 +163,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
               const locked = lifecycle.locked(target),
                 attempt = lifecycle.attempt(target);
               return (
-                <li key={record.citadelId} className="space-y-2 rounded-md border border-line-subtle bg-sunken p-3">
+                <li key={record.citadelId} className="space-y-2 py-3">
                   <h4 className="break-words text-sm font-semibold text-fg">{record.name}</h4>
                   <p className="text-xs text-fg-muted">
                     {record.lifecycleStatus === "active" ? "Active" : "Archived"} · {record.kind}

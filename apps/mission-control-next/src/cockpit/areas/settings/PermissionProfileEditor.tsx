@@ -124,7 +124,7 @@ export function PermissionProfileEditor({
         <p className="text-xs text-fg-muted">Showing up to 30 matches. Search to narrow the list.</p>
       ) : null}
       {open ? (
-        <div className="space-y-3 rounded-lg border border-line p-3">
+        <div className="space-y-3 border-t border-line-subtle pt-4">
           <h4 className="font-semibold">
             {selected ? `Edit ${selected.label}` : "New workspace permission profile"}
             {editor.isDirty ? " · Unsaved" : ""}

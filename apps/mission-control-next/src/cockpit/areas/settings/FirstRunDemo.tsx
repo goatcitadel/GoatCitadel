@@ -6,6 +6,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { McpDraftLeave } from "./McpDraftLeave";
+import { presentDemoStatus } from "./settings-vocabulary";
 
 export function FirstRunDemo({ workspaceId }: { workspaceId: string }) {
   const control = useDemoBootstrap(workspaceId),
@@ -31,8 +32,7 @@ export function FirstRunDemo({ workspaceId }: { workspaceId: string }) {
       <h3 className="text-base font-semibold text-fg">Try a local demo</h3>
       <p className="text-sm text-fg-secondary">{DEMO_BOOTSTRAP_CONSEQUENCE}</p>
       <p className="text-sm text-fg-secondary">
-        Sample records: {control.state?.status?.replaceAll("_", " ") ?? "Not checked"}. Samples are not model output or
-        completed approvals.
+        Sample records: {presentDemoStatus(control.state?.status)}. Samples are not model output or completed approvals.
       </p>
       {control.message || control.attempt ? (
         <p role="status" className="text-sm text-fg-secondary">
@@ -40,8 +40,8 @@ export function FirstRunDemo({ workspaceId }: { workspaceId: string }) {
         </p>
       ) : null}
       {control.receipt ? (
-        <div className="rounded-md border border-line p-3 text-sm text-fg-secondary">
-          <p>Last acknowledged preparation: {control.receipt.status}.</p>
+        <div className="border-t border-line-subtle pt-3 text-sm text-fg-secondary">
+          <p>Last preparation: {presentDemoStatus(control.receipt.status)}.</p>
           <ul className="list-disc pl-5">
             {control.receipt.notes.map((note, index) => (
               <li key={index} className="break-words">

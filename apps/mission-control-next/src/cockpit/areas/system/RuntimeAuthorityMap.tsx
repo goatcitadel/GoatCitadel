@@ -34,15 +34,9 @@ function AuthorityRecord({ item, workspaceId }: { item: RuntimeAuthorityItem; wo
   // A coded state is worded here; the server's own prose is kept for technical details.
   const worded = item.stateMessage ? presentAuthorityMessage(item.stateMessage) : undefined;
   return (
-    <li className="space-y-2 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
+    <li className="space-y-2 py-3 text-sm text-fg-secondary">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-xs text-fg-muted">
-            {AUTHORITY_DOMAIN[item.domain] ?? "Runtime"} ·{" "}
-            {AUTHORITY_CLASS_LABELS[item.authorityClass] ?? "Unclassified"}
-          </p>
-          <h3 className="break-words font-semibold text-fg">{item.label}</h3>
-        </div>
+        <h3 className="min-w-0 break-words font-semibold text-fg">{item.label}</h3>
         <div className="flex flex-wrap gap-1">
           <StatusBadge status={AUTHORITY_FRESHNESS[item.freshness]} />
           <StatusBadge status={AUTHORITY_POSTURE[item.posture]} />
@@ -50,6 +44,9 @@ function AuthorityRecord({ item, workspaceId }: { item: RuntimeAuthorityItem; wo
       </div>
       <p className="break-words">{worded ?? item.state}</p>
       <ul className="space-y-1">
+        <li className="text-xs text-fg-muted">
+          {AUTHORITY_DOMAIN[item.domain] ?? "Runtime"} · {AUTHORITY_CLASS_LABELS[item.authorityClass] ?? "Unclassified"}
+        </li>
         <li className="break-words">Managed by: {item.owner}</li>
         <li className="break-words">Source: {item.source}</li>
         <li>Scope: {item.scope.kind === "workspace" ? "Current workspace" : "Citadel runtime"}</li>
@@ -116,7 +113,7 @@ export function RuntimeAuthorityMap({ workspaceId }: { workspaceId: string }) {
           <p className="text-xs text-fg-muted">
             {plural(items.length, "record")} · {attention} {attention === 1 ? "needs" : "need"} attention
           </p>
-          <ul aria-label="Runtime authority records" className="grid gap-3 md:grid-cols-2">
+          <ul aria-label="Runtime authority records" className="divide-y divide-line-subtle">
             {items.map((item) => (
               <AuthorityRecord key={item.id} item={item} workspaceId={workspaceId} />
             ))}
