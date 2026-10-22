@@ -464,6 +464,13 @@ describe("isInternalInfrastructureSearchQuery", () => {
     expect(isInternalInfrastructureSearchQuery("host.docker.internal vs db01.corp")).toBe(true);
   });
 
+  it.each(["db.host.docker.internal status", "my-host.docker.internal", "svc.gateway.docker.internal dns"])(
+    "refuses a private hostname that merely ends in a Docker pseudo-host: %s",
+    (query) => {
+      expect(isInternalInfrastructureSearchQuery(query)).toBe(true);
+    },
+  );
+
   it("stays narrower than the official-provider check", () => {
     expect(isSensitiveOfficialSearchQuery("192.168.1.1 admin login")).toBe(true);
     expect(isSensitiveOfficialSearchQuery("localhost:3000 not loading react")).toBe(true);

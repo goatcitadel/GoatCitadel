@@ -648,7 +648,10 @@ const CLOUD_METADATA_HOST_PATTERN = /\b(?:metadata\.google\.internal|169\.254\.1
 // public names such as `mail.corp.example.com` out: the suffix must end the hostname.
 const PRIVATE_NAMESPACE_HOST_PATTERN = /\b[a-z0-9-]+\.(?:internal|corp|lan|home\.arpa)(?![a-z0-9-]|\.[a-z0-9])/i;
 // Docker Desktop's documented names: they are the same on every machine and reveal no network.
-const PUBLIC_DOCKER_PSEUDO_HOST_PATTERN = /\b(?:host|gateway|kubernetes)\.docker\.internal(?![a-z0-9-]|\.[a-z0-9])/gi;
+// Only a complete hostname is exempt: a hostname character before the match (`db.host.docker.internal`)
+// makes it the tail of a longer, possibly private name.
+const PUBLIC_DOCKER_PSEUDO_HOST_PATTERN =
+  /(?<![a-z0-9.-])(?:host|gateway|kubernetes)\.docker\.internal(?![a-z0-9-]|\.[a-z0-9])/gi;
 
 function containsSecret(query: string): boolean {
   return (
