@@ -31,6 +31,13 @@
 4. **An answer that cites by number ("[1]") instead of URL** must not lose all its citations when citations are pruned. Pinned in Task 9.
 5. **An ordinary router query such as "192.168.1.1 admin login"** must still search after the sensitive-query guard is extended. Only secrets, cloud-metadata endpoints, and internal-only hostnames are refused. Pinned in Task 11.
 
+## Corrections found during P0 execution
+
+- **Task 1's exposure premise was wrong.** Admission builds the tool schema without a capability profile, so web tools were already exposed in Deep mode. Task 1 was narrowed to the controller's opening search (the seed). After the final review, the seed is also skipped when its query trips the sensitive-query guard, and a Deep-only seed is skipped for greetings and short follow-ups.
+- **W2's "double engine walk after native total failure" was wrong.** The policy engine returns that failure as `blocked`, so the runner's fallback never sees it. Task 4's filter applies to executed-but-failed results and, after the final review, to failed native retries inside the alternate-engine loop.
+- **Task 3's timeout rule was narrowed.** Connection failures trip the Firecrawl breaker on any endpoint; request timeouts trip it only for the search endpoint, because a scrape waits on the target page and a slow page must not bench a healthy Firecrawl.
+- **Task 6's Deep chip copy** is "Uses web search for your messages and allows a longer research pass (up to 8 minutes)."
+
 ---
 
 ## Task 0: Sync with the Web & Search settings work
