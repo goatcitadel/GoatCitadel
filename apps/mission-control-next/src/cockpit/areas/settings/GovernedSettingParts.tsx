@@ -83,7 +83,7 @@ export function GovernedSettingChangeStatus<T extends GovernedSettingValue>({
   return (
     <>
       {change.change ? (
-        <div className="mt-3 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
+        <div className="mt-3 border-t border-line-subtle pt-3 text-sm text-fg-secondary">
           <p role="status">
             <strong className="text-fg">{presentChangeStatusLabel(change.change.receipt.status)}</strong> ·{" "}
             {change.change.message}

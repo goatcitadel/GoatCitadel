@@ -59,11 +59,7 @@ export function WorkScheduleCreateForm({
 }) {
   const actionDescriptionId = useId();
   return (
-    <form
-      aria-label="New schedule"
-      onSubmit={onSubmit}
-      className="grid gap-3 rounded-lg border border-line bg-raised p-4"
-    >
+    <form aria-label="New schedule" onSubmit={onSubmit} className="grid gap-3 border-t border-line-subtle pt-4">
       <h2 className="text-base font-semibold text-fg">New schedule</h2>
       <label className="grid gap-1 text-sm text-fg-secondary">
         Name

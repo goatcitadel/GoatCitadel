@@ -43,7 +43,7 @@ export function IntegrationManagementSettings({
     selectionGuard.requestTransition(selection.connectionId);
   }, [available, selection, selectionGuard]);
   return (
-    <section aria-label="Integration management" className="space-y-4 rounded-md border border-line-subtle p-3">
+    <section aria-label="Integration management" className="space-y-4 border-t border-line-subtle pt-4">
       <header>
         <h3 className="text-md font-semibold">Connection management</h3>
         <p className="mt-1 text-sm text-fg-secondary">

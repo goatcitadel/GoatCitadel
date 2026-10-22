@@ -1,5 +1,4 @@
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
-import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAgents } from "@goatcitadel/mission-control-shared/api/operators-agents-files";
@@ -14,6 +13,11 @@ import { LibraryImportedAgents } from "./LibraryImportedAgents";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
+
+const AGENT_VIEWS = [
+  { id: "profiles", label: "Profiles" },
+  { id: "catalog", label: "Imported catalog" },
+] as const;
 
 export function LibraryAgentsWorkspace({ workspaceId }: { workspaceId: string }) {
   const access = useProjectAccess(workspaceId);
@@ -72,17 +76,22 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
           </>
         }
       />
-      <div className="flex flex-wrap gap-2">
-        <Button
-          onClick={() =>
-            route.requestTransition((review) => {
-              if (review.isCurrent())
-                review.navigate(`/library/agents?view=${catalog ? "profiles" : "catalog"}&shell=cockpit`);
-            })
-          }
-        >
-          {catalog ? "Profiles" : "Imported catalog"}
-        </Button>
+      {/* One segmented control; the pressed button names the open view (LB-N03). */}
+      <div role="group" aria-label="Agent views" className="flex flex-wrap gap-2">
+        {AGENT_VIEWS.map((view) => (
+          <Button
+            key={view.id}
+            aria-pressed={catalog === (view.id === "catalog")}
+            variant={catalog === (view.id === "catalog") ? "primary" : "secondary"}
+            onClick={() =>
+              route.requestTransition((review) => {
+                if (review.isCurrent()) review.navigate(`/library/agents?view=${view.id}&shell=cockpit`);
+              })
+            }
+          >
+            {view.label}
+          </Button>
+        ))}
       </div>
       {query.isPending ? <p role="status">Loading agent profiles…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
@@ -134,13 +143,6 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
       ) : (
         <LibraryImportedAgents workspaceId={workspaceId} />
       )}
-      <nav aria-label="Related Library areas" className="flex flex-wrap gap-3">
-        {["skills", "capabilities", "memory", "prompt-packs"].map((section) => (
-          <NativeOwnerLink key={section} href={`/library/${section}`} scope={identity}>
-            {section.replaceAll("-", " ")}
-          </NativeOwnerLink>
-        ))}
-      </nav>
     </section>
   );
 }

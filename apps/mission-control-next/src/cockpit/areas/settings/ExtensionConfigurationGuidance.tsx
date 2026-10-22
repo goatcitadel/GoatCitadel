@@ -25,7 +25,7 @@ export function ExtensionConfigurationGuidance({ guidance }: { guidance?: Integr
     }
   }
   return (
-    <details className="space-y-3 rounded-md border border-line-subtle p-3">
+    <details className="space-y-3 border-t border-line-subtle pt-3">
       <summary className="min-h-9 cursor-pointer font-medium">Extension setup guidance · {guidance.pluginId}</summary>
       <p className="break-words text-sm text-fg-secondary">
         Author guidance from {guidance.pluginId} {guidance.pluginVersion}. This does not enable tools or change

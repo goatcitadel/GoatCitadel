@@ -69,7 +69,7 @@ export function DeviceAccessSettings() {
           </p>
         ) : null}
         {ready && !grants.length ? <p className="mt-3 text-sm text-fg-muted">No device grants recorded.</p> : null}
-        <ul className="mt-3 space-y-3">
+        <ul className="mt-3 divide-y divide-line-subtle">
           {grants.slice(0, limit).map((grant) => {
             const active = deviceGrantCanBeRevoked(grant);
             const attempt = control.attemptFor(grant.grantId);
@@ -81,7 +81,7 @@ export function DeviceAccessSettings() {
                   ? "Active"
                   : "Unavailable";
             return (
-              <li key={grant.grantId} className="rounded-md border border-line bg-raised p-3">
+              <li key={grant.grantId} className="py-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <h4 className="break-words text-sm font-semibold text-fg">

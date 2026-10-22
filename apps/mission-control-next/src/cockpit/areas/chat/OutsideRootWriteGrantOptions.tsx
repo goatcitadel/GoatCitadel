@@ -106,10 +106,7 @@ export function OutsideRootWriteGrantOptions({
 
   const busy = Boolean(attempt);
   return (
-    <section
-      aria-label="Open a folder for this tool"
-      className="space-y-3 rounded-md border border-line-subtle bg-sunken p-3 text-sm"
-    >
+    <section aria-label="Open a folder for this tool" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
       <div>
         <h4 className="font-medium text-fg">Or approve and open a folder</h4>
         <p className="text-xs text-fg-muted">

@@ -115,9 +115,9 @@ export function ChannelOperations({
             blocked. The saved result is checked afterward.
           </p>
           {discord.pendingPairings.length + discord.approvedPairings.length > 0 ? (
-            <ul className="max-h-80 space-y-2 overflow-auto">
+            <ul className="max-h-80 divide-y divide-line-subtle overflow-auto">
               {[...discord.pendingPairings, ...discord.approvedPairings].map((pairing) => (
-                <li key={pairing.pairingId} className="rounded-md border border-line p-3">
+                <li key={pairing.pairingId} className="py-3">
                   <p>
                     {pairing.displayName || "Unnamed Discord user"} ·{" "}
                     {PAIRING_STATUS_LABELS[pairing.status] ?? "Unknown"}

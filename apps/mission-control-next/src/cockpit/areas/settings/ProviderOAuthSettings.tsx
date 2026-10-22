@@ -67,7 +67,7 @@ export function ProviderOAuthSettings({
         ) : null}
       </div>
       {flow ? (
-        <div className="space-y-2 rounded-md border border-line p-3 text-sm text-fg-secondary">
+        <div className="space-y-2 border-t border-line-subtle pt-3 text-sm text-fg-secondary">
           <p>
             <TimeText prefix="Current login expires" absolute value={flow.expiresAt} />.
           </p>
@@ -92,7 +92,7 @@ export function ProviderOAuthSettings({
         </div>
       ) : null}
       {plan ? (
-        <div className="space-y-2 rounded-md border border-line p-3 text-sm text-fg-secondary">
+        <div className="space-y-2 border-t border-line-subtle pt-3 text-sm text-fg-secondary">
           <p role="status">
             <strong>{presentChangeStatusLabel(plan.status)}</strong> · {plan.result?.summary ?? plan.summary}
           </p>

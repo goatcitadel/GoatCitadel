@@ -33,11 +33,11 @@ export function EffectivePermissionContexts({
   refreshing: boolean;
 }) {
   const rows = (legacy: boolean) => (
-    <ul className="space-y-2">
+    <ul className="divide-y divide-line-subtle">
       {contexts
         .filter((item) => isLegacyPermissionContext(item.surface) === legacy)
         .map((item) => (
-          <li key={item.surface} className="rounded-md border border-line p-3 text-sm">
+          <li key={item.surface} className="py-3 text-sm">
             <h5 className="font-semibold">{PERMISSION_CONTEXT_PRESENTATION[item.surface].label}</h5>
             <p className="text-fg-secondary">{PERMISSION_CONTEXT_PRESENTATION[item.surface].description}</p>
             {item.error ? (

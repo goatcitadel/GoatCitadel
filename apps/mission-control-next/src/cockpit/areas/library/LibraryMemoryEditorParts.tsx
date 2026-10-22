@@ -130,9 +130,9 @@ export function MemoryHistoryList({ events }: { events: MemoryChangeEvent[] }) {
         History records which fields changed and when. It does not keep earlier text, so it can't show a word-level
         difference.
       </p>
-      <ul className="grid gap-2">
+      <ul className="divide-y divide-line-subtle">
         {events.map((event) => (
-          <li key={event.changeId} className="rounded-md border border-line p-2">
+          <li key={event.changeId} className="py-2">
             <h3>{MEMORY_CHANGE[event.changeType]}</h3>
             {memoryChangeSummary(event) ? (
               <p className="text-sm text-fg-secondary">{memoryChangeSummary(event)}</p>

@@ -81,7 +81,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
             {inbox.data && !suggestions.length ? (
               <p className="text-sm text-fg-muted">No improvement suggestions.</p>
             ) : null}
-            <ul className="grid min-w-0 grid-cols-1 gap-2">
+            <ul className="grid min-w-0 grid-cols-1 divide-y divide-line-subtle">
               {suggestions.map((item) => (
                 <Suggestion key={item.candidate.candidateId} item={item} workspaceId={workspaceId} />
               ))}
@@ -178,7 +178,7 @@ function Suggestion({ item, workspaceId }: { item: CuratorReviewItem; workspaceI
     }
   };
   return (
-    <li className="grid min-w-0 gap-2 rounded-md border border-line p-3 text-sm wrap-anywhere">
+    <li className="grid min-w-0 gap-2 py-3 text-sm wrap-anywhere">
       <strong>{item.candidate.summary}</strong>
       <p>{item.proposedChange ?? item.observedIssue ?? "Review the linked records before deciding."}</p>
       <p className="text-fg-secondary">

@@ -113,9 +113,9 @@ export function RunArtifacts({ trace, workspaceId }: { trace: ObserveRunTraceRes
           Artifact records are {EVIDENCE_STATE_WORDS[trace.artifacts.state] ?? "unknown"}.
         </p>
       ) : artifacts.length ? (
-        <ul className="mt-3 grid gap-2">
+        <ul className="mt-3 divide-y divide-line-subtle">
           {artifacts.map((artifact) => (
-            <li key={artifact.artifactId} className="rounded-md border border-line p-3">
+            <li key={artifact.artifactId} className="py-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
                   <p className="text-sm font-medium text-fg">{artifact.title}</p>

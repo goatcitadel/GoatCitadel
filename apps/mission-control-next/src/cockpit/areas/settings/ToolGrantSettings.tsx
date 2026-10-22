@@ -216,12 +216,12 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
             Showing {Math.min(limit, grants.length)} of {grants.length} matching records from the latest 400 grants.
           </p>
         ) : null}
-        <ul className="space-y-2">
+        <ul className="divide-y divide-line-subtle">
           {grants.slice(0, limit).map((grant) => {
             const attempt = actions.attemptFor(`revoke:${grant.grantId}`);
             const name = describeToolGrant(grant);
             return (
-              <li key={grant.grantId} className="min-w-0 space-y-2 rounded-md border border-line bg-raised p-3">
+              <li key={grant.grantId} className="min-w-0 space-y-2 py-3">
                 <p className="break-words text-sm font-semibold text-fg">{name}</p>
                 <p className="break-words text-xs text-fg-secondary">
                   {scopeLabel(grant)} · {describeToolGrantAvailability(grant)}

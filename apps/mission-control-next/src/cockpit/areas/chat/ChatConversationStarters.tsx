@@ -1,4 +1,5 @@
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
+import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 type Props = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -18,22 +19,22 @@ export function ChatConversationStarters({ props }: { props: Props }) {
   return (
     <section aria-label="Conversation starters" className="mx-auto max-w-3xl space-y-4 p-5 text-sm">
       <h2 className="text-lg font-semibold text-fg">What would you like to work on?</h2>
-      <div className="grid gap-2 sm:grid-cols-3">
+      {/* CH-N23: a plain list of secondary buttons, not a grid of bordered cards. */}
+      <ul aria-label="Starting prompts" className="flex flex-wrap gap-2">
         {STARTERS.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            className="rounded-lg border border-line bg-raised p-3 text-left font-medium text-fg hover:border-accent"
-            onClick={() => {
-              if (props.draft?.length || props.sending || props.historicalReadOnly) return;
-              props.onDraftChange(item.prompt);
-              document.getElementById("cockpit-chat-draft")?.focus();
-            }}
-          >
-            {item.label}
-          </button>
+          <li key={item.label}>
+            <Button
+              onClick={() => {
+                if (props.draft?.length || props.sending || props.historicalReadOnly) return;
+                props.onDraftChange(item.prompt);
+                document.getElementById("cockpit-chat-draft")?.focus();
+              }}
+            >
+              {item.label}
+            </Button>
+          </li>
         ))}
-      </div>
+      </ul>
       <p className="text-fg-muted">Choose a starting prompt, then review it before sending.</p>
       <div className="flex flex-wrap gap-4 text-accent">
         <NativeOwnerLink scope="conversation-starters" href="/settings/models">

@@ -124,9 +124,9 @@ function ScopeSelection({
         />
       </label>
       {items.length ? (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-line-subtle">
           {items.slice(0, limit).map((item) => (
-            <li key={item.resourceRef} className="rounded-md border border-line-subtle px-3 py-2">
+            <li key={item.resourceRef} className="py-2">
               <label className="flex items-start gap-3 text-sm text-fg">
                 <input
                   type="checkbox"

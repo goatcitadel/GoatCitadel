@@ -288,7 +288,7 @@ function ProviderConnectionEditor({
       ) : null}
       {credentialActions}
       {attempt ? (
-        <div className="space-y-2 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
+        <div className="space-y-2 border-t border-line-subtle pt-3 text-sm text-fg-secondary">
           <p role={attempt.uncertain ? "alert" : "status"}>{attempt.message}</p>
           {attempt.uncertain && attempt.transport ? (
             <Button

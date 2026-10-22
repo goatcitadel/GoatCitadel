@@ -105,7 +105,7 @@ export function lastRunFailureReason(job: CronJobRecordResponse): string {
 /** The page notice; a run request links to its run page when the Gateway names one. */
 export function WorkScheduleNotice({ message, runHref }: { message: string; runHref?: string }) {
   return (
-    <p role="status" className="rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
+    <p role="status" className="text-sm text-fg-secondary">
       {message}
       {runHref ? (
         <>

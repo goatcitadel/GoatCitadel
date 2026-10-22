@@ -45,4 +45,13 @@ describe("EffectivePermissionContexts", () => {
     expect(shown).toContain("Unavailable: MCP owner unavailable");
     expect(view!.root.findAllByType("details")).toHaveLength(1); // only the legacy-contexts disclosure
   });
+
+  it("renders rows as hairline-separated items, not bordered cards", async () => {
+    await render("MCP owner unavailable");
+    const row = view!.root
+      .findAllByType("li")
+      .find((node) => text(node).includes("Unavailable: MCP owner unavailable"))!;
+    expect(String(row.parent!.props.className)).toContain("divide-y");
+    expect(String(row.props.className)).not.toMatch(/\brounded-md\b|\bborder\b|\bp-3\b/);
+  });
 });

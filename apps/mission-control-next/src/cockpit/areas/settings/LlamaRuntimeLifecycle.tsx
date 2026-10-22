@@ -174,7 +174,7 @@ export function LlamaRuntimeLifecycle({
 
   const locked = busy || pending;
   return (
-    <section aria-label="llama.cpp lifecycle" className="space-y-3 rounded-md border border-line bg-raised p-3">
+    <section aria-label="llama.cpp lifecycle" className="space-y-3 border-t border-line-subtle pt-4">
       <h4 className="text-sm font-semibold text-fg">llama.cpp lifecycle</h4>
       {diagnostics ? (
         <LeaseEvidence diagnostics={diagnostics} />

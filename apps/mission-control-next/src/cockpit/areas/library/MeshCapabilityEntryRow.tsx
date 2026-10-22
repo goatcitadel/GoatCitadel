@@ -32,7 +32,7 @@ export function MeshCapabilityEntryRow({
   const activation = entry.activation;
   const name = meshEntryName(entry.localId);
   return (
-    <li className="space-y-2 rounded-md border border-line p-3">
+    <li className="space-y-2 py-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <h4 className="break-words font-semibold text-fg">{name}</h4>
         <div className="flex flex-wrap gap-1">

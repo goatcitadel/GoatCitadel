@@ -44,7 +44,7 @@ export function KnowledgeResults({
         </Callout>
       ) : null}
       {outcome?.rows && resultAuthorized ? (
-        <ul className="grid min-w-0 grid-cols-1 gap-2">
+        <ul className="grid min-w-0 grid-cols-1 divide-y divide-line-subtle">
           {outcome.rows.map((row, index) => (
             <KnowledgeMatch key={index} row={row} index={index} />
           ))}
@@ -59,7 +59,7 @@ function KnowledgeMatch({ row, index }: { row: Record<string, unknown>; index: n
   const text = (value: unknown) => (typeof value === "string" && value.trim() ? value : undefined);
   const redacted = row.redacted === true || attribution.redacted === true;
   return (
-    <li className="grid min-w-0 grid-cols-1 gap-1 wrap-anywhere rounded-md border border-line p-2">
+    <li className="grid min-w-0 grid-cols-1 gap-1 wrap-anywhere py-2">
       <h3>{text(attribution.title) ?? `Match ${index + 1}: title unavailable`}</h3>
       <p className="whitespace-pre-wrap break-words">
         {redacted ? "Excerpt redacted by its source." : (text(row.snippet) ?? "Excerpt unavailable")}

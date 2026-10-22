@@ -1,4 +1,5 @@
 import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Callout } from "../../ui/Callout";
@@ -97,7 +98,7 @@ export function SystemDiagnostics() {
     }
   };
   return (
-    <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
+    <section className={AREA_PAGE}>
       <AreaHeader
         title="Diagnostics"
         description="Recent events, daemon logs, and unresolved recovery records."

@@ -108,9 +108,9 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
       {rail.snapshot ? (
         <>
           {rail.snapshot.tasks.length ? (
-            <ol className="space-y-2">
+            <ol className="divide-y divide-line-subtle">
               {rail.snapshot.tasks.map((task) => (
-                <li key={task.watcherId} className="rounded-md border border-line bg-raised p-3">
+                <li key={task.watcherId} className="py-3">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
                       <h3 className="font-medium text-fg">{task.label}</h3>

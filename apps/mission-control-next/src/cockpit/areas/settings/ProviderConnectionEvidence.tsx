@@ -163,10 +163,7 @@ export function ProviderConnectionEvidence({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <details
-      className="mt-3 rounded-md border border-line bg-raised p-3"
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
+    <details className="mt-3 border-t border-line-subtle pt-3" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="min-h-11 cursor-pointer text-sm font-semibold text-fg">Connection details</summary>
       {open ? <Body provider={provider} request={request} /> : null}
     </details>

@@ -203,11 +203,11 @@ export function BrowserSessionGrants({
           Showing the newest {LIST_LIMIT} grants. Older grants exist; counts here may be incomplete.
         </p>
       ) : null}
-      <ul className="grid min-w-0 grid-cols-1 gap-2">
+      <ul className="grid min-w-0 grid-cols-1 divide-y divide-line-subtle">
         {grants.map((grant) => {
           const live = isGrantActive(grant, now);
           return (
-            <li key={grant.grantId} className="min-w-0 rounded-md border border-line p-3 wrap-anywhere">
+            <li key={grant.grantId} className="min-w-0 py-3 wrap-anywhere">
               <div className="flex flex-wrap items-center gap-2">
                 <strong>{grant.actorId}</strong>
                 <StatusBadge

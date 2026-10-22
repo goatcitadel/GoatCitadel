@@ -49,12 +49,12 @@ export function SafetyCatalogSummary() {
               Some catalog sources are unavailable, so these counts may be incomplete.
             </p>
           ) : null}
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div className="mt-3 divide-y divide-line-subtle">
             {links.map(({ kind, label, action }) => {
               const entries = catalog.items.filter((item) => item.kind === kind);
               const href = `/library?shell=cockpit&type=${kind}`;
               return (
-                <div key={kind} className="rounded-md border border-line bg-raised p-3">
+                <div key={kind} className="py-3">
                   <h4 className="text-sm font-medium text-fg">{label}</h4>
                   <p className="mt-1 text-sm text-fg-secondary">
                     {entries.length} catalog entries

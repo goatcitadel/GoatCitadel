@@ -40,7 +40,7 @@ export function FirstRunDemo({ workspaceId }: { workspaceId: string }) {
         </p>
       ) : null}
       {control.receipt ? (
-        <div className="rounded-md border border-line p-3 text-sm text-fg-secondary">
+        <div className="border-t border-line-subtle pt-3 text-sm text-fg-secondary">
           <p>Last preparation: {presentDemoStatus(control.receipt.status)}.</p>
           <ul className="list-disc pl-5">
             {control.receipt.notes.map((note, index) => (

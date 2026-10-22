@@ -52,7 +52,7 @@ export function McpSetupProgress({
     }
   }
   return (
-    <section aria-label="MCP setup progress" className="space-y-3 rounded-md border border-line p-3">
+    <section aria-label="MCP setup progress" className="space-y-3 border-t border-line-subtle pt-4">
       <h5 className="font-semibold text-fg">From setup to a verified task</h5>
       {stale ? (
         <p role="status">This is the last inspection. Refresh to check current setup before continuing.</p>

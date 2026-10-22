@@ -126,7 +126,7 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
           <p className="text-xs text-fg-muted">
             Showing {Math.min(limit, filtered.length)} of {filtered.length} loaded servers.
           </p>
-          <ul className="space-y-2">
+          <ul className="divide-y divide-line-subtle">
             {filtered.slice(0, limit).map((server) => (
               <McpServerRow
                 key={server.serverId}
@@ -217,7 +217,7 @@ function McpServerRow({
   const attempt = useMcpServerMutation(server.serverId);
   const blocked = mcpToggleUnavailableReason(server);
   return (
-    <li className="rounded-md border border-line bg-sunken p-3">
+    <li className="py-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h4 className="break-words text-sm font-semibold text-fg">{server.label}</h4>

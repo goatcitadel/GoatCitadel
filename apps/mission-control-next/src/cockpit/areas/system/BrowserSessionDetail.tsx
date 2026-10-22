@@ -161,9 +161,9 @@ export function BrowserSessionDetail({
               onKeyDown={handleEvidenceScrollKeyDown}
               className="max-h-96 min-w-0 overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
             >
-              <ol className="grid min-w-0 grid-cols-1 gap-2">
+              <ol className="grid min-w-0 grid-cols-1 divide-y divide-line-subtle">
                 {events.data.map((event) => (
-                  <li key={event.eventId} className="min-w-0 rounded-md border border-line p-2 text-sm wrap-anywhere">
+                  <li key={event.eventId} className="min-w-0 py-2 text-sm wrap-anywhere">
                     <p className="font-medium">{BROWSER_SESSION_EVENT[event.eventType] ?? "Session event"}</p>
                     <TimeText value={event.createdAt} className="text-fg-secondary" />
                     <p>{describeEventPayload(event)}</p>

@@ -12,7 +12,7 @@ export function TemplateCard({
   onReview: () => void;
 }) {
   return (
-    <article className="space-y-2 rounded-md border border-line-subtle bg-sunken p-3">
+    <article className="space-y-2 py-3">
       <h4 className="break-words text-sm font-medium text-fg">{template.name}</h4>
       <p className="text-sm text-fg-secondary">{template.description}</p>
       <details className="text-sm text-fg-secondary">

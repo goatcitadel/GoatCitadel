@@ -182,8 +182,36 @@ describe("native owner navigation", () => {
     ]) {
       await render("record-a", target);
       expect(container.querySelector("a")).toBeNull();
-      expect(container.textContent).toContain("Open evidence");
+      // GL-N08: no cockpit destination means no link at all, not link text that does nothing.
+      expect(container.textContent).not.toContain("Open evidence");
     }
     expect(switchShell).not.toHaveBeenCalled();
+  });
+
+  it("defaults to accent link styling at its natural width (WK-N04)", async () => {
+    await act(async () => {
+      root.render(
+        <CockpitNavigationProvider>
+          <NativeOwnerLink href="/work" scope="plain">
+            Open Work
+          </NativeOwnerLink>
+        </CockpitNavigationProvider>,
+      );
+    });
+    const link = container.querySelector("a")!;
+    expect(link.className).toContain("text-accent");
+    expect(link.className).toContain("w-fit");
+  });
+
+  it("merges the caller's classes with the default link styling", async () => {
+    await render();
+    const link = container.querySelector("a")!;
+    expect(link.className).toContain("evidence-link");
+    expect(link.className).toContain("text-accent");
+  });
+
+  it("renders nothing, not a bare span, when no cockpit href resolves (GL-N08)", async () => {
+    await render("record-a", "https://foreign.invalid/chat");
+    expect(container.innerHTML).toBe("");
   });
 });

@@ -314,3 +314,29 @@ it.each([401, 403, 404])(
     expect(window.history.state.retained).toBe(true);
   },
 );
+it("switches agent views with one segmented control and no slug link row (LB-N01, LB-N03)", async () => {
+  await render("agents");
+  const group = container.querySelector('[role="group"][aria-label="Agent views"]')!;
+  expect(group).not.toBeNull();
+  const views = [...group.querySelectorAll("button")].map((button) => [
+    button.textContent,
+    button.getAttribute("aria-pressed"),
+  ]);
+  expect(views).toEqual([
+    ["Profiles", "true"],
+    ["Imported catalog", "false"],
+  ]);
+  // The pressed view is visible, not only announced, and keeps the default touch-target size.
+  const [profiles, imported] = [...group.querySelectorAll("button")];
+  expect(profiles!.className).toContain("bg-accent");
+  expect(imported!.className).not.toContain("bg-accent");
+  expect(profiles!.className).toContain("h-9");
+  expect(container.querySelector('nav[aria-label="Related Library areas"]')).toBeNull();
+});
+it("renders agent profiles as hairline-separated rows, not bordered cards", async () => {
+  await render("agents");
+  const row = [...container.querySelectorAll("li")].find((item) => item.textContent?.includes("Open Existing B"))!;
+  expect(row.parentElement!.classList.contains("divide-y")).toBe(true);
+  expect(row.classList.contains("border")).toBe(false);
+  expect(row.classList.contains("rounded-md")).toBe(false);
+});

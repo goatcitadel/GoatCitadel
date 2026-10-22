@@ -76,7 +76,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
         </Button>
       </div>
       {s.view === "new" ? (
-        <section aria-label="Register hook" className="space-y-3 rounded-md border border-line-subtle p-3">
+        <section aria-label="Register hook" className="space-y-3 border-t border-line-subtle pt-4">
           <h4 className="text-md font-semibold">Register hook</h4>
           <p className="text-sm text-fg-secondary">
             New registrations are enabled, send metadata only, use priority 100 and a 5-second timeout, and record an
@@ -226,7 +226,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
         </>
       ) : null}
       {s.view === "hook" && s.selectedHook ? (
-        <section aria-label="Selected hook" className="space-y-3 rounded-md border border-line-subtle p-3">
+        <section aria-label="Selected hook" className="space-y-3 border-t border-line-subtle pt-4">
           <h4 className="break-words text-md font-semibold">{s.selectedHook.label}</h4>
           <HookRecordEvidence hook={s.selectedHook} workspaceLabel={workspaceLabel} />
           <div className="flex flex-wrap gap-2">
@@ -250,7 +250,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
         </section>
       ) : null}
       {s.view === "hook" || s.view === "history" ? (
-        <section aria-label="Hook delivery history" className="space-y-3 rounded-md border border-line-subtle p-3">
+        <section aria-label="Hook delivery history" className="space-y-3 border-t border-line-subtle pt-4">
           <h4 className="text-md font-semibold">Hook delivery history</h4>
           {s.data?.issues.some((issue) => issue.label === "Hook deliveries") ? (
             <p role="status">Delivery history is unavailable.</p>

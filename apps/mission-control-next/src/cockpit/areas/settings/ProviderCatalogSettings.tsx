@@ -164,10 +164,7 @@ export function ProviderCatalogSettings() {
                   catalog.config?.providerConfigs?.find((item) => item.providerId === provider.providerId)?.request
                 }
               />
-              <div
-                className="mt-4 rounded-md border border-line bg-raised p-3"
-                aria-busy={refreshingId === provider.providerId}
-              >
+              <div className="mt-4 border-t border-line-subtle pt-3" aria-busy={refreshingId === provider.providerId}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h4 className="text-sm font-semibold text-fg">
                     {refreshingId === provider.providerId ? "Checking catalog…" : evidence.label}

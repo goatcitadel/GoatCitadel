@@ -235,9 +235,9 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
         Review source scan
       </Button>
       {catalog.error ? <Callout tone="error">{describeApiError(catalog.error).summary}</Callout> : null}
-      <ul className="grid min-w-0 grid-cols-1 gap-2">
+      <ul className="grid min-w-0 grid-cols-1 divide-y divide-line-subtle">
         {catalog.data?.items.map((item) => (
-          <li key={item.itemId} className="min-w-0 rounded-md border border-line p-2">
+          <li key={item.itemId} className="min-w-0 py-2">
             <label className="flex min-h-11 min-w-0 w-full items-center gap-2">
               <input
                 className="shrink-0"

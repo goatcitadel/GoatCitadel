@@ -66,11 +66,11 @@ function ExternalSources({ workspaceId }: { workspaceId: string }) {
       <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
         Refresh external sources
       </Button>
-      <ul className="grid min-w-0 grid-cols-1 gap-2">
+      <ul className="grid min-w-0 grid-cols-1 divide-y divide-line-subtle">
         {query.data?.items
           .filter((item) => item.workspaceId === workspaceId)
           .map((item) => (
-            <li key={item.sourceId} className="min-w-0 rounded-md border border-line p-3">
+            <li key={item.sourceId} className="min-w-0 py-3">
               <h3>{item.label}</h3>
               <p>
                 {sourceKindLabel(item.kind)} · {sourceStatusLabel(item.status)} ·{" "}

@@ -157,7 +157,9 @@ describe("Work task board", () => {
           </QueryClientProvider>,
         ),
       );
-      await vi.waitFor(() => expect(container.querySelector('[aria-label="Active"]')).not.toBeNull());
+      // Both sources load empty, so the board starts as its one empty state (WK-N05); the failed refresh brings the
+      // columns back with stale counts.
+      await vi.waitFor(() => expect(container.textContent).toContain("No tasks or runs yet"));
       if (source === "tasks") vi.mocked(fetchTasks).mockRejectedValue(new Error("Unavailable tasks"));
       else vi.mocked(fetchDurableRunHistory).mockRejectedValue(new Error("Unavailable runs"));
       const refresh = [...container.querySelectorAll<HTMLButtonElement>("button")].find(

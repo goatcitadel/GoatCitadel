@@ -132,7 +132,7 @@ function CandidatePlan({
   }
   const approvalId = plan?.requiredAction?.kind === "approval" ? plan.requiredAction.approvalId : undefined;
   return (
-    <section className="grid gap-3 rounded-md border border-line p-3" aria-label="Candidate change plan">
+    <section className="grid gap-3 border-t border-line-subtle pt-3" aria-label="Candidate change plan">
       <h3 className="font-semibold">{plan?.title ?? seed.title}</h3>
       <p>Applies to this workspace.</p>
       {query.isFetching ? <p role="status">Reading change plan…</p> : null}

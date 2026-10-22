@@ -197,7 +197,7 @@ function SelectedSessionControlManager({
 
   const copy = reviewCopy(review);
   return (
-    <section aria-labelledby="session-control-title" className="space-y-3 rounded-md border border-line p-3 text-sm">
+    <section aria-labelledby="session-control-title" className="space-y-3 border-t border-line-subtle pt-4 text-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <h3 id="session-control-title" className="font-semibold text-fg">
           Session control
@@ -277,12 +277,12 @@ function SelectedSessionControlManager({
       ) : null}
       {detail && !model.externalControlActive ? (
         pending.length ? (
-          <ul aria-label="Pending control requests" className="space-y-2">
+          <ul aria-label="Pending control requests" className="divide-y divide-line-subtle">
             {pending.map((request, index) => {
               const requestName = pending.length > 1 ? `companion request ${index + 1}` : "the companion request";
               const readRequested = request.requestedCapabilities.length > 1;
               return (
-                <li key={request.requestId} className="space-y-2 rounded-md border border-line p-3">
+                <li key={request.requestId} className="space-y-2 py-3">
                   <p className="font-medium text-fg">
                     {pending.length > 1 ? `Companion request ${index + 1}` : "Companion request"} · Requested:{" "}
                     {readRequested ? "Send and Read" : "Send"}

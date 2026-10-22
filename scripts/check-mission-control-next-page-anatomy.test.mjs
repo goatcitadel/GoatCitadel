@@ -48,6 +48,27 @@ describe("page-anatomy guard", () => {
     assert.deepEqual(countAnatomy("areas/settings/X.tsx", 'import "./model-setup.css";'), { "model-setup-css": 1 });
   });
 
+  it("counts rounded-md border p-* containers in areas/ as cards (GL-R03)", () => {
+    const card = '<div className="rounded-md border border-line p-3 text-sm">Item</div>';
+    assert.deepEqual(countAnatomy("areas/work/X.tsx", card), { "padded-panel": 1 });
+    // A boxed paragraph or label is the same nested card.
+    assert.deepEqual(
+      countAnatomy("areas/work/X.tsx", '<p className="rounded-md border border-line p-3 text-sm">Note</p>'),
+      { "padded-panel": 1 },
+    );
+    // Hairline rows, list dividers and form controls are not cards.
+    const rows = [
+      '<li className="border-b border-line-subtle py-3">Row</li>',
+      '<ul className="divide-y divide-line-subtle">',
+      '<select className="min-h-10 rounded-md border border-line-control bg-sunken p-2 text-fg">',
+      '<input className="rounded-md border border-line px-3 py-2" />',
+      '<button className="rounded-md border border-line px-3 py-1">Go</button>',
+    ].join("\n");
+    assert.deepEqual(countAnatomy("areas/work/X.tsx", rows), {});
+    // Only page areas count; shared ui primitives own their own surfaces.
+    assert.deepEqual(countAnatomy("ui/Callout.tsx", card), {});
+  });
+
   it("fails above the budget and asks for a lower budget below it", () => {
     const rules = [{ id: "card-surface", budget: 3, help: "flatten", count: () => 0 }];
     assert.deepEqual(evaluateAnatomy({ "card-surface": 3 }, rules), []);

@@ -6,6 +6,7 @@ import { CitadelCouncilSettings } from "../settings/CitadelCouncilSettings";
 import { CitadelVaultSettings } from "../settings/CitadelVaultSettings";
 import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 import { AreaHeader } from "../../ui/AreaHeader";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { AREA_PAGE } from "../../ui/area-layout";
 
 // Headings use the shared Citadel page names so Library, Settings, the nav rail and document titles agree.
@@ -26,10 +27,16 @@ export function LibraryGovernanceRoute({
     <section className={`${AREA_PAGE} min-w-0`}>
       <AreaHeader
         title={GOVERNANCE_SECTIONS[section]}
-        description="Governance for the active Citadel. Settings › Citadel lists every Citadel page."
+        description={
+          <>
+            Governance for the active Citadel.{" "}
+            <NativeOwnerLink href="/settings/citadel" scope="library-governance-settings-citadel">
+              Settings › Citadel
+            </NativeOwnerLink>{" "}
+            lists every Citadel page.
+          </>
+        }
       />
-      {/* The Citadel pages open at h3, as they do under Settings' per-page h2; this keeps the outline one level deep. */}
-      <h2 className="sr-only">{GOVERNANCE_SECTIONS[section]}</h2>
       {section === "citadel-overview" ? (
         <CitadelOverviewSettings key={citadelId} citadelId={citadelId} />
       ) : section === "citadel-blueprint" ? (

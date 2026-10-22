@@ -12,6 +12,7 @@ import {
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { EmptyState } from "../../ui/EmptyState";
 import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
@@ -95,6 +96,10 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
   );
   const selected = items.find((event) => event.eventId === selectedId);
   const blocked = items.filter((event) => event.evidence.trustContribution === "blocked").length;
+  const filtered = category !== "all" || posture !== "all" || Boolean(sessionId) || includeGlobal;
+  // An unfiltered read with no events is one empty state: no filters, counts or detail pane (LB-N06).
+  const nothingRecorded = Boolean(query.data) && !query.hasNextPage && !items.length && !filtered;
+  const showFilters = filtered || items.length > 0;
 
   function setParams(patch: Record<string, string | undefined>) {
     const next = new URLSearchParams(route.search);
@@ -123,72 +128,85 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
           revoke, and outside sources are not connected yet.
         </p>
       </AreaHeader>
-      <section className={CARD} aria-label="Journey filters">
-        <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Event family">
-            {(props) => (
-              <select
-                {...props}
-                className={INPUT}
-                value={category}
-                onChange={(event) => setParams({ category: event.target.value, eventId: undefined })}
-              >
-                {CATEGORIES.map(([id, text]) => (
-                  <option key={id} value={id}>
-                    {text}
-                  </option>
-                ))}
-              </select>
-            )}
-          </Field>
-          <Field label="Record state">
-            {(props) => (
-              <select
-                {...props}
-                className={INPUT}
-                value={posture}
-                onChange={(event) => setParams({ evidence: event.target.value, eventId: undefined })}
-              >
-                {POSTURES.map(([id, text]) => (
-                  <option key={id} value={id}>
-                    {text}
-                  </option>
-                ))}
-              </select>
-            )}
-          </Field>
-          <Field label="Exact session ID" help="Only events recorded for this session ID.">
-            {(props) => (
+      {showFilters ? (
+        <section className={CARD} aria-label="Journey filters">
+          <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Event family">
+              {(props) => (
+                <select
+                  {...props}
+                  className={INPUT}
+                  value={category}
+                  onChange={(event) => setParams({ category: event.target.value, eventId: undefined })}
+                >
+                  {CATEGORIES.map(([id, text]) => (
+                    <option key={id} value={id}>
+                      {text}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+            <Field label="Record state">
+              {(props) => (
+                <select
+                  {...props}
+                  className={INPUT}
+                  value={posture}
+                  onChange={(event) => setParams({ evidence: event.target.value, eventId: undefined })}
+                >
+                  {POSTURES.map(([id, text]) => (
+                    <option key={id} value={id}>
+                      {text}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+            <Field label="Exact session ID" help="Only events recorded for this session ID.">
+              {(props) => (
+                <input
+                  {...props}
+                  className={INPUT}
+                  value={sessionDraft}
+                  onChange={(event) => setSessionDraft(event.target.value)}
+                />
+              )}
+            </Field>
+            <label className="flex min-h-11 min-w-0 items-center gap-2 text-sm">
               <input
-                {...props}
-                className={INPUT}
-                value={sessionDraft}
-                onChange={(event) => setSessionDraft(event.target.value)}
+                type="checkbox"
+                checked={includeGlobal}
+                onChange={(event) => setParams({ includeGlobal: String(event.target.checked), eventId: undefined })}
               />
-            )}
-          </Field>
-          <label className="flex min-h-11 min-w-0 items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={includeGlobal}
-              onChange={(event) => setParams({ includeGlobal: String(event.target.checked), eventId: undefined })}
-            />
-            Include global records
-          </label>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            onClick={() =>
-              setParams({ sessionId: sessionDraft.normalize("NFKC").trim() || undefined, eventId: undefined })
-            }
-          >
-            Apply session
-          </Button>
-        </div>
-      </section>
+              Include global records
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={() =>
+                setParams({ sessionId: sessionDraft.normalize("NFKC").trim() || undefined, eventId: undefined })
+              }
+            >
+              Apply session
+            </Button>
+          </div>
+        </section>
+      ) : null}
       {query.isPending ? <p role="status">Reading Journey events…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
-      {query.data ? (
+      {nothingRecorded ? (
+        <EmptyState
+          title="No Journey events yet"
+          description="Governance events for this workspace appear here as memory, skills, imports and approvals change."
+          action={
+            // The filters are hidden here, so global records stay reachable from the empty state itself.
+            <Button onClick={() => setParams({ includeGlobal: "true", eventId: undefined })}>
+              Include global records
+            </Button>
+          }
+        />
+      ) : query.data ? (
         <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
           <section className={CARD} aria-label="Journey events">
             <h2 className="text-base font-semibold">Events</h2>
@@ -196,14 +214,14 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
               {plural(items.length, "event")} loaded · {blocked} with blocked records
             </p>
             {!items.length ? <p className="text-sm text-fg-muted">No Journey events match these filters.</p> : null}
-            <ul className="grid min-w-0 grid-cols-1 gap-2">
+            <ul className="grid min-w-0 grid-cols-1 divide-y divide-line-subtle">
               {items.map((event) => (
-                <li key={event.eventId} data-journey-event={event.eventId} className="min-w-0">
+                <li key={event.eventId} data-journey-event={event.eventId} className="min-w-0 py-1">
                   <button
                     type="button"
                     aria-current={event.eventId === selectedId ? "true" : undefined}
                     onClick={() => setParams({ eventId: event.eventId })}
-                    className="grid min-h-11 w-full min-w-0 gap-1 rounded-md border border-line p-2 text-left wrap-anywhere aria-[current=true]:border-accent"
+                    className="grid min-h-11 w-full min-w-0 gap-1 rounded-md px-2 py-2 text-left wrap-anywhere hover:bg-sunken aria-[current=true]:rounded-l-none aria-[current=true]:border-l aria-[current=true]:border-accent aria-[current=true]:bg-sunken aria-[current=true]:text-accent"
                   >
                     <strong>{humanize(event.action)}</strong>
                     <span className="text-sm text-fg-secondary">

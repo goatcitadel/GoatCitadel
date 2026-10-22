@@ -108,7 +108,7 @@ export function PortablePackSetup({
           {owner.children.map((child) => {
             const item = packChildItem(child);
             return (
-              <article key={child.planId} className="space-y-2 rounded-md border border-line p-3">
+              <article key={child.planId} className="space-y-2 border-t border-line-subtle py-3">
                 <h6 className="text-sm font-semibold text-fg">{child.title.slice(0, 240)}</h6>
                 <p className="text-sm text-fg-secondary">
                   {child.status.replaceAll("_", " ")} · {child.summary.slice(0, 2000)}

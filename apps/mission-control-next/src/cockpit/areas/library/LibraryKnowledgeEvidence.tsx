@@ -91,9 +91,9 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
       <Button onClick={() => setShowContext((value) => !value)}>
         {showContext ? "Hide context packs" : "Show context packs"}
       </Button>
-      <ul className="grid gap-3">
+      <ul className="divide-y divide-line-subtle">
         {retrieval.data?.recent.map((pack) => (
-          <li key={pack.contextId} className="rounded-md border border-line p-3">
+          <li key={pack.contextId} className="py-3">
             <p>
               {plural(pack.citations.length, "citation")} · <TimeText value={pack.createdAt} /> ·{" "}
               {freeformLabel(pack.scope, "Scope not recorded")}
@@ -156,9 +156,9 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
       <h2 className="text-base font-semibold">Recovered external copies</h2>
       {recovered.error ? <Callout tone="error">{describeApiError(recovered.error).summary}</Callout> : null}
       {recovered.isPending ? <p role="status">Reading recovered copies…</p> : null}
-      <ul className="grid gap-2">
+      <ul className="divide-y divide-line-subtle">
         {recovered.data?.items.map((event) => (
-          <li key={event.eventId} className="rounded-md border border-line p-3">
+          <li key={event.eventId} className="py-3">
             <h3>
               {event.action === "snapshot_created"
                 ? "Copy created"

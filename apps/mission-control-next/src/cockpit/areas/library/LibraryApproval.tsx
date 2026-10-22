@@ -29,7 +29,7 @@ export function LibraryApproval({
   }
   const approval = query.data;
   return (
-    <section className="grid gap-3 rounded-md border border-line p-3" aria-label="Library approval">
+    <section className="grid gap-3 border-t border-line-subtle pt-3" aria-label="Library approval">
       {query.isPending ? <p role="status">Reading persisted approval…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
       {approval ? (

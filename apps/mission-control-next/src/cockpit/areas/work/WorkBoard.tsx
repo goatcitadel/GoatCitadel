@@ -5,6 +5,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { presentRunStatus, presentTaskStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
+import { EmptyState } from "../../ui/EmptyState";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
@@ -79,6 +80,15 @@ export function WorkBoard() {
       )
     : null;
   const loadedTasks = taskBoard ? Object.values(taskBoard).flat() : [];
+  // WK-N05: with nothing loaded at all the board is one empty state, not four empty columns.
+  const boardEmpty =
+    Boolean(board && taskBoard) &&
+    !runs.isError &&
+    !tasks.isError &&
+    !runs.hasNextPage &&
+    !tasks.hasNextPage &&
+    !loadedTasks.length &&
+    !(board ? Object.values(board).flat().length : 0);
   const taskView = recordView(tasks);
   const runView = recordView(runs);
   const query = search.trim().toLowerCase();
@@ -148,18 +158,21 @@ export function WorkBoard() {
             >
               New task
             </Button>
-            <Button
-              size="sm"
-              aria-pressed={selecting}
-              disabled={!selecting && !tasks.data}
-              onClick={() => {
-                setSelecting((value) => !value);
-                setSelectedIds(new Set());
-                setBulkNotice(undefined);
-              }}
-            >
-              {selecting ? "Done selecting" : "Select tasks"}
-            </Button>
+            {/* Bulk selection hides until the board has rows (DESIGN.md › Page anatomy). */}
+            {boardEmpty && !selecting ? null : (
+              <Button
+                size="sm"
+                aria-pressed={selecting}
+                disabled={!selecting && !tasks.data}
+                onClick={() => {
+                  setSelecting((value) => !value);
+                  setSelectedIds(new Set());
+                  setBulkNotice(undefined);
+                }}
+              >
+                {selecting ? "Done selecting" : "Select tasks"}
+              </Button>
+            )}
             <Button
               size="sm"
               onClick={() => {
@@ -175,38 +188,40 @@ export function WorkBoard() {
         }
       />
       <WorkWaitingDecisions workspaceId={workspaceId} />
-      <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor={searchId} className="sr-only">
-          Search loaded work
-        </label>
-        <div className="relative min-w-0 flex-1 sm:max-w-sm">
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-fg-muted"
-          />
-          <input
-            id={searchId}
-            type="search"
-            value={search}
-            placeholder="Search loaded tasks and runs"
-            onChange={(event) => setSearch(event.target.value)}
-            className={`${CONTROL} w-full pl-8 pr-2 placeholder:text-fg-muted`}
-          />
+      {boardEmpty ? null : (
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor={searchId} className="sr-only">
+            Search loaded work
+          </label>
+          <div className="relative min-w-0 flex-1 sm:max-w-sm">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-fg-muted"
+            />
+            <input
+              id={searchId}
+              type="search"
+              value={search}
+              placeholder="Search loaded tasks and runs"
+              onChange={(event) => setSearch(event.target.value)}
+              className={`${CONTROL} w-full pl-8 pr-2 placeholder:text-fg-muted`}
+            />
+          </div>
+          <label htmlFor={kindId} className="sr-only">
+            Record type
+          </label>
+          <select
+            id={kindId}
+            value={kind}
+            onChange={(event) => setKind(event.target.value)}
+            className={`${CONTROL} px-2`}
+          >
+            <option value="all">Tasks and runs</option>
+            <option value="task">Tasks</option>
+            <option value="run">Runs</option>
+          </select>
         </div>
-        <label htmlFor={kindId} className="sr-only">
-          Record type
-        </label>
-        <select
-          id={kindId}
-          value={kind}
-          onChange={(event) => setKind(event.target.value)}
-          className={`${CONTROL} px-2`}
-        >
-          <option value="all">Tasks and runs</option>
-          <option value="task">Tasks</option>
-          <option value="run">Runs</option>
-        </select>
-      </div>
+      )}
       {selecting ? (
         <WorkTaskBulkActions
           workspaceId={workspaceId}
@@ -263,7 +278,17 @@ export function WorkBoard() {
           Task list unavailable: {describeApiError(tasks.error).summary}
         </p>
       ) : null}
-      {board || taskBoard ? (
+      {boardEmpty ? (
+        <EmptyState
+          title="No tasks or runs yet"
+          description="Tasks you create here and runs started from Chat or a supervised plan appear on this board."
+          action={
+            <Button variant="primary" onClick={() => setCreating(true)} disabled={creating || !writable}>
+              New task
+            </Button>
+          }
+        />
+      ) : board || taskBoard ? (
         <>
           {stacked ? (
             <WorkBoardColumnPicker

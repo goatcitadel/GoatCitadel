@@ -203,9 +203,9 @@ function CandidateVersions({
           {blocker}
         </Callout>
       ))}
-      <ul className="grid gap-2">
+      <ul className="divide-y divide-line-subtle">
         {detail.versions.map((version) => (
-          <li key={version.versionId} className="grid gap-2 rounded-md border border-line p-3">
+          <li key={version.versionId} className="grid gap-2 py-3">
             <h4 className="font-semibold">{version.title}</h4>
             <p>{version.summary}</p>
             <p className="text-sm text-fg-secondary">
@@ -251,7 +251,7 @@ function CandidateVersions({
         <section aria-label="Immutable version artifacts">
           <p>Read-only artifact inspection does not activate this version.</p>
           {artifacts.data.artifacts.map((artifact) => (
-            <details key={artifact.artifactRef} className="rounded-md border border-line p-2">
+            <details key={artifact.artifactRef} className="border-t border-line-subtle py-2">
               <summary>{artifact.label}</summary>
               <pre
                 role="region"

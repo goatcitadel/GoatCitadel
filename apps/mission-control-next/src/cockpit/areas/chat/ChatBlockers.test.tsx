@@ -103,11 +103,10 @@ describe("Chat blockers", () => {
     expect(container.textContent).not.toContain("tool_invoke");
     expect(container.textContent).toContain("Which path?");
     const anchors = [...container.querySelectorAll("a")];
-    expect(anchors).toHaveLength(2);
-    for (const [label, pathname, approvalId] of [
-      ["Inspect persisted approval", "/inbox", "approval/1"],
-      ["Open this conversation in Chat", "/chat", null],
-    ] as const) {
+    // CH-N06: no "Open this conversation in Chat" link while already inside Chat.
+    expect(anchors).toHaveLength(1);
+    expect(container.textContent).not.toContain("Open this conversation in Chat");
+    for (const [label, pathname, approvalId] of [["Inspect persisted approval", "/inbox", "approval/1"]] as const) {
       const anchor = anchors.find((link) => link.textContent === label)!;
       expect(anchor).toBeDefined();
       const target = new URL(anchor.href);

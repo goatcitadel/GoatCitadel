@@ -30,12 +30,9 @@ export function ProviderAdviceSettings() {
             <p key={warning}>{warning}</p>
           ))}
           {Array.isArray(state.data.candidates) ? (
-            <ul className="space-y-3">
+            <ul className="divide-y divide-line-subtle">
               {state.data.candidates.slice(0, 5).map((candidate) => (
-                <li
-                  key={`${candidate.providerId}:${candidate.model}`}
-                  className="rounded-md border border-line-subtle p-3"
-                >
+                <li key={`${candidate.providerId}:${candidate.model}`} className="py-3">
                   <strong className="text-fg">
                     {candidate.providerLabel} · {candidate.model}
                   </strong>

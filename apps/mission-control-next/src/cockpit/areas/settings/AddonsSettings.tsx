@@ -118,7 +118,7 @@ export function AddonsSettings() {
         </>
       ) : null}
       {owner.selectedAddonId ? (
-        <section aria-label="Selected add-on" className="space-y-4 rounded-md border border-line-subtle p-3">
+        <section aria-label="Selected add-on" className="space-y-4 border-t border-line-subtle pt-4">
           {owner.statusLoading ? (
             <p role="status" className="text-sm">
               Loading selected add-on status…

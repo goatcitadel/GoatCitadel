@@ -29,7 +29,7 @@ export function CapabilityPolicyInspector({ workspaceId, toolName }: { workspace
   if (!toolName)
     return <p className="text-xs text-fg-muted">Context evaluation is available for entries with a tool identity.</p>;
   return (
-    <section aria-label="Tool policy inspector" className="mt-3 space-y-3 rounded-md border border-line-subtle p-3">
+    <section aria-label="Tool policy inspector" className="mt-3 space-y-3 border-t border-line-subtle pt-3">
       <h3 className="font-medium text-fg">Evaluate a selected tool context</h3>
       <p className="text-xs text-fg-muted">
         GoatCitadel records an advisory decision for your selected context and arguments. This does not run the tool,
@@ -329,7 +329,7 @@ function PolicyResult({ value }: { value: PolicyInspectionResult }) {
       ? "Allowed by this evaluation"
       : "Blocked by this evaluation";
   return (
-    <section aria-label="Advisory policy result" className="space-y-2 rounded-md border border-line bg-sunken p-3">
+    <section aria-label="Advisory policy result" className="space-y-2 border-t border-line-subtle pt-3">
       <p className="font-medium text-fg">{label}</p>
       <RiskBadge risk={decision.riskLevel} />
       <p className="text-xs">Profile: {bounded(value.profileLabel)}</p>

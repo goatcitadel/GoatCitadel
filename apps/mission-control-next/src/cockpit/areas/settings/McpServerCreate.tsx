@@ -99,9 +99,9 @@ export function McpServerCreate({
                 {templates.isError ? (
                   <p role="alert">Templates unavailable: {describeApiError(templates.error).summary}</p>
                 ) : null}
-                <ul className="mt-2 space-y-2">
+                <ul className="mt-2 divide-y divide-line-subtle">
                   {templateItems.slice(0, templateLimit).map((template) => (
-                    <li key={template.templateId} className="rounded-md border border-line p-2">
+                    <li key={template.templateId} className="py-2">
                       <p className="font-semibold text-fg">{template.label}</p>
                       <p className="break-words">{template.description.slice(0, 1200)}</p>
                       <Button

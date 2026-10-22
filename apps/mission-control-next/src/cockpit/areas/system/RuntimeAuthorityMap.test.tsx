@@ -185,6 +185,30 @@ describe("cockpit runtime authority map", () => {
     expect(container.querySelector("li h3")?.textContent).toBe("Durable run ledger");
   });
 
+  it("leads each record with its heading and keeps domain and class as trailing metadata (SY-N05)", async () => {
+    projection.value.data = { items: [item()] };
+    await render();
+    const record = container.querySelector('[aria-label="Runtime authority records"] > li')!;
+    const heading = record.querySelector("h3")!;
+    const meta = [...record.querySelectorAll("li")].find((entry) => entry.textContent === "Runs · Saved record");
+    expect(meta).toBeDefined();
+    expect(heading.compareDocumentPosition(meta!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Nothing above the heading: it is the record's first text.
+    expect(record.textContent?.startsWith("Durable run ledger")).toBe(true);
+  });
+
+  it("renders rows as hairline-separated items, not bordered cards", async () => {
+    projection.value.data = { items: [item(), item({ id: "signals", label: "Realtime signals" })] };
+    await render();
+    const list = container.querySelector('[aria-label="Runtime authority records"]')!;
+    expect(list.className).toContain("divide-y divide-line-subtle");
+    expect(list.className).not.toContain("grid-cols-2");
+    for (const row of list.querySelectorAll(":scope > li")) {
+      expect(row.className).not.toMatch(/\brounded-(?:md|lg|xl)\b/);
+      expect(row.className.split(/\s+/)).not.toContain("border");
+    }
+  });
+
   it("announces loading before the first projection arrives", async () => {
     projection.value.loading = true;
     await render();

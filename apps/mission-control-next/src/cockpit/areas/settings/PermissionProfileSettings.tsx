@@ -178,9 +178,9 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
           <p className="text-xs text-fg-muted">
             Showing {Math.min(limit, filtered.length)} of {filtered.length} eligible loaded profiles.
           </p>
-          <ul className="space-y-2">
+          <ul className="divide-y divide-line-subtle">
             {filtered.slice(0, limit).map((item) => (
-              <li key={item.profileId} className="rounded-md border border-line-subtle bg-raised p-3">
+              <li key={item.profileId} className="py-3">
                 <label className="flex items-start gap-2 text-sm text-fg">
                   <input
                     type="radio"
@@ -245,7 +245,7 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
         <div
           role="group"
           aria-label={`Reviewed ${contextLabel} profile selection`}
-          className="space-y-3 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary"
+          className="space-y-3 border-t border-line-subtle pt-3 text-sm text-fg-secondary"
         >
           <p>
             Apply <strong className="text-fg">{reviewed.profile.label}</strong> to {contextLabel} in the selected

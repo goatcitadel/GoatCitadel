@@ -27,7 +27,7 @@ export function NotificationRoutingSettings({
   const s = useNotificationRouting(workspaceId, channels);
   const [limit, setLimit] = useState(20);
   return (
-    <section aria-label="Notification routing" className="min-w-0 space-y-4 rounded-md border border-line p-4">
+    <section aria-label="Notification routing" className="min-w-0 space-y-4 border-t border-line-subtle pt-4">
       <header>
         <h3 className="text-md font-semibold">Notification routing</h3>
         <p className="mt-1 text-sm text-fg-secondary">
@@ -96,7 +96,7 @@ export function NotificationRoutingSettings({
           <section aria-label="Notification destinations" className="space-y-2">
             <h4 className="font-semibold">Destinations</h4>
             {s.targets.slice(0, limit).map((target) => (
-              <details className="rounded-md border border-line-subtle p-3" key={target.targetId}>
+              <details className="border-t border-line-subtle py-3" key={target.targetId}>
                 <summary className="cursor-pointer break-words text-sm">
                   {target.label} · {NOTIFICATION_LIFECYCLE_LABELS[target.lifecycleState] ?? "Unknown"}
                 </summary>
@@ -145,7 +145,7 @@ export function NotificationRoutingSettings({
           <section aria-label="Notification rules" className="space-y-2">
             <h4 className="font-semibold">Rules</h4>
             {s.rules.slice(0, limit).map((rule) => (
-              <details className="rounded-md border border-line-subtle p-3" key={rule.ruleId}>
+              <details className="border-t border-line-subtle py-3" key={rule.ruleId}>
                 <summary className="cursor-pointer break-words text-sm">
                   {rule.label} · {NOTIFICATION_LIFECYCLE_LABELS[rule.lifecycleState] ?? "Unknown"}
                 </summary>

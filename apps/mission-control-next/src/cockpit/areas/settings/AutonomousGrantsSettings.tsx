@@ -88,11 +88,11 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
           className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-fg"
         />
       </label>
-      <ul className="space-y-3">
+      <ul className="divide-y divide-line-subtle">
         {items.slice(0, limit).map((grant) => {
           const attempt = control.attemptFor(grant.grantId);
           return (
-            <li key={grant.grantId} className="space-y-2 rounded-md border border-line p-3 text-sm">
+            <li key={grant.grantId} className="space-y-2 py-3 text-sm">
               <h4 className="break-words font-semibold">{grant.reason}</h4>
               <p>
                 {workspaceName(grant.workspaceId) ?? "Workspace outside this Citadel"}

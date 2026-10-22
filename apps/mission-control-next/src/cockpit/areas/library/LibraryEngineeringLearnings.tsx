@@ -195,11 +195,11 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
       {list.isFetching ? <p role="status">Reading Engineering learnings…</p> : null}
       {list.error ? <Callout tone="error">{describeApiError(list.error).summary}</Callout> : null}
       <Button onClick={() => void refresh()}>Refresh learnings</Button>
-      <ul className="grid gap-2">
+      <ul className="divide-y divide-line-subtle">
         {list.data?.items
           .filter((record) => record.workspaceId === workspaceId)
           .map((record) => (
-            <li key={record.learningId} className="rounded-md border border-line p-3">
+            <li key={record.learningId} className="py-3">
               <h3>{record.title}</h3>
               <p>
                 <StatusBadge status={presentLearningStatus(record.status)} />

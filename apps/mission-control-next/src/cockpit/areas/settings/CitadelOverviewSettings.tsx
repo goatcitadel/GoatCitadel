@@ -87,7 +87,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
             </div>
             {view === "brief" ? <CitadelBrief key={citadelId} citadelId={citadelId} /> : null}
             {view === "charter" ? (
-              <article className="space-y-3 rounded-md border border-line-subtle bg-sunken p-3">
+              <article className="space-y-3">
                 <h4 className="font-medium text-fg">Charter</h4>
                 <p className="break-words text-sm text-fg">{charter.purpose}</p>
                 <p className="text-xs text-fg-muted">
@@ -122,9 +122,9 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
               <div className="space-y-2">
                 <h4 className="text-sm font-medium text-fg">Chambers</h4>
                 {state.citadel!.chambers.length ? (
-                  <ul className="space-y-2">
+                  <ul className="divide-y divide-line-subtle">
                     {state.citadel!.chambers.slice(0, 100).map((chamber) => (
-                      <li key={chamber.chamberId} className="rounded-md border border-line-subtle bg-sunken p-3">
+                      <li key={chamber.chamberId} className="py-3">
                         <p className="break-words text-sm font-medium text-fg">{chamber.name}</p>
                         <p className="text-xs text-fg-muted">
                           {presentChamberSensitivity(chamber.sensitivity)} · {chamber.sealed ? "Sealed" : "Unsealed"}
@@ -147,7 +147,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
             ) : null}
             {view === "gatehouse" ? (
               state.gatehouse ? (
-                <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                <dl className="divide-y divide-line-subtle text-sm">
                   {[
                     ["Risk setting", presentRiskPosture(state.gatehouse.riskPosture)],
                     ["Model policy", presentModelPolicy(state.gatehouse.modelPolicyDefault)],
@@ -156,7 +156,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
                     [CITADEL_PAGE_LABELS["citadel-wards"], String(state.gatehouse.wardCount)],
                     ["Sealed Chambers", String(state.gatehouse.sealedChamberCount)],
                   ].map(([label, value]) => (
-                    <div key={label} className="rounded-md border border-line-subtle bg-sunken p-3">
+                    <div key={label} className="py-2">
                       <dt className="font-medium text-fg">{label}</dt>
                       <dd className="mt-1 text-fg-secondary">{value}</dd>
                     </div>
@@ -170,7 +170,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
               Rules (Wards) and Gates are checked with deny-wins: one matching deny blocks the action. Sealed Chambers
               do not widen access.
             </p>
-            <details className="rounded-md border border-line-subtle bg-sunken p-3 text-sm text-fg-secondary">
+            <details className="border-t border-line-subtle pt-3 text-sm text-fg-secondary">
               <summary className="cursor-pointer">Default templates for reference</summary>
               <p className="mt-2">This Citadel already has a Charter. These templates are shown for inspection.</p>
               {templateState.loading ? (
@@ -207,7 +207,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
                 {templateState.error}
               </p>
             ) : null}
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="divide-y divide-line-subtle">
               {control.defaultTemplates.map((template) => (
                 <TemplateCard
                   key={template.id}

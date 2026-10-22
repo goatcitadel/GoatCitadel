@@ -177,7 +177,7 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
             threshold={50}
           >
             {(record) => (
-              <article className="mb-2 grid gap-2 rounded-lg border border-line p-3">
+              <article className="grid gap-2 border-b border-line-subtle pb-3">
                 <h3 className="font-medium">
                   {record.explanation?.summary || presentApprovalAction(record.linkage?.toolName, record.kind)}
                 </h3>

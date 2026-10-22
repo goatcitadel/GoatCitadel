@@ -163,6 +163,9 @@ describe("native Library resource routes", () => {
     expect(container.querySelector("h1")?.textContent).toBe(CITADEL_PAGE_LABELS["citadel-overview"]);
     expect(container.textContent).not.toContain("Capability directory");
     expect(container.querySelector('[aria-current="page"]')).toBeNull();
+    // LB-N08: the header names Settings › Citadel as a link, not as plain text.
+    const settingsLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Settings › Citadel");
+    expect(settingsLink?.getAttribute("href")).toBe("/settings/citadel?shell=cockpit");
     await navigate("/library/citadel-blueprint?shell=cockpit");
     expect(container.textContent).toContain("Blueprint for personal");
     expect(container.querySelector("h1")?.textContent).toBe("Export/import · Blueprint");
@@ -178,6 +181,12 @@ describe("native Library resource routes", () => {
     await navigate("/library/citadel-vault?shell=cockpit");
     expect(container.textContent).toContain("Vault for personal");
     expect(container.textContent).not.toContain("Capability directory");
+  });
+  it("titles a Citadel page with one heading, without a hidden repeat of it (LB-R01)", async () => {
+    await navigate("/library/citadel?shell=cockpit");
+    const label = CITADEL_PAGE_LABELS.citadel;
+    const headings = [...container.querySelectorAll("h1, h2, h3")].filter((heading) => heading.textContent === label);
+    expect(headings.map((heading) => heading.tagName)).toEqual(["H1"]);
   });
   it("opens scoped resource tabs and preserves explicit classic management ownership", async () => {
     await navigate("/library/memory?shell=cockpit");
@@ -197,7 +206,12 @@ describe("native Library resource routes", () => {
     expect(container.textContent).not.toContain("mesh publications in");
     expect(window.location.pathname).toBe("/library/tool/tool%3Aread");
     await navigate("/library/notes/unknown?shell=cockpit");
-    expect(container.textContent).toContain("Library destination unavailable");
+    // LB-N10: an unknown Library link says plainly that the page wasn't found and links back to Library.
+    expect(container.querySelector("h1")?.textContent).toBe("Page not found");
+    expect(container.textContent).toContain("No Library page at this link");
+    expect(
+      [...container.querySelectorAll("a")].find((link) => link.textContent === "Open Library")?.getAttribute("href"),
+    ).toBe("/library?shell=cockpit");
     expect(container.textContent).not.toContain("Capability directory");
     expect(container.textContent).not.toContain("notes in scoped-workspace");
   });
@@ -212,14 +226,14 @@ it("opens native Mail for the active workspace from its Library section", async 
   expect(container.textContent).toContain("mail in scoped-workspace");
   expect(container.querySelector('[aria-current="page"]')?.textContent).toBe("Mail");
   expect(container.textContent).not.toContain("Capability directory");
-  expect(container.textContent).not.toContain("Library destination unavailable");
+  expect(container.textContent).not.toContain("No Library page at this link");
 });
 
 it("opens the experimental native curator by direct link without adding it to the section tabs", async () => {
   await navigate("/library/curator?shell=cockpit");
   expect(container.textContent).toContain("curator in scoped-workspace");
   expect(container.querySelector('nav a[href*="/library/curator"]')).toBeNull();
-  expect(container.textContent).not.toContain("Library destination unavailable");
+  expect(container.textContent).not.toContain("No Library page at this link");
 });
 
 it("opens the experimental native Journey by direct link without adding it to the section tabs", async () => {

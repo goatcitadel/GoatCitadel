@@ -897,6 +897,40 @@ it.each([0, 1])(
   },
 );
 
+it("opens an approvalId link in the inspector, not inline above the groups (IN-N07)", async () => {
+  inboxMock.result = {
+    data: { ...projection, items: [] },
+    isLoading: false,
+    isError: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  };
+  window.history.replaceState(null, "", "/inbox?workspaceId=default&approvalId=test&shell=cockpit");
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await renderUpdates(client);
+  const inspector = await vi.waitFor(() => {
+    const region = container.querySelector('[aria-label="Inspector: Linked approval"]');
+    expect(region).not.toBeNull();
+    return region!;
+  });
+  await vi.waitFor(() => expect(inspector.textContent).toContain("Review the file write."));
+  const page = container.querySelector("[data-area-header]")!.closest("section")!;
+  expect(page.contains(inspector)).toBe(false);
+  expect(page.textContent).not.toContain("Review the file write.");
+  expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
+  // While it is open, the page shows no second entry for the record.
+  const reopen = () =>
+    [...page.querySelectorAll("button")].find((button) => button.textContent === "Open linked approval");
+  expect(reopen()).toBeUndefined();
+  // Closed (Escape, Close, or a phone sheet dismissed), the page offers a way back.
+  const close = container.querySelector<HTMLButtonElement>('button[aria-label="Close inspector"]');
+  await act(async () => close!.click());
+  await vi.waitFor(() => expect(reopen()).toBeDefined());
+  await act(async () => reopen()!.click());
+  await vi.waitFor(() => expect(container.querySelector('[aria-label="Inspector: Linked approval"]')).not.toBeNull());
+  client.clear();
+});
+
 it("opens an exact approval link even outside the Inbox projection", async () => {
   inboxMock.result = {
     data: { ...projection, items: [] },

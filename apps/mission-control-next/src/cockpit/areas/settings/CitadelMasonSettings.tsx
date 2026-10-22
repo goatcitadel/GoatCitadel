@@ -52,9 +52,15 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
         </p>
       ) : null}
       {!control.session ? (
-        <Button disabled={control.locked || !citadelId || control.loading} onClick={() => void control.startSession()}>
-          Start setup
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="primary"
+            disabled={control.locked || !citadelId || control.loading}
+            onClick={() => void control.startSession()}
+          >
+            Start setup
+          </Button>
+        </div>
       ) : (
         <>
           <TechnicalDetails label="Session details">
@@ -103,7 +109,7 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
               Discard answer changes
             </Button>
           </div>
-          <details className="rounded-md border border-line-subtle p-3 text-sm text-fg-secondary">
+          <details className="border-t border-line-subtle pt-3 text-sm text-fg-secondary">
             <summary>Ask the configured model to interpret an answer</summary>
             <p className="mt-2">
               This sends your message and captured answers to the configured model. Do not include secrets. Structured
