@@ -73,6 +73,6 @@
     "happy-dom": "20.9.0",
     "react-test-renderer": "19.2.5",
     "terser": "5.51.2",
-    "vite": "6.4.3"
+    "vite": "6.4.4"
   }
 }

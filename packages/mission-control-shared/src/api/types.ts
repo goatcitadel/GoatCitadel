@@ -478,6 +478,12 @@ export interface RuntimeSettingsResponse {
       timeoutMs: number;
       defaultReadBackend: "native" | "firecrawl";
       fallbackToNative: boolean;
+      /** False when tools cannot reach the base URL; reads then use native search. */
+      baseUrlAllowlisted?: boolean;
+    };
+    search?: {
+      /** Native engines in order: the first is the default, the rest are the backup order. */
+      engineOrder: import("@goatcitadel/contracts").WebSearchNativeEngine[];
     };
   };
   auth: {
@@ -627,6 +633,7 @@ export interface RuntimeSettingsResponse {
     chatWorkPassportV1Enabled?: boolean;
     chatRequesterMcpV1Enabled?: boolean;
     chatStaticMcpV1Enabled?: boolean;
+    claudeCliToolBridgeEnabled?: boolean;
     evolutionControlPlaneV1Enabled?: boolean;
     improvementLocalObservationV1Enabled?: boolean;
     improvementModelEvaluationV1Enabled?: boolean;

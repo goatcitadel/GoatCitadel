@@ -181,6 +181,7 @@ import {
 } from "./chat-turn-agent-runner/tool-call-protocol.js";
 import { applyCompletionFailureClearing } from "./chat-turn-agent-runner/completion-failure-clearing.js";
 import {
+  isSearchQueryRefusal,
   tryAlternateBuiltinBrowserResult,
   tryBrowserFallbackAcrossMcpTiers,
   type BrowserFallbackExecutorDeps,
@@ -198,6 +199,9 @@ import {
   extractSkillSecurityFailureRecord,
 } from "./chat-turn-agent-runner/failure-records.js";
 import { buildToolResultDesignAdvisories, hasDesignSkillReceipt } from "./chat-turn-agent-runner/design-advisories.js";
+import { hasSubstantiveSeedQuery, resolveTurnWebLookupIntent } from "./chat-turn-agent-runner/web-research-mode.js";
+import { selectAnswerCitations } from "./chat-turn-agent-runner/answer-citations.js";
+import { buildDeepResearchThinEvidenceFooter } from "./chat-turn-agent-runner/deep-research-evidence.js";
 import {
   analyzePresentationContentQuality,
   buildWorkspaceFileDownloadHref,
@@ -253,6 +257,7 @@ import {
   type MeshToolPolicyBinding,
   type ArtifactBrandInput,
   MESH_TOOL_POLICY_DEFINITION,
+  isUnsafeSeedQuery,
 } from "@goatcitadel/policy-engine";
 import { MAX_PARALLEL_TOOL_CALLS, decideToolBatchParallelism } from "./chat-tool-parallelism.js";
 import {
@@ -901,6 +906,8 @@ export interface ChatTurnAgentRunnerDeps {
   storage: Storage;
   listToolCatalog: () => ToolCatalogEntry[];
   getModelOutputTokenLimit?: (providerId: string, model: string) => number | undefined;
+  /** Text-only providers (the local Claude Code CLI) drop Gateway tools, so they cannot create files. */
+  describeProviderToolSupport?: (providerId: string) => { label: string; toolCalling: boolean } | undefined;
   /** Live callable catalog used only to enforce stricter removals or drift. */
   listCapabilityCatalog?: (scope: "callable", workspaceId?: string) => Promise<CapabilityCatalogEntry[]>;
   revalidateRequesterTool?: (profile: ChatTurnCapabilityProfileRecord, canonicalName: string) => Promise<void>;
@@ -968,6 +975,8 @@ export interface ChatTurnAgentRunnerDeps {
     },
   ) => Promise<McpInvokeResponse>;
   listMcpBrowserFallbackTargets?: () => Promise<McpBrowserFallbackTarget[]>;
+  /** Operator native search engine order for the alternate-engine fallback. */
+  getSearchEngineOrder?: () => readonly string[];
   /** Canonical operator decision projection for ordinary Chat tool runs. */
   recordRuntimeDecision?: (input: RuntimeDecisionTraceAppendInput) => Promise<void>;
   /**
@@ -1209,6 +1218,7 @@ export class ChatTurnAgentRunner {
       invokeTool: deps.invokeTool,
       invokeMcpTool: deps.invokeMcpTool,
       listMcpBrowserFallbackTargets: deps.listMcpBrowserFallbackTargets,
+      getSearchEngineOrder: deps.getSearchEngineOrder,
       buildPolicyContext: buildTurnToolPolicyContext,
       listPriorToolRuns: async (turnId) => await deps.storage.chatToolRuns.listByTurn(turnId),
       selectRecentBrowserResultUrls,
@@ -1254,18 +1264,26 @@ export class ChatTurnAgentRunner {
     const localResearchContinuation = resolveLocalResearchContinuation(input.content, input.historyMessages);
     const presentationArtifactIntent =
       !suppressPromptLabCodeArtifactTools && detectPresentationArtifactIntent(input.content);
+    const detectedWebLookupIntent =
+      detectWebLookupIntent(intentDetectionContent, input.historyMessages) ||
+      (intentDetectionContent !== input.content
+        ? detectWebLookupIntent(input.content, input.historyMessages)
+        : false) ||
+      Boolean(localResearchContinuation);
+    const localFileIntent = detectLocalFileIntent(input.content);
     const intents = {
       liveData:
         detectLiveDataIntent(intentDetectionContent) ||
         (intentDetectionContent !== input.content ? detectLiveDataIntent(input.content) : false) ||
         Boolean(localResearchContinuation),
-      webLookup:
-        detectWebLookupIntent(intentDetectionContent, input.historyMessages) ||
-        (intentDetectionContent !== input.content
-          ? detectWebLookupIntent(input.content, input.historyMessages)
-          : false) ||
-        Boolean(localResearchContinuation),
-      localFile: detectLocalFileIntent(input.content),
+      // Deep mode counts as a web lookup on its own so a bounded schema keeps the web essentials.
+      webLookup: resolveTurnWebLookupIntent({
+        webMode: input.webMode,
+        detectedWebLookupIntent,
+        localFileIntent,
+        workflowSkillCapture: false,
+      }),
+      localFile: localFileIntent,
       presentationArtifact: presentationArtifactIntent,
       documentArtifact:
         !suppressPromptLabCodeArtifactTools &&
@@ -2146,6 +2164,14 @@ export class ChatTurnAgentRunner {
           ? this.deps.getModelOutputTokenLimit?.(input.providerId, input.model)
           : undefined,
     });
+    const describeProviderToolSupport = this.deps.describeProviderToolSupport;
+    const fileArtifactIntent = intents.documentArtifact || intents.presentationArtifact;
+    // Before the first completion only the routed provider is known; the instruction is sized for it.
+    const primaryFileToollessProviderLabel = resolveFileToollessProviderLabel(
+      fileArtifactIntent,
+      input.capabilityProfile?.selection.effectiveProviderId ?? input.providerId,
+      describeProviderToolSupport,
+    );
     const executionBudgetTrace = {
       profile: executionBudget.profile ?? "default",
       ...(executionBudget.promotionReason ? { promotionReason: executionBudget.promotionReason } : {}),
@@ -2368,7 +2394,6 @@ export class ChatTurnAgentRunner {
     const canUseSessionStatusTool = toolSchema.canonicalToModel.has("session.status");
     const explicitMemoryOnlyPrompt = detectMemoryToolsOnlyPrompt(input.content);
     const memoryLookupIntent = detectMemoryLookupIntent(input.content) || explicitMemoryOnlyPrompt;
-    const promptSpecificWebLookupTurn = input.mode !== "code" && Boolean(derivePromptSpecificWebQuery(input.content));
     const canUseMemorySearchTool = toolSchema.canonicalToModel.has("memory.search");
     const canUseFilesystemListTool = toolSchema.canonicalToModel.has("fs.list");
     const localFileIntent = intents.localFile;
@@ -2532,6 +2557,15 @@ export class ChatTurnAgentRunner {
       ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
       ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
     };
+    // An opted-in fallback can answer on another provider; file behavior follows the provider that answered.
+    const answeringFileToollessProviderLabel = (): string | undefined =>
+      routingState.effectiveProviderId
+        ? resolveFileToollessProviderLabel(
+            fileArtifactIntent,
+            routingState.effectiveProviderId,
+            describeProviderToolSupport,
+          )
+        : primaryFileToollessProviderLabel;
     let lastCodingCheckpointAt = codingCheckpoint?.createdAt;
     const persistCodingProgress = async (nextAction: string): Promise<void> => {
       if (!codingState || !input.policyRunId) return;
@@ -2982,13 +3016,13 @@ export class ChatTurnAgentRunner {
       input.mode !== "code" &&
       !promptLabShouldInspectFilesForTurn &&
       !intents.webLookup &&
-      !promptSpecificWebLookupTurn &&
       (promptLabContract.explicitTools || explicitMemoryOnlyPrompt) &&
       (memoryLookupIntent || explicitMemoryOnlyPrompt) &&
       canUseMemorySearchTool &&
       toolRunCount === 0
     ) {
-      const memoryQuery = inferMemoryQueryFromPrompt(input.content) ?? "planning preferences travel scheduling";
+      const memoryQuery =
+        inferMemoryQueryFromPrompt(input.content) ?? inferQueryFromPrompt(input.content) ?? input.content.slice(0, 200);
       throwIfChatTurnCancelled(input);
       await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
@@ -3724,7 +3758,7 @@ export class ChatTurnAgentRunner {
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       const quickWebQuery = inferQueryFromPrompt(input.content) ?? deriveLiveDataQuery(input.content);
-      if (quickWebQuery.trim().length > 0) {
+      if (quickWebQuery.trim().length > 0 && !isUnsafeSeedQuery(quickWebQuery)) {
         throwIfChatTurnCancelled(input);
         await this.patchTurnTrace(input, input.turnId, {
           status: "waiting_for_tool",
@@ -3879,18 +3913,22 @@ export class ChatTurnAgentRunner {
       }
     }
 
-    const promptLabCoworkPromptSpecificWebLookup =
-      promptLabHarnessTurn && input.mode === "cowork" && Boolean(derivePromptSpecificWebQuery(input.content));
+    // Deep mode seeds the controller web search on its own; every other intent consumer keeps the detected value.
+    const controllerWebLookupIntent = resolveTurnWebLookupIntent({
+      webMode: input.webMode,
+      detectedWebLookupIntent: intents.webLookup,
+      localFileIntent,
+      workflowSkillCapture,
+    });
     const controllerWebLookupRequested =
       detectExplicitWebLookupIntent(input.content) ||
       hasLiveDataIntent(input.content) ||
       Boolean(localResearchContinuation) ||
       Boolean(extractExternalResearchSubject(input.content)) ||
-      Boolean(derivePromptSpecificWebQuery(input.content)) ||
       (detectDirectUrlIntent(input.content) &&
         /\b(?:help me|increase|improve|audit|compare|research|analy[sz]e)\b/i.test(input.content)) ||
-      (input.webMode === "deep" && intents.webLookup);
-    if (
+      (input.webMode === "deep" && controllerWebLookupIntent);
+    const controllerSeedGateOpen =
       !assistantContent &&
       !approvalPayload &&
       !pendingUserInput &&
@@ -3898,32 +3936,40 @@ export class ChatTurnAgentRunner {
       !quickWebProfile &&
       input.toolAutonomy !== "manual" &&
       input.webMode !== "off" &&
-      intents.webLookup &&
+      controllerWebLookupIntent &&
       controllerWebLookupRequested &&
       !promptLabContract.toolUseSuppressed &&
       !(promptLabHarnessTurn && promptLabContract.explicitTools && input.mode === "chat") &&
-      (!localFileIntent || promptLabCoworkPromptSpecificWebLookup) &&
+      !localFileIntent &&
       !intents.time &&
       canUseSearchTool &&
       !hasPersistedExecutedSearchEvidence &&
-      toolRunCount < executionBudget.maxToolRunsPerTurn
-    ) {
+      toolRunCount < executionBudget.maxToolRunsPerTurn;
+    const liveDataQuerySourceContent = promptLabHarnessTurn
+      ? (extractPromptLabQuotedUserAsk(promptLabTaskForInspection) ?? promptLabTaskForInspection)
+      : (localResearchContinuation ?? input.content);
+    let liveDataQuery = "";
+    if (controllerSeedGateOpen) {
+      const derivedLiveDataQuery = deriveLiveDataQuery(liveDataQuerySourceContent);
+      const inferredLiveDataQuery = inferQueryFromPrompt(liveDataQuerySourceContent);
+      const explicitResearchSubject = extractExternalResearchSubject(liveDataQuerySourceContent);
+      liveDataQuery =
+        explicitResearchSubject ??
+        (shouldPreferInferredLiveDataQuery(inferredLiveDataQuery, derivedLiveDataQuery)
+          ? (inferredLiveDataQuery ?? derivedLiveDataQuery)
+          : derivedLiveDataQuery);
+    }
+    // Deep alone (no detected web intent) must not open a greeting or a short follow-up with a search.
+    const deepOnlySeed = !intents.webLookup && controllerWebLookupIntent;
+    const deepOnlySeedTooThin =
+      deepOnlySeed && (!hasSubstantiveSeedQuery(liveDataQuery) || looksLikeContinuationSearchPrompt(liveDataQuery));
+    // A seed is never the model's choice, so it must not carry a secret or an internal hostname to a search backend.
+    if (controllerSeedGateOpen && !isUnsafeSeedQuery(liveDataQuery) && !deepOnlySeedTooThin) {
       throwIfChatTurnCancelled(input);
       await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
-      const liveDataQuerySourceContent = promptLabHarnessTurn
-        ? (extractPromptLabQuotedUserAsk(promptLabTaskForInspection) ?? promptLabTaskForInspection)
-        : (localResearchContinuation ?? input.content);
-      const derivedLiveDataQuery = deriveLiveDataQuery(liveDataQuerySourceContent);
-      const inferredLiveDataQuery = inferQueryFromPrompt(liveDataQuerySourceContent);
-      const explicitResearchSubject = extractExternalResearchSubject(liveDataQuerySourceContent);
-      const liveDataQuery =
-        explicitResearchSubject ??
-        (shouldPreferInferredLiveDataQuery(inferredLiveDataQuery, derivedLiveDataQuery)
-          ? (inferredLiveDataQuery ?? derivedLiveDataQuery)
-          : derivedLiveDataQuery);
       const syntheticRun = await this.executeToolCall({
         input,
         turnId: input.turnId,
@@ -3932,7 +3978,7 @@ export class ChatTurnAgentRunner {
           query: liveDataQuery,
           maxResults: executionBudget.searchMaxResults,
         },
-        localFileIntent: promptLabCoworkPromptSpecificWebLookup ? false : localFileIntent,
+        localFileIntent,
       });
       toolRunCount += 1;
       toolRuns.push(syntheticRun.record);
@@ -3977,13 +4023,7 @@ export class ChatTurnAgentRunner {
         } as ChatCompletionMessage);
 
         if (
-          (shouldProactivelyOpenGroundedNewsResult(liveDataQuerySourceContent) ||
-            localReviewRankingTurn ||
-            shouldProactivelyOpenCoworkResearchResult({
-              mode: input.mode,
-              webMode: input.webMode,
-              content: liveDataQuerySourceContent,
-            })) &&
+          (shouldProactivelyOpenGroundedNewsResult(liveDataQuerySourceContent) || localReviewRankingTurn) &&
           canUseNavigateTool &&
           toolRunCount < executionBudget.maxToolRunsPerTurn
         ) {
@@ -4172,6 +4212,12 @@ export class ChatTurnAgentRunner {
       conversationMessages.push({
         role: "system",
         content: buildPdfDeckDeliveryInstruction(),
+      } as ChatCompletionMessage);
+    }
+    if (primaryFileToollessProviderLabel) {
+      conversationMessages.push({
+        role: "system",
+        content: buildFileToollessProviderInstruction(),
       } as ChatCompletionMessage);
     }
 
@@ -4717,6 +4763,7 @@ export class ChatTurnAgentRunner {
                 : undefined;
             if (
               requestedArtifactTool &&
+              !answeringFileToollessProviderLabel() &&
               !turnControl.artifactRetryIssued &&
               toolCalls.length === 0 &&
               input.toolAutonomy !== "manual" &&
@@ -6039,6 +6086,7 @@ export class ChatTurnAgentRunner {
         markCompletionRepair("cowork_contract_normalization", "orchestrator", preRepairContent, assistantContent);
       }
     }
+    const workspaceFileRootDir = this.deps.workspaceFileRootDir;
     const presentationAttempts = toolRuns.filter((run) => run.toolName === "presentations.create");
     const verifiedPresentationWrite = presentationAttempts.some(hasVerifiedPresentationArtifactWrite);
     // "A deck, saved as a PDF" is satisfied by a verified PDF file; the deck
@@ -6053,7 +6101,9 @@ export class ChatTurnAgentRunner {
       !durableFanoutWaiting &&
       intents.presentationArtifact &&
       !verifiedPresentationWrite &&
-      !verifiedPdfDeckDocumentWrite
+      !verifiedPdfDeckDocumentWrite &&
+      // A text-only provider never had the tool; the missing-file notice below keeps its answer.
+      !answeringFileToollessProviderLabel()
     ) {
       const lastAttempt = presentationAttempts.at(-1);
       const failureClass: ChatTurnFailureClass = lastAttempt?.status === "blocked" ? "tool_blocked" : "tool_failed";
@@ -6094,7 +6144,7 @@ export class ChatTurnAgentRunner {
       assistantContent = mergePresentationArtifactDeliveryContent(assistantContent, verifiedAttempt, {
         downloadHref:
           bytesWritten !== undefined && bytesWritten <= MAX_INLINE_FILE_DOWNLOAD_BYTES
-            ? buildWorkspaceFileDownloadHref(artifactPath, this.deps.workspaceFileRootDir)
+            ? buildWorkspaceFileDownloadHref(artifactPath, workspaceFileRootDir)
             : undefined,
       });
     }
@@ -6114,7 +6164,7 @@ export class ChatTurnAgentRunner {
         assistantContent = mergeWorkspaceFileDownloadContent(
           assistantContent,
           toolRun,
-          buildWorkspaceFileDownloadHref(receipt.artifactPath, this.deps.workspaceFileRootDir),
+          buildWorkspaceFileDownloadHref(receipt.artifactPath, workspaceFileRootDir),
         );
       }
     }
@@ -6196,6 +6246,15 @@ export class ChatTurnAgentRunner {
       const mutationsFooter = buildFailedFileMutationsFooter(failedFileMutations);
       if (mutationsFooter && !assistantContent.includes("did not complete:")) {
         footerParts.push(mutationsFooter);
+      }
+      const deepResearchFooter = buildDeepResearchThinEvidenceFooter({
+        webMode: input.webMode,
+        toolRuns,
+        delegatedResultContract: Boolean(delegatedResultContract),
+        paused: Boolean(approvalPayload || pendingUserInput),
+      });
+      if (deepResearchFooter && !assistantContent.includes(deepResearchFooter)) {
+        footerParts.push(deepResearchFooter);
       }
       if (footerParts.length > 0) {
         assistantContent = `${assistantContent.trim()}\n\n${footerParts.join("\n\n")}`;
@@ -6289,7 +6348,7 @@ export class ChatTurnAgentRunner {
             Boolean(run.result?.path || run.result?.artifactId || run.result?.artifact)),
       )
     ) {
-      assistantContent = "The requested file was not created. There is no successful artifact result for this turn.";
+      assistantContent = withMissingArtifactNotice(assistantContent, answeringFileToollessProviderLabel());
     }
     if (
       delegatedResultContract &&
@@ -6398,6 +6457,10 @@ export class ChatTurnAgentRunner {
     };
     const deferSystemHeartbeatTerminalCommit =
       finalStatus === "completed" && isExactSystemHeartbeatRunnerPosture(input);
+    // Persist only the citations the answer relied on; scored prompt-lab output keeps its raw evidence.
+    if (!promptLabEvalIntegrityTurn) {
+      citations.splice(0, citations.length, ...selectAnswerCitations({ citations, assistantContent, toolRuns }));
+    }
     const updatedTrace = await this.patchTurnTrace(input, input.turnId, {
       ...(deferSystemHeartbeatTerminalCommit ? {} : { status: finalStatus }),
       model: assistantModel,
@@ -6569,7 +6632,6 @@ export class ChatTurnAgentRunner {
     const suppressPromptLabCodeArtifactTools =
       input.mode === "code" && promptLabHarnessTurn && !promptLabContractRequiresArtifactTools(promptLabContract);
     const promptLabTask = promptLabContract.userTask || extractPrimaryUserTaskContent(input.content);
-    const promptSpecificWebLookupTurn = input.mode !== "code" && Boolean(derivePromptSpecificWebQuery(input.content));
     const promptLabFileInspectionIntent =
       promptLabHarnessTurn &&
       (promptLabContractRequiresFileTools(promptLabContract) ||
@@ -6598,7 +6660,6 @@ export class ChatTurnAgentRunner {
       !promptLabTaskSuggestsRepoInspection(promptLabTask) &&
       !looksLikeRepoGroundedInspectionPrompt(promptLabTask);
     const suppressLocalPathTools =
-      promptSpecificWebLookupTurn ||
       nonCodeWebLookupWithoutFileIntent ||
       (promptLabHarnessTurn && input.mode !== "code" && !promptLabFileInspectionIntent) ||
       delegatedPromptLabNonCodeWithoutFileIntent ||
@@ -8639,22 +8700,26 @@ export class ChatTurnAgentRunner {
         }
       }
     }
-    const alternateBuiltinResult = await tryAlternateBuiltinBrowserResult(
-      {
-        created: input.created,
-        turnInput: input.turnInput,
-        turnId: input.turnId,
-        toolName: input.toolName,
-        args: input.args,
-        fallbackChain,
-        classification,
-        normalizedResult,
-        error: input.error,
-        turnBudgetDeadline: input.turnBudgetDeadline,
-        invokeTool: input.invokeFallbackTool,
-      },
-      this.browserFallbackDeps,
-    );
+    // A refused search query is final: no other engine and no MCP server may receive it.
+    const searchQueryRefused = input.toolName === "browser.search" && isSearchQueryRefusal(input.error);
+    const alternateBuiltinResult = searchQueryRefused
+      ? undefined
+      : await tryAlternateBuiltinBrowserResult(
+          {
+            created: input.created,
+            turnInput: input.turnInput,
+            turnId: input.turnId,
+            toolName: input.toolName,
+            args: input.args,
+            fallbackChain,
+            classification,
+            normalizedResult,
+            error: input.error,
+            turnBudgetDeadline: input.turnBudgetDeadline,
+            invokeTool: input.invokeFallbackTool,
+          },
+          this.browserFallbackDeps,
+        );
     if (alternateBuiltinResult) {
       const annotatedAlternateBuiltinResult = this.annotateBrowserResultForTurn({
         turnInput: input.turnInput,
@@ -8689,6 +8754,7 @@ export class ChatTurnAgentRunner {
       };
     }
     const fallbackAttempted =
+      !searchQueryRefused &&
       shouldAttemptBrowserFallback(input.toolName, classification.failureClass) &&
       this.deps.invokeMcpTool &&
       this.deps.listMcpBrowserFallbackTargets;
@@ -9046,17 +9112,10 @@ export class ChatTurnAgentRunner {
         blockedReason: promptLabWebToolCapBlock,
       };
     }
-    const promptLabCoworkPromptSpecificWebSearch =
-      isBrowserSearch &&
-      (input.localFileIntent ?? false) &&
-      isPromptLabHarnessContent(input.userContent) &&
-      input.mode === "cowork" &&
-      Boolean(derivePromptSpecificWebQuery(input.userContent));
     if (
       isBrowserSearch &&
       (input.localFileIntent ?? false) &&
-      !detectWebLookupIntent(input.userContent, input.historyMessages) &&
-      !promptLabCoworkPromptSpecificWebSearch
+      !detectWebLookupIntent(input.userContent, input.historyMessages)
     ) {
       return {
         toolName: effectiveToolName,
@@ -10402,6 +10461,38 @@ function buildEvidenceGroundingInstruction(): string {
   ].join("\n");
 }
 
+function resolveFileToollessProviderLabel(
+  artifactIntent: boolean,
+  providerId: string | undefined,
+  describe: ChatTurnAgentRunnerDeps["describeProviderToolSupport"],
+): string | undefined {
+  if (!artifactIntent || !providerId) return undefined;
+  const support = describe?.(providerId);
+  return support && !support.toolCalling ? support.label : undefined;
+}
+
+function buildFileToollessProviderInstruction(): string {
+  return [
+    "File delivery for this turn:",
+    "- The user asked for a file, but the selected model cannot call tools, so no file can be created in this turn.",
+    "- Write the complete requested content directly in your reply.",
+    "- Do not claim that a file, download, or attachment was created.",
+  ].join("\n");
+}
+
+/**
+ * A tool-capable model that made no file may still claim one ("Your PDF is ready"), so its text is
+ * dropped. A text-only provider was told to answer inline instead, so its answer stays under the notice.
+ */
+function withMissingArtifactNotice(assistantContent: string, toollessProviderLabel: string | undefined): string {
+  if (!toollessProviderLabel) {
+    return "The requested file was not created. There is no successful artifact result for this turn.";
+  }
+  const notice = `No file was created: ${toollessProviderLabel} cannot use GoatCitadel tools, so it cannot save a PDF, document, or deck. The answer is below; to get a file, choose a model from a provider that supports tools and resend.`;
+  const answer = assistantContent.trim();
+  return answer ? `${notice}\n\n${answer}` : notice;
+}
+
 function buildPdfDeckDeliveryInstruction(): string {
   return [
     "Deck delivery format for this turn:",
@@ -10437,7 +10528,7 @@ function detectTimeIntent(content: string): boolean {
 
 function detectLiveDataIntent(content: string): boolean {
   if (isExplicitLocalMcpTask(content)) return false;
-  return hasLiveDataIntent(content) || Boolean(derivePromptSpecificWebQuery(content));
+  return hasLiveDataIntent(content);
 }
 
 function detectExplicitWebLookupIntent(content: string): boolean {
@@ -10458,7 +10549,6 @@ function detectWebLookupIntent(content: string, historyMessages: ChatCompletionR
     hasExternalResearchIntent(content) ||
     detectDirectUrlIntent(content) ||
     detectWebPageInteractionIntent(content) ||
-    Boolean(derivePromptSpecificWebQuery(content)) ||
     /\bresearch\s+whether\b/i.test(content) ||
     /\buse\s+available\s+lookup\b/i.test(content) ||
     detectWebFollowUpIntent(content, historyMessages)
@@ -10513,10 +10603,6 @@ function deriveLiveDataQuery(content: string): string {
   if (localBusinessPlan) {
     return localBusinessPlan.primaryQuery;
   }
-  const promptSpecificQuery = derivePromptSpecificWebQuery(normalized);
-  if (promptSpecificQuery) {
-    return promptSpecificQuery;
-  }
   const clauses = normalized
     .split(/[\n\r]+|(?<=[.!?])\s+/)
     .map((item) => item.trim())
@@ -10547,17 +10633,6 @@ function deriveLiveDataQuery(content: string): string {
 }
 
 function inferMemoryQueryFromPrompt(userContent: string): string | undefined {
-  const taskText = `${extractPrimaryUserTaskContent(userContent) ?? ""}\n${userContent}`;
-  if (/\bstored\s+preference\b/i.test(taskText) && /\banswer\s+length\b/i.test(taskText)) {
-    return "answer length preference concise short detailed response length";
-  }
-  if (
-    /\bstored\s+planning\s+preferences?\b/i.test(taskText) &&
-    /\btravel\b/i.test(taskText) &&
-    /\bscheduling\b/i.test(taskText)
-  ) {
-    return "travel scheduling planning preferences dates availability itinerary constraints";
-  }
   const inferred = inferQueryFromPrompt(userContent);
   if (inferred) {
     return inferred;
@@ -11744,7 +11819,6 @@ function resolveGroundedBrowserSearchQuery(input: {
   historyMessages: ChatCompletionRequest["messages"];
   priorToolRuns?: ChatToolRunRecord[];
 }): string | undefined {
-  const promptSpecificQuery = derivePromptSpecificWebQuery(input.userContent);
   const queryCandidates = readBrowserSearchQueryCandidatesFromArgs(input.rawArgs);
   const currentQuery = queryCandidates[0];
   const localBusinessQuery = resolveLocalBusinessSearchQuery(input.userContent, currentQuery);
@@ -11756,11 +11830,7 @@ function resolveGroundedBrowserSearchQuery(input: {
     !looksLikeContinuationSearchPrompt(currentQuery) &&
     !looksLikeHarnessContaminatedQuery(currentQuery)
   ) {
-    const sanitizedCurrent = sanitizeQueryClause(currentQuery).slice(0, 240);
-    if (promptSpecificQuery && shouldPreferPromptSpecificWebQuery(sanitizedCurrent, promptSpecificQuery)) {
-      return promptSpecificQuery;
-    }
-    return sanitizedCurrent;
+    return sanitizeQueryClause(currentQuery).slice(0, 240);
   }
 
   const alternatives = [
@@ -11780,7 +11850,7 @@ function resolveGroundedBrowserSearchQuery(input: {
   if (inferredFromPrompt && !looksLikeContinuationSearchPrompt(inferredFromPrompt)) {
     return inferredFromPrompt;
   }
-  return promptSpecificQuery ?? currentQuery;
+  return currentQuery;
 }
 
 function inferToolArgValueFromRecentToolRuns(
@@ -12207,10 +12277,6 @@ function inferQueryFromPrompt(userContent: string): string | undefined {
   if (localBusinessQuery) {
     return localBusinessQuery;
   }
-  const promptSpecificQuery = derivePromptSpecificWebQuery(normalizedInput);
-  if (promptSpecificQuery) {
-    return promptSpecificQuery;
-  }
   const clauses = normalizedInput
     .split(/[\n\r]+|(?<=[.!?])\s+/)
     .map((item) => sanitizeQueryClause(item))
@@ -12267,121 +12333,6 @@ function normalizeSearchReuseQuery(value: unknown): string | undefined {
     .sort()
     .join(" ");
   return normalized || undefined;
-}
-
-function derivePromptSpecificWebQuery(content: string): string | undefined {
-  const normalized = extractPrimaryUserTaskContent(content).replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    /\bpublic\s+outdoor\s+activity\b/i.test(normalized) &&
-    /\bthis\s+weekend\b/i.test(normalized) &&
-    /\bcity\s+of\s+your\s+choice\b/i.test(normalized)
-  ) {
-    return "Seattle this weekend weather forecast outdoor public events parks official";
-  }
-  if (
-    /\bpublic\s+event\b/i.test(normalized) &&
-    /\bthis\s+weekend\b/i.test(normalized) &&
-    /\bstill\s+scheduled\b/i.test(normalized)
-  ) {
-    return "Seattle Center official events this weekend schedule";
-  }
-  if (
-    /\bcurrent[-\s]+hours\b/i.test(normalized) &&
-    /\bnamed\s+public\s+place\s+of\s+your\s+choice\b/i.test(normalized)
-  ) {
-    return "New York Public Library Stephen A. Schwarzman Building hours official";
-  }
-  if (/\bsevere\s+heat\b/i.test(normalized) && /\bpublic\s+safety\s+tips?\b/i.test(normalized)) {
-    return "CDC severe heat public safety tips official";
-  }
-  if (/\bcity\s+service\b/i.test(normalized) && /\bavailable\b/i.test(normalized) && /\bholiday\b/i.test(normalized)) {
-    return "NYC DSNY holiday schedule NYC311 trash recycling compost collection holiday";
-  }
-  if (
-    /\bhousehold\b/i.test(normalized) &&
-    /\bsevere\s+storm\b/i.test(normalized) &&
-    /\bpublic\s+tips?\b/i.test(normalized)
-  ) {
-    return "Ready.gov FEMA severe storm household preparedness tips official";
-  }
-  if (/\bflights?\s+out\s+of\s+JFK\b/i.test(normalized) && /\bcurrent\s+disruption\b/i.test(normalized)) {
-    return "FAA NAS Status JFK airport delays Port Authority JFK alerts official";
-  }
-  if (/\bhousehold\s+emergency\s+water\s+storage\b/i.test(normalized)) {
-    return "CDC household emergency water storage official guidance";
-  }
-  if (/\bcurrent\s+weather\s+for\s+Seattle\b/i.test(normalized) && /\boutdoor\s+dinner\b/i.test(normalized)) {
-    return "Seattle tonight hourly weather forecast precipitation official";
-  }
-  if (/\bIRS\b/i.test(normalized) && /\bstandard\s+mileage\s+rate\b/i.test(normalized)) {
-    return "IRS current standard mileage rate business use 2026 official";
-  }
-  if (/\bBoston\b/i.test(normalized) && /\bumbrella\b/i.test(normalized)) {
-    return "Boston tonight hourly weather forecast precipitation National Weather Service";
-  }
-  if (
-    /\bPortland,\s*Oregon\b/i.test(normalized) &&
-    /\bmuseum\b/i.test(normalized) &&
-    /\blive music\b/i.test(normalized)
-  ) {
-    return "Portland Oregon this weekend museum nature walk live music events official";
-  }
-  if (/\brobot vacuum\b/i.test(normalized) && /\bone pet\b/i.test(normalized)) {
-    return "robot vacuum pet hair small apartment buying criteria current reviews";
-  }
-  if (/\bstormy season\b/i.test(normalized) && /\bgo\/no-go checklist\b/i.test(normalized)) {
-    return "official travel weather alerts storm season go no go checklist";
-  }
-  if (/\bair purifier\b/i.test(normalized) && /\bwildfire smoke\b/i.test(normalized)) {
-    return "EPA air purifier wildfire smoke HEPA CADR ozone official";
-  }
-  if (/\bbasic emergency kit\b/i.test(normalized) && /\bhousehold\b/i.test(normalized)) {
-    return "Ready.gov basic emergency kit household official";
-  }
-  if (/\bpublic library services\b/i.test(normalized) && /\blearn new skills online\b/i.test(normalized)) {
-    return "public library online learning services LinkedIn Learning Gale Courses official";
-  }
-  if (/\breducing household food waste\b/i.test(normalized)) {
-    return "EPA FDA USDA household food waste reduction advice official";
-  }
-  if (/\bfarmers?\s+market\b/i.test(normalized) && /\b(?:busy|arrive|arrival|weekend)\b/i.test(normalized)) {
-    return "weekend farmers market busiest time arrive early planning source";
-  }
-  if (
-    /\bplausible\s+public\s+venue\b/i.test(normalized) ||
-    /\bpublic\s+venue\b[\s\S]{0,80}\bsmall meetup\b/i.test(normalized)
-  ) {
-    return "public library meeting room small meetup official availability";
-  }
-  if (/\brainy[-\s]+day\b/i.test(normalized) && /\bfamily\s+activity\b/i.test(normalized)) {
-    return "public library rainy day family activity storytime official";
-  }
-  if (
-    /\bagentic\s+(?:harnesses?|frameworks?)\b/i.test(normalized) ||
-    (/\bagent(?:ic)?\s+(?:frameworks?|orchestration)\b/i.test(normalized) &&
-      /\b(?:LangGraph|AutoGen|CrewAI|Semantic Kernel|LlamaIndex|Haystack|PydanticAI|OpenAI Agents)\b/i.test(normalized))
-  ) {
-    return "LangGraph AutoGen CrewAI OpenAI Agents SDK Semantic Kernel LlamaIndex Haystack PydanticAI official docs agent framework comparison";
-  }
-  return undefined;
-}
-
-function shouldPreferPromptSpecificWebQuery(currentQuery: string, promptSpecificQuery: string): boolean {
-  const normalizedCurrent = currentQuery.toLowerCase();
-  if (!normalizedCurrent.trim()) {
-    return true;
-  }
-  if (
-    /\b(decide whether|coordinate|roles? in this exact order|city of your choice|public outdoor activity|city service|public event|named public place|current hours|severe heat)\b/.test(
-      normalizedCurrent,
-    )
-  ) {
-    return true;
-  }
-  return scoreQueryCandidate(promptSpecificQuery) > scoreQueryCandidate(currentQuery) + 10;
 }
 
 function readBrowserSearchQueryCandidatesFromArgs(rawArgs: Record<string, unknown>): string[] {
@@ -12466,24 +12417,6 @@ function shouldProactivelyOpenGroundedNewsResult(userContent: string): boolean {
   const hasNewsIntent = /\b(news|headline|headlines)\b/.test(normalized);
   const hasRecencyIntent = /\b(latest|recent|today|yesterday|tonight|this week)\b/.test(normalized);
   return hasNewsIntent && hasRecencyIntent;
-}
-
-function shouldProactivelyOpenCoworkResearchResult(input: {
-  mode: ChatMode;
-  webMode: ChatWebMode;
-  content: string;
-}): boolean {
-  if (input.mode !== "cowork" || input.webMode !== "deep") {
-    return false;
-  }
-  const normalized = extractPrimaryUserTaskContent(input.content).toLowerCase();
-  const hasResearchReportIntent = /\b(research|compare|comparison|report|pros\s+and\s+cons|profile|best)\b/.test(
-    normalized,
-  );
-  const hasFrameworkIntent =
-    /\bagentic\s+(?:harnesses?|frameworks?)\b/.test(normalized) ||
-    /\bagent(?:ic)?\s+(?:frameworks?|orchestration|harnesses?)\b/.test(normalized);
-  return hasResearchReportIntent && hasFrameworkIntent;
 }
 
 function looksLikeContinuationSearchPrompt(value: string): boolean {

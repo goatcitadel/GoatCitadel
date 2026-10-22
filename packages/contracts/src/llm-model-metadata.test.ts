@@ -41,7 +41,8 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
   it("parses against LlmModelMetadataManifest and every entry is well-formed", () => {
     expect(parsedManifest.version).toBe(1);
     expect(typeof parsedManifest.entries).toBe("object");
-    expect(Object.keys(parsedManifest.entries)).toHaveLength(45);
+    // 45 earlier entries plus the Claude 5 models (4) under anthropic, claude-code and claude-code-cli.
+    expect(Object.keys(parsedManifest.entries)).toHaveLength(57);
     for (const [key, entry] of Object.entries(parsedManifest.entries)) {
       expect(key.toLowerCase()).not.toMatch(/(?:^|\/)(?:xai|grok)(?:\/|$)/);
       expect(entry.contextWindow, `${key} contextWindow`).toBeGreaterThan(0);

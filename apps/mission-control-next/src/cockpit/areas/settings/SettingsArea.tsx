@@ -23,10 +23,12 @@ import {
   IntegrationConnectionsSettings,
   ManagedRuntimeSettings,
   McpServersSettings,
+  WebSearchSettings,
   BudgetModeControl,
   ApprovalModeControl,
   FilesystemWriteRootsControl,
   ModelsSettings,
+  ClaudeCliToolBridgeControl,
   ToolGrantSettings,
   SafetyCatalogSummary,
   PermissionProfileSettings,
@@ -138,6 +140,8 @@ export function SettingsArea() {
         return <ChannelsSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />;
       case "mcp":
         return <McpServersSettings workspaceId={activeWorkspaceId ?? ""} />;
+      case "web-search":
+        return <WebSearchSettings />;
       case "addons":
         return (
           <>
@@ -156,7 +160,12 @@ export function SettingsArea() {
           </>
         );
       case "providers":
-        return <ModelsSettings />;
+        return (
+          <>
+            <ModelsSettings />
+            <ClaudeCliToolBridgeControl />
+          </>
+        );
       case "local-ai":
         return (
           <>
@@ -214,9 +223,13 @@ export function SettingsArea() {
       : rest[0] && !PAGES.some((item) => item.id === rest[0] || item.entries.some((entry) => entry.section === rest[0]))
         ? "This link does not match a settings page. Choose a page from Settings."
         : hash &&
-            !["application-updates", "approval-mode", "filesystem-write-roots", "notification-routing"].includes(
-              hash,
-            ) &&
+            ![
+              "application-updates",
+              "approval-mode",
+              "claude-cli-tool-bridge",
+              "filesystem-write-roots",
+              "notification-routing",
+            ].includes(hash) &&
             !page.entries.some((entry) => entry.anchor === hash || entry.section === hash)
           ? "This link does not match a section on this settings page. Choose a section from Settings."
           : undefined;

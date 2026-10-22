@@ -3,7 +3,11 @@ import { Play, PlugZap } from "lucide-react";
 import type { ChatThinkingLevel, OnboardingState } from "@goatcitadel/contracts";
 import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { GUIDED_THINKING_LEVELS } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
+import {
+  GUIDED_THINKING_LEVELS,
+  groupGuidedProviders,
+  guidedProviderOptionLabel,
+} from "../../../features/native-routes/settings/sections/guided-model-setup-support";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Field } from "../../ui/Field";
@@ -61,6 +65,12 @@ export function CockpitGuidedModelSetup({
             : "Check connection"
           : (setup.connectionHint?.connectLabel ?? "Connect provider");
   const PrimaryIcon = setup.primary.kind === "enter" ? Play : PlugZap;
+  // Offer the better-supported provider as a one-click switch, only when the list has it.
+  const alternative = setup.providers.some(
+    (provider) => provider.providerId === setup.connectionHint?.alternative?.providerId,
+  )
+    ? setup.connectionHint?.alternative
+    : undefined;
   return (
     <div className="mt-4 grid gap-4">
       {setup.draft.hasRemoteChanges ? (
@@ -102,12 +112,18 @@ export function CockpitGuidedModelSetup({
                 </option>
               ) : null}
               {setup.providerId && !setup.selectedProvider ? (
-                <option value={setup.providerId}>Saved provider · unavailable</option>
-              ) : null}
-              {setup.providers.map((provider) => (
-                <option key={provider.providerId} value={provider.providerId}>
-                  {provider.label}
+                <option value={setup.providerId}>
+                  {catalog.loading ? "Loading providers…" : "Saved provider · unavailable"}
                 </option>
+              ) : null}
+              {groupGuidedProviders(setup.providers, [setup.providerId, setup.savedProviderId]).map((group) => (
+                <optgroup key={group.id} label={group.label}>
+                  {group.providers.map((provider) => (
+                    <option key={provider.providerId} value={provider.providerId}>
+                      {guidedProviderOptionLabel(provider)}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           )}
@@ -191,7 +207,7 @@ export function CockpitGuidedModelSetup({
           </div>
         </div>
       </details>
-      <div>
+      <div className="flex flex-wrap gap-2">
         <Button
           variant="primary"
           loading={busy}
@@ -202,6 +218,11 @@ export function CockpitGuidedModelSetup({
           <PrimaryIcon aria-hidden="true" className="size-4" />
           {primaryLabel}
         </Button>
+        {alternative ? (
+          <Button disabled={busy} onClick={() => setup.setProviderId(alternative.providerId)}>
+            {alternative.label}
+          </Button>
+        ) : null}
       </div>
       {setup.actionError && !setup.dialogPlan ? <Callout tone="error">{setup.actionError}</Callout> : null}
       {setup.latestPlan ? (

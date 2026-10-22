@@ -57,6 +57,26 @@ export function clampGuidedThinkingLevel(
   return fallback ?? supported[0] ?? "off";
 }
 
+type GuidedModelSelection = { providerId: string; model: string; thinkingLevel: ChatThinkingLevel };
+
+/**
+ * The draft input a saved default acknowledges. The wizard submits the clamped effort, so the raw draft captured when
+ * the plan was submitted is that submission when its effort clamps to the saved one. Input edited after submission is
+ * compared against this snapshot, so it stays unsaved.
+ */
+export function submittedGuidedSelection(
+  submittedDraft: GuidedModelSelection | null,
+  saved: GuidedModelSelection,
+  supported: readonly ChatThinkingLevel[],
+): GuidedModelSelection {
+  return submittedDraft &&
+    submittedDraft.providerId === saved.providerId &&
+    submittedDraft.model === saved.model &&
+    clampGuidedThinkingLevel(submittedDraft.thinkingLevel, supported) === saved.thinkingLevel
+    ? submittedDraft
+    : saved;
+}
+
 type GuidedReadinessProvider = Pick<ProviderModelCatalogOption, "providerId" | "label" | "baseUrl"> &
   Pick<GuidedProviderOption, "addProfile"> &
   Partial<
@@ -201,6 +221,8 @@ export interface GuidedConnectionHint {
   /** Primary button text before the provider is ready. */
   connectLabel: string;
   note: string;
+  /** A better-supported provider to offer as a one-click switch, when the list has it. */
+  alternative?: { providerId: string; label: string };
 }
 
 /**
@@ -226,6 +248,7 @@ export function guidedConnectionHint(
     return {
       connectLabel: "Connect Claude Code",
       note: "Run claude setup-token in a terminal, select Connect Claude Code, then paste the token it prints. Anthropic limits subscription tokens to Claude Code and may reject them here; choose Claude Code CLI (local login) to use your subscription, or an Anthropic API key.",
+      alternative: { providerId: "claude-code-cli", label: "Use Claude Code CLI instead" },
     };
   }
   if (provider?.authMode === "claude-code-cli-login") {
@@ -242,12 +265,13 @@ export type GuidedProviderOption = ProviderModelCatalogOption & {
   readonly addProfile?: NonNullable<ChangePlanProviderConnectionRequest["profile"]>;
 };
 
-// Built-in providers that new installs get by default but an existing saved config can lack.
-const ADDABLE_BUILTIN_PROVIDER_IDS = ["claude-code-cli"] as const;
+// Built-in providers that new installs get by default but an existing saved config can lack,
+// each listed right after the first of its related providers so it is found where people look.
+const ADDABLE_BUILTIN_PROVIDERS = [{ providerId: "claude-code-cli", after: ["claude-code", "anthropic"] }] as const;
 
 /**
- * Appends each addable built-in provider the saved config is missing, so the
- * guided setup can add it through a provider connection plan with its template profile.
+ * Adds each built-in provider the saved config is missing, next to its related providers, so
+ * the guided setup can add it through a provider connection plan with its template profile.
  * Only a successful, current catalog load proves a provider is missing: while the
  * catalog is loading or failed, nothing is offered.
  */
@@ -257,35 +281,116 @@ export function withAddableBuiltinProviders(
 ): GuidedProviderOption[] {
   if (!catalogLoaded) return [...providers];
   const present = new Set(providers.map((provider) => provider.providerId));
-  const additions = ADDABLE_BUILTIN_PROVIDER_IDS.filter((providerId) => !present.has(providerId)).flatMap(
-    (providerId): GuidedProviderOption[] => {
+  return ADDABLE_BUILTIN_PROVIDERS.filter(({ providerId }) => !present.has(providerId)).reduce<GuidedProviderOption[]>(
+    (options, { providerId, after }) => {
       const template = findProviderTemplate(providerId);
-      if (!template?.apiStyle) return [];
-      return [
-        {
-          providerId: template.providerId,
-          label: `${template.label} · not added yet`,
+      if (!template?.apiStyle) return options;
+      const addition: GuidedProviderOption = {
+        providerId: template.providerId,
+        label: `${template.label} · not added yet`,
+        baseUrl: template.baseUrl,
+        defaultModel: template.defaultModel,
+        apiStyle: template.apiStyle,
+        authMode: template.authMode,
+        models: [template.defaultModel],
+        sanitizedEndpointIdentity: "",
+        addProfile: {
+          label: template.label,
           baseUrl: template.baseUrl,
-          defaultModel: template.defaultModel,
           apiStyle: template.apiStyle,
           authMode: template.authMode,
-          models: [template.defaultModel],
-          sanitizedEndpointIdentity: "",
-          addProfile: {
-            label: template.label,
-            baseUrl: template.baseUrl,
-            apiStyle: template.apiStyle,
-            authMode: template.authMode,
-            defaultModel: template.defaultModel,
-            // Capabilities stay Gateway-owned: it pins this provider's, and a stated
-            // value it overrides would fail the plan's exact saved-profile check.
-          },
+          defaultModel: template.defaultModel,
+          // Capabilities stay Gateway-owned: it pins this provider's, and a stated
+          // value it overrides would fail the plan's exact saved-profile check.
         },
-      ];
+      };
+      const anchor = after
+        .map((relatedId) => options.findIndex((option) => option.providerId === relatedId))
+        .find((index) => index >= 0);
+      const insertAt = anchor === undefined ? 0 : anchor + 1;
+      return [...options.slice(0, insertAt), addition, ...options.slice(insertAt)];
     },
+    [...providers],
   );
-  return [...providers, ...additions];
 }
+
+export type GuidedProviderGroupId = "ready" | "subscription" | "api_key" | "cloud_account" | "local";
+
+export interface GuidedProviderGroup {
+  readonly id: GuidedProviderGroupId;
+  readonly label: string;
+  readonly providers: readonly GuidedProviderOption[];
+}
+
+const GUIDED_PROVIDER_GROUP_LABELS: Readonly<Record<GuidedProviderGroupId, string>> = {
+  ready: "Ready to use",
+  subscription: "Use a subscription",
+  api_key: "Pay-per-use API key",
+  cloud_account: "Pay-per-use cloud account",
+  local: "Run locally",
+};
+
+// Sign-in or account based providers; everything not local and not here takes an API key.
+const SUBSCRIPTION_AUTH_MODES = new Set(["codex-oauth", "claude-code-oauth", "claude-code-cli-login"]);
+
+// Cloud credentials that are not an API key: Google ADC or service accounts, and AWS SigV4.
+const CLOUD_ACCOUNT_AUTH_MODES = new Set(["google-adc", "google-service-account", "aws-sigv4"]);
+
+// Providers whose path is retired from the product but can linger in an older saved config.
+const RETIRED_PROVIDER_IDS = new Set(["npu-local"]);
+
+// Dropdown names that say how each provider is paid for, where the saved label leaves it ambiguous.
+const GUIDED_PROVIDER_OPTION_LABELS: Readonly<Record<string, string>> = {
+  openai: "OpenAI API (platform key)",
+  anthropic: "Anthropic API (Console key)",
+  "claude-code": "Claude Code token (may be rejected)",
+};
+
+/** The dropdown name for a provider; the saved label is unchanged everywhere else. */
+export function guidedProviderOptionLabel(
+  provider: Pick<GuidedProviderOption, "providerId" | "label" | "addProfile">,
+): string {
+  return provider.addProfile ? provider.label : (GUIDED_PROVIDER_OPTION_LABELS[provider.providerId] ?? provider.label);
+}
+
+function guidedProviderGroupId(provider: GuidedProviderOption): GuidedProviderGroupId {
+  if (resolveGuidedProviderReadiness(provider).state === "ready") return "ready";
+  if (provider.authMode && SUBSCRIPTION_AUTH_MODES.has(provider.authMode)) return "subscription";
+  if (provider.localCostPosture === "zero_cost_local_runtime") return "local";
+  if (provider.authMode && CLOUD_ACCOUNT_AUTH_MODES.has(provider.authMode)) return "cloud_account";
+  return "api_key";
+}
+
+/**
+ * Groups the provider choices by how they are paid for, ready ones first, keeping
+ * catalog order inside each group. Retired providers are hidden unless kept visible:
+ * pass both the draft selection and the saved provider, so an operator can switch
+ * back to a still-saved retired provider until a replacement is confirmed.
+ */
+export function groupGuidedProviders(
+  providers: readonly GuidedProviderOption[],
+  keepVisibleIds: readonly string[],
+): GuidedProviderGroup[] {
+  const keep = new Set(keepVisibleIds.filter(Boolean));
+  const visible = providers.filter(
+    (provider) => !RETIRED_PROVIDER_IDS.has(provider.providerId) || keep.has(provider.providerId),
+  );
+  return (Object.keys(GUIDED_PROVIDER_GROUP_LABELS) as GuidedProviderGroupId[])
+    .map((id) => ({
+      id,
+      label: GUIDED_PROVIDER_GROUP_LABELS[id],
+      providers: visible.filter((provider) => guidedProviderGroupId(provider) === id),
+    }))
+    .filter((group) => group.providers.length > 0);
+}
+
+/** Readiness while the saved providers are still loading: never "not chosen" or "unavailable". */
+export const GUIDED_CATALOG_LOADING_READINESS: GuidedProviderReadiness = {
+  state: "checking",
+  label: "Loading…",
+  description: "Loading the saved providers from the Gateway.",
+  evidence: null,
+};
 
 /**
  * Picks the active setup plan to resume: the one targeting the selected provider,
@@ -296,9 +401,7 @@ export function pendingPlanForSelection(
   providerId: string,
 ): ChangePlanRecord | null {
   if (!providerId) return activePlans[0] ?? null;
-  return (
-    activePlans.find((plan) => "providerId" in plan.request && plan.request.providerId === providerId) ?? null
-  );
+  return activePlans.find((plan) => "providerId" in plan.request && plan.request.providerId === providerId) ?? null;
 }
 
 export interface LocalRuntimeSetupGuide {

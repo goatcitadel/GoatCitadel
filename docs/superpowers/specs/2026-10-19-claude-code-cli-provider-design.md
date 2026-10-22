@@ -79,10 +79,11 @@ Command:
 
 Disabling the CLI's tools works in layers: `--tools ""` (no built-in tools), `--strict-mcp-config` with no `--mcp-config` (no MCP servers), `--safe-mode` (no hooks, plugins, skills or CLAUDE.md), and `--permission-mode dontAsk` (anything that slips through is denied rather than prompted). If the stream ever shows a `tool_use` block, the adapter treats it as a governance fault. It kills the process and fails the turn with `claude_cli_tool_use_blocked`, and does not forward the block.
 
-The provider advertises `toolCalling: false`, `vision: false`, `audio: false`, `jsonMode: false` and `reasoning: true`. The CLI cannot do OpenAI-style function calling back to its caller, so `tools` are never passed to it. The operator decided how tool turns are handled:
+The provider advertises `vision: false`, `audio: false`, `jsonMode: false` and `reasoning: true`. It advertises `toolCalling: true` only while the `claudeCliToolBridgeEnabled` bridge is on, and `false` otherwise. The CLI cannot do OpenAI-style function calling back to its caller, so `tools` are never passed to it directly. The operator decided how tool turns are handled:
 
 - If a request requires a tool call (`tool_choice` is `"required"` or names a function), the turn fails before spawn with `claude_cli_tools_unsupported` and a hint to switch providers for agentic or Code Mode turns.
-- If tools are only offered (`tool_choice` is absent, `"auto"` or `"none"`), they are dropped and the turn runs as plain text. My call: GoatCitadel tools through this provider would need a Gateway-hosted MCP bridge that goes through policy and approvals. That is listed as a follow-up and is not in this PR.
+- If the bridge is on and tools are offered (`tool_choice` is absent or `"auto"`), the step runs through the Gateway-hosted MCP bridge, and every tool call goes through GoatCitadel's policy and approvals. The bridge is designed in `2026-10-20-claude-code-cli-tool-bridge-design.md` and implemented behind the `claudeCliToolBridgeEnabled` flag, which is on by default since its live proof passed.
+- If `tool_choice` is `"none"`, or the bridge is off, the CLI runs without any tool definitions. That is not a guarantee of a text-only turn: the Chat runner still recognizes tool calls written out as text (`parseSerializedToolCalls`) for the tools allowed in that turn, and runs them under the same policy and approvals.
 
 ### 5. Streaming into the normalized chat stream
 
@@ -179,7 +180,7 @@ This feeds `LlmProviderAuthReadiness` (`source: "metadata"`, `liveVerified: true
 ## Follow-ups (not in this PR)
 
 - PR 3: wizard support, with a "Use my local Claude Code login" path, a readiness panel, and the logged-out remediation copy.
-- A Gateway-hosted MCP bridge, so GoatCitadel tools can be offered to the CLI under policy and approvals.
+- A Gateway-hosted MCP bridge, so GoatCitadel tools can be offered to the CLI under policy and approvals. Designed in `2026-10-20-claude-code-cli-tool-bridge-design.md` and implemented behind the `claudeCliToolBridgeEnabled` feature flag, which defaulted to off until the live proof passed on 2026-10-21 and is now on by default. Tools run in GoatCitadel, not in Claude Code, and each tool step is a separate CLI run.
 - Image input via stream-json content blocks.
 
 ## Terms note

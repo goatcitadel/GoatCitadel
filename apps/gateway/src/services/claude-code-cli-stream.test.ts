@@ -1,7 +1,10 @@
+import type { ChatCompletionMessage } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  CLAUDE_CLI_TOOL_BRIDGE_ADDENDUM,
   buildStreamJsonUserMessage,
   classifyClaudeCliFailure,
+  claudeCliUserMessage,
   createClaudeCliStreamMapper,
   renderClaudeCliPrompt,
 } from "./claude-code-cli-stream.js";
@@ -218,6 +221,87 @@ describe("renderClaudeCliPrompt", () => {
   it("sends a lone user message without transcript labels", () => {
     expect(renderClaudeCliPrompt([{ role: "user", content: "just this" }]).userText).toBe("just this");
   });
+
+  it("a single plain user turn still renders as before", () => {
+    const rendered = renderClaudeCliPrompt([{ role: "user", content: "just this" }]);
+    expect(rendered.userBlocks).toEqual(["just this"]);
+    expect(rendered.userText).toBe("just this");
+    expect(rendered.system).toBe("");
+  });
+
+  const toolCallMessage = (id: string, name: string, args: string, content: string | null = "") =>
+    ({
+      role: "assistant",
+      content,
+      tool_calls: [{ id, type: "function", function: { name, arguments: args } }],
+    }) as unknown as ChatCompletionMessage;
+
+  it("assistant tool calls render with id, model name and arguments", () => {
+    const rendered = renderClaudeCliPrompt([
+      { role: "user", content: "make a doc" },
+      toolCallMessage("call_1", "documents_create", '{"title":"T"}'),
+      { role: "tool", content: "created", tool_call_id: "call_1" },
+    ]);
+    expect(rendered.userBlocks).toContain('[Assistant tool call call_1: documents_create] {"title":"T"}');
+    expect(rendered.userBlocks.some((block) => block.startsWith("[Assistant]"))).toBe(false);
+    expect(rendered.userBlocks).toContain("[Tool result call_1]\ncreated");
+  });
+
+  it("renders assistant text first, one block per tool call, and defaults empty arguments to {}", () => {
+    const message = {
+      role: "assistant",
+      content: "Looking that up.",
+      tool_calls: [
+        { id: "call_a", type: "function", function: { name: "alpha", arguments: "" } },
+        { id: "call_b", type: "function", function: { name: "beta", arguments: '{"x":1}' } },
+      ],
+    } as unknown as ChatCompletionMessage;
+    const rendered = renderClaudeCliPrompt([{ role: "user", content: "go" }, message]);
+    expect(rendered.userBlocks.slice(-3)).toEqual([
+      "[Assistant]\nLooking that up.",
+      "[Assistant tool call call_a: alpha] {}",
+      '[Assistant tool call call_b: beta] {"x":1}',
+    ]);
+  });
+
+  it("resume continuation ids render like any id", () => {
+    const rendered = renderClaudeCliPrompt([
+      { role: "user", content: "go" },
+      toolCallMessage("toolu_01ABC-resume.7", "files_read", '{"path":"a"}', null),
+      { role: "tool", content: "ok", tool_call_id: "toolu_01ABC-resume.7" },
+    ]);
+    expect(rendered.userBlocks).toContain('[Assistant tool call toolu_01ABC-resume.7: files_read] {"path":"a"}');
+    expect(rendered.userBlocks).toContain("[Tool result toolu_01ABC-resume.7]\nok");
+  });
+
+  it("bridged prompts append the addendum to the system text; unbridged prompts do not", () => {
+    const messages: ChatCompletionMessage[] = [
+      { role: "system", content: "Be brief." },
+      { role: "user", content: "hi" },
+    ];
+    expect(renderClaudeCliPrompt(messages).system).toBe("Be brief.");
+    expect(renderClaudeCliPrompt(messages, { bridged: false }).system).toBe("Be brief.");
+    expect(renderClaudeCliPrompt(messages, { bridged: true }).system).toBe(
+      `Be brief.\n\n${CLAUDE_CLI_TOOL_BRIDGE_ADDENDUM}`,
+    );
+    expect(renderClaudeCliPrompt([{ role: "user", content: "hi" }], { bridged: true }).system).toBe(
+      CLAUDE_CLI_TOOL_BRIDGE_ADDENDUM,
+    );
+    expect(CLAUDE_CLI_TOOL_BRIDGE_ADDENDUM).not.toMatch(/You are Claude Code/i);
+  });
+
+  it("userText equals userBlocks joined, so the two forms never diverge", () => {
+    const rendered = renderClaudeCliPrompt([
+      { role: "user", content: "make a doc" },
+      toolCallMessage("call_1", "documents_create", '{"title":"T"}', "ok"),
+      { role: "tool", content: "created", tool_call_id: "call_1" },
+      { role: "user", content: "thanks" },
+    ]);
+    expect(rendered.userText).toBe(rendered.userBlocks.join("\n\n"));
+    expect(rendered.userBlocks[0]).toBe(
+      "The conversation so far is below. Reply as the assistant to the final user turn.",
+    );
+  });
 });
 
 describe("buildStreamJsonUserMessage", () => {
@@ -228,5 +312,44 @@ describe("buildStreamJsonUserMessage", () => {
       type: "user",
       message: { role: "user", content: [{ type: "text", text: "héllo 🐐" }] },
     });
+  });
+
+  it("each prior message becomes its own content block in order", () => {
+    const { userBlocks } = renderClaudeCliPrompt([
+      { role: "user", content: "one" },
+      { role: "assistant", content: "two" },
+      { role: "user", content: "three" },
+    ]);
+    const payload = buildStreamJsonUserMessage(userBlocks);
+    const parsed = JSON.parse(payload) as { message: { content: Array<{ type: string; text: string }> } };
+    expect(parsed.message.content.length).toBe(userBlocks.length);
+    expect(parsed.message.content.map((block) => block.text)).toEqual(userBlocks);
+    expect(parsed.message.content.every((block) => block.type === "text")).toBe(true);
+  });
+
+  it("a string is one text block, identical to a one-element block array", () => {
+    expect(buildStreamJsonUserMessage("abc")).toBe(buildStreamJsonUserMessage(["abc"]));
+  });
+
+  it("a transcript over 2 MiB stays one stdin line with blocks intact", () => {
+    const big = `line one\nline two\n${"x".repeat(1024 * 1024)}`;
+    const { userBlocks } = renderClaudeCliPrompt([
+      { role: "user", content: big },
+      { role: "assistant", content: big },
+      { role: "user", content: "next" },
+    ]);
+    const payload = buildStreamJsonUserMessage(userBlocks);
+    expect(payload.length).toBeGreaterThan(2 * 1024 * 1024);
+    expect(payload.indexOf("\n")).toBe(payload.length - 1);
+    const parsed = JSON.parse(payload) as { message: { content: Array<{ text: string }> } };
+    expect(parsed.message.content.map((block) => block.text)).toEqual(userBlocks);
+  });
+});
+
+describe("claudeCliUserMessage", () => {
+  it("explains a forced tool call without sending agentic or Code Mode turns to another provider", () => {
+    const message = claudeCliUserMessage("claude_cli_tools_unsupported");
+    expect(message).toMatch(/forces a specific tool call/);
+    expect(message).not.toMatch(/agentic|Code Mode/i);
   });
 });

@@ -1,3 +1,4 @@
+import { type WebSearchNativeEngine } from "@goatcitadel/contracts";
 import type {
   AuthRuntimeSettings,
   DeploymentProfile,
@@ -62,6 +63,11 @@ export interface RuntimeSettings {
       timeoutMs: number;
       defaultReadBackend: "native" | "firecrawl";
       fallbackToNative: boolean;
+      /** Whether tools may reach the base URL; reads fall back to native when false. */
+      baseUrlAllowlisted?: boolean;
+    };
+    search: {
+      engineOrder: WebSearchNativeEngine[];
     };
   };
   auth: AuthRuntimeSettings;
@@ -170,6 +176,8 @@ export interface RuntimeSettings {
     chatWorkPassportV1Enabled?: boolean;
     chatRequesterMcpV1Enabled?: boolean;
     chatStaticMcpV1Enabled?: boolean;
+    /** Lets the local `claude-code-cli` provider call Gateway tools through the per-run MCP bridge. Absent/false => text-only. */
+    claudeCliToolBridgeEnabled?: boolean;
     /** Gateway-owned governed Change Plan authority. */
     evolutionControlPlaneV1Enabled?: boolean;
     /** Default-on only after the Evolution Control Plane rollout. */

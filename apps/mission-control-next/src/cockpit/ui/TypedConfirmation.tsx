@@ -2,7 +2,8 @@ import { useId } from "react";
 
 /** Matches what the operator typed against the phrase, ignoring case and surrounding spaces. */
 export function typedConfirmationMatches(typed: string, phrase: string): boolean {
-  return typed.trim().toLowerCase() === phrase.trim().toLowerCase();
+  const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
+  return normalize(typed) === normalize(phrase);
 }
 
 /**

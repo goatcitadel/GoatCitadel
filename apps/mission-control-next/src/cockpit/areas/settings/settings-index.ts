@@ -27,7 +27,7 @@ const CONTROL_TERMS: Record<string, string> = {
   personalities: "tone style overlay create edit delete work default personality",
   onboarding: "first run setup choose model test message safety network allowlist safe demo",
   providers:
-    "provider api key credential secret endpoint base url oauth login model catalog routing default llm guided expert diagnostics connection ollama openai compatible",
+    "provider api key credential secret endpoint base url oauth login model catalog routing default llm guided expert diagnostics connection ollama openai compatible claude code cli let it use goatcitadel tools tool bridge",
   "local-ai":
     "hardware memory model fit download serve endpoint jobs local inference llama.cpp llamacpp gguf gpu cpu npu",
   channels:
@@ -35,6 +35,8 @@ const CONTROL_TERMS: Record<string, string> = {
   integrations:
     "add create edit delete enable disable integration connection diagnostics operator actions external connector meet",
   mcp: "register create edit delete server enable disable connect disconnect oauth tools health elicitation templates model context protocol stdio http sse transport",
+  "web-search":
+    "web search firecrawl api key hosted self-hosted engine default fallback order duckduckgo bing google brave parallel official allowlist test connection credits",
   addons: "install update uninstall enable disable launch stop addon extension capability pack import export",
   permissions:
     "permission profile select activate chat effective policy create edit archive default override autonomy grant revoke",

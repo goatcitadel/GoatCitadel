@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingState } from "@goatcitadel/contracts";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
-import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
+import { __resetSessionDraftsForTests, hasSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import { CockpitGuidedModelSetup } from "./CockpitGuidedModelSetup";
 
 const mocks = vi.hoisted(() => ({
@@ -232,6 +232,41 @@ describe("shared guided model setup", () => {
     await act(async () => button("Connect provider")!.click());
     expect(mocks.create).not.toHaveBeenCalled();
   });
+  it("switches from the Claude Code token route to the CLI provider in one click", async () => {
+    catalog("missing", {
+      providerId: "claude-code",
+      label: "Claude Code (Claude subscription)",
+      authMode: "claude-code-oauth",
+    });
+    onboarding.settings.llm.activeProviderId = "claude-code";
+    await mount();
+    await act(async () => button("Use Claude Code CLI instead")!.click());
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    expect(provider.value).toBe("claude-code-cli");
+    expect(button("Add Claude Code CLI")).toBeDefined();
+  });
+  it("shows loading instead of an unavailable saved provider while the catalog loads", async () => {
+    catalog("ready");
+    mocks.catalog.mockReturnValue({ ...mocks.catalog(), providers: [], loading: true });
+    await mount();
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    expect(provider.textContent).toContain("Loading providers…");
+    expect(provider.textContent).not.toContain("unavailable");
+    expect(container.textContent).not.toContain("Not chosen");
+  });
+  it("groups the provider dropdown by how each provider is paid for", async () => {
+    catalog("ready");
+    await mount();
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    const groups = [...provider.querySelectorAll("optgroup")].map((group) => [
+      group.label,
+      [...group.querySelectorAll("option")].map((option) => option.textContent),
+    ]);
+    expect(groups).toEqual([
+      ["Ready to use", ["Test provider"]],
+      ["Use a subscription", ["Claude Code CLI (local login) · not added yet"]],
+    ]);
+  });
   it("confirms a changed model through an installation default plan and shows the result", async () => {
     catalog("ready");
     await mount();
@@ -254,6 +289,20 @@ describe("shared guided model setup", () => {
     });
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Change applied and verified.");
     expect(mocks.reload).toHaveBeenCalled();
+  });
+  it("leaves no unsaved draft after saving the clamped effort of a provider without reasoning", async () => {
+    catalog("ready", { capabilities: { reasoning: false } });
+    await mount();
+    const model = container.querySelectorAll("select")[1]!;
+    await vi.waitFor(() => expect(model.querySelector('option[value="other-model"]')).not.toBeNull());
+    await act(async () => {
+      model.value = "other-model";
+      model.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(hasSessionDraft("onboarding:default:model")).toBe(true);
+    await act(async () => button("Confirm model")!.click());
+    expect(mocks.create.mock.calls[0]![0].request).toMatchObject({ model: "other-model", thinkingLevel: "off" });
+    expect(hasSessionDraft("onboarding:default:model")).toBe(false);
   });
   it("moves on with the host's own label once the default is confirmed", async () => {
     catalog("ready");

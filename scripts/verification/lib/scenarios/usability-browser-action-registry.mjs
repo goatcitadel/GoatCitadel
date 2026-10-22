@@ -31,6 +31,12 @@ const DEDICATED_BROWSER_PROOFS = Object.freeze({
     "surface-regression.settings-hooks",
     "The route-specific Chromium scenario verifies that the governed Hooks surface renders from canonical Gateway state.",
   ),
+  // Render-only browser proof. The governed saves (Change Plans, keychain, allowlist step) are proven
+  // by the Gateway and WebSearchSettings unit tests, not by this scenario.
+  "route.settings-web-search.web-search-settings-render-from-gateway-state": dedicated(
+    "surface-regression.settings-web-search",
+    "The route-specific Chromium scenario verifies that the Web & Search route renders from canonical Gateway state; it does not submit a save.",
+  ),
 });
 
 const SUPPLEMENTAL_ACTION_PROOFS = Object.freeze({
@@ -1001,9 +1007,11 @@ const STEPS = [
     "settings-governance-runtime-integrations",
     "route.settings-integrations.sandbox-destination",
     "settings-integrations",
-    [clickPattern("Verification sandbox bridge"),
+    [
+      clickPattern("Verification sandbox bridge"),
       click("Actions"),
-      text("Read Sample"), click("Run"),
+      text("Read Sample"),
+      click("Run"),
       confirm("Run reviewed action"),
       text("fixture bridge ok"),
     ],

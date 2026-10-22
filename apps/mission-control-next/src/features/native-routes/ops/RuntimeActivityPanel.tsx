@@ -1,5 +1,11 @@
 import { OpsNeedsAttentionCard } from "./RuntimeOverviewPanels";
-import { buildNeedsAttentionItems, runtimeEventKey, sourceFailed } from "./runtime-overview-model";
+import {
+  buildNeedsAttentionItems,
+  presentPendingApprovals,
+  presentRuntimeDaemon,
+  runtimeEventKey,
+  sourceFailed,
+} from "./runtime-overview-model";
 import { toneForActivityEvent, formatActivityAge } from "./runtime-formatters";
 import { presentEventClass, presentEventType } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { EmptyState, NativeMetricGrid as MetricGrid, ThreePartChip } from "../primitives";
@@ -18,7 +24,7 @@ export function RuntimeActivityPanel({
   route,
 }: {
   data: OpsRuntimeData;
-  pendingApprovals: number;
+  pendingApprovals?: number;
   activityFilter: "all" | "errors" | "approvals" | "runtime";
   setActivityFilter: RuntimePanelSetter<"all" | "errors" | "approvals" | "runtime">;
   openInspection: RuntimeOpenInspection;
@@ -34,9 +40,6 @@ export function RuntimeActivityPanel({
   // returning {}) can omit them at runtime — and sourceFailed() only trips
   // on fetch errors, not a 200 with an empty body. Chain through every hop
   // and fall back to inert defaults, here and in the helpers below.
-  const daemonRunning = daemonRuntimeUnavailable
-    ? null
-    : (data.daemon?.running ?? data.health?.daemonStatus?.running ?? null);
   const daemonHost = daemonRuntimeUnavailable
     ? "unavailable"
     : (data.daemon?.host ?? data.health?.daemonStatus?.host ?? "Unknown");
@@ -68,7 +71,7 @@ export function RuntimeActivityPanel({
         density="compact"
         stats={[
           { label: "Recent events", value: String(filteredActivityEvents.length) },
-          { label: "Pending approvals", value: String(data.dashboard?.pendingApprovals ?? pendingApprovals) },
+          presentPendingApprovals(data, pendingApprovals),
         ]}
       >
         <div className="mc-next-settings-filter-bar" role="radiogroup" aria-label="Activity feed filter">
@@ -139,7 +142,7 @@ export function RuntimeActivityPanel({
             },
             {
               label: "Daemon",
-              value: daemonRunning === null ? "unavailable" : daemonRunning ? "running" : "stopped",
+              value: presentRuntimeDaemon(data).label,
               meta: daemonHost,
             },
           ]}

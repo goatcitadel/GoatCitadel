@@ -4,6 +4,7 @@ import {
   CHANGE_PLAN_RUNTIME_FEATURE_FLAGS,
   LlmProviderAuthModeSchema,
   ServiceUnavailableError,
+  WEB_SEARCH_NATIVE_ENGINES,
 } from "@goatcitadel/contracts";
 import type { EvolutionControlPlaneActor } from "../services/evolution-control-plane-service.js";
 import { sendRouteError } from "./_error-handler.js";
@@ -225,6 +226,16 @@ const requestSchema = z.discriminatedUnion("kind", [
         z.object({ operation: z.literal("memory_configuration"), config: memoryConfigurationSchema }).strict(),
         z
           .object({ operation: z.literal("web_firecrawl_configuration"), config: firecrawlConfigurationSchema })
+          .strict(),
+        z
+          .object({
+            operation: z.literal("web_search_configuration"),
+            config: z
+              .object({
+                engineOrder: z.array(z.enum(WEB_SEARCH_NATIVE_ENGINES)).min(1).max(WEB_SEARCH_NATIVE_ENGINES.length),
+              })
+              .strict(),
+          })
           .strict(),
         z.object({ operation: z.literal("mesh_configuration"), config: meshConfigurationSchema }).strict(),
         z.object({ operation: z.literal("npu_configuration"), config: npuConfigurationSchema }).strict(),

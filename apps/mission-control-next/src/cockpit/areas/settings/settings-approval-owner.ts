@@ -9,7 +9,10 @@ export type SettingsApprovalOwner =
   | "guided-model"
   | "tool-approval"
   | "budget-mode"
-  | "filesystem-write-access";
+  | "filesystem-write-access"
+  | "claude-cli-tool-bridge"
+  | "firecrawl"
+  | "search-engine-order";
 export type SettingsApprovalReceipt = Pick<ChangePlanRecord, "planId" | "revision" | "status" | "requiredAction">;
 
 function identifier(value: unknown): value is string {
@@ -73,7 +76,17 @@ export function settingsApprovalOwnerBinding(
 
   let expectedWorkspace = workspaceId;
   let matches: boolean;
-  if (["gateway-auth", "managed-runtime", "llama-setup", "tool-approval", "budget-mode"].includes(owner)) {
+  if (
+    [
+      "gateway-auth",
+      "managed-runtime",
+      "llama-setup",
+      "tool-approval",
+      "budget-mode",
+      "firecrawl",
+      "search-engine-order",
+    ].includes(owner)
+  ) {
     const operation =
       owner === "gateway-auth"
         ? "gateway_auth_configuration"
@@ -83,7 +96,11 @@ export function settingsApprovalOwnerBinding(
             ? "tool_approval_mode"
             : owner === "budget-mode"
               ? "budget_mode"
-              : "llama_cpp_setup";
+              : owner === "firecrawl"
+                ? "web_firecrawl_configuration"
+                : owner === "search-engine-order"
+                  ? "web_search_configuration"
+                  : "llama_cpp_setup";
     expectedWorkspace = owner === "llama-setup" ? workspaceId : "default";
     matches =
       plan.kind === "runtime_configuration" &&
@@ -109,6 +126,19 @@ export function settingsApprovalOwnerBinding(
       resourceId !== undefined &&
       plan.target.ownerId === "runtime_settings" &&
       plan.target.resourceId === resourceId &&
+      plan.adapter.adapterId === "runtime-configuration" &&
+      plan.adapter.version === 2 &&
+      plan.scope === "runtime";
+  } else if (owner === "claude-cli-tool-bridge") {
+    // A registered rollout gate: the plan names this one flag, never another.
+    expectedWorkspace = "default";
+    matches =
+      plan.kind === "runtime_configuration" &&
+      plan.request.kind === "runtime_configuration" &&
+      plan.request.change.operation === "feature_flag" &&
+      plan.request.change.flag === "claudeCliToolBridgeEnabled" &&
+      plan.target.ownerId === "runtime_settings" &&
+      plan.target.resourceId === "feature:claudeCliToolBridgeEnabled" &&
       plan.adapter.adapterId === "runtime-configuration" &&
       plan.adapter.version === 2 &&
       plan.scope === "runtime";

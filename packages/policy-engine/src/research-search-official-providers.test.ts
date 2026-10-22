@@ -4,7 +4,10 @@ import {
   canonicalizeResearchResultUrl,
   executeOfficialResearchSearch,
   getOfficialSearchCredentialEnvAliases,
+  isInternalInfrastructureSearchQuery,
   isOfficialResearchSearchInvocation,
+  isSensitiveOfficialSearchQuery,
+  isUnsafeSeedQuery,
   resolveOfficialSearchProviders,
 } from "./research-search-official-providers.js";
 
@@ -423,4 +426,71 @@ describe("official research search providers", () => {
     expect(isOfficialResearchSearchInvocation({ backend: "ollama", providers: ["brave"] })).toBe(false);
     expect(isOfficialResearchSearchInvocation({ engines: ["brave"] })).toBe(false);
   });
+});
+
+describe("isInternalInfrastructureSearchQuery", () => {
+  it.each([
+    "db01.corp outage",
+    "169.254.169.254 metadata",
+    "metadata.google.internal token endpoint",
+    "build.internal status",
+    "nas.home.arpa unreachable",
+    "printer.lan driver",
+    "sk-proj-abcdefghijklmnopqrstuvwx invalid",
+    "token sk-proj-abcdefghijklmnop1234",
+  ])("refuses %s", (query) => {
+    expect(isInternalInfrastructureSearchQuery(query)).toBe(true);
+  });
+
+  it.each([
+    "192.168.1.1 admin login",
+    "localhost:3000 not loading react",
+    "127.0.0.1 refused connection",
+    "10.0.0.1 default gateway",
+    "mail.corp.example.com mx record",
+    "host.docker.internal not resolving on linux",
+    "gateway.docker.internal vs host-gateway",
+    "kubernetes.docker.internal certificate error",
+    "curl Authorization: Bearer header example",
+    "NODE_OPTIONS=--max-old-space-size=4096 meaning",
+    "Cookie: SameSite=None header meaning",
+    "password: requirements for azure ad",
+    "jdk.internal.misc.Unsafe",
+  ])("allows %s", (query) => {
+    expect(isInternalInfrastructureSearchQuery(query)).toBe(false);
+  });
+
+  it("still refuses a private hostname next to a public Docker pseudo-host", () => {
+    expect(isInternalInfrastructureSearchQuery("host.docker.internal vs db01.corp")).toBe(true);
+  });
+
+  it.each(["db.host.docker.internal status", "my-host.docker.internal", "svc.gateway.docker.internal dns"])(
+    "refuses a private hostname that merely ends in a Docker pseudo-host: %s",
+    (query) => {
+      expect(isInternalInfrastructureSearchQuery(query)).toBe(true);
+    },
+  );
+
+  it("stays narrower than the official-provider check", () => {
+    expect(isSensitiveOfficialSearchQuery("192.168.1.1 admin login")).toBe(true);
+    expect(isSensitiveOfficialSearchQuery("localhost:3000 not loading react")).toBe(true);
+  });
+});
+
+describe("isUnsafeSeedQuery", () => {
+  it.each([
+    "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwx why is it rejected",
+    "why is my api_key=abcd1234efgh5678 rejected",
+    "db01.corp outage",
+    "169.254.169.254 metadata",
+  ])("refuses an automatic seed for %s", (query) => {
+    expect(isUnsafeSeedQuery(query)).toBe(true);
+  });
+
+  it.each(["192.168.1.1 admin login", "host.docker.internal not resolving on linux"])(
+    "allows an automatic seed for %s",
+    (query) => {
+      expect(isUnsafeSeedQuery(query)).toBe(false);
+    },
+  );
 });

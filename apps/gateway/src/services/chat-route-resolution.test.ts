@@ -1,9 +1,12 @@
+import { describeClaudeCodeCliLoginGuidance } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
+import { createNoopSecretStore } from "../test/llm-fixtures.js";
 import {
   createRoutingDecisionFingerprint,
   preflightChatRoute,
   resolveChatRouteDescriptor,
 } from "./chat-route-resolution.js";
+import { LlmService } from "./llm-service.js";
 
 function createHost(input?: {
   sessionPrefs?: {
@@ -22,6 +25,7 @@ function createHost(input?: {
       defaultModel?: string;
       hasApiKey?: boolean;
       baseUrl?: string;
+      capabilities?: { toolCalling: boolean };
     }>;
   };
   fallbacks?: Array<{ providerId: string; model: string }>;
@@ -945,5 +949,200 @@ describe("chat-route-resolution citadel ward route_local", () => {
     expect(descriptor.wardReasonCode).toBeUndefined();
     expect(descriptor.wardCitadelId).toBeUndefined();
     expect(withSessionReader.resolveSessionWorkspaceId).not.toHaveBeenCalled();
+  });
+
+  describe("file output notice", () => {
+    const providers = [
+      {
+        providerId: "claude-code-cli",
+        label: "Claude Code CLI (local login)",
+        defaultModel: "claude-sonnet-5-5",
+        hasApiKey: true,
+        baseUrl: "https://api.anthropic.com/v1",
+        capabilities: { toolCalling: false },
+      },
+      {
+        providerId: "openai",
+        label: "OpenAI",
+        defaultModel: "gpt-5.4-mini",
+        hasApiKey: true,
+        baseUrl: "https://api.openai.com/v1",
+        capabilities: { toolCalling: true },
+      },
+      {
+        providerId: "anthropic",
+        label: "Anthropic",
+        defaultModel: "claude-sonnet-5-5",
+        hasApiKey: false,
+        baseUrl: "https://api.anthropic.com/v1",
+        capabilities: { toolCalling: true },
+      },
+    ];
+    const pdfDraft =
+      "Please do some research into the best coding languages for full stack web development and then put it into a report/pdf.";
+
+    it("warns before send when a text-only provider is asked for a file and names providers that can create one", async () => {
+      const host = createHost({
+        runtime: { activeProviderId: "claude-code-cli", activeModel: "claude-sonnet-5-5", providers },
+      });
+      const result = await preflightChatRoute(host as never, "session-1", { action: "send", content: pdfDraft });
+      expect(result.blockedReason).toBeUndefined();
+      expect(result.fileOutputNotice).toEqual({
+        providerLabel: "Claude Code CLI (local login)",
+        message: expect.stringContaining("cannot create a PDF, document, or deck"),
+        alternatives: [{ providerId: "openai", label: "OpenAI" }],
+      });
+    });
+
+    it("keeps the notice out of the routing decision fingerprint", async () => {
+      const host = createHost({
+        runtime: { activeProviderId: "claude-code-cli", activeModel: "claude-sonnet-5-5", providers },
+      });
+      const withFile = await preflightChatRoute(host as never, "session-1", { action: "send", content: pdfDraft });
+      expect(JSON.stringify(withFile.decision)).not.toContain("fileOutputNotice");
+      expect(withFile.decision.fingerprint).toBe(
+        createRoutingDecisionFingerprint({ ...withFile.decision, fingerprint: undefined } as never),
+      );
+    });
+
+    it("stays quiet for tool-capable providers and for drafts that do not ask for a file", async () => {
+      const cli = createHost({
+        runtime: { activeProviderId: "claude-code-cli", activeModel: "claude-sonnet-5-5", providers },
+      });
+      const chatOnly = await preflightChatRoute(cli as never, "session-1", {
+        action: "send",
+        content: "What are the best languages for full stack web development?",
+      });
+      expect(chatOnly.fileOutputNotice).toBeUndefined();
+
+      const openai = createHost({ runtime: { activeProviderId: "openai", activeModel: "gpt-5.4-mini", providers } });
+      const toolCapable = await preflightChatRoute(openai as never, "session-1", { action: "send", content: pdfDraft });
+      expect(toolCapable.fileOutputNotice).toBeUndefined();
+    });
+
+    /** The CLI provider with the capability LlmService projects for the tool-bridge flag. */
+    function providersWithBridgeFlag(enabled: boolean) {
+      const service = new LlmService(
+        {
+          activeProviderId: "claude-code-cli",
+          activeModel: "claude-sonnet-5-5",
+          providers: [
+            {
+              providerId: "claude-code-cli",
+              label: "Claude Code CLI (local login)",
+              baseUrl: "https://api.anthropic.com/v1",
+              apiStyle: "claude-code-cli",
+              defaultModel: "claude-sonnet-5-5",
+            },
+          ],
+        },
+        {},
+        {
+          secretStore: createNoopSecretStore(),
+          enforceNetworkAllowlist: false,
+          claudeCliToolBridgeEnabled: () => enabled,
+        },
+      );
+      const cli = service.listProviders().find((item) => item.providerId === "claude-code-cli");
+      const toolCalling = cli?.capabilities?.toolCalling === true;
+      expect(toolCalling).toBe(enabled);
+      return providers.map((provider) =>
+        provider.providerId === "claude-code-cli" ? { ...provider, capabilities: { toolCalling } } : provider,
+      );
+    }
+
+    it("flag on: no fileOutputNotice for claude-code-cli", async () => {
+      const host = createHost({
+        runtime: {
+          activeProviderId: "claude-code-cli",
+          activeModel: "claude-sonnet-5-5",
+          providers: providersWithBridgeFlag(true),
+        },
+      });
+      const result = await preflightChatRoute(host as never, "session-1", { action: "send", content: pdfDraft });
+      expect(result.blockedReason).toBeUndefined();
+      expect(result.effectiveProviderId).toBe("claude-code-cli");
+      expect(result.fileOutputNotice).toBeUndefined();
+    });
+
+    it("flag off: #455 notice unchanged", async () => {
+      const host = createHost({
+        runtime: {
+          activeProviderId: "claude-code-cli",
+          activeModel: "claude-sonnet-5-5",
+          providers: providersWithBridgeFlag(false),
+        },
+      });
+      const result = await preflightChatRoute(host as never, "session-1", { action: "send", content: pdfDraft });
+      expect(result.fileOutputNotice).toEqual({
+        providerLabel: "Claude Code CLI (local login)",
+        message:
+          "Claude Code CLI (local login) cannot use GoatCitadel tools, so it cannot create a PDF, document, or deck. It will answer in chat instead. Choose a model from a provider that supports tools to get a file.",
+        alternatives: [{ providerId: "openai", label: "OpenAI" }],
+      });
+    });
+  });
+});
+
+describe("chat-route-resolution Claude Code CLI login readiness", () => {
+  /** A Gateway that just restarted: the `claude auth status` probe has not run, so the
+   * provider projects `claude_cli_not_probed` until `ensureProviderReadiness` runs it. */
+  function coldCliHost(probe: { status: "ready" | "missing"; reasonCode: string }) {
+    const base = createHost();
+    let probed: typeof probe | undefined;
+    const ensureProviderReadiness = vi.fn(async (providerId: string | undefined) => {
+      if (providerId === "claude-code-cli") probed = probe;
+    });
+    const getRuntimeConfig = vi.fn(() => ({
+      activeProviderId: "claude-code-cli",
+      activeModel: "claude-sonnet-4-6",
+      providers: [
+        {
+          providerId: "claude-code-cli",
+          label: "Claude Code CLI (local login)",
+          defaultModel: "claude-sonnet-4-6",
+          baseUrl: "https://api.anthropic.com/v1",
+          authMode: "claude-code-cli-login",
+          authReadiness: { reasonCode: probed?.reasonCode ?? "claude_cli_not_probed" },
+          hasApiKey: probed?.status === "ready",
+        },
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          defaultModel: "gpt-5.4-mini",
+          hasApiKey: true,
+          baseUrl: "https://api.openai.com/v1",
+        },
+      ],
+    }));
+    return { ...base, llmService: { ...base.llmService, getRuntimeConfig, ensureProviderReadiness } };
+  }
+
+  it("probes a cold-start signed-in CLI before judging the route, so it is not blocked", async () => {
+    const host = coldCliHost({ status: "ready", reasonCode: "claude_cli_logged_in" });
+    const result = await preflightChatRoute(host as never, "session-1", { action: "send" });
+    expect(host.llmService.ensureProviderReadiness).toHaveBeenCalledWith("claude-code-cli");
+    expect(host.llmService.ensureProviderReadiness.mock.contexts).toEqual([host.llmService]);
+    expect(result).toMatchObject({
+      effectiveProviderId: "claude-code-cli",
+      effectiveModel: "claude-sonnet-4-6",
+      runtimeClass: "cloud",
+      blockedReason: undefined,
+    });
+  });
+
+  it("tells a not-signed-in CLI to sign in with claude instead of adding an API key", async () => {
+    const host = coldCliHost({ status: "missing", reasonCode: "claude_cli_logged_out" });
+    const result = await preflightChatRoute(host as never, "session-1", { action: "send" });
+    expect(result.blockedReason).toBe(describeClaudeCodeCliLoginGuidance("claude_cli_logged_out"));
+    expect(result.blockedReason).toContain("sign in with /login");
+    expect(result.blockedReason).not.toContain("API key");
+  });
+
+  it("does not probe the CLI for a route on another provider", async () => {
+    const host = coldCliHost({ status: "ready", reasonCode: "claude_cli_logged_in" });
+    const result = await preflightChatRoute(host as never, "session-1", { action: "send", providerId: "openai" });
+    expect(host.llmService.ensureProviderReadiness).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ effectiveProviderId: "openai", blockedReason: undefined });
   });
 });

@@ -1286,15 +1286,17 @@ test("cockpit Chat persistence journey reloads, exports, archives, and restores 
   assert.equal(operations[8].name, "Export conversation");
   assert.deepEqual(
     operations.slice(-6).map((operation) => operation.kind),
-    ["click", "confirm", "api", "assert-text", "click", "assert-control"],
+    ["click", "click", "api", "assert-text", "click", "assert-control"],
   );
-  assert.deepEqual(operations.slice(13, 15), [
+  // Archive and restore act at once; the conversation stays recoverable in Archived (CH-R08).
+  assert.ok(!operations.some((operation) => operation.kind === "confirm"));
+  assert.deepEqual(operations.slice(12, 14), [
     { kind: "click", name: "Archived", exact: true },
     { kind: "select-action-session" },
   ]);
   // Phones open the conversation list from the header's Conversations sheet first.
   const phone = cockpitChatPersistenceStep({ phone: true }).operations;
-  assert.deepEqual(phone.slice(13, 16), [
+  assert.deepEqual(phone.slice(12, 15), [
     { kind: "click", name: "Conversations", exact: true },
     { kind: "click", name: "Archived", exact: true },
     { kind: "select-action-session" },

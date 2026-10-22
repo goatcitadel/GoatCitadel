@@ -329,6 +329,23 @@ export function ChatComposerNotices({ props, onChooseModel }: { props: Controls;
           ) : null}
         </div>
       ) : null}
+      {/* Not a live region: preflight re-runs while the draft changes, so it would re-announce on every keystroke. */}
+      {route?.fileOutputNotice ? (
+        <div className="mb-2 space-y-2 rounded-md border border-status-waiting bg-sunken p-2 text-xs text-fg-secondary">
+          <p>{route.fileOutputNotice.message}</p>
+          {route.fileOutputNotice.alternatives.length > 0 ? (
+            <p>
+              {"Can create files: "}
+              {route.fileOutputNotice.alternatives.map((alternative) => alternative.label).join(", ")}
+            </p>
+          ) : null}
+          {onChooseModel ? (
+            <Button size="sm" disabled={props.historicalReadOnly || props.sending} onClick={onChooseModel}>
+              Choose another model
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       <input
         ref={props.fileInputRef}
         type="file"

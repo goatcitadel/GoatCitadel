@@ -2169,7 +2169,16 @@ export interface RoutingPreflightResult {
   wardReasonCode?: RoutingWardReasonCode;
   wardCitadelId?: string;
   capabilityProfile?: import("./chat-capability-profile.js").ChatTurnCapabilityProfilePreview;
+  /** Display-only: the draft asks for a file the effective provider cannot create. Not part of the decision. */
+  fileOutputNotice?: RoutingPreflightFileOutputNotice;
   decision: RoutingDecisionSnapshot;
+}
+
+export interface RoutingPreflightFileOutputNotice {
+  providerLabel: string;
+  message: string;
+  /** Configured providers with credentials that can call tools, so they can create files. */
+  alternatives: Array<{ providerId: string; label: string }>;
 }
 
 export interface ChatSendMessageResponse {

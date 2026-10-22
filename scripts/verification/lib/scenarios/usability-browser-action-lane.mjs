@@ -679,7 +679,6 @@ export function cockpitChatPersistenceStep({ phone = false } = {}) {
       },
       { kind: "click", name: "Conversation actions", exact: true },
       { kind: "click", name: "Archive conversation", exact: true },
-      { kind: "confirm", name: "Archive" },
       { kind: "api", probe: "chat-persistence-archived" },
       // Phones open the conversation list (filters, Recent/Archived, rows) from the header's Conversations sheet.
       ...(phone ? [{ kind: "click", name: "Conversations", exact: true }] : []),
@@ -688,7 +687,6 @@ export function cockpitChatPersistenceStep({ phone = false } = {}) {
       { kind: "assert-text", value: "Persist this deterministic cockpit conversation." },
       { kind: "click", name: "Conversation actions", exact: true },
       { kind: "click", name: "Restore conversation", exact: true },
-      { kind: "confirm", name: "Restore" },
       { kind: "api", probe: "chat-persistence-restored" },
       { kind: "assert-text", value: "Persist this deterministic cockpit conversation." },
       { kind: "click", name: "Conversation actions", exact: true },
@@ -710,7 +708,7 @@ export function adaptInlineDecisionsStepForCockpit(sourceStep) {
     operations: [
       { kind: "fixture-session", sessionKey: "approval" },
       { kind: "assert-text", value: "Approval needed" },
-      { kind: "click", name: "Review approval", exact: true },
+      { kind: "click", name: "Review danger approval", exact: true },
       { kind: "assert-text", value: "Confirm danger risk action" },
       { kind: "confirm", name: "Approve once" },
       { kind: "api", probe: "cockpit-inline-approval-settled" },

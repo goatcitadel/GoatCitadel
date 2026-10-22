@@ -1,12 +1,14 @@
 import { resolveOptedInFallback } from "./chat-provider-fallback-preview.js";
 import {
   applyChatModePresetToPatch,
+  describeClaudeCodeCliLoginGuidance,
   inferProviderForModelId,
   providerAllowsForeignModelIds,
   providerRecognizesModelId,
   type RoutingDecisionSnapshot,
   type RoutingPreflightRequest,
   type RoutingPreflightResult,
+  type RoutingPreflightFileOutputNotice,
   type ChatSessionPrefsRecord,
   type ChatProviderFallbackPreference,
   type RoutingWardReasonCode,
@@ -17,6 +19,7 @@ import type { LlmService } from "./llm-service.js";
 import { isLocalChatProviderUrl } from "./chat-provider-fallback-authority.js";
 import { splitChatPrefsPatch } from "./chat-session-utils.js";
 import { enforceRouteLocalWard, type RouteLocalWardDependencies } from "./chat-route-local-ward.js";
+import { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "./chat-artifact-intent.js";
 
 type LlmRuntimeConfig = ReturnType<LlmService["getRuntimeConfig"]>;
 type RuntimeProvider = LlmRuntimeConfig["providers"][number];
@@ -27,7 +30,9 @@ export interface ChatRouteResolutionDependencies {
   readonly storage: Pick<Storage, "chatSessionPrefs"> & RouteLocalWardDependencies["storage"];
   resolveSessionWorkspaceId?: RouteLocalWardDependencies["resolveSessionWorkspaceId"];
   readonly llmService: Pick<LlmService, "getRuntimeConfig"> &
-    Partial<Pick<LlmService, "getCachedModelAvailability" | "refreshModelCatalogInBackground">>;
+    Partial<
+      Pick<LlmService, "getCachedModelAvailability" | "refreshModelCatalogInBackground" | "ensureProviderReadiness">
+    >;
   resolveFallbackTargets(
     runtime: LlmRuntimeConfig,
     primaryProviderId: string,
@@ -67,6 +72,8 @@ export interface ResolvedChatRouteDescriptor {
   providerFallback?: ChatProviderFallbackPreference;
   wardReasonCode?: RoutingWardReasonCode;
   wardCitadelId?: string;
+  /** Set only when the route's provider cannot call tools: configured, credentialed providers that can. */
+  toolCapableProviders?: Array<{ providerId: string; label: string }>;
 }
 
 function normalizeRequestedModel(providerId: string, model: string): string {
@@ -145,55 +152,56 @@ function resolveEffectiveModel(input: {
   normalizationReason?: string;
   blockedReason?: string;
 } {
+  const { provider } = input;
   const fallbackModel =
-    input.provider.providerId === input.runtime.activeProviderId
-      ? input.runtime.activeModel || input.provider.defaultModel
-      : input.provider.defaultModel;
+    provider.providerId === input.runtime.activeProviderId
+      ? input.runtime.activeModel || provider.defaultModel
+      : provider.defaultModel;
   const normalizedRequested = input.requestedModel?.trim();
   if (!normalizedRequested) {
-    const model = fallbackModel ? normalizeRequestedModel(input.provider.providerId, fallbackModel) : undefined;
+    const model = fallbackModel ? normalizeRequestedModel(provider.providerId, fallbackModel) : undefined;
     if (!model) {
       return {
-        blockedReason: `No model is configured for ${input.provider.label}. Select a model first.`,
+        blockedReason: `No model is configured for ${provider.label}. Select a model first.`,
       };
     }
-    const availability = input.getModelAvailability?.(input.provider.providerId, model);
+    const availability = input.getModelAvailability?.(provider.providerId, model);
     if (availability === "unavailable" || availability === "stale_unavailable") {
-      return { blockedReason: describeUnavailableModel(model, input.provider.label, availability) };
+      return { blockedReason: describeUnavailableModel(model, provider.label, availability) };
     }
     return { model };
   }
 
-  const availability = input.getModelAvailability?.(input.provider.providerId, normalizedRequested);
+  const availability = input.getModelAvailability?.(provider.providerId, normalizedRequested);
   if (availability === "unavailable" || availability === "stale_unavailable") {
-    return { blockedReason: describeUnavailableModel(normalizedRequested, input.provider.label, availability) };
+    return { blockedReason: describeUnavailableModel(normalizedRequested, provider.label, availability) };
   }
 
   if (
     availability !== "available" &&
     availability !== "stale_available" &&
-    !providerAllowsForeignModelIds(input.provider.providerId) &&
-    !providerRecognizesModelId(input.provider.providerId, normalizedRequested)
+    !providerAllowsForeignModelIds(provider.providerId) &&
+    !providerRecognizesModelId(provider.providerId, normalizedRequested)
   ) {
     const ownerProviderId = inferProviderForModelId(normalizedRequested);
-    if (ownerProviderId && ownerProviderId !== input.provider.providerId) {
+    if (ownerProviderId && ownerProviderId !== provider.providerId) {
       const normalizedFallback = fallbackModel
-        ? normalizeRequestedModel(input.provider.providerId, fallbackModel)
+        ? normalizeRequestedModel(provider.providerId, fallbackModel)
         : undefined;
       if (!normalizedFallback) {
         return {
-          blockedReason: `Model ${normalizedRequested} belongs to ${ownerProviderId}; choose a ${input.provider.providerId} model first.`,
+          blockedReason: `Model ${normalizedRequested} belongs to ${ownerProviderId}; choose a ${provider.providerId} model first.`,
         };
       }
       return {
         model: normalizedFallback,
-        normalizationReason: `Model changed from ${normalizedRequested} to ${normalizedFallback} because provider ${input.provider.label} cannot run ${normalizedRequested}.`,
+        normalizationReason: `Model changed from ${normalizedRequested} to ${normalizedFallback} because provider ${provider.label} cannot run ${normalizedRequested}.`,
       };
     }
   }
 
   return {
-    model: normalizeRequestedModel(input.provider.providerId, normalizedRequested),
+    model: normalizeRequestedModel(provider.providerId, normalizedRequested),
   };
 }
 
@@ -205,6 +213,29 @@ function describeUnavailableModel(
   return availability === "unavailable"
     ? `${model} is no longer listed for ${providerLabel}. Choose an available model in Settings → Providers & models.`
     : `${model} was not in the last known model list for ${providerLabel}. Refresh the catalog in Settings → Providers & models before using it.`;
+}
+
+function describeMissingProviderAuth(provider: RuntimeProvider): string {
+  return provider.authMode === "claude-code-cli-login"
+    ? describeClaudeCodeCliLoginGuidance(provider.authReadiness?.reasonCode)
+    : `${provider.label} is not configured yet. Add an API key before using it.`;
+}
+
+/** The local Claude Code CLI login is known only from a cached `claude auth status` probe, which
+ * is empty after a Gateway restart; run (or reuse) that probe before judging the route on it. */
+async function readRouteRuntimeConfig(
+  llmService: ChatRouteResolutionDependencies["llmService"],
+  prefs: ChatSessionPrefsRecord,
+  input: RoutingPreflightRequest,
+): Promise<LlmRuntimeConfig> {
+  const readRuntime = () => llmService.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true });
+  const runtime = readRuntime();
+  const provider = resolveRequestedProvider(runtime, prefs, input);
+  if (provider?.authMode !== "claude-code-cli-login") {
+    return runtime;
+  }
+  await llmService.ensureProviderReadiness?.(provider.providerId);
+  return readRuntime();
 }
 
 function classifyRuntime(provider: RuntimeProvider | undefined): RoutingPreflightResult["runtimeClass"] {
@@ -239,10 +270,7 @@ async function resolveUnwardedChatRouteDescriptor(
   const sessionPrefs = await deps.storage.chatSessionPrefs.ensure(sessionId);
   const previewPrefs = buildPreviewPrefs(sessionPrefs, input);
   const llmService = deps.llmService;
-  const runtime = llmService.getRuntimeConfig({
-    includeKeychainForActiveProvider: true,
-    useCache: true,
-  });
+  const runtime = await readRouteRuntimeConfig(llmService, previewPrefs, input);
   const selectionSource = describeSelectionSource(sessionPrefs, input);
   const requestedProvider = resolveRequestedProvider(runtime, previewPrefs, input);
   const requestedProviderId =
@@ -291,7 +319,7 @@ async function resolveUnwardedChatRouteDescriptor(
       fallbackResult: "not_applicable",
       runtimeClass,
       runtimeProvider: requestedProvider,
-      blockedReason: `${requestedProvider.label} is not configured yet. Add an API key before using it.`,
+      blockedReason: describeMissingProviderAuth(requestedProvider),
     });
   }
 
@@ -339,6 +367,14 @@ async function resolveUnwardedChatRouteDescriptor(
     blockedReason: effectiveModelResolution.blockedReason,
     degradedReason: undefined,
     runtimeProvider: requestedProvider,
+    ...(requestedProvider.capabilities?.toolCalling === false
+      ? {
+          toolCapableProviders: runtime.providers
+            .filter((candidate) => candidate.capabilities?.toolCalling !== false && candidate.hasApiKey)
+            .slice(0, 3)
+            .map((candidate) => ({ providerId: candidate.providerId, label: candidate.label })),
+        }
+      : {}),
     fallbackTarget: providerFallback
       ? { providerId: providerFallback.providerId, model: providerFallback.model }
       : undefined,
@@ -358,21 +394,22 @@ export async function preflightChatRoute(
   const descriptor = await resolveChatRouteDescriptor(deps, sessionId, input);
   let runtimeReachability: RoutingPreflightResult["runtimeReachability"] = "not_checked";
   let blockedReason = descriptor.blockedReason;
+  const runtimeProvider = descriptor.runtimeProvider;
 
-  if (!blockedReason && descriptor.runtimeClass === "local" && descriptor.runtimeProvider?.providerId) {
+  if (!blockedReason && descriptor.runtimeClass === "local" && runtimeProvider?.providerId) {
     try {
-      const models = await deps.listLlmModels?.(descriptor.runtimeProvider.providerId);
+      const models = await deps.listLlmModels?.(runtimeProvider.providerId);
       if (models) {
         runtimeReachability = models.length > 0 ? "reachable" : "models_unavailable";
         if (models.length === 0) {
-          blockedReason = `No models are currently available for ${descriptor.runtimeProvider.label}.`;
+          blockedReason = `No models are currently available for ${runtimeProvider.label}.`;
         }
       }
     } catch {
       runtimeReachability = "unreachable";
-      blockedReason = `The ${descriptor.runtimeProvider.label} runtime could not be reached.`;
+      blockedReason = `The ${runtimeProvider.label} runtime could not be reached.`;
     }
-  } else if (!blockedReason && descriptor.runtimeClass === "cloud" && descriptor.runtimeProvider?.hasApiKey) {
+  } else if (!blockedReason && descriptor.runtimeClass === "cloud" && runtimeProvider?.hasApiKey) {
     runtimeReachability = "not_checked";
   }
 
@@ -393,10 +430,30 @@ export async function preflightChatRoute(
     wardReasonCode: descriptor.wardReasonCode,
     wardCitadelId: descriptor.wardCitadelId,
   } satisfies Omit<RoutingPreflightResult, "decision">;
+  const fileOutputNotice = blockedReason
+    ? undefined
+    : describeFileOutputNotice(runtimeProvider, descriptor.toolCapableProviders, input.content);
 
   return {
     ...resultWithoutDecision,
+    // Display-only, so it stays out of the decision snapshot and its fingerprint.
+    ...(fileOutputNotice ? { fileOutputNotice } : {}),
     decision: createRoutingDecisionSnapshot(input, resultWithoutDecision),
+  };
+}
+
+/** A draft that asks for a file, routed to a provider that cannot call tools (the local Claude Code CLI). */
+function describeFileOutputNotice(
+  provider: RuntimeProvider | undefined,
+  toolCapableProviders: ResolvedChatRouteDescriptor["toolCapableProviders"],
+  content: string | undefined,
+): RoutingPreflightFileOutputNotice | undefined {
+  if (!provider || provider.capabilities?.toolCalling !== false || !content) return undefined;
+  if (!detectDocumentArtifactIntent(content) && !detectPresentationArtifactIntent(content)) return undefined;
+  return {
+    providerLabel: provider.label,
+    message: `${provider.label} cannot use GoatCitadel tools, so it cannot create a PDF, document, or deck. It will answer in chat instead. Choose a model from a provider that supports tools to get a file.`,
+    alternatives: toolCapableProviders ?? [],
   };
 }
 

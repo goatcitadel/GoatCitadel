@@ -53,7 +53,11 @@ const SECRET_SENSITIVE_MOBILE_PUSH_ROUTES = new Set(["/api/v1/mobile/current-dev
  * bodies must never be fingerprinted durably: an unsalted hash of a low-entropy password is an offline oracle.
  * A key binds one attempt to its concrete path; the owner's expectedRevision governs explicit retries.
  */
-const SECRET_SENSITIVE_CREDENTIAL_ROUTES = new Set(["/api/v1/secrets/providers/:providerId", "/api/v1/auth/settings"]);
+const SECRET_SENSITIVE_CREDENTIAL_ROUTES = new Set([
+  "/api/v1/secrets/providers/:providerId",
+  "/api/v1/auth/settings",
+  "/api/v1/settings/web/credentials/:targetId",
+]);
 const MOBILE_PUSH_REGISTRATION_PATH = "/api/v1/mobile/current-device/push";
 const SECURE_CONFIGURATION_ROUTE =
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration";

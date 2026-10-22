@@ -41,7 +41,9 @@ const helloScript: Script = ({ stdout, exit }) => {
 
 function createHarness(scripts: Script[], options: { loggedIn?: boolean } = {}) {
   const spawns: SpawnRecord[] = [];
-  const killTree = vi.fn();
+  const exitsByPid = new Map<number, (code: number | null) => void>();
+  // Like a real tree kill, the killed fake child closes (stdout ends, then "close").
+  const killTree = vi.fn((pid: number) => exitsByPid.get(pid)?.(null));
   const spawn = vi.fn((command: string, args: string[], spawnOptions: SpawnOptions) => {
     const emitter = new EventEmitter() as ChildProcess;
     const stdout = new PassThrough();
@@ -60,18 +62,17 @@ function createHarness(scripts: Script[], options: { loggedIn?: boolean } = {}) 
       systemPromptAtSpawn: systemFile ? readFileSync(systemFile, "utf8") : undefined,
     });
     const script = scripts[spawns.length - 1] ?? helloScript;
-    setImmediate(() =>
-      script({
-        stdout,
-        stderr,
-        exit: (code) => {
-          Object.assign(emitter, { exitCode: code });
-          stdout.end();
-          stderr.end();
-          setImmediate(() => emitter.emit("close", code, null));
-        },
-      }),
-    );
+    let exited = false;
+    const exit = (code: number | null) => {
+      if (exited) return;
+      exited = true;
+      Object.assign(emitter, { exitCode: code });
+      stdout.end();
+      stderr.end();
+      setImmediate(() => emitter.emit("close", code, null));
+    };
+    exitsByPid.set(emitter.pid as number, exit);
+    setImmediate(() => script({ stdout, stderr, exit }));
     return emitter;
   });
   const readiness = new ClaudeCodeCliReadiness({
@@ -229,7 +230,6 @@ describe("claude-code-cli provider through LlmService", () => {
         );
       },
     ]);
-    harness.killTree.mockImplementation(() => undefined);
     const service = createService(harness);
     await expect(service.chatCompletions({ messages: [{ role: "user", content: "hi" }] })).rejects.toMatchObject({
       reasonCode: "claude_cli_tool_use_blocked",

@@ -7,12 +7,14 @@ import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hoo
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import {
   clampGuidedThinkingLevel,
+  GUIDED_CATALOG_LOADING_READINESS,
   GUIDED_THINKING_LEVELS,
   guidedConnectionHint,
   localRuntimeSetupGuide,
   pendingPlanForSelection,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
+  submittedGuidedSelection,
   supportedGuidedThinkingLevels,
   withAddableBuiltinProviders,
 } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
@@ -80,6 +82,8 @@ export function useGuidedModelSetup({
   const setThinkingLevel = (next: ChatThinkingLevel) =>
     modelDraft.setValue((current) => ({ ...current, thinkingLevel: next }));
   const busyRef = useRef(false);
+  // The raw draft behind the default-model plan this wizard submitted, before effort clamping.
+  const submittedDraftRef = useRef<typeof modelDraft.value | null>(null);
   const planLoadGeneration = useRef(0);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
@@ -103,9 +107,14 @@ export function useGuidedModelSetup({
     catalog.config?.defaultThinkingLevel ?? "standard",
     supportedThinkingLevels,
   );
-  const readiness = resolveGuidedProviderReadiness(
-    selectedProvider && recheckingEndpoint ? { ...selectedProvider, modelProbeState: "not_checked" } : selectedProvider,
-  );
+  const readiness =
+    !selectedProvider && catalog.loading
+      ? GUIDED_CATALOG_LOADING_READINESS
+      : resolveGuidedProviderReadiness(
+          selectedProvider && recheckingEndpoint
+            ? { ...selectedProvider, modelProbeState: "not_checked" }
+            : selectedProvider,
+        );
   const providerReady = readiness.state === "ready";
   // Local runtimes need no credential: the next step is re-checking the live endpoint, not a credential plan.
   const verifiesLocalEndpoint =
@@ -193,7 +202,13 @@ export function useGuidedModelSetup({
             model: updated.request.model,
             thinkingLevel: updated.request.thinkingLevel ?? ("standard" as ChatThinkingLevel),
           };
-          modelDraft.acceptSaved(saved, JSON.stringify(saved), saved);
+          const savedProvider = providers.find((provider) => provider.providerId === saved.providerId);
+          const submitted = submittedGuidedSelection(
+            submittedDraftRef.current,
+            saved,
+            supportedGuidedThinkingLevels(savedProvider?.capabilities),
+          );
+          modelDraft.acceptSaved(saved, JSON.stringify(saved), submitted);
         }
         setNotice(updated.result?.summary ?? "Change applied and verified.");
         await Promise.all([catalog.reload(), reloadOnboarding()]);
@@ -203,7 +218,7 @@ export function useGuidedModelSetup({
       }
       return updated;
     },
-    [catalog, reloadOnboarding, setNotice, modelDraft],
+    [catalog, providers, reloadOnboarding, setNotice, modelDraft],
   );
 
   const runAction = useCallback(
@@ -253,6 +268,7 @@ export function useGuidedModelSetup({
       setNotice("Choose a verified provider and model first.");
       return;
     }
+    if (!pendingSetupPlan) submittedDraftRef.current = modelDraft.value;
     await createPlan({ kind: "installation_default_model", providerId, model, thinkingLevel });
   };
   const recheckLocalEndpoint = async () => {
@@ -297,6 +313,7 @@ export function useGuidedModelSetup({
         : { kind: "connect" as const, run: createProviderPlan };
   const primaryDisabled =
     busy ||
+    catalog.loading ||
     !providerId ||
     (providerReady && !model) ||
     (!providerReady && verifiesLocalEndpoint && readiness.state === "checking");
@@ -304,6 +321,8 @@ export function useGuidedModelSetup({
   return {
     catalog,
     providers,
+    /** The provider saved for future Chats, distinct from the draft selection. */
+    savedProviderId: activeProviderId,
     draft: modelDraft,
     providerId,
     model,

@@ -62,7 +62,7 @@
     "@assistant-ui/react-markdown": "0.12.9",
     "@fontsource-variable/geist": "5.2.8",
     "@goatcitadel/contracts": "workspace:*",
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "@monaco-editor/loader": "1.7.0",
     "@openuidev/lang-core": "0.2.6",
     "@openuidev/react-lang": "0.2.6",

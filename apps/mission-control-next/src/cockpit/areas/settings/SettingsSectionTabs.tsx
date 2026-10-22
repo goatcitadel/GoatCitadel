@@ -36,7 +36,9 @@ export function selectedSettingsSection(page: SettingsIndexPage, routeSection: s
       ? "appearance"
       : hash === "approval-mode" || hash === "filesystem-write-roots"
         ? "tools"
-        : hash;
+        : hash === "claude-cli-tool-bridge"
+          ? "providers"
+          : hash;
   return (
     page.entries.find((entry) => entry.anchor === aliasedHash || entry.section === aliasedHash)?.section ??
     page.entries.find((entry) => entry.section === routeSection)?.section ??

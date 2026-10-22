@@ -367,7 +367,7 @@ export async function collectProviderModelStaleness(
     {
       providerId: "anthropic" as const,
       preferredApiStyle: "anthropic-messages" as const,
-      preferredModel: "claude-sonnet-4-6",
+      preferredModel: "claude-sonnet-5-5",
     },
   ];
 

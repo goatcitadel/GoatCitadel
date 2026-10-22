@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   clampGuidedThinkingLevel,
+  GUIDED_CATALOG_LOADING_READINESS,
+  groupGuidedProviders,
   guidedConnectionHint,
+  guidedProviderOptionLabel,
   pendingPlanForSelection,
   withAddableBuiltinProviders,
   localRuntimeSetupGuide,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
+  submittedGuidedSelection,
   supportedGuidedThinkingLevels,
 } from "./guided-model-setup-support";
 
@@ -139,6 +143,16 @@ describe("guided model setup support", () => {
     expect(clampGuidedThinkingLevel("extended", ["off", "minimal", "standard", "extended"])).toBe("extended");
   });
 
+  it("treats the draft captured at submission as the saved submission when its effort clamps to the saved one", () => {
+    const saved = { providerId: "claude-code-cli", model: "sonnet", thinkingLevel: "off" as const };
+    const draft = { ...saved, thinkingLevel: "standard" as const };
+    expect(submittedGuidedSelection(draft, saved, ["off"])).toBe(draft);
+    expect(submittedGuidedSelection(draft, saved, ["off", "minimal", "standard"])).toBe(saved);
+    expect(submittedGuidedSelection({ ...draft, providerId: "openai" }, saved, ["off"])).toBe(saved);
+    // A plan this wizard did not submit, such as one resumed from the Gateway, acknowledges only the saved value.
+    expect(submittedGuidedSelection(null, saved, ["off"])).toBe(saved);
+  });
+
   it("returns setup guides only for llama.cpp and LocalAI, using the configured endpoint", () => {
     expect(
       localRuntimeSetupGuide({ providerId: "llamacpp", baseUrl: "http://127.0.0.1:9000/v1" })?.steps.join(" "),
@@ -151,16 +165,20 @@ describe("guided model setup support", () => {
   });
 
   it("uses the chosen model and local endpoint in the llama.cpp command", () => {
-    expect(localRuntimeSetupGuide({ providerId: "llamacpp", baseUrl: "http://127.0.0.1:8181/v1" }, "Ornith-35B-Q4_K_M")?.command).toBe(
-      "llama-server -m path/to/model.gguf --alias Ornith-35B-Q4_K_M --host 127.0.0.1 --port 8181 --jinja",
-    );
+    expect(
+      localRuntimeSetupGuide({ providerId: "llamacpp", baseUrl: "http://127.0.0.1:8181/v1" }, "Ornith-35B-Q4_K_M")
+        ?.command,
+    ).toBe("llama-server -m path/to/model.gguf --alias Ornith-35B-Q4_K_M --host 127.0.0.1 --port 8181 --jinja");
     expect(localRuntimeSetupGuide({ providerId: "llamacpp", baseUrl: "not a url" })?.command).toBe(
       "llama-server -m path/to/model.gguf --alias my-local-model --host 127.0.0.1 --port 8080 --jinja",
     );
   });
 
   it("does not offer a copyable command when the model alias could execute shell text", () => {
-    expect(localRuntimeSetupGuide({ providerId: "llamacpp", baseUrl: "http://127.0.0.1:8080/v1" }, "model;echo unsafe")?.command).toBeUndefined();
+    expect(
+      localRuntimeSetupGuide({ providerId: "llamacpp", baseUrl: "http://127.0.0.1:8080/v1" }, "model;echo unsafe")
+        ?.command,
+    ).toBeUndefined();
   });
 });
 
@@ -259,5 +277,85 @@ describe("addable built-in providers need a loaded catalog", () => {
   it("offers nothing while the catalog is loading or failed", () => {
     expect(withAddableBuiltinProviders([], false)).toEqual([]);
     expect(withAddableBuiltinProviders([], true).map((option) => option.providerId)).toEqual(["claude-code-cli"]);
+  });
+});
+
+describe("finding the Claude Code CLI provider", () => {
+  const option = (providerId: string) => ({ providerId, label: providerId, baseUrl: "https://example.test", defaultModel: "m", apiStyle: "openai-responses", models: [], sanitizedEndpointIdentity: "" });
+
+  it("lists the missing CLI provider right after the Claude Code token route, not at the end", () => {
+    const ids = withAddableBuiltinProviders(
+      [option("openai"), option("anthropic"), option("claude-code"), option("google"), option("ollama")] as never,
+      true,
+    ).map((entry) => entry.providerId);
+    expect(ids).toEqual(["openai", "anthropic", "claude-code", "claude-code-cli", "google", "ollama"]);
+  });
+
+  it("falls back to right after Anthropic, then to the top", () => {
+    expect(
+      withAddableBuiltinProviders([option("openai"), option("anthropic"), option("google")] as never, true).map(
+        (entry) => entry.providerId,
+      ),
+    ).toEqual(["openai", "anthropic", "claude-code-cli", "google"]);
+    expect(withAddableBuiltinProviders([option("openai")] as never, true)[0]?.providerId).toBe("claude-code-cli");
+  });
+
+  it("offers a one-click switch from the token route to the CLI provider", () => {
+    expect(guidedConnectionHint({ authMode: "claude-code-oauth" })?.alternative).toEqual({
+      providerId: "claude-code-cli",
+      label: "Use Claude Code CLI instead",
+    });
+    expect(guidedConnectionHint({ authMode: "codex-oauth" })?.alternative).toBeUndefined();
+  });
+
+  it("reports loading, not a missing provider, while the catalog loads", () => {
+    expect(GUIDED_CATALOG_LOADING_READINESS).toMatchObject({ state: "checking", label: "Loading…" });
+  });
+});
+
+describe("grouped provider choices", () => {
+  const base = { baseUrl: "https://example.test", defaultModel: "m", apiStyle: "openai-responses", models: [], sanitizedEndpointIdentity: "" };
+  const providers = [
+    { ...base, providerId: "openai", label: "OpenAI" },
+    { ...base, providerId: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)", authMode: "codex-oauth", hasApiKey: true },
+    { ...base, providerId: "anthropic", label: "Anthropic" },
+    { ...base, providerId: "claude-code", label: "Claude Code (Claude subscription)", authMode: "claude-code-oauth" },
+    { ...base, providerId: "vertex", label: "Google Vertex AI", authMode: "google-adc" },
+    { ...base, providerId: "ollama", label: "Ollama", localCostPosture: "zero_cost_local_runtime" },
+    { ...base, providerId: "npu-local", label: "NPU Local Sidecar", localCostPosture: "zero_cost_local_runtime" },
+  ] as never;
+
+  it("puts ready providers first, then subscriptions, API keys and local runtimes", () => {
+    const groups = groupGuidedProviders(providers, ["openai-codex"]);
+    expect(groups.map((group) => [group.label, group.providers.map((provider) => provider.providerId)])).toEqual([
+      ["Ready to use", ["openai-codex"]],
+      ["Use a subscription", ["claude-code"]],
+      ["Pay-per-use API key", ["openai", "anthropic"]],
+      ["Pay-per-use cloud account", ["vertex"]],
+      ["Run locally", ["ollama"]],
+    ]);
+  });
+
+  it("hides a retired provider unless it is the current selection", () => {
+    const ids = (selected: string) =>
+      groupGuidedProviders(providers, [selected]).flatMap((group) => group.providers.map((provider) => provider.providerId));
+    expect(ids("openai-codex")).not.toContain("npu-local");
+    expect(ids("npu-local")).toContain("npu-local");
+  });
+
+  it("keeps a saved retired provider visible after the draft selection moves away", () => {
+    const visible = groupGuidedProviders(providers, ["openai-codex", "npu-local"]).flatMap((group) =>
+      group.providers.map((provider) => provider.providerId),
+    );
+    expect(visible).toContain("npu-local");
+  });
+
+  it("names each option by how it is paid for", () => {
+    expect(guidedProviderOptionLabel({ providerId: "anthropic", label: "Anthropic" })).toBe("Anthropic API (Console key)");
+    expect(guidedProviderOptionLabel({ providerId: "openai", label: "OpenAI" })).toBe("OpenAI API (platform key)");
+    expect(guidedProviderOptionLabel({ providerId: "claude-code", label: "Claude Code (Claude subscription)" })).toBe(
+      "Claude Code token (may be rejected)",
+    );
+    expect(guidedProviderOptionLabel({ providerId: "ollama", label: "Ollama" })).toBe("Ollama");
   });
 });

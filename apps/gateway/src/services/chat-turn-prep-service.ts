@@ -1115,6 +1115,7 @@ export async function prepareAgentChatTurn(
           mode: effectiveMode,
         },
         toolset: promptCapabilityCatalog,
+        webMode: normalized.webMode ?? prefs.webMode,
         ...(memoryDigest ? { memoryDigest } : {}),
       }),
     );

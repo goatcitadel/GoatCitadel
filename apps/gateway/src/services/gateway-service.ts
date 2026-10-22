@@ -425,7 +425,7 @@ import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import { getRequestAttribution, runWithIsolatedRequestAttribution } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
-import { resolveUtilityModelOverride } from "./utility-model-routing.js";
+import { resolveJudgeModelDefaults, resolveUtilityModelOverride } from "./utility-model-routing.js";
 import { AssemblyService, bindAssemblyChatCompletion } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
@@ -470,9 +470,13 @@ import { enqueueMobilePushApprovalRefresh, MobilePushService } from "./mobile-pu
 import { createConfiguredMobilePushProvider } from "./mobile-push-provider.js";
 import { startMobilePushDeliveryScheduler } from "./mobile-push-scheduler.js";
 import {
+  probeOfficialSearchCredential,
   RuntimeConfigurationService,
   type RuntimeConfigurationAuthorizationInput,
 } from "./runtime-configuration-service.js";
+import { WebSearchCredentialService } from "./web-search-credential-service.js";
+import { applyRuntimeBrowserBackendDefaults } from "./runtime-browser-backend-defaults.js";
+import { submitEvolutionWebSearchCredential } from "./web-search-credential-change.js";
 import { assertRuntimeConfigurationApprovalBinding } from "./runtime-configuration-approval-binding.js";
 import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
@@ -1028,6 +1032,7 @@ export class GatewayService {
   public readonly secretStore: SecretStoreService;
   private readonly providerSecretStaging: ProviderSecretStaging;
   public readonly runtimeConfigurationService: RuntimeConfigurationService;
+  public readonly webSearchCredentials: WebSearchCredentialService;
   public readonly approvalRemoteTokenSecrets: ApprovalRemoteTokenSecretService;
   private readonly skillsService: SkillsService;
   private readonly capabilityScopeResolver: CapabilityScopeResolver;
@@ -1410,6 +1415,24 @@ export class GatewayService {
         void (await this.storage.audit.append("tool_invocations", payload));
       },
     });
+    this.webSearchCredentials = new WebSearchCredentialService({
+      secretStore,
+      installationScopeId: this.runtimeConfigurationService.getInstallationScopeRef(),
+      getNetworkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
+      getFirecrawlConfig: () => this.config.assistant.web.firecrawl,
+      probeOfficial: probeOfficialSearchCredential,
+      withOfficialTargetChange: (targetId, work, options) =>
+        this.runtimeConfigurationService.withSettingsCredentialChange(targetId, work, options),
+      appendAudit: async (payload) => void (await this.storage.audit.append("tool_invocations", payload)),
+      reportAuditFailure: (event, targetId, error) =>
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "runtime_configuration",
+          event: "web_search_credential.audit_failed_after_keychain_change",
+          message: "A web-search key changed in the OS keychain, but its audit record could not be written.",
+          context: { auditEvent: event, targetId, errorName: error instanceof Error ? error.name : "unknown" },
+        }),
+    });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       // Tool-policy approval creation must enter the canonical lifecycle. A
       // direct policy-engine storage write would omit the durable wait run and
@@ -1418,6 +1441,7 @@ export class GatewayService {
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
       resolveOutsideRootWriteEligibility: (request) => isOutsideRootWriteEligible(request, { storage: this.storage }),
       resolveCredential: (provider) => this.runtimeConfigurationService.resolveOfficialSearchCredential(provider),
+      resolveFirecrawlCredential: (baseUrl) => this.webSearchCredentials.resolveFirecrawlCredential(baseUrl),
       configureRuntime: (_request, targetId) => this.runtimeConfigurationService.assertConfigurationAvailable(targetId),
       resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
@@ -1656,6 +1680,7 @@ export class GatewayService {
       modelCatalogCachePath: path.resolve(config.rootDir, config.assistant.dataDir, "cache", "llm-model-catalog.json"),
       secretStore,
       modelUsageAccounting: this.modelUsageAccounting,
+      claudeCliToolBridgeEnabled: () => this.config.assistant.features.claudeCliToolBridgeEnabled === true,
       localServiceLeaseAcquirer: (request) => {
         this.configGenerationService.assertRuntimeReadsReady();
         return acquireBoundLlamaCppLease({
@@ -1841,6 +1866,7 @@ export class GatewayService {
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
       getModelOutputTokenLimit: (providerId, model) => this.llmService.getModelOutputTokenLimit(providerId, model),
+      describeProviderToolSupport: (providerId) => this.llmService.describeProviderToolSupport(providerId),
       listCapabilityCatalog: (scope, workspaceId) =>
         this.capabilitySystemService.listCatalog(scope, "ALL", workspaceId),
       revalidateRequesterTool: (profile, canonicalName) => this.revalidateNativeMcpChatTool(profile, canonicalName),
@@ -1872,6 +1898,7 @@ export class GatewayService {
       meshChatRuntimeAvailable: true,
       invokeMcpTool: async (request, options) => await this.invokeMcpTool(request, options),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
+      getSearchEngineOrder: () => this.config.assistant.web.search?.engineOrder ?? [],
       recordRuntimeDecision: async (input) => await this.recordRuntimeDecision(input),
       enqueueRuntimeDecision: (input) => this.runtimeDecisionRecorder.enqueueAdvisory(input),
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
@@ -3341,6 +3368,7 @@ export class GatewayService {
           return secret;
         },
         discardTemporaryAuthCredential: (planId) => this.secretStore.deleteSecret(runtimeTemporaryAuthAccount(planId)),
+        webSearchCredentials: this.webSearchCredentials,
       }),
       new ProviderConnectionChangePlanAdapter({
         getSettings: () => this.getSettings(),
@@ -3830,7 +3858,10 @@ export class GatewayService {
       },
       evolutionRuntimeConfiguration: {
         submitGatewayAuthCredential: (input) => this.submitEvolutionGatewayAuthCredential(input),
+        submitWebSearchCredential: (input) =>
+          submitEvolutionWebSearchCredential(this.evolutionControlPlaneService, this.webSearchCredentials, input),
       },
+      webSearchCredentials: this.webSearchCredentials,
     };
   }
 
@@ -6410,45 +6441,12 @@ export class GatewayService {
     if (utilityOverride) {
       return utilityOverride;
     }
-    const runtime = this.llmService.getRuntimeConfig({
-      includeKeychainForActiveProvider: true,
-      useCache: true,
-    });
-    const openaiCodex = runtime.providers.find(
-      (provider) => provider.providerId === "openai-codex" && provider.hasApiKey,
+    return resolveJudgeModelDefaults(
+      this.llmService.getRuntimeConfig({
+        includeKeychainForActiveProvider: true,
+        useCache: true,
+      }),
     );
-    if (openaiCodex) {
-      return {
-        providerId: openaiCodex.providerId,
-        model: "gpt-5.5",
-      };
-    }
-    const openai = runtime.providers.find((provider) => provider.providerId === "openai" && provider.hasApiKey);
-    if (openai) {
-      return {
-        providerId: openai.providerId,
-        model: "gpt-5.4",
-      };
-    }
-    const glm = runtime.providers.find((provider) => provider.providerId === "glm" && provider.hasApiKey);
-    if (glm) {
-      return {
-        providerId: glm.providerId,
-        model: glm.defaultModel || "glm-5",
-      };
-    }
-    const kimi = runtime.providers.find((provider) => provider.providerId === "moonshot" && provider.hasApiKey);
-    if (kimi) {
-      return {
-        providerId: kimi.providerId,
-        model: kimi.defaultModel,
-      };
-    }
-    const active = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
-    return {
-      providerId: active?.providerId ?? runtime.activeProviderId,
-      model: runtime.activeModel || active?.defaultModel,
-    };
   }
 
   public async ensureChatSessionRuntimeGrants(sessionId: string): Promise<void> {
@@ -9423,44 +9421,11 @@ export class GatewayService {
     if (!request.args || typeof request.args !== "object") {
       return request;
     }
-    const firecrawl = this.config.assistant.web.firecrawl;
-    const args = { ...request.args } as Record<string, unknown>;
-    const explicitBackend = typeof args.backend === "string" ? args.backend.trim().toLowerCase() : undefined;
-    const wantsFirecrawl =
-      firecrawl.enabled &&
-      (explicitBackend === "firecrawl" || (!explicitBackend && firecrawl.defaultReadBackend === "firecrawl"));
-
-    if (
-      request.toolName === "browser.search" ||
-      request.toolName === "browser.navigate" ||
-      request.toolName === "browser.extract"
-    ) {
-      if (!explicitBackend && firecrawl.enabled) {
-        args.backend = firecrawl.defaultReadBackend;
-      }
-      if (wantsFirecrawl) {
-        args.firecrawlBaseUrl = args.firecrawlBaseUrl ?? firecrawl.baseUrl;
-        args.firecrawlTimeoutMs = args.firecrawlTimeoutMs ?? firecrawl.timeoutMs;
-        args.firecrawlApiKeyEnv = args.firecrawlApiKeyEnv ?? firecrawl.apiKeyEnv;
-        args.firecrawlFallbackToNative = args.firecrawlFallbackToNative ?? firecrawl.fallbackToNative;
-      }
-      return { ...request, args };
-    }
-
-    if (request.toolName === "docs.ingest" && args.sourceType === "url") {
-      const hasExplicitDocsBackend = args.backend !== undefined && args.backend !== null;
-      if (!hasExplicitDocsBackend && firecrawl.enabled && firecrawl.defaultReadBackend === "firecrawl") {
-        args.backend = "firecrawl";
-      }
-      if (args.backend === "firecrawl") {
-        args.firecrawlBaseUrl = args.firecrawlBaseUrl ?? firecrawl.baseUrl;
-        args.firecrawlTimeoutMs = args.firecrawlTimeoutMs ?? firecrawl.timeoutMs;
-        args.firecrawlApiKeyEnv = args.firecrawlApiKeyEnv ?? firecrawl.apiKeyEnv;
-      }
-      return { ...request, args };
-    }
-
-    return request;
+    return applyRuntimeBrowserBackendDefaults(
+      request,
+      this.config.assistant.web,
+      this.config.toolPolicy?.sandbox?.networkAllowlist ?? [],
+    );
   }
 
   public listToolCatalog(): ToolCatalogEntry[] {

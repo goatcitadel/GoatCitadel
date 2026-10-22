@@ -6,7 +6,7 @@ import {
   resolveAdmittedDelegatedResultContract,
 } from "./chat-delegated-result-contract.js";
 import { ChatTurnAgentRunner, type ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
-import { createMockStorage } from "./chat-turn-agent-runner-test-fixtures.js";
+import { createMockStorage, createToolCatalog, toolCallCompletion } from "./chat-turn-agent-runner-test-fixtures.js";
 
 const schema = {
   type: "object",
@@ -147,6 +147,29 @@ describe("admitted delegated result correction", () => {
     expect(result.turnTrace.status).toBe("completed");
     expect(result.assistantContent).toBe('{"answer":"A direct answer."}');
     expect(createChatCompletion).toHaveBeenCalledTimes(2);
+  });
+  it("keeps the Deep evidence note out of a structured child result", async () => {
+    const f = fixture();
+    const createChatCompletion = vi.fn(async () =>
+      createChatCompletion.mock.calls.length === 1
+        ? toolCallCompletion("debezium logical replication")
+        : response('{"answer":"Use logical replication."}'),
+    );
+    const invokeTool = vi.fn(async (_request: { toolName: string }) => ({
+      outcome: "executed",
+      policyReason: "allowed",
+      result: { results: [] },
+    }));
+    const runner = new ChatTurnAgentRunner({
+      storage: f.storage as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      invokeTool: invokeTool as never,
+      createChatCompletion,
+    });
+    const result = await runner.run({ ...f.input, webMode: "deep" });
+    expect(invokeTool.mock.calls.some(([request]) => request.toolName === "browser.search")).toBe(true);
+    expect(JSON.parse(result.assistantContent)).toEqual({ answer: "Use logical replication." });
+    expect(f.storage.durableRuns.createCheckpoint).not.toHaveBeenCalled();
   });
   it("does not retry a second invalid correction and never labels it completed", async () => {
     const f = fixture();

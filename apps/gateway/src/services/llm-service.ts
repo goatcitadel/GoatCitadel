@@ -87,6 +87,7 @@ import {
   checkClaudeCodeCliReadiness,
   claudeCodeCliProviderAdapter,
   createClaudeCodeCliRuntime,
+  isClaudeCodeCliToolBridgeEnabled,
   peekClaudeCodeCliReadiness,
   type ClaudeCodeCliRuntime,
   type ClaudeCodeCliRuntimeOptions,
@@ -231,6 +232,8 @@ export interface LlmServiceOptions {
   modelUsageAccounting?: ModelUsageAccountingService;
   /** Overrides for the local Claude Code CLI provider (`claude-code-cli`); tests inject a fake spawn. */
   claudeCli?: ClaudeCodeCliRuntimeOptions;
+  /** Read per call: whether the Claude Code CLI provider may call Gateway tools through the MCP bridge. Absent means off. */
+  claudeCliToolBridgeEnabled?: () => boolean;
   /** Injected only for deterministic auth integration tests. */
   googleCloudAuthService?: GoogleCloudAuthService;
 }
@@ -523,7 +526,7 @@ export class LlmService {
         apiKeySource: status.apiKeySource,
         hasKeychainSecret: status.hasKeychainSecret,
         apiKeyRef: status.apiKeyRef,
-        capabilities: inferProviderCapabilities(provider),
+        capabilities: inferProviderCapabilities(provider, this.claudeCodeCli),
       };
     });
   }
@@ -578,6 +581,19 @@ export class LlmService {
     return typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0 ? limit : undefined;
   }
 
+  /** Whether the Claude Code CLI provider may call Gateway tools through the MCP bridge (read per call). */
+  public isClaudeCliToolBridgeEnabled(): boolean {
+    return isClaudeCodeCliToolBridgeEnabled(this.claudeCodeCli);
+  }
+
+  /** Whether a configured provider can call Gateway tools (and so create files). */
+  public describeProviderToolSupport(providerId: string): { label: string; toolCalling: boolean } | undefined {
+    const provider = this.providers.get(providerId);
+    return provider
+      ? { label: provider.label, toolCalling: inferProviderCapabilities(provider, this.claudeCodeCli).toolCalling }
+      : undefined;
+  }
+
   /** Exact server-owned reasoning metadata used by Change Plan validation. */
   public getModelReasoningMetadata(providerId: string, model: string): LlmModelReasoningMetadata | undefined {
     const reasoning = lookupExactModelMetadata(this.modelMetadata, providerId, model)?.reasoning;
@@ -596,7 +612,7 @@ export class LlmService {
     if (!provider || !contextWindowTokens) {
       return undefined;
     }
-    return fingerprintProviderRouteConfig(provider, model, contextWindowTokens);
+    return fingerprintProviderRouteConfig(provider, model, contextWindowTokens, this.claudeCodeCli);
   }
 
   public getRuntimeConfig(
@@ -1260,7 +1276,7 @@ export class LlmService {
     return resolveLlmReasoningProfile({
       request,
       providerId: provider.providerId,
-      providerCapabilities: inferProviderCapabilities(provider),
+      providerCapabilities: inferProviderCapabilities(provider, this.claudeCodeCli),
       modelMetadata: omitsReasoning
         ? undefined
         : lookupExactModelMetadata(this.modelMetadata, provider.providerId, model),
@@ -1345,7 +1361,10 @@ export class LlmService {
     }
   }
 
-  private async postTrackedJsonRequest(input: LlmProviderJsonRequestInput): Promise<LlmTrackedJsonDispatch> {
+  private async postTrackedJsonRequest(
+    input: LlmProviderJsonRequestInput,
+    options: { credentialRefreshed?: boolean } = {},
+  ): Promise<LlmTrackedJsonDispatch> {
     const timeoutSignal = AbortSignal.timeout(input.timeoutMs);
     const dispatchAbort = new AbortController();
     const signal = input.signal
@@ -1460,6 +1479,12 @@ export class LlmService {
         ...(requestedOutputTokenCap === undefined ? {} : { logicalRequestedOutputTokenCap: requestedOutputTokenCap }),
         ...(minimumEffectiveOutputTokenCap === undefined ? {} : { minimumEffectiveOutputTokenCap }),
       };
+      if (response.status === 401 && !options.credentialRefreshed && isOpenAICodexProvider(resolved.provider)) {
+        const refreshed = await this.retryAfterOpenAICodexTokenExpiry(input, baseResult);
+        if (refreshed) {
+          return refreshed;
+        }
+      }
       if (
         response.ok ||
         !isOutputCapRecoveryHttpStatus(response.status) ||
@@ -1494,6 +1519,59 @@ export class LlmService {
       rethrowIfProviderNetworkBlocked(error);
       throw error;
     }
+  }
+
+  /**
+   * ChatGPT can revoke a Codex access token before its recorded expiry. On a
+   * `token_expired` 401, force one refresh and resend with the new token. A
+   * failed refresh marks the credential as needing reconnect (inside the OAuth
+   * owner) and leaves the original 401 authoritative.
+   */
+  private async retryAfterOpenAICodexTokenExpiry(
+    input: LlmProviderJsonRequestInput,
+    dispatched: LlmTrackedJsonDispatch,
+  ): Promise<LlmTrackedJsonDispatch | undefined> {
+    let errorText: string;
+    try {
+      errorText = await readProviderErrorBody("OpenAI Codex auth probe", dispatched.response.clone());
+    } catch {
+      return undefined;
+    }
+    const rejectedAccessToken = input.resolved.apiKey;
+    if (!rejectedAccessToken || !isOpenAICodexTokenExpiredError(errorText)) {
+      return undefined;
+    }
+    let accessToken: string;
+    try {
+      // The refresh is shared across callers; this caller stops waiting at its
+      // own cancel or timeout without aborting the exchange for the others.
+      const waitSignal = input.signal
+        ? AbortSignal.any([input.signal, AbortSignal.timeout(input.timeoutMs)])
+        : AbortSignal.timeout(input.timeoutMs);
+      accessToken = await raceAbortSignal(
+        this.openAICodexOAuth.forceRefreshAccessToken(rejectedAccessToken),
+        waitSignal,
+      );
+    } catch {
+      return undefined;
+    }
+    const expiredError = new Error(`OpenAI Codex access token expired: ${errorText.slice(0, 400)}`);
+    expiredError.name = "ProviderCredentialExpiredError";
+    await dispatched.usage?.fail(expiredError);
+    const usage = dispatched.usage;
+    const retried = await this.postTrackedJsonRequest(
+      {
+        ...input,
+        resolved: { ...input.resolved, apiKey: accessToken },
+        target: { ...input.target, headers: { ...input.target.headers, Authorization: `Bearer ${accessToken}` } },
+        transportAttemptIndex: (dispatched.lastTransportAttemptIndex ?? input.transportAttemptIndex) + 1,
+      },
+      { credentialRefreshed: true },
+    );
+    return {
+      ...retried,
+      priorModelUsageEventIds: [...(usage ? [usage.eventId] : []), ...(retried.priorModelUsageEventIds ?? [])],
+    };
   }
 
   private async retryTrackedOutputCapFailure(
@@ -1844,6 +1922,9 @@ export class LlmService {
       })),
     ];
 
+    // A recovered dispatch (e.g. a token refresh retry) consumes extra transport
+    // indexes, so each image starts after the last index the previous one used.
+    let transportAttemptIndex = 0;
     for (let index = 0; index < count; index += 1) {
       let dispatched: LlmTrackedJsonDispatch;
       try {
@@ -1853,7 +1934,7 @@ export class LlmService {
           requestedProviderId: attribution.requestedProviderId ?? request.providerId,
           requestedModelId: attribution.requestedModelId ?? request.model,
           attribution,
-          transportAttemptIndex: index,
+          transportAttemptIndex,
           target,
           payload: buildOpenAICodexImagePayload(request, model, content, coordinatorModel),
           timeoutMs,
@@ -1862,6 +1943,8 @@ export class LlmService {
         if (error instanceof ModelUsageSettlementError) throw error;
         throw normalizeOpenAICodexImageResponseError(error);
       }
+      transportAttemptIndex = (dispatched.lastTransportAttemptIndex ?? transportAttemptIndex) + 1;
+      eventIds.push(...(dispatched.priorModelUsageEventIds ?? []));
       if (dispatched.usage) eventIds.push(dispatched.usage.eventId);
       try {
         if (isRedirect(dispatched.response.status)) {
@@ -4693,6 +4776,7 @@ function fingerprintProviderRouteConfig(
   provider: LlmProviderConfig,
   model: string,
   contextWindowTokens: number,
+  claudeCodeCli: ClaudeCodeCliRuntime | undefined,
 ): string {
   const proxy = provider.request?.proxy;
   const secretFree = {
@@ -4702,7 +4786,7 @@ function fingerprintProviderRouteConfig(
     contextWindowTokens,
     resolvedApiStyle: resolveProviderExecutionApiStyle(provider, model),
     credentialConfigFingerprint: fingerprintProviderCredentialConfig(provider),
-    capabilities: inferProviderCapabilities(provider),
+    capabilities: inferProviderCapabilities(provider, claudeCodeCli),
     requestTransport: {
       tls: projectProviderTlsShape(provider.request?.tls),
       proxy: proxy
@@ -6609,7 +6693,11 @@ function isClaudeFourthGenerationOrLater(model: string): boolean {
   return Boolean(match && Number(match[1]) >= 4);
 }
 
-function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapabilities {
+/** `claudeCodeCli` owns the tool-bridge flag, which only a `claude-code-cli` provider reads. */
+function inferProviderCapabilities(
+  provider: LlmProviderConfig,
+  claudeCodeCli: ClaudeCodeCliRuntime | undefined,
+): LlmProviderCapabilities {
   const model = provider.defaultModel.toLowerCase();
   const base = provider.baseUrl.toLowerCase();
   const hasVision =
@@ -6654,13 +6742,14 @@ function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapa
     ...(provider.capabilities ?? {}),
   };
   if (provider.apiStyle === "claude-code-cli") {
-    // The CLI runs as a pure text model with its own tools disabled; no
-    // configured override may advertise tool, media or JSON-mode support.
+    // The CLI is a text model; only the Gateway tool bridge (behind its feature
+    // flag) can give it tool calling. No configured override may advertise tool,
+    // media or JSON-mode support beyond that.
     return {
       vision: false,
       audio: false,
       video: false,
-      toolCalling: false,
+      toolCalling: isClaudeCodeCliToolBridgeEnabled(claudeCodeCli),
       jsonMode: false,
       webSearch: false,
       reasoning: false,
@@ -6720,6 +6809,43 @@ function resolveProviderAuthMode(provider: LlmProviderConfig): LlmProviderConfig
 
 function isOpenAICodexProvider(provider: Pick<LlmProviderConfig, "providerId">): boolean {
   return provider.providerId.trim().toLowerCase() === "openai-codex";
+}
+
+/** Settle with `promise`, or reject with the signal's reason once it aborts. */
+function raceAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    void promise.catch(() => undefined);
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/** ChatGPT reports a stale Codex token as `code: "token_expired"` under `error` or `detail`. */
+function isOpenAICodexTokenExpiredError(errorText: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(errorText);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return false;
+  }
+  const body = parsed as { error?: { code?: unknown }; detail?: { code?: unknown } };
+  return body.error?.code === "token_expired" || body.detail?.code === "token_expired";
 }
 
 function isClaudeCodeOAuthProvider(provider: Pick<LlmProviderConfig, "providerId" | "authMode">): boolean {
