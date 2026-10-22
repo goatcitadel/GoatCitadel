@@ -1,6 +1,7 @@
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
+import { resetFirecrawlReachabilityForTests } from "./firecrawl-reachability.js";
 
 function config(): ToolPolicyConfig {
   return {
@@ -21,6 +22,7 @@ describe("browser tools loop 30 branch tails", () => {
   const originalFetch = globalThis.fetch;
 
   afterEach(() => {
+    resetFirecrawlReachabilityForTests();
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });

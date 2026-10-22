@@ -27,6 +27,7 @@ import {
   forgetBrowserSessionState,
   isBrowserToolName,
 } from "./browser-tools.js";
+import { resetFirecrawlReachabilityForTests } from "./firecrawl-reachability.js";
 
 const EXAMPLE_HOST = new URL("https://example.com").hostname;
 const DUCKDUCKGO_HOST = new URL("https://duckduckgo.com").hostname;
@@ -214,6 +215,7 @@ describe("browser tools coverage sweep", () => {
   });
 
   afterEach(async () => {
+    resetFirecrawlReachabilityForTests();
     globalThis.fetch = priorFetch;
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
@@ -2675,9 +2677,17 @@ describe("browser tools coverage sweep", () => {
       return context;
     };
     mocked.launch.mockResolvedValueOnce(browser as never);
-    await expect(executeBrowserTool("browser.interact", {
-      url: "https://example.com/settlement", steps: [{ action: "wait", timeoutMs: 100 }],
-    }, config, execution)).rejects.toThrow();
+    await expect(
+      executeBrowserTool(
+        "browser.interact",
+        {
+          url: "https://example.com/settlement",
+          steps: [{ action: "wait", timeoutMs: 100 }],
+        },
+        config,
+        execution,
+      ),
+    ).rejects.toThrow();
     expect(describeBrowserSessionState(sessionId).availability).toBe("not_available");
     expect(close).toHaveBeenCalled();
   });
