@@ -159,11 +159,11 @@ describe("Settings page anatomy (ST-N01, ST-N02, ST-N05, ST-N18)", () => {
     expect([...container.querySelectorAll("header a")].map((link) => link.textContent)).not.toContain("Get started");
     expect(container.textContent).not.toContain("Open three-step first-run setup");
   });
-  it("does not make a section panel a tab stop", async () => {
+  it("keeps a section panel reachable by keyboard, as the tabs pattern asks for panels that open with text", async () => {
     await render("/settings/general");
     await vi.waitFor(() => expect(container.querySelector('[role="tabpanel"]')).not.toBeNull());
     for (const panel of container.querySelectorAll('[role="tabpanel"]'))
-      expect(panel.getAttribute("tabindex")).toBe("-1");
+      expect(panel.getAttribute("tabindex")).toBe("0");
   });
 });
 

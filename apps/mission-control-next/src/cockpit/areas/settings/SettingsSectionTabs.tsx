@@ -114,7 +114,8 @@ export function SettingsSectionTabs({
           key={entry.section}
           value={entry.section}
           forceMount
-          tabIndex={-1}
+          // Panels open with a heading or text, not a control, so the tabs pattern keeps them a tab stop.
+          tabIndex={0}
           hidden={value !== entry.section}
           aria-label={!entry.discoverable ? entry.label : undefined}
           className="min-w-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
