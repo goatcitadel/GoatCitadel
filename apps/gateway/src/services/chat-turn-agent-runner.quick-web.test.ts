@@ -290,8 +290,11 @@ describe("ChatTurnAgentRunner quick_web profile", () => {
     expect(result.turnTrace.failure).toBeUndefined();
   });
 
-  it("does not prefetch a search whose query carries secret text", async () => {
-    const content = "please look up why my deploy fails OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
+  it.each([
+    "please look up why my deploy fails OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+    // No token prefix: only the full secret check behind automatic seeds catches this one.
+    "please look up why my deploy fails with api_key=abcd1234efgh5678",
+  ])("does not prefetch a search whose query carries secret text: %s", async (content) => {
     const createChatCompletion = vi.fn(
       async (): Promise<ChatCompletionResponse> => ({
         model: "glm-5",

@@ -647,6 +647,8 @@ const CLOUD_METADATA_HOST_PATTERN = /\b(?:metadata\.google\.internal|169\.254\.1
 // A hostname whose final label(s) are a private-namespace suffix. The lookahead keeps
 // public names such as `mail.corp.example.com` out: the suffix must end the hostname.
 const PRIVATE_NAMESPACE_HOST_PATTERN = /\b[a-z0-9-]+\.(?:internal|corp|lan|home\.arpa)(?![a-z0-9-]|\.[a-z0-9])/i;
+// Docker Desktop's documented names: they are the same on every machine and reveal no network.
+const PUBLIC_DOCKER_PSEUDO_HOST_PATTERN = /\b(?:host|gateway|kubernetes)\.docker\.internal(?![a-z0-9-]|\.[a-z0-9])/gi;
 
 function containsSecret(query: string): boolean {
   return (
@@ -668,13 +670,31 @@ export function isSensitiveOfficialSearchQuery(query: string): boolean {
 }
 
 /**
- * Narrower than {@link isSensitiveOfficialSearchQuery}: true only for queries that carry a
- * secret or name a cloud-metadata endpoint or a private-namespace hostname. Bare RFC1918
- * addresses, `localhost`, and `127.0.0.1` stay searchable because questions about a home
- * router or a local dev server are ordinary and reveal nothing about a specific network.
+ * The guard on a model-issued native or Firecrawl search. Narrower than
+ * {@link isSensitiveOfficialSearchQuery}: true only for a cloud-metadata endpoint, a
+ * private-namespace hostname (except Docker's public pseudo-hosts such as
+ * `host.docker.internal`), or an explicit API-token prefix such as `sk-` or `ghp_`. Secrets in
+ * general are caught earlier by the executor's scan of every tool call's arguments, so ordinary
+ * developer questions that mention headers, env vars, or password rules stay searchable. Bare
+ * RFC1918 addresses, `localhost`, and `127.0.0.1` stay searchable too because questions about a
+ * home router or a local dev server reveal nothing about a specific network.
  */
 export function isInternalInfrastructureSearchQuery(query: string): boolean {
-  return containsSecret(query) || CLOUD_METADATA_HOST_PATTERN.test(query) || PRIVATE_NAMESPACE_HOST_PATTERN.test(query);
+  const withoutPublicPseudoHosts = query.replace(PUBLIC_DOCKER_PSEUDO_HOST_PATTERN, " ");
+  return (
+    CLOUD_METADATA_HOST_PATTERN.test(query) ||
+    PRIVATE_NAMESPACE_HOST_PATTERN.test(withoutPublicPseudoHosts) ||
+    SECRET_TOKEN_PREFIX_PATTERN.test(query)
+  );
+}
+
+/**
+ * The guard on a search the runner seeds automatically from the operator's message. A seed is
+ * never the model's choice, so it keeps the full secret check (redaction patterns and
+ * `key=value` style assignments) on top of {@link isInternalInfrastructureSearchQuery}.
+ */
+export function isUnsafeSeedQuery(query: string): boolean {
+  return containsSecret(query) || isInternalInfrastructureSearchQuery(query);
 }
 
 function resolveSnippet(entry: Record<string, unknown>): string {

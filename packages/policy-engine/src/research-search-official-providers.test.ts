@@ -7,6 +7,7 @@ import {
   isInternalInfrastructureSearchQuery,
   isOfficialResearchSearchInvocation,
   isSensitiveOfficialSearchQuery,
+  isUnsafeSeedQuery,
   resolveOfficialSearchProviders,
 } from "./research-search-official-providers.js";
 
@@ -435,8 +436,8 @@ describe("isInternalInfrastructureSearchQuery", () => {
     "build.internal status",
     "nas.home.arpa unreachable",
     "printer.lan driver",
-    "why is my api_key=abcd1234efgh5678 rejected",
     "sk-proj-abcdefghijklmnopqrstuvwx invalid",
+    "token sk-proj-abcdefghijklmnop1234",
   ])("refuses %s", (query) => {
     expect(isInternalInfrastructureSearchQuery(query)).toBe(true);
   });
@@ -447,12 +448,42 @@ describe("isInternalInfrastructureSearchQuery", () => {
     "127.0.0.1 refused connection",
     "10.0.0.1 default gateway",
     "mail.corp.example.com mx record",
+    "host.docker.internal not resolving on linux",
+    "gateway.docker.internal vs host-gateway",
+    "kubernetes.docker.internal certificate error",
+    "curl Authorization: Bearer header example",
+    "NODE_OPTIONS=--max-old-space-size=4096 meaning",
+    "Cookie: SameSite=None header meaning",
+    "password: requirements for azure ad",
+    "jdk.internal.misc.Unsafe",
   ])("allows %s", (query) => {
     expect(isInternalInfrastructureSearchQuery(query)).toBe(false);
+  });
+
+  it("still refuses a private hostname next to a public Docker pseudo-host", () => {
+    expect(isInternalInfrastructureSearchQuery("host.docker.internal vs db01.corp")).toBe(true);
   });
 
   it("stays narrower than the official-provider check", () => {
     expect(isSensitiveOfficialSearchQuery("192.168.1.1 admin login")).toBe(true);
     expect(isSensitiveOfficialSearchQuery("localhost:3000 not loading react")).toBe(true);
   });
+});
+
+describe("isUnsafeSeedQuery", () => {
+  it.each([
+    "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwx why is it rejected",
+    "why is my api_key=abcd1234efgh5678 rejected",
+    "db01.corp outage",
+    "169.254.169.254 metadata",
+  ])("refuses an automatic seed for %s", (query) => {
+    expect(isUnsafeSeedQuery(query)).toBe(true);
+  });
+
+  it.each(["192.168.1.1 admin login", "host.docker.internal not resolving on linux"])(
+    "allows an automatic seed for %s",
+    (query) => {
+      expect(isUnsafeSeedQuery(query)).toBe(false);
+    },
+  );
 });

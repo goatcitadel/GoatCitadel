@@ -257,7 +257,7 @@ import {
   type MeshToolPolicyBinding,
   type ArtifactBrandInput,
   MESH_TOOL_POLICY_DEFINITION,
-  isInternalInfrastructureSearchQuery,
+  isUnsafeSeedQuery,
 } from "@goatcitadel/policy-engine";
 import { MAX_PARALLEL_TOOL_CALLS, decideToolBatchParallelism } from "./chat-tool-parallelism.js";
 import {
@@ -3758,7 +3758,7 @@ export class ChatTurnAgentRunner {
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       const quickWebQuery = inferQueryFromPrompt(input.content) ?? deriveLiveDataQuery(input.content);
-      if (quickWebQuery.trim().length > 0 && !isInternalInfrastructureSearchQuery(quickWebQuery)) {
+      if (quickWebQuery.trim().length > 0 && !isUnsafeSeedQuery(quickWebQuery)) {
         throwIfChatTurnCancelled(input);
         await this.patchTurnTrace(input, input.turnId, {
           status: "waiting_for_tool",
@@ -3964,7 +3964,7 @@ export class ChatTurnAgentRunner {
     const deepOnlySeedTooThin =
       deepOnlySeed && (!hasSubstantiveSeedQuery(liveDataQuery) || looksLikeContinuationSearchPrompt(liveDataQuery));
     // A seed is never the model's choice, so it must not carry a secret or an internal hostname to a search backend.
-    if (controllerSeedGateOpen && !isInternalInfrastructureSearchQuery(liveDataQuery) && !deepOnlySeedTooThin) {
+    if (controllerSeedGateOpen && !isUnsafeSeedQuery(liveDataQuery) && !deepOnlySeedTooThin) {
       throwIfChatTurnCancelled(input);
       await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
