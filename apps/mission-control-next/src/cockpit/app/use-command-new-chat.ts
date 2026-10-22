@@ -11,9 +11,14 @@ export interface CommandCreationReview {
 
 export { resetChatSessionCreationForTests as resetCommandNewChatForTests } from "@goatcitadel/mission-control-shared/state/chat-session-creation";
 import {
-  abandonChatSessionCreation, assertChatSessionCreated, beginChatSessionCreation,
-  chatSessionCreationBlocked, chatSessionCreationKey, publishChatSessionCreation,
-  useChatSessionCreation, type ChatSessionCreation,
+  abandonChatSessionCreation,
+  assertChatSessionCreated,
+  beginChatSessionCreation,
+  chatSessionCreationBlocked,
+  chatSessionCreationKey,
+  publishChatSessionCreation,
+  useChatSessionCreation,
+  type ChatSessionCreation,
 } from "@goatcitadel/mission-control-shared/state/chat-session-creation";
 
 /** One explicit creation. A lost POST acknowledgement stays locked across palette remounts. */
@@ -35,9 +40,17 @@ export function useCommandNewChat(scope: PaletteScope, open: boolean, onCreated:
   const attempt = useChatSessionCreation(key);
   const blocked = chatSessionCreationBlocked(attempt);
   async function create(review?: CommandCreationReview) {
-    const current = () => mounted.current && view.current === renderedView && getGatewayApiBaseUrl() === installation && (review?.isCurrent() ?? true);
+    const current = () =>
+      mounted.current &&
+      view.current === renderedView &&
+      getGatewayApiBaseUrl() === installation &&
+      (review?.isCurrent() ?? true);
     if (!current() || !open || !scope.workspaceId || !scope.citadelId) return;
-    const pending: ChatSessionCreation = { state: "checking", mode: "chat", message: "Verifying the selected workspace…" };
+    const pending: ChatSessionCreation = {
+      state: "checking",
+      mode: "chat",
+      message: "Verifying the selected workspace…",
+    };
     if (!beginChatSessionCreation(key, pending)) return;
     let dispatched = false;
     try {
@@ -57,10 +70,15 @@ export function useCommandNewChat(scope: PaletteScope, open: boolean, onCreated:
       assertChatSessionCreated(created, scope.workspaceId);
       pending.sessionId = created.sessionId;
       const saved = await fetchChatSessionStatus(created.sessionId, new AbortController().signal);
-      if (getGatewayApiBaseUrl() !== installation || saved.sessionId !== created.sessionId || saved.workspaceId !== scope.workspaceId)
+      if (
+        getGatewayApiBaseUrl() !== installation ||
+        saved.sessionId !== created.sessionId ||
+        saved.workspaceId !== scope.workspaceId
+      )
         throw new Error("The independent conversation read does not match the creation receipt.");
       await assertPaletteWorkspace(scope);
-      if (getGatewayApiBaseUrl() !== installation) throw new Error("The Gateway installation changed during verification.");
+      if (getGatewayApiBaseUrl() !== installation)
+        throw new Error("The Gateway installation changed during verification.");
       pending.state = "confirmed";
       pending.message = "Conversation created and independently verified.";
       publishChatSessionCreation(key, pending);

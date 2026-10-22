@@ -3,43 +3,85 @@ import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useProviderModelCatalog, type ProviderModelCatalogOption } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
+import {
+  useProviderModelCatalog,
+  type ProviderModelCatalogOption,
+} from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { ProviderCatalogSettings } from "./ProviderCatalogSettings";
 
-vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({ useProviderModelCatalog: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
+  useProviderModelCatalog: vi.fn(),
+}));
 
 const provider: ProviderModelCatalogOption = {
-  providerId: "provider-a", label: "Provider A", baseUrl: "https://example.test/v1?token=not-for-display",
-  sanitizedEndpointIdentity: "https://example.test", apiStyle: "openai-responses", defaultModel: "saved-model",
-  models: ["saved-model", "available-model"], modelProbeSource: "live", modelProbeState: "ready",
-  modelRefreshStatus: "fresh", modelProbeCheckedAt: "2026-09-30T12:00:00.000Z", hasApiKey: true,
+  providerId: "provider-a",
+  label: "Provider A",
+  baseUrl: "https://example.test/v1?token=not-for-display",
+  sanitizedEndpointIdentity: "https://example.test",
+  apiStyle: "openai-responses",
+  defaultModel: "saved-model",
+  models: ["saved-model", "available-model"],
+  modelProbeSource: "live",
+  modelProbeState: "ready",
+  modelRefreshStatus: "fresh",
+  modelProbeCheckedAt: "2026-09-30T12:00:00.000Z",
+  hasApiKey: true,
 };
 let catalog: ReturnType<typeof useProviderModelCatalog>;
 let root: Root;
 let container: HTMLDivElement;
-const render = () => act(async () => root.render(<CockpitNavigationProvider><ProviderCatalogSettings /></CockpitNavigationProvider>));
+const render = () =>
+  act(async () =>
+    root.render(
+      <CockpitNavigationProvider>
+        <ProviderCatalogSettings />
+      </CockpitNavigationProvider>,
+    ),
+  );
 const button = (label: string) => [...container.querySelectorAll("button")].find((item) => item.textContent === label)!;
 
 beforeEach(() => {
   catalog = {
-    config: { activeProviderId: "provider-a", activeModel: "saved-model", revision: 4, providers: [] } as unknown as NonNullable<ReturnType<typeof useProviderModelCatalog>["config"]>,
-    providers: [{ ...provider }], loading: false, error: null, reload: vi.fn().mockResolvedValue(undefined),
-    loadModelsForProvider: vi.fn().mockResolvedValue(provider.models), getCachedModels: vi.fn(), getCachedModelProbe: vi.fn(),
+    config: {
+      activeProviderId: "provider-a",
+      activeModel: "saved-model",
+      revision: 4,
+      providers: [],
+    } as unknown as NonNullable<ReturnType<typeof useProviderModelCatalog>["config"]>,
+    providers: [{ ...provider }],
+    loading: false,
+    error: null,
+    reload: vi.fn().mockResolvedValue(undefined),
+    loadModelsForProvider: vi.fn().mockResolvedValue(provider.models),
+    getCachedModels: vi.fn(),
+    getCachedModelProbe: vi.fn(),
   };
   vi.mocked(useProviderModelCatalog).mockImplementation(() => catalog);
-  container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
 });
-afterEach(() => { act(() => root.unmount()); container.remove(); vi.clearAllMocks(); });
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+  vi.clearAllMocks();
+});
 
 describe("cockpit provider catalog", () => {
   it("opens native provider management without reloading the document", async () => {
     window.history.replaceState(null, "", "/settings/models?shell=cockpit#provider-catalog");
     const assign = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
     await render();
-    const link = [...container.querySelectorAll("a")].find((item) => item.textContent === "Manage provider credentials and endpoints")!;
+    const link = [...container.querySelectorAll("a")].find(
+      (item) => item.textContent === "Manage provider credentials and endpoints",
+    )!;
     expect(link.getAttribute("href")).toBe("/settings/models?shell=cockpit#providers");
-    await act(async () => { link.click(); });
-    expect(window.location.pathname + window.location.search + window.location.hash).toBe("/settings/models?shell=cockpit#providers");
+    await act(async () => {
+      link.click();
+    });
+    expect(window.location.pathname + window.location.search + window.location.hash).toBe(
+      "/settings/models?shell=cockpit#providers",
+    );
     expect(assign).not.toHaveBeenCalled();
     expect(catalog.loadModelsForProvider).not.toHaveBeenCalled();
     assign.mockRestore();
@@ -63,7 +105,15 @@ describe("cockpit provider catalog", () => {
   });
 
   it("labels a retained catalog as unverified and preserves a missing saved model", async () => {
-    catalog.providers = [{ ...provider, models: ["available-model"], modelProbeState: "fallback", modelRefreshStatus: "stale", modelProbeWarning: "Provider is offline" }];
+    catalog.providers = [
+      {
+        ...provider,
+        models: ["available-model"],
+        modelProbeState: "fallback",
+        modelRefreshStatus: "stale",
+        modelProbeWarning: "Provider is offline",
+      },
+    ];
     await render();
     expect(container.textContent).toContain("Last known catalog");
     expect(container.textContent).toContain("not been verified by a current request");
@@ -77,7 +127,8 @@ describe("cockpit provider catalog", () => {
     await render();
     await act(async () => {
       const select = container.querySelector("select")!;
-      select.value = "provider-b"; select.dispatchEvent(new Event("change", { bubbles: true }));
+      select.value = "provider-b";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await act(async () => button("Refresh models").click());
     expect(catalog.loadModelsForProvider).toHaveBeenCalledExactlyOnceWith("provider-b", { force: true });
@@ -87,7 +138,15 @@ describe("cockpit provider catalog", () => {
 
   it("does not treat a refresh that returns fallback data as a successful live check", async () => {
     vi.mocked(catalog.loadModelsForProvider).mockImplementation(async () => {
-      catalog.providers = [{ ...provider, modelProbeState: "fallback", modelProbeSource: "error_fallback", modelRefreshStatus: "fresh", modelProbeWarning: "Live discovery failed" }];
+      catalog.providers = [
+        {
+          ...provider,
+          modelProbeState: "fallback",
+          modelProbeSource: "error_fallback",
+          modelRefreshStatus: "fresh",
+          modelProbeWarning: "Live discovery failed",
+        },
+      ];
       return ["saved-model"];
     });
     await render();
@@ -99,9 +158,16 @@ describe("cockpit provider catalog", () => {
 
   it("blocks overlapping model checks and exposes a request rejection", async () => {
     let reject!: (reason: Error) => void;
-    vi.mocked(catalog.loadModelsForProvider).mockReturnValue(new Promise((_resolve, fail) => { reject = fail; }));
+    vi.mocked(catalog.loadModelsForProvider).mockReturnValue(
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      }),
+    );
     await render();
-    await act(async () => { button("Refresh models").click(); button("Refresh models").click(); });
+    await act(async () => {
+      button("Refresh models").click();
+      button("Refresh models").click();
+    });
     expect(catalog.loadModelsForProvider).toHaveBeenCalledTimes(1);
     expect(button("Refresh models").disabled).toBe(true);
     expect(container.querySelector("select")?.disabled).toBe(true);
@@ -121,7 +187,9 @@ describe("cockpit provider catalog", () => {
   });
 
   it("bounds large catalogs and searches across every page", async () => {
-    catalog.providers = [{ ...provider, models: Array.from({ length: 85 }, (_, index) => `model-${String(index).padStart(2, "0")}`) }];
+    catalog.providers = [
+      { ...provider, models: Array.from({ length: 85 }, (_, index) => `model-${String(index).padStart(2, "0")}`) },
+    ];
     await render();
     expect(container.querySelectorAll('ul[aria-label="Discovered models"] li')).toHaveLength(40);
     expect(container.textContent).toContain("1–40 of 85 model names");
@@ -141,7 +209,15 @@ describe("cockpit provider catalog", () => {
     catalog.providers = [{ ...provider, models: [], modelProbeState: "empty" }];
     await render();
     expect(container.textContent).toContain("The live catalog returned no models");
-    catalog.providers = [{ ...provider, models: [], modelProbeState: "not_checked", modelProbeSource: undefined, modelRefreshStatus: "not_checked" }];
+    catalog.providers = [
+      {
+        ...provider,
+        models: [],
+        modelProbeState: "not_checked",
+        modelProbeSource: undefined,
+        modelRefreshStatus: "not_checked",
+      },
+    ];
     await render();
     expect(container.textContent).toContain("Catalog not checked");
     expect(container.textContent).not.toContain("The live catalog returned no models");

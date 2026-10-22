@@ -23,7 +23,11 @@ const callbacks = vi.hoisted(() => ({ confirm: undefined as ComponentProps<"butt
 vi.mock("../../ui/Button", () => ({
   Button: ({ children, ...props }: ComponentProps<"button">) => {
     if (children === "Cancel task") callbacks.confirm = props.onClick;
-    return <button {...props} type={props.type ?? "button"}>{children}</button>;
+    return (
+      <button {...props} type={props.type ?? "button"}>
+        {children}
+      </button>
+    );
   },
 }));
 let root: Root;
@@ -133,7 +137,11 @@ beforeEach(async () => {
   document.body.append(container);
   root = createRoot(container);
   await act(async () => {
-    root.render(<CockpitNavigationProvider><ChatBackgroundTasks input={input()} turnId="turn" /></CockpitNavigationProvider>);
+    root.render(
+      <CockpitNavigationProvider>
+        <ChatBackgroundTasks input={input()} turnId="turn" />
+      </CockpitNavigationProvider>,
+    );
   });
 });
 afterEach(async () => {
