@@ -106,6 +106,17 @@ it("shows exact editable labels and reviews a global scope without sending a gra
   expect(api.createToolGrant).not.toHaveBeenCalled();
   expect(input("Tool pattern").props.value).toBe("session.status");
 });
+it("shows the exact scope reference it will save, so a mistyped target is visible before saving", async () => {
+  await render();
+  await act(async () => input("Tool pattern").props.onChange({ target: { value: "session.status" } }));
+  await act(async () => input("Scope").props.onChange({ target: { value: "session" } }));
+  await act(async () => input("Scope ID").props.onChange({ target: { value: "sesion-typo" } }));
+  await act(async () => button("Review new grant").props.onClick());
+  const dialog = view!.root.findByProps({ role: "dialog", "aria-label": "Review new tool grant" });
+  expect(dialog.findAllByType("code").map((item) => item.children.join(""))).toEqual(["sesion-typo"]);
+  await act(async () => button("Cancel").props.onClick());
+  expect(api.createToolGrant).not.toHaveBeenCalled();
+});
 it("does not show zero grants or allow a write when the bounded grant owner is unavailable", async () => {
   api.fetchToolGrants.mockRejectedValue(new Error("owner unavailable"));
   await render();

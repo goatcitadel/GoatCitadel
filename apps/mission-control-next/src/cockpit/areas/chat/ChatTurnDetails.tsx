@@ -12,6 +12,7 @@ import { useAutoOpenDisclosure } from "./use-auto-open-disclosure";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { presentErrorText } from "../../lib/present-error";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 
 /** How long a copy confirmation stays before the button returns to its label. */
 const COPIED_MS = 2000;
@@ -149,6 +150,12 @@ export function ChatTurnDetails({
                         diagnostics.summary ??
                         (tool.error ? presentErrorText(tool.error).summary : null)}
                     </p>
+                  ) : null}
+                  {/* The row shows the summary; the recorded failure stays reachable for technical review. */}
+                  {tool.error ? (
+                    <div className="w-full">
+                      <RecordedErrorDetails error={tool.error} />
+                    </div>
                   ) : null}
                   {effect ? <p className="w-full">{effect.plainSummary}</p> : null}
                   {advisories.length ? (
