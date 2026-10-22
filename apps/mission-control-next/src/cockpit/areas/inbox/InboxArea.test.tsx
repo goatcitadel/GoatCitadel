@@ -926,6 +926,8 @@ it("opens an approvalId link in the inspector, not inline above the groups (IN-N
   const close = container.querySelector<HTMLButtonElement>('button[aria-label="Close inspector"]');
   await act(async () => close!.click());
   await vi.waitFor(() => expect(reopen()).toBeDefined());
+  // The inspector opened from the URL had no opener, so focus lands on the way back rather than the page body.
+  expect(document.activeElement).toBe(reopen());
   await act(async () => reopen()!.click());
   await vi.waitFor(() => expect(container.querySelector('[aria-label="Inspector: Linked approval"]')).not.toBeNull());
   client.clear();
