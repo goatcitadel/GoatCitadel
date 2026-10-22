@@ -95,6 +95,7 @@ describe("ResearchService policy context", () => {
         auditEventId: "audit-nav",
         result: { textSnippet: `page text for ${url}` },
       }),
+      inspectToolAccess?: (request: { toolName: string; args?: Record<string, unknown> }) => Promise<unknown>,
     ) {
       const invokeTool = vi.fn(async (request: { toolName: string; args: Record<string, unknown> }) => {
         if (request.toolName === "browser.search") {
@@ -120,6 +121,7 @@ describe("ResearchService policy context", () => {
         } as never,
         invokeTool: invokeTool as never,
         createChatCompletion: createChatCompletion as never,
+        ...(inspectToolAccess ? { inspectToolAccess: inspectToolAccess as never } : {}),
       });
       return { service, invokeTool, createChatCompletion };
     }
@@ -215,11 +217,88 @@ describe("ResearchService policy context", () => {
 
       const result = await service.run({ sessionId: "session-1", query: "q", mode: "deep" });
 
-      expect(result.summary).toBe("Summary.");
+      expect(result.summary).toBe(
+        "Summary.\n\nNote: 1 of the top sources need approval before they can be opened, so this summary uses their search snippets.",
+      );
       expect(invokeTool).toHaveBeenCalledTimes(4);
       const prompt = userPrompt(createChatCompletion);
       expect(prompt).not.toContain("Page excerpt:");
       expect(prompt).toContain("Snippet: snippet 1");
+    });
+
+    describe("approval-gated page opens", () => {
+      const allowed = { allowed: true, requiresApproval: false, reasonCodes: [], riskLevel: "low" };
+      const navigatedUrls = (invokeTool: {
+        mock: { calls: Array<[{ toolName: string; args: Record<string, unknown> }]> };
+      }) =>
+        invokeTool.mock.calls
+          .filter(([request]) => request.toolName === "browser.navigate")
+          .map(([request]) => request.args.url);
+
+      it("skips a source whose navigate needs approval without invoking it, and says so in the summary", async () => {
+        const inspectToolAccess = vi.fn(async (request: { args?: Record<string, unknown> }) =>
+          request.args?.url === "https://example.com/2" ? { ...allowed, requiresApproval: true } : allowed,
+        );
+        const { service, invokeTool, createChatCompletion } = createService(undefined, inspectToolAccess);
+
+        const result = await service.run({
+          sessionId: "session-1",
+          query: "q",
+          mode: "deep",
+          workspaceId: "workspace-1",
+        });
+
+        expect(navigatedUrls(invokeTool)).toEqual(["https://example.com/1", "https://example.com/3"]);
+        expect(inspectToolAccess).toHaveBeenCalledTimes(3);
+        expect(inspectToolAccess.mock.calls[0]?.[0]).toMatchObject({
+          toolName: "browser.navigate",
+          agentId: "research",
+          sessionId: "session-1",
+          workspaceId: "workspace-1",
+          args: { url: "https://example.com/1", maxChars: 4000 },
+        });
+        const prompt = userPrompt(createChatCompletion);
+        expect(prompt).toContain("page text for https://example.com/1");
+        expect(prompt).not.toContain("page text for https://example.com/2");
+        expect(prompt).toContain("page text for https://example.com/3");
+        expect(result.summary).toBe(
+          "Summary.\n\nNote: 1 of the top sources need approval before they can be opened, so this summary uses their search snippets.",
+        );
+      });
+
+      it("skips a denied source without invoking it and without the approval note", async () => {
+        const inspectToolAccess = vi.fn(async (request: { args?: Record<string, unknown> }) =>
+          request.args?.url === "https://example.com/1" ? { ...allowed, allowed: false } : allowed,
+        );
+        const { service, invokeTool } = createService(undefined, inspectToolAccess);
+
+        const result = await service.run({ sessionId: "session-1", query: "q", mode: "deep" });
+
+        expect(navigatedUrls(invokeTool)).toEqual(["https://example.com/2", "https://example.com/3"]);
+        expect(result.summary).toBe("Summary.");
+      });
+
+      it("stops opening pages once an invoke itself returns approval_required", async () => {
+        const { service, invokeTool } = createService(async () => ({
+          outcome: "approval_required",
+          policyReason: "needs approval",
+          auditEventId: "b",
+        }));
+
+        const result = await service.run({ sessionId: "session-1", query: "q", mode: "deep" });
+
+        expect(navigatedUrls(invokeTool)).toEqual(["https://example.com/1"]);
+        expect(result.summary).toContain("Note: 1 of the top sources need approval");
+      });
+
+      it("opens every page and adds no note when no inspect dependency is wired", async () => {
+        const { service, invokeTool } = createService();
+
+        const result = await service.run({ sessionId: "session-1", query: "q", mode: "deep" });
+
+        expect(invokeTool).toHaveBeenCalledTimes(4);
+        expect(result.summary).toBe("Summary.");
+      });
     });
 
     it("frames sources as untrusted data in the summarizer system prompt", async () => {

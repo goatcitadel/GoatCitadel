@@ -6,6 +6,8 @@ import type {
   ResearchRunRecord,
   ResearchSourceRecord,
   ResearchSummaryRecord,
+  ToolAccessEvaluateRequest,
+  ToolAccessEvaluateResponse,
   ToolPolicyActorContext,
   ToolInvokeRequest,
   ToolInvokeResult,
@@ -65,6 +67,18 @@ interface ResearchServiceDeps {
     permissionProfileId?: string;
     localOperatorOverrideId?: string;
   }) => Promise<ToolPolicyActorContext>;
+  /**
+   * Non-materializing policy probe. When wired, deep research checks each page open before
+   * invoking it so an approval-gated navigate is skipped instead of leaving a pending approval
+   * that nothing will resume.
+   */
+  inspectToolAccess?: (request: ToolAccessEvaluateRequest) => Promise<ToolAccessEvaluateResponse>;
+}
+
+interface OpenedSources {
+  excerpts: Map<string, string>;
+  /** Top sources that could not be opened because the navigate needs approval. */
+  needsApprovalCount: number;
 }
 
 export class ResearchService {
@@ -138,10 +152,12 @@ export class ResearchService {
         .filter((item) => item.url.length > 0);
 
       const persistedSources = await this.deps.storage.researchSources.replaceForRun(runId, sources);
-      const pageExcerpts =
-        input.mode === "deep" ? await this.openTopSources(toolContext, persistedSources) : new Map<string, string>();
+      const opened: OpenedSources =
+        input.mode === "deep"
+          ? await this.openTopSources(toolContext, persistedSources)
+          : { excerpts: new Map<string, string>(), needsApprovalCount: 0 };
       const sessionMeta = await this.deps.storage.chatSessionMeta.get(input.sessionId);
-      const summary = await this.summarize(
+      const summaryText = await this.summarize(
         {
           ...input,
           runId,
@@ -150,8 +166,14 @@ export class ResearchService {
           trustedRunId: policyContext?.runId,
         },
         persistedSources,
-        pageExcerpts,
+        opened.excerpts,
       );
+      const summary =
+        opened.needsApprovalCount > 0
+          ? `${summaryText}
+
+Note: ${opened.needsApprovalCount} of the top sources need approval before they can be opened, so this summary uses their search snippets.`
+          : summaryText;
       const finishedAt = new Date().toISOString();
       await this.deps.storage.researchRuns.patch(runId, {
         status: "completed",
@@ -194,22 +216,36 @@ export class ResearchService {
 
   /**
    * Opens the top sources sequentially so deep mode reads real page text instead of only
-   * search snippets. A navigate that is blocked, needs approval, or throws is skipped: that
-   * source keeps only its snippet and the run continues.
+   * search snippets. A navigate that is blocked or throws is skipped: that source keeps only
+   * its snippet and the run continues. A navigate that needs approval is never invoked when
+   * the policy probe says so (no approval is created), and an invoke that still escalates to
+   * approval stops further opens, so no approval is left behind with nothing to resume it.
    */
-  private async openTopSources(
-    context: ResearchToolContext,
-    sources: ResearchSourceRecord[],
-  ): Promise<Map<string, string>> {
+  private async openTopSources(context: ResearchToolContext, sources: ResearchSourceRecord[]): Promise<OpenedSources> {
     const excerpts = new Map<string, string>();
+    let needsApprovalCount = 0;
+    const inspectToolAccess = this.deps.inspectToolAccess;
     for (const source of sources.slice(0, DEEP_RESEARCH_PAGE_COUNT)) {
       try {
-        const page = await this.deps.invokeTool(
-          buildResearchToolRequest(context, "browser.navigate", {
-            url: source.url,
-            maxChars: DEEP_RESEARCH_PAGE_MAX_CHARS,
-          }),
-        );
+        const request = buildResearchToolRequest(context, "browser.navigate", {
+          url: source.url,
+          maxChars: DEEP_RESEARCH_PAGE_MAX_CHARS,
+        });
+        if (inspectToolAccess) {
+          const access = await inspectToolAccess(toAccessRequest(request));
+          if (!access.allowed) {
+            continue;
+          }
+          if (access.requiresApproval) {
+            needsApprovalCount += 1;
+            continue;
+          }
+        }
+        const page = await this.deps.invokeTool(request);
+        if (page.outcome === "approval_required") {
+          needsApprovalCount += 1;
+          break;
+        }
         const text = page.outcome === "executed" ? page.result?.textSnippet : undefined;
         const excerpt = typeof text === "string" ? sanitizePageExcerpt(text) : "";
         if (excerpt.length > 0) {
@@ -219,7 +255,7 @@ export class ResearchService {
         // Best effort: this source keeps only its search snippet.
       }
     }
-    return excerpts;
+    return { excerpts, needsApprovalCount };
   }
 
   private async summarize(
@@ -316,6 +352,22 @@ function buildResearchToolRequest(
       source: "agent",
       reason: `research:${input.mode}`,
     },
+  };
+}
+
+function toAccessRequest(request: ToolInvokeRequest): ToolAccessEvaluateRequest {
+  return {
+    toolName: request.toolName,
+    agentId: request.agentId,
+    sessionId: request.sessionId,
+    workspaceId: request.workspaceId,
+    taskId: request.taskId,
+    runId: request.runId,
+    args: request.args,
+    permissionProfileId: request.permissionProfileId,
+    localOperatorOverrideId: request.localOperatorOverrideId,
+    surface: request.surface,
+    policyContext: request.policyContext,
   };
 }
 
