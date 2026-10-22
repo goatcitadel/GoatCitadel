@@ -49,14 +49,25 @@ describe("isFirecrawlConnectFailure", () => {
     expect(isFirecrawlConnectFailure(wrapped)).toBe(true);
   });
 
-  it("matches the guard's own timeout", () => {
-    expect(isFirecrawlConnectFailure(new Error("fetchAllowlisted timed out"))).toBe(true);
+  it("matches the guard's own timeout only when timeouts count (the search endpoint)", () => {
+    const timeout = new Error("fetchAllowlisted timed out");
+    expect(isFirecrawlConnectFailure(timeout, undefined, { countTimeouts: true })).toBe(true);
+    expect(isFirecrawlConnectFailure(timeout, undefined, { countTimeouts: false })).toBe(false);
+    expect(isFirecrawlConnectFailure(timeout)).toBe(false);
   });
 
-  it("matches the AbortSignal.timeout fallback (TimeoutError)", () => {
+  it("matches the AbortSignal.timeout fallback (TimeoutError) only when timeouts count", () => {
     const timeout = new Error("The operation was aborted due to timeout");
     timeout.name = "TimeoutError";
-    expect(isFirecrawlConnectFailure(timeout)).toBe(true);
+    expect(isFirecrawlConnectFailure(timeout, undefined, { countTimeouts: true })).toBe(true);
+    expect(isFirecrawlConnectFailure(timeout, undefined, { countTimeouts: false })).toBe(false);
+  });
+
+  it("matches a refused connection whether or not timeouts count", () => {
+    const wrapped = new Error("fetch failed");
+    wrapped.name = "TypeError";
+    expect(isFirecrawlConnectFailure(wrapped, undefined, { countTimeouts: true })).toBe(true);
+    expect(isFirecrawlConnectFailure(wrapped, undefined, { countTimeouts: false })).toBe(true);
   });
 
   it.each(["ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "EHOSTUNREACH", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"])(
@@ -88,11 +99,15 @@ describe("isFirecrawlConnectFailure", () => {
     wrapped.name = "TypeError";
     expect(isFirecrawlConnectFailure(new Error("turn cancelled"), controller.signal)).toBe(false);
     expect(isFirecrawlConnectFailure(wrapped, controller.signal)).toBe(false);
-    expect(isFirecrawlConnectFailure(new Error("fetchAllowlisted timed out"), controller.signal)).toBe(false);
+    expect(
+      isFirecrawlConnectFailure(new Error("fetchAllowlisted timed out"), controller.signal, { countTimeouts: true }),
+    ).toBe(false);
   });
 
   it("still classifies a connect failure when the caller signal is not aborted", () => {
     const controller = new AbortController();
-    expect(isFirecrawlConnectFailure(new Error("fetchAllowlisted timed out"), controller.signal)).toBe(true);
+    expect(
+      isFirecrawlConnectFailure(new Error("fetchAllowlisted timed out"), controller.signal, { countTimeouts: true }),
+    ).toBe(true);
   });
 });

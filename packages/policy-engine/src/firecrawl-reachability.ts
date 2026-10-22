@@ -27,17 +27,32 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.slice(0, end);
 }
 
+export interface FirecrawlConnectFailureOptions {
+  /** Count request timeouts as unreachability. Only the search endpoint may; see below. */
+  countTimeouts?: boolean;
+}
+
 /**
- * True for connection-level failures only (refused, reset, DNS, timeout).
+ * True for connection-level failures (refused, reset, DNS, connect timeout) on any
+ * endpoint, and for request timeouts only when `countTimeouts` is set.
+ *
+ * Timeouts count only for `/v2/search`: `/v2/scrape` replies after rendering the
+ * target page, so a slow or hostile page can time out a healthy Firecrawl and must
+ * not bench it for every caller.
  *
  * This matches on name/message text because fetchAllowlisted's `redactFetchError`
  * rebuilds every error as a plain `Error` and drops `cause`, so `cause.code`
  * never reaches callers. The real wrapped shapes are pinned in
  * firecrawl-reachability.test.ts ("matches the guard-wrapped refused connection",
- * "matches the guard's own timeout"). The `cause.code` branch covers unwrapped
- * errors. A cancelled turn (`callerSignal.aborted`) is never Firecrawl's fault.
+ * "matches the guard's own timeout only when timeouts count"). The `cause.code`
+ * branch covers unwrapped errors. A cancelled turn (`callerSignal.aborted`) is
+ * never Firecrawl's fault.
  */
-export function isFirecrawlConnectFailure(error: unknown, callerSignal?: AbortSignal): boolean {
+export function isFirecrawlConnectFailure(
+  error: unknown,
+  callerSignal?: AbortSignal,
+  options: FirecrawlConnectFailureOptions = {},
+): boolean {
   if (callerSignal?.aborted) {
     return false;
   }
@@ -48,7 +63,7 @@ export function isFirecrawlConnectFailure(error: unknown, callerSignal?: AbortSi
     return true;
   }
   if (error.message === "fetchAllowlisted timed out" || error.name === "TimeoutError") {
-    return true;
+    return options.countTimeouts === true;
   }
   const code = (error as { cause?: { code?: unknown } }).cause?.code;
   return typeof code === "string" && CONNECT_ERROR_CODES.has(code);

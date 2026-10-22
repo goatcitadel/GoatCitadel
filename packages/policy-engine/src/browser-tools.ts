@@ -2439,6 +2439,8 @@ function assertFirecrawlBaseUrlAllowed(baseUrl: string, config: ToolPolicyConfig
   assertNotPrivateOrReservedHost(baseUrl);
 }
 
+const FIRECRAWL_SEARCH_PATH = "/v2/search";
+
 async function fetchFirecrawlEndpoint(
   firecrawl: { baseUrl: string; timeoutMs: number },
   path: string,
@@ -2457,7 +2459,7 @@ async function fetchFirecrawlEndpoint(
   try {
     response = await fetchAllowlisted(targetUrl, options);
   } catch (error) {
-    if (isFirecrawlConnectFailure(error, callerSignal)) {
+    if (isFirecrawlConnectFailure(error, callerSignal, { countTimeouts: path === FIRECRAWL_SEARCH_PATH })) {
       recordFirecrawlConnectFailure(firecrawl.baseUrl);
     }
     throw error;
@@ -2485,7 +2487,7 @@ async function executeBrowserSearchViaFirecrawl(
   assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
   const response = await fetchFirecrawlEndpoint(
     firecrawl,
-    "/v2/search",
+    FIRECRAWL_SEARCH_PATH,
     config,
     {
       method: "POST",
