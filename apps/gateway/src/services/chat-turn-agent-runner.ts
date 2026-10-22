@@ -198,6 +198,7 @@ import {
   extractSkillSecurityFailureRecord,
 } from "./chat-turn-agent-runner/failure-records.js";
 import { buildToolResultDesignAdvisories, hasDesignSkillReceipt } from "./chat-turn-agent-runner/design-advisories.js";
+import { resolveTurnWebLookupIntent } from "./chat-turn-agent-runner/web-research-mode.js";
 import {
   analyzePresentationContentQuality,
   buildWorkspaceFileDownloadHref,
@@ -3903,6 +3904,13 @@ export class ChatTurnAgentRunner {
 
     const promptLabCoworkPromptSpecificWebLookup =
       promptLabHarnessTurn && input.mode === "cowork" && Boolean(derivePromptSpecificWebQuery(input.content));
+    // Deep mode seeds the controller web search on its own; every other intent consumer keeps the detected value.
+    const controllerWebLookupIntent = resolveTurnWebLookupIntent({
+      webMode: input.webMode,
+      detectedWebLookupIntent: intents.webLookup,
+      localFileIntent,
+      workflowSkillCapture,
+    });
     const controllerWebLookupRequested =
       detectExplicitWebLookupIntent(input.content) ||
       hasLiveDataIntent(input.content) ||
@@ -3911,7 +3919,7 @@ export class ChatTurnAgentRunner {
       Boolean(derivePromptSpecificWebQuery(input.content)) ||
       (detectDirectUrlIntent(input.content) &&
         /\b(?:help me|increase|improve|audit|compare|research|analy[sz]e)\b/i.test(input.content)) ||
-      (input.webMode === "deep" && intents.webLookup);
+      (input.webMode === "deep" && controllerWebLookupIntent);
     if (
       !assistantContent &&
       !approvalPayload &&
@@ -3920,7 +3928,7 @@ export class ChatTurnAgentRunner {
       !quickWebProfile &&
       input.toolAutonomy !== "manual" &&
       input.webMode !== "off" &&
-      intents.webLookup &&
+      controllerWebLookupIntent &&
       controllerWebLookupRequested &&
       !promptLabContract.toolUseSuppressed &&
       !(promptLabHarnessTurn && promptLabContract.explicitTools && input.mode === "chat") &&
