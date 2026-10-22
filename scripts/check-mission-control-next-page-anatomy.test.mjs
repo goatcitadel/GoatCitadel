@@ -68,5 +68,11 @@ describe("page-anatomy guard", () => {
     assert.deepEqual(countAnatomy("areas/library/X.tsx", "<PromptPacksWorkbenchPage workspaceId={id} />"), {
       "unwrapped-classic-page": 1,
     });
+    // One wrapped page doesn't exempt the file: each page needs its own enclosing wrapper.
+    const mixed = [
+      "<EmbeddedClassicPage><KanbanRoutePage {...props} /></EmbeddedClassicPage>",
+      "<SessionsRoutePage {...props} />",
+    ].join("\n");
+    assert.deepEqual(countAnatomy("areas/work/X.tsx", mixed), { "unwrapped-classic-page": 1 });
   });
 });

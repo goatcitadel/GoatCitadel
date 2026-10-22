@@ -13,6 +13,7 @@ import {
 import {
   describeOpsDegradedSources,
   presentRuntimeDaemon,
+  presentRuntimeReadiness,
   sourceFailed,
   type OpsAttentionItem,
   type OpsDegradedSource,
@@ -36,9 +37,8 @@ export function RuntimeHeroLead({
   compact: boolean;
 }) {
   const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
-  const daemonRunning = daemonRuntimeUnavailable
-    ? null
-    : (data.daemon?.running ?? data.health?.daemonStatus?.running ?? null);
+  // Readiness comes from the same service status as the "Serving posture" metric below.
+  const readiness = presentRuntimeReadiness(data);
   const daemonHost = daemonRuntimeUnavailable
     ? "unavailable"
     : (data.daemon?.host ?? data.health?.daemonStatus?.host ?? "Unknown");
@@ -49,12 +49,7 @@ export function RuntimeHeroLead({
   const pendingApprovalCount = data.dashboard?.pendingApprovals ?? pendingApprovals;
   const daySpend = formatCostMetric(data.dashboard?.dailyCostUsd, readCurrentDayCostCompleteness(data));
 
-  const readinessLine = daemonRuntimeUnavailable
-    ? "Runtime control truth is unavailable — inspect the daemon and health sources."
-    : daemonRunning
-      ? "The runtime reports a running daemon."
-      : "Gateway runtime is reachable, but the daemon is stopped.";
-  const readinessTone: StatusChipTone = daemonRuntimeUnavailable ? "critical" : daemonRunning ? "success" : "warning";
+  const readinessTone: StatusChipTone = readiness.tone;
 
   const metrics = [
     {
@@ -77,9 +72,7 @@ export function RuntimeHeroLead({
   return (
     <div className={`mc-next-runtime-hero-lead${compact ? " is-compact" : ""}`}>
       <div className="mc-next-runtime-chip-row">
-        <StatusChip tone={readinessTone}>
-          {daemonRuntimeUnavailable ? "Runtime unavailable" : daemonRunning ? "Runtime ready" : "Daemon stopped"}
-        </StatusChip>
+        <StatusChip tone={readinessTone}>{readiness.chip}</StatusChip>
         <StatusChip tone={mcpCount !== null && mcpCount > 0 ? "default" : "muted"}>
           {mcpCount === null ? "MCP evidence not loaded" : `${mcpCount} MCP configured`}
         </StatusChip>
@@ -89,7 +82,7 @@ export function RuntimeHeroLead({
             : `${pendingApprovalCount} pending ${pendingApprovalCount === 1 ? "approval" : "approvals"}`}
         </StatusChip>
       </div>
-      <p className="mc-next-settings-field-note">{readinessLine}</p>
+      <p className="mc-next-settings-field-note">{readiness.line}</p>
       {compact ? (
         <details className="mc-next-runtime-hero-details">
           <summary>Runtime details</summary>

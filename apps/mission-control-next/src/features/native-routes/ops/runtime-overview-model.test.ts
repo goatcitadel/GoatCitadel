@@ -5,6 +5,7 @@ import {
   buildOpsHeadMetrics,
   presentPendingApprovals,
   presentRuntimeDaemon,
+  presentRuntimeReadiness,
 } from "./runtime-overview-model";
 
 type Data = Parameters<typeof buildOpsHeadMetrics>[1];
@@ -88,5 +89,41 @@ describe("runtime head metrics", () => {
       "ops" as never,
     ).map((item) => item.id);
     expect(ids).not.toContain("daemon-runtime");
+  });
+
+  it("raises a daemon attention item for warning or critical diagnostics on a running daemon", () => {
+    const withDiagnostics = (severity: string) =>
+      buildNeedsAttentionItems(
+        base({ daemon: { running: true, supported: true, diagnostics: [{ id: "d", severity }] } }),
+        undefined,
+        "ops" as never,
+      ).find((item) => item.id === "daemon-runtime");
+    expect(withDiagnostics("critical")).toMatchObject({ meta: "problem", tone: "danger" });
+    expect(withDiagnostics("warn")).toMatchObject({ meta: "needs review", tone: "caution" });
+    expect(withDiagnostics("info")).toBeUndefined();
+  });
+});
+
+describe("runtime hero readiness", () => {
+  it("derives the chip, tone and line from the shared service status, not the running flag", () => {
+    const running = (extra: Record<string, unknown>) =>
+      presentRuntimeReadiness(base({ daemon: { running: true, supported: true, ...extra } }));
+    expect(running({})).toMatchObject({ chip: "Runtime ready", tone: "success" });
+    expect(running({ diagnostics: [{ id: "d", severity: "critical" }] })).toMatchObject({
+      chip: "Runtime problem",
+      tone: "critical",
+    });
+    expect(running({ diagnostics: [{ id: "d", severity: "warn" }] })).toMatchObject({
+      chip: "Runtime needs review",
+      tone: "warning",
+    });
+    expect(presentRuntimeReadiness(base({ daemon: { running: true, supported: false } }))).toMatchObject({
+      chip: "Service control unavailable",
+      tone: "muted",
+    });
+    expect(presentRuntimeReadiness(base({ daemon: { running: false, supported: true } }))).toMatchObject({
+      chip: "Daemon stopped",
+      tone: "warning",
+    });
   });
 });

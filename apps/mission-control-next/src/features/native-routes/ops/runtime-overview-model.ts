@@ -88,19 +88,31 @@ export function buildNeedsAttentionItems(
     });
   }
 
-  if (daemonRuntimeUnavailable || (daemonRunning === false && presentRuntimeDaemon(data).label !== "Unavailable")) {
+  // The same derivation as the Runtime metric and hero: a stopped daemon, or a running one with warning or critical
+  // diagnostics, needs attention; an unsupported host or an unknown status does not.
+  const daemonStatus = presentRuntimeDaemon(data);
+  const daemonNeedsAttention = daemonStatus.label === "Problem" || daemonStatus.label === "Needs review";
+  if (daemonRuntimeUnavailable || daemonNeedsAttention) {
     items.push({
       id: "daemon-runtime",
       title: "Daemon/runtime issue",
-      meta: daemonRuntimeUnavailable ? "unavailable" : "stopped",
+      meta: daemonRuntimeUnavailable
+        ? "unavailable"
+        : daemonRunning === false
+          ? "stopped"
+          : daemonStatus.label === "Problem"
+            ? "problem"
+            : "needs review",
       body: daemonRuntimeUnavailable
         ? "Daemon and health sources are unavailable, so runtime control truth needs inspection."
-        : `Daemon is ${data.daemon?.state ?? data.health?.daemonStatus?.state ?? "stopped"}.`,
+        : daemonRunning === false
+          ? `Daemon is ${data.daemon?.state ?? data.health?.daemonStatus?.state ?? "stopped"}.`
+          : daemonStatus.detail,
       primaryLabel: "Open runtime",
       primaryRoute: { area: "ops", section: "runtime", theme },
       inspectLabel: "Diagnostics",
       inspectRoute: { area: "ops", section: "diagnostics", theme },
-      tone: "danger",
+      tone: daemonRuntimeUnavailable || daemonStatus.label === "Problem" ? "danger" : "caution",
     });
   }
 
@@ -290,6 +302,39 @@ export function presentRuntimeDaemon(data: OpsRuntimeData): ReturnType<typeof de
   const unavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
   const status = unavailable ? undefined : (data.daemon ?? data.health?.daemonStatus);
   return describeRuntimeService(status as Parameters<typeof describeRuntimeService>[0]);
+}
+
+/**
+ * The Runtime hero's chip, tone and line, from the same service status as the "Serving posture" metric, so the hero
+ * never reads "Runtime ready" beside "Problem" or "Unavailable".
+ */
+export function presentRuntimeReadiness(data: OpsRuntimeData): {
+  chip: string;
+  tone: "success" | "warning" | "critical" | "muted";
+  line: string;
+} {
+  if (sourceFailed(data, "daemon") && sourceFailed(data, "health"))
+    return {
+      chip: "Runtime unavailable",
+      tone: "critical",
+      line: "Runtime control truth is unavailable — inspect the daemon and health sources.",
+    };
+  const status = presentRuntimeDaemon(data);
+  const running = data.daemon?.running ?? data.health?.daemonStatus?.running;
+  switch (status.label) {
+    case "Running":
+      return { chip: "Runtime ready", tone: "success", line: "The runtime reports a running daemon." };
+    case "Needs review":
+      return { chip: "Runtime needs review", tone: "warning", line: status.detail };
+    case "Problem":
+      return running === false
+        ? { chip: "Daemon stopped", tone: "warning", line: "Gateway runtime is reachable, but the daemon is stopped." }
+        : { chip: "Runtime problem", tone: "critical", line: status.detail };
+    case "Unavailable":
+      return { chip: "Service control unavailable", tone: "muted", line: status.detail };
+    default:
+      return { chip: "Runtime status unknown", tone: "muted", line: status.detail };
+  }
 }
 
 /**
