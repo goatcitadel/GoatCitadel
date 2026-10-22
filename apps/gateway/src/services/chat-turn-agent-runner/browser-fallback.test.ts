@@ -9,7 +9,7 @@ import {
 } from "./browser-fallback.js";
 
 const NATIVE_TOTAL_FAILURE =
-  "browser.search failed: duckduckgo: no usable results from browser page | bing: fallback returned no usable results | google: timed out";
+  "execution error: browser.search failed: duckduckgo: no usable results from browser page | bing: fallback returned no usable results | google: timed out";
 
 function buildDeps(invokeTool: BrowserFallbackExecutorDeps["invokeTool"]): BrowserFallbackExecutorDeps {
   return {
@@ -37,9 +37,22 @@ function buildInput(overrides: Partial<AlternateBuiltinBrowserFallbackInput>): A
 describe("readAttemptedSearchEngines", () => {
   it("reads engine names from a native total-failure error", () => {
     expect(readAttemptedSearchEngines(undefined, NATIVE_TOTAL_FAILURE)).toEqual(["duckduckgo", "bing", "google"]);
+    expect(
+      readAttemptedSearchEngines(
+        undefined,
+        "execution error: browser.search failed: duckduckgo: x | bing: y | google: z",
+      ),
+    ).toEqual(["duckduckgo", "bing", "google"]);
+  });
+
+  it("also reads a total-failure error without the execution-error prefix", () => {
     expect(readAttemptedSearchEngines(undefined, "browser.search failed: duckduckgo: x | bing: y | google: z")).toEqual(
       ["duckduckgo", "bing", "google"],
     );
+  });
+
+  it("lowercases structured engine names", () => {
+    expect(readAttemptedSearchEngines({ attemptedEngines: ["DuckDuckGo"] }, undefined)).toEqual(["duckduckgo"]);
   });
 
   it("prefers the structured attemptedEngines list", () => {
@@ -65,6 +78,21 @@ describe("tryAlternateBuiltinBrowserResult for browser.search", () => {
     );
     expect(invokeTool).not.toHaveBeenCalled();
     expect(result).toBeUndefined();
+  });
+
+  it("filters a differently cased attempted engine against the operator order", async () => {
+    const invokeTool = vi.fn(
+      async (_request: ToolInvokeRequest): Promise<ToolInvokeResult> =>
+        ({ outcome: "blocked", policyReason: "test" }) as ToolInvokeResult,
+    );
+    await tryAlternateBuiltinBrowserResult(
+      buildInput({
+        classification: { failureClass: "no_results" },
+        normalizedResult: { attemptedEngines: ["DuckDuckGo", "BING"], results: [] },
+      }),
+      buildDeps(invokeTool),
+    );
+    expect(invokeTool.mock.calls.map((call) => call[0].args.engine)).toEqual(["google"]);
   });
 
   it("still tries native engines after a Firecrawl-only empty result", async () => {

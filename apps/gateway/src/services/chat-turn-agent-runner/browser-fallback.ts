@@ -216,12 +216,13 @@ export async function tryAlternateBuiltinBrowserResult(
   return undefined;
 }
 
-const NATIVE_SEARCH_TOTAL_FAILURE_PREFIX = "browser.search failed:";
+const NATIVE_SEARCH_TOTAL_FAILURE_MARKER = "browser.search failed:";
 const NATIVE_SEARCH_ENGINE_FAILURE_PATTERN = /(?:^|[\s|:])(duckduckgo|bing|google):/g;
 
 /**
  * Engines a search already tried. Prefers the structured `attemptedEngines` list; otherwise parses
  * native search's total-failure error (`browser.search failed: <engine>: <reason> | ...`).
+ * The policy engine prefixes execution errors with "execution error: ", so the marker is matched anywhere.
  */
 export function readAttemptedSearchEngines(
   result: Record<string, unknown> | undefined,
@@ -229,13 +230,15 @@ export function readAttemptedSearchEngines(
 ): string[] {
   const attempted = result?.attemptedEngines;
   if (Array.isArray(attempted) && attempted.every((entry) => typeof entry === "string")) {
-    return [...(attempted as string[])];
+    return (attempted as string[]).map((engine) => engine.toLowerCase());
   }
-  if (typeof error !== "string" || !error.startsWith(NATIVE_SEARCH_TOTAL_FAILURE_PREFIX)) {
+  const markerIndex = typeof error === "string" ? error.indexOf(NATIVE_SEARCH_TOTAL_FAILURE_MARKER) : -1;
+  if (typeof error !== "string" || markerIndex < 0) {
     return [];
   }
   const engines = new Set<string>();
-  for (const match of error.matchAll(NATIVE_SEARCH_ENGINE_FAILURE_PATTERN)) {
+  const failureText = error.slice(markerIndex + NATIVE_SEARCH_TOTAL_FAILURE_MARKER.length);
+  for (const match of failureText.matchAll(NATIVE_SEARCH_ENGINE_FAILURE_PATTERN)) {
     engines.add(match[1]!);
   }
   return [...engines];
@@ -264,7 +267,7 @@ async function tryAlternateBuiltinSearchEngines(
     readAttemptedSearchEngines(input.normalizedResult, input.classification.error ?? input.error),
   );
   const alternateEngines = configuredEngines.filter(
-    (engine) => engine !== failedEngine && !attemptedEngines.has(engine),
+    (engine) => engine !== failedEngine && !attemptedEngines.has(engine.toLowerCase()),
   );
   if (alternateEngines.length === 0) {
     return undefined;
