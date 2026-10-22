@@ -528,8 +528,18 @@ describe("chat-agent-budget", () => {
     ).toBe(3);
   });
 
-  it("charges official research search tool-run budget once per requested provider", () => {
+  it("charges official research-mode search once per provider and quick-mode search once", () => {
     expect(toolRunBudgetCostForToolCall("browser.search", { backend: "official", mode: "research" })).toBe(2);
+    expect(
+      toolRunBudgetCostForToolCall("browser.search", { backend: "official", providers: ["brave", "parallel"] }),
+    ).toBe(1);
+    expect(
+      toolRunBudgetCostForToolCall("browser.search", {
+        backend: "official",
+        mode: "research",
+        providers: ["brave", "parallel"],
+      }),
+    ).toBe(2);
     expect(toolRunBudgetCostForToolCall("browser.search", { backend: "official", providers: ["brave"] })).toBe(1);
     expect(toolRunBudgetCostForToolCall("browser.search", { query: "x" })).toBe(1);
   });

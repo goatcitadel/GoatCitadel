@@ -448,8 +448,10 @@ export function minimumRemainingBudgetForToolStart(toolName: string, executionBu
 
 export function toolRunBudgetCostForToolCall(toolName: string, args: Record<string, unknown>): number {
   if (toolName === "browser.search" && isOfficialResearchSearchInvocation(args)) {
-    // Each official provider in the request is a separate paid API call, so charge per provider.
-    return Math.max(1, resolveOfficialSearchProviders(args).length);
+    // Research mode calls every requested provider in parallel, each a separate paid API call, so
+    // it is charged per provider. Quick mode (the default) stops at the first provider that
+    // succeeds, so it is charged once.
+    return args.mode === "research" ? Math.max(1, resolveOfficialSearchProviders(args).length) : 1;
   }
   if (toolName !== SUBAGENT_FANOUT_TOOL_NAME) {
     return 1;
