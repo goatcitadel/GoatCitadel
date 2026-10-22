@@ -3,7 +3,9 @@ import { navigationRailItems, RAIL_GROUPS, RAIL_ITEMS } from "../../app/route-mo
 type RouteModelArea = "settings" | "library" | "ops";
 
 /** Cockpit areas whose sections the route model names; cockpit-only System views map onto their Ops sections. */
-const ROUTE_MODEL_AREAS: Readonly<Record<string, { area: RouteModelArea; aliases?: Readonly<Record<string, string>> }>> = {
+const ROUTE_MODEL_AREAS: Readonly<
+  Record<string, { area: RouteModelArea; aliases?: Readonly<Record<string, string>> }>
+> = {
   settings: { area: "settings" },
   library: { area: "library" },
   system: { area: "ops", aliases: { spend: "costs", dashboards: "boards", "browser-sessions": "sessions" } },
