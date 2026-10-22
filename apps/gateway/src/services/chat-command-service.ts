@@ -214,7 +214,7 @@ export interface ChatCommandDependencies {
     sessionId: string,
     input: {
       query: string;
-      mode: "quick";
+      mode: "quick" | "deep";
       policyRunId?: string;
       policyTaskId?: string;
       operatorId?: string;
@@ -944,9 +944,10 @@ export async function parseChatCommand(
     if (!query) {
       return { ok: false, command, args, message: "Usage: /research <query>" };
     }
+    const researchPrefs = await deps.getChatSessionPrefs(sessionId);
     const research = await deps.runChatResearch(sessionId, {
       query,
-      mode: "quick",
+      mode: researchPrefs.webMode === "deep" ? "deep" : "quick",
       policyRunId: options?.policyRunId,
       policyTaskId: options?.policyTaskId,
       operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,

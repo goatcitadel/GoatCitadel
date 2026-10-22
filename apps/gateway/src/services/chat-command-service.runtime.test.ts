@@ -238,11 +238,18 @@ describe("chat command runtime dispatch", () => {
     const deps = createDeps();
     vi.mocked(deps.listMcpServers).mockResolvedValue([]);
     const { createMcpServer, connectMcpServer, disconnectMcpServer, ...source } = deps;
-    const commands = createChatCommandDependencies(source as unknown as Parameters<typeof createChatCommandDependencies>[0], {
-      createMcpServer, connectMcpServer, disconnectMcpServer,
-      createChatChangePlan: deps.createChatChangePlan, getSettings: deps.getSettings,
-      listMemoryItems: deps.listMemoryItems, normalizeWorkspaceId: deps.normalizeWorkspaceId,
-    });
+    const commands = createChatCommandDependencies(
+      source as unknown as Parameters<typeof createChatCommandDependencies>[0],
+      {
+        createMcpServer,
+        connectMcpServer,
+        disconnectMcpServer,
+        createChatChangePlan: deps.createChatChangePlan,
+        getSettings: deps.getSettings,
+        listMemoryItems: deps.listMemoryItems,
+        normalizeWorkspaceId: deps.normalizeWorkspaceId,
+      },
+    );
     for (const command of ["/mcp connect mcp-1", "/mcp disconnect mcp-1", "/mcp add-template browser"])
       expect((await parseChatCommand(commands, "session-1", command)).ok).toBe(true);
     expect(connectMcpServer).toHaveBeenCalledWith("mcp-1");
@@ -673,6 +680,23 @@ describe("chat command runtime dispatch", () => {
         localOperatorOverrideId: "override-1",
         surface: "cowork",
       }),
+    );
+  });
+
+  it("runs /research in deep mode only when the session web mode is deep", async () => {
+    const deps = createDeps();
+
+    await parseChatCommand(deps, "session-1", "/research foo");
+    expect(deps.runChatResearch).toHaveBeenLastCalledWith(
+      "session-1",
+      expect.objectContaining({ query: "foo", mode: "quick" }),
+    );
+
+    await parseChatCommand(deps, "session-1", "/web deep");
+    await parseChatCommand(deps, "session-1", "/research foo");
+    expect(deps.runChatResearch).toHaveBeenLastCalledWith(
+      "session-1",
+      expect.objectContaining({ query: "foo", mode: "deep" }),
     );
   });
 
