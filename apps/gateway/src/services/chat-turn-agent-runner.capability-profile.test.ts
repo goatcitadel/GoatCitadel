@@ -738,9 +738,20 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       expect(createChatCompletion).toHaveBeenCalled();
     });
 
-    it("does not seed a detected web search with private-network text in Auto mode", async () => {
+    it("does not seed a substantive Deep web search that carries secret text", async () => {
       const { createChatCompletion, invokeTool } = await runFrozenTurn({
-        content: "Search the web for the latest news on why my router at 192.168.1.20 drops connections",
+        content:
+          "Compare Debezium vs Postgres logical replication when OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789 is set",
+        webMode: "deep",
+      });
+
+      expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+      expect(createChatCompletion).toHaveBeenCalled();
+    });
+
+    it("does not seed a detected web search with a cloud-metadata endpoint in Auto mode", async () => {
+      const { createChatCompletion, invokeTool } = await runFrozenTurn({
+        content: "Search the web for the latest news on why calls to 169.254.169.254 time out on my VM",
         webMode: "auto",
       });
 
