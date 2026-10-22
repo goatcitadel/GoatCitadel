@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatMode } from "@goatcitadel/contracts";
 import {
   buildBaseAgentSystemPrompt,
+  DEEP_RESEARCH_PROMPT_SECTION,
   type BaseAgentRuntimeInfo,
   type BuildBaseAgentSystemPromptInput,
   MAX_BASE_PROMPT_SKILLS,
@@ -132,6 +133,36 @@ describe("buildBaseAgentSystemPrompt", () => {
     const withMemory = buildBaseAgentSystemPrompt(input({ memoryDigest: "Operator prefers terse answers." }));
     expect(withMemory.volatileTail).toContain("## Memory");
     expect(withMemory.volatileTail).toContain("Operator prefers terse answers.");
+  });
+
+  it("adds the Deep research contract to the volatile tail only, leaving the cached prefix unchanged", () => {
+    const deep = buildBaseAgentSystemPrompt(input({ mode: "chat" as ChatMode, webMode: "deep" }));
+    const auto = buildBaseAgentSystemPrompt(input({ mode: "chat" as ChatMode, webMode: "auto" }));
+    expect(DEEP_RESEARCH_PROMPT_SECTION).toBe(
+      [
+        "## Web research: deep",
+        "The operator turned on Deep research for this message.",
+        "- Plan 2–4 differently worded searches before answering; do not stop at the first result page.",
+        "- Open at least two relevant pages from different sites before relying on them, preferring primary sources.",
+        "- Cross-check key facts across sources and say which claims you could not verify.",
+        "- Cite the pages you relied on by URL.",
+      ].join("\n"),
+    );
+    expect(deep.volatileTail).toContain(DEEP_RESEARCH_PROMPT_SECTION);
+    expect(deep.stablePrefix).toBe(auto.stablePrefix);
+    expect(deep.stablePrefix).not.toContain("## Web research: deep");
+    expect(auto.volatileTail).not.toContain("## Web research: deep");
+    for (const webMode of ["off", "quick"] as const) {
+      const other = buildBaseAgentSystemPrompt(input({ mode: "chat" as ChatMode, webMode }));
+      expect(other.volatileTail).not.toContain("## Web research: deep");
+    }
+  });
+
+  it("never adds the Deep research contract to the quick-web prompt", () => {
+    const prompt = buildBaseAgentSystemPrompt(
+      input({ mode: "chat" as ChatMode, normalizationProfile: "quick_web", webMode: "deep" }),
+    );
+    expect(renderBaseAgentSystemPrompt(prompt)).not.toContain("## Web research: deep");
   });
 
   it("uses a lean quick-web prompt without project, tools, skills, cwd, or memory", () => {

@@ -199,6 +199,7 @@ import {
 } from "./chat-turn-agent-runner/failure-records.js";
 import { buildToolResultDesignAdvisories, hasDesignSkillReceipt } from "./chat-turn-agent-runner/design-advisories.js";
 import { hasSubstantiveSeedQuery, resolveTurnWebLookupIntent } from "./chat-turn-agent-runner/web-research-mode.js";
+import { buildDeepResearchThinEvidenceFooter } from "./chat-turn-agent-runner/deep-research-evidence.js";
 import {
   analyzePresentationContentQuality,
   buildWorkspaceFileDownloadHref,
@@ -6243,6 +6244,10 @@ export class ChatTurnAgentRunner {
       const mutationsFooter = buildFailedFileMutationsFooter(failedFileMutations);
       if (mutationsFooter && !assistantContent.includes("did not complete:")) {
         footerParts.push(mutationsFooter);
+      }
+      const deepResearchFooter = buildDeepResearchThinEvidenceFooter({ webMode: input.webMode, toolRuns });
+      if (deepResearchFooter && !assistantContent.includes(deepResearchFooter)) {
+        footerParts.push(deepResearchFooter);
       }
       if (footerParts.length > 0) {
         assistantContent = `${assistantContent.trim()}\n\n${footerParts.join("\n\n")}`;
