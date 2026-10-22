@@ -1926,6 +1926,7 @@ export class GatewayService {
       invokeTool: async (request) => await this.invokeTool(request),
       createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
       resolveToolPolicyContext: async (input) => await this.resolveToolPolicyContext(input),
+      inspectToolAccess: async (request) => await this.inspectToolAccess(request),
     });
     this.obsidianVaultService = new ObsidianVaultService(this.storage.systemSettings);
     this.skillImportService = new SkillImportService(config.rootDir, this.storage.systemSettings);

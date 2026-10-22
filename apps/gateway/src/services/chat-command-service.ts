@@ -214,7 +214,7 @@ export interface ChatCommandDependencies {
     sessionId: string,
     input: {
       query: string;
-      mode: "quick";
+      mode: "quick" | "deep";
       policyRunId?: string;
       policyTaskId?: string;
       operatorId?: string;
@@ -324,6 +324,15 @@ export interface ChatCommandCatalogItem {
   description: string;
 }
 
+/** Mirrored by the Discord slash command descriptions, which cannot import this module. */
+const RESEARCH_COMMAND_DESCRIPTION =
+  "Run research for the current session; with Deep on, it also opens the top sources.";
+
+/** `/research` and `/run research` open sources only when the session's web mode is Deep. */
+export function resolveResearchMode(prefs: Pick<ChatSessionPrefsRecord, "webMode">): "quick" | "deep" {
+  return prefs.webMode === "deep" ? "deep" : "quick";
+}
+
 export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
   return [
     { command: "/new", usage: "/new [title]", description: "Start a fresh session." },
@@ -412,7 +421,11 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
       usage: "/learn apply <selection-token>",
       description: "Apply one explicitly selected history correction through the governed learning path.",
     },
-    { command: "/research", usage: "/research <query>", description: "Run quick research for current session." },
+    {
+      command: "/research",
+      usage: "/research <query>",
+      description: RESEARCH_COMMAND_DESCRIPTION,
+    },
     {
       command: "/delegate",
       usage: "/delegate <role1,role2,...> :: <objective>",
@@ -944,9 +957,10 @@ export async function parseChatCommand(
     if (!query) {
       return { ok: false, command, args, message: "Usage: /research <query>" };
     }
+    const researchPrefs = await deps.getChatSessionPrefs(sessionId);
     const research = await deps.runChatResearch(sessionId, {
       query,
-      mode: "quick",
+      mode: resolveResearchMode(researchPrefs),
       policyRunId: options?.policyRunId,
       policyTaskId: options?.policyTaskId,
       operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,
@@ -1403,9 +1417,10 @@ export async function parseChatCommand(
     if (!query) {
       return { ok: false, command, args, message: "Usage: /run research <query>" };
     }
+    const runPrefs = await deps.getChatSessionPrefs(sessionId);
     const research = await deps.runChatResearch(sessionId, {
       query,
-      mode: "quick",
+      mode: resolveResearchMode(runPrefs),
       policyRunId: options?.policyRunId,
       policyTaskId: options?.policyTaskId,
       operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,

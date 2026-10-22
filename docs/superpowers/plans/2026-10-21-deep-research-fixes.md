@@ -45,6 +45,13 @@
 - **Task 11's guard was narrowed.** The guard on a model-issued native or Firecrawl search covers internal hostnames (except Docker's public pseudo-hosts such as `host.docker.internal`), cloud-metadata endpoints, and explicit token prefixes such as `sk-` and `ghp_`. Secrets in general are caught by the executor's scan of every tool call's arguments. Automatic seed searches use the stricter `isUnsafeSeedQuery`, which adds the full secret check. A refused search is never retried on another engine or sent to an MCP server.
 - **Deep's tool-run limits and Task 10's per-provider cost apply per checkpoint window.** The per-turn bound is the 8-minute budget plus the no-progress checkpoint windows. Task 10 charges per provider only in research mode, where providers run in parallel; quick mode stops at the first success and is charged once.
 
+## Corrections found during P2 execution
+
+- **Task 14: only navigate clamps at 20000.** Extract's runtime clamp is 50000, so its schema keeps a 50000 maximum; only `browser.navigate` drops to 20000. The test pins each schema's `maxChars` maximum to its own clamp rather than asserting 20000 for both.
+- **Task 16: the check runs at the start of each loop pass.** It records the previous pass there instead of at the loop end, because several `continue` paths skip the end of the loop body.
+- **Task 16: progress counts listed and opened sites separately.** A pass is progress when either the set of hosts listed by executed `browser.search` results or the set of hosts executed page opens landed on grows. Opening a page on a site a search already listed is progress, which matters for Deep's "open at least two relevant pages from different sites" and for research-list turns that open many listed pages.
+- **Task 13: `/run research` follows Deep too.** Both `/research` and `/run research` use the session's web mode (Deep runs the deep pass, anything else runs quick), and their command and Discord copy says that Deep also opens the top sources. Page excerpts are capped at 4000 characters and fenced with `<<<page>>>` and `<<<end page>>>` markers; any such markers inside the page text are stripped first.
+
 ---
 
 ## Task 0: Sync with the Web & Search settings work
@@ -375,9 +382,9 @@ Persisted spend accounting needs storage and is out of scope. This task bounds t
 
 ### Task 14: Navigate/extract `maxChars` schema matches the clamp (R14)
 
-**Files:** Modify `packages/policy-engine/src/tool-registry.ts` (`browser.navigate` and `browser.extract` `maxChars.maximum` 50000 → 20000). Test: add to the existing `packages/policy-engine/src/tool-registry.test.ts` a case asserting both schemas' `maximum === 20000`.
+**Files:** Modify `packages/policy-engine/src/tool-registry.ts` (`browser.navigate` `maxChars.maximum` 50000 → 20000; `browser.extract` keeps 50000, its runtime clamp). Test: add to the existing `packages/policy-engine/src/tool-registry.test.ts` a case asserting each schema's `maximum` equals its own clamp.
 
-- [ ] **Step 1:** Write the failing test. **Step 2:** Run and confirm it fails. **Step 3:** Change both maxima. **Step 4:** Run it; expected PASS. **Step 5:** Commit with message `fix(policy-engine): advertise the real 20000-char navigate/extract limit`.
+- [ ] **Step 1:** Write the failing test. **Step 2:** Run and confirm it fails. **Step 3:** Change the navigate maximum. **Step 4:** Run it; expected PASS. **Step 5:** Commit with message `fix(policy-engine): advertise the real 20000-char navigate/extract limit`.
 
 ---
 
@@ -395,12 +402,12 @@ Persisted spend accounting needs storage and is out of scope. This task bounds t
 
 **Files:**
 - Create: `apps/gateway/src/services/chat-turn-agent-runner/research-saturation.ts` + `.test.ts`
-- Modify: `apps/gateway/src/services/chat-turn-agent-runner.ts` (end of each iteration of `for (let loop = 0; loop < executionBudget.maxToolLoops; loop += 1)`, ~line 4205)
+- Modify: `apps/gateway/src/services/chat-turn-agent-runner.ts` (start of each iteration of `for (let loop = 0; loop < executionBudget.maxToolLoops; loop += 1)`, ~line 4240)
 
 **Interfaces:**
-- Produces: `collectResearchHosts(toolRuns: readonly ChatToolRunRecord[]): Set<string>`, the hostnames from executed `browser.search` result URLs plus opened-page URLs, compared without `www.`.
+- Produces: `collectResearchHosts(toolRuns: readonly ChatToolRunRecord[]): { listed: ReadonlySet<string>; opened: ReadonlySet<string> }`, the hostnames from executed `browser.search` result URLs and from opened-page URLs, kept separate and compared without `www.`.
 - Produces: `RESEARCH_SATURATION_INSTRUCTION = "Your last two research steps found no new sites. Stop searching and write the answer from the evidence you have, noting any gaps."`
-- Rule: applies only when `input.webMode === "deep"` or the budget profile is `research_list`. Track the host count after each loop iteration. When two consecutive iterations each add 0 new hosts and at least one web tool ran in each, push `{ role: "system", content: RESEARCH_SATURATION_INSTRUCTION }` once per turn.
+- Rule: applies only when `input.webMode === "deep"` or the budget profile is `research_list`. Check at the start of each pass, against the previous pass. When two consecutive passes each grow neither set (listed or opened) and at least one web tool ran in each, push `{ role: "system", content: RESEARCH_SATURATION_INSTRUCTION }` once per turn.
 
 - [ ] **Step 1: Write failing tests** for `collectResearchHosts` (dedupes `www.`, ignores failed runs). Add a runner test in `chat-turn-agent-runner.browser-fallback.test.ts`: three completions, each calling `browser.search` that returns the same two URLs, in Deep mode. The third completion request's messages contain `RESEARCH_SATURATION_INSTRUCTION` exactly once.
 - [ ] **Step 2: Run and confirm failure.**

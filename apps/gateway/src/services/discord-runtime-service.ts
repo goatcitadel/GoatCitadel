@@ -1557,7 +1557,7 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
       ),
     new SlashCommandBuilder()
       .setName("research")
-      .setDescription("Run quick research in the current session.")
+      .setDescription("Run research for the current session; with Deep on, it also opens the top sources.")
       .addStringOption((option) => option.setName("query").setDescription("Research query.").setRequired(true)),
     new SlashCommandBuilder()
       .setName("delegate")
@@ -1709,7 +1709,7 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
       .addSubcommand((subcommand) =>
         subcommand
           .setName("research")
-          .setDescription("Run quick research.")
+          .setDescription("Run research for the current session; with Deep on, it also opens the top sources.")
           .addStringOption((option) => option.setName("query").setDescription("Research query.").setRequired(true)),
       )
       .addSubcommand((subcommand) =>
@@ -1771,7 +1771,7 @@ function buildSharedDiscordSlashCommandDefinition(
         .addSubcommand((subcommand) =>
           subcommand
             .setName("research")
-            .setDescription("Run quick research.")
+            .setDescription("Run research for the current session; with Deep on, it also opens the top sources.")
             .addStringOption((option) => option.setName("query").setDescription("Research query.").setRequired(true)),
         )
         .addSubcommand((subcommand) =>

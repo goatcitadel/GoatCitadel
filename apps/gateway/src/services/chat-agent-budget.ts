@@ -107,7 +107,7 @@ export interface ResolveChatExecutionBudgetInput {
   readonly mode: ChatMode;
   readonly webMode: ChatWebMode;
   readonly thinkingLevel: ChatThinkingLevel;
-  readonly liveDataIntent?: boolean;
+  readonly webLookupIntent?: boolean;
   readonly researchListIntent?: boolean;
   readonly artifactIntent?: boolean;
   readonly repoReviewIntent?: boolean;
@@ -227,7 +227,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
       },
       input.promptLabExplicitTools,
     );
-  } else if (input.liveDataIntent && input.artifactIntent) {
+  } else if (input.webLookupIntent && input.artifactIntent) {
     budget = applyPromptLabExplicitToolBudget(
       {
         profile: "research_artifact",
@@ -276,7 +276,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
       },
       input.promptLabExplicitTools,
     );
-  } else if (input.liveDataIntent) {
+  } else if (input.webLookupIntent) {
     budget = applyPromptLabExplicitToolBudget(
       {
         profile: "live_data",

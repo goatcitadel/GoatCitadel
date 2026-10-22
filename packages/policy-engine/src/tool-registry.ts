@@ -1508,7 +1508,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         url: { type: "string", format: "uri" },
-        maxChars: { type: "integer", minimum: 200, maximum: 50000 },
+        maxChars: { type: "integer", minimum: 200, maximum: 20000 },
         backend: { type: "string", enum: ["native", "firecrawl"] },
       },
       required: ["url"],
