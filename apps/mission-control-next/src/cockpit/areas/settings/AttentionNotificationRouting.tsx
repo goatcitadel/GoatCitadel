@@ -16,7 +16,7 @@ export function AttentionNotificationRouting({ workspaceId }: { workspaceId: str
   const items = connections.data?.items;
   const channels = useMemo(() => (items ?? []).filter((item) => item.kind === "channel"), [items]);
   return (
-    <div id="notification-routing" className="min-w-0 space-y-2 sm:col-span-2">
+    <div id="notification-routing" className="min-w-0 space-y-2">
       {connections.isError ? (
         <p className="text-xs text-status-waiting">
           Channel destinations could not load: {describeApiError(connections.error).summary}

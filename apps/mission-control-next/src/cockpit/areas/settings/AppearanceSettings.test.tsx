@@ -113,4 +113,23 @@ describe("General › Appearance and attention", () => {
     expect(view.root.findAllByProps({ "aria-label": "Notification routing" })).toHaveLength(1);
     expect(routing.workspaces.at(-1)).toBe("workspace-7");
   });
+
+  it("ST-R02: scopes Saved automatically to the preference fields, not to routing or updates", async () => {
+    await mount();
+    const preferences = view.root.findByProps({ "aria-label": "Appearance and attention" });
+    expect(preferences.findAllByProps({ "data-settings-save-model": "automatic" })).toHaveLength(1);
+    expect(preferences.findAllByProps({ "aria-label": "Notification routing" })).toHaveLength(0);
+    expect(String(preferences.props.className)).not.toContain("border-t");
+    // The line speaks for these preferences only; routing and updates save through their own reviews.
+    const note = text(preferences.findByProps({ "data-settings-save-model": "automatic" }));
+    expect(note).toContain("These preferences apply right away");
+    expect(note).not.toContain("on this page");
+  });
+
+  it("ST-11 / ST-27: General selects use the shared 44px control class", async () => {
+    await mount();
+    const selects = view.root.findAllByType("select");
+    expect(selects.length).toBeGreaterThan(0);
+    for (const select of selects) expect(String(select.props.className)).toContain("min-h-11");
+  });
 });

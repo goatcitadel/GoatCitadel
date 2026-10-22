@@ -100,3 +100,12 @@ it.each([
   await act(async () => actions[0]!.props.onClick());
   expect(owner.current.confirmReview).toHaveBeenCalledOnce();
 });
+
+it("ST-R01: renders routing as a flat section with plain copy, not a card", async () => {
+  await mount();
+  const section = renderer!.root.findByProps({ "aria-label": "Notification routing" });
+  expect(String(section.props.className)).not.toMatch(/\brounded-md\b|\bborder-line\b|\bp-4\b/);
+  const text = JSON.stringify(renderer!.toJSON());
+  expect(text).toContain("Notification destinations and rules for this workspace.");
+  expect(text).not.toContain("Workspace-owned");
+});

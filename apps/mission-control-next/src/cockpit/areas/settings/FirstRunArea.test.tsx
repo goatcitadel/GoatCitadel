@@ -283,8 +283,10 @@ describe("native first-run setup", () => {
     expect(button("Continue to safety")).toBeUndefined();
     expect(container.textContent).not.toContain("Setup is already recorded");
     const primaries = [...container.querySelectorAll("button")].filter((item) => item.className.includes("bg-accent"));
-    expect(primaries.map((item) => item.textContent)).toEqual(["Send a test message"]);
-    await click("Send a test message");
+    expect(primaries.map((item) => item.textContent)).toEqual(["Open Chat to send a test message"]);
+    // The primary sits in the action row beside Refresh checks (ST-N04).
+    expect(button("Open Chat to send a test message")!.parentElement).toBe(button("Refresh checks")!.parentElement);
+    await click("Open Chat to send a test message");
     expect(api.navigate).toHaveBeenCalledExactlyOnceWith("/chat");
   });
   it("explains why the test message waits for setup (ST-18)", async () => {
@@ -309,5 +311,21 @@ describe("native first-run setup", () => {
     expect(container.textContent).not.toContain("Local demo for workspace-a");
     expect(guided.rendered).toHaveBeenLastCalledWith(expect.objectContaining({ showSteps: false }));
     expect(container.querySelectorAll("h1")).toHaveLength(1);
+  });
+
+  it("lists the steps as a flat ordered list, not a card grid (ST-R05)", async () => {
+    await render();
+    const list = container.querySelector('nav[aria-label="Setup steps"] ol');
+    expect(list).not.toBeNull();
+    for (const step of list!.querySelectorAll("button")) expect(step.className).not.toMatch(/rounded-lg|bg-raised/);
+  });
+  it("Exit setup returns to Settings › Models › Get started (ST-N23)", async () => {
+    await render();
+    await click("Exit setup");
+    expect(api.navigate).toHaveBeenCalledWith("/settings/models#onboarding");
+  });
+  it("names the setup page Get started, as the header link and the tab do (ST-N05)", async () => {
+    await render();
+    expect(container.querySelector("h1")?.textContent).toBe("Get started");
   });
 });

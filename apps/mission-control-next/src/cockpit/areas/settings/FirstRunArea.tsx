@@ -25,7 +25,7 @@ const STEPS: readonly { id: FirstRunStep; label: string; detail: string }[] = [
   },
 ];
 
-const TITLE = "Your first answer";
+const TITLE = "Get started";
 const DESCRIPTION = "Three steps to connect a model, choose how tools ask for approval, and verify a response.";
 
 /** The guided setup page at Settings › First run. Settings › Get started shows FirstRunStatus instead. */
@@ -44,7 +44,7 @@ export function FirstRunArea() {
       <AreaHeader
         title={TITLE}
         description={DESCRIPTION}
-        actions={<Button onClick={() => go("/settings")}>Exit setup</Button>}
+        actions={<Button onClick={() => go("/settings/models#onboarding")}>Exit setup</Button>}
       />
       {query.isLoading ? (
         <p role="status" className="text-sm text-fg-muted">
@@ -60,41 +60,44 @@ export function FirstRunArea() {
       ) : null}
       {state && progress ? (
         <>
-          <nav aria-label="Setup steps" className="grid gap-2 sm:grid-cols-3">
-            {STEPS.map((item, index) => {
-              const done =
-                item.id === "model"
-                  ? progress.modelReady
-                  : item.id === "message"
-                    ? progress.firstResponseVerified
-                    : setup.safetyConfirmed;
-              const current = step === item.id;
-              // A finished step collapses to what was chosen; the open step and later ones say what they need.
-              const summary =
-                done && !current
-                  ? item.id === "model"
-                    ? firstRunModelSummary(state)
-                    : item.id === "safety"
-                      ? firstRunSafetySummary(state)
-                      : `First response: ${progress.firstResponseLabel}`
-                  : item.detail;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => leave.request(() => setup.setStep(item.id))}
-                  aria-current={current ? "step" : undefined}
-                  className="rounded-lg border border-line bg-raised p-3 text-left hover:border-accent aria-[current=step]:border-accent"
-                >
-                  <span className="mb-2 flex items-center justify-between gap-2">
-                    <span className="text-xs text-fg-muted">Step {index + 1}</span>
-                    <SetupStepBadge phase={done ? "done" : current ? "current" : "not_started"} />
-                  </span>
-                  <span className="block text-sm font-semibold text-fg">{item.label}</span>
-                  <span className="mt-1 block break-words text-xs text-fg-muted">{summary}</span>
-                </button>
-              );
-            })}
+          <nav aria-label="Setup steps">
+            <ol className="grid gap-1 sm:grid-cols-3">
+              {STEPS.map((item, index) => {
+                const done =
+                  item.id === "model"
+                    ? progress.modelReady
+                    : item.id === "message"
+                      ? progress.firstResponseVerified
+                      : setup.safetyConfirmed;
+                const current = step === item.id;
+                // A finished step collapses to what was chosen; the open step and later ones say what they need.
+                const summary =
+                  done && !current
+                    ? item.id === "model"
+                      ? firstRunModelSummary(state)
+                      : item.id === "safety"
+                        ? firstRunSafetySummary(state)
+                        : `First response: ${progress.firstResponseLabel}`
+                    : item.detail;
+                return (
+                  <li key={item.id} className="min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => leave.request(() => setup.setStep(item.id))}
+                      aria-current={current ? "step" : undefined}
+                      className="flex h-full w-full flex-col items-start justify-start rounded-md px-3 py-2 text-left hover:bg-sunken aria-[current=step]:bg-sunken"
+                    >
+                      <span className="mb-2 flex items-center justify-between gap-2">
+                        <span className="text-xs text-fg-muted">Step {index + 1}</span>
+                        <SetupStepBadge phase={done ? "done" : current ? "current" : "not_started"} />
+                      </span>
+                      <span className="block text-sm font-semibold text-fg">{item.label}</span>
+                      <span className="mt-1 block break-words text-xs text-fg-muted">{summary}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
           </nav>
           <div className="border-t border-line-subtle pt-5">
             {step === "model" ? (
@@ -111,7 +114,7 @@ export function FirstRunArea() {
             ) : null}
             {step === "safety" ? (
               <div className="space-y-4">
-                <h2 className="text-base font-semibold text-fg">Choose your safety settings</h2>
+                <h2 className="text-lg font-semibold text-fg">Choose your safety settings</h2>
                 <p className="text-sm text-fg-secondary">
                   Current tool approval rule: {describeToolApprovalMode(state.settings.toolApprovalMode)}.
                 </p>
@@ -129,21 +132,18 @@ export function FirstRunArea() {
             ) : null}
             {step === "message" ? (
               <div className="space-y-4">
-                <h2 className="text-base font-semibold text-fg">Send a test message</h2>
+                <h2 className="text-lg font-semibold text-fg">Send a test message</h2>
                 <p className="text-sm text-fg-secondary">
                   First response: {progress.firstResponseLabel}.{" "}
                   {progress.firstResponseVerified
                     ? "Your first Chat answer is recorded."
                     : "Ask a short question in Chat; a completed answer verifies your model."}
                 </p>
-                <Button
-                  variant={state.completed ? "primary" : "secondary"}
-                  disabled={!state.completed}
-                  aria-describedby={state.completed ? undefined : "first-run-message-prerequisite"}
-                  onClick={() => go("/chat")}
-                >
-                  {progress.firstResponseVerified ? "Open Chat" : "Send a test message"}
-                </Button>
+                {!state.completed ? (
+                  <Button disabled aria-describedby="first-run-message-prerequisite">
+                    Send a test message
+                  </Button>
+                ) : null}
                 {!state.completed ? (
                   <p id="first-run-message-prerequisite" className="text-sm text-fg-secondary">
                     Finish setup first: choose a model, review the approval rule, then select Finish setup and open
@@ -160,6 +160,11 @@ export function FirstRunArea() {
             >
               Refresh checks
             </Button>
+            {state.completed ? (
+              <Button variant="primary" onClick={() => go("/chat")}>
+                {progress.firstResponseVerified ? "Open Chat" : "Open Chat to send a test message"}
+              </Button>
+            ) : null}
             {!state.completed ? (
               <Button
                 variant="primary"

@@ -17,7 +17,7 @@ export function FirstRunAdvanced({ workspaceId }: { workspaceId: string }) {
           aria-controls="first-run-advanced-panels"
           onClick={() => leave.request(() => setOpen(!open))}
         >
-          Optional bootstrap defaults
+          Change installation defaults
         </Button>
         <p className="mt-2 text-xs text-fg-muted">
           Review optional defaults only if you want to change your installation settings.

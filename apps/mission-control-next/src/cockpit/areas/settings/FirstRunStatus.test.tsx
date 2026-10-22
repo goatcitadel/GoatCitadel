@@ -67,6 +67,12 @@ describe("Settings › Get started status (ST-03)", () => {
     expect(rows()[1]).toMatch(/Tool approval:.*Done$/u);
     expect(rows()[2]).toMatch(/Current$/u);
     expect(container.textContent).toContain("Setup is recorded");
+    // The remaining step happens in Chat, so the status links there beside the setup link (ST-R06).
+    const links = [...container.querySelectorAll("a")].map((item) => [item.textContent, item.getAttribute("href")]);
+    expect(links).toEqual([
+      ["Open Chat", "/chat"],
+      ["Open setup", "/settings/first-run"],
+    ]);
   });
   it("says when progress cannot be read and offers a retry", async () => {
     api.fetchOnboardingState.mockRejectedValue(new Error("offline"));

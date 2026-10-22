@@ -263,8 +263,8 @@ async function main() {
           try {
             const page = await browserContext.newPage();
             await page.goto(`${stack.uiUrl}/settings/first-run?shell=cockpit`, { waitUntil: "domcontentloaded" });
-            await page.getByRole("heading", { name: "Your first answer" }).waitFor({ timeout: 30_000 });
-            await page.getByRole("button", { name: /Step 2.*Set your safety posture/u }).click();
+            await page.getByRole("heading", { name: "Get started" }).waitFor({ timeout: 30_000 });
+            await page.getByRole("button", { name: /Step 2.*Choose your safety settings/u }).click();
             await page.getByRole("button", { name: "Keep current rule" }).click();
             await page.getByRole("button", { name: "Finish setup and open Chat" }).click();
             await page.waitForURL((url) => url.pathname === "/chat", { timeout: 30_000 });

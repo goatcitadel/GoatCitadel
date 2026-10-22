@@ -58,7 +58,7 @@ export const COCKPIT_VISUAL_MANIFEST = [
     href: "/settings/first-run",
     shell: "cockpit",
     fullscreen: true,
-    readyText: "Your first answer",
+    readyText: "Get started",
     readySelector: 'nav[aria-label="Setup steps"]',
   },
   {
