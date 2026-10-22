@@ -6449,6 +6449,14 @@ export class GatewayService {
         this.llmService.ensureProviderReadiness(this.llmService.getRuntimeConfig({ useCache: true }).activeProviderId),
       getRuntimeConfig: () =>
         this.llmService.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true }),
+      onReadinessProbeError: (error) =>
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "model",
+          event: "background_job.readiness_check_failed",
+          message: "Skipped a background job because the active provider's readiness check failed.",
+          context: { errorName: error instanceof Error ? error.name : "unknown" },
+        }),
     });
   }
 

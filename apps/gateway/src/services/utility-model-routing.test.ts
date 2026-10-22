@@ -278,4 +278,27 @@ describe("resolveBackgroundJobModel", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it("fails closed when the probe throws even though an earlier probe still projects ready", async () => {
+    const staleReady = {
+      ...notReadyCli,
+      providers: notReadyCli.providers.map((item) => ({ ...item, hasApiKey: true })),
+    };
+    const probeError = new Error("claude auth status timed out");
+    const onReadinessProbeError = vi.fn();
+    const getRuntimeConfig = vi.fn(() => staleReady);
+
+    await expect(
+      resolveBackgroundJobModel({
+        getUtilityModelOverride: async () => undefined,
+        ensureActiveProviderReadiness: async () => {
+          throw probeError;
+        },
+        getRuntimeConfig,
+        onReadinessProbeError,
+      }),
+    ).resolves.toBeUndefined();
+    expect(getRuntimeConfig).not.toHaveBeenCalled();
+    expect(onReadinessProbeError).toHaveBeenCalledWith(probeError);
+  });
 });

@@ -89,6 +89,8 @@ export interface BackgroundJobModelResolverDeps {
   /** Runs any probe-backed readiness check (the Claude Code CLI login) so "not checked yet" is not read as "not ready". */
   ensureActiveProviderReadiness(): Promise<void>;
   getRuntimeConfig(): ModelRoutingRuntime;
+  /** Bounded evidence for a readiness check that threw; the job is skipped either way. */
+  onReadinessProbeError?(error: unknown): void;
 }
 
 /**
@@ -105,8 +107,11 @@ export async function resolveBackgroundJobModel(
   }
   try {
     await deps.ensureActiveProviderReadiness();
-  } catch {
-    // A failed probe leaves the provider not ready; the job is skipped below.
+  } catch (error) {
+    // Fail closed: the provider summary could still project an earlier "ready"
+    // result, so a check that just failed must not be overridden by it.
+    deps.onReadinessProbeError?.(error);
+    return undefined;
   }
   return resolveBackgroundJobModelDefaults(deps.getRuntimeConfig());
 }
