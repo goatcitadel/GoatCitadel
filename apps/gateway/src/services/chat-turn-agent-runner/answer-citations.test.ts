@@ -121,6 +121,31 @@ describe("selectAnswerCitations", () => {
     expect(result).toEqual([opened]);
   });
 
+  it("keeps both a mentioned source and an opened source the answer cites by number", () => {
+    const result = selectAnswerCitations({
+      citations: [
+        webCitation("search", "https://results.example/hit"),
+        webCitation("mentioned", "https://a.com/named"),
+        webCitation("opened", "https://b.com/opened-page"),
+      ],
+      assistantContent: "The spec at https://a.com/named agrees with the vendor page [2].",
+      toolRuns: [run("browser.navigate", "https://b.com/opened-page")],
+    });
+    expect(ids(result)).toEqual(["mentioned", "opened"]);
+  });
+
+  it("still drops an unopened, unmentioned web citation when another is mentioned", () => {
+    const result = selectAnswerCitations({
+      citations: [
+        webCitation("search", "https://results.example/hit"),
+        webCitation("mentioned", "https://a.com/named"),
+      ],
+      assistantContent: "See https://a.com/named.",
+      toolRuns: [run("browser.navigate", "https://elsewhere.example/page")],
+    });
+    expect(ids(result)).toEqual(["mentioned"]);
+  });
+
   it("recognizes a URL used as both the text and the target of a markdown link", () => {
     const result = selectAnswerCitations({
       citations: [

@@ -82,10 +82,10 @@ function dedupeWebCitations(citations: readonly ChatCitationRecord[]): ChatCitat
 
 /**
  * Narrows a turn's citations to the ones the answer relied on, so a Deep research turn does not
- * persist every search result of every search. Non-web citations are always kept. Web citations
- * are kept when the answer text names their URL; when it names none (for example it cites by
- * number), the pages the turn actually opened are kept instead. When neither identifies a web
- * citation, the input is returned unchanged rather than dropping all evidence.
+ * persist every search result of every search. Non-web citations are always kept. A web citation
+ * is kept when the answer text names its URL or the turn actually opened that page (the union, so
+ * an answer that links one source and cites another by number keeps both). When neither identifies
+ * any web citation, the input is returned unchanged rather than dropping all evidence.
  */
 export function selectAnswerCitations(input: {
   citations: readonly ChatCitationRecord[];
@@ -94,19 +94,17 @@ export function selectAnswerCitations(input: {
 }): ChatCitationRecord[] {
   const { citations, assistantContent, toolRuns } = input;
   const mentionedUrls = collectUrlsFromText(assistantContent);
-  const isMentioned = (citation: ChatCitationRecord) =>
-    citation.sourceType === "web" && mentionedUrls.has(normalizeUrl(citation.url));
-
-  let keepWeb: (citation: ChatCitationRecord) => boolean = isMentioned;
-  if (!citations.some(isMentioned)) {
-    const openedUrls = collectOpenedPageUrls(toolRuns);
-    const isOpened = (citation: ChatCitationRecord) =>
-      citation.sourceType === "web" && openedUrls.has(normalizeUrl(citation.url));
-    if (!citations.some(isOpened)) {
-      return [...citations];
+  const openedUrls = collectOpenedPageUrls(toolRuns);
+  const isRelied = (citation: ChatCitationRecord) => {
+    if (citation.sourceType !== "web") {
+      return false;
     }
-    keepWeb = isOpened;
-  }
+    const key = normalizeUrl(citation.url);
+    return mentionedUrls.has(key) || openedUrls.has(key);
+  };
 
-  return dedupeWebCitations(citations.filter((citation) => citation.sourceType !== "web" || keepWeb(citation)));
+  if (!citations.some(isRelied)) {
+    return [...citations];
+  }
+  return dedupeWebCitations(citations.filter((citation) => citation.sourceType !== "web" || isRelied(citation)));
 }
