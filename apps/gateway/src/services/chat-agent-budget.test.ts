@@ -119,7 +119,7 @@ describe("chat-agent-budget", () => {
         mode: "chat",
         webMode: "quick",
         thinkingLevel: "standard",
-        liveDataIntent: true,
+        webLookupIntent: true,
         artifactIntent: true,
       }),
     ).toEqual(
@@ -142,7 +142,7 @@ describe("chat-agent-budget", () => {
         mode: "chat",
         webMode: "off",
         thinkingLevel: "standard",
-        liveDataIntent: true,
+        webLookupIntent: true,
         artifactIntent: true,
       }),
     ).toEqual(expect.objectContaining({ profile: "off", searchMaxResults: 0 }));
@@ -161,7 +161,7 @@ describe("chat-agent-budget", () => {
         mode: "cowork",
         webMode: "auto",
         thinkingLevel: "standard",
-        liveDataIntent: true,
+        webLookupIntent: true,
         promptLabHarness: true,
       }),
     ).toEqual(
@@ -180,7 +180,7 @@ describe("chat-agent-budget", () => {
         mode: "cowork",
         webMode: "auto",
         thinkingLevel: "standard",
-        liveDataIntent: true,
+        webLookupIntent: true,
         researchListIntent: true,
       }),
     ).toEqual(
@@ -198,7 +198,7 @@ describe("chat-agent-budget", () => {
         mode: "cowork",
         webMode: "auto",
         thinkingLevel: "standard",
-        liveDataIntent: true,
+        webLookupIntent: true,
       }),
     ).toEqual(expect.objectContaining({ maxToolRunsPerTurn: 8, turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.liveData }));
 
@@ -207,7 +207,7 @@ describe("chat-agent-budget", () => {
         mode: "chat",
         webMode: "auto",
         thinkingLevel: "standard",
-        liveDataIntent: true,
+        webLookupIntent: true,
         researchListIntent: true,
       }),
     ).toEqual(
@@ -329,7 +329,7 @@ describe("chat-agent-budget", () => {
         completionTimeoutMs: 90000,
       },
       {
-        input: { mode: "chat", webMode: "auto", thinkingLevel: "standard", liveDataIntent: true },
+        input: { mode: "chat", webMode: "auto", thinkingLevel: "standard", webLookupIntent: true },
         turnBudgetMs: 240000,
         completionTimeoutMs: 150000,
       },

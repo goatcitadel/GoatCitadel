@@ -2148,7 +2148,7 @@ export class ChatTurnAgentRunner {
       mode: input.mode,
       webMode: input.webMode,
       thinkingLevel: input.thinkingLevel,
-      liveDataIntent: intents.webLookup,
+      webLookupIntent: intents.webLookup,
       researchListIntent: intents.researchList,
       repoReviewIntent: hasRepositoryReviewIntent(intentDetectionContent),
       artifactIntent: intents.presentationArtifact || intents.documentArtifact,
