@@ -55,33 +55,29 @@
 
 ### Task 1: Deep mode turns on web lookup (R1, finding 1)
 
-Today Chat exposes web tools only when a regex detects web intent, whatever the `webMode` (`shouldExposeWebToolForTurn`, `chat-turn-agent-runner.ts:10977`). Intents are computed twice: in `resolveCapabilityToolSchema` (~line 1259) and in `run` (~line 2100). Both must apply the Deep rule.
+Admission builds the tool schema without a capability profile, so web tools were already exposed in Deep mode; this task does not add a tool-exposure test. What Deep lacked was the controller's opening search: `run` seeds a `browser.search` only when a regex detects web intent. The same Deep rule is also applied in `resolveCapabilityToolSchema` so a bounded tool schema keeps the web essentials in Deep.
 
 **Files:**
 - Create: `apps/gateway/src/services/chat-turn-agent-runner/web-research-mode.ts`
 - Create: `apps/gateway/src/services/chat-turn-agent-runner/web-research-mode.test.ts`
-- Modify: `apps/gateway/src/services/chat-turn-agent-runner.ts` (the two `intents = { … webLookup: … }` blocks near lines 1259 and 2100)
-- Modify: `apps/gateway/src/services/chat-turn-agent-runner.capability-profile.test.ts` (`buildProfile` gains a `webMode` option; `buildInput` reads `profile.selection.webMode`)
+- Modify: `apps/gateway/src/services/chat-turn-agent-runner.ts` (the `webLookup` intent in `resolveCapabilityToolSchema`, and the controller seed gate in `run`)
+- Modify: `apps/gateway/src/services/chat-turn-agent-runner.capability-profile.test.ts` (a bounded-exposure case that keeps web search in Deep's admitted schema)
 
 **Interfaces:**
 - Produces: `resolveTurnWebLookupIntent(input: { webMode: ChatWebMode; detectedWebLookupIntent: boolean; localFileIntent: boolean; workflowSkillCapture: boolean }): boolean`. It returns `detectedWebLookupIntent || (webMode === "deep" && !localFileIntent && !workflowSkillCapture)`, and returns `false` whenever `webMode === "off"`.
+- Produces: `hasSubstantiveSeedQuery(query: string): boolean`. True when the derived query has at least three content words (segmented with `Intl.Segmenter`, so scripts written without spaces count; Latin and digit words need two or more characters and must not be stopwords).
 
-- [ ] **Step 1: Write failing unit tests** in `web-research-mode.test.ts`:
-  - `it("treats Deep mode as web lookup when nothing else claims the turn")`: `{ webMode: "deep", detectedWebLookupIntent: false, localFileIntent: false, workflowSkillCapture: false }` → `true`.
-  - `it("lets local-file intent win over Deep mode")`: same with `localFileIntent: true` → `false`.
-  - `it("never turns on web lookup when web is off")`: `{ webMode: "off", detectedWebLookupIntent: true, … }` → `false`.
-  - `it("keeps Auto mode on regex detection only")`: `{ webMode: "auto", detectedWebLookupIntent: false, … }` → `false`, and `detectedWebLookupIntent: true` → `true`.
+- [ ] **Step 1: Write failing unit tests** in `web-research-mode.test.ts` for `resolveTurnWebLookupIntent`:
+  - Deep mode with nothing else claiming the turn returns `true`.
+  - `localFileIntent: true` wins over Deep and returns `false`.
+  - `webMode: "off"` with `detectedWebLookupIntent: true` returns `false`.
+  - Auto mode follows regex detection only.
 - [ ] **Step 2: Run and confirm they fail:** `pnpm --filter @goatcitadel/gateway exec vitest run src/services/chat-turn-agent-runner/web-research-mode.test.ts --maxWorkers=2`. Expected: FAIL (module not found).
 - [ ] **Step 3: Implement `resolveTurnWebLookupIntent`** in `web-research-mode.ts` as specified in Interfaces.
-- [ ] **Step 4: Write the failing integration tests** in `chat-turn-agent-runner.capability-profile.test.ts`. Add `webMode?: ChatWebMode` to `buildProfile`'s options (default `"auto"`, written into `selection.webMode`) and make `buildInput` use `profile.selection.webMode`. Then add:
-  - `it("exposes frozen web tools in Deep mode for a prompt with no web keywords")`: profile `webMode: "deep"`, input `content` and history `"Compare Debezium vs Postgres logical replication for change data capture."`. Run as in the existing "sends only the frozen definitions" test and assert `completionRequests[0]?.tools` equals `[TOOL_DEFINITION]`.
-  - `it("withholds web tools for the same prompt in Auto mode")`: same with `webMode: "auto"`. Assert `completionRequests[0]?.tools ?? []` does not contain `TOOL_DEFINITION`.
-  - `it("withholds web tools in Deep mode when the prompt names a local file")`: content `"Summarize C:\\notes\\todo.md"`, `webMode: "deep"`. Assert no `browser_search` in the request tools (Review Focus 1).
-  - `it("exposes no tools in Deep mode under manual autonomy")`: `webMode: "deep"`, `toolAutonomy: "manual"`, Debezium content. Assert `invokeTool` not called and no tools sent (Review Focus 2).
-- [ ] **Step 5: Run the integration tests and confirm the Deep/no-keyword test fails:** `pnpm --filter @goatcitadel/gateway exec vitest run src/services/chat-turn-agent-runner.capability-profile.test.ts --maxWorkers=2`.
-- [ ] **Step 6: Wire it in.** In both `intents` blocks, compute the regex result as today into `detectedWebLookupIntent`. Then set `webLookup: resolveTurnWebLookupIntent({ webMode: input.webMode, detectedWebLookupIntent, localFileIntent: detectLocalFileIntent(input.content), workflowSkillCapture })`. In the `resolveCapabilityToolSchema` block `workflowSkillCapture` is `false`, because that method already returns early for the marker. Leave `shouldExposeWebToolForTurn` unchanged. It now receives the corrected intent.
-- [ ] **Step 7: Run both test files plus the existing website test.** `… vitest run src/services/chat-turn-agent-runner/web-research-mode.test.ts src/services/chat-turn-agent-runner.capability-profile.test.ts src/services/chat-turn-agent-runner.website-access.test.ts --maxWorkers=2`. Expected: PASS.
-- [ ] **Step 8: Commit** with message `fix(gateway): let Deep research mode turn on web lookup in Chat`.
+- [ ] **Step 4: Wire the opening search.** In `run`, compute `controllerWebLookupIntent = resolveTurnWebLookupIntent({ webMode, detectedWebLookupIntent: intents.webLookup, localFileIntent, workflowSkillCapture })` and let it open the controller seed gate (it also satisfies `controllerWebLookupRequested` when `webMode === "deep"`). Leave every other intent consumer on the detected value. In `resolveCapabilityToolSchema`, set `webLookup` through the same helper (`workflowSkillCapture: false`, because that method returns early for the marker) so the bounded exposure path keeps web search in Deep's admitted schema.
+- [ ] **Step 5: Skip the seed where it would be wrong.** A Deep-only seed (no detected web intent) is skipped when the derived query is thin (`!hasSubstantiveSeedQuery(query)`) or a continuation (`looksLikeContinuationSearchPrompt`), so a greeting or a short follow-up does not open with a search. Every seed is skipped when `isSensitiveOfficialSearchQuery(query)` is true.
+- [ ] **Step 6: Add the tests for the seed behavior and run them.** Unit tests for `hasSubstantiveSeedQuery` (a greeting is false, "make it shorter" is false, a real question is true, a space-less CJK question is true, a short CJK greeting is false), plus the capability-profile bounded-exposure case. Then run both files and the existing website test: `… vitest run src/services/chat-turn-agent-runner/web-research-mode.test.ts src/services/chat-turn-agent-runner.capability-profile.test.ts src/services/chat-turn-agent-runner.website-access.test.ts --maxWorkers=2`. Expected: PASS.
+- [ ] **Step 7: Commit** with message `fix(gateway): let Deep research mode turn on web lookup in Chat`.
 
 ---
 
@@ -121,25 +117,25 @@ A refused connection to the default `127.0.0.1:3002` is paid on every search, na
 **Interfaces:**
 - Produces (all exported from `firecrawl-reachability.ts`):
   - `FIRECRAWL_UNREACHABLE_COOLDOWN_MS = 300_000`
-  - `isFirecrawlConnectFailure(error: unknown, callerSignal?: AbortSignal): boolean`. Returns false when `callerSignal?.aborted` (the turn was cancelled; Firecrawl did nothing wrong). Otherwise true for `TypeError` with `cause.code` in `ECONNREFUSED | ECONNRESET | ENOTFOUND | EHOSTUNREACH | ETIMEDOUT | UND_ERR_CONNECT_TIMEOUT`, and for errors named `AbortError` / `TimeoutError`. False for anything else, including thrown HTTP-status errors. `fetchFirecrawlEndpoint` passes `init.signal` as `callerSignal` only when that signal came from the execution context (search/navigate/extract already pass `executionContext?.signal`); add a `callerSignal` parameter to `fetchFirecrawlEndpoint` for this.
+  - `isFirecrawlConnectFailure(error: unknown, callerSignal?: AbortSignal, options?: { countTimeouts?: boolean }): boolean`. Returns false when `callerSignal?.aborted` (the turn was cancelled; Firecrawl did nothing wrong). Returns true for connection failures on every endpoint: the guard-wrapped refusal (a plain `Error` named `TypeError` with message `"fetch failed"`, because `fetchAllowlisted` drops `cause`) and an unwrapped error whose `cause.code` is in `ECONNREFUSED | ECONNRESET | ENOTFOUND | EHOSTUNREACH | ETIMEDOUT | UND_ERR_CONNECT_TIMEOUT`. Timeouts (message `"fetchAllowlisted timed out"` or name `TimeoutError`) count only when `options.countTimeouts` is true, and `fetchFirecrawlEndpoint` sets that only for `/v2/search`: a scrape waits on the target page, so a slow page must not bench a healthy Firecrawl. False for anything else, including thrown HTTP-status errors. `fetchFirecrawlEndpoint` passes `init.signal` as `callerSignal` only when that signal came from the execution context (search/navigate/extract already pass `executionContext?.signal`); add a `callerSignal` parameter to `fetchFirecrawlEndpoint` for this.
   - `recordFirecrawlConnectFailure(baseUrl: string, now?: number): void`
   - `recordFirecrawlSuccess(baseUrl: string): void`
   - `isFirecrawlCoolingDown(baseUrl: string, now?: number): boolean`
   - `resetFirecrawlReachabilityForTests(): void`
-  - `class FirecrawlUnavailableError extends Error`, message `"Firecrawl at <baseUrl> is unreachable; skipping it for 5 minutes."`
+  - `class FirecrawlUnavailableError extends Error`, message `"Firecrawl at <host> is unreachable; skipping it for 5 minutes."` (host only, so a token in the base URL's userinfo, path, or query never reaches the message). The cooldown map is bounded: expired entries are dropped, and at most 32 endpoints are tracked
 
 - [ ] **Step 1: Write failing unit tests** in `firecrawl-reachability.test.ts`:
   - Records a failure at `t=0`. `isFirecrawlCoolingDown(url, 299_999)` is true and `isFirecrawlCoolingDown(url, 300_000)` is false.
   - `recordFirecrawlSuccess` clears an active cooldown.
   - Cooldowns are per base URL: a failure for `http://127.0.0.1:3002` does not cool down `https://api.firecrawl.dev`.
-  - `isFirecrawlConnectFailure(Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }))` is true. `isFirecrawlConnectFailure(new Error("Firecrawl search failed (500 Internal Server Error)."))` is false.
+  - The real error shapes classify as connection failures: a plain `Error` named `TypeError` with message `"fetch failed"` (the guard-wrapped refusal) is true with or without `countTimeouts`; an unwrapped `TypeError` with `cause.code` `ECONNREFUSED` is true. `new Error("fetchAllowlisted timed out")` and a `TimeoutError` are true only with `{ countTimeouts: true }`. `new Error("Firecrawl search failed (500 Internal Server Error).")` is false, and any error is false when the caller signal is aborted.
 - [ ] **Step 2: Run and confirm failure.** `pnpm --filter @goatcitadel/policy-engine exec vitest run src/firecrawl-reachability.test.ts --maxWorkers=2`.
 - [ ] **Step 3: Implement the module.** Use a module-level `Map<string, number>` of `baseUrl → cooldownUntil`, with keys normalized by trimming trailing slashes.
 - [ ] **Step 4: Write failing integration tests** in `browser-tools.firecrawl-reachability.test.ts`. Mirror `browser-tools.official-search.test.ts` setup with `vi.stubGlobal("fetch", …)` and `resetFirecrawlReachabilityForTests()` in `afterEach`. Use `firecrawlFallbackToNative: false` so no native browser launches.
   - `it("skips Firecrawl without a network call while it is cooling down")`: fetch rejects with the ECONNREFUSED `TypeError`. The first `executeBrowserTool("browser.search", { query: "q", backend: "firecrawl", firecrawlFallbackToNative: false }, config(["*"]))` rejects. A second identical call rejects with `FirecrawlUnavailableError`, and `fetch` was called exactly once in total.
   - `it("does not cool down on an HTTP error response")` (Review Focus 3): fetch resolves `new Response("", { status: 500 })` twice. Both calls reject with `/Firecrawl search failed \(500/`, and `fetch` was called twice.
 - [ ] **Step 5: Run and confirm failure.**
-- [ ] **Step 6: Implement in `fetchFirecrawlEndpoint`.** Before fetching, throw `FirecrawlUnavailableError` if `isFirecrawlCoolingDown(firecrawl.baseUrl)`. Wrap the fetch: on a thrown error where `isFirecrawlConnectFailure(error)` is true, call `recordFirecrawlConnectFailure` and rethrow. On any `Response` (any status), call `recordFirecrawlSuccess`. The existing `catch (firecrawlError)` blocks in search, navigate, and extract already fall back to native when `firecrawlFallbackToNative` is true, so the cooldown makes the fallback immediate.
+- [ ] **Step 6: Implement in `fetchFirecrawlEndpoint`.** Before fetching, throw `FirecrawlUnavailableError` if `isFirecrawlCoolingDown(firecrawl.baseUrl)`. Wrap the fetch: on a thrown error where `isFirecrawlConnectFailure(error, callerSignal, { countTimeouts: path === "/v2/search" })` is true, call `recordFirecrawlConnectFailure` and rethrow. On any `Response` (any status), call `recordFirecrawlSuccess`. The existing `catch (firecrawlError)` blocks in search, navigate, and extract already fall back to native when `firecrawlFallbackToNative` is true, so the cooldown makes the fallback immediate.
 - [ ] **Step 7: Run both test files plus `browser-tools.coverage.test.ts`.** Expected: PASS.
 - [ ] **Step 8: Commit** with message `fix(policy-engine): skip an unreachable Firecrawl for five minutes instead of on every call`.
 
@@ -147,22 +143,22 @@ A refused connection to the default `127.0.0.1:3002` is paid on every search, na
 
 ### Task 4: No second engine walk after native already tried every engine (R4, W2)
 
-Native search already walks every operator engine (Playwright, then HTTP). On total failure it throws `browser.search failed: duckduckgo: … | bing: … | google: …`. `tryAlternateBuiltinSearchEngines` then walks the same engines again. The settings PR already forces those retries to the native backend.
+Native search already walks every operator engine (Playwright, then HTTP). The runner's alternate-engine fallback must not walk the same engines again. Total native-search failure is returned by the policy engine as `blocked`, so the runner's fallback never receives it directly. The cases that do reach `tryAlternateBuiltinSearchEngines` are (a) executed-but-failed results that carry structured `attemptedEngines`, and (b) failed native retries inside the alternate-engine loop, whose `policyReason` is `execution error: browser.search failed: duckduckgo: … | bing: … | google: …`. The settings PR already forces those retries to the native backend.
 
 **Files:**
 - Modify: `apps/gateway/src/services/chat-turn-agent-runner/browser-fallback.ts` (`tryAlternateBuiltinSearchEngines`)
 - Test: `apps/gateway/src/services/chat-turn-agent-runner/browser-fallback.test.ts` (create; unit-test the exported function with fake `deps`)
 
 **Interfaces:**
-- Produces: `readAttemptedSearchEngines(result: Record<string, unknown> | undefined, error: string | undefined): string[]`, exported from `browser-fallback.ts`. It returns `result.attemptedEngines` when that is a string array. Otherwise, when `error` starts with `"browser.search failed:"`, it returns every `(duckduckgo|bing|google):` engine name found in it. Otherwise it returns `[]`.
+- Produces: `readAttemptedSearchEngines(result: Record<string, unknown> | undefined, error: string | undefined): string[]`, exported from `browser-fallback.ts`. It returns the lowercased `result.attemptedEngines` when that is a string array. Otherwise it returns every `(duckduckgo|bing|google):` engine name found in a `browser.search failed:` error (with or without the `execution error:` prefix). Otherwise it returns `[]`.
 
 - [ ] **Step 1: Write failing tests:**
-  - `readAttemptedSearchEngines(undefined, "browser.search failed: duckduckgo: x | bing: y | google: z")` → `["duckduckgo", "bing", "google"]`.
-  - `readAttemptedSearchEngines({ attemptedEngines: ["firecrawl"] }, undefined)` → `["firecrawl"]`.
-  - `it("does not retry engines native search already attempted")`: call `tryAlternateBuiltinBrowserResult` with `toolName: "browser.search"`, classification `runtime_error`, the 3-engine error above, and `getSearchEngineOrder: () => ["duckduckgo", "bing", "google"]`. Assert the fake `invokeTool` was never called and the result is `undefined`.
+  - `readAttemptedSearchEngines(undefined, "execution error: browser.search failed: duckduckgo: x | bing: y | google: z")` returns `["duckduckgo", "bing", "google"]`.
+  - `readAttemptedSearchEngines({ attemptedEngines: ["firecrawl"] }, undefined)` returns `["firecrawl"]`.
   - `it("still tries native engines after a Firecrawl-only empty result")`: `normalizedResult: { attemptedEngines: ["firecrawl"], results: [] }`, classification `no_results`. Assert `invokeTool` was called with `args.backend === "native"`.
+  - `it("stops retrying once a failed native retry reports every engine it walked")`: the first native retry returns `blocked` with `policyReason: "execution error: browser.search failed: bing: x | duckduckgo: y | google: z"`. Assert `invokeTool` was called once and the result is `undefined`.
 - [ ] **Step 2: Run and confirm failure.** `pnpm --filter @goatcitadel/gateway exec vitest run src/services/chat-turn-agent-runner/browser-fallback.test.ts --maxWorkers=2`.
-- [ ] **Step 3: Implement.** Export `readAttemptedSearchEngines`. In `tryAlternateBuiltinSearchEngines`, filter `alternateEngines` to drop every engine in `readAttemptedSearchEngines(input.normalizedResult, input.classification.error ?? input.error)`, and return `undefined` when none remain.
+- [ ] **Step 3: Implement.** Export `readAttemptedSearchEngines`. In `tryAlternateBuiltinSearchEngines`, filter `alternateEngines` to drop every engine in `readAttemptedSearchEngines(input.normalizedResult, input.classification.error ?? input.error)`, and return `undefined` when none remain. After each failed native retry, drop the engines named in that retry's `policyReason` too.
 - [ ] **Step 4: Run the new file plus `src/services/chat-turn-agent-runner.browser-fallback.test.ts`.** Expected: PASS.
 - [ ] **Step 5: Commit** with message `fix(gateway): stop re-walking search engines native search already tried`.
 
@@ -199,7 +195,7 @@ The copy must match what P0 delivers: web lookup on, a larger and longer budget,
 - Modify: `skills/bundled/research/SKILL.md:3` (frontmatter `description`) and the "How to run" bullets
 - Modify: `packages/policy-engine/src/tool-registry.ts` (`browser.search` `usageHints[1]`)
 
-- [ ] **Step 1: Update the test** to expect the Deep description to be exactly `"Searches the web for every message and allows a longer research pass (up to 8 minutes)."`
+- [ ] **Step 1: Update the test** to expect the Deep description to be exactly `"Uses web search for your messages and allows a longer research pass (up to 8 minutes)."`
 - [ ] **Step 2: Run and confirm failure.** `pnpm --filter @goatcitadel/mission-control-next exec vitest run src/features/threaded-surface/chat-option-settings.test.ts --maxWorkers=2`.
 - [ ] **Step 3: Change the copy:**
   - In `chat-option-settings.ts`, use the description above.
