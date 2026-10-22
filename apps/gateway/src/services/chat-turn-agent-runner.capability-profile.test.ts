@@ -7,6 +7,7 @@ import {
   type CapabilityCatalogSnapshotRecord,
   type ChatCompletionRequest,
   type ChatTurnCapabilityProfileRecord,
+  type ChatWebMode,
   type SkillLifecycleRecord,
   type ToolCatalogEntry,
 } from "@goatcitadel/contracts";
@@ -36,11 +37,25 @@ const MESH_PUBLICATION_BINDING = {
 
 const MESH_TOOL_NAME = "mesh:node-a:tool:browser.search";
 const MESH_TOOL_ENTRY: CapabilityCatalogEntry = {
-  capabilityId: MESH_TOOL_NAME, kind: "mesh_tool", category: "mesh_published",
-  title: "Remote search", summary: "Search through the activated publisher.", callable: true,
-  effectPotential: classifyToolEffectPotential({ toolName: MESH_TOOL_NAME, trustedBuiltin: false, sourceKind: "remote" }),
-  mesh: { ...MESH_PUBLICATION_BINDING, admissionGeneration: 1, localId: "browser.search", capabilityKind: "tool",
-    status: "active", reasons: ["activation_live"] },
+  capabilityId: MESH_TOOL_NAME,
+  kind: "mesh_tool",
+  category: "mesh_published",
+  title: "Remote search",
+  summary: "Search through the activated publisher.",
+  callable: true,
+  effectPotential: classifyToolEffectPotential({
+    toolName: MESH_TOOL_NAME,
+    trustedBuiltin: false,
+    sourceKind: "remote",
+  }),
+  mesh: {
+    ...MESH_PUBLICATION_BINDING,
+    admissionGeneration: 1,
+    localId: "browser.search",
+    capabilityKind: "tool",
+    status: "active",
+    reasons: ["activation_live"],
+  },
 };
 
 const MESH_DISPATCH_RECEIPT = {
@@ -56,22 +71,45 @@ const MESH_DISPATCH_RECEIPT = {
 };
 
 /** Controlled coordinator port; runtime/policy owners are covered separately. */
-function createMeshInvocationPort(profile: ChatTurnCapabilityProfileRecord, dispatch: MeshChatDispatchPort["dispatch"]) {
+function createMeshInvocationPort(
+  profile: ChatTurnCapabilityProfileRecord,
+  dispatch: MeshChatDispatchPort["dispatch"],
+) {
   return vi.fn<NonNullable<ChatTurnAgentRunnerDeps["invokeToolWithEffectTruth"]>>(async (request, options) => {
     expect(options.meshTurnContext).toBeDefined();
     expect(() => JSON.stringify(options.meshTurnContext)).toThrow("cannot be serialized");
-    if (profile.governance.policyDecisions[0]?.requiresApproval) return {
-      outcome: "approval_required", approvalId: "mesh-call-approval", policyReason: "Mesh approval required", auditEventId: "mesh-policy",
-    };
+    if (profile.governance.policyDecisions[0]?.requiresApproval)
+      return {
+        outcome: "approval_required",
+        approvalId: "mesh-call-approval",
+        policyReason: "Mesh approval required",
+        auditEventId: "mesh-policy",
+      };
     const tool = profile.selection.tools[0]!;
-    return dispatchMeshChatTool({
-      resolveBinding: async () => ({ executionProfileSha256: profile.hashes.profileHash, schema: {
-        canonicalName: tool.canonicalName, modelName: tool.modelName, providerDefinition: tool.providerDefinition,
-        entry: MESH_TOOL_ENTRY, publication: tool.meshPublication!, policyBinding: createMeshToolPolicyBinding({
-          canonicalName: MESH_TOOL_NAME, nodeId: "node-a", kind: "tool", localId: "browser.search",
+    return dispatchMeshChatTool(
+      {
+        resolveBinding: async () => ({
+          executionProfileSha256: profile.hashes.profileHash,
+          schema: {
+            canonicalName: tool.canonicalName,
+            modelName: tool.modelName,
+            providerDefinition: tool.providerDefinition,
+            entry: MESH_TOOL_ENTRY,
+            publication: tool.meshPublication!,
+            policyBinding: createMeshToolPolicyBinding({
+              canonicalName: MESH_TOOL_NAME,
+              nodeId: "node-a",
+              kind: "tool",
+              localId: "browser.search",
+            }),
+          },
         }),
-      } }), dispatch,
-    }, request, { outcome: "executed", policyReason: "allowed", auditEventId: "mesh-policy" }, options);
+        dispatch,
+      },
+      request,
+      { outcome: "executed", policyReason: "allowed", auditEventId: "mesh-policy" },
+      options,
+    );
   });
 }
 
@@ -255,13 +293,11 @@ function digest(value: unknown): string {
 
 function buildCatalogSnapshot(includeTrustedSkill = false, meshTool = false): CapabilityCatalogSnapshotRecord {
   const tool = meshTool ? MESH_TOOL_ENTRY : TOOL_CATALOG_ENTRY;
-  const inspectableEntries = [
-    tool,
-    ...(includeTrustedSkill ? [TRUSTED_SKILL_ENTRY] : []),
-    INSPECTABLE_ONLY_ENTRY,
-  ].sort((left, right) => left.capabilityId.localeCompare(right.capabilityId));
-  const callableEntries = [tool, ...(includeTrustedSkill ? [TRUSTED_SKILL_ENTRY] : [])].sort(
+  const inspectableEntries = [tool, ...(includeTrustedSkill ? [TRUSTED_SKILL_ENTRY] : []), INSPECTABLE_ONLY_ENTRY].sort(
     (left, right) => left.capabilityId.localeCompare(right.capabilityId),
+  );
+  const callableEntries = [tool, ...(includeTrustedSkill ? [TRUSTED_SKILL_ENTRY] : [])].sort((left, right) =>
+    left.capabilityId.localeCompare(right.capabilityId),
   );
   return {
     snapshotId: "snapshot-frozen",
@@ -272,7 +308,15 @@ function buildCatalogSnapshot(includeTrustedSkill = false, meshTool = false): Ca
 }
 
 function buildProfile(
-  options: { requiresApproval?: boolean; trustedSkill?: boolean; heartbeat?: boolean; meshTool?: boolean } = {},
+  options: {
+    requiresApproval?: boolean;
+    trustedSkill?: boolean;
+    heartbeat?: boolean;
+    meshTool?: boolean;
+    webMode?: ChatWebMode;
+    toolAutonomy?: ChatTurnCapabilityProfileRecord["selection"]["toolAutonomy"];
+    content?: string;
+  } = {},
 ): ChatTurnCapabilityProfileRecord {
   const requiresApproval = options.requiresApproval ?? false;
   const heartbeat = options.heartbeat ?? false;
@@ -300,12 +344,12 @@ function buildProfile(
       callableCount: snapshot.callableEntries.length,
     },
     selection: {
-      contentHash: digest("Search public sources."),
+      contentHash: digest(options.content ?? "Search public sources."),
       effectiveProviderId: "provider-a",
       effectiveModel: "model-a",
       allowedFallbacks: [],
       mode: "chat",
-      webMode: "auto",
+      webMode: options.webMode ?? "auto",
       memory: {
         mode: "off",
         retrievalMode: "standard",
@@ -317,7 +361,7 @@ function buildProfile(
       thinkingLevel: "standard",
       speedMode: "standard",
       subagentPolicy: "auto_when_useful",
-      toolAutonomy: "safe_auto",
+      toolAutonomy: options.toolAutonomy ?? "safe_auto",
       tools: [
         {
           canonicalName,
@@ -397,7 +441,10 @@ function createProfileStorage(profile: ChatTurnCapabilityProfileRecord, lifecycl
   storage.capabilityCatalogSnapshots = {
     get: vi.fn((snapshotId: string) => {
       expect(snapshotId).toBe(profile.catalog.snapshotId);
-      return buildCatalogSnapshot(profile.selection.trustedSkills.length > 0, Boolean(profile.selection.tools[0]?.meshPublication));
+      return buildCatalogSnapshot(
+        profile.selection.trustedSkills.length > 0,
+        Boolean(profile.selection.tools[0]?.meshPublication),
+      );
     }),
   };
   storage.skillLifecycle = { list: vi.fn(() => lifecycleRows) };
@@ -405,7 +452,10 @@ function createProfileStorage(profile: ChatTurnCapabilityProfileRecord, lifecycl
 }
 
 function liveCallableCatalog(profile: ChatTurnCapabilityProfileRecord): CapabilityCatalogEntry[] {
-  return buildCatalogSnapshot(profile.selection.trustedSkills.length > 0, Boolean(profile.selection.tools[0]?.meshPublication)).callableEntries;
+  return buildCatalogSnapshot(
+    profile.selection.trustedSkills.length > 0,
+    Boolean(profile.selection.tools[0]?.meshPublication),
+  ).callableEntries;
 }
 
 function buildInput(profile: ChatTurnCapabilityProfileRecord) {
@@ -417,13 +467,13 @@ function buildInput(profile: ChatTurnCapabilityProfileRecord) {
     mode: "chat" as const,
     providerId: "provider-a",
     model: "model-a",
-    webMode: "auto" as const,
+    webMode: profile.selection.webMode,
     memoryMode: "off" as const,
     retrievalMode: "standard" as const,
     thinkingLevel: "standard" as const,
     speedMode: "standard" as const,
     subagentPolicy: "auto_when_useful" as const,
-    toolAutonomy: "safe_auto" as const,
+    toolAutonomy: profile.selection.toolAutonomy,
     operatorId: "operator-frozen",
     authActorId: "operator-frozen",
     authActorSource: "token" as const,
@@ -455,10 +505,23 @@ function buildHeartbeatInput(profile: ChatTurnCapabilityProfileRecord) {
 function heartbeatInputWithBinding(profile: ChatTurnCapabilityProfileRecord, featureBinding: boolean) {
   const input = buildHeartbeatInput(profile);
   if (!featureBinding) return input;
-  return { ...input, capabilityProfile: undefined, subagentPolicy: "off" as const,
+  return {
+    ...input,
+    capabilityProfile: undefined,
+    subagentPolicy: "off" as const,
     canonicalWriteFence: async <T>(operation: () => T | Promise<T>) => await operation(),
-    featureAdmission: { referenceSha256: "b".repeat(64), references: { version: "chat.turn.feature-references.v1" as const,
-      heartbeatOccurrence: { ownerId: input.serverOnlyPosture.occurrenceId, revision: "1", sha256: input.serverOnlyPosture.claimSha256 } } } };
+    featureAdmission: {
+      referenceSha256: "b".repeat(64),
+      references: {
+        version: "chat.turn.feature-references.v1" as const,
+        heartbeatOccurrence: {
+          ownerId: input.serverOnlyPosture.occurrenceId,
+          revision: "1",
+          sha256: input.serverOnlyPosture.claimSha256,
+        },
+      },
+    },
+  };
 }
 
 describe("ChatTurnAgentRunner frozen capability profiles", () => {
@@ -580,6 +643,121 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     expect(completionRequests[0]?.tools).toEqual([TOOL_DEFINITION]);
     expect(JSON.stringify(completionRequests[0]?.tools)).not.toContain("shell_exec");
     expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  describe("Deep web mode controller search", () => {
+    const NO_KEYWORD_PROMPT = "Compare Debezium vs Postgres logical replication for change data capture.";
+
+    async function runFrozenTurn(options: {
+      content: string;
+      webMode: ChatWebMode;
+      toolAutonomy?: ChatTurnCapabilityProfileRecord["selection"]["toolAutonomy"];
+    }) {
+      const events: string[] = [];
+      const createChatCompletion = vi.fn(async () => {
+        events.push("completion");
+        return {
+          model: "model-a",
+          choices: [{ index: 0, message: { role: "assistant", content: "Done." } }],
+        };
+      });
+      const invokeTool = vi.fn(async (request: { toolName: string }) => {
+        events.push(`tool:${request.toolName}`);
+        return { outcome: "executed", result: { results: [] } };
+      });
+      const profile = buildProfile(options);
+      const runner = new ChatTurnAgentRunner({
+        storage: createProfileStorage(profile) as never,
+        listToolCatalog: () => createToolCatalog(["browser.search"]),
+        listCapabilityCatalog: () => liveCallableCatalog(profile),
+        createChatCompletion,
+        invokeTool: invokeTool as never,
+        evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+      });
+      await runner.run({
+        ...buildInput(profile),
+        content: options.content,
+        historyMessages: [{ role: "user" as const, content: options.content }],
+      });
+      return { events, createChatCompletion, invokeTool };
+    }
+
+    it("seeds a web search in Deep mode for a prompt with no web keywords", async () => {
+      const { events } = await runFrozenTurn({ content: NO_KEYWORD_PROMPT, webMode: "deep" });
+
+      const firstSearch = events.indexOf("tool:browser.search");
+      const firstCompletion = events.indexOf("completion");
+      expect(firstSearch).toBeGreaterThanOrEqual(0);
+      expect(firstCompletion === -1 || firstSearch < firstCompletion).toBe(true);
+    });
+
+    it("does not seed a web search for the same prompt in Auto mode", async () => {
+      const { events } = await runFrozenTurn({ content: NO_KEYWORD_PROMPT, webMode: "auto" });
+
+      expect(events).not.toContain("tool:browser.search");
+    });
+
+    it("does not seed a web search in Deep mode when the prompt names a local file", async () => {
+      const { events } = await runFrozenTurn({ content: "Summarize C:\\notes\\todo.md", webMode: "deep" });
+
+      expect(events).not.toContain("tool:browser.search");
+    });
+
+    it("still calls the model in Deep mode under manual autonomy", async () => {
+      const { createChatCompletion, invokeTool } = await runFrozenTurn({
+        content: NO_KEYWORD_PROMPT,
+        webMode: "deep",
+        toolAutonomy: "manual",
+      });
+
+      expect(createChatCompletion).toHaveBeenCalled();
+      expect(invokeTool).not.toHaveBeenCalled();
+    });
+
+    it("does not seed a Deep web search for a greeting and still calls the model", async () => {
+      const { createChatCompletion, invokeTool } = await runFrozenTurn({ content: "hi", webMode: "deep" });
+
+      expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+      expect(createChatCompletion).toHaveBeenCalled();
+    });
+
+    it("does not seed a Deep web search for a short follow-up and still calls the model", async () => {
+      const { createChatCompletion, invokeTool } = await runFrozenTurn({ content: "make it shorter", webMode: "deep" });
+
+      expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+      expect(createChatCompletion).toHaveBeenCalled();
+    });
+
+    it("does not seed a Deep web search with secret text and still calls the model", async () => {
+      const { createChatCompletion, invokeTool } = await runFrozenTurn({
+        content: "Why does my deploy fail? OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+        webMode: "deep",
+      });
+
+      expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+      expect(createChatCompletion).toHaveBeenCalled();
+    });
+
+    it("does not seed a substantive Deep web search that carries secret text", async () => {
+      const { createChatCompletion, invokeTool } = await runFrozenTurn({
+        content:
+          "Compare Debezium vs Postgres logical replication when OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789 is set",
+        webMode: "deep",
+      });
+
+      expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+      expect(createChatCompletion).toHaveBeenCalled();
+    });
+
+    it("does not seed a detected web search with a cloud-metadata endpoint in Auto mode", async () => {
+      const { createChatCompletion, invokeTool } = await runFrozenTurn({
+        content: "Search the web for the latest news on why calls to 169.254.169.254 time out on my VM",
+        webMode: "auto",
+      });
+
+      expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+      expect(createChatCompletion).toHaveBeenCalled();
+    });
   });
 
   it("lets current deny-wins policy narrow a frozen allow before invocation", async () => {
@@ -777,20 +955,22 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
         choices: [{ index: 0, message: { role: "assistant", content: "The mesh tool ran." } }],
       });
     const invokeTool = vi.fn();
-    const dispatchMeshCapabilityInvocation = vi.fn(async (_input: unknown, options: { executionFence: () => Promise<void> }) => {
-      // The invocation owner fires the durable fence exactly once at the
-      // envelope append; the mock mirrors that discipline.
-      await options.executionFence();
-      return {
-        invocationId: `mesh-invocation-${"a".repeat(48)}`,
-        disposition: "succeeded" as const,
-        settled: true,
-        deliveryUncertain: false,
-        manualReconciliationRequired: false,
-        output: { status: "ok" },
-        receipt: MESH_DISPATCH_RECEIPT,
-      };
-    });
+    const dispatchMeshCapabilityInvocation = vi.fn(
+      async (_input: unknown, options: { executionFence: () => Promise<void> }) => {
+        // The invocation owner fires the durable fence exactly once at the
+        // envelope append; the mock mirrors that discipline.
+        await options.executionFence();
+        return {
+          invocationId: `mesh-invocation-${"a".repeat(48)}`,
+          disposition: "succeeded" as const,
+          settled: true,
+          deliveryUncertain: false,
+          manualReconciliationRequired: false,
+          output: { status: "ok" },
+          receipt: MESH_DISPATCH_RECEIPT,
+        };
+      },
+    );
     const profile = buildProfile({ meshTool: true });
     const runner = new ChatTurnAgentRunner({
       storage: createProfileStorage(profile) as never,
@@ -1000,73 +1180,79 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     expect(invokeTool).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("terminally blocks exact system-heartbeat approval drift before invocation or tool-row creation (feature binding %s)", async (featureBinding) => {
-    const createChatCompletion = vi
-      .fn()
-      .mockImplementationOnce(async (request: ChatCompletionRequest) => {
+  it.each([false, true])(
+    "terminally blocks exact system-heartbeat approval drift before invocation or tool-row creation (feature binding %s)",
+    async (featureBinding) => {
+      const createChatCompletion = vi.fn().mockImplementationOnce(async (request: ChatCompletionRequest) => {
         const offered = request.tools?.[0] as { function?: { name?: string } } | undefined;
         expect(offered?.function?.name).toBeTruthy();
         return namedToolCallCompletion(offered!.function!.name!, { query: "heartbeat status" });
       });
-    const invokeTool = vi.fn();
-    const profile = buildProfile({ heartbeat: true });
-    const storage = createProfileStorage(profile);
-    const runner = new ChatTurnAgentRunner({
-      storage: storage as never,
-      listToolCatalog: () => createToolCatalog(["browser.search"]),
-      listCapabilityCatalog: () => liveCallableCatalog(profile),
-      createChatCompletion,
-      invokeTool,
-      assertFeatureReferencesCurrent: vi.fn(async () => undefined),
-      evaluateToolAccess: vi.fn(() => createChatCompletion.mock.calls.length === 0
-        ? { allowed: true, requiresApproval: false, reasonCodes: ["heartbeat_allow"] }
-        : { allowed: true, requiresApproval: true, reasonCodes: ["risk_posture_drift"] }),
-    });
+      const invokeTool = vi.fn();
+      const profile = buildProfile({ heartbeat: true });
+      const storage = createProfileStorage(profile);
+      const runner = new ChatTurnAgentRunner({
+        storage: storage as never,
+        listToolCatalog: () => createToolCatalog(["browser.search"]),
+        listCapabilityCatalog: () => liveCallableCatalog(profile),
+        createChatCompletion,
+        invokeTool,
+        assertFeatureReferencesCurrent: vi.fn(async () => undefined),
+        evaluateToolAccess: vi.fn(() =>
+          createChatCompletion.mock.calls.length === 0
+            ? { allowed: true, requiresApproval: false, reasonCodes: ["heartbeat_allow"] }
+            : { allowed: true, requiresApproval: true, reasonCodes: ["risk_posture_drift"] },
+        ),
+      });
 
-    await expect(runner.run(heartbeatInputWithBinding(profile, featureBinding))).rejects.toMatchObject({
-      name: "SystemHeartbeatToolInvocationBlockedError",
-    });
+      await expect(runner.run(heartbeatInputWithBinding(profile, featureBinding))).rejects.toMatchObject({
+        name: "SystemHeartbeatToolInvocationBlockedError",
+      });
 
-    expect(createChatCompletion).toHaveBeenCalledTimes(1);
-    expect(invokeTool).not.toHaveBeenCalled();
-    expect(storage.chatToolRuns.listByTurn("turn-frozen")).toEqual([]);
-  });
+      expect(createChatCompletion).toHaveBeenCalledTimes(1);
+      expect(invokeTool).not.toHaveBeenCalled();
+      expect(storage.chatToolRuns.listByTurn("turn-frozen")).toEqual([]);
+    },
+  );
 
-  it.each([false, true])("omits approval-requiring tools from the exact system-heartbeat provider catalog (feature binding %s)", async (featureBinding) => {
-    const completionRequests: ChatCompletionRequest[] = [];
-    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest) => {
-      completionRequests.push(request);
-      return {
-        model: "model-a",
-        choices: [{ index: 0, message: { role: "assistant", content: '{"notify":false}' } }],
-      };
-    });
-    const invokeTool = vi.fn();
-    const profile = buildProfile({ heartbeat: true });
-    const storage = createProfileStorage(profile);
-    const runner = new ChatTurnAgentRunner({
-      storage: storage as never,
-      listToolCatalog: () => createToolCatalog(["browser.search"]),
-      listCapabilityCatalog: () => liveCallableCatalog(profile),
-      createChatCompletion,
-      invokeTool,
-      assertFeatureReferencesCurrent: vi.fn(async () => undefined),
-      evaluateToolAccess: vi.fn(() => ({
-        allowed: true,
-        requiresApproval: true,
-        reasonCodes: ["risk_posture_drift"],
-      })),
-    });
+  it.each([false, true])(
+    "omits approval-requiring tools from the exact system-heartbeat provider catalog (feature binding %s)",
+    async (featureBinding) => {
+      const completionRequests: ChatCompletionRequest[] = [];
+      const createChatCompletion = vi.fn(async (request: ChatCompletionRequest) => {
+        completionRequests.push(request);
+        return {
+          model: "model-a",
+          choices: [{ index: 0, message: { role: "assistant", content: '{"notify":false}' } }],
+        };
+      });
+      const invokeTool = vi.fn();
+      const profile = buildProfile({ heartbeat: true });
+      const storage = createProfileStorage(profile);
+      const runner = new ChatTurnAgentRunner({
+        storage: storage as never,
+        listToolCatalog: () => createToolCatalog(["browser.search"]),
+        listCapabilityCatalog: () => liveCallableCatalog(profile),
+        createChatCompletion,
+        invokeTool,
+        assertFeatureReferencesCurrent: vi.fn(async () => undefined),
+        evaluateToolAccess: vi.fn(() => ({
+          allowed: true,
+          requiresApproval: true,
+          reasonCodes: ["risk_posture_drift"],
+        })),
+      });
 
-    const result = await runner.run(heartbeatInputWithBinding(profile, featureBinding));
+      const result = await runner.run(heartbeatInputWithBinding(profile, featureBinding));
 
-    expect(completionRequests[0]?.tools).toBeUndefined();
-    expect(invokeTool).not.toHaveBeenCalled();
-    expect(storage.chatToolRuns.listByTurn("turn-frozen")).toEqual([]);
-    expect(result.turnTrace.status).toBe("running");
-    expect(result.turnTrace).not.toHaveProperty("completion");
-    expect(result.turnTrace).not.toHaveProperty("finishedAt");
-  });
+      expect(completionRequests[0]?.tools).toBeUndefined();
+      expect(invokeTool).not.toHaveBeenCalled();
+      expect(storage.chatToolRuns.listByTurn("turn-frozen")).toEqual([]);
+      expect(result.turnTrace.status).toBe("running");
+      expect(result.turnTrace).not.toHaveProperty("completion");
+      expect(result.turnTrace).not.toHaveProperty("finishedAt");
+    },
+  );
 
   it.each([
     ["content", { content: "different content" }],

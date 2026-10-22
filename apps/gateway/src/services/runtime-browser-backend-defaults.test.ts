@@ -103,6 +103,41 @@ describe("applyRuntimeBrowserBackendDefaults", () => {
     expect(ingest(false).args).toMatchObject({ backend: "firecrawl", firecrawlBaseUrl: "https://api.firecrawl.dev" });
   });
 
+  it.each([
+    { engine: "brave" },
+    { engine: "parallel" },
+    { providers: ["brave"] },
+    { providers: ["brave", "parallel"], mode: "research" },
+  ])("keeps an official selection official: %j", (selection) => {
+    const result = applyRuntimeBrowserBackendDefaults(
+      search({ query: "goats", ...selection }),
+      web({ defaultReadBackend: "firecrawl" }, { engineOrder: ["bing"] }),
+      ["api.firecrawl.dev"],
+    ) as { args: Record<string, unknown> };
+    expect(result.args.backend).toBe("official");
+    expect(result.args.firecrawlBaseUrl).toBeUndefined();
+    expect(result.args.firecrawlTimeoutMs).toBeUndefined();
+    expect(result.args.firecrawlApiKeyEnv).toBeUndefined();
+    expect(result.args.firecrawlFallbackToNative).toBeUndefined();
+    expect(result.args.searchEngineOrder).toEqual(["bing"]);
+  });
+
+  it("still defaults a plain search to Firecrawl when Firecrawl is usable", () => {
+    const result = applyRuntimeBrowserBackendDefaults(search({ query: "x" }), web(), ["api.firecrawl.dev"]) as {
+      args: Record<string, unknown>;
+    };
+    expect(result.args.backend).toBe("firecrawl");
+  });
+
+  it("leaves an explicit native backend alone even with engine brave", () => {
+    const result = applyRuntimeBrowserBackendDefaults(
+      search({ query: "x", engine: "brave", backend: "native" }),
+      web(),
+      ["api.firecrawl.dev"],
+    ) as { args: Record<string, unknown> };
+    expect(result.args.backend).toBe("native");
+  });
+
   it("falls back to the default engine order when none is configured", () => {
     const result = applyRuntimeBrowserBackendDefaults(search(), web({ enabled: false }), []) as {
       args: Record<string, unknown>;

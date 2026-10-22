@@ -4272,7 +4272,9 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(createChatCompletion).toHaveBeenCalledTimes(4);
     expect(result.turnTrace.status).toBe("failed");
     expect(result.turnTrace.completion).toMatchObject({
-      status: "interrupted", repaired: false, degraded: { recoveredByModel: false },
+      status: "interrupted",
+      repaired: false,
+      degraded: { recoveredByModel: false },
     });
   });
 
@@ -4372,7 +4374,9 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(createChatCompletion).toHaveBeenCalledTimes(4);
     expect(result.turnTrace.status).toBe("failed");
     expect(result.turnTrace.completion).toMatchObject({
-      status: "interrupted", repaired: false, degraded: { recoveredByModel: false },
+      status: "interrupted",
+      repaired: false,
+      degraded: { recoveredByModel: false },
     });
   });
 
@@ -6516,7 +6520,7 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(invokeTool).toHaveBeenCalledWith(
       expect.objectContaining({
         args: expect.objectContaining({
-          query: "travel scheduling planning preferences dates availability itinerary constraints",
+          query: "Then produce a Cowork-style planning handoff that says exactly what memory was or was not used",
         }),
       }),
     );

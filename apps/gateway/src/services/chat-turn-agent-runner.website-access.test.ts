@@ -29,10 +29,15 @@ function input(overrides: Partial<ChatTurnAgentRunnerInput> = {}): ChatTurnAgent
   };
 }
 
-function runner(allowed = true, toolNames = WEB_TOOLS) {
+function runner(allowed = true, toolNames = WEB_TOOLS, boundedExposure = false) {
   return new ChatTurnAgentRunner({
+    ...(boundedExposure ? { boundedToolExposureV1Enabled: async () => true } : {}),
     storage: createMockStorage() as never,
-    listToolCatalog: () => createToolCatalog(toolNames),
+    // The fixture maps unknown names to browser.search, so restore the requested filler names.
+    listToolCatalog: () =>
+      createToolCatalog(toolNames).map((entry, index) =>
+        toolNames[index]!.startsWith("aaa.") ? { ...entry, toolName: toolNames[index]! } : entry,
+      ),
     createChatCompletion: vi.fn(),
     invokeTool: vi.fn(),
     inspectToolAccess: vi.fn(async () => ({
@@ -79,13 +84,13 @@ describe("website tool selection with live policy", () => {
     );
   });
 
-  it.each([
-    { webMode: "off" as const },
-    { toolAutonomy: "manual" as const },
-  ])("keeps full web access subordinate to turn settings: %j", async (overrides) => {
-    const schema = await runner().resolveCapabilityToolSchema(input(overrides));
-    expect(schema.tools).toEqual([]);
-  });
+  it.each([{ webMode: "off" as const }, { toolAutonomy: "manual" as const }])(
+    "keeps full web access subordinate to turn settings: %j",
+    async (overrides) => {
+      const schema = await runner().resolveCapabilityToolSchema(input(overrides));
+      expect(schema.tools).toEqual([]);
+    },
+  );
 
   it("keeps policy-approved web tools available when intent detection misses a request", async () => {
     const schema = await runner().resolveCapabilityToolSchema(input({ content: "Tell me about Peaky Blinders." }));
@@ -103,5 +108,34 @@ describe("website tool selection with live policy", () => {
         reasonCodes: ["policy_deny"],
       })),
     );
+  });
+});
+
+describe("bounded tool exposure and Deep web lookup", () => {
+  // Fillers sort ahead of browser.search on the score tie-break, so bounding drops it unless it is essential.
+  const BOUNDED_TOOLS = [...WEB_TOOLS, ...Array.from({ length: 12 }, (_, index) => `aaa.filler${index}`)];
+  const NO_WEB_KEYWORDS = "Compare Debezium vs Postgres logical replication for change data capture.";
+
+  async function boundedKeys(content: string, webMode: "auto" | "deep") {
+    const schema = await runner(true, BOUNDED_TOOLS, true).resolveCapabilityToolSchema(
+      input({ content, webMode, fullWebAccess: false, historyMessages: [{ role: "user", content }] }),
+    );
+    return [...schema.canonicalToModel.keys()];
+  }
+
+  it("keeps browser.search in a bounded Deep schema for a prompt with no web keywords", async () => {
+    expect(await boundedKeys(NO_WEB_KEYWORDS, "deep")).toContain("browser.search");
+  });
+
+  it("keeps the bounded Auto schema on keyword detection", async () => {
+    expect(await boundedKeys(NO_WEB_KEYWORDS, "auto")).not.toContain("browser.search");
+  });
+
+  it("keeps a bounded Deep schema free of web essentials for a local-file prompt", async () => {
+    const content = "Summarize C:\\notes\\todo.md";
+    const deep = await boundedKeys(content, "deep");
+    const auto = await boundedKeys(content, "auto");
+    expect(deep).toEqual(auto);
+    expect(deep).not.toContain("browser.search");
   });
 });

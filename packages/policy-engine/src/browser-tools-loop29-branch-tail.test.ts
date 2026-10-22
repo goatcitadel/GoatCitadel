@@ -1,6 +1,7 @@
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeBrowserTool } from "./browser-tools.js";
+import { resetFirecrawlReachabilityForTests } from "./firecrawl-reachability.js";
 
 function createConfig(): ToolPolicyConfig {
   return {
@@ -24,6 +25,7 @@ describe("browser tools loop 29 branch tails", () => {
   const originalFirecrawlKey = process.env.FIRECRAWL_KEY;
 
   afterEach(() => {
+    resetFirecrawlReachabilityForTests();
     globalThis.fetch = originalFetch;
     process.env.FIRECRAWL_BASE_URL = originalFirecrawlBaseUrl;
     process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV = originalFirecrawlApiKeyEnv;

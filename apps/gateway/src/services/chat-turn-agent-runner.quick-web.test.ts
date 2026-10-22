@@ -283,4 +283,42 @@ describe("ChatTurnAgentRunner quick_web profile", () => {
     expect(result.turnTrace.completion?.providerCallCount).toBe(1);
     expect(result.turnTrace.failure).toBeUndefined();
   });
+
+  it("does not prefetch a search whose query carries secret text", async () => {
+    const content = "please look up why my deploy fails OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
+    const createChatCompletion = vi.fn(
+      async (): Promise<ChatCompletionResponse> => ({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: "Check the deploy logs first." } }],
+      }),
+    );
+    const invokeTool = vi.fn(async (): Promise<ToolInvokeResult> => ({ outcome: "executed", result: { results: [] } }));
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "http.get", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "session-quick-web-secret",
+      turnId: "turn-quick-web-secret",
+      userMessageId: "msg-quick-web-secret",
+      content,
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "quick",
+      memoryMode: "off",
+      thinkingLevel: "minimal",
+      speedMode: "fast",
+      subagentPolicy: "off",
+      normalizationProfile: "quick_web",
+      toolAutonomy: "manual",
+      historyMessages: [{ role: "user", content }],
+    });
+
+    expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+    expect(createChatCompletion).toHaveBeenCalled();
+  });
 });

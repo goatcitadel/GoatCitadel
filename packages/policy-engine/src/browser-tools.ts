@@ -14,6 +14,13 @@ import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 import { assertHostAllowed, assertNotPrivateOrReservedHost, fetchAllowlisted } from "./sandbox/network-guard.js";
 import { assertToolWritePath } from "./sandbox/tool-write-gate.js";
 import {
+  FirecrawlUnavailableError,
+  isFirecrawlConnectFailure,
+  isFirecrawlCoolingDown,
+  recordFirecrawlConnectFailure,
+  recordFirecrawlSuccess,
+} from "./firecrawl-reachability.js";
+import {
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE,
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE,
   launchPlaywrightChromium,
@@ -2432,25 +2439,33 @@ function assertFirecrawlBaseUrlAllowed(baseUrl: string, config: ToolPolicyConfig
   assertNotPrivateOrReservedHost(baseUrl);
 }
 
+const FIRECRAWL_SEARCH_PATH = "/v2/search";
+
 async function fetchFirecrawlEndpoint(
   firecrawl: { baseUrl: string; timeoutMs: number },
   path: string,
   config: ToolPolicyConfig,
   init: RequestInit,
+  callerSignal?: AbortSignal,
 ): Promise<Response> {
-  const targetUrl = `${firecrawl.baseUrl}${path}`;
-  if (isCanonicalLocalFirecrawlBaseUrl(firecrawl.baseUrl)) {
-    return fetchAllowlisted(targetUrl, {
-      allowlist: ["127.0.0.1:3002", "localhost:3002"],
-      timeoutMs: firecrawl.timeoutMs,
-      init,
-    });
+  if (isFirecrawlCoolingDown(firecrawl.baseUrl)) {
+    throw new FirecrawlUnavailableError(firecrawl.baseUrl);
   }
-  return fetchAllowlisted(targetUrl, {
-    allowlist: config.sandbox.networkAllowlist,
-    timeoutMs: firecrawl.timeoutMs,
-    init,
-  });
+  const targetUrl = `${firecrawl.baseUrl}${path}`;
+  const options = isCanonicalLocalFirecrawlBaseUrl(firecrawl.baseUrl)
+    ? { allowlist: ["127.0.0.1:3002", "localhost:3002"], timeoutMs: firecrawl.timeoutMs, init }
+    : { allowlist: config.sandbox.networkAllowlist, timeoutMs: firecrawl.timeoutMs, init };
+  let response: Response;
+  try {
+    response = await fetchAllowlisted(targetUrl, options);
+  } catch (error) {
+    if (isFirecrawlConnectFailure(error, callerSignal, { countTimeouts: path === FIRECRAWL_SEARCH_PATH })) {
+      recordFirecrawlConnectFailure(firecrawl.baseUrl);
+    }
+    throw error;
+  }
+  recordFirecrawlSuccess(firecrawl.baseUrl);
+  return response;
 }
 
 function trimTrailingSlashes(value: string): string {
@@ -2470,18 +2485,24 @@ async function executeBrowserSearchViaFirecrawl(
 ): Promise<Record<string, unknown>> {
   const firecrawl = await withFirecrawlKeychainCredential(resolveFirecrawlRuntimeConfig(args), executionContext);
   assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
-  const response = await fetchFirecrawlEndpoint(firecrawl, "/v2/search", config, {
-    method: "POST",
-    signal: executionContext?.signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
-    headers: {
-      "Content-Type": "application/json",
-      ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
+  const response = await fetchFirecrawlEndpoint(
+    firecrawl,
+    FIRECRAWL_SEARCH_PATH,
+    config,
+    {
+      method: "POST",
+      signal: executionContext?.signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
+      headers: {
+        "Content-Type": "application/json",
+        ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        query,
+        limit,
+      }),
     },
-    body: JSON.stringify({
-      query,
-      limit,
-    }),
-  });
+    executionContext?.signal,
+  );
   if (!response.ok) {
     throw new Error(`Firecrawl search failed (${response.status} ${response.statusText}).`);
   }
@@ -2614,18 +2635,24 @@ async function executeFirecrawlScrape(
   assertAllowedHttpUrl(url);
   assertHostAllowedForConfig(url, config, executionContext);
   assertNotPrivateOrReservedHost(url);
-  const response = await fetchFirecrawlEndpoint(firecrawl, "/v2/scrape", config, {
-    method: "POST",
-    signal: signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
-    headers: {
-      "Content-Type": "application/json",
-      ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
+  const response = await fetchFirecrawlEndpoint(
+    firecrawl,
+    "/v2/scrape",
+    config,
+    {
+      method: "POST",
+      signal: signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
+      headers: {
+        "Content-Type": "application/json",
+        ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        url,
+        formats,
+      }),
     },
-    body: JSON.stringify({
-      url,
-      formats,
-    }),
-  });
+    signal,
+  );
   if (!response.ok) {
     throw new Error(`Firecrawl scrape failed (${response.status} ${response.statusText}).`);
   }
