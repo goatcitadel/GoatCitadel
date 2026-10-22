@@ -185,6 +185,25 @@ describe("ChatTurnAgentRunner Cowork repair behavior", () => {
     expect(result.assistantContent).not.toMatch(/https?:\/\//);
   });
 
+  it("keeps a live volunteer-orientation answer as the model wrote it when no role contract was requested", async () => {
+    // Without an explicit role contract, a volunteer-orientation prompt is a
+    // normal live Cowork turn: the model's plan is not forced into a fallback.
+    const livePrompt =
+      "Create a three-phase plan for organizing a small volunteer orientation and pause at the approval checkpoint.";
+    const modelAnswer = [
+      "## Planner",
+      "- Phase 1: confirm the role, audience size, and trainer.",
+      "- Phase 2: draft the agenda and welcome note.",
+      "- Phase 3: run the session after approval only.",
+      "",
+      "## Operator Handoff",
+      "- Approval checkpoint: stop here until the organizer approves the agenda and date.",
+    ].join("\n");
+    const result = await runLiveCoworkTurn("sess-live-cowork-volunteer-passthrough-1", livePrompt, modelAnswer);
+
+    expect(result.assistantContent).toBe(modelAnswer);
+  });
+
   it.each([
     {
       name: "household severe storm",

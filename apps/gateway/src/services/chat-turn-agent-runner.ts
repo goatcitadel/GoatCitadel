@@ -13621,17 +13621,7 @@ function normalizeCoworkRoleContractOutput(input: {
     /(?:^|\n)- Constraints:\s+/i.test(trimmed) &&
     /(?:^|\n)- Workarounds:\s+/i.test(trimmed);
   const hasDuplicatedRoleBodies = hasDuplicatedCoworkRoleBodies(trimmed);
-  const volunteerOrientationNeedsRoleShape =
-    looksLikeVolunteerOrientationApprovalPrompt(input.prompt) &&
-    (!presentRoles.includes("risk review") || !presentRoles.includes("operator handoff"));
-  const forcePlanningFallback =
-    looksLikeVolunteerOrientationApprovalPrompt(input.prompt) &&
-    (hasGenericEvidenceScaffold ||
-      hasDuplicatedRoleBodies ||
-      volunteerOrientationNeedsRoleShape ||
-      looksLikeLowSignalEverydayCoworkOutput(trimmed) ||
-      looksLikePromptLabInstructionEchoContent(trimmed));
-  const forceDeterministicFallback = shouldForceDeterministicCoworkFallback(input.prompt) || forcePlanningFallback;
+  const forceDeterministicFallback = shouldForceDeterministicCoworkFallback(input.prompt);
   if (requestedRoleOrderOnly && forceDeterministicFallback) {
     const repaired = buildDeterministicCoworkRoleContractFallback({
       prompt: input.prompt,
@@ -13702,17 +13692,6 @@ function shouldForceDeterministicCoworkFallback(prompt: string): boolean {
     looksLikePromptLabEventLinkPropagationCoworkPrompt(promptText) ||
     looksLikePromptLabRank1HardeningCoworkPrompt(promptText) ||
     looksLikePromptLabApprovalPartialFailureCoworkPrompt(promptText)
-  );
-}
-
-function looksLikeLowSignalEverydayCoworkOutput(responseText: string): boolean {
-  const normalized = responseText.toLowerCase().replace(/\s+/g, " ").trim();
-  return (
-    normalized.includes("focus the work on the user's decision, not on tool traces or file evidence") ||
-    normalized.includes(
-      "name the next practical step, the key risk, and what information would change the recommendation",
-    ) ||
-    normalized.includes("proceed with the smallest reversible next step, keep assumptions visible")
   );
 }
 
@@ -13801,10 +13780,6 @@ function looksLikeTopicalCoworkWebEvidencePrompt(promptText: string): boolean {
 
 function looksLikePublicVenueCoworkPrompt(promptText: string): boolean {
   return /\bplausible\s+public\s+venue\b/i.test(promptText) || /\bpublic\s+venue\b/i.test(promptText);
-}
-
-function looksLikeVolunteerOrientationApprovalPrompt(promptText: string): boolean {
-  return /\bvolunteer\s+orientation\b/i.test(promptText) && /\bapproval\s+checkpoint\b/i.test(promptText);
 }
 
 function stripToolFailureAppendixTail(content: string): string {
