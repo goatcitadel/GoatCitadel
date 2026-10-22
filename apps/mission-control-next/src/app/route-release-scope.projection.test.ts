@@ -57,6 +57,7 @@ const EXPECTED_RAW_KEYS = [
   "settings/integrations",
   "settings/channels",
   "settings/mcp",
+  "settings/web-search",
   "settings/tools",
   "settings/hooks",
   "settings/workspace-capabilities",
@@ -92,11 +93,11 @@ describe("compact release metadata and full facade parity", () => {
     expect(routeModel.describeReleaseScopeForOperator).toBe(fullScopeOwner.describeReleaseScopeForOperator);
   });
 
-  it("preserves all 56 raw records, statuses and public field order", () => {
-    expect(EXPECTED_RAW_KEYS).toHaveLength(56);
-    expect(routeModel.ROUTE_RELEASE_SCOPE).toHaveLength(56);
+  it("preserves all 57 raw records, statuses and public field order", () => {
+    expect(EXPECTED_RAW_KEYS).toHaveLength(57);
+    expect(routeModel.ROUTE_RELEASE_SCOPE).toHaveLength(57);
     expect(routeModel.ROUTE_RELEASE_SCOPE.map(routeModel.getRouteReleaseKey)).toEqual(EXPECTED_RAW_KEYS);
-    expect(new Set(routeModel.ROUTE_RELEASE_SCOPE.map(routeModel.getRouteReleaseKey)).size).toBe(56);
+    expect(new Set(routeModel.ROUTE_RELEASE_SCOPE.map(routeModel.getRouteReleaseKey)).size).toBe(57);
 
     for (const scope of routeModel.ROUTE_RELEASE_SCOPE) {
       const key = routeModel.getRouteReleaseKey(scope);

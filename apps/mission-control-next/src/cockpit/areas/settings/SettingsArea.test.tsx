@@ -49,6 +49,7 @@ vi.mock("./CapabilityScopesSettings", () => ({
   ),
 }));
 vi.mock("./McpServersSettings", () => ({ McpServersSettings: () => <OwnerProbe name="MCP owner" /> }));
+vi.mock("./WebSearchSettings", () => ({ WebSearchSettings: () => <OwnerProbe name="Web & Search owner" /> }));
 vi.mock("./BudgetModeControl", () => ({ BudgetModeControl: () => <OwnerProbe name="Budget owner" /> }));
 vi.mock("./ApprovalModeControl", () => ({ ApprovalModeControl: () => <OwnerProbe name="Approval owner" /> }));
 vi.mock("./FilesystemWriteRootsControl", () => ({
@@ -267,7 +268,7 @@ describe("Settings section tabs", () => {
   });
   it("keeps all grouped owner destinations in ordered tabs with native hrefs", async () => {
     const pages = buildSettingsIndex();
-    expect(pages.flatMap((page) => page.entries)).toHaveLength(25);
+    expect(pages.flatMap((page) => page.entries)).toHaveLength(26);
     expect(pages.flatMap((page) => page.entries).every((entry) => !entry.href.includes("shell="))).toBe(true);
     for (const page of pages) {
       window.history.replaceState(null, "", `/settings/${page.id}?shell=cockpit`);

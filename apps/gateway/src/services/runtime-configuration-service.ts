@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { DeploymentProfile, ResearchSearchOfficialProvider } from "@goatcitadel/contracts";
-import { ExternalServiceError, PolicyViolationError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, ExternalServiceError, PolicyViolationError, ValidationError } from "@goatcitadel/contracts";
 import {
   executeOfficialResearchSearch,
   getOfficialSearchCredentialEnvAliases,
@@ -46,6 +46,24 @@ const TARGETS: Record<RuntimeConfigurationTargetId, RuntimeConfigurationTarget> 
     accountSuffix: "search.parallel",
   },
 };
+
+/** Keychain account for an installation-scoped runtime credential; shared with the Settings owner. */
+export function runtimeConfigurationAccount(installationScopeId: string, accountSuffix: string): string {
+  return `runtime-configuration:installation:${installationScopeId}:${accountSuffix}`;
+}
+
+/** Secret-free description of an official-search credential target. */
+export function describeOfficialSearchTarget(targetId: RuntimeConfigurationTargetId) {
+  const target = requireTarget(targetId);
+  return {
+    targetId: target.targetId,
+    provider: target.provider,
+    targetLabel: target.targetLabel,
+    endpointHost: target.endpointHost,
+    acquisitionUrl: target.acquisitionUrl,
+    accountSuffix: target.accountSuffix,
+  };
+}
 
 export interface RuntimeConfigurationPromptDescriptor {
   targetId: RuntimeConfigurationTargetId;
@@ -200,9 +218,19 @@ export class RuntimeConfigurationService {
     return this.installationScopeId;
   }
 
-  public assertConfigurationAvailable(targetId: RuntimeConfigurationTargetId): void {
+  /**
+   * `chatOnlyGates: false` is for the authenticated Settings owner: it keeps the keychain, allowlist
+   * and unresolved-settlement checks but skips the remote_hardened installation-scope block and the
+   * non-interactive write-custody check, which govern Chat-hosted credential capture only.
+   * `networkAllowlist: false` is for key removal, which never contacts the provider.
+   */
+  public assertConfigurationAvailable(
+    targetId: RuntimeConfigurationTargetId,
+    options: { chatOnlyGates?: boolean; networkAllowlist?: boolean } = {},
+  ): void {
     const target = requireTarget(targetId);
-    this.assertInstallationScopeAllowed(targetId);
+    const chatOnlyGates = options.chatOnlyGates !== false;
+    if (chatOnlyGates) this.assertInstallationScopeAllowed(targetId);
     const unresolved = this.unresolvedSettlements.get(targetId);
     if (unresolved) {
       throw new ExternalServiceError(
@@ -221,7 +249,7 @@ export class RuntimeConfigurationService {
         diagnosticCode: "keychain_unavailable",
       });
     }
-    if (!this.options.secretStore.isWriteCustodySafe()) {
+    if (chatOnlyGates && !this.options.secretStore.isWriteCustodySafe()) {
       throw new ExternalServiceError(
         "This host keychain adapter cannot safely accept a non-interactive Chat credential.",
         {
@@ -230,6 +258,7 @@ export class RuntimeConfigurationService {
         },
       );
     }
+    if (options.networkAllowlist === false) return;
     const networkAllowlist = [...(this.options.getNetworkAllowlist?.() ?? this.options.networkAllowlist)];
     if (!isHostAllowed(`https://${target.endpointHost}`, networkAllowlist)) {
       throw new PolicyViolationError({
@@ -241,6 +270,31 @@ export class RuntimeConfigurationService {
           operatorAction: "Add the exact provider host in Settings, then retry the original Chat request.",
         },
       });
+    }
+  }
+
+  /**
+   * Settings-surface keychain changes for the same target share this owner's lock and fences, so
+   * they cannot interleave with a Chat configuration that is preparing, settling, or reserved.
+   */
+  public async withSettingsCredentialChange<T>(
+    targetId: RuntimeConfigurationTargetId,
+    work: () => Promise<T>,
+    options: { action?: "store" | "remove" } = {},
+  ): Promise<T> {
+    const target = requireTarget(targetId);
+    // Checked before queueing too: a pending settlement keeps the lock until Chat settles.
+    await this.assertNoChatConfigurationInFlight(target);
+    const releaseTarget = await this.acquireTargetLock(target.targetId);
+    try {
+      this.assertConfigurationAvailable(target.targetId, {
+        chatOnlyGates: false,
+        networkAllowlist: options.action !== "remove",
+      });
+      await this.assertNoChatConfigurationInFlight(target);
+      return await work();
+    } finally {
+      releaseTarget();
     }
   }
 
@@ -660,6 +714,18 @@ export class RuntimeConfigurationService {
     }
   }
 
+  private async assertNoChatConfigurationInFlight(target: RuntimeConfigurationTarget): Promise<void> {
+    if (
+      this.preparingTargets.has(target.targetId) ||
+      [...this.pendingSettlement.values()].some((pending) => pending.target.targetId === target.targetId) ||
+      (await this.hasBlockingDurableReservation(target.targetId))
+    ) {
+      throw new ConflictError({
+        message: `${target.targetLabel} is being configured from Chat. Finish or cancel that request, then try again.`,
+      });
+    }
+  }
+
   private assertInstallationScopeAllowed(targetId: RuntimeConfigurationTargetId): void {
     if ((this.options.getDeploymentProfile?.() ?? this.options.deploymentProfile) === "remote_hardened") {
       throw new PolicyViolationError({
@@ -697,7 +763,7 @@ export class RuntimeConfigurationService {
   }
 
   private accountFor(target: RuntimeConfigurationTarget): string {
-    return `runtime-configuration:installation:${this.installationScopeId}:${target.accountSuffix}`;
+    return runtimeConfigurationAccount(this.installationScopeId, target.accountSuffix);
   }
 
   private async hasBlockingDurableReservation(targetId: RuntimeConfigurationTargetId): Promise<boolean> {
@@ -834,7 +900,7 @@ export function getRuntimeConfigurationAvailabilityProjection(
   };
 }
 
-async function probeOfficialSearchCredential(
+export async function probeOfficialSearchCredential(
   provider: ResearchSearchOfficialProvider,
   secret: string,
   networkAllowlist: readonly string[],

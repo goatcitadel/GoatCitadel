@@ -14,6 +14,7 @@ import {
   Play,
   Plug2,
   RefreshCw,
+  Globe,
   Server,
   ShieldCheck,
   SlidersHorizontal,
@@ -583,6 +584,8 @@ export function iconForSettingsSection(section: string) {
       return Plug2;
     case "mcp":
       return Server;
+    case "web-search":
+      return Globe;
     case "tools":
       return Wrench;
     case "hooks":
@@ -624,6 +627,8 @@ export function labelForSettingsSection(section: string) {
       return "Channels";
     case "mcp":
       return "MCP";
+    case "web-search":
+      return "Web & Search";
     case "tools":
       return "Tools";
     case "hooks":
@@ -665,6 +670,8 @@ export function descriptionForSettingsSection(section: string) {
       return "Run setup drafts for channel connections, check readiness, send trial messages, and finalize.";
     case "mcp":
       return "Manage MCP servers, templates, transport config, and tool visibility.";
+    case "web-search":
+      return "Firecrawl, search engines, and web-search API keys; managed in the cockpit layout.";
     case "tools":
       return "Review the tool catalog and manage grants from one place.";
     case "hooks":

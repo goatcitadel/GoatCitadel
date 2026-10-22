@@ -17,61 +17,95 @@ import { COCKPIT_VISUAL_MANIFEST } from "./cockpit-visual-manifest.mjs";
 
 test("surface proof covers the default cockpit and selects Classic explicitly for its owner checks", () => {
   const routes = resolveSurfaceRegressionManifest();
-  const defaultChat = routes.find(route => route.slug === "cockpit-default-chat");
+  const defaultChat = routes.find((route) => route.slug === "cockpit-default-chat");
   assert.equal(new URL(resolveReleaseSurfaceHref(defaultChat), "http://test.invalid").searchParams.has("shell"), false);
   assert.equal(defaultChat.readySelector, COCKPIT_VISUAL_MANIFEST[0].readySelector);
-  assert.equal(resolveShellContract("@goatcitadel/mission-control-next").shellSelector, '[data-cockpit-ready="true"] #main-content');
+  assert.equal(
+    resolveShellContract("@goatcitadel/mission-control-next").shellSelector,
+    '[data-cockpit-ready="true"] #main-content',
+  );
   assert.equal(resolveShellContract("@goatcitadel/mission-control-next", "classic").shellSelector, ".mc-next-shell");
   for (const original of NEXT_RELEASE_SURFACE_MANIFEST) {
-    const route = routes.find(candidate => candidate.slug === original.slug);
+    const route = routes.find((candidate) => candidate.slug === original.slug);
     assert.equal(route.shell, "classic");
     assert.equal(new URL(resolveReleaseSurfaceHref(route), "http://test.invalid").searchParams.get("shell"), "classic");
     assert.equal(route.readySelector, original.readySelector);
   }
-  assert.equal(new Set(routes.map(route => route.slug)).size, routes.length);
+  assert.equal(new Set(routes.map((route) => route.slug)).size, routes.length);
 });
 
 test("cockpit captures are additive and preserve all classic PNG identities with explicit shell selection", () => {
-  const classic = NEXT_VISUAL_REGRESSION_MANIFEST.filter(route => route.shell === "classic");
-  assert.equal(classic.length, 52);
-  assert.deepEqual(classic.map(({ shell: _shell, ...route }) => route), [
-    ...NEXT_RELEASE_SURFACE_MANIFEST, ...NEXT_VISUAL_SCENARIO_MANIFEST,
-  ]);
+  const classic = NEXT_VISUAL_REGRESSION_MANIFEST.filter((route) => route.shell === "classic");
+  assert.equal(classic.length, 53);
+  assert.deepEqual(
+    classic.map(({ shell: _shell, ...route }) => route),
+    [...NEXT_RELEASE_SURFACE_MANIFEST, ...NEXT_VISUAL_SCENARIO_MANIFEST],
+  );
   for (const route of classic) {
     const href = new URL(resolveReleaseSurfaceHref(route), "http://test.invalid");
     assert.equal(href.searchParams.get("shell"), "classic");
   }
-  assert.equal(classic.length * RELEASE_SURFACE_VARIANTS.length, 416);
-  const slugs = NEXT_VISUAL_REGRESSION_MANIFEST.map(route => route.slug);
+  assert.equal(classic.length * RELEASE_SURFACE_VARIANTS.length, 424);
+  const slugs = NEXT_VISUAL_REGRESSION_MANIFEST.map((route) => route.slug);
   assert.equal(new Set(slugs).size, slugs.length, "Two shells must never share a baseline filename.");
 });
 
 test("native manifest covers cockpit destinations and binds fixture, theme and explicit shell independently", () => {
-  assert.deepEqual(COCKPIT_VISUAL_MANIFEST.map(route => route.slug), [
-    "cockpit-chat", "cockpit-inbox", "cockpit-work-board", "cockpit-work-history", "cockpit-work-schedules",
-    "cockpit-library-capabilities", "cockpit-library-memory", "cockpit-library-notes", "cockpit-library-files", "cockpit-library-artifacts",
-    "cockpit-system-health", "cockpit-system-spend", "cockpit-system-quality", "cockpit-system-diagnostics", "cockpit-system-activity", "cockpit-system-dashboards",
-    "cockpit-settings-general", "cockpit-settings-models", "cockpit-settings-connections", "cockpit-settings-safety", "cockpit-settings-citadel", "cockpit-settings-access", "cockpit-settings-advanced",
-    "cockpit-first-run", "cockpit-gallery",
-  ]);
+  assert.deepEqual(
+    COCKPIT_VISUAL_MANIFEST.map((route) => route.slug),
+    [
+      "cockpit-chat",
+      "cockpit-inbox",
+      "cockpit-work-board",
+      "cockpit-work-history",
+      "cockpit-work-schedules",
+      "cockpit-library-capabilities",
+      "cockpit-library-memory",
+      "cockpit-library-notes",
+      "cockpit-library-files",
+      "cockpit-library-artifacts",
+      "cockpit-system-health",
+      "cockpit-system-spend",
+      "cockpit-system-quality",
+      "cockpit-system-diagnostics",
+      "cockpit-system-activity",
+      "cockpit-system-dashboards",
+      "cockpit-settings-general",
+      "cockpit-settings-models",
+      "cockpit-settings-connections",
+      "cockpit-settings-safety",
+      "cockpit-settings-citadel",
+      "cockpit-settings-access",
+      "cockpit-settings-advanced",
+      "cockpit-first-run",
+      "cockpit-gallery",
+    ],
+  );
   for (const route of COCKPIT_VISUAL_MANIFEST) {
     assert.equal(route.shell, "cockpit");
     assert.ok(route.readySelector || route.readyText);
     assert.equal(route.interaction, undefined, "Native routes do not use the classic inspector.");
   }
-  const chat = new URL(resolveReleaseSurfaceHref(COCKPIT_VISUAL_MANIFEST[0], { themeQuery: "theme=light" }, {
-    sessions: { approval: "reviewed/session?1" },
-  }), "http://test.invalid");
+  const chat = new URL(
+    resolveReleaseSurfaceHref(
+      COCKPIT_VISUAL_MANIFEST[0],
+      { themeQuery: "theme=light" },
+      {
+        sessions: { approval: "reviewed/session?1" },
+      },
+    ),
+    "http://test.invalid",
+  );
   assert.equal(chat.pathname, "/chat");
   assert.equal(chat.searchParams.get("sessionId"), "reviewed/session?1");
   assert.equal(chat.searchParams.get("shell"), "cockpit");
   assert.equal(chat.searchParams.get("theme"), "light");
-  const gallery = COCKPIT_VISUAL_MANIFEST.find(route => route.slug === "cockpit-gallery");
+  const gallery = COCKPIT_VISUAL_MANIFEST.find((route) => route.slug === "cockpit-gallery");
   assert.equal(gallery.href, "/__gallery");
   assert.equal(gallery.readySelector, '[data-cockpit-gallery="true"]');
   assert.equal(gallery.readyText, "Cockpit components");
   assert.equal(COCKPIT_VISUAL_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 200);
-  assert.equal(NEXT_VISUAL_REGRESSION_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 616);
+  assert.equal(NEXT_VISUAL_REGRESSION_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 624);
 });
 
 test("desktop-narrow visual proof renders inside the less-than-1180 compact boundary", () => {

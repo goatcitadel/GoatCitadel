@@ -1,3 +1,4 @@
+import { normalizeWebSearchEngineOrder } from "@goatcitadel/contracts";
 import type {
   ChatToolRunRecord,
   McpInvokeRequest,
@@ -29,6 +30,7 @@ export interface BrowserFallbackExecutorDeps {
     options?: { executionFence?: () => Promise<void> },
   ) => Promise<McpInvokeResponse>;
   listMcpBrowserFallbackTargets?: () => Promise<McpBrowserFallbackTarget[]>;
+  getSearchEngineOrder?: () => readonly string[];
   buildPolicyContext: (input: Partial<ChatTurnAgentRunnerInput>) => ToolPolicyActorContext;
   listPriorToolRuns: (turnId: string) => Promise<ChatToolRunRecord[]>;
   selectRecentBrowserResultUrls: (
@@ -228,8 +230,13 @@ async function tryAlternateBuiltinSearchEngines(
     return undefined;
   }
 
-  const failedEngine = typeof input.args.engine === "string" ? input.args.engine : undefined;
-  const alternateEngines = ["bing", "duckduckgo", "google"].filter((engine) => engine !== failedEngine);
+  // Only operator-enabled engines, in the operator's order. Without an explicit engine the search
+  // already tried the configured default first, so retries start after it.
+  const configuredEngines = normalizeWebSearchEngineOrder(deps.getSearchEngineOrder?.());
+  const failedEngine = typeof input.args.engine === "string" ? input.args.engine : configuredEngines[0];
+  const alternateEngines = configuredEngines.filter((engine) => engine !== failedEngine);
+  // Each retry is a native engine search: it must not repeat the same Firecrawl or official request.
+  const alternateBackend = { backend: "native" };
 
   for (const engine of alternateEngines) {
     if (input.turnInput.signal?.aborted) {
@@ -238,7 +245,7 @@ async function tryAlternateBuiltinSearchEngines(
     if (input.turnBudgetDeadline && Date.now() >= input.turnBudgetDeadline) {
       break;
     }
-    const alternateArgs = { ...input.args, engine };
+    const alternateArgs = { ...input.args, ...alternateBackend, engine };
     try {
       const request: ToolInvokeRequest = {
         toolName: "browser.search",

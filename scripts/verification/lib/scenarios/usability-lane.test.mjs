@@ -113,15 +113,15 @@ test("usability inventory follows current implementation truth and covers every 
   assert.equal(Object.keys(ROUTE_ACTIONS_BY_SLUG).length, EXPECTED_USABILITY_SURFACE_COUNTS.routes);
 
   const inventory = buildUsabilityRouteActionInventory("a".repeat(40));
-  assert.equal(inventory.counts.routes, 49);
-  assert.equal(inventory.counts.shipped, 43);
+  assert.equal(inventory.counts.routes, 50);
+  assert.equal(inventory.counts.shipped, 44);
   assert.equal(inventory.counts.experimental, 6);
   assert.equal(inventory.counts.redirects, 20);
   assert.equal(inventory.counts.directCompatibility, 3);
   assert.ok(inventory.rows.length > 100);
   const requiredRows = inventory.rows.filter((row) => row.required);
   const optionalRows = inventory.rows.filter((row) => !row.required);
-  assert.equal(requiredRows.length, 156);
+  assert.equal(requiredRows.length, 158);
   assert.ok(requiredRows.every((row) => row.proofBindings.length > 0 && row.expectedResult));
   assert.ok(
     requiredRows.every(
@@ -134,7 +134,7 @@ test("usability inventory follows current implementation truth and covers every 
     ),
   );
   const actionRows = requiredRows.filter((row) => row.kind === "route-action");
-  assert.equal(actionRows.length, 84);
+  assert.equal(actionRows.length, 85);
   assert.ok(
     actionRows.every((row) =>
       row.proofBindings.every((binding) =>

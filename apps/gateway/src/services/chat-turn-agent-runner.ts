@@ -970,6 +970,8 @@ export interface ChatTurnAgentRunnerDeps {
     },
   ) => Promise<McpInvokeResponse>;
   listMcpBrowserFallbackTargets?: () => Promise<McpBrowserFallbackTarget[]>;
+  /** Operator native search engine order for the alternate-engine fallback. */
+  getSearchEngineOrder?: () => readonly string[];
   /** Canonical operator decision projection for ordinary Chat tool runs. */
   recordRuntimeDecision?: (input: RuntimeDecisionTraceAppendInput) => Promise<void>;
   /**
@@ -1211,6 +1213,7 @@ export class ChatTurnAgentRunner {
       invokeTool: deps.invokeTool,
       invokeMcpTool: deps.invokeMcpTool,
       listMcpBrowserFallbackTargets: deps.listMcpBrowserFallbackTargets,
+      getSearchEngineOrder: deps.getSearchEngineOrder,
       buildPolicyContext: buildTurnToolPolicyContext,
       listPriorToolRuns: async (turnId) => await deps.storage.chatToolRuns.listByTurn(turnId),
       selectRecentBrowserResultUrls,

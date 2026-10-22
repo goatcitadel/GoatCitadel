@@ -7,7 +7,7 @@ import type {
   BrowserSessionStateSummary,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { clampInt } from "@goatcitadel/contracts";
+import { clampInt, resolveWebSearchEngineCandidates } from "@goatcitadel/contracts";
 import { startBrowserEgressProxy, type BrowserEgressProxy } from "./browser-egress-proxy.js";
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
@@ -51,6 +51,8 @@ export interface BrowserExecutionContext {
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
   /** Process-local protected credential lookup; never serialized into browser tool arguments. */
   resolveCredential?: ResolveOfficialSearchCredential;
+  /** Keychain-held Firecrawl key; the configured environment variable stays the fallback. */
+  resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
 }
 
 interface BrowserStepInput {
@@ -339,7 +341,7 @@ async function executeBrowserSearchNative(
   const attemptedEngines: string[] = [];
   const failures: string[] = [];
 
-  for (const engine of resolveSearchEngineCandidates(requestedEngine)) {
+  for (const engine of resolveWebSearchEngineCandidates(requestedEngine, args.searchEngineOrder)) {
     attemptedEngines.push(engine);
     const searchUrl = buildSearchUrl(engine, query);
     const searchBackendContext = browserSearchBackendExecutionContext(executionContext);
@@ -2166,21 +2168,6 @@ function normalizeBrowserReadBackend(backend: string | undefined): "native" | "f
   return backend?.toLowerCase() === "firecrawl" ? "firecrawl" : "native";
 }
 
-function resolveSearchEngineCandidates(
-  engine: "auto" | "duckduckgo" | "bing" | "google",
-): Array<"duckduckgo" | "bing" | "google"> {
-  if (engine === "google") {
-    return ["google", "bing", "duckduckgo"];
-  }
-  if (engine === "bing") {
-    return ["bing", "duckduckgo", "google"];
-  }
-  if (engine === "duckduckgo") {
-    return ["duckduckgo", "bing", "google"];
-  }
-  return ["duckduckgo", "bing", "google"];
-}
-
 function parseWaitUntil(input: unknown): "load" | "domcontentloaded" | "networkidle" {
   const value = asString(input)?.toLowerCase();
   if (value === "load" || value === "networkidle" || value === "domcontentloaded") {
@@ -2413,6 +2400,20 @@ function resolveFirecrawlRuntimeConfig(args: Record<string, unknown>): {
   };
 }
 
+/** The keychain key wins; the environment variable named by `firecrawlApiKeyEnv` is the fallback. */
+async function withFirecrawlKeychainCredential<T extends { apiKey?: string; baseUrl: string }>(
+  firecrawl: T,
+  executionContext?: BrowserExecutionContext,
+): Promise<T> {
+  let keychainKey: string | undefined;
+  try {
+    keychainKey = (await executionContext?.resolveFirecrawlCredential?.(firecrawl.baseUrl))?.trim();
+  } catch {
+    // A keychain outage keeps the environment fallback and never surfaces a credential value.
+  }
+  return keychainKey ? { ...firecrawl, apiKey: keychainKey } : firecrawl;
+}
+
 function isCanonicalLocalFirecrawlBaseUrl(baseUrl: string): boolean {
   try {
     const parsed = new URL(baseUrl);
@@ -2467,7 +2468,7 @@ async function executeBrowserSearchViaFirecrawl(
   config: ToolPolicyConfig,
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
-  const firecrawl = resolveFirecrawlRuntimeConfig(args);
+  const firecrawl = await withFirecrawlKeychainCredential(resolveFirecrawlRuntimeConfig(args), executionContext);
   assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
   const response = await fetchFirecrawlEndpoint(firecrawl, "/v2/search", config, {
     method: "POST",
@@ -2608,7 +2609,7 @@ async function executeFirecrawlScrape(
   markdown: string;
   html: string;
 }> {
-  const firecrawl = resolveFirecrawlRuntimeConfig(args);
+  const firecrawl = await withFirecrawlKeychainCredential(resolveFirecrawlRuntimeConfig(args), executionContext);
   assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
   assertAllowedHttpUrl(url);
   assertHostAllowedForConfig(url, config, executionContext);
