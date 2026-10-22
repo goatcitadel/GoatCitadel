@@ -18,6 +18,7 @@ const fixture = vi.hoisted(() => ({
   props: null as NativeRoutePagesProps | null,
   departed: vi.fn(),
   workspaces: vi.fn(),
+  workerError: false,
 }));
 vi.mock("../../app/use-cockpit-route", () => ({
   useCockpitRoute: () => ({ search: fixture.search, hash: fixture.hash, navigate: fixture.navigate }),
@@ -60,7 +61,11 @@ vi.mock("../../../features/native-routes/ops/RemoteWorkersRoutePage", () => ({
   ) => {
     fixture.props = props;
     useEffect(() => () => fixture.departed(props.activeWorkspaceId), [props.activeWorkspaceId]);
-    return <p>Existing worker and budget control owner</p>;
+    return fixture.workerError ? (
+      <p role="alert">Could not load workers</p>
+    ) : (
+      <p>Existing worker and budget control owner</p>
+    );
   },
 }));
 let host: HTMLDivElement, root: Root, client: QueryClient, previousCaller: string;
@@ -74,6 +79,7 @@ function render(section: "runtime" | "diagnostics" | "costs" | "workers" = "runt
 beforeEach(() => {
   vi.clearAllMocks();
   fixture.props = null;
+  fixture.workerError = false;
   fixture.identity = "owner-a";
   fixture.workspaceId = "workspace-a";
   fixture.citadelId = "citadel-a";
@@ -268,3 +274,16 @@ it.each(["?workerId=", "?workerId=a&workerId=b", "?assignmentId=a", "?workerId=a
     expect(fixture.navigate).not.toHaveBeenCalled();
   },
 );
+it("renders the runtime page inside the cockpit column", () => {
+  act(() => render());
+  const owner = [...host.querySelectorAll("button")].find((b) => b.textContent === "Existing runtime control owner");
+  expect(owner?.closest(".cockpit-embedded-classic")).not.toBeNull();
+});
+it("keeps the column when the embedded worker page renders its load error", () => {
+  fixture.search = "?workerId=w1&assignmentId=a1";
+  fixture.workerError = true;
+  act(() => render("workers"));
+  const alert = host.querySelector("[role=alert]");
+  expect(alert?.textContent).toBe("Could not load workers");
+  expect(alert?.closest(".cockpit-embedded-classic")?.className).toContain("max-w-5xl");
+});

@@ -3,6 +3,7 @@ import type {
   RuntimeSnapshotSourceStatus,
 } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import type { AppRoute } from "@next/app/route-model";
+import { describeRuntimeService } from "@goatcitadel/mission-control-shared/content/runtime-service";
 import type { NativePageMetric } from "../NativeRoutePageLayout";
 import type { ChipTone } from "../primitives";
 import { capitalize, formatDateTime, formatLoadAverage } from "./runtime-formatters";
@@ -56,11 +57,11 @@ export function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
 
 export function buildNeedsAttentionItems(
   data: OpsRuntimeData,
-  pendingApprovals: number,
+  pendingApprovals: number | undefined,
   theme: AppRoute["theme"],
 ): OpsAttentionItem[] {
   const items: OpsAttentionItem[] = [];
-  const pendingApprovalCount = data.dashboard?.pendingApprovals ?? pendingApprovals;
+  const pendingApprovalCount = data.dashboard?.pendingApprovals ?? pendingApprovals ?? 0;
   const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
   const daemonRunning = daemonRuntimeUnavailable ? null : (data.daemon?.running ?? data.health?.daemonStatus?.running);
   const latestBackup = data.health?.backups?.latest;
@@ -87,19 +88,31 @@ export function buildNeedsAttentionItems(
     });
   }
 
-  if (daemonRuntimeUnavailable || daemonRunning === false) {
+  // The same derivation as the Runtime metric and hero: a stopped daemon, or a running one with warning or critical
+  // diagnostics, needs attention; an unsupported host or an unknown status does not.
+  const daemonStatus = presentRuntimeDaemon(data);
+  const daemonNeedsAttention = daemonStatus.label === "Problem" || daemonStatus.label === "Needs review";
+  if (daemonRuntimeUnavailable || daemonNeedsAttention) {
     items.push({
       id: "daemon-runtime",
       title: "Daemon/runtime issue",
-      meta: daemonRuntimeUnavailable ? "unavailable" : "stopped",
+      meta: daemonRuntimeUnavailable
+        ? "unavailable"
+        : daemonRunning === false
+          ? "stopped"
+          : daemonStatus.label === "Problem"
+            ? "problem"
+            : "needs review",
       body: daemonRuntimeUnavailable
         ? "Daemon and health sources are unavailable, so runtime control truth needs inspection."
-        : `Daemon is ${data.daemon?.state ?? data.health?.daemonStatus?.state ?? "stopped"}.`,
+        : daemonRunning === false
+          ? `Daemon is ${data.daemon?.state ?? data.health?.daemonStatus?.state ?? "stopped"}.`
+          : daemonStatus.detail,
       primaryLabel: "Open runtime",
       primaryRoute: { area: "ops", section: "runtime", theme },
       inspectLabel: "Diagnostics",
       inspectRoute: { area: "ops", section: "diagnostics", theme },
-      tone: "danger",
+      tone: daemonRuntimeUnavailable || daemonStatus.label === "Problem" ? "danger" : "caution",
     });
   }
 
@@ -192,12 +205,10 @@ export function buildNeedsAttentionItems(
 export function buildOpsHeadMetrics(
   section: NonNullable<AppRoute["section"]>,
   data: NonNullable<ReturnType<typeof useOpsRuntimeSnapshot>["data"]>,
-  pendingApprovals: number,
+  pendingApprovals: number | undefined,
 ): NativePageMetric[] {
-  const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
-  const daemonRunning = daemonRuntimeUnavailable ? null : (data.daemon?.running ?? data.health?.daemonStatus?.running);
-  const daemonValue = daemonRunning == null ? "unknown" : daemonRunning ? "running" : "stopped";
-  const pendingValue = String(data.dashboard?.pendingApprovals ?? pendingApprovals);
+  const daemonValue = presentRuntimeDaemon(data).label;
+  const pendingMetric: NativePageMetric = presentPendingApprovals(data, pendingApprovals);
   const subagentsValue = String(data.dashboard?.activeSubagents ?? 0);
   const daySpendValue = formatCostMetric(data.dashboard?.dailyCostUsd, readCurrentDayCostCompleteness(data));
 
@@ -209,23 +220,23 @@ export function buildOpsHeadMetrics(
         // returning {}) can omit it at runtime — count a missing list as 0.
         { label: "Visible", value: String(data.sessions.length || data.dashboard?.sessions?.length || 0) },
         { label: "Active subagents", value: subagentsValue },
-        { label: "Pending approvals", value: pendingValue },
+        pendingMetric,
       ];
     case "schedules":
       return [
         { label: "Jobs", value: String(data.timeline?.scheduler?.jobs?.length ?? 0) },
         { label: "Review queue", value: String(data.timeline?.scheduler?.reviewQueue?.length ?? 0) },
-        { label: "Pending approvals", value: pendingValue },
+        pendingMetric,
       ];
     case "improvement":
       return [
         { label: "Reports", value: String(data.timeline?.improvement?.reports?.length ?? 0) },
         { label: "Replay runs", value: String(data.timeline?.improvement?.replayRuns?.length ?? 0) },
-        { label: "Pending approvals", value: pendingValue },
+        pendingMetric,
       ];
     case "notifications":
       return [
-        { label: "Pending approvals", value: pendingValue },
+        pendingMetric,
         { label: "Daemon", value: daemonValue },
         { label: "Active subagents", value: subagentsValue },
       ];
@@ -239,19 +250,22 @@ export function buildOpsHeadMetrics(
       return [
         { label: "Daemon", value: daemonValue },
         { label: "MCP servers", value: String(data.mcpServers.length) },
-        { label: "Backups", value: String(data.backups.length) },
-        { label: "Pending approvals", value: pendingValue },
+        { label: "Backups", value: sourceFailed(data, "backups") ? "Unknown" : String(data.backups.length) },
+        pendingMetric,
       ];
     case "diagnostics":
       return [
         { label: "Hostname", value: data.health?.systemVitals?.hostname ?? "Unknown" },
-        { label: "CPU", value: String(data.health?.systemVitals?.cpuCount ?? 0) },
+        {
+          label: "CPU",
+          value: data.health?.systemVitals?.cpuCount == null ? "Unknown" : String(data.health.systemVitals.cpuCount),
+        },
         { label: "Load", value: formatLoadAverage(data.health?.systemVitals?.loadAverage ?? []) },
       ];
     case "activity":
     default:
       return [
-        { label: "Pending approvals", value: pendingValue },
+        pendingMetric,
         { label: "Active subagents", value: subagentsValue },
         { label: "Day spend", value: daySpendValue },
         { label: "Daemon", value: daemonValue },
@@ -278,6 +292,59 @@ export function descriptionForOpsSection(section: NonNullable<AppRoute["section"
     default:
       return "Operational signal grouped for quick scanning.";
   }
+}
+
+/**
+ * The Runtime tab's daemon wording: the same derivation as System › Health (shared describeRuntimeService), so the
+ * two never disagree (SY-01). Unknown when both the daemon and health sources failed.
+ */
+export function presentRuntimeDaemon(data: OpsRuntimeData): ReturnType<typeof describeRuntimeService> {
+  const unavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
+  const status = unavailable ? undefined : (data.daemon ?? data.health?.daemonStatus);
+  return describeRuntimeService(status as Parameters<typeof describeRuntimeService>[0]);
+}
+
+/**
+ * The Runtime hero's chip, tone and line, from the same service status as the "Serving posture" metric, so the hero
+ * never reads "Runtime ready" beside "Problem" or "Unavailable".
+ */
+export function presentRuntimeReadiness(data: OpsRuntimeData): {
+  chip: string;
+  tone: "success" | "warning" | "critical" | "muted";
+  line: string;
+} {
+  if (sourceFailed(data, "daemon") && sourceFailed(data, "health"))
+    return {
+      chip: "Runtime unavailable",
+      tone: "critical",
+      line: "Runtime control truth is unavailable — inspect the daemon and health sources.",
+    };
+  const status = presentRuntimeDaemon(data);
+  const running = data.daemon?.running ?? data.health?.daemonStatus?.running;
+  switch (status.label) {
+    case "Running":
+      return { chip: "Runtime ready", tone: "success", line: "The runtime reports a running daemon." };
+    case "Needs review":
+      return { chip: "Runtime needs review", tone: "warning", line: status.detail };
+    case "Problem":
+      return running === false
+        ? { chip: "Daemon stopped", tone: "warning", line: "Gateway runtime is reachable, but the daemon is stopped." }
+        : { chip: "Runtime problem", tone: "critical", line: status.detail };
+    case "Unavailable":
+      return { chip: "Service control unavailable", tone: "muted", line: status.detail };
+    default:
+      return { chip: "Runtime status unknown", tone: "muted", line: status.detail };
+  }
+}
+
+/**
+ * Pending approvals, presented once for every Runtime surface (SY-R05, SY-L01). The dashboard count is
+ * installation-wide and says so; a host-supplied count is the current workspace's; a missing count is Unknown, never 0.
+ */
+export function presentPendingApprovals(data: OpsRuntimeData, hostCount: number | undefined): NativePageMetric {
+  const dashboardCount = data.dashboard?.pendingApprovals;
+  if (dashboardCount != null) return { label: "Pending approvals, all workspaces", value: String(dashboardCount) };
+  return { label: "Pending approvals", value: hostCount == null ? "Unknown" : String(hostCount) };
 }
 
 export function sourceFailed(

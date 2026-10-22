@@ -239,7 +239,9 @@ describe("cockpit tool approval rule", () => {
     expect(api.patchSettings).not.toHaveBeenCalled();
     const actions = [...dialog()!.querySelectorAll("button")];
     expect(actions.map((item) => item.textContent)).toEqual(["Skip normal prompts", "Keep current rule"]);
-    expect(actions[0]!.className).toContain("border-status-failed");
+    // Reversible but risky: the primary action carries a shield, not red (DESIGN › Decisions and danger).
+    expect(actions[0]!.className).toContain("bg-accent");
+    expect(actions[0]!.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
     expect(actions[0]!.disabled).toBe(false);
     expect(dialog()!.textContent).not.toContain("revision");
     expect(dialog()!.textContent).toContain("Deny rules, Nuclear risk and risky-shell approvals");

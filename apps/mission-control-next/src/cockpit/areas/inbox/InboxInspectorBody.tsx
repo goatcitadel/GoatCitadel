@@ -50,7 +50,10 @@ export function InboxInspectorBody({
           {inboxItemKindLabel(item.kind)} · <TimeText value={item.createdAt} />
         </p>
         <p className="mt-2 text-fg-secondary">{item.summary}</p>
-        {item.expiresAt ? <p className="mt-2 text-fg-muted">{approvalExpiryLabel(item.expiresAt, now)}</p> : null}
+        {/* An approval's detail states its expiry from the current record; show it once (IN-R04). */}
+        {item.expiresAt && item.kind !== "approval" ? (
+          <p className="mt-2 text-fg-muted">{approvalExpiryLabel(item.expiresAt, now)}</p>
+        ) : null}
       </div>
       {explicitDetails && inboxUpdateVersion(item, workspaceId) ? <RecordViewedUpdate onOpened={onOpened} /> : null}
       {/* An approval's detail shows the risk from its current record; show the projected risk only once (IN-15). */}

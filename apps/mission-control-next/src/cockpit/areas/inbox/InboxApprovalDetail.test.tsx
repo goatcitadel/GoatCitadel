@@ -408,4 +408,14 @@ describe("Inbox approval detail states (IN-05, IN-07, IN-16)", () => {
     expect(container.textContent).not.toContain("Checking specialist evidence");
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
   });
+
+  it("shows the expiry and the decision disclaimer once in the inspector (IN-R04)", async () => {
+    api.fetchApproval.mockResolvedValue({ ...approval, expiresAt: "2099-01-01T00:00:00Z" });
+    await render();
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    const text = container.textContent ?? "";
+    expect(text.split(/Expires in|Expiry:/).length - 1).toBe(1);
+    // The decision bar (mocked here) carries the one "does not prove the action ran" disclaimer.
+    expect(text).not.toMatch(/does not prove (the|its) action ran/);
+  });
 });
