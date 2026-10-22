@@ -20,13 +20,18 @@ const DEEP_RESEARCH_PAGE_MAX_CHARS = 4000;
 const PAGE_FENCE_OPEN = "<<<page>>>";
 const PAGE_FENCE_CLOSE = "<<<end page>>>";
 
-/** Drops fence markers the page itself contains, then bounds the text to what navigate was asked for. */
+/**
+ * Drops fence markers the page itself contains, then bounds the text to what navigate was asked for.
+ * Removal repeats until the text stops changing, so nested text such as `<<<end <<<page>>>page>>>`
+ * cannot rebuild a marker after a single pass.
+ */
 function sanitizePageExcerpt(text: string): string {
-  return text
-    .replaceAll(PAGE_FENCE_OPEN, "")
-    .replaceAll(PAGE_FENCE_CLOSE, "")
-    .trim()
-    .slice(0, DEEP_RESEARCH_PAGE_MAX_CHARS);
+  let current = text;
+  for (let previous = ""; previous !== current; ) {
+    previous = current;
+    current = current.replaceAll(PAGE_FENCE_OPEN, "").replaceAll(PAGE_FENCE_CLOSE, "");
+  }
+  return current.trim().slice(0, DEEP_RESEARCH_PAGE_MAX_CHARS);
 }
 
 interface ResearchRunInput {
