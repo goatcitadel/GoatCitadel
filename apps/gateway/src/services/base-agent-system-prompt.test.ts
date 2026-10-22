@@ -143,7 +143,7 @@ describe("buildBaseAgentSystemPrompt", () => {
         "## Web research: deep",
         "The operator turned on Deep research for this message.",
         "When this message needs information from the web:",
-        "- Plan 2–4 differently worded searches before answering; do not stop at the first result page.",
+        "- Run 2–4 differently worded searches before answering; do not stop at the first result page.",
         "- Open at least two relevant pages from different sites before relying on them, preferring primary sources.",
         "- Cross-check key facts across sources and say which claims you could not verify.",
         "- Cite the pages you relied on by URL.",
