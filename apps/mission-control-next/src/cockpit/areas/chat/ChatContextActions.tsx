@@ -115,7 +115,7 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
   const pageCount = Math.max(1, Math.ceil(dock.learnedMemory.length / 8));
   const currentPage = Math.min(memoryPage, pageCount - 1);
   return (
-    <div className="space-y-3" aria-label="Conversation context actions">
+    <div role="group" className="space-y-3" aria-label="Conversation context actions">
       {!ownersCurrent ? (
         <p role="status">
           Select a current conversation in this workspace and review its access before changing context.

@@ -93,8 +93,12 @@ export function ChatTextComposer({
     props.composerPalette?.onSelect(item);
   };
   const command = props.draft.trim().toLowerCase();
+  // Escape hides the slash menu for the current draft and leaves the draft alone; the next keystroke brings it back.
+  const [dismissedDraft, setDismissedDraft] = useState<string | null>(null);
+  const slashDismissed = !props.composerPalette?.globalOpen && dismissedDraft === props.draft;
+  const commandSuggestions = slashDismissed ? [] : props.commandSuggestions;
   // While the global palette is open, its search input owns the suggestions listbox.
-  const ownsSuggestions = !props.composerPalette?.globalOpen && props.commandSuggestions.length > 0;
+  const ownsSuggestions = !props.composerPalette?.globalOpen && commandSuggestions.length > 0;
   const localCommand =
     !props.editingTurnId &&
     !props.composerPalette?.globalOpen &&
@@ -160,18 +164,25 @@ export function ChatTextComposer({
       if (isImeEnter(event) || (event.shiftKey && !event.ctrlKey && !event.metaKey)) return;
       // A committed command (`/help`, `/help args`) sends; only a partial token applies the highlighted suggestion.
       const applies =
-        props.commandSuggestions.length && !localReady && !committedCommandDraft(props.draft, props.commandSuggestions);
+        commandSuggestions.length && !localReady && !committedCommandDraft(props.draft, commandSuggestions);
       // On touch, a plain Enter is a new line and Send is the button; Ctrl or Cmd+Enter still sends.
       if (coarse && !applies && !event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
       if (applies) {
-        const selected = props.commandSuggestions[props.commandIndex];
+        const selected = commandSuggestions[props.commandIndex];
         if (selected) {
           if (props.composerPalette?.enabled) selectPaletteItem(selected);
           else props.onApplyDraftCommand(selected.applyValue);
         }
       } else send();
       return;
+    }
+    if (!isImeEnter(event)) {
+      if (event.key === "Escape" && ownsSuggestions) setDismissedDraft(props.draft);
+      // A dismissed menu takes no navigation keys; the controller would still move through its hidden items. A later
+      // Escape isn't forwarded either: the controller would swallow it (preventDefault) for the hidden menu, so it
+      // could never reach document handlers such as stopping a stream.
+      if (slashDismissed && ["ArrowDown", "ArrowUp", "Tab", "Escape"].includes(event.key)) return;
     }
     props.onComposerKeyDown(event);
   };
@@ -206,7 +217,10 @@ export function ChatTextComposer({
           disabled={props.historicalReadOnly || props.sending || Boolean(props.sessionControlBanner)}
         />
         <ChatRunVariables panel={props.runVariablePanel} />
-        <ChatComposerPalette props={props} onSelect={selectPaletteItem} />
+        <ChatComposerPalette
+          props={slashDismissed ? { ...props, commandSuggestions } : props}
+          onSelect={selectPaletteItem}
+        />
         {projectReview.notice ? (
           <p role="status" className="mb-2 text-sm text-fg-secondary">
             {projectReview.notice}
@@ -253,7 +267,7 @@ export function ChatTextComposer({
             aria-autocomplete="list"
             aria-controls={ownsSuggestions ? "cockpit-composer-suggestions" : undefined}
             aria-activedescendant={
-              ownsSuggestions && props.commandSuggestions[props.commandIndex]
+              ownsSuggestions && commandSuggestions[props.commandIndex]
                 ? `cockpit-suggestion-${props.commandIndex}`
                 : undefined
             }
@@ -261,13 +275,16 @@ export function ChatTextComposer({
             readOnly={Boolean(capture)}
             disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
             aria-describedby={visibleReason ? REASON_ID : undefined}
-            onChange={(event) => props.onDraftChange(event.target.value)}
+            onChange={(event) => {
+              setDismissedDraft(null);
+              props.onDraftChange(event.target.value);
+            }}
             onKeyDown={keyDown}
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={() => setComposing(false)}
             onPaste={props.onComposerPaste}
             placeholder="Message GoatCitadel…"
-            className={`cockpit-chat-draft block min-h-16 resize-none field-sizing-content rounded-md border border-line-control bg-canvas px-3 py-2 text-md text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60 sm:text-sm ${phone ? "min-w-0 flex-1" : "mt-2 w-full"}`}
+            className={`cockpit-chat-draft block min-h-16 resize-none field-sizing-content rounded-md border border-line-control bg-canvas px-3 py-2 text-md text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60 ${phone ? "min-w-0 flex-1" : "mt-2 w-full"}`}
           />
           {phone ? (
             <ChatComposerPhoneActions

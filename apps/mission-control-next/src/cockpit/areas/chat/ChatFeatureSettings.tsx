@@ -41,7 +41,7 @@ export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDock
     void perform(() => dock.onPrefPatch({ subagentPolicy: policy }));
   };
   return (
-    <div className="cockpit-chat-feature-settings space-y-3" aria-label="Conversation execution settings">
+    <div role="group" className="cockpit-chat-feature-settings space-y-3" aria-label="Conversation execution settings">
       <fieldset disabled={busy} className="min-w-0 border-0 p-0">
         <ChatProviderFallbackSettings {...dock} sending={busy} />
       </fieldset>

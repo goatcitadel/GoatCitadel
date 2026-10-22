@@ -1,6 +1,67 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { checkFile, countLiveRegions, findUnguardedLinkHandlers } from "./check-mission-control-next-cockpit-semantics.mjs";
+import {
+  checkFile,
+  countLiveRegions,
+  countSemanticRatchets,
+  findUnguardedLinkHandlers,
+} from "./check-mission-control-next-cockpit-semantics.mjs";
+
+describe("names, Callout regions and phone inputs (GL-L01, GL-R01)", () => {
+  it("flags an aria-label that does not start with the element's literal visible text", () => {
+    assert.deepEqual(countSemanticRatchets("areas/x/X.tsx", '<button aria-label="Search commands">Search<kbd>K</kbd></button>'), {});
+    assert.deepEqual(countSemanticRatchets("areas/x/X.tsx", '<button aria-label="Open the palette">Search</button>'), {
+      "label-in-name": 1,
+    });
+    // An arrow handler before the label doesn't end the tag.
+    assert.deepEqual(
+      countSemanticRatchets("areas/x/X.tsx", '<button onClick={() => go()} aria-label="Open the palette">Search</button>'),
+      { "label-in-name": 1 },
+    );
+    assert.deepEqual(
+      countSemanticRatchets("areas/x/X.tsx", '<button onClick={() => go()} aria-label="Search commands">Search</button>'),
+      {},
+    );
+    // A control inside a visible <label> is named by it; an aria-label that disagrees overrides the visible name.
+    assert.deepEqual(
+      countSemanticRatchets("areas/x/X.tsx", '<label>Kind<select aria-label="Filter by kind"><option /></select></label>'),
+      { "label-in-name": 1 },
+    );
+    assert.deepEqual(
+      countSemanticRatchets("areas/x/X.tsx", '<label>Kind<select aria-label="Kind of record"><option /></select></label>'),
+      {},
+    );
+  });
+
+  it("counts Callout without announce={false} as a live region", () => {
+    assert.equal(countLiveRegions('<Callout tone="info">Saved.</Callout>'), 1);
+    assert.equal(countLiveRegions('<Callout tone="info" announce={false}>Read me.</Callout>'), 0);
+  });
+
+  it("flags aria-label on div, span or p without a role", () => {
+    assert.deepEqual(countSemanticRatchets("areas/x/X.tsx", '<div aria-label="Run summary">…</div>'), {
+      "aria-label-no-role": 1,
+    });
+    assert.deepEqual(countSemanticRatchets("areas/x/X.tsx", '<div role="group" aria-label="Run summary">…</div>'), {});
+    assert.deepEqual(countSemanticRatchets("areas/x/X.tsx", '<section aria-label="Run summary">…</section>'), {});
+  });
+
+  it("flags inputs without cockpitInputClass or text-md below sm (iOS zoom)", () => {
+    assert.deepEqual(countSemanticRatchets("areas/x/X.tsx", '<input className="rounded-md border px-2 text-sm" />'), {
+      "phone-input-size": 1,
+    });
+    assert.deepEqual(countSemanticRatchets("areas/x/X.tsx", "<input className={cockpitInputClass} />"), {});
+    assert.deepEqual(countSemanticRatchets("areas/x/X.tsx", '<input className="text-md sm:text-sm" />'), {});
+    assert.deepEqual(countSemanticRatchets("areas/x/X.tsx", '<input type="checkbox" className="size-4 text-sm" />'), {});
+    // iOS zooms selects and text areas too.
+    assert.deepEqual(countSemanticRatchets("areas/x/X.tsx", '<select className="min-h-10 rounded-md px-2 text-sm">'), {
+      "phone-input-size": 1,
+    });
+    assert.deepEqual(countSemanticRatchets("areas/x/X.tsx", '<textarea className="w-full text-xs" />'), {
+      "phone-input-size": 1,
+    });
+  });
+});
 
 describe("cockpit semantics guard", () => {
   it("keeps EmptyState and Callout off live regions and prefixes", () => {

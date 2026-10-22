@@ -85,7 +85,7 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
             variant={catalog === (view.id === "catalog") ? "primary" : "secondary"}
             onClick={() =>
               route.requestTransition((review) => {
-                if (review.isCurrent()) review.navigate(`/library/agents?view=${view.id}&shell=cockpit`);
+                if (review.isCurrent()) review.navigate(`/library/agents?view=${view.id}`);
               })
             }
           >

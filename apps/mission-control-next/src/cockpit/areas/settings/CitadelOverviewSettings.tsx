@@ -278,7 +278,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
           disabled={control.locked}
           value={charterDraft.value}
           onChange={(event) => control.changePurpose(event.target.value)}
-          className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg"
+          className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-md sm:text-sm text-fg"
         />
         {review?.kind === "charter" ? (
           <div className="mt-3 space-y-2 text-sm text-fg-secondary">

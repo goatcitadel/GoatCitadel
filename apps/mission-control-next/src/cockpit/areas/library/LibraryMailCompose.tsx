@@ -217,7 +217,7 @@ function LibraryMailComposeContent({
         </p>
       ) : null}
       {knownAccounts && !accounts.length ? (
-        <Callout tone="warning">
+        <Callout announce={false} tone="warning">
           No mail account is connected to this workspace. Connect a mail integration before drafting.
         </Callout>
       ) : null}

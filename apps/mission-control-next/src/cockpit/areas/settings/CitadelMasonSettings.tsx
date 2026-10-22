@@ -125,7 +125,7 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
               disabled={control.locked}
               value={control.messageDraft.value}
               onChange={(event) => control.changeMessage(event.target.value)}
-              className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg"
+              className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-md sm:text-sm text-fg"
             />
             <div className="mt-2 flex flex-wrap gap-2">
               <Button
@@ -161,7 +161,11 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
         Refresh Mason session
       </Button>
       {control.review ? (
-        <div className="space-y-3 rounded-md border border-line bg-sunken p-3" aria-label="Drafted Blueprint">
+        <div
+          className="space-y-3 rounded-md border border-line bg-sunken p-3"
+          role="group"
+          aria-label="Drafted Blueprint"
+        >
           <h4 className="text-sm font-semibold text-fg">{control.review.summary.name}</h4>
           <p className="text-sm text-fg-secondary">{control.review.blueprint.charter.purpose}</p>
           <p className="text-sm text-fg-secondary">

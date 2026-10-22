@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
-import { projectSessionActivity, projectThreadActivity, threadActivityLabel } from "./thread-activity";
+import {
+  isNotableThreadActivity,
+  projectSessionActivity,
+  projectThreadActivity,
+  threadActivityLabel,
+} from "./thread-activity";
 import { statusRecord } from "./thread-activity.test-support";
 
 describe("canonical visible thread activity", () => {
@@ -53,6 +58,14 @@ describe("canonical visible thread activity", () => {
     expect(projectSessionActivity(session({ observedAt: "not a time", latestTurn, turnCounts: counts })).label).toBe(
       "Status unavailable",
     );
+  });
+  it("treats only running, waiting and failed activity as worth a row's status", () => {
+    expect(isNotableThreadActivity({ tone: "running" })).toBe(true);
+    expect(isNotableThreadActivity({ tone: "waiting" })).toBe(true);
+    expect(isNotableThreadActivity({ tone: "failed" })).toBe(true);
+    expect(isNotableThreadActivity({ tone: "done" })).toBe(false);
+    expect(isNotableThreadActivity({ tone: "neutral" })).toBe(false);
+    expect(isNotableThreadActivity(undefined)).toBe(false);
   });
   it("dates a status once it is no longer current", () => {
     const fresh = { label: "Working", tone: "running" as const, observedAt: "2026-10-01T10:42:00Z" };

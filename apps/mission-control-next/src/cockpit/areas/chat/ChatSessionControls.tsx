@@ -36,7 +36,7 @@ export function ChatSessionTitle({ title, dock }: { title: string; dock: Mission
           onKeyDown={(event) => {
             if (event.key === "Escape") cancel();
           }}
-          className="min-w-0 flex-1 rounded-md border border-line-control bg-canvas px-2 py-1 text-sm text-fg"
+          className="min-w-0 flex-1 rounded-md border border-line-control bg-canvas px-2 py-1 text-md sm:text-sm text-fg"
         />
         <Button type="submit" size="sm" disabled={busy || !dock.renameTitle.trim()}>
           Save
@@ -47,26 +47,21 @@ export function ChatSessionTitle({ title, dock }: { title: string; dock: Mission
       </form>
     );
   return (
-    <h1 className="truncate font-display text-base font-semibold text-fg">
+    // The heading holds only the title; the rename button sits beside it, so the outline reads the title alone.
+    <div className="flex min-w-0 items-center gap-1">
+      <h1 className="truncate font-display text-base font-semibold text-fg">{title}</h1>
       <button
         type="button"
+        aria-label="Rename conversation"
         onClick={() => {
           dock.onRenameTitleChange(title);
           setRenaming(true);
         }}
-        className="group inline-flex min-h-6 max-w-full items-center gap-1 rounded-md text-left hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-sunken hover:text-accent focus-visible:bg-sunken focus-visible:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent max-sm:size-11"
       >
-        <span className="truncate">{title}</span>
-        {/* The name starts with the visible title, then says what the button does. */}
-        <span className="sr-only"> · Rename conversation</span>
-        <span
-          aria-hidden="true"
-          className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-fg-muted group-hover:bg-sunken group-hover:text-accent group-focus-visible:bg-sunken group-focus-visible:text-accent"
-        >
-          <Pencil className="size-3.5" />
-        </span>
+        <Pencil aria-hidden="true" className="size-3.5" />
       </button>
-    </h1>
+    </div>
   );
 }
 

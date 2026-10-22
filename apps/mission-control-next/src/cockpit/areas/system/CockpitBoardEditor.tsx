@@ -235,7 +235,7 @@ function BoardEditorView({
                         [placement.widgetId]: event.target.value as OpsSavedBoardsPlacementAdjustment,
                       })
                     }
-                    className="rounded-md border border-line-control bg-canvas p-2 text-sm text-fg"
+                    className="rounded-md border border-line-control bg-canvas p-2 text-md sm:text-sm text-fg"
                   >
                     {ADJUSTMENTS.map((option) => (
                       <option key={option.value} value={option.value}>

@@ -29,6 +29,7 @@ import {
   MemoryHistoryList,
   MemoryTtlField,
   noApprovalNeededMessage,
+  TextWithInboxLink,
 } from "./LibraryMemoryEditorParts";
 
 export function LibraryMemoryEditor({ itemId, workspaceId }: { itemId: string; workspaceId: string }) {
@@ -179,11 +180,15 @@ function MemoryEditor({
         {presentMemoryLifecycle(item.lifecycleState).label} · {memoryNamespaceLabel(item.namespace)} · {scope}
       </p>
       {globalItem ? (
-        <Callout tone="info">
+        <Callout announce={false} tone="info">
           Global memory is read-only here. Only workspace-owned items accept reviewed changes or forget requests.
         </Callout>
       ) : null}
-      {!enabled ? <Callout tone="warning">{administrationMessage} Changes remain locked.</Callout> : null}
+      {!enabled ? (
+        <Callout announce={false} tone="warning">
+          {administrationMessage} Changes remain locked.
+        </Callout>
+      ) : null}
       {stale ? (
         <Callout tone="warning">
           The saved memory changed, so your draft started from an older version. Your draft is kept; discard it to load
@@ -304,7 +309,7 @@ function MemoryEditor({
           <p className="break-words">
             Target: {review?.item.title} · {scope}
           </p>
-          <Callout tone="warning">
+          <Callout announce={false} tone="warning">
             {review?.action === "forget"
               ? "Forgetting removes the item from active recall after approval and effect settlement. A forgotten item can't be restored from the cockpit."
               : "The reviewed title, content and pinned state are applied only after approval and effect settlement."}
@@ -321,7 +326,9 @@ function MemoryEditor({
           {outcome?.request ? (
             <LibraryMemoryReceipt request={outcome.request} itemId={item.itemId} workspaceId={workspaceId} />
           ) : outcome ? (
-            <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout>
+            <Callout tone={outcome.error ? "error" : "info"}>
+              <TextWithInboxLink text={outcome.text} workspaceId={workspaceId} />
+            </Callout>
           ) : reviewStale ? (
             <Callout tone="warning">The memory item changed during review. Close and inspect current content.</Callout>
           ) : null}

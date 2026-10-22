@@ -38,7 +38,7 @@ export function KnowledgeResults({
         </TechnicalDetails>
       ) : null}
       {outcome?.rows && !resultAuthorized ? (
-        <Callout>
+        <Callout announce={false}>
           Retained result content is withheld until current source access is checked. Refresh the original approval
           result, or make an explicit new retrieval when no approval was needed.
         </Callout>

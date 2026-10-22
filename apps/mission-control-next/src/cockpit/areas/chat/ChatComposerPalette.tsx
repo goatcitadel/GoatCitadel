@@ -58,7 +58,7 @@ export function ChatComposerPalette({
                 choose(props.commandIndex);
               }
             }}
-            className="mt-1 h-9 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
+            className="mt-1 h-9 w-full rounded-md border border-line-control bg-canvas px-2 text-md text-fg sm:text-sm"
           />
         </label>
       ) : null}

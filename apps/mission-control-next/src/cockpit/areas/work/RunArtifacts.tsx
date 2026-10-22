@@ -179,7 +179,7 @@ export function RunArtifacts({ trace, workspaceId }: { trace: ObserveRunTraceRes
               <NativeOwnerLink
                 scope={[scope, active.expected.artifactId, active.expected.sessionId]}
                 className="text-sm font-medium text-accent hover:underline"
-                href={`/chat?sessionId=${encodeURIComponent(active.expected.sessionId)}&shell=cockpit`}
+                href={`/chat?sessionId=${encodeURIComponent(active.expected.sessionId)}`}
               >
                 Open artifact conversation
               </NativeOwnerLink>

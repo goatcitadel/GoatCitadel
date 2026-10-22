@@ -278,10 +278,11 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
                 document.activeElement?.closest("[data-record-key]")?.getAttribute("data-record-key"),
               );
               assert.ok(fixture.sessions.some((item) => item.sessionId === endId));
-              await threads
-                .locator('li[aria-posinset="105"]')
-                .getByText(endId === sessionId ? "Last response completed" : "No messages yet", { exact: true })
-                .waitFor();
+              // Rows show status only while running, waiting or failed (CH-N05), so a settled row is just its title.
+              const endRow = threads.locator('li[aria-posinset="105"]');
+              await endRow.waitFor();
+              for (const quiet of ["Last response completed", "No messages yet"])
+                assert.equal(await endRow.getByText(quiet, { exact: true }).count(), 0);
               assert.ok(
                 new Set(statusIds).size <= 73,
                 "Settled initial/page/end windows plus selected session must stay within3*24+1 unique IDs.",

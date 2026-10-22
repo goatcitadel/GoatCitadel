@@ -171,7 +171,7 @@ export function ChatInspector({
                     </TechnicalDetails>
                   ) : null}
                   {verifiedRoutedContext ? (
-                    <div className="border-t border-line-subtle pt-2" aria-label="Verified routed context">
+                    <div role="group" className="border-t border-line-subtle pt-2" aria-label="Verified routed context">
                       <p className="text-fg-secondary">
                         {"Scoped source inspection: "}
                         {verifiedRoutedContext.includedCount}

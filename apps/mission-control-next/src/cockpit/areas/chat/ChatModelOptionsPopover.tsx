@@ -3,7 +3,7 @@ import { useMemo, type RefObject } from "react";
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import type { ChatModelOptionsControls as Controls } from "./ChatComposerControls";
 import { useProviderLabelLookup } from "../../data/use-model-label";
-import { presentThinkingLevel } from "./chat-vocabulary";
+import { PLAN_HELP, REVIEW_HELP, presentThinkingLevel } from "./chat-vocabulary";
 import { useChatModelLabels } from "./use-chat-model-labels";
 import { GUIDED_THINKING_LEVELS } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
 
@@ -114,7 +114,7 @@ export function ChatModelOptionsPopover({
       <label className="flex items-center gap-1">
         Effort
         <select
-          aria-label="Thinking effort"
+          aria-label="Effort"
           value={props.currentThinkingLevel}
           disabled={disabled}
           onChange={(event) => {
@@ -142,7 +142,7 @@ export function ChatModelOptionsPopover({
       </label>
       <button
         type="button"
-        aria-label="Open personality settings"
+        aria-label={`${props.activePersonality?.name ?? "Personality"} · Open personality settings`}
         onClick={props.onOpenPersonalitiesSettings}
         disabled={!props.onOpenPersonalitiesSettings}
         className="rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-line-strong max-sm:min-h-11"
@@ -216,6 +216,17 @@ export function ChatModelOptionsPopover({
           <h3 className="text-sm font-semibold">Model and reasoning</h3>
           <div className="flex flex-wrap items-center gap-3">{modelOptions}</div>
           <p className="text-fg-muted">Effort support depends on the selected model.</p>
+          {/* The composer's mode toggles explain themselves here in visible text, not only in a tooltip (CH-R07). */}
+          <dl className="space-y-1 border-t border-line-subtle pt-2 text-fg-secondary">
+            <div>
+              <dt className="inline font-medium text-fg">Plan first: </dt>
+              <dd className="inline">{PLAN_HELP}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium text-fg">Review answer: </dt>
+              <dd className="inline">{REVIEW_HELP}</dd>
+            </div>
+          </dl>
           <Close className="min-h-9 rounded-md border border-line px-3" type="button">
             Done
           </Close>

@@ -152,7 +152,7 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
     );
   if (!enabled)
     return (
-      <Callout>
+      <Callout announce={false}>
         Engineering learnings is disabled in this runtime. Direct links and technical details do not enable this
         feature.
       </Callout>
@@ -167,7 +167,7 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
             workspaceId={workspaceId}
             onCreated={(id) => {
               void refresh();
-              route.navigate(`/library/knowledge?learningId=${encodeURIComponent(id)}&shell=cockpit`);
+              route.navigate(`/library/knowledge?learningId=${encodeURIComponent(id)}`);
             }}
           />
         </Suspense>
@@ -205,9 +205,7 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
                 <StatusBadge status={presentLearningStatus(record.status)} />
               </p>
               <Button
-                onClick={() =>
-                  route.navigate(`/library/knowledge?learningId=${encodeURIComponent(record.learningId)}&shell=cockpit`)
-                }
+                onClick={() => route.navigate(`/library/knowledge?learningId=${encodeURIComponent(record.learningId)}`)}
               >
                 Open {record.title}
               </Button>
@@ -217,7 +215,9 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
       {selected.isFetching ? <p role="status">Reading learning record…</p> : null}
       {selected.error ? <Callout tone="error">{describeApiError(selected.error).summary}</Callout> : null}
       {selected.data && !item ? (
-        <Callout tone="warning">The learning does not belong to this workspace.</Callout>
+        <Callout announce={false} tone="warning">
+          The learning does not belong to this workspace.
+        </Callout>
       ) : null}
       {item ? (
         <article className="grid gap-2">
@@ -238,7 +238,7 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
           ))}
           <p>Applies to: {item.applicablePaths.join(", ") || "No paths recorded"}</p>
           {item.staleReasons?.map((reason) => (
-            <Callout key={reason} tone="warning">
+            <Callout announce={false} key={reason} tone="warning">
               {reason}
             </Callout>
           ))}
@@ -257,15 +257,12 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
           </TechnicalDetails>
           <NativeOwnerLink
             scope={[workspaceId, item.learningId, item.source.runId]}
-            href={`/work/runs/${encodeURIComponent(item.source.runId)}?shell=cockpit`}
+            href={`/work/runs/${encodeURIComponent(item.source.runId)}`}
           >
             Open source run
           </NativeOwnerLink>
           {item.source.sessionId ? (
-            <NativeOwnerLink
-              scope={workspaceId}
-              href={`/chat?sessionId=${encodeURIComponent(item.source.sessionId)}&shell=cockpit`}
-            >
+            <NativeOwnerLink scope={workspaceId} href={`/chat?sessionId=${encodeURIComponent(item.source.sessionId)}`}>
               Open source conversation
             </NativeOwnerLink>
           ) : null}
@@ -328,7 +325,7 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
                 .join(", ")}
             </p>
           ) : null}
-          <Callout tone="warning">
+          <Callout announce={false} tone="warning">
             Activation makes this learning eligible for context under GoatCitadel policy. Rejection or archive removes
             its eligibility.
           </Callout>

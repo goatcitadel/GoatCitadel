@@ -51,7 +51,7 @@ export function LibraryApproval({
       <Button disabled={query.isFetching} onClick={() => void refresh()}>
         Refresh approval and record
       </Button>
-      <NativeOwnerLink scope={workspaceId} href={`/inbox?approvalId=${encodeURIComponent(approvalId)}&shell=cockpit`}>
+      <NativeOwnerLink scope={workspaceId} href={`/inbox?approvalId=${encodeURIComponent(approvalId)}`}>
         Open this approval in Inbox
       </NativeOwnerLink>
     </section>

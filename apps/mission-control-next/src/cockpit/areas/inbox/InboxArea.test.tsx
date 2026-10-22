@@ -1098,25 +1098,47 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
     const count = (group: string) => container.querySelector(`[data-inbox-count="${group}"]`)?.textContent;
     expect(summary()).toBe("Sorted by risk, then expiry, then age.");
     expect(count("needs_decision")).toBe("2");
+    // The filters are named by their visible <label> text alone.
+    const filter = (label: string) =>
+      [...container.querySelectorAll("label")]
+        .find((node) => node.firstChild?.textContent?.trim() === label)
+        ?.querySelector<HTMLSelectElement>("select");
     const choose = (label: string, value: string) =>
       act(async () => {
-        const select = container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+        const select = filter(label)!;
         select.value = value;
         select.dispatchEvent(new Event("change", { bubbles: true }));
       });
-    await choose("Filter loaded items by kind", "task_deliverable");
+    await choose("Kind", "task_deliverable");
     expect(summary()).toBe("1 of 3 loaded items shown. Sorted by risk, then expiry, then age.");
     expect(count("needs_decision")).toBe("0 of 2 shown");
     expect(count("updates")).toBe("1 of at least 3 shown");
     expect(container.textContent).toContain("Nothing here matches the filters.");
-    await choose("Filter loaded items by kind", "all");
-    await choose("Filter loaded items by risk", "caution");
+    await choose("Kind", "all");
+    await choose("Risk", "caution");
     expect(summary()).toBe("1 of 3 loaded items shown. Sorted by risk, then expiry, then age.");
     expect([...container.querySelectorAll("[data-inbox-item] h3")].map((node) => node.textContent)).toEqual([
       "Second write",
     ]);
     await clickButton("Clear filters");
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(3);
+  });
+
+  it("filter bar: accessible name starts with the visible text", async () => {
+    show([first, second, update], {
+      needs_decision: { known: 2, complete: true },
+      updates: { known: 3, complete: false },
+    });
+    await renderUpdates(new QueryClient());
+    for (const label of ["Kind", "Risk"]) {
+      const wrapper = [...container.querySelectorAll("label")].find(
+        (node) => node.firstChild?.textContent?.trim() === label,
+      );
+      const select = wrapper?.querySelector("select");
+      expect(select, label).toBeTruthy();
+      // No aria-label overrides the visible <label> text (WCAG 2.5.3).
+      expect(select!.hasAttribute("aria-label")).toBe(false);
+    }
   });
 
   it("moves expired decisions to their own visible group with an Expired badge", async () => {

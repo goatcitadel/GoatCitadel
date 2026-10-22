@@ -17,9 +17,8 @@ export function SystemOwnerLink({
   const owner = resolveCockpitContinuation(href, { search: window.location.search, hash: window.location.hash });
   if (owner.kind !== "native")
     return (
-      <span role="status" className="text-xs text-fg-muted">
-        This page is not available here
-      </span>
+      // Static text, not an outcome: no live region and no link role.
+      <span className="text-xs text-fg-muted">This page is not available here</span>
     );
   return (
     <NativeOwnerLink

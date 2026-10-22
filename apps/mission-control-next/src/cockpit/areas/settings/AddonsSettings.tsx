@@ -134,7 +134,7 @@ export function AddonsSettings() {
               <h4 className="break-words text-md font-semibold">{selected.addon.label}</h4>
               <p className="break-words text-sm text-fg-secondary">{selected.addon.description}</p>
               <AddonEvidence status={selected} />
-              <div aria-label="Add-on lifecycle actions" className="flex flex-wrap gap-2">
+              <div role="group" aria-label="Add-on lifecycle actions" className="flex flex-wrap gap-2">
                 {ADDON_ACTIONS.map((action) => (
                   <Button
                     key={action}

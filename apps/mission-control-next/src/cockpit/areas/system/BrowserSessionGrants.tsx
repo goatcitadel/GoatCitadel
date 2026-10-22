@@ -368,7 +368,7 @@ export function BrowserSessionGrants({
         {review ? (
           <div className="grid min-w-0 grid-cols-1 gap-3 text-sm wrap-anywhere">
             {review.kind === "create" && !review.request.allowedHosts.length ? (
-              <Callout tone="warning">
+              <Callout announce={false} tone="warning">
                 <RiskBadge risk="danger" /> This grant covers every host. {review.request.actorId} can use this session
                 on any site within its scopes.
               </Callout>

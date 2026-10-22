@@ -71,10 +71,16 @@ it("uses the existing evidence list and selects details through native navigatio
   expect(host.textContent).toContain("Session evidence");
   expect(host.textContent).toContain("Owner conversation");
   expect(fixture.control).not.toHaveBeenCalled();
-  act(() => host.querySelector<HTMLButtonElement>('[aria-label="Inspect Owner conversation"]')!.click());
+  act(() => host.querySelector<HTMLButtonElement>('[aria-label="Details: Owner conversation"]')!.click());
   expect(fixture.navigate).toHaveBeenCalledExactlyOnceWith(
     "/system/sessions?workspaceId=workspace-a&extra=keep&sessionId=session-a#control",
   );
+});
+it("session Details button: accessible name starts with the visible text", () => {
+  render();
+  const details = [...host.querySelectorAll("button")].find((node) => node.textContent?.trim() === "Details")!;
+  expect(details.getAttribute("aria-label")).toMatch(/^Details/);
+  expect(details.getAttribute("aria-label")).toBe("Details: Owner conversation");
 });
 it("binds the canonical control owner to the selected session and active workspace independently of list presence", () => {
   fixture.search += "&sessionId=older-session";

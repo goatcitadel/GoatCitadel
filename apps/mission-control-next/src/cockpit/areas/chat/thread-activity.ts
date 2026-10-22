@@ -63,6 +63,15 @@ export function projectSessionActivity(session: ChatSessionRecord): ThreadActivi
   );
 }
 
+/**
+ * A conversation row mentions only activity that is under way or needs you: working or queued, waiting, or failed.
+ * A finished, cancelled, empty or unreadable status says nothing, so the list is not a column of "Status unavailable"
+ * and "No messages yet".
+ */
+export function isNotableThreadActivity(activity?: Pick<ThreadActivity, "tone">): boolean {
+  return activity?.tone === "running" || activity?.tone === "waiting" || activity?.tone === "failed";
+}
+
 /** "Last response completed · as of 5 minutes ago" once a status is no longer known to be current. */
 export function threadActivityLabel(activity: ThreadActivity & { stale?: boolean }): string {
   if (!activity.stale || !activity.observedAt) return activity.label;

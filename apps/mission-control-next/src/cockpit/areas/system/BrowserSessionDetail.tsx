@@ -81,7 +81,7 @@ export function BrowserSessionDetail({
   const record = session.data!;
   if (record.workspaceId !== workspaceId)
     return (
-      <Callout tone="warning">
+      <Callout announce={false} tone="warning">
         This browser session belongs to {record.workspaceId ? "another workspace" : "no workspace"}, not the selected
         one. Switch workspace to manage it.
       </Callout>

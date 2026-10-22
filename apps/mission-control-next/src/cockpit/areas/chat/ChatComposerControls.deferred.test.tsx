@@ -141,11 +141,11 @@ async function render(
     ),
   );
 }
-const trigger = () => host.querySelector<HTMLButtonElement>('button[aria-label="Model and reasoning options"]')!;
+const trigger = () => host.querySelector<HTMLButtonElement>('button[aria-label$="Model and reasoning options"]')!;
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
 const provider = () => document.querySelector<HTMLSelectElement>('select[aria-label="Provider"]')!;
 const model = () => document.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!;
-const effort = () => document.querySelector<HTMLSelectElement>('select[aria-label="Thinking effort"]')!;
+const effort = () => document.querySelector<HTMLSelectElement>('select[aria-label="Effort"]')!;
 const outside = () => host.querySelector<HTMLButtonElement>("#popover-outside")!;
 async function ready() {
   await vi.waitFor(() => expect(provider()).not.toBeNull());

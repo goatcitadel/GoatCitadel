@@ -14,7 +14,7 @@ type ActiveSession = MissionThreadedRenderSurfaceInput["activeSessionSurfaceProp
 
 /**
  * Title, conversations and session actions in one row. Below the desktop rail a Conversations button opens the list
- * in a sheet. On a phone the row is only the title, Conversations and the actions menu, which also holds Projects and
+ * in a sheet; Projects opens from the list's project filter. On a phone the row is only the title, Conversations and the actions menu, which also holds Projects and
  * New conversation, so the transcript keeps the screen; an open build editor keeps its visible way back.
  */
 export function ChatSessionHeader({
@@ -46,6 +46,7 @@ export function ChatSessionHeader({
 }) {
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const rail = input.sessionRail;
+  const createConversation = () => void rail.onCreateSession();
   const title = (
     <ChatSessionTitle key={selectedSessionId} title={active?.sessionTitle ?? "Chat"} dock={input.contextDockProps} />
   );
@@ -67,7 +68,7 @@ export function ChatSessionHeader({
       className="md:hidden"
       aria-label="New conversation"
       disabled={rail.creatingSession || rail.loading}
-      onClick={() => void rail.onCreateSession()}
+      onClick={createConversation}
     >
       New
     </Button>
@@ -99,7 +100,7 @@ export function ChatSessionHeader({
           phone
             ? {
                 onOpenProjects,
-                onNewConversation: () => void rail.onCreateSession(),
+                onNewConversation: createConversation,
                 newConversationDisabled: rail.creatingSession || rail.loading,
               }
             : undefined
@@ -128,9 +129,7 @@ export function ChatSessionHeader({
         {title}
         <ChatHeaderSubtitle active={active} projectName={session?.projectName} loading={rail.loading} />
       </div>
-      <Button size="sm" onClick={onOpenProjects}>
-        Projects
-      </Button>
+      {/* Projects sits with the conversation list's project filter; a phone keeps it in the actions menu. */}
       {conversations}
       <SelectedThreadActivity session={session} />
       {newConversation}

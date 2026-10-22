@@ -163,7 +163,7 @@ describe("native first-run setup", () => {
       expect.objectContaining({ enterChatLabel: "Continue to safety", showSteps: false }),
     );
     await click("Advanced: edit provider profiles");
-    expect(api.navigate).toHaveBeenCalledWith("/settings/models?shell=cockpit#providers");
+    expect(api.navigate).toHaveBeenCalledWith("/settings/models#providers");
     await click("Guided model owner ready");
     expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Choose your safety settings");
     expect(button("Open Chat")).toBeUndefined();
@@ -276,7 +276,7 @@ describe("native first-run setup", () => {
     await render();
     const steps = [...container.querySelectorAll('nav[aria-label="Setup steps"] button')];
     expect(steps.map((step) => step.getAttribute("aria-current"))).toEqual([null, null, "step"]);
-    expect(steps[0]?.textContent).toContain("DoneChoose a modelProvider A");
+    expect(steps[0]?.textContent).toContain("DoneChoose a modelmodel-a · Provider A");
     expect(steps[1]?.textContent).toContain("Tool approval:");
     expect(steps[2]?.textContent).toContain("Current");
     expect(steps.map((step) => step.textContent)).not.toContainEqual(expect.stringContaining("Open"));

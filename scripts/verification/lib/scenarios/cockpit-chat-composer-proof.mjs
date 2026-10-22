@@ -275,7 +275,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
             patch: { thinkingLevel: prefs.thinkingLevel === "extended" ? "standard" : "extended" },
             select: () =>
               page
-                .getByRole("combobox", { name: "Thinking effort", exact: true })
+                .getByRole("combobox", { name: "Effort", exact: true })
                 .selectOption(prefs.thinkingLevel === "extended" ? "standard" : "extended"),
           });
           evidence.preferences = {
@@ -359,7 +359,8 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           );
           assert.ok(defaultPersonality, "Personality owner has no canonical default");
           await revealComposerOptions(page);
-          await page.getByRole("button", { name: "Open personality settings", exact: true }).click();
+          // The name starts with the visible personality name: "<name> · Open personality settings".
+          await page.getByRole("button", { name: /· Open personality settings$/u }).click();
           await page.waitForURL(/\/settings\/general\?shell=cockpit#work-personality/u);
           const personalityPanel = page.getByRole("region", { name: "Work personality", exact: true });
           await personalityPanel

@@ -146,7 +146,7 @@ function CandidatePlan({
             <StatusBadge status={presentChangePlanStatus(plan.status)} />
           </div>
           <p>Required action: {plan.requiredAction?.title ?? "Nothing needed from you"}</p>
-          {plan.result ? <Callout>{plan.result.summary}</Callout> : null}
+          {plan.result ? <Callout announce={false}>{plan.result.summary}</Callout> : null}
           <TechnicalDetails label="Change plan identity">
             <p>
               Plan: {plan.planId} · Revision {plan.revision}

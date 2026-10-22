@@ -250,7 +250,7 @@ function LineageLinks({ links }: { links: DurableBackgroundTaskSemanticLink[] })
           link.kind === "durable_run"
             ? `/work/runs/${encodeURIComponent(link.id)}`
             : link.kind === "chat_session"
-              ? `/chat?sessionId=${encodeURIComponent(link.id)}&shell=cockpit`
+              ? `/chat?sessionId=${encodeURIComponent(link.id)}`
               : null;
         return href ? (
           <NativeOwnerLink

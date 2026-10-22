@@ -231,6 +231,7 @@ function RecallProbeResult({ benchmark }: { benchmark: MemoryRetrievalBenchmarkR
       </p>
       <p>{benchmark.semanticCoverageNote}</p>
       {benchmark.warnings.map((warning) => (
+        // The result of the operator's own recall probe, so the warnings announce.
         <Callout key={warning} tone="warning">
           {warning}
         </Callout>

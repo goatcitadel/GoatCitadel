@@ -96,7 +96,7 @@ function LifecycleInspector({ item, workspaceId }: { item: CapabilityCatalogEntr
           available={!candidate.isError && !candidate.isFetching && !proposal.isError}
         />
       ) : !candidateId && !proposal.isFetching ? (
-        <Callout>No candidate version is linked to this catalog entry.</Callout>
+        <Callout announce={false}>No candidate version is linked to this catalog entry.</Callout>
       ) : null}
     </section>
   );
@@ -199,7 +199,7 @@ function CandidateVersions({
           : "No active version. Inactive candidates are not callable."}
       </p>
       {detail.activationBlockers.map((blocker, index) => (
-        <Callout key={index} tone="warning">
+        <Callout announce={false} key={index} tone="warning">
           {blocker}
         </Callout>
       ))}
@@ -279,7 +279,7 @@ function CandidateVersions({
             {review ? lifecycleActionLabel(review.action) : ""}: {review?.version.title}
           </p>
           <p>{review?.version.workspaceId ? "This workspace" : "Installation scope"}</p>
-          <Callout tone="warning">
+          <Callout announce={false} tone="warning">
             Activation remains subject to policy, approvals, provenance, health and grants. A pending request is never
             callable.
           </Callout>

@@ -264,7 +264,7 @@ export function SettingsArea() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search settings"
-                className="min-w-0 flex-1 self-stretch bg-transparent text-sm text-fg outline-none placeholder:text-fg-muted"
+                className="min-w-0 flex-1 self-stretch bg-transparent text-md sm:text-sm text-fg outline-none placeholder:text-fg-muted"
               />
             </label>
             {searching && searched.length === 0 ? (

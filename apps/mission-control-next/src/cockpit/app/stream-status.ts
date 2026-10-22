@@ -1,4 +1,3 @@
-import { describeRealtimeTruthUi } from "../../app/mission-control-shell-model";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import type { StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import {
@@ -43,11 +42,7 @@ export function statusNeedsAttention(tone: StatusTone, state: EventStreamConnect
 }
 
 export function presentCockpitStream(state: EventStreamConnectionState, replayRecovery = false) {
-  const truth = describeRealtimeTruthUi(state, replayRecovery ? "replay-gap" : "authoritative");
   const native = STREAM_STATUS[state];
-  return {
-    ...native,
-    label: native.label + (state === "open" && replayRecovery ? " · Catching up" : ""),
-    ariaLabel: "Live updates: " + truth.strip,
-  };
+  // The visible label is also the accessible name, so what is spoken matches what is on screen.
+  return { ...native, label: native.label + (state === "open" && replayRecovery ? " · Catching up" : "") };
 }

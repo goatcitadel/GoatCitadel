@@ -214,6 +214,23 @@ describe("CockpitShell", () => {
     });
     expect(window.location.pathname).toBe("/library");
   });
+  it("sidebar search: accessible name starts with the visible text", async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <CockpitShell streamState="open" />
+        </QueryClientProvider>,
+      );
+    });
+    const sidebar = container.querySelector('aside[aria-label="Cockpit sidebar"]')!;
+    const search = [...sidebar.querySelectorAll("button")].find((node) => node.textContent?.startsWith("Search"))!;
+    expect(search.getAttribute("aria-label")).toMatch(/^Search/);
+    // The shortcut is announced as a shortcut, not folded into the name.
+    expect(search.getAttribute("aria-keyshortcuts")).toMatch(/^(Control|Meta)\+K$/);
+    // The live-updates row shows its state as text; no hidden aria-label renames it.
+    expect(sidebar.querySelector('[data-stream-state="open"]')?.hasAttribute("aria-label")).toBe(false);
+    expect(sidebar.querySelector('[data-stream-state="open"]')?.textContent).toContain("Updates connected");
+  });
   it("shows a prominent Gateway outage without claiming an SSE retry is an outage", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () =>

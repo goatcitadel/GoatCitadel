@@ -135,7 +135,7 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
               togglePin={() => pins.togglePinned(selected.projectId)}
             />
           ) : !projects.isPending && !projects.error ? (
-            <Callout tone="warning">
+            <Callout tone="warning" announce={false}>
               Project unavailable in this scope. It may be missing, unauthorized, or outside the loaded list. Refresh or
               return to all projects; the requested URL is preserved.
             </Callout>
@@ -157,7 +157,7 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <div aria-label="Project views" className="flex flex-wrap gap-2">
+          <div role="group" aria-label="Project views" className="flex flex-wrap gap-2">
             {PROJECT_FILTER_VIEWS.map((view) => (
               <Button
                 key={view.id}

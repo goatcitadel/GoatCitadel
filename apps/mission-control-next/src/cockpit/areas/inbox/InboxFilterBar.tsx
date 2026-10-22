@@ -36,7 +36,6 @@ export function InboxFilterBar({
         <label className="block text-xs text-fg-muted">
           Kind
           <select
-            aria-label="Filter loaded items by kind"
             value={filters.kind}
             onChange={(event) => onChange({ ...filters, kind: event.target.value as InboxFilters["kind"] })}
             className={`block ${SELECT_CLASS}`}
@@ -52,7 +51,6 @@ export function InboxFilterBar({
         <label className="block text-xs text-fg-muted">
           Risk
           <select
-            aria-label="Filter loaded items by risk"
             value={filters.risk}
             onChange={(event) => onChange({ ...filters, risk: event.target.value as InboxFilters["risk"] })}
             className={`block ${SELECT_CLASS}`}

@@ -175,17 +175,14 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
                 : "This event does not establish a completed Knowledge write."}
             </p>
             {event.sessionId ? (
-              <NativeOwnerLink
-                scope={access.identity}
-                href={"/chat?sessionId=" + encodeURIComponent(event.sessionId) + "&shell=cockpit"}
-              >
+              <NativeOwnerLink scope={access.identity} href={"/chat?sessionId=" + encodeURIComponent(event.sessionId)}>
                 Open source conversation
               </NativeOwnerLink>
             ) : null}
             {event.approvalId ? (
               <NativeOwnerLink
                 scope={access.identity}
-                href={"/inbox?approvalId=" + encodeURIComponent(event.approvalId) + "&shell=cockpit"}
+                href={"/inbox?approvalId=" + encodeURIComponent(event.approvalId)}
               >
                 Inspect copy approval
               </NativeOwnerLink>

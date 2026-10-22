@@ -137,7 +137,7 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
                   ) : null}
                   <div className="mt-3 flex flex-wrap gap-3 text-xs">
                     <NativeOwnerLink
-                      href={`/work/runs/${encodeURIComponent(task.childRunId)}?shell=cockpit`}
+                      href={`/work/runs/${encodeURIComponent(task.childRunId)}`}
                       scope={[
                         active.workspaceId,
                         active.selectedSessionId,

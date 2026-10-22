@@ -68,4 +68,19 @@ describe("shared cockpit conversation filters", () => {
     expect(owner.onSelectFolderId).not.toHaveBeenCalled();
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
+  it("accessible name starts with the visible text", async () => {
+    await act(async () => root.render(<ChatConversationFilters rail={rail()} />));
+    const project = container.querySelector("select")!;
+    expect(project.closest("label")?.firstChild?.textContent?.trim()).toBe("Project");
+    expect(project.getAttribute("aria-label")).toMatch(/^Project/);
+    expect(container.querySelector("input")?.getAttribute("aria-label")).toMatch(/^Search/);
+  });
+  it("opens Projects from beside the project filter", async () => {
+    const onOpenProjects = vi.fn();
+    await act(async () => root.render(<ChatConversationFilters rail={rail()} onOpenProjects={onOpenProjects} />));
+    const projects = [...container.querySelectorAll("button")].find((button) => button.textContent === "Projects")!;
+    expect(projects.parentElement).toBe(container.querySelector("select")!.closest("label")!.parentElement);
+    await act(async () => projects.click());
+    expect(onOpenProjects).toHaveBeenCalledOnce();
+  });
 });

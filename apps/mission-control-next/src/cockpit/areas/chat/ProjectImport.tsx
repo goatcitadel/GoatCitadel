@@ -177,7 +177,7 @@ export function ProjectImport({
               Reference: {review?.value.ref || "Repository default"} · Name:{" "}
               {review?.value.name || "Derived from source"}
             </p>
-            <Callout tone="warning">
+            <Callout tone="warning" announce={false}>
               This can copy or clone files and initialize a repository under GoatCitadel policy. Importing does not run
               project code.
             </Callout>

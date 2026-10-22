@@ -1,6 +1,7 @@
 import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { useThreadActivity } from "./use-thread-activity";
 import { ThreadRowStatus } from "./ThreadRowStatus";
+import { isNotableThreadActivity } from "./thread-activity";
 import type { MissionThreadedSessionRailData } from "@goatcitadel/threaded-surface-core";
 import { TimeText } from "../../ui/TimeText";
 import { ChatConversationFilters, type ChatProjectFilterOption } from "./ChatConversationFilters";
@@ -21,10 +22,12 @@ export function ConversationListPanel({
   projectOptions,
   inSheet = false,
   onDone,
+  onOpenProjects,
 }: {
   rail: MissionThreadedSessionRailData;
   projectOptions?: readonly ChatProjectFilterOption[];
   inSheet?: boolean;
+  onOpenProjects?: () => void;
   /** Called after a conversation is chosen or created, so the sheet can close. */
   onDone?: () => void;
 }) {
@@ -54,8 +57,20 @@ export function ConversationListPanel({
             {rail.creatingSession ? "Creating…" : "New"}
           </button>
         </div>
-        <ChatConversationFilters rail={rail} projectOptions={projectOptions} />
-        <div className="flex gap-1" aria-label="Conversation history">
+        <ChatConversationFilters
+          rail={rail}
+          projectOptions={projectOptions}
+          touch={touch}
+          onOpenProjects={
+            onOpenProjects
+              ? () => {
+                  onOpenProjects();
+                  onDone?.();
+                }
+              : undefined
+          }
+        />
+        <div role="group" className="flex gap-1" aria-label="Conversation history">
           {(["active", "archived"] as const).map((view) => (
             <button
               key={view}
@@ -95,7 +110,7 @@ export function ConversationListPanel({
                   aria-current={session.sessionId === rail.selectedSessionId ? "page" : undefined}
                   className="flex w-full items-start rounded-md p-2 text-left hover:bg-sunken aria-[current=page]:bg-sunken"
                 >
-                  {/* Two lines: the title and when; then any non-default status, the project, and the preview. */}
+                  {/* Two lines: the title and when; then a running, waiting or failed status, the project, and the preview. */}
                   <span className="min-w-0 flex-1">
                     <span className="flex min-w-0 items-baseline gap-2">
                       <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
@@ -104,9 +119,9 @@ export function ConversationListPanel({
                       <TimeText value={session.lastActivityAt} className="shrink-0 text-xs text-fg-muted" />
                     </span>
                     <span className="flex min-w-0 items-center gap-1 text-xs text-fg-muted">
-                      {activity[session.sessionId]?.tone === "done" ? null : (
+                      {isNotableThreadActivity(activity[session.sessionId]) ? (
                         <ThreadRowStatus record={activity[session.sessionId]} />
-                      )}
+                      ) : null}
                       {rowContext(session) ? <span className="shrink-0">{rowContext(session)}</span> : null}
                       {session.lastMessagePreview ? (
                         <span className="min-w-0 truncate text-fg-secondary">{session.lastMessagePreview}</span>

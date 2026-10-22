@@ -255,7 +255,7 @@ function LibraryFileTemplatesContent({
         <div className="grid gap-3">
           <p className="text-sm text-fg">Template: {review?.template.title}</p>
           <p className="break-words text-sm text-fg">Target: {review?.path}</p>
-          <Callout tone="warning">
+          <Callout announce={false} tone="warning">
             This writes an installation shared file and may replace existing content at this path. Cancel makes no
             request.
           </Callout>

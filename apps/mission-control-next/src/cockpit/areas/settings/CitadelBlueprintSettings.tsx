@@ -241,6 +241,7 @@ export function CitadelBlueprintSettings({ citadelId }: { citadelId: string }) {
 function BlueprintSummary({ blueprint }: { blueprint: CitadelBlueprint }) {
   return (
     <div
+      role="group"
       aria-label="Validated Blueprint summary"
       className="space-y-2 rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary"
     >

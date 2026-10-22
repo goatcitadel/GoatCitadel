@@ -120,7 +120,7 @@ function ScopeSelection({
             setSearch(event.target.value);
             setLimit(30);
           }}
-          className="mt-1 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent"
+          className="mt-1 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-md sm:text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent"
         />
       </label>
       {items.length ? (

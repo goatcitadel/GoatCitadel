@@ -260,10 +260,11 @@ it("guards exact run evidence navigation while retaining the real draft and unkn
   const assign = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
   const reload = vi.spyOn(window.location, "reload").mockImplementation(() => undefined);
   const push = vi.spyOn(window.history, "pushState");
-  const href = "/work/runs/child%2Fone%3Fdetail?shell=cockpit";
+  // The source names the bare route; the owner link renders it with the cockpit shell, as every cockpit link does.
+  const href = "/work/runs/child%2Fone%3Fdetail";
   const evidence = container.querySelector<HTMLAnchorElement>("a")!;
   expect(evidence.textContent).toBe("Open run details");
-  expect(evidence.getAttribute("href")).toBe(href);
+  expect(evidence.getAttribute("href")).toBe(`${href}?shell=cockpit`);
   await act(async () => {
     evidence.click();
   });
@@ -278,7 +279,7 @@ it("guards exact run evidence navigation while retaining the real draft and unkn
     evidence.click();
   });
   await click(dialog(), "Keep draft and close");
-  expect(window.location.pathname + window.location.search).toBe(href);
+  expect(window.location.pathname + window.location.search).toBe(`${href}?shell=cockpit`);
   expect(push).toHaveBeenCalledTimes(1);
   expect(draft.value.text).toBe("Retained draft");
   expect(draft.isDirty).toBe(true);

@@ -118,7 +118,7 @@ export function SchedulerReviewQueue({
         </Callout>
       ) : null}
       {settings.isSuccess && !enabled ? (
-        <Callout tone="warning">
+        <Callout announce={false} tone="warning">
           Scheduler review is switched off in runtime settings on this installation. No review items can be shown.
         </Callout>
       ) : null}

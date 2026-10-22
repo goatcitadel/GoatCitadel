@@ -44,7 +44,7 @@ export function MemoryMaintenanceView({
   return (
     <>
       {!data?.maintenanceEnabled || !data.maintenanceDurableReady ? (
-        <Callout>
+        <Callout announce={false}>
           Memory maintenance needs the maintenance and resumable runs features turned on. Controls stay locked.
         </Callout>
       ) : (
@@ -108,7 +108,7 @@ export function MemoryMaintenanceView({
               <NativeOwnerLink
                 className="inline-flex min-h-11 max-w-full items-center wrap-anywhere"
                 scope={ownerScope}
-                href={"/work/runs/" + encodeURIComponent(run.durableRunId) + "?shell=cockpit"}
+                href={"/work/runs/" + encodeURIComponent(run.durableRunId)}
               >
                 Open maintenance run
               </NativeOwnerLink>

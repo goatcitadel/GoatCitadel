@@ -36,7 +36,7 @@ export function PersonalityEditor({ control }: { control: Controller }) {
         title={c.editorMode === "new" ? "New custom personality" : "Edit saved personality"}
         description="Edit the saved Work voice and framing. Policy, approvals, tools, privacy and memory rules remain authoritative."
       >
-        <div className="space-y-3" aria-label="Personality editor">
+        <div className="space-y-3" role="group" aria-label="Personality editor">
           {c.isDirty ? (
             <p role="status" className="text-sm text-status-waiting">
               Unsaved personality draft

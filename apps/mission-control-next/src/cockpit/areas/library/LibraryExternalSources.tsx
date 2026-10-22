@@ -36,7 +36,9 @@ function ExternalSources({ workspaceId }: { workspaceId: string }) {
   });
   if (query.isError && isExternalSourceCapabilityAbsent(query.error))
     return (
-      <Callout>External sources are unavailable in this runtime. Registration and imports remain disabled.</Callout>
+      <Callout announce={false}>
+        External sources are unavailable in this runtime. Registration and imports remain disabled.
+      </Callout>
     );
   return (
     <section
@@ -59,7 +61,7 @@ function ExternalSources({ workspaceId }: { workspaceId: string }) {
           workspaceId={workspaceId}
           onRegistered={(id) => {
             void query.refetch();
-            route.navigate(`/library/knowledge?sourceId=${encodeURIComponent(id)}&shell=cockpit`);
+            route.navigate(`/library/knowledge?sourceId=${encodeURIComponent(id)}`);
           }}
         />
       ) : null}
@@ -79,9 +81,7 @@ function ExternalSources({ workspaceId }: { workspaceId: string }) {
               <Button
                 size="sm"
                 className="min-w-0 max-w-full"
-                onClick={() =>
-                  route.navigate(`/library/knowledge?sourceId=${encodeURIComponent(item.sourceId)}&shell=cockpit`)
-                }
+                onClick={() => route.navigate(`/library/knowledge?sourceId=${encodeURIComponent(item.sourceId)}`)}
               >
                 Inspect {item.label}
               </Button>
@@ -91,7 +91,9 @@ function ExternalSources({ workspaceId }: { workspaceId: string }) {
       {detail.isFetching ? <p role="status">Reading registered source…</p> : null}
       {detail.error ? <Callout tone="error">{describeApiError(detail.error).summary}</Callout> : null}
       {detail.data && detail.data.source.workspaceId !== workspaceId ? (
-        <Callout tone="error">This source does not belong to the current workspace.</Callout>
+        <Callout announce={false} tone="error">
+          This source does not belong to the current workspace.
+        </Callout>
       ) : null}
       {detail.data?.source.workspaceId === workspaceId ? (
         <SourceOperations

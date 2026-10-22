@@ -154,7 +154,7 @@ export async function runCockpitNotificationRoutingProof({ context, browser, sta
         await panel.getByText(`Destination ${label}: active, revision 1, confirmed by the Gateway.`, { exact: true }).waitFor();
         stage = "create reviewed future-event rule";
         await panel.getByRole("button", { name: "New rule", exact: true }).click();
-        await panel.getByLabel("Notification rule label", { exact: true }).fill(ruleLabel);
+        await panel.getByLabel("Rule label", { exact: true }).fill(ruleLabel);
         const events = panel.getByRole("group", { name: "Events", exact: true });
         for (const box of await events.getByRole("checkbox").all()) await box.uncheck();
         await events.getByRole("checkbox", { name: "turn.failed", exact: true }).check();

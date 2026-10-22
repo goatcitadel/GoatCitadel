@@ -63,11 +63,11 @@ function props(overrides: Partial<Props> = {}): Props {
 const control = (selector: string) => container.querySelector(selector);
 /** Model and effort controls live in the options popover, which renders in a portal. */
 async function openOptions() {
-  const trigger = control('button[aria-label="Model and reasoning options"]') as HTMLButtonElement;
+  const trigger = control('button[aria-label$="Model and reasoning options"]') as HTMLButtonElement;
   await act(async () => trigger.click());
   await vi.waitFor(() => expect(document.querySelector('select[aria-label="Provider"]')).not.toBeNull());
 }
-const effortSelect = () => document.querySelector('select[aria-label="Thinking effort"]') as HTMLSelectElement;
+const effortSelect = () => document.querySelector('select[aria-label="Effort"]') as HTMLSelectElement;
 
 describe("Chat composer controls", () => {
   it.each([false, true])("keeps modes visible and folds model controls at phone=%s", async (phone) => {
@@ -76,11 +76,11 @@ describe("Chat composer controls", () => {
     await act(async () => root.render(<ChatComposerControls props={input} />));
     expect(control('select[aria-label="Provider"]')).toBeNull();
     expect(control('select[aria-label="Web search"]')).not.toBeNull();
-    const trigger = control('button[aria-label="Model and reasoning options"]') as HTMLButtonElement;
+    const trigger = control('button[aria-label$="Model and reasoning options"]') as HTMLButtonElement;
     expect(trigger).not.toBeNull();
     await openOptions();
     expect(document.querySelector('select[aria-label="Provider"]')).not.toBeNull();
-    expect(document.querySelector('select[aria-label="Thinking effort"]')).not.toBeNull();
+    expect(document.querySelector('select[aria-label="Effort"]')).not.toBeNull();
     const plan = [...container.querySelectorAll("button")].find((button) => button.textContent === "Plan first")!;
     await act(async () => plan.click());
     expect(input.onTogglePlanningMode).toHaveBeenCalledOnce();
@@ -124,6 +124,35 @@ describe("Chat composer controls", () => {
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(input.onSetWebMode).toHaveBeenCalledWith("off");
+  });
+
+  it("accessible name starts with the visible text", async () => {
+    await act(async () =>
+      root.render(<ChatComposerControls props={props({ activePersonality: { name: "Concise" } } as Partial<Props>)} />),
+    );
+    const trigger = control('button[aria-label$="Model and reasoning options"]') as HTMLButtonElement;
+    expect(trigger.getAttribute("aria-label")).toMatch(new RegExp(`^${trigger.textContent!.trim()} · `));
+    expect(trigger.getAttribute("aria-label")).toMatch(/^stub-chat/);
+    expect(control('[role="group"][aria-label="Composer controls"]')).not.toBeNull();
+    await openOptions();
+    expect(effortSelect().closest("label")?.firstChild?.textContent?.trim()).toBe("Effort");
+    expect(effortSelect().getAttribute("aria-label")).toMatch(/^Effort/);
+    const personality = document.querySelector<HTMLButtonElement>('button[aria-label$="Open personality settings"]')!;
+    expect(personality.textContent).toBe("Concise");
+    expect(personality.getAttribute("aria-label")).toMatch(/^Concise/);
+  });
+
+  it("explains Plan first and Review answer in visible text in the options popover (CH-R07)", async () => {
+    await act(async () => root.render(<ChatComposerControls props={props()} />));
+    for (const label of ["Plan first", "Review answer"]) {
+      const toggle = [...container.querySelectorAll("button")].find((button) => button.textContent === label)!;
+      expect(toggle.className).toContain("min-h-8");
+    }
+    await openOptions();
+    const help = document.querySelector('[role="dialog"] dl, [data-radix-popper-content-wrapper] dl')!;
+    expect(help.textContent).toContain("Plan first: Plan before acting.");
+    expect(help.textContent).toContain("Review answer: Request review of the answer");
+    expect(help.closest(".sr-only")).toBeNull();
   });
 });
 

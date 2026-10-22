@@ -174,9 +174,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
                 onClick={() =>
                   route.requestTransition((review) => {
                     if (review.isCurrent())
-                      review.navigate(
-                        `/library/agents?view=catalog&entryId=${encodeURIComponent(item.entryId)}&shell=cockpit`,
-                      );
+                      review.navigate(`/library/agents?view=catalog&entryId=${encodeURIComponent(item.entryId)}`);
                   })
                 }
               >
@@ -201,7 +199,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
             {AGENT_PARSE_STATUS[selected.definition.parseStatus]}
           </p>
           {selected.definition.parseWarnings.map((warning, index) => (
-            <Callout key={index} tone="warning">
+            <Callout announce={false} key={index} tone="warning">
               {warning}
             </Callout>
           ))}
@@ -249,7 +247,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
               ? `${review.repoUrl || "Configured source"} · ${review.ref || "Default reference"}`
               : `${review?.entry.definition.frontmatter.name} → ${review ? AGENT_CATALOG_STATE[review.state] : ""}`}
           </p>
-          <Callout tone="warning">
+          <Callout announce={false} tone="warning">
             Imported definitions are untrusted until their lifecycle and parser checks permit use. Catalog state is not
             proof of session activation.
           </Callout>

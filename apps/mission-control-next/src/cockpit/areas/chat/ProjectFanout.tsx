@@ -39,7 +39,9 @@ export function ProjectFanout({
       {owner.message ? <Callout>{owner.message}</Callout> : null}
       {owner.loading ? <p role="status">Reading project grants…</p> : null}
       {project.lifecycleStatus !== "active" ? (
-        <Callout tone="warning">Archived projects cannot authorize automatic fan-out.</Callout>
+        <Callout tone="warning" announce={false}>
+          Archived projects cannot authorize automatic fan-out.
+        </Callout>
       ) : null}
       <Button disabled={owner.busy || owner.loading} onClick={() => void owner.load()}>
         Refresh grants

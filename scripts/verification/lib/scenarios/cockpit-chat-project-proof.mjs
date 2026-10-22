@@ -194,7 +194,7 @@ export async function runCockpitChatProjectProof({ context, browser, stack, cita
           stage = "select exact project";
           let filters = await openFilters();
           await filters
-            .getByRole("combobox", { name: "Filter by project", exact: true })
+            .getByRole("combobox", { name: "Project", exact: true })
             .selectOption(projects[0].projectId);
           await closeFilters();
           await assertVisible(baseline.items, projects[0].projectId);

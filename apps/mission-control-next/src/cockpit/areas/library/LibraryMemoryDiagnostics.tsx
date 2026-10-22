@@ -106,12 +106,14 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
       {memory.loading ? <p role="status">Reading memory diagnostics…</p> : null}
       {memory.error ? <Callout tone="error">{memory.error}</Callout> : null}
       {data && !data.memoryAdminEnabled ? (
-        <Callout>Memory administration is {ADMIN_STATE[data.memoryAdminState]}. Changes stay locked.</Callout>
+        <Callout announce={false}>
+          Memory administration is {ADMIN_STATE[data.memoryAdminState]}. Changes stay locked.
+        </Callout>
       ) : null}
       {Object.entries(data?.sectionErrors ?? {})
         .filter(([, value]) => value)
         .map(([key, value]) => (
-          <Callout key={key} tone="warning">
+          <Callout announce={false} key={key} tone="warning">
             {key.replace(/([A-Z])/g, " $1")}: {value}
           </Callout>
         ))}

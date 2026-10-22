@@ -23,7 +23,7 @@ export function projectWorkHistory(
         kind: "conversation",
         title: session.title?.trim() || "Untitled conversation",
         at: session.lastActivityAt || session.updatedAt,
-        href: `/chat?sessionId=${encodeURIComponent(session.sessionId)}&shell=cockpit`,
+        href: `/chat?sessionId=${encodeURIComponent(session.sessionId)}`,
       }),
     );
   const scopedEvents = events.filter((event) => event.links?.workspaceId === workspaceId);
@@ -34,7 +34,7 @@ export function projectWorkHistory(
       title: describeActivity(event).sentence,
       at: event.timestamp,
       ...(event.links?.sessionId
-        ? { href: `/chat?sessionId=${encodeURIComponent(event.links.sessionId)}&shell=cockpit` }
+        ? { href: `/chat?sessionId=${encodeURIComponent(event.links.sessionId)}` }
         : event.links?.runId
           ? { href: `/work/runs/${encodeURIComponent(event.links.runId)}` }
           : {}),

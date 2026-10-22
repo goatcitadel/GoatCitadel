@@ -14,7 +14,11 @@ export function LibraryImportProvenance({
   workspaceId: string;
 }) {
   if (detail.intent.workspaceId !== workspaceId || detail.plan.workspaceId !== workspaceId)
-    return <Callout tone="warning">Import provenance is not available in this workspace.</Callout>;
+    return (
+      <Callout announce={false} tone="warning">
+        Import provenance is not available in this workspace.
+      </Callout>
+    );
   return (
     <section className="grid min-w-0 max-w-full grid-cols-1 gap-3 wrap-anywhere" aria-label="Import provenance">
       <h3 className="font-semibold">Import provenance</h3>
@@ -58,7 +62,7 @@ export function LibraryImportProvenance({
         Attach an eligible item read-only from Chat. Chat checks separately whether this conversation and you may use
         it. Saving a lasting Knowledge copy needs its own approval.
       </p>
-      <NativeOwnerLink scope={workspaceId} href="/chat?shell=cockpit">
+      <NativeOwnerLink scope={workspaceId} href="/chat">
         Open Chat to attach imported source
       </NativeOwnerLink>
     </section>

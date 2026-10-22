@@ -189,7 +189,9 @@ function AgentEditor({
         do not grant tool access.
       </p>
       {!editable ? (
-        <Callout>Profile fields are read-only. Archive and restore remain governed by GoatCitadel.</Callout>
+        <Callout announce={false}>
+          Profile fields are read-only. Archive and restore remain governed by GoatCitadel.
+        </Callout>
       ) : null}
       {stale ? (
         <Callout tone="warning">The profile changed. Discard your draft to load the latest version.</Callout>
@@ -280,7 +282,7 @@ function AgentEditor({
           <p>
             {review?.draft.name} · {review?.action}
           </p>
-          <Callout tone="warning">
+          <Callout announce={false} tone="warning">
             {review?.action === "archive"
               ? "Archive removes this profile from active selection while retaining its records."
               : "GoatCitadel validates the role, duplicate names, profile fields and tool defaults. Existing tool grants remain authoritative."}

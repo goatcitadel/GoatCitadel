@@ -13,13 +13,21 @@ type FilterRail = Pick<
   | "onSearchChange"
 >;
 
-/** Presentation for the shared Chat controller's existing project, folder and search state. */
+/**
+ * Presentation for the shared Chat controller's existing project, folder and search state. Projects opens beside the
+ * project filter, where the conversation list's scope is chosen.
+ */
 export function ChatConversationFilters({
   rail,
   projectOptions = [],
+  onOpenProjects,
+  touch = "",
 }: {
   rail: FilterRail;
   projectOptions?: readonly ChatProjectFilterOption[];
+  onOpenProjects?: () => void;
+  /** Extra classes for 44px targets inside the phone sheet. */
+  touch?: string;
 }) {
   const [foldersOpen, setFoldersOpen] = useState(rail.selectedFolderId !== "all" && rail.selectedFolderId != null);
   const projectId = rail.selectedProjectId ?? "all";
@@ -30,24 +38,35 @@ export function ChatConversationFilters({
     !["all", "none"].includes(folderId) && !rail.availableFolders.some((folder) => folder.folderId === folderId);
   return (
     <div className="space-y-2">
-      <label className="block text-xs text-fg-muted">
-        Project
-        <select
-          aria-label="Filter by project"
-          value={projectId}
-          onChange={(event) => rail.onSelectProjectId(event.target.value)}
-          className="mt-1 h-8 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
-        >
-          <option value="all">All projects</option>
-          <option value="none">Unassigned</option>
-          {missingProject ? <option value={projectId}>Current project · unavailable in this catalog</option> : null}
-          {projects.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="flex items-end gap-2">
+        <label className="block min-w-0 flex-1 text-xs text-fg-muted">
+          Project
+          <select
+            aria-label="Project"
+            value={projectId}
+            onChange={(event) => rail.onSelectProjectId(event.target.value)}
+            className="mt-1 h-8 w-full rounded-md border border-line-control bg-canvas px-2 text-md text-fg sm:text-sm"
+          >
+            <option value="all">All projects</option>
+            <option value="none">Unassigned</option>
+            {missingProject ? <option value={projectId}>Current project · unavailable in this catalog</option> : null}
+            {projects.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {onOpenProjects ? (
+          <button
+            type="button"
+            onClick={onOpenProjects}
+            className={`h-8 shrink-0 rounded-md border border-line-control px-2 text-xs font-medium text-accent hover:border-accent ${touch}`}
+          >
+            Projects
+          </button>
+        ) : null}
+      </div>
       {rail.availableFolders.length || folderId !== "all" ? (
         <details
           className="rounded-md border border-line-subtle bg-canvas"
@@ -99,7 +118,7 @@ export function ChatConversationFilters({
           value={rail.search}
           onChange={(event) => rail.onSearchChange(event.target.value)}
           placeholder="Find a conversation"
-          className="mt-1 h-8 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
+          className="mt-1 h-8 w-full rounded-md border border-line-control bg-canvas px-2 text-md text-fg sm:text-sm"
         />
       </label>
     </div>

@@ -74,6 +74,50 @@ describe("ThreadList status for searched conversations", () => {
     expect(rows[0]?.textContent).toContain("Deploy plan");
     expect(rows[0]?.textContent).toContain("Waiting on you");
     expect(rows[0]?.textContent).not.toContain("Status unavailable");
-    expect(rows[1]?.textContent).toContain("Status unavailable");
+    // A row without a readable status says nothing rather than "Status unavailable".
+    expect(rows[1]?.textContent).not.toContain("Status unavailable");
+  });
+
+  it("shows status only for running, waiting and failed rows", async () => {
+    const counts = { queued: 0, running: 0, waiting_for_tool: 0, waiting_for_approval: 0, waiting_for_user_input: 0 };
+    const observedAt = "2026-10-05T10:00:00.000Z";
+    const latest = (status: string) => ({ turnId: `turn-${status}`, status, startedAt: "2026-10-05T09:59:00.000Z" });
+    const session = (sessionId: string, activity?: object) =>
+      ({ sessionId, lifecycleStatus: "active", activity }) as unknown as ChatSessionRecord;
+    const sessions = [
+      session("running", { observedAt, latestTurn: null, turnCounts: { ...counts, running: 1 } }),
+      session("waiting", { observedAt, latestTurn: null, turnCounts: { ...counts, waiting_for_approval: 1 } }),
+      session("failed", { observedAt, latestTurn: latest("failed"), turnCounts: counts }),
+      session("completed", { observedAt, latestTurn: latest("completed"), turnCounts: counts }),
+      session("cancelled", { observedAt, latestTurn: latest("cancelled"), turnCounts: counts }),
+      session("empty", { observedAt, latestTurn: null, turnCounts: counts }),
+      session("unknown"),
+    ];
+    const rail = {
+      missionSessions: sessions,
+      availableFolders: [],
+      selectedFolderId: "all",
+      selectedProjectId: "all",
+      selectedSessionId: null,
+      search: "",
+      historyView: "active",
+      creatingSession: false,
+      onCreateSession: vi.fn(),
+      onSearchChange: vi.fn(),
+      onHistoryViewChange: vi.fn(),
+      onSelectFolderId: vi.fn(),
+      onSelectSession: vi.fn(),
+      renderSessionLabel: (sessionId: string) => `Chat ${sessionId}`,
+    } as unknown as MissionThreadedSessionRailData;
+    await act(async () => root.render(<ThreadList rail={rail} />));
+    const rows = [...container.querySelectorAll('nav[aria-label="Conversations"] li')].map((row) => row.textContent);
+    expect(rows[0]).toContain("Working");
+    expect(rows[1]).toContain("Waiting on you");
+    expect(rows[2]).toContain("Last response failed");
+    expect(rows[3]).not.toContain("Last response completed");
+    expect(rows[4]).not.toContain("Last response cancelled");
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("Status unavailable");
+    expect(text).not.toContain("No messages yet");
   });
 });
