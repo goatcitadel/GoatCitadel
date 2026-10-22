@@ -29,6 +29,7 @@ import {
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
 import {
   executeOfficialResearchSearch,
+  isInternalInfrastructureSearchQuery,
   isOfficialResearchSearchInvocation,
   resolveOfficialSearchProviders,
   type ResolveOfficialSearchCredential,
@@ -157,6 +158,8 @@ export { BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE, BROWSER_CHROMIUM_MANU
 
 const browserSessionStates = new Map<string, { state: BrowserSessionState; lastAccess: number }>();
 const MAX_BROWSER_SESSION_STATES = 128;
+const BROWSER_SEARCH_SENSITIVE_QUERY_REFUSAL =
+  "browser.search refused: the query names internal infrastructure or a secret; remove it and search again.";
 
 export function describeBrowserSessionState(sessionId: string): BrowserSessionStateSummary {
   const entry = browserSessionStates.get(sessionId);
@@ -281,6 +284,11 @@ async function executeBrowserSearch(
       attemptedEngines: response.routing?.attemptedProviders ?? [],
       fallbackUsed: response.routing?.fallbackUsed ?? false,
     };
+  }
+  // The official path applies its own stricter check; native and Firecrawl search
+  // refuse here, before any page or request leaves the machine.
+  if (isInternalInfrastructureSearchQuery(query)) {
+    throw new Error(BROWSER_SEARCH_SENSITIVE_QUERY_REFUSAL);
   }
   const requestedEngine = normalizeSearchEngine(rawEngine) ?? "auto";
   const requestedReadBackend = requestedBackend === "firecrawl" ? "firecrawl" : "native";

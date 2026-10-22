@@ -4,7 +4,9 @@ import {
   canonicalizeResearchResultUrl,
   executeOfficialResearchSearch,
   getOfficialSearchCredentialEnvAliases,
+  isInternalInfrastructureSearchQuery,
   isOfficialResearchSearchInvocation,
+  isSensitiveOfficialSearchQuery,
   resolveOfficialSearchProviders,
 } from "./research-search-official-providers.js";
 
@@ -422,5 +424,35 @@ describe("official research search providers", () => {
     expect(isOfficialResearchSearchInvocation({ backend: "firecrawl", providers: ["parallel"] })).toBe(false);
     expect(isOfficialResearchSearchInvocation({ backend: "ollama", providers: ["brave"] })).toBe(false);
     expect(isOfficialResearchSearchInvocation({ engines: ["brave"] })).toBe(false);
+  });
+});
+
+describe("isInternalInfrastructureSearchQuery", () => {
+  it.each([
+    "db01.corp outage",
+    "169.254.169.254 metadata",
+    "metadata.google.internal token endpoint",
+    "build.internal status",
+    "nas.home.arpa unreachable",
+    "printer.lan driver",
+    "why is my api_key=abcd1234efgh5678 rejected",
+    "sk-proj-abcdefghijklmnopqrstuvwx invalid",
+  ])("refuses %s", (query) => {
+    expect(isInternalInfrastructureSearchQuery(query)).toBe(true);
+  });
+
+  it.each([
+    "192.168.1.1 admin login",
+    "localhost:3000 not loading react",
+    "127.0.0.1 refused connection",
+    "10.0.0.1 default gateway",
+    "mail.corp.example.com mx record",
+  ])("allows %s", (query) => {
+    expect(isInternalInfrastructureSearchQuery(query)).toBe(false);
+  });
+
+  it("stays narrower than the official-provider check", () => {
+    expect(isSensitiveOfficialSearchQuery("192.168.1.1 admin login")).toBe(true);
+    expect(isSensitiveOfficialSearchQuery("localhost:3000 not loading react")).toBe(true);
   });
 });
