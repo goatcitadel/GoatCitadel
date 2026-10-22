@@ -7933,6 +7933,57 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(result.turnTrace.status).not.toBe("running");
   });
 
+  it("never retries a refused search on another engine or forwards it to MCP", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(toolCallCompletion("db01.corp outage"))
+      .mockResolvedValue({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: "I could not search for that." } }],
+      });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockImplementation(async () => {
+        throw new Error(
+          "browser.search refused: the query names internal infrastructure or a secret; remove it and search again.",
+        );
+      });
+    const invokeMcpTool = vi.fn<(request: McpInvokeRequest) => Promise<McpInvokeResponse>>().mockResolvedValue({
+      ok: true,
+      output: { contentText: "MCP search results" },
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+      invokeMcpTool,
+      getSearchEngineOrder: () => ["duckduckgo", "bing", "google"],
+      listMcpBrowserFallbackTargets: () => [
+        { serverId: "srv-search", label: "Search MCP", tier: "browser_mcp" as const, searchToolName: "mcp_search" },
+      ],
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-refused-search-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-refused-search-1",
+      content: "What do you know about the db01.corp outage?",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "What do you know about the db01.corp outage?" }],
+    });
+
+    const searchCalls = invokeTool.mock.calls.filter(([request]) => request.toolName === "browser.search");
+    expect(searchCalls).toHaveLength(1);
+    expect(invokeMcpTool).not.toHaveBeenCalled();
+  });
+
   it("stops alternate-URL retries when abort signal fires mid-fallback", async () => {
     const controller = new AbortController();
     let navigateCallCount = 0;

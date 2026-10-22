@@ -1,4 +1,5 @@
 import { normalizeWebSearchEngineOrder } from "@goatcitadel/contracts";
+import { isInternalInfrastructureSearchQuery } from "@goatcitadel/policy-engine";
 import type {
   ChatToolRunRecord,
   McpInvokeRequest,
@@ -217,6 +218,16 @@ export async function tryAlternateBuiltinBrowserResult(
 }
 
 const NATIVE_SEARCH_TOTAL_FAILURE_MARKER = "browser.search failed:";
+const SEARCH_QUERY_REFUSAL_MARKER = "browser.search refused:";
+
+/**
+ * True when native or Firecrawl search refused the query itself (internal infrastructure or a
+ * secret). The policy engine may prefix the message with "execution error: ", so it is matched
+ * anywhere. A refused query must never be retried on another engine or forwarded to MCP.
+ */
+export function isSearchQueryRefusal(text: string | undefined): boolean {
+  return typeof text === "string" && text.includes(SEARCH_QUERY_REFUSAL_MARKER);
+}
 const NATIVE_SEARCH_ENGINE_FAILURE_PATTERN = /(?:^|[\s|:])(duckduckgo|bing|google):/g;
 
 /**
@@ -315,6 +326,19 @@ async function tryAlternateBuiltinSearchEngines(
         ? await input.invokeTool(request)
         : await invokeTurnTool(deps, input.turnInput, request);
       if (result.outcome !== "executed") {
+        if (isSearchQueryRefusal(result.policyReason)) {
+          input.fallbackChain.push(
+            buildBrowserFallbackChainEntry({
+              toolName: "browser.search",
+              engineTier: "builtin",
+              engineLabel: `Built-in browser (${engine})`,
+              error: result.policyReason,
+              browserFailureClass: "runtime_error",
+              status: "failed",
+            }),
+          );
+          return undefined;
+        }
         recordWalkedEngines(result.policyReason);
         input.fallbackChain.push(
           buildBrowserFallbackChainEntry({
@@ -360,6 +384,9 @@ async function tryAlternateBuiltinSearchEngines(
           status: "failed",
         }),
       );
+      if (isSearchQueryRefusal((error as Error).message)) {
+        return undefined;
+      }
     }
   }
   return undefined;
@@ -379,6 +406,10 @@ export async function tryBrowserFallbackAcrossMcpTiers(
   input: McpBrowserFallbackInput,
   deps: BrowserFallbackExecutorDeps,
 ): Promise<{ result: Record<string, unknown> } | undefined> {
+  // Defense in depth: a query native search would refuse never leaves the machine through MCP either.
+  if (input.toolName === "browser.search" && isInternalInfrastructureSearchQuery(String(input.args.query ?? ""))) {
+    return undefined;
+  }
   const targets = (await deps.listMcpBrowserFallbackTargets?.()) ?? [];
   for (const target of targets) {
     if (input.turnInput.signal?.aborted) {

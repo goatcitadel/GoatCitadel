@@ -181,6 +181,7 @@ import {
 } from "./chat-turn-agent-runner/tool-call-protocol.js";
 import { applyCompletionFailureClearing } from "./chat-turn-agent-runner/completion-failure-clearing.js";
 import {
+  isSearchQueryRefusal,
   tryAlternateBuiltinBrowserResult,
   tryBrowserFallbackAcrossMcpTiers,
   type BrowserFallbackExecutorDeps,
@@ -8694,22 +8695,26 @@ export class ChatTurnAgentRunner {
         }
       }
     }
-    const alternateBuiltinResult = await tryAlternateBuiltinBrowserResult(
-      {
-        created: input.created,
-        turnInput: input.turnInput,
-        turnId: input.turnId,
-        toolName: input.toolName,
-        args: input.args,
-        fallbackChain,
-        classification,
-        normalizedResult,
-        error: input.error,
-        turnBudgetDeadline: input.turnBudgetDeadline,
-        invokeTool: input.invokeFallbackTool,
-      },
-      this.browserFallbackDeps,
-    );
+    // A refused search query is final: no other engine and no MCP server may receive it.
+    const searchQueryRefused = input.toolName === "browser.search" && isSearchQueryRefusal(input.error);
+    const alternateBuiltinResult = searchQueryRefused
+      ? undefined
+      : await tryAlternateBuiltinBrowserResult(
+          {
+            created: input.created,
+            turnInput: input.turnInput,
+            turnId: input.turnId,
+            toolName: input.toolName,
+            args: input.args,
+            fallbackChain,
+            classification,
+            normalizedResult,
+            error: input.error,
+            turnBudgetDeadline: input.turnBudgetDeadline,
+            invokeTool: input.invokeFallbackTool,
+          },
+          this.browserFallbackDeps,
+        );
     if (alternateBuiltinResult) {
       const annotatedAlternateBuiltinResult = this.annotateBrowserResultForTurn({
         turnInput: input.turnInput,
@@ -8744,6 +8749,7 @@ export class ChatTurnAgentRunner {
       };
     }
     const fallbackAttempted =
+      !searchQueryRefused &&
       shouldAttemptBrowserFallback(input.toolName, classification.failureClass) &&
       this.deps.invokeMcpTool &&
       this.deps.listMcpBrowserFallbackTargets;
