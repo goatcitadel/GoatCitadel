@@ -13,6 +13,7 @@ import {
 } from "@goatcitadel/contracts";
 import { sealChatTurnCapabilityProfile } from "@goatcitadel/storage";
 import { ChatTurnAgentRunner, type ChatTurnAgentRunnerDeps } from "./chat-turn-agent-runner.js";
+import { DEEP_RESEARCH_THIN_EVIDENCE_FOOTER } from "./chat-turn-agent-runner/deep-research-evidence.js";
 import { createMeshToolPolicyBinding } from "@goatcitadel/policy-engine";
 import { dispatchMeshChatTool, type MeshChatDispatchPort } from "./gateway/mesh-chat-dispatch.js";
 import {
@@ -674,13 +675,26 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
         invokeTool: invokeTool as never,
         evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
       });
-      await runner.run({
+      const result = await runner.run({
         ...buildInput(profile),
         content: options.content,
         historyMessages: [{ role: "user" as const, content: options.content }],
       });
-      return { events, createChatCompletion, invokeTool };
+      return { events, createChatCompletion, invokeTool, result };
     }
+
+    it("flags a Deep answer whose web research opened no independent sources", async () => {
+      const { invokeTool, result } = await runFrozenTurn({ content: NO_KEYWORD_PROMPT, webMode: "deep" });
+
+      expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+      expect(result.assistantContent.endsWith(DEEP_RESEARCH_THIN_EVIDENCE_FOOTER)).toBe(true);
+    });
+
+    it("does not flag a Deep greeting that ran no web tool", async () => {
+      const { result } = await runFrozenTurn({ content: "hi", webMode: "deep" });
+
+      expect(result.assistantContent).not.toContain(DEEP_RESEARCH_THIN_EVIDENCE_FOOTER);
+    });
 
     it("seeds a web search in Deep mode for a prompt with no web keywords", async () => {
       const { events } = await runFrozenTurn({ content: NO_KEYWORD_PROMPT, webMode: "deep" });
@@ -757,6 +771,15 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
 
       expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
       expect(createChatCompletion).toHaveBeenCalled();
+    });
+
+    it("seeds a Deep web search for a question that names a bare LAN address", async () => {
+      const { invokeTool } = await runFrozenTurn({
+        content: "What does the admin page at 192.168.1.1 let me change on a home router?",
+        webMode: "deep",
+      });
+
+      expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
     });
   });
 

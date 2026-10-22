@@ -1624,8 +1624,9 @@ describe("browser tools coverage sweep", () => {
       config,
     );
 
-    expect(response.backend).toBe("firecrawl");
-    expect(response.backendUsed).toBe(false);
+    expect(response.backend).toBe("native");
+    expect(response.requestedBackend).toBe("firecrawl");
+    expect(response.backendUsed).toBe(true);
     expect(response.fallbackUsed).toBe(true);
     expect(response.results).toEqual([
       { title: "Fallback Result", url: "https://example.com/fallback", snippet: "Fallback snippet" },
@@ -1642,8 +1643,9 @@ describe("browser tools coverage sweep", () => {
       config,
     );
     expect(navigate).toMatchObject({
-      backend: "firecrawl",
-      backendUsed: false,
+      backend: "native",
+      requestedBackend: "firecrawl",
+      backendUsed: true,
       fallbackUsed: true,
       action: "navigate",
     });
@@ -1660,8 +1662,9 @@ describe("browser tools coverage sweep", () => {
       config,
     );
     expect(extract).toMatchObject({
-      backend: "firecrawl",
-      backendUsed: false,
+      backend: "native",
+      requestedBackend: "firecrawl",
+      backendUsed: true,
       fallbackUsed: true,
       action: "extract",
     });

@@ -181,6 +181,7 @@ import {
 } from "./chat-turn-agent-runner/tool-call-protocol.js";
 import { applyCompletionFailureClearing } from "./chat-turn-agent-runner/completion-failure-clearing.js";
 import {
+  isSearchQueryRefusal,
   tryAlternateBuiltinBrowserResult,
   tryBrowserFallbackAcrossMcpTiers,
   type BrowserFallbackExecutorDeps,
@@ -199,6 +200,8 @@ import {
 } from "./chat-turn-agent-runner/failure-records.js";
 import { buildToolResultDesignAdvisories, hasDesignSkillReceipt } from "./chat-turn-agent-runner/design-advisories.js";
 import { hasSubstantiveSeedQuery, resolveTurnWebLookupIntent } from "./chat-turn-agent-runner/web-research-mode.js";
+import { selectAnswerCitations } from "./chat-turn-agent-runner/answer-citations.js";
+import { buildDeepResearchThinEvidenceFooter } from "./chat-turn-agent-runner/deep-research-evidence.js";
 import {
   analyzePresentationContentQuality,
   buildWorkspaceFileDownloadHref,
@@ -254,7 +257,7 @@ import {
   type MeshToolPolicyBinding,
   type ArtifactBrandInput,
   MESH_TOOL_POLICY_DEFINITION,
-  isSensitiveOfficialSearchQuery,
+  isUnsafeSeedQuery,
 } from "@goatcitadel/policy-engine";
 import { MAX_PARALLEL_TOOL_CALLS, decideToolBatchParallelism } from "./chat-tool-parallelism.js";
 import {
@@ -3755,7 +3758,7 @@ export class ChatTurnAgentRunner {
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       const quickWebQuery = inferQueryFromPrompt(input.content) ?? deriveLiveDataQuery(input.content);
-      if (quickWebQuery.trim().length > 0 && !isSensitiveOfficialSearchQuery(quickWebQuery)) {
+      if (quickWebQuery.trim().length > 0 && !isUnsafeSeedQuery(quickWebQuery)) {
         throwIfChatTurnCancelled(input);
         await this.patchTurnTrace(input, input.turnId, {
           status: "waiting_for_tool",
@@ -3960,8 +3963,8 @@ export class ChatTurnAgentRunner {
     const deepOnlySeed = !intents.webLookup && controllerWebLookupIntent;
     const deepOnlySeedTooThin =
       deepOnlySeed && (!hasSubstantiveSeedQuery(liveDataQuery) || looksLikeContinuationSearchPrompt(liveDataQuery));
-    // A seed is never the model's choice, so it must not carry secret or private-network text to a search backend.
-    if (controllerSeedGateOpen && !isSensitiveOfficialSearchQuery(liveDataQuery) && !deepOnlySeedTooThin) {
+    // A seed is never the model's choice, so it must not carry a secret or an internal hostname to a search backend.
+    if (controllerSeedGateOpen && !isUnsafeSeedQuery(liveDataQuery) && !deepOnlySeedTooThin) {
       throwIfChatTurnCancelled(input);
       await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
@@ -6244,6 +6247,15 @@ export class ChatTurnAgentRunner {
       if (mutationsFooter && !assistantContent.includes("did not complete:")) {
         footerParts.push(mutationsFooter);
       }
+      const deepResearchFooter = buildDeepResearchThinEvidenceFooter({
+        webMode: input.webMode,
+        toolRuns,
+        delegatedResultContract: Boolean(delegatedResultContract),
+        paused: Boolean(approvalPayload || pendingUserInput),
+      });
+      if (deepResearchFooter && !assistantContent.includes(deepResearchFooter)) {
+        footerParts.push(deepResearchFooter);
+      }
       if (footerParts.length > 0) {
         assistantContent = `${assistantContent.trim()}\n\n${footerParts.join("\n\n")}`;
       }
@@ -6445,6 +6457,10 @@ export class ChatTurnAgentRunner {
     };
     const deferSystemHeartbeatTerminalCommit =
       finalStatus === "completed" && isExactSystemHeartbeatRunnerPosture(input);
+    // Persist only the citations the answer relied on; scored prompt-lab output keeps its raw evidence.
+    if (!promptLabEvalIntegrityTurn) {
+      citations.splice(0, citations.length, ...selectAnswerCitations({ citations, assistantContent, toolRuns }));
+    }
     const updatedTrace = await this.patchTurnTrace(input, input.turnId, {
       ...(deferSystemHeartbeatTerminalCommit ? {} : { status: finalStatus }),
       model: assistantModel,
@@ -8684,22 +8700,26 @@ export class ChatTurnAgentRunner {
         }
       }
     }
-    const alternateBuiltinResult = await tryAlternateBuiltinBrowserResult(
-      {
-        created: input.created,
-        turnInput: input.turnInput,
-        turnId: input.turnId,
-        toolName: input.toolName,
-        args: input.args,
-        fallbackChain,
-        classification,
-        normalizedResult,
-        error: input.error,
-        turnBudgetDeadline: input.turnBudgetDeadline,
-        invokeTool: input.invokeFallbackTool,
-      },
-      this.browserFallbackDeps,
-    );
+    // A refused search query is final: no other engine and no MCP server may receive it.
+    const searchQueryRefused = input.toolName === "browser.search" && isSearchQueryRefusal(input.error);
+    const alternateBuiltinResult = searchQueryRefused
+      ? undefined
+      : await tryAlternateBuiltinBrowserResult(
+          {
+            created: input.created,
+            turnInput: input.turnInput,
+            turnId: input.turnId,
+            toolName: input.toolName,
+            args: input.args,
+            fallbackChain,
+            classification,
+            normalizedResult,
+            error: input.error,
+            turnBudgetDeadline: input.turnBudgetDeadline,
+            invokeTool: input.invokeFallbackTool,
+          },
+          this.browserFallbackDeps,
+        );
     if (alternateBuiltinResult) {
       const annotatedAlternateBuiltinResult = this.annotateBrowserResultForTurn({
         turnInput: input.turnInput,
@@ -8734,6 +8754,7 @@ export class ChatTurnAgentRunner {
       };
     }
     const fallbackAttempted =
+      !searchQueryRefused &&
       shouldAttemptBrowserFallback(input.toolName, classification.failureClass) &&
       this.deps.invokeMcpTool &&
       this.deps.listMcpBrowserFallbackTargets;

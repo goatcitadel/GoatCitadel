@@ -6,6 +6,7 @@ import {
   createMockStorage,
   createToolCatalog,
 } from "./chat-turn-agent-runner-test-fixtures.js";
+import { DEEP_RESEARCH_THIN_EVIDENCE_FOOTER } from "./chat-turn-agent-runner/deep-research-evidence.js";
 
 describe("ChatTurnAgentRunner Cowork repair behavior", () => {
   it("never runs repo inspection tools on the model's behalf for explicit-tools prompt-lab chat turns", async () => {
@@ -982,7 +983,8 @@ describe("ChatTurnAgentRunner Cowork repair behavior", () => {
       historyMessages: [{ role: "user", content: delegatedPrompt }],
     });
 
-    expect(result.assistantContent).toBe(repairedAnswer);
+    // The thin-evidence footer is expected: the turn is Deep and its only page read failed.
+    expect(result.assistantContent).toBe(`${repairedAnswer}\n\n${DEEP_RESEARCH_THIN_EVIDENCE_FOOTER}`);
     expect(result.turnTrace.failure).toBeUndefined();
     expect(result.turnTrace.completion?.failureCleared).toMatchObject({
       failureClass: "unknown",

@@ -1,12 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatToolRunRecord, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
+import type {
+  ChatToolRunRecord,
+  McpInvokeRequest,
+  McpInvokeResponse,
+  ToolInvokeRequest,
+  ToolInvokeResult,
+} from "@goatcitadel/contracts";
 import type { ChatTurnAgentRunnerInput } from "../chat-turn-agent-runner.js";
 import {
+  isSearchQueryRefusal,
   readAttemptedSearchEngines,
   tryAlternateBuiltinBrowserResult,
+  tryBrowserFallbackAcrossMcpTiers,
   type AlternateBuiltinBrowserFallbackInput,
   type BrowserFallbackExecutorDeps,
 } from "./browser-fallback.js";
+
+const SEARCH_REFUSAL =
+  "browser.search refused: the query names internal infrastructure or a secret; remove it and search again.";
 
 const NATIVE_TOTAL_FAILURE =
   "execution error: browser.search failed: duckduckgo: no usable results from browser page | bing: fallback returned no usable results | google: timed out";
@@ -146,5 +157,55 @@ describe("tryAlternateBuiltinBrowserResult for browser.search", () => {
     );
     expect(invokeTool).toHaveBeenCalledTimes(1);
     expect(result).toBeUndefined();
+  });
+});
+
+describe("search refusals", () => {
+  it("recognizes a refusal with or without the execution-error prefix", () => {
+    expect(isSearchQueryRefusal(SEARCH_REFUSAL)).toBe(true);
+    expect(isSearchQueryRefusal(`execution error: ${SEARCH_REFUSAL}`)).toBe(true);
+    expect(isSearchQueryRefusal(NATIVE_TOTAL_FAILURE)).toBe(false);
+    expect(isSearchQueryRefusal(undefined)).toBe(false);
+  });
+
+  it("stops retrying engines once a native retry is refused", async () => {
+    const invokeTool = vi.fn(
+      async (_request: ToolInvokeRequest): Promise<ToolInvokeResult> =>
+        ({ outcome: "blocked", policyReason: `execution error: ${SEARCH_REFUSAL}` }) as ToolInvokeResult,
+    );
+    const result = await tryAlternateBuiltinBrowserResult(
+      buildInput({
+        classification: { failureClass: "no_results" },
+        normalizedResult: { attemptedEngines: ["brave"], results: [] },
+      }),
+      buildDeps(invokeTool),
+    );
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(result).toBeUndefined();
+  });
+
+  it("never sends an internal-infrastructure search to an MCP server", async () => {
+    const invokeMcpTool = vi.fn(
+      async (_request: McpInvokeRequest): Promise<McpInvokeResponse> =>
+        ({ ok: true, output: { contentText: "results" } }) as McpInvokeResponse,
+    );
+    const deps: BrowserFallbackExecutorDeps = {
+      ...buildDeps(vi.fn()),
+      invokeMcpTool,
+      listMcpBrowserFallbackTargets: async () => [
+        { serverId: "srv-search", label: "Search MCP", tier: "browser_mcp", searchToolName: "mcp_search" },
+      ],
+    };
+    const result = await tryBrowserFallbackAcrossMcpTiers(
+      {
+        turnInput: { sessionId: "session-1", mode: "chat", content: "find things" } as ChatTurnAgentRunnerInput,
+        toolName: "browser.search",
+        args: { query: "db01.corp outage" },
+        fallbackChain: [],
+      },
+      deps,
+    );
+    expect(result).toBeUndefined();
+    expect(invokeMcpTool).not.toHaveBeenCalled();
   });
 });

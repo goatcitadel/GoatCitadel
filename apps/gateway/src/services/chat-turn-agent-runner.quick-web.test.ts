@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionRequest, ChatCompletionResponse, ToolInvokeResult } from "@goatcitadel/contracts";
 import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
-import { createMockStorage, createToolCatalog } from "./chat-turn-agent-runner-test-fixtures.js";
+import { DEEP_RESEARCH_THIN_EVIDENCE_FOOTER } from "./chat-turn-agent-runner/deep-research-evidence.js";
+import {
+  createMockStorage,
+  createToolCatalog,
+  namedToolCallCompletion,
+  toolCallCompletion,
+} from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("ChatTurnAgentRunner quick_web profile", () => {
   it("prefetches one bounded search and synthesizes without exposing more tools", async () => {
@@ -284,8 +290,11 @@ describe("ChatTurnAgentRunner quick_web profile", () => {
     expect(result.turnTrace.failure).toBeUndefined();
   });
 
-  it("does not prefetch a search whose query carries secret text", async () => {
-    const content = "please look up why my deploy fails OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
+  it.each([
+    "please look up why my deploy fails OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+    // No token prefix: only the full secret check behind automatic seeds catches this one.
+    "please look up why my deploy fails with api_key=abcd1234efgh5678",
+  ])("does not prefetch a search whose query carries secret text: %s", async (content) => {
     const createChatCompletion = vi.fn(
       async (): Promise<ChatCompletionResponse> => ({
         model: "glm-5",
@@ -320,5 +329,97 @@ describe("ChatTurnAgentRunner quick_web profile", () => {
 
     expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
     expect(createChatCompletion).toHaveBeenCalled();
+  });
+});
+
+describe("ChatTurnAgentRunner Deep research evidence note", () => {
+  function deepInput(content: string) {
+    return {
+      sessionId: "session-deep-note",
+      turnId: `turn-deep-note-${Math.random().toString(36).slice(2)}`,
+      userMessageId: "msg-deep-note",
+      content,
+      mode: "chat" as const,
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "deep" as const,
+      memoryMode: "off" as const,
+      thinkingLevel: "standard" as const,
+      toolAutonomy: "safe_auto" as const,
+      historyMessages: [{ role: "user" as const, content }],
+    };
+  }
+
+  it("does not add the note to a Deep turn that ends paused for approval", async () => {
+    const createChatCompletion = vi.fn(
+      async (): Promise<ChatCompletionResponse> => toolCallCompletion("debezium release notes 2026"),
+    );
+    // The effect-truth seam reports approval before any executor dispatch, as the policy engine does.
+    const invokeToolWithEffectTruth = vi.fn(async (): Promise<ToolInvokeResult> => {
+      if (invokeToolWithEffectTruth.mock.calls.length === 1) {
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          result: { results: [{ title: "Debezium", url: "https://debezium.example/docs", snippet: "CDC" }] },
+        };
+      }
+      return {
+        outcome: "approval_required",
+        policyReason: "search requires approval",
+        auditEventId: "audit-deep-note-approval",
+        approvalId: "approval-deep-note",
+        expiresAt: "2026-10-22T13:30:00.000Z",
+      };
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool: vi.fn(async () => {
+        throw new Error("legacy invocation seam must not run when effect truth is supported");
+      }),
+      invokeToolWithEffectTruth: invokeToolWithEffectTruth as never,
+    });
+
+    const result = await orchestrator.run(
+      deepInput("Compare Debezium vs Postgres logical replication for change data capture."),
+    );
+
+    expect(result.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([expect.objectContaining({ toolName: "browser.search", status: "approval_required" })]),
+    );
+    expect(result.assistantContent).not.toContain(DEEP_RESEARCH_THIN_EVIDENCE_FOOTER);
+  });
+
+  it("does not add the note when the only web tool was http.post", async () => {
+    const createChatCompletion = vi.fn(async (): Promise<ChatCompletionResponse> => {
+      if (createChatCompletion.mock.calls.length === 1) {
+        return namedToolCallCompletion("http.post", { url: "https://hooks.example.test/notify", body: "{}" });
+      }
+      return {
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: "I sent the notification." } }],
+      };
+    });
+    const invokeTool = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        result: { status: 200, body: "ok" },
+      }),
+    );
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["http.post"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run(deepInput("Send the deploy notification to my webhook."));
+
+    expect(result.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([expect.objectContaining({ toolName: "http.post", status: "executed" })]),
+    );
+    expect(result.assistantContent).not.toContain(DEEP_RESEARCH_THIN_EVIDENCE_FOOTER);
   });
 });

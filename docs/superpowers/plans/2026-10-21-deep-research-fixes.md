@@ -38,6 +38,13 @@
 - **Task 3's timeout rule was narrowed.** Connection failures trip the Firecrawl breaker on any endpoint; request timeouts trip it only for the search endpoint, because a scrape waits on the target page and a slow page must not bench a healthy Firecrawl.
 - **Task 6's Deep chip copy** is "Uses web search for your messages and allows a longer research pass (up to 8 minutes)."
 
+## Corrections found during P1 execution
+
+- **Task 7's Deep chip copy** is "Uses web search for your messages, asks for several independent sources, and allows a longer research pass (up to 8 minutes)." Step 4 below quotes it.
+- **Task 7's prompt section is conditional.** After its first line it reads "When this message needs information from the web:" before the sourcing rules, and it ends by telling the model to skip web research for greetings and for questions about local files or this workspace. The thin-evidence note counts only searches and page opens (not `http.post`), and it is never added to a delegated child's structured result or to a turn that ends paused for an approval or the operator's input.
+- **Task 11's guard was narrowed.** The guard on a model-issued native or Firecrawl search covers internal hostnames (except Docker's public pseudo-hosts such as `host.docker.internal`), cloud-metadata endpoints, and explicit token prefixes such as `sk-` and `ghp_`. Secrets in general are caught by the executor's scan of every tool call's arguments. Automatic seed searches use the stricter `isUnsafeSeedQuery`, which adds the full secret check. A refused search is never retried on another engine or sent to an MCP server.
+- **Deep's tool-run limits and Task 10's per-provider cost apply per checkpoint window.** The per-turn bound is the 8-minute budget plus the no-progress checkpoint windows. Task 10 charges per provider only in research mode, where providers run in parallel; quick mode stops at the first success and is charged once.
+
 ---
 
 ## Task 0: Sync with the Web & Search settings work
@@ -226,7 +233,7 @@ The copy must match what P0 delivers: web lookup on, a larger and longer budget,
   ```
   ## Web research: deep
   The operator turned on Deep research for this message.
-  - Plan 2–4 differently worded searches before answering; do not stop at the first result page.
+  - Run 2–4 differently worded searches before answering; do not stop at the first result page.
   - Open at least two relevant pages from different sites before relying on them, preferring primary sources.
   - Cross-check key facts across sources and say which claims you could not verify.
   - Cite the pages you relied on by URL.
@@ -237,7 +244,7 @@ The copy must match what P0 delivers: web lookup on, a larger and longer budget,
 - [ ] **Step 1: Write failing tests.** In the prompt test: `webMode: "deep"` puts `DEEP_RESEARCH_PROMPT_SECTION` in `volatileTail` and leaves `stablePrefix` byte-identical to the `webMode: "auto"` case. `quick_web` never includes it. In `deep-research-evidence.test.ts`: two navigates to `www.a.com` and `a.com` → `thin: true`. Navigates to `a.com` and `b.org` → `thin: false`. Failed runs don't count.
 - [ ] **Step 2: Run and confirm failure.**
 - [ ] **Step 3: Implement.** Push the section into `tailSections` when `input.webMode === "deep"`. Pass `webMode` from the prep service. In the runner footer block, when `input.webMode === "deep"`, the turn is not `promptLabEvalIntegrityTurn`, at least one web tool ran, and `assessDeepResearchEvidence(toolRuns).thin` is true, push `DEEP_RESEARCH_THIN_EVIDENCE_FOOTER` into `footerParts`.
-- [ ] **Step 4: Update the Deep chip description** to `"Searches the web, opens several sources, and allows a longer research pass (up to 8 minutes)."` and its test.
+- [ ] **Step 4: Update the Deep chip description** to `"Uses web search for your messages, asks for several independent sources, and allows a longer research pass (up to 8 minutes)."` and its test.
 - [ ] **Step 5: Run** the prompt, evidence, and chip tests, plus `chat-turn-agent-runner.capability-profile.test.ts`. Expected: PASS.
 - [ ] **Step 6: Commit** with message `feat(gateway): give Deep research a sourcing contract and flag thin evidence`.
 
