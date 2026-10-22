@@ -275,7 +275,16 @@ async function tryAlternateBuiltinSearchEngines(
   // Each retry is a native engine search: it must not repeat the same Firecrawl or official request.
   const alternateBackend = { backend: "native" };
 
+  // A failed native retry walks the whole configured order too, so its failure text can exhaust the loop.
+  const recordWalkedEngines = (failureText: string | undefined): void => {
+    for (const walked of readAttemptedSearchEngines(undefined, failureText)) {
+      attemptedEngines.add(walked);
+    }
+  };
   for (const engine of alternateEngines) {
+    if (attemptedEngines.has(engine.toLowerCase())) {
+      continue;
+    }
     if (input.turnInput.signal?.aborted) {
       break;
     }
@@ -306,6 +315,7 @@ async function tryAlternateBuiltinSearchEngines(
         ? await input.invokeTool(request)
         : await invokeTurnTool(deps, input.turnInput, request);
       if (result.outcome !== "executed") {
+        recordWalkedEngines(result.policyReason);
         input.fallbackChain.push(
           buildBrowserFallbackChainEntry({
             toolName: "browser.search",
@@ -339,6 +349,7 @@ async function tryAlternateBuiltinSearchEngines(
       }
     } catch (error) {
       if (isDurableControlError(error)) throw error;
+      recordWalkedEngines((error as Error).message);
       input.fallbackChain.push(
         buildBrowserFallbackChainEntry({
           toolName: "browser.search",

@@ -110,4 +110,41 @@ describe("tryAlternateBuiltinBrowserResult for browser.search", () => {
     expect(invokeTool).toHaveBeenCalled();
     expect(invokeTool.mock.calls[0]?.[0].args.backend).toBe("native");
   });
+
+  it("stops retrying once a failed native retry reports every engine it walked", async () => {
+    const invokeTool = vi.fn(
+      async (_request: ToolInvokeRequest): Promise<ToolInvokeResult> =>
+        ({
+          outcome: "blocked",
+          policyReason: "execution error: browser.search failed: bing: x | duckduckgo: y | google: z",
+        }) as ToolInvokeResult,
+    );
+    const fallbackChain: Array<Record<string, unknown>> = [];
+    const result = await tryAlternateBuiltinBrowserResult(
+      buildInput({
+        classification: { failureClass: "no_results" },
+        normalizedResult: { attemptedEngines: ["firecrawl"], results: [] },
+        fallbackChain,
+      }),
+      buildDeps(invokeTool),
+    );
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(result).toBeUndefined();
+    expect(fallbackChain).toHaveLength(1);
+  });
+
+  it("stops retrying once a thrown native retry reports every engine it walked", async () => {
+    const invokeTool = vi.fn(async (_request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
+      throw new Error(NATIVE_TOTAL_FAILURE);
+    });
+    const result = await tryAlternateBuiltinBrowserResult(
+      buildInput({
+        classification: { failureClass: "no_results" },
+        normalizedResult: { attemptedEngines: ["firecrawl"], results: [] },
+      }),
+      buildDeps(invokeTool),
+    );
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(result).toBeUndefined();
+  });
 });
