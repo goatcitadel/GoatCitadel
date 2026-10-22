@@ -325,18 +325,36 @@ export function useCockpitRealtime(input: {
             };
             const id = `inbox:${scopeWorkspaceId}:${item.id}`;
             if (preferences.toastsEnabled)
-              requestCockpitToast((toast) => {
-                const show = notification.tone === "error" ? toast.error : notification.tone === "warning" ? toast.warning : toast;
-                show(item.title, { id, description: item.summary, duration: notification.tone === "error" ? Infinity : 6_000,
-                  action: { label: "Open Inbox item", onClick: open } });
-              }, () => {
-                const currentPreferences = preferencesRef.current;
-                return isCurrentWorkspace() && currentPreferences.toastsEnabled &&
-                  !(currentPreferences.onlyWhenUnfocused && pageFocused()) && decideNotificationDelivery(notification, {
-                    replayed: delivery.replayed, eventSessionId: item.source.sessionId,
-                    visibleSessionId: visibleSessionIdRef.current, pageFocused: pageFocused(),
-                  }).toast;
-              });
+              requestCockpitToast(
+                (toast) => {
+                  const show =
+                    notification.tone === "error"
+                      ? toast.error
+                      : notification.tone === "warning"
+                        ? toast.warning
+                        : toast;
+                  show(item.title, {
+                    id,
+                    description: item.summary,
+                    duration: notification.tone === "error" ? Infinity : 6_000,
+                    action: { label: "Open Inbox item", onClick: open },
+                  });
+                },
+                () => {
+                  const currentPreferences = preferencesRef.current;
+                  return (
+                    isCurrentWorkspace() &&
+                    currentPreferences.toastsEnabled &&
+                    !(currentPreferences.onlyWhenUnfocused && pageFocused()) &&
+                    decideNotificationDelivery(notification, {
+                      replayed: delivery.replayed,
+                      eventSessionId: item.source.sessionId,
+                      visibleSessionId: visibleSessionIdRef.current,
+                      pageFocused: pageFocused(),
+                    }).toast
+                  );
+                },
+              );
             if (deliveryDecision.sound) void playOperatorAttentionSound(notification.soundCue, preferences.soundMode);
             if (deliveryDecision.desktop && preferences.desktopEnabled && document.visibilityState === "hidden") {
               showBrowserNotification(item.title, notification.tone, { tag: id, onClick: open });

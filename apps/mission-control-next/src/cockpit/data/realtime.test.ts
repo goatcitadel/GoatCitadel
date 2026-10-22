@@ -175,16 +175,18 @@ describe("unmapped event throttle", () => {
   });
 });
 
-
-it.each(["chat_session_deleted", "session_deleted"])("maps %s through the actual Chat refresh owner without reloading another transcript", (eventType) => {
-  const event = { ...base, eventType, source: "chat", links: { sessionId: "deleted" } };
-  const plans: unknown[] = [];
-  const s = sink();
-  s.refresh.mockImplementation((topic, mapped) => {
-    expect(topic).toBe("chat");
-    plans.push(resolveChatRefreshPlan(realtimeRefreshSignal(mapped), false, false, "selected"));
-  });
-  invalidateForEvent(event, s);
-  expect(s.unmapped).not.toHaveBeenCalled();
-  expect(plans).toEqual([{ refreshSidebar: true, refreshSession: "none" }]);
-});
+it.each(["chat_session_deleted", "session_deleted"])(
+  "maps %s through the actual Chat refresh owner without reloading another transcript",
+  (eventType) => {
+    const event = { ...base, eventType, source: "chat", links: { sessionId: "deleted" } };
+    const plans: unknown[] = [];
+    const s = sink();
+    s.refresh.mockImplementation((topic, mapped) => {
+      expect(topic).toBe("chat");
+      plans.push(resolveChatRefreshPlan(realtimeRefreshSignal(mapped), false, false, "selected"));
+    });
+    invalidateForEvent(event, s);
+    expect(s.unmapped).not.toHaveBeenCalled();
+    expect(plans).toEqual([{ refreshSidebar: true, refreshSession: "none" }]);
+  },
+);
