@@ -951,7 +951,7 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("Runtime authority map");
     expect(markup).toContain("Mesh capability publications");
     expect(markup).toContain("No mesh capability manifests");
-    expect(markup).toContain("Daemon running");
+    expect(markup).toContain("Daemon: Needs review");
     expect(markup).toContain("Start daemon");
     expect(markup).toContain("Restart daemon");
     expect(markup).toContain("Recovery diagnostics");
@@ -1227,7 +1227,7 @@ describe("RuntimeRoutePage", () => {
     // A missing daemonStatus block means daemon truth is unknown, not stopped.
     expect(buildOpsHeadMetrics("notifications" as any, partialData, 0)).toContainEqual({
       label: "Daemon",
-      value: "unknown",
+      value: "Unknown",
     });
 
     const attentionIds = buildNeedsAttentionItems(partialData, 0, "ops" as any).map((item) => item.id);
@@ -1403,11 +1403,11 @@ describe("RuntimeRoutePage", () => {
           scheduler: { jobs: [], reviewQueue: [{ itemId: "review-1" }] },
         },
         health: {
-          daemonStatus: { running: false, state: "stopped" },
+          daemonStatus: { running: false, supported: true, state: "stopped" },
           backups: { latest: null },
         },
         cost: null,
-        daemon: { running: false, state: "stopped" },
+        daemon: { running: false, supported: true, state: "stopped" },
         backups: [],
         sessions: [],
         mcpServers: [],
@@ -2437,7 +2437,7 @@ describe("RuntimeRoutePage", () => {
       />,
     );
 
-    expect(markup).toContain("Daemon unavailable");
+    expect(markup).toContain("Daemon: Unknown");
     expect(markup).toContain("Backup status unavailable");
     expect(markup).toContain("unavailable");
     expect(markup).toContain("<strong>unavailable</strong>");
@@ -2702,7 +2702,7 @@ describe("RuntimeRoutePage", () => {
       />,
     );
 
-    expect(markup).toContain("Daemon running");
+    expect(markup).toContain("Daemon: Running");
     expect(markup).toContain("Control status unavailable");
     expect(markup).toContain("<strong>localhost</strong>");
     expect(markup).toContain("<strong>42</strong>");

@@ -1,4 +1,5 @@
 import { formatHumanSessionTitle, formatShortSessionId, formatDateTime } from "./runtime-formatters";
+import { presentPendingApprovals } from "./runtime-overview-model";
 import { NativeButton, NativeMetricGrid as MetricGrid } from "../primitives";
 import { NativeCard, NativeDisclosureCard, NativeGrid, NativeList } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
@@ -18,7 +19,7 @@ export function RuntimeSessionsPanel({
   navigate: NativeRoutePagesProps["navigate"];
   route: NativeRoutePagesProps["route"];
   openInspection: RuntimeOpenInspection;
-  pendingApprovals: number;
+  pendingApprovals?: number;
 }) {
   return (
     <NativeGrid>
@@ -80,11 +81,7 @@ export function RuntimeSessionsPanel({
       >
         <MetricGrid
           items={[
-            {
-              label: "Pending approvals",
-              value: String(data.dashboard?.pendingApprovals ?? pendingApprovals),
-              meta: "Decision queue pressure",
-            },
+            { ...presentPendingApprovals(data, pendingApprovals), meta: "Waiting for a decision" },
             {
               label: "Active subagents",
               value: String(data.dashboard?.activeSubagents ?? 0),
