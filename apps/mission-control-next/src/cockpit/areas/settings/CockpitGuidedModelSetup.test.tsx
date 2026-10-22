@@ -254,6 +254,19 @@ describe("shared guided model setup", () => {
     expect(provider.textContent).not.toContain("unavailable");
     expect(container.textContent).not.toContain("Not chosen");
   });
+  it("groups the provider dropdown by how each provider is paid for", async () => {
+    catalog("ready");
+    await mount();
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    const groups = [...provider.querySelectorAll("optgroup")].map((group) => [
+      group.label,
+      [...group.querySelectorAll("option")].map((option) => option.textContent),
+    ]);
+    expect(groups).toEqual([
+      ["Ready to use", ["Test provider"]],
+      ["Use a subscription", ["Claude Code CLI (local login) · not added yet"]],
+    ]);
+  });
   it("confirms a changed model through an installation default plan and shows the result", async () => {
     catalog("ready");
     await mount();
