@@ -276,7 +276,9 @@ describe("prepareAgentChatTurn route admission", () => {
     );
     expect(capabilityResolver).not.toHaveBeenCalled();
     expect(prepared.capabilityProfile).toBeUndefined();
-    expect(prepared.history.some((message) => String(message.content).includes("Server-owned capability profile:"))).toBe(false);
+    expect(
+      prepared.history.some((message) => String(message.content).includes("Server-owned capability profile:")),
+    ).toBe(false);
   });
 
   it("does not consult the retired profile resolver before provider execution", async () => {
@@ -760,6 +762,28 @@ describe("prepareAgentChatTurn personality overlay", () => {
     const combined = blocks.map((block) => block.text).join("\n\n");
     expect(combined).toContain("Planning mode is active");
     expect(combined).not.toContain("Code mode requires a bound project");
+  });
+
+  it("tells the model Deep research is on through the volatile base-prompt block only", async () => {
+    // The composer sends the session's web mode on every request (useChatOutboundExecution).
+    const deep = createHost("chat", { webMode: "deep" });
+    await prepareAgentChatTurn(deep.host, "session-1", {
+      content: "compare heat pump rebates in Oregon",
+      webMode: "deep",
+    });
+    const deepBlocks = deep.readGuidanceContent() as Array<Record<string, unknown>>;
+    expect(deepBlocks[0]?.text).not.toContain("## Web research: deep");
+    expect(deepBlocks[1]?.text).toContain("## Web research: deep");
+
+    const auto = createHost("chat", { webMode: "auto" });
+    await prepareAgentChatTurn(auto.host, "session-1", {
+      content: "compare heat pump rebates in Oregon",
+      webMode: "auto",
+    });
+    const autoBlocks = auto.readGuidanceContent() as Array<Record<string, unknown>>;
+    expect(auto.readGuidance()).not.toContain("## Web research: deep");
+    // The cached stable prefix must not change when Deep research is toggled.
+    expect(autoBlocks[0]?.text).toBe(deepBlocks[0]?.text);
   });
 
   it("omits the Memory section when there is no operator-profile digest", async () => {

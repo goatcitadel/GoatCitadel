@@ -16,6 +16,8 @@ import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
+import { EmbeddedClassicPage } from "../../ui/EmbeddedClassicPage";
+import { useWorkspaceName } from "../../data/use-workspace-name";
 import "../../../features/native-routes/native-routes.css";
 
 /** Session lists are installation-wide metadata; only the canonical control owner admits mutations. */
@@ -24,26 +26,28 @@ export function SystemSessions() {
     location = useCockpitRoute();
   const workspaceId = preferences.activeWorkspaceId ?? "default";
   const access = useProjectAccess(JSON.stringify(["system-sessions", preferences.activeCitadelId, workspaceId]));
+  const workspaceName = useWorkspaceName(preferences.activeCitadelId ?? undefined, workspaceId);
   const route = parseAppRoute(new URL("/ops/sessions" + location.search + location.hash, "http://cockpit.invalid"));
   const props: NativeRoutePagesProps = {
     route,
     activeWorkspaceId: workspaceId,
-    activeWorkspaceName: workspaceId,
+    activeWorkspaceName: workspaceName ?? "Current workspace",
     activeCitadelId: preferences.activeCitadelId ?? undefined,
-    pendingApprovals: 0,
     setActiveWorkspaceId: preferences.setActiveWorkspaceId,
     navigate: (next, options) => location.navigate(buildAppHref(next), options),
   };
   return route.runId || route.view === "run-detail" ? (
     <section className="min-w-0">
       <div className={AREA_PAGE}>
-        {/* The embedded run page drops its own h1, so the header names the selected run the way that page did. */}
+        {/* The embedded run page drops its own h1; its id stays in the run page technical details (SY-N11). */}
         <AreaHeader
-          title={route.runId ? `Run ${route.runId}` : "Run detail"}
+          title={route.runId ? "Run" : "Run detail"}
           description="A run opened from Sessions, with its saved steps and outcome."
         />
       </div>
-      <RunDetailRoutePage key={access.identity} {...props} />
+      <EmbeddedClassicPage>
+        <RunDetailRoutePage key={access.identity} {...props} />
+      </EmbeddedClassicPage>
     </section>
   ) : (
     <SystemSessionEvidence key={access.identity} {...props} location={location} />
@@ -90,7 +94,7 @@ function SystemSessionEvidence({
       ) : runtime.loading && !data ? (
         <p className="text-sm text-fg-muted">Loading sessions…</p>
       ) : (
-        <div className="flex min-w-0 flex-col gap-4">
+        <EmbeddedClassicPage inColumn>
           <OpsDegradedSourcesStrip
             degraded={data ? buildSectionDegradedSources(data, "sessions") : []}
             onRetry={() => void runtime.reload()}
@@ -129,7 +133,7 @@ function SystemSessionEvidence({
             setSchedulePendingCancelId={noChange}
             scheduleNotice={null}
           />
-        </div>
+        </EmbeddedClassicPage>
       )}
     </section>
   );

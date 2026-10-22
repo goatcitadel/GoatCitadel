@@ -1,5 +1,6 @@
 import type { HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
 import type { StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { describeRuntimeService } from "@goatcitadel/mission-control-shared/content/runtime-service";
 import type { BackupTrustState } from "./backup-trust";
 
 /** Full runtime controls and backup records use the existing native runtime owner inside Cockpit. */
@@ -75,31 +76,7 @@ export function backupHealthCheck(trust: BackupTrustState | undefined, hasRecord
   }
 }
 
-/** One runtime-service derivation, shared by Health and the saved-board Runtime widget so they never disagree. */
-export function describeRuntimeService(daemon: HealthSummaryResponse["daemonStatus"] | undefined): {
-  label: string;
-  tone: StatusTone;
-  detail: string;
-} {
-  if (!daemon) return { label: "Unknown", tone: "neutral", detail: "The health summary did not report the service." };
-  const issues = daemon.diagnostics?.filter((item) => item.severity === "critical" || item.severity === "warn") ?? [];
-  if (!daemon.supported)
-    return { label: "Unavailable", tone: "neutral", detail: "Service control is unavailable on this host." };
-  if (!daemon.running) return { label: "Problem", tone: "failed", detail: "The managed runtime service is stopped." };
-  if (issues.length) {
-    const critical = issues.some((item) => item.severity === "critical");
-    return {
-      label: critical ? "Problem" : "Needs review",
-      tone: critical ? "failed" : "waiting",
-      detail: `${issues.length} runtime ${issues.length === 1 ? "diagnostic needs" : "diagnostics need"} review.`,
-    };
-  }
-  return {
-    label: "Running",
-    tone: "done",
-    detail: "The managed runtime service is running with no reported warnings.",
-  };
-}
+export { describeRuntimeService };
 
 export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: BackupTrustState): HealthCheck[] {
   const database = health.database;

@@ -60,10 +60,10 @@ export const RULES = [
     // Only rendered text counts: attribute values such as key={run.runId} are never shown.
     pattern:
       /(?<!=)\{\s*[\w?.!]+\.(?:workspaceId|providerId|actorId|runId|taskId|sessionId|approvalId|grantId|localOperatorOverrideId)\s*\}/g,
-    // IDs inside TechnicalDetails and key/href templates don't count. The budget includes the two "Run <id>"
-    // run-detail headers (Sessions, classic Kanban): a run has no other name there. It rose from 22 to 28 when the
-    // rule learned grantId: Project fan-out, autonomous and browser grants still show grant IDs (a later PR names them).
-    budget: 28,
+    // IDs inside TechnicalDetails and key/href templates don't count; the run-detail headers read "Run" with the id in
+    // technical details. The budget rose by 6 when the rule learned grantId: Project fan-out, autonomous and browser
+    // grants still show grant IDs (a later PR names them).
+    budget: 26,
     help: "show a name or plain label; put the ID in TechnicalDetails",
   },
   {

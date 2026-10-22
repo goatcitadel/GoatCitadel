@@ -6,7 +6,8 @@ export interface NativeRoutePagesProps {
   activeCitadelName?: string;
   activeWorkspaceId: string;
   activeWorkspaceName: string;
-  pendingApprovals: number;
+  /** Undefined when the host has no count; shown as Unknown, never as 0. */
+  pendingApprovals?: number;
   navigate: (route: AppRoute, options?: { replace?: boolean }) => void;
   setActiveCitadelId?: (citadelId: string) => void;
   setActiveWorkspaceId: (workspaceId: string) => void;

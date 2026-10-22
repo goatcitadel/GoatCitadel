@@ -380,7 +380,7 @@ describe("risk approval action", () => {
       ),
     );
     const review = container.querySelector("button")!;
-    expect(review.textContent).toBe("Review approval");
+    expect(review.textContent).toBe("Review danger approval");
     expect(review.className).toContain("text-status-failed");
     expect(review.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
   });
@@ -452,7 +452,7 @@ describe("risk approval action", () => {
       ),
     );
     const review = container.querySelector("button")!;
-    expect(review.textContent).toBe("Review approval");
+    expect(review.textContent).toBe("Review nuclear approval");
     await act(async () => review.click());
     expect(onApprove).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("Confirm critical-level action");

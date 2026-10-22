@@ -17,10 +17,7 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { RiskApprovalAction } from "../chat/RiskApprovalAction";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
-import { Dialog } from "../../ui/Dialog";
-import { StatusBadge } from "../../ui/StatusBadge";
-import { presentApprovalOutcome } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
-import { useMinuteClock } from "./use-minute-clock";
+import { hasExpired, useMinuteClock } from "./use-minute-clock";
 import { canResolveInboxApproval, matchesInboxApprovalDecision } from "./inbox-approval-guard";
 import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { ApprovalReviewSummary } from "./ApprovalReviewSummary";
@@ -52,6 +49,8 @@ interface ApprovalDecisionBarProps {
    * Owners may keep passing it; it no longer disables the controls.
    */
   checking?: boolean;
+  /** The surrounding view already states the expiry (Inbox approval detail), so the review summary leaves it out. */
+  expiryShownNearby?: boolean;
   onResolved: (message: string) => void;
   onInvalidated: (message?: string) => void;
 }
@@ -84,6 +83,7 @@ function ApprovalDecisionReview({
   approval,
   workspaceId,
   focusAction,
+  expiryShownNearby = false,
   onResolved,
   onInvalidated,
   activeWorkspaceId,
@@ -91,8 +91,6 @@ function ApprovalDecisionReview({
   const access = useProjectAccess(workspaceId);
   const queryClient = useQueryClient();
   const attempt = useInboxApprovalAttempt(workspaceId, approval.approvalId);
-  const pending = attempt?.phase === "checking" || attempt?.phase === "submitted";
-  const [denyOpen, setDenyOpen] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [rechecking, setRechecking] = useState(false);
@@ -109,7 +107,7 @@ function ApprovalDecisionReview({
     approval.kind === "code_mode.run";
   // One shared minute clock plus a single re-render at the expiry moment, instead of a per-second re-render (IN-05).
   const now = useMinuteClock(approval.expiresAt);
-  const expired = Boolean(approval.expiresAt && !(Date.parse(approval.expiresAt) > now));
+  const expired = hasExpired(approval.expiresAt, now);
   useLayoutEffect(() => {
     current.current = true;
     return () => {
@@ -208,7 +206,6 @@ function ApprovalDecisionReview({
           "uncertain",
           "Decision outcome is uncertain. Check again to read the current record before taking another action.",
         );
-        if (current.current) setDenyOpen(false);
       } else if (current.current) {
         setError(`Could not check the current approval. ${describeApiError(cause).summary}`);
       }
@@ -216,10 +213,7 @@ function ApprovalDecisionReview({
       releaseInboxApprovalCheck(workspaceId, approval.approvalId, token);
     }
     if (resolvedMessage) {
-      if (current.current) {
-        setDenyOpen(false);
-        onResolved(resolvedMessage);
-      }
+      if (current.current) onResolved(resolvedMessage);
       invalidateOwnerReads();
     }
   }
@@ -271,7 +265,7 @@ function ApprovalDecisionReview({
     const resolution = approvalResolutionLine(approval);
     return (
       <section aria-label="Recorded approval decision" className="space-y-2">
-        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} />
+        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
         <p role="status">{approvalDecisionMessage(approval)}</p>
         {resolution ? <p className="text-fg-secondary">{resolution}</p> : null}
       </section>
@@ -280,7 +274,7 @@ function ApprovalDecisionReview({
   if (approval.mcpElicitation)
     return (
       <>
-        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} />
+        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
         <p className="text-fg-muted">
           This request carries an MCP server question, which can&apos;t be decided here. Pending MCP server requests are
           listed in Settings.{" "}
@@ -294,19 +288,17 @@ function ApprovalDecisionReview({
         </p>
       </>
     );
-  if (!hasPreview && !specializedReview)
-    return <p role="alert">The exact action preview is unavailable, so this approval can&apos;t be decided yet.</p>;
   if (expired)
     return (
-      <div className="space-y-2">
-        <StatusBadge status={presentApprovalOutcome("expired")} />
-        <p className="text-fg-muted">This approval has expired and can no longer be decided.</p>
-      </div>
+      // The surrounding detail or card shows the Expired badge; the bar says only what it means (IN-R04).
+      <p className="text-fg-muted">This approval has expired and can no longer be decided.</p>
     );
+  if (!hasPreview && !specializedReview)
+    return <p role="alert">The exact action preview is unavailable, so this approval can&apos;t be decided yet.</p>;
 
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">
-      <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} />
+      <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
       <div role="group" aria-label="Approval decisions" className="flex flex-wrap gap-2">
         <span ref={approveRef} className="inline-flex">
           <RiskApprovalAction
@@ -329,7 +321,7 @@ function ApprovalDecisionReview({
             onApprove={() => void decide("approve")}
           />
         </span>
-        <Button ref={denyRef} type="button" size="sm" disabled={Boolean(attempt)} onClick={() => setDenyOpen(true)}>
+        <Button ref={denyRef} type="button" size="sm" disabled={Boolean(attempt)} onClick={() => void decide("reject")}>
           Deny
         </Button>
       </div>
@@ -366,21 +358,6 @@ function ApprovalDecisionReview({
           </p>
         </div>
       </details>
-      <Dialog
-        open={denyOpen}
-        onOpenChange={setDenyOpen}
-        title="Deny this approval"
-        description="The pending action will not be authorized by this decision."
-      >
-        <div className="flex gap-2">
-          <Button variant="primary" disabled={Boolean(attempt)} onClick={() => void decide("reject")}>
-            Confirm deny
-          </Button>
-          <Button disabled={pending} onClick={() => setDenyOpen(false)}>
-            Cancel
-          </Button>
-        </div>
-      </Dialog>
     </div>
   );
 }

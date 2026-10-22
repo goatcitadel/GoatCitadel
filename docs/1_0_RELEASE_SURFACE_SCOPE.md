@@ -60,6 +60,7 @@ Status meanings:
 | `/settings/integrations` | `ship` | Each visible connector has a setup/action path or explicit blocked/incomplete copy. |
 | `/settings/channels` | `ship` | Each visible channel has guided setup with live-auth/send diagnostics or blocked copy. |
 | `/settings/mcp` | `ship` | Local stdio, Approval Inbox, and governed remote http/sse no-auth, token-env, and OAuth2 paths are visible; OAuth records show connect/reconnect readiness and fail closed as `needs_auth` when token refs are missing or expired. |
+| `/settings/web-search` | `ship` | Firecrawl (hosted or self-hosted), connection test, native search engine order, and Firecrawl, Brave, and Parallel keys save through the governed settings path; keys are live-checked and stored only in the OS keychain, with environment variables as the fallback. |
 | `/settings/tools` | `ship` | Inspect tool catalog and scoped allow/deny grants. |
 | `/settings/hooks` | `ship` | Create signed metadata-only HTTPS lifecycle hooks, safely test delivery, and inspect durable delivery history without exposing signing secrets or conversation payloads. |
 

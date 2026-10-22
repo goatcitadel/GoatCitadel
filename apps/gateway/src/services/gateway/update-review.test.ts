@@ -325,7 +325,7 @@ describe("collectProviderModelStaleness", () => {
             {
               providerId: "anthropic",
               apiStyle: "anthropic-messages",
-              defaultModel: "claude-sonnet-4-6",
+              defaultModel: "claude-sonnet-5-5",
             },
           ],
         },
@@ -345,6 +345,7 @@ describe("collectProviderModelStaleness", () => {
           }),
           expect.objectContaining({
             providerId: "anthropic",
+            preferredModel: "claude-sonnet-5-5",
             status: "current",
           }),
         ]),

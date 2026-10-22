@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveUtilityModelOverride } from "./utility-model-routing.js";
+import { resolveJudgeModelDefaults, resolveUtilityModelOverride } from "./utility-model-routing.js";
 
 const provider = { providerId: "glm", hasApiKey: true, defaultModel: "glm-5" };
 
@@ -70,5 +70,73 @@ describe("resolveUtilityModelOverride", () => {
         provider: { ...provider, defaultModel: "" },
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("resolveJudgeModelDefaults", () => {
+  const codex = {
+    providerId: "openai-codex",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    hasApiKey: true,
+    defaultModel: "gpt-6-sol",
+  };
+  const cli = { providerId: "claude-code-cli", baseUrl: "", hasApiKey: true, defaultModel: "claude-sonnet-5-5" };
+  const ollama = {
+    providerId: "ollama",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    hasApiKey: false,
+    defaultModel: "llama3",
+  };
+
+  it("prefers the ready active provider over a signed-in Codex account", () => {
+    expect(
+      resolveJudgeModelDefaults({
+        activeProviderId: "claude-code-cli",
+        activeModel: "claude-opus-5-5",
+        providers: [codex, cli],
+      }),
+    ).toEqual({ providerId: "claude-code-cli", model: "claude-opus-5-5" });
+  });
+
+  it("uses the active provider's default model when no active model is set", () => {
+    expect(
+      resolveJudgeModelDefaults({ activeProviderId: "claude-code-cli", activeModel: "", providers: [codex, cli] }),
+    ).toEqual({ providerId: "claude-code-cli", model: "claude-sonnet-5-5" });
+  });
+
+  it("falls back to Codex with its configured default model, never a hard-coded one", () => {
+    expect(
+      resolveJudgeModelDefaults({
+        activeProviderId: "claude-code-cli",
+        activeModel: "claude-opus-5-5",
+        providers: [codex, { ...cli, hasApiKey: false }],
+      }),
+    ).toEqual({ providerId: "openai-codex", model: "gpt-6-sol" });
+  });
+
+  it("returns the active provider when no keyed fallback exists", () => {
+    expect(
+      resolveJudgeModelDefaults({
+        activeProviderId: "ollama",
+        activeModel: "qwen3",
+        providers: [ollama],
+      }),
+    ).toEqual({ providerId: "ollama", model: "qwen3" });
+  });
+
+  it("keeps a keyless active provider on this machine ahead of a signed-in Codex account", () => {
+    expect(
+      resolveJudgeModelDefaults({ activeProviderId: "ollama", activeModel: "qwen3", providers: [codex, ollama] }),
+    ).toEqual({ providerId: "ollama", model: "qwen3" });
+  });
+
+  it("does not treat a keyless remote active provider as ready", () => {
+    expect(
+      resolveJudgeModelDefaults({
+        activeProviderId: "ollama",
+        activeModel: "qwen3",
+        providers: [codex, { ...ollama, baseUrl: "https://ollama.example.com/v1" }],
+      }),
+    ).toEqual({ providerId: "openai-codex", model: "gpt-6-sol" });
   });
 });

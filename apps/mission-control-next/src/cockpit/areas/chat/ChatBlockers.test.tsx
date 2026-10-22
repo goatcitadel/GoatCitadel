@@ -122,10 +122,12 @@ describe("Chat blockers", () => {
     }
     await vi.waitFor(() =>
       expect(
-        [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval"),
+        [...container.querySelectorAll("button")].find((button) => button.textContent === "Review danger approval"),
       ).toBeDefined(),
     );
-    const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
+    const review = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Review danger approval",
+    );
     await act(async () => review?.click());
     expect(onApprovePending).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("Confirm danger-level action");
@@ -188,10 +190,12 @@ describe("Chat blockers", () => {
     expect(recordTarget.searchParams.has("shellScope")).toBe(false);
     await vi.waitFor(() =>
       expect(
-        [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval"),
+        [...container.querySelectorAll("button")].find((button) => button.textContent === "Review nuclear approval"),
       ).toBeDefined(),
     );
-    const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
+    const review = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Review nuclear approval",
+    );
     await act(async () => review?.click());
     await vi.waitFor(() => expect(document.body.textContent).toContain("rm -rf build"));
     expect(document.body.textContent).toContain("Confirm nuclear-level action");
@@ -240,10 +244,12 @@ describe("Chat blockers", () => {
     expect(container.textContent).toContain("Critical infra");
     await vi.waitFor(() =>
       expect(
-        [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval"),
+        [...container.querySelectorAll("button")].find((button) => button.textContent === "Review nuclear approval"),
       ).toBeDefined(),
     );
-    const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
+    const review = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Review nuclear approval",
+    );
     await act(async () => review?.click());
     await vi.waitFor(() => expect(document.body.textContent).toContain("kubectl delete ns prod"));
   });

@@ -62,7 +62,7 @@ export function RuntimeSchedulesPanel({
   navigate: NativeRoutePagesProps["navigate"];
   data: OpsRuntimeData;
   route: NativeRoutePagesProps["route"];
-  pendingApprovals: number;
+  pendingApprovals?: number;
   openInspection: RuntimeOpenInspection;
   closeScheduleEditor: () => void;
   scheduleDraft: RuntimeScheduleDraft;

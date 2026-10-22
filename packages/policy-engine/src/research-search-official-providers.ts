@@ -641,17 +641,63 @@ async function resolveProviderApiKey(
   return undefined;
 }
 
-export function isSensitiveOfficialSearchQuery(query: string): boolean {
+const SECRET_ASSIGNMENT_PATTERN = /\b(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)\s*[:=]\s*\S{8,}/i;
+const SECRET_TOKEN_PREFIX_PATTERN = /\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b/;
+const CLOUD_METADATA_HOST_PATTERN = /\b(?:metadata\.google\.internal|169\.254\.169\.254)\b/i;
+// A hostname whose final label(s) are a private-namespace suffix. The lookahead keeps
+// public names such as `mail.corp.example.com` out: the suffix must end the hostname.
+const PRIVATE_NAMESPACE_HOST_PATTERN = /\b[a-z0-9-]+\.(?:internal|corp|lan|home\.arpa)(?![a-z0-9-]|\.[a-z0-9])/i;
+// Docker Desktop's documented names: they are the same on every machine and reveal no network.
+// Only a complete hostname is exempt: a hostname character before the match (`db.host.docker.internal`)
+// makes it the tail of a longer, possibly private name.
+const PUBLIC_DOCKER_PSEUDO_HOST_PATTERN =
+  /(?<![a-z0-9.-])(?:host|gateway|kubernetes)\.docker\.internal(?![a-z0-9-]|\.[a-z0-9])/gi;
+
+function containsSecret(query: string): boolean {
   return (
     redactSecretText(query).redactionCount > 0 ||
+    SECRET_ASSIGNMENT_PATTERN.test(query) ||
+    SECRET_TOKEN_PREFIX_PATTERN.test(query)
+  );
+}
+
+export function isSensitiveOfficialSearchQuery(query: string): boolean {
+  return (
+    containsSecret(query) ||
     /\b(?:localhost|metadata\.google\.internal|169\.254\.169\.254|127\.0\.0\.1|0\.0\.0\.0)\b/i.test(query) ||
     /\b[a-z0-9-]+\.(?:local|internal|lan|corp|home)\b/i.test(query) ||
     /\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b/.test(query) ||
     /(?:^|\s)(?:https?:\/\/)?\[?::1\]?(?=$|[\s/:)])/i.test(query) ||
-    /(?:^|\s)(?:https?:\/\/)?\[?(?:f[cd][0-9a-f]{0,2}|fe[89ab][0-9a-f]?):[0-9a-f:]+\]?(?=$|[\s/:)])/i.test(query) ||
-    /\b(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)\s*[:=]\s*\S{8,}/i.test(query) ||
-    /\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b/.test(query)
+    /(?:^|\s)(?:https?:\/\/)?\[?(?:f[cd][0-9a-f]{0,2}|fe[89ab][0-9a-f]?):[0-9a-f:]+\]?(?=$|[\s/:)])/i.test(query)
   );
+}
+
+/**
+ * The guard on a model-issued native or Firecrawl search. Narrower than
+ * {@link isSensitiveOfficialSearchQuery}: true only for a cloud-metadata endpoint, a
+ * private-namespace hostname (except Docker's public pseudo-hosts such as
+ * `host.docker.internal`), or an explicit API-token prefix such as `sk-` or `ghp_`. Secrets in
+ * general are caught earlier by the executor's scan of every tool call's arguments, so ordinary
+ * developer questions that mention headers, env vars, or password rules stay searchable. Bare
+ * RFC1918 addresses, `localhost`, and `127.0.0.1` stay searchable too because questions about a
+ * home router or a local dev server reveal nothing about a specific network.
+ */
+export function isInternalInfrastructureSearchQuery(query: string): boolean {
+  const withoutPublicPseudoHosts = query.replace(PUBLIC_DOCKER_PSEUDO_HOST_PATTERN, " ");
+  return (
+    CLOUD_METADATA_HOST_PATTERN.test(query) ||
+    PRIVATE_NAMESPACE_HOST_PATTERN.test(withoutPublicPseudoHosts) ||
+    SECRET_TOKEN_PREFIX_PATTERN.test(query)
+  );
+}
+
+/**
+ * The guard on a search the runner seeds automatically from the operator's message. A seed is
+ * never the model's choice, so it keeps the full secret check (redaction patterns and
+ * `key=value` style assignments) on top of {@link isInternalInfrastructureSearchQuery}.
+ */
+export function isUnsafeSeedQuery(query: string): boolean {
+  return containsSecret(query) || isInternalInfrastructureSearchQuery(query);
 }
 
 function resolveSnippet(entry: Record<string, unknown>): string {

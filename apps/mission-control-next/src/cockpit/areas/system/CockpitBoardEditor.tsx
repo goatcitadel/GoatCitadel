@@ -14,7 +14,7 @@ import {
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
-import { Dialog } from "../../ui/Dialog";
+import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { SystemDashboardWidget } from "./SystemDashboardWidget";
 
 const ADJUSTMENTS: ReadonlyArray<{ value: OpsSavedBoardsPlacementAdjustment; label: string }> = [
@@ -285,19 +285,14 @@ function BoardEditorView({
           <Button onClick={() => (hasEdits ? setConfirmDiscard(true) : closeEditor())}>Close editor</Button>
         </div>
       </form>
-      <Dialog
+      {/* The shared unsaved-changes prompt (SY-R04). A layout saves only through its review, so no Save choice here. */}
+      <UnsavedChangesDialog
         open={confirmDiscard}
-        onOpenChange={setConfirmDiscard}
-        title="Discard layout changes?"
-        description="Your edits to this board layout have not been saved. Discarding them can't be undone."
-      >
-        <div className="flex flex-wrap gap-2">
-          <Button variant="danger" onClick={() => closeEditor(true)}>
-            Discard changes
-          </Button>
-          <Button onClick={() => setConfirmDiscard(false)}>Keep editing</Button>
-        </div>
-      </Dialog>
+        keys={[]}
+        onContinue={() => closeEditor(true)}
+        onDiscard={() => closeEditor(true)}
+        onCancel={() => setConfirmDiscard(false)}
+      />
       {preview ? (
         <section aria-label="Draft live widget preview" className="grid gap-3">
           <p className="text-sm text-fg-secondary">

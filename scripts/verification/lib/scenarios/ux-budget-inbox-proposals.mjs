@@ -152,8 +152,7 @@ export async function runUxBudgetInboxProposals(environment) {
               `Inbox memory review ${variant}: accessibility ${blockingAxe.map((violation) => violation.id).join(", ") || "clear"}; overflow ${overflow.overflow}px`,
             );
           }
-          await review.getByRole("button", { name: "Reject proposal" }).click();
-          await page.getByRole("button", { name: "Confirm rejection" }).waitFor();
+          await review.getByRole("button", { name: "Reject proposal" }).waitFor();
           await page.screenshot({ path: confirmShot, fullPage: false });
           const pending = await requestJson(
             stack.gatewayUrl,
@@ -161,9 +160,9 @@ export async function runUxBudgetInboxProposals(environment) {
           );
           assertOk(pending, `read ${variant} pending Inbox memory proposal`);
           if (!pending.body?.items?.some((candidate) => candidate.candidateId === candidateId)) {
-            throw new Error("Opening the Inbox confirmation changed the canonical proposal.");
+            throw new Error("Opening the Inbox proposal changed the canonical proposal.");
           }
-          await page.getByRole("button", { name: "Confirm rejection" }).click();
+          await review.getByRole("button", { name: "Reject proposal" }).click();
           await page.getByText("Proposal rejected.", { exact: false }).waitFor();
           const resolved = await requestJson(
             stack.gatewayUrl,

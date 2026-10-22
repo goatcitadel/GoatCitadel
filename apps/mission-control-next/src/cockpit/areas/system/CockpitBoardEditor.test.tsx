@@ -393,15 +393,16 @@ describe("cockpit saved-board editor", () => {
     await render();
     await click("Close editor");
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(document.body.textContent).not.toContain("Discard layout changes?");
+    expect(document.querySelector("[role=dialog]")).toBeNull();
 
     await typeName("Renamed board");
     await click("Close editor");
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(document.body.textContent).toContain("Discard layout changes?");
+    expect(document.querySelector("[role=dialog]")?.textContent).toContain("Unsaved changes");
     expect(bodyButton("Discard changes")?.className).toContain("border-status-failed");
-    await act(async () => bodyButton("Keep editing")!.click());
-    expect(document.body.textContent).not.toContain("Discard layout changes?");
+    // The shared UnsavedChangesDialog (SY-R04): Discard is the only red button and Cancel keeps editing.
+    await act(async () => bodyButton("Cancel")!.click());
+    expect(document.querySelector("[role=dialog]")).toBeNull();
     expect(container.querySelector<HTMLInputElement>("input")?.value).toBe("Renamed board");
 
     await click("Close editor");

@@ -1,14 +1,22 @@
 import { useOperatorInbox } from "../../data/use-operator-inbox";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { inboxViewGroup } from "../inbox/inbox-triage";
+import { useMinuteClock } from "../inbox/use-minute-clock";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 /** Shows only decisions the Inbox links to a run; never infer approvals from a run's waiting status. */
 export function WorkWaitingDecisions({ workspaceId }: { workspaceId: string }) {
   const inbox = useOperatorInbox(workspaceId);
-  const decisions =
-    !inbox.isError && inbox.data?.workspaceId === workspaceId
-      ? inbox.data.items.filter((item) => item.group === "needs_decision" && item.source.runId)
-      : [];
+  const current = !inbox.isError && inbox.data?.workspaceId === workspaceId ? inbox.data.items : [];
+  // The shared expiry clock re-renders at the earliest upcoming deadline, so a decision leaves the list when it
+  // expires rather than at the next Inbox read.
+  const nextDeadline = current
+    .map((item) => item.expiresAt)
+    .filter((at): at is string => Boolean(at) && Date.parse(at!) > Date.now())
+    .sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+  const now = useMinuteClock(nextDeadline);
+  // Expired approvals can no longer be decided; Inbox lists them under Expired (WK-N06).
+  const decisions = current.filter((item) => inboxViewGroup(item, now) === "needs_decision" && item.source.runId);
   const empty = !inbox.isError && Boolean(inbox.data) && !decisions.length;
   // Nothing waiting collapses to one line; the Inbox caveat only matters while decisions are listed or checked.
   return (

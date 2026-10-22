@@ -1,3 +1,5 @@
+import { normalizeWebSearchEngineOrder } from "@goatcitadel/contracts";
+import { isInternalInfrastructureSearchQuery } from "@goatcitadel/policy-engine";
 import type {
   ChatToolRunRecord,
   McpInvokeRequest,
@@ -29,6 +31,7 @@ export interface BrowserFallbackExecutorDeps {
     options?: { executionFence?: () => Promise<void> },
   ) => Promise<McpInvokeResponse>;
   listMcpBrowserFallbackTargets?: () => Promise<McpBrowserFallbackTarget[]>;
+  getSearchEngineOrder?: () => readonly string[];
   buildPolicyContext: (input: Partial<ChatTurnAgentRunnerInput>) => ToolPolicyActorContext;
   listPriorToolRuns: (turnId: string) => Promise<ChatToolRunRecord[]>;
   selectRecentBrowserResultUrls: (
@@ -214,6 +217,44 @@ export async function tryAlternateBuiltinBrowserResult(
   return undefined;
 }
 
+const NATIVE_SEARCH_TOTAL_FAILURE_MARKER = "browser.search failed:";
+const SEARCH_QUERY_REFUSAL_MARKER = "browser.search refused:";
+
+/**
+ * True when native or Firecrawl search refused the query itself (internal infrastructure or a
+ * secret). The policy engine may prefix the message with "execution error: ", so it is matched
+ * anywhere. A refused query must never be retried on another engine or forwarded to MCP.
+ */
+export function isSearchQueryRefusal(text: string | undefined): boolean {
+  return typeof text === "string" && text.includes(SEARCH_QUERY_REFUSAL_MARKER);
+}
+const NATIVE_SEARCH_ENGINE_FAILURE_PATTERN = /(?:^|[\s|:])(duckduckgo|bing|google):/g;
+
+/**
+ * Engines a search already tried. Prefers the structured `attemptedEngines` list; otherwise parses
+ * native search's total-failure error (`browser.search failed: <engine>: <reason> | ...`).
+ * The policy engine prefixes execution errors with "execution error: ", so the marker is matched anywhere.
+ */
+export function readAttemptedSearchEngines(
+  result: Record<string, unknown> | undefined,
+  error: string | undefined,
+): string[] {
+  const attempted = result?.attemptedEngines;
+  if (Array.isArray(attempted) && attempted.every((entry) => typeof entry === "string")) {
+    return (attempted as string[]).map((engine) => engine.toLowerCase());
+  }
+  const markerIndex = typeof error === "string" ? error.indexOf(NATIVE_SEARCH_TOTAL_FAILURE_MARKER) : -1;
+  if (typeof error !== "string" || markerIndex < 0) {
+    return [];
+  }
+  const engines = new Set<string>();
+  const failureText = error.slice(markerIndex + NATIVE_SEARCH_TOTAL_FAILURE_MARKER.length);
+  for (const match of failureText.matchAll(NATIVE_SEARCH_ENGINE_FAILURE_PATTERN)) {
+    engines.add(match[1]!);
+  }
+  return [...engines];
+}
+
 async function tryAlternateBuiltinSearchEngines(
   input: AlternateBuiltinBrowserFallbackInput,
   deps: BrowserFallbackExecutorDeps,
@@ -228,17 +269,40 @@ async function tryAlternateBuiltinSearchEngines(
     return undefined;
   }
 
-  const failedEngine = typeof input.args.engine === "string" ? input.args.engine : undefined;
-  const alternateEngines = ["bing", "duckduckgo", "google"].filter((engine) => engine !== failedEngine);
+  // Only operator-enabled engines, in the operator's order. Without an explicit engine the search
+  // already tried the configured default first, so retries start after it.
+  const configuredEngines = normalizeWebSearchEngineOrder(deps.getSearchEngineOrder?.());
+  const failedEngine = typeof input.args.engine === "string" ? input.args.engine : configuredEngines[0];
+  // Native search walks every configured engine before it throws, so never repeat an attempted one.
+  const attemptedEngines = new Set(
+    readAttemptedSearchEngines(input.normalizedResult, input.classification.error ?? input.error),
+  );
+  const alternateEngines = configuredEngines.filter(
+    (engine) => engine !== failedEngine && !attemptedEngines.has(engine.toLowerCase()),
+  );
+  if (alternateEngines.length === 0) {
+    return undefined;
+  }
+  // Each retry is a native engine search: it must not repeat the same Firecrawl or official request.
+  const alternateBackend = { backend: "native" };
 
+  // A failed native retry walks the whole configured order too, so its failure text can exhaust the loop.
+  const recordWalkedEngines = (failureText: string | undefined): void => {
+    for (const walked of readAttemptedSearchEngines(undefined, failureText)) {
+      attemptedEngines.add(walked);
+    }
+  };
   for (const engine of alternateEngines) {
+    if (attemptedEngines.has(engine.toLowerCase())) {
+      continue;
+    }
     if (input.turnInput.signal?.aborted) {
       break;
     }
     if (input.turnBudgetDeadline && Date.now() >= input.turnBudgetDeadline) {
       break;
     }
-    const alternateArgs = { ...input.args, engine };
+    const alternateArgs = { ...input.args, ...alternateBackend, engine };
     try {
       const request: ToolInvokeRequest = {
         toolName: "browser.search",
@@ -262,6 +326,20 @@ async function tryAlternateBuiltinSearchEngines(
         ? await input.invokeTool(request)
         : await invokeTurnTool(deps, input.turnInput, request);
       if (result.outcome !== "executed") {
+        if (isSearchQueryRefusal(result.policyReason)) {
+          input.fallbackChain.push(
+            buildBrowserFallbackChainEntry({
+              toolName: "browser.search",
+              engineTier: "builtin",
+              engineLabel: `Built-in browser (${engine})`,
+              error: result.policyReason,
+              browserFailureClass: "runtime_error",
+              status: "failed",
+            }),
+          );
+          return undefined;
+        }
+        recordWalkedEngines(result.policyReason);
         input.fallbackChain.push(
           buildBrowserFallbackChainEntry({
             toolName: "browser.search",
@@ -295,6 +373,7 @@ async function tryAlternateBuiltinSearchEngines(
       }
     } catch (error) {
       if (isDurableControlError(error)) throw error;
+      recordWalkedEngines((error as Error).message);
       input.fallbackChain.push(
         buildBrowserFallbackChainEntry({
           toolName: "browser.search",
@@ -305,6 +384,9 @@ async function tryAlternateBuiltinSearchEngines(
           status: "failed",
         }),
       );
+      if (isSearchQueryRefusal((error as Error).message)) {
+        return undefined;
+      }
     }
   }
   return undefined;
@@ -324,6 +406,10 @@ export async function tryBrowserFallbackAcrossMcpTiers(
   input: McpBrowserFallbackInput,
   deps: BrowserFallbackExecutorDeps,
 ): Promise<{ result: Record<string, unknown> } | undefined> {
+  // Defense in depth: a query native search would refuse never leaves the machine through MCP either.
+  if (input.toolName === "browser.search" && isInternalInfrastructureSearchQuery(String(input.args.query ?? ""))) {
+    return undefined;
+  }
   const targets = (await deps.listMcpBrowserFallbackTargets?.()) ?? [];
   for (const target of targets) {
     if (input.turnInput.signal?.aborted) {

@@ -274,6 +274,129 @@ describe("OpenAICodexOAuthService", () => {
     });
   });
 
+  it("force-refreshes a rejected token even when its stored expiry is still in the future", async () => {
+    const secretStore = createMemorySecretStore();
+    secretStore.setSecret(
+      "provider:openai-codex:oauth",
+      JSON.stringify({
+        accessToken: "rejected-token",
+        refreshToken: "refresh-token",
+        expiresAt: Date.now() + 6 * 60 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    );
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ access_token: "fresh-token", expires_in: 3600 }), { status: 200 }),
+    );
+    service = new OpenAICodexOAuthService(secretStore, fetchMock as unknown as typeof fetch);
+
+    await expect(service.resolveAccessToken()).resolves.toBe("rejected-token");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const [first, second] = await Promise.all([
+      service.forceRefreshAccessToken("rejected-token"),
+      service.forceRefreshAccessToken("rejected-token"),
+    ]);
+    expect([first, second]).toEqual(["fresh-token", "fresh-token"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // A caller still holding the old token gets the already-rotated one without another exchange.
+    await expect(service.forceRefreshAccessToken("rejected-token")).resolves.toBe("fresh-token");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(service.getStatus()).toMatchObject({ connected: true });
+  });
+
+  it("marks reauth when a forced refresh fails and refuses to refresh a disconnected credential", async () => {
+    const secretStore = createMemorySecretStore();
+    secretStore.setSecret(
+      "provider:openai-codex:oauth",
+      JSON.stringify({
+        accessToken: "rejected-token",
+        refreshToken: "refresh-token",
+        expiresAt: Date.now() + 6 * 60 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    );
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }));
+    service = new OpenAICodexOAuthService(secretStore, fetchMock as unknown as typeof fetch);
+
+    await expect(service.forceRefreshAccessToken("rejected-token")).rejects.toThrow("token refresh failed");
+    expect(service.getStatus()).toMatchObject({ connected: false, requiresReauth: true });
+
+    await expect(service.forceRefreshAccessToken("rejected-token")).rejects.toThrow("not connected");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("never lets an in-flight refresh overwrite a credential replaced by disconnect or a new login", async () => {
+    const secretStore = createMemorySecretStore();
+    const initial = JSON.stringify({
+      accessToken: "rejected-token",
+      refreshToken: "refresh-token",
+      expiresAt: Date.now() + 6 * 60 * 60_000,
+      updatedAt: Date.now(),
+    });
+    const relogin = JSON.stringify({
+      accessToken: "relogin-token",
+      refreshToken: "relogin-refresh-token",
+      expiresAt: Date.now() + 6 * 60 * 60_000,
+      updatedAt: Date.now(),
+    });
+    let respond: (response: Response) => void = () => undefined;
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => (respond = resolve)));
+    service = new OpenAICodexOAuthService(secretStore, fetchMock as unknown as typeof fetch);
+
+    // Disconnect mid-refresh: the successful result must not resurrect the credential.
+    secretStore.setSecret("provider:openai-codex:oauth", initial);
+    const afterDisconnect = service.forceRefreshAccessToken("rejected-token");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    secretStore.deleteSecret("provider:openai-codex:oauth");
+    respond(new Response(JSON.stringify({ access_token: "late-token", expires_in: 3600 }), { status: 200 }));
+    await expect(afterDisconnect).rejects.toThrow("not connected");
+    expect(secretStore.getSecret("provider:openai-codex:oauth")).toBeUndefined();
+
+    // New login mid-refresh: a successful stale result defers to the new credential.
+    secretStore.setSecret("provider:openai-codex:oauth", initial);
+    const afterReloginSuccess = service.forceRefreshAccessToken("rejected-token");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    secretStore.setSecret("provider:openai-codex:oauth", relogin);
+    respond(new Response(JSON.stringify({ access_token: "late-token", expires_in: 3600 }), { status: 200 }));
+    await expect(afterReloginSuccess).resolves.toBe("relogin-token");
+    expect(secretStore.getSecret("provider:openai-codex:oauth")).toBe(relogin);
+
+    // New login mid-refresh: a failed stale result must not mark the new credential for reauth.
+    secretStore.setSecret("provider:openai-codex:oauth", initial);
+    const afterReloginFailure = service.forceRefreshAccessToken("rejected-token");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    secretStore.setSecret("provider:openai-codex:oauth", relogin);
+    respond(new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }));
+    await expect(afterReloginFailure).rejects.toThrow("token refresh failed");
+    expect(secretStore.getSecret("provider:openai-codex:oauth")).toBe(relogin);
+    expect(service.getStatus()).toMatchObject({ connected: true });
+  });
+
+  it("bounds the token exchange with its own transport timeout signal", async () => {
+    const secretStore = createMemorySecretStore();
+    secretStore.setSecret(
+      "provider:openai-codex:oauth",
+      JSON.stringify({
+        accessToken: "rejected-token",
+        refreshToken: "refresh-token",
+        expiresAt: Date.now() + 6 * 60 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    );
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ access_token: "fresh-token", expires_in: 3600 }), { status: 200 }),
+    );
+    service = new OpenAICodexOAuthService(secretStore, fetchMock as unknown as typeof fetch);
+
+    await service.forceRefreshAccessToken("rejected-token");
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal?.aborted).toBe(false);
+  });
+
   it("surfaces token exchange response errors and invalid successful payloads", async () => {
     const port = await getFreePort();
     const secretStore = createMemorySecretStore();

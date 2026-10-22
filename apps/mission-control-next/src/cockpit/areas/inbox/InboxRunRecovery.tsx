@@ -207,7 +207,6 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
           </p>
           <Button
             size="sm"
-            variant="danger"
             disabled={pending || checking}
             onClick={() => {
               setReviewed(evidence!);
@@ -250,7 +249,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
-            variant="danger"
+            variant="primary"
             disabled={pending || scopeChanged || checking}
             onClick={() => void requestRecovery()}
           >

@@ -14,6 +14,18 @@ describe("presentAuthorityMessage (SY-N06)", () => {
     );
   });
 
+  it("falls back to the server prose when a count the wording needs is missing or invalid", () => {
+    expect(presentAuthorityMessage({ code: "approval_records_available", count: -1 })).toBeUndefined();
+    expect(presentAuthorityMessage({ code: "approval_records_available" })).toBeUndefined();
+    expect(presentAuthorityMessage({ code: "local_runtime_ready" })).toBeUndefined();
+    expect(presentAuthorityMessage({ code: "mesh_workers", counts: { currentNodes: 1 } })).toBeUndefined();
+    expect(
+      presentAuthorityMessage({ code: "worker_leases_checked", counts: { runs: 1, expired: 0.5, stale: 0 } }),
+    ).toBeUndefined();
+    // A code with no count in its wording still words without one.
+    expect(presentAuthorityMessage({ code: "approval_records_unavailable" })).toBeDefined();
+  });
+
   it("words worker, mesh and local runtime counts without (s) or internal terms", () => {
     const messages = [
       presentAuthorityMessage({ code: "worker_leases_checked", counts: { runs: 4, expired: 1, stale: 0 } }),

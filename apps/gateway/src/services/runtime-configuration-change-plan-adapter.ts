@@ -22,6 +22,15 @@ import {
   matchesOperatorWriteRootChange,
 } from "./runtime-write-access-change.js";
 import type { LlamaCppSetupSelection } from "./llama-cpp-setup-selection-service.js";
+import {
+  applyWebSearchCredential,
+  describeWebSearchCredential,
+  isWebSearchCredentialChange,
+  observeWebSearchCredential,
+  prepareWebSearchCredential,
+  resumeWebSearchCredential,
+  type WebSearchCredentialChangeOwner,
+} from "./web-search-credential-change.js";
 import type { LlamaCppRuntimeStatus } from "@goatcitadel/contracts";
 import type {
   EvolutionControlPlaneAdapter,
@@ -43,6 +52,8 @@ export interface RuntimeConfigurationChangePlanAdapterDependencies {
   readonly hasTemporaryAuthCredential: (planId: string) => boolean | Promise<boolean>;
   readonly consumeTemporaryAuthCredential: (planId: string) => string | Promise<string>;
   readonly discardTemporaryAuthCredential: (planId: string) => void | Promise<void>;
+  /** OS-keychain owner for Firecrawl, Brave, and Parallel keys. */
+  readonly webSearchCredentials?: WebSearchCredentialChangeOwner;
 }
 
 /** Registered typed runtime operations only; this adapter never accepts raw setting keys. */
@@ -57,6 +68,9 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     assertNotRetiredToolProfileChange(request);
     const settings = await this.deps.getSettings();
     await this.validateOwnerSelection(request, settings, context.origin.workspaceId);
+    if (isWebSearchCredentialChange(request)) {
+      return prepareWebSearchCredential(context, request.change, settings, this.deps.webSearchCredentials);
+    }
     if (request.change.operation === "gateway_auth_configuration") {
       const change = request.change;
       const configured =
@@ -167,6 +181,9 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     if (plan.request.change.operation === "llama_cpp_setup") {
       return await applyLlamaSetup(this.deps, plan, current);
     }
+    if (isWebSearchCredentialChange(plan.request)) {
+      return await applyWebSearchCredential(plan, plan.request.change, this.deps.webSearchCredentials);
+    }
     const updated = await updateSettings({
       expectedRevision: current.revision,
       ...settingsPatch(plan.request),
@@ -222,6 +239,9 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     plan: ChangePlanRecord,
     receipt: EvolutionControlPlaneOwnerInputReceipt,
   ): Promise<EvolutionControlPlaneAdapterOutcome> {
+    if (plan.request.kind === "runtime_configuration" && isWebSearchCredentialChange(plan.request)) {
+      return resumeWebSearchCredential(context, plan, plan.request.change, receipt, this.deps.webSearchCredentials);
+    }
     if (
       plan.request.kind !== "runtime_configuration" ||
       plan.request.change.operation !== "gateway_auth_configuration" ||
@@ -252,6 +272,9 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     ) {
       await this.deps.discardTemporaryAuthCredential(plan.planId);
     }
+    if (plan.request.kind === "runtime_configuration" && isWebSearchCredentialChange(plan.request)) {
+      this.deps.webSearchCredentials?.discardTemporary(plan.planId);
+    }
     discardLlamaSetup(this.deps, plan);
   }
 
@@ -264,6 +287,9 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       };
     }
     assertNotRetiredToolProfileChange(plan.request);
+    if (isWebSearchCredentialChange(plan.request)) {
+      return observeWebSearchCredential(plan.request.change, this.deps.webSearchCredentials);
+    }
     const current = await this.deps.getSettings();
     const applied = matches(plan.request, current);
     return {
@@ -286,9 +312,14 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       await validateLlamaSetup(this.deps, request.change, workspaceId);
       return;
     }
-    if (request.change.operation === "operator_write_root" || request.change.operation === "tool_global_access") {
-      // The settings owner canonicalizes folders and checks tool posture; a
-      // plan is never prepared for a change the owner would refuse.
+    if (
+      request.change.operation === "operator_write_root" ||
+      request.change.operation === "tool_global_access" ||
+      request.change.operation === "web_firecrawl_configuration"
+    ) {
+      // The settings owner canonicalizes folders, checks tool posture, and
+      // requires an allowlisted Firecrawl URL; a plan is never prepared (or
+      // sent for approval) for a change the owner would refuse at apply.
       const validateSettingsUpdate = this.deps.validateSettingsUpdate;
       if (!validateSettingsUpdate) {
         throw new SemanticValidationError("The runtime write-access settings owner is unavailable.");
@@ -348,6 +379,10 @@ function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<Upd
       return { memory: { ...request.change.config } };
     case "web_firecrawl_configuration":
       return { web: { firecrawl: { ...request.change.config } } };
+    case "web_search_configuration":
+      return { web: { search: { engineOrder: [...request.change.config.engineOrder] } } };
+    case "web_search_credential":
+      throw new SemanticValidationError("Web-search keys use the dedicated OS-keychain owner path.");
     case "mesh_configuration": {
       const { staticPeers, ...config } = request.change.config;
       return { mesh: { ...config, ...(staticPeers !== undefined ? { staticPeers: [...staticPeers] } : {}) } };
@@ -401,6 +436,11 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
       return matchesMemory(settings, request.change.config);
     case "web_firecrawl_configuration":
       return matchesPartial(settings.web.firecrawl, request.change.config);
+    case "web_search_configuration":
+      return sameList(settings.web.search.engineOrder, request.change.config.engineOrder);
+    case "web_search_credential":
+      // Observed through the credential owner, never the settings projection.
+      return false;
     case "mesh_configuration":
       return matchesPartial(settings.mesh, request.change.config);
     case "npu_configuration":
@@ -531,6 +571,19 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
         "Future web reads may use the reviewed external service posture.",
         "caution",
       );
+    case "web_search_configuration": {
+      const [defaultEngine, ...backups] = request.change.config.engineOrder;
+      const order = request.change.config.engineOrder.join(" → ");
+      return {
+        title: "Change web search engines",
+        summary: `Search with ${defaultEngine}${backups.length ? `, then ${backups.join(", then ")}` : " only"}.`,
+        completedSummary: `Native web search now uses ${order}.`,
+        impact: "browser.search and the Chat search fallback use only these engines, in this order.",
+        risk: "safe" as const,
+      };
+    }
+    case "web_search_credential":
+      return describeWebSearchCredential(request.change);
     case "mesh_configuration":
       return typedConfigurationDescription(
         "mesh configuration",

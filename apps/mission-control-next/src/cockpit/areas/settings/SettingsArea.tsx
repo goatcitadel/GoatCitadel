@@ -18,6 +18,7 @@ import {
   IntegrationConnectionsSettings,
   ManagedRuntimeSettings,
   McpServersSettings,
+  WebSearchSettings,
   BudgetModeControl,
   ApprovalModeControl,
   FilesystemWriteRootsControl,
@@ -130,6 +131,8 @@ export function SettingsArea() {
         return <ChannelsSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />;
       case "mcp":
         return <McpServersSettings workspaceId={activeWorkspaceId ?? ""} />;
+      case "web-search":
+        return <WebSearchSettings />;
       case "addons":
         return (
           <>

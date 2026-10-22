@@ -17,7 +17,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "cockpit");
 
-export const LIVE_REGION_BUDGET = 887;
+// 892: Web & Search settings (#464) added five outcome and error callouts (allowlist, connection check, key actions,
+// key status load), which announce.
+export const LIVE_REGION_BUDGET = 892;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

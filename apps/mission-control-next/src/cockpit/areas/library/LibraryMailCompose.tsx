@@ -379,7 +379,7 @@ function LibraryMailComposeContent({
                 </Button>
               ) : (
                 <Button
-                  variant="danger"
+                  variant="primary"
                   disabled={busy || operation.locked || !available}
                   onClick={() => void requestSend()}
                 >
