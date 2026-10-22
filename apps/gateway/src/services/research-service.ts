@@ -15,6 +15,17 @@ import { createUtilityModelUsageAttribution } from "./utility-model-usage-attrib
 
 const DEEP_RESEARCH_PAGE_COUNT = 3;
 const DEEP_RESEARCH_PAGE_MAX_CHARS = 4000;
+const PAGE_FENCE_OPEN = "<<<page>>>";
+const PAGE_FENCE_CLOSE = "<<<end page>>>";
+
+/** Drops fence markers the page itself contains, then bounds the text to what navigate was asked for. */
+function sanitizePageExcerpt(text: string): string {
+  return text
+    .replaceAll(PAGE_FENCE_OPEN, "")
+    .replaceAll(PAGE_FENCE_CLOSE, "")
+    .trim()
+    .slice(0, DEEP_RESEARCH_PAGE_MAX_CHARS);
+}
 
 interface ResearchRunInput {
   sessionId: string;
@@ -200,8 +211,9 @@ export class ResearchService {
           }),
         );
         const text = page.outcome === "executed" ? page.result?.textSnippet : undefined;
-        if (typeof text === "string" && text.trim().length > 0) {
-          excerpts.set(source.sourceId, text.trim());
+        const excerpt = typeof text === "string" ? sanitizePageExcerpt(text) : "";
+        if (excerpt.length > 0) {
+          excerpts.set(source.sourceId, excerpt);
         }
       } catch {
         // Best effort: this source keeps only its search snippet.
@@ -234,7 +246,7 @@ export class ResearchService {
         const title = source.title ?? source.url;
         const snippet = source.snippet ? `\nSnippet: ${source.snippet}` : "";
         const excerpt = pageExcerpts.get(source.sourceId);
-        const page = excerpt ? `\nPage excerpt: ${excerpt}` : "";
+        const page = excerpt ? `\nPage excerpt:\n${PAGE_FENCE_OPEN}\n${excerpt}\n${PAGE_FENCE_CLOSE}` : "";
         return `${index + 1}. ${title}\nURL: ${source.url}${snippet}${page}`;
       })
       .join("\n\n");
