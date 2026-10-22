@@ -32,6 +32,11 @@ describe("buildActiveChatOptionSettings", () => {
     expect(buildActiveChatOptionSettings({ webMode: "deep", modelCouncilEnabled: false }).map((s) => s.label)).toEqual([
       "Deep research",
     ]);
+    expect(
+      buildActiveChatOptionSettings({ webMode: "deep", modelCouncilEnabled: false }).map((s) => s.description),
+    ).toEqual([
+      "Uses web search for your messages, asks for several independent sources, and allows a longer research pass (up to 8 minutes).",
+    ]);
   });
 
   it("surfaces a non-standard review depth rather than flattening it", () => {

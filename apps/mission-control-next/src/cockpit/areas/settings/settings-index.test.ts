@@ -149,7 +149,7 @@ describe("cold Settings destination projection", () => {
       "Access",
       "Advanced",
     ]);
-    expect(destinations.flatMap((page) => page.entries)).toHaveLength(discovery ? 22 : 25);
+    expect(destinations.flatMap((page) => page.entries)).toHaveLength(discovery ? 23 : 26);
     expect(
       fullPages.map((page) => ({
         ...page,

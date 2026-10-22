@@ -20,7 +20,6 @@ import {
 } from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
-import { Dialog } from "../../ui/Dialog";
 import { classifyOperationFailure } from "./approval-operation-attempts";
 import { currentInboxUserInput, hasCurrentInboxUserInputItem } from "./inbox-user-input-guard";
 
@@ -50,7 +49,6 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
   const locked = useRef(false);
   const [selectedOptionId, setSelectedOptionId] = useState("");
   const [textValue, setTextValue] = useState("");
-  const [review, setReview] = useState<{ prompt: ChatUserInputPromptRecord; response: Answer } | null>(null);
   const [pending, setPending] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [outcomeUncertain, setOutcomeUncertain] = useState(false);
@@ -73,12 +71,6 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
   const canAnswer = Boolean(prompt && !prompt.secureConfiguration && !scopeChanged && !completed && !outcomeUncertain);
   const selectedOption = prompt?.options?.find((option) => option.optionId === selectedOptionId);
   const hasAnswer = prompt?.kind === "single_select" ? Boolean(selectedOption) : Boolean(textValue.trim());
-  const answerPreview = (() => {
-    if (!review) return "";
-    if (review.response.kind === "text") return review.response.text;
-    const optionId = review.response.optionId;
-    return review.prompt.options?.find((option) => option.optionId === optionId)?.label ?? "";
-  })();
 
   function prepareAnswer() {
     if (!prompt || !canAnswer || !hasAnswer || pending) return;
@@ -86,12 +78,11 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
       prompt.kind === "single_select"
         ? { kind: "single_select", optionId: selectedOptionId }
         : { kind: "text", text: textValue.trim() };
-    setReview({ prompt, response });
+    void submitAnswer({ prompt, response });
   }
 
-  async function submitAnswer() {
+  async function submitAnswer(review: { prompt: ChatUserInputPromptRecord; response: Answer }) {
     if (
-      !review ||
       !item.source.sessionId ||
       !item.source.turnId ||
       !item.source.promptId ||
@@ -114,7 +105,6 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
         latest.secureConfiguration ||
         JSON.stringify(latest) !== JSON.stringify(review.prompt)
       ) {
-        setReview(null);
         setError("The question changed or is no longer waiting. Refresh its current record before answering.");
         void query.refetch();
         return;
@@ -131,7 +121,6 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
       ) {
         throw new Error("The saved answer did not match the question you answered.");
       }
-      setReview(null);
       setCompleted(true);
       setNotice(
         result.resumed
@@ -140,7 +129,6 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
       );
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
-      setReview(null);
       if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
         // Gateway answered and recorded nothing: the answer form stays available.
         setError(`The answer was not accepted. ${describeApiError(cause).summary}`);
@@ -166,7 +154,6 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
           size="sm"
           disabled={query.isFetching || pending}
           onClick={() => {
-            setReview(null);
             setError("");
             setSelectedOptionId("");
             setTextValue("");
@@ -267,7 +254,7 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
           ) : null}
           {canAnswer ? (
             <Button variant="primary" disabled={!hasAnswer || pending || checking} onClick={prepareAnswer}>
-              Review answer
+              Send answer
             </Button>
           ) : null}
         </>
@@ -287,26 +274,6 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
           {error}
         </p>
       ) : null}
-      <Dialog
-        open={Boolean(review)}
-        onOpenChange={(open) => {
-          if (!open && !pending) setReview(null);
-        }}
-        title="Submit this answer"
-        description="Your answer is saved to this conversation turn and may let its run continue."
-      >
-        <p className="mb-3 max-h-32 overflow-auto whitespace-pre-wrap break-words text-sm text-fg-secondary">
-          {answerPreview}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="primary" disabled={pending || scopeChanged || checking} onClick={() => void submitAnswer()}>
-            Confirm answer
-          </Button>
-          <Button disabled={pending} onClick={() => setReview(null)}>
-            Cancel
-          </Button>
-        </div>
-      </Dialog>
     </section>
   );
 }

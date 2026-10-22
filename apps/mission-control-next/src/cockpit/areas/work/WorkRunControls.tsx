@@ -232,7 +232,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
             <Button
               key={entry.id}
               size="sm"
-              variant={entry.id === "cancel" || entry.id === "retry" || entry.id === "recover" ? "danger" : "secondary"}
+              variant="secondary"
               disabled={pending || checking || letterView.phase === "checking"}
               onClick={() => {
                 setReviewed({ run, action: entry.id, deadLetter });
@@ -271,11 +271,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
-            variant={
-              reviewed?.action === "cancel" || reviewed?.action === "retry" || reviewed?.action === "recover"
-                ? "danger"
-                : "primary"
-            }
+            variant="primary"
             disabled={pending || scopeRef.current !== workspaceId || checking || letterView.phase === "checking"}
             onClick={() => void requestAction()}
           >

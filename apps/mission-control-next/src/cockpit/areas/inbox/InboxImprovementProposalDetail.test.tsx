@@ -143,24 +143,11 @@ describe("Inbox improvement proposal review", () => {
     expect(button("Keep proposal").disabled).toBe(false);
   });
 
-  it("keeps an open decision review open while it is rechecked", async () => {
-    await render();
-    await act(async () => button("Keep proposal").click());
-    const finish = await startRecheck();
-    expect(button("Confirm keep").disabled).toBe(true);
-    await finish();
-    expect(button("Confirm keep").disabled).toBe(false);
-  });
-
-  it("keeps with a primary button and discards with a secondary one, confirming either as primary", async () => {
+  it("keeps with a primary button and discards with a secondary one, in place", async () => {
     await render();
     expect(button("Keep proposal").className).toContain("bg-accent");
     expect(button("Discard proposal").className).toContain("bg-raised");
-    await act(async () => button("Discard proposal").click());
-    expect(button("Confirm discard").className).toContain("bg-accent");
-    await act(async () => button("Cancel").click());
-    await act(async () => button("Keep proposal").click());
-    expect(button("Confirm keep").className).toContain("bg-accent");
+    expect(document.body.querySelector("[role=dialog]")).toBeNull();
     expect(document.body.innerHTML).not.toContain("text-status-failed hover:bg-sunken");
   });
 
@@ -204,8 +191,6 @@ describe("Inbox improvement proposal review", () => {
     // Opening checks the cached Inbox; only the decision re-reads it.
     expect(api.fetchOperatorInbox).not.toHaveBeenCalled();
     await act(async () => button("Keep proposal").click());
-    expect(api.approveImprovementCandidate).not.toHaveBeenCalled();
-    await act(async () => button("Confirm keep").click());
     await settle();
     expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
     // Open, the decision's re-read, then the decided record is reset and read once more.
@@ -223,7 +208,6 @@ describe("Inbox improvement proposal review", () => {
       candidate: { ...review.candidate, summary: "Changed" },
     });
     await act(async () => button("Discard proposal").click());
-    await act(async () => button("Confirm discard").click());
     await settle();
     expect(api.rejectImprovementCandidate).not.toHaveBeenCalled();
     expect(container.textContent).toContain("action readiness changed");
@@ -233,7 +217,6 @@ describe("Inbox improvement proposal review", () => {
     await render();
     api.rejectImprovementCandidate.mockRejectedValueOnce(new Error("Network lost"));
     await act(async () => button("Discard proposal").click());
-    await act(async () => button("Confirm discard").click());
     await settle();
     expect(container.textContent).toContain("Decision outcome is uncertain");
     expect(container.textContent).not.toContain("Discard proposal");
@@ -246,13 +229,11 @@ describe("Inbox improvement proposal review", () => {
       new ApiRequestError("API error 409", { kind: "http", method: "POST", path: "/x", status: 409 }),
     );
     await act(async () => button("Discard proposal").click());
-    await act(async () => button("Confirm discard").click());
     await settle();
     expect(container.textContent).toContain("This changed somewhere else");
     expect(container.textContent).not.toContain("uncertain");
     expect(button("Discard proposal").disabled).toBe(false);
     await act(async () => button("Discard proposal").click());
-    await act(async () => button("Confirm discard").click());
     await settle();
     expect(api.rejectImprovementCandidate).toHaveBeenCalledTimes(2);
     expect(container.textContent).toContain("Proposal discarded.");
@@ -303,7 +284,6 @@ describe("Inbox improvement proposal review", () => {
     });
     await render();
     await act(async () => button("Keep proposal").click());
-    await act(async () => button("Confirm keep").click());
     await settle();
     expect(container.textContent).toContain("Decision outcome is uncertain");
     expect(container.textContent).not.toContain("Proposal kept.");

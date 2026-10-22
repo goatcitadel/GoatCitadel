@@ -281,6 +281,8 @@ export function InboxApprovalDetail({
           ) : null}
           {evidence || specialist ? (
             <InboxApprovalActions
+              // This detail states the expiry above, so the decision summary leaves it out.
+              expiryShownNearby
               specialistEvidence={specialistEvidence}
               item={item}
               approval={approval}
@@ -293,9 +295,6 @@ export function InboxApprovalDetail({
               }
             />
           ) : null}
-          <p className="text-xs text-fg-muted">
-            This is the current approval record. A decision alone does not prove its action ran.
-          </p>
         </>
       ) : null}
     </section>

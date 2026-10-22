@@ -149,6 +149,14 @@ export function InboxArea() {
         return { group, allItems, known, complete: count.complete };
       }).filter(({ allItems, known }) => allItems.length > 0 || known > 0)
     : [];
+  // The installation-wide rejection shows while this page has open decisions (IN-R01). Once shown it stays for this
+  // scope, so the receipt of a successful rejection survives the re-read that empties the page.
+  const hasOpenDecisions = shownGroups.some(
+    ({ group, allItems }) => group.id === "needs_decision" && allItems.length > 0,
+  );
+  const [bulkRejectScope, setBulkRejectScope] = useState<string | null>(null);
+  if (hasOpenDecisions && bulkRejectScope !== scopeKey) setBulkRejectScope(scopeKey);
+  const showBulkReject = hasOpenDecisions || bulkRejectScope === scopeKey;
   const { announce, region: announcer } = useInboxAnnouncer();
   const [contextSelection, setContextSelection] = useState<{ scope: string; id: string } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -318,7 +326,6 @@ export function InboxArea() {
           ) : (
             <InboxEmptyState projection={projection} />
           )}
-          <InboxApprovalHistory key={workspaceId} workspaceId={workspaceId} />
           {shownGroups.length ? (
             <InboxFilterBar
               items={visibleItems}
@@ -389,9 +396,12 @@ export function InboxArea() {
               />
             );
           })}
+          {/* History follows the decisions it records; the installation-wide rejection comes last, and only while this
+              page has open decisions, so an empty Inbox stays one state (IN-02, IN-10, IN-R01, IN-N08). */}
+          <InboxApprovalHistory key={workspaceId} workspaceId={workspaceId} />
+          {showBulkReject ? <InboxBulkRejectZone /> : null}
         </>
       ) : null}
-      <InboxBulkRejectZone />
     </section>
   );
 }

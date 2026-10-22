@@ -34,7 +34,7 @@ export function RuntimeNotificationsPanel({
   supportPanel: string | null;
   activeWorkspaceId: string;
   route: NativeRoutePagesProps["route"];
-  pendingApprovals: number;
+  pendingApprovals?: number;
 }) {
   const needsAttentionItems = buildNeedsAttentionItems(data, pendingApprovals, route.theme);
 

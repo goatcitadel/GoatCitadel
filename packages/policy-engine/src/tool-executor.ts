@@ -151,6 +151,8 @@ export interface ToolExecutorRuntimeHooks {
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
   /** Resolve protected official-search credentials at execution time, before environment fallback. */
   resolveCredential?: ResolveOfficialSearchCredential;
+  /** Resolve the keychain-held Firecrawl key at execution time, before environment fallback. */
+  resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
   /** Resolve a protected approval action bearer only inside the native comms provider adapter. */
   resolveApprovalActionTokenSecret?: (secretRef: string) => string;
   /** Remove a protected approval action bearer after a terminal provider outcome. */
@@ -282,6 +284,9 @@ const executeKnowledgeFamily = (
     ...(runtimeHooks.prepareEmbeddingUsageDispatch
       ? { prepareEmbeddingUsageDispatch: runtimeHooks.prepareEmbeddingUsageDispatch }
       : {}),
+    ...(runtimeHooks.resolveFirecrawlCredential
+      ? { resolveFirecrawlCredential: runtimeHooks.resolveFirecrawlCredential }
+      : {}),
     assertReadPathAllowedForRequest,
     fetchAllowlisted,
     resolveExecutionGrantAllowedHosts,
@@ -325,6 +330,7 @@ export async function executeTool(
       ...(request.runId ? { runId: request.runId } : {}),
       assertBrowserSessionAccess: runtimeHooks.assertBrowserSessionAccess,
       resolveCredential: runtimeHooks.resolveCredential,
+      resolveFirecrawlCredential: runtimeHooks.resolveFirecrawlCredential,
     });
     return finalizeToolResult(rawResult);
   }

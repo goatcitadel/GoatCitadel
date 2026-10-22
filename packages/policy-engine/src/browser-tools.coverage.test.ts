@@ -27,6 +27,7 @@ import {
   forgetBrowserSessionState,
   isBrowserToolName,
 } from "./browser-tools.js";
+import { resetFirecrawlReachabilityForTests } from "./firecrawl-reachability.js";
 
 const EXAMPLE_HOST = new URL("https://example.com").hostname;
 const DUCKDUCKGO_HOST = new URL("https://duckduckgo.com").hostname;
@@ -214,6 +215,7 @@ describe("browser tools coverage sweep", () => {
   });
 
   afterEach(async () => {
+    resetFirecrawlReachabilityForTests();
     globalThis.fetch = priorFetch;
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
@@ -1622,8 +1624,9 @@ describe("browser tools coverage sweep", () => {
       config,
     );
 
-    expect(response.backend).toBe("firecrawl");
-    expect(response.backendUsed).toBe(false);
+    expect(response.backend).toBe("native");
+    expect(response.requestedBackend).toBe("firecrawl");
+    expect(response.backendUsed).toBe(true);
     expect(response.fallbackUsed).toBe(true);
     expect(response.results).toEqual([
       { title: "Fallback Result", url: "https://example.com/fallback", snippet: "Fallback snippet" },
@@ -1640,8 +1643,9 @@ describe("browser tools coverage sweep", () => {
       config,
     );
     expect(navigate).toMatchObject({
-      backend: "firecrawl",
-      backendUsed: false,
+      backend: "native",
+      requestedBackend: "firecrawl",
+      backendUsed: true,
       fallbackUsed: true,
       action: "navigate",
     });
@@ -1658,8 +1662,9 @@ describe("browser tools coverage sweep", () => {
       config,
     );
     expect(extract).toMatchObject({
-      backend: "firecrawl",
-      backendUsed: false,
+      backend: "native",
+      requestedBackend: "firecrawl",
+      backendUsed: true,
       fallbackUsed: true,
       action: "extract",
     });
@@ -2675,9 +2680,17 @@ describe("browser tools coverage sweep", () => {
       return context;
     };
     mocked.launch.mockResolvedValueOnce(browser as never);
-    await expect(executeBrowserTool("browser.interact", {
-      url: "https://example.com/settlement", steps: [{ action: "wait", timeoutMs: 100 }],
-    }, config, execution)).rejects.toThrow();
+    await expect(
+      executeBrowserTool(
+        "browser.interact",
+        {
+          url: "https://example.com/settlement",
+          steps: [{ action: "wait", timeoutMs: 100 }],
+        },
+        config,
+        execution,
+      ),
+    ).rejects.toThrow();
     expect(describeBrowserSessionState(sessionId).availability).toBe("not_available");
     expect(close).toHaveBeenCalled();
   });

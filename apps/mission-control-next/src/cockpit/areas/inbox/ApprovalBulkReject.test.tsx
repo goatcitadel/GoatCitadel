@@ -210,3 +210,11 @@ it("keeps an interrupted caller operation locked after switching away and back",
   expect(bulk).toHaveBeenCalledOnce();
   await act(async () => setGatewayCallerScope(""));
 });
+
+it("names the confirm button in the typed-confirmation hint and puts Cancel last", async () => {
+  await click("Review installation-wide rejection");
+  const text = document.body.textContent ?? "";
+  expect(text).toContain("Confirm installation-wide rejection stays unavailable until the text matches");
+  const buttons = [...document.body.querySelectorAll("[role=dialog] button")].map((b) => b.textContent);
+  expect(buttons.at(-1)).toBe("Cancel");
+});

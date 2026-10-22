@@ -17,6 +17,8 @@ import {
   LlmConfigFileSchema,
   ToolPolicyConfigSchema,
   clampInt,
+  normalizeWebSearchEngineOrder,
+  type WebSearchNativeEngine,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import { normalizeFirecrawlApiKeyEnvName } from "@goatcitadel/policy-engine";
@@ -269,8 +271,14 @@ export interface FirecrawlRuntimeConfig {
   fallbackToNative: boolean;
 }
 
+export interface WebSearchRuntimeConfig {
+  /** Native engines in order: the first is the default, the rest are the backup order. */
+  engineOrder: WebSearchNativeEngine[];
+}
+
 export interface WebRuntimeConfig {
   firecrawl: FirecrawlRuntimeConfig;
+  search?: WebSearchRuntimeConfig;
 }
 
 export interface AuthConfig {
@@ -1279,6 +1287,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
         timeoutMs: clampInt(firecrawlInput.timeoutMs, 20_000, 1_000, 120_000),
         defaultReadBackend: firecrawlInput.defaultReadBackend ?? "firecrawl",
         fallbackToNative: firecrawlInput.fallbackToNative ?? true,
+      },
+      search: {
+        engineOrder: normalizeWebSearchEngineOrder(webInput.search?.engineOrder),
       },
     },
     mesh: {

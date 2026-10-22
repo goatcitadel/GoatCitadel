@@ -245,7 +245,9 @@ export function useGuidedModelSetup({
   );
 
   const pendingSetupPlan = pendingPlanForSelection(
-    [...(latestPlan ? [latestPlan] : []), ...activePlans].filter((plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status)),
+    [...(latestPlan ? [latestPlan] : []), ...activePlans].filter(
+      (plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
+    ),
     providerId,
   );
   const createPlan = async (request: Parameters<typeof createChangePlan>[0]["request"]) => {
@@ -321,6 +323,8 @@ export function useGuidedModelSetup({
   return {
     catalog,
     providers,
+    /** The provider saved for future Chats, distinct from the draft selection. */
+    savedProviderId: activeProviderId,
     draft: modelDraft,
     providerId,
     model,

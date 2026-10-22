@@ -151,6 +151,7 @@ export function WorkScheduleInspector({
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">
+            {/* danger-actions: destructive cancel — the "cancel" action deletes the schedule and can't be undone. */}
             <Button
               variant={pending === "cancel" ? "danger" : "primary"}
               disabled={busy || actionLocked || reviewChanged}

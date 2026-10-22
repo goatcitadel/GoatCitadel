@@ -6,6 +6,7 @@ import {
   createMockStorage,
   createToolCatalog,
 } from "./chat-turn-agent-runner-test-fixtures.js";
+import { DEEP_RESEARCH_THIN_EVIDENCE_FOOTER } from "./chat-turn-agent-runner/deep-research-evidence.js";
 
 describe("ChatTurnAgentRunner Cowork repair behavior", () => {
   it("never runs repo inspection tools on the model's behalf for explicit-tools prompt-lab chat turns", async () => {
@@ -868,19 +869,14 @@ describe("ChatTurnAgentRunner Cowork repair behavior", () => {
       expect.objectContaining({
         toolName: "browser.search",
         args: expect.objectContaining({
-          query: expect.stringMatching(/LangGraph.*AutoGen.*CrewAI.*official docs/i),
+          query: expect.stringMatching(/agentic harnesses/i),
         }),
       }),
     );
     expect(String(invokeTool.mock.calls[0]?.[0].args.query ?? "")).not.toMatch(/Delegated role|Parent objective/i);
-    expect(invokeTool).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "browser.navigate",
-        args: expect.objectContaining({
-          url: "https://langchain-ai.github.io/langgraph/",
-        }),
-      }),
-    );
+    // The runner no longer force-opens the first result for agentic-harness research topics; opening a
+    // result is the model's decision, and this scripted model never asks for it.
+    expect(invokeTool.mock.calls.map((call) => call[0].toolName)).not.toContain("browser.navigate");
   });
 
   it("clears stale partial-tool-call failures after repaired delegated Cowork research completes", async () => {
@@ -987,7 +983,8 @@ describe("ChatTurnAgentRunner Cowork repair behavior", () => {
       historyMessages: [{ role: "user", content: delegatedPrompt }],
     });
 
-    expect(result.assistantContent).toBe(repairedAnswer);
+    // The thin-evidence footer is expected: the turn is Deep and its only page read failed.
+    expect(result.assistantContent).toBe(`${repairedAnswer}\n\n${DEEP_RESEARCH_THIN_EVIDENCE_FOOTER}`);
     expect(result.turnTrace.failure).toBeUndefined();
     expect(result.turnTrace.completion?.failureCleared).toMatchObject({
       failureClass: "unknown",

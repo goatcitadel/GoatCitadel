@@ -41,7 +41,10 @@ export interface SettingsChangePlanInput {
     };
   };
   readonly memory?: RuntimeChangeFor<"memory_configuration">["config"];
-  readonly web?: { readonly firecrawl?: RuntimeChangeFor<"web_firecrawl_configuration">["config"] };
+  readonly web?: {
+    readonly firecrawl?: RuntimeChangeFor<"web_firecrawl_configuration">["config"];
+    readonly search?: RuntimeChangeFor<"web_search_configuration">["config"];
+  };
   readonly mesh?: RuntimeChangeFor<"mesh_configuration">["config"];
   readonly npu?: RuntimeChangeFor<"npu_configuration">["config"];
   readonly llamaCpp?: RuntimeChangeFor<"llama_cpp_configuration">["config"] & {
@@ -154,7 +157,16 @@ export function settingsChangePlanRequest(input: SettingsChangePlanInput): Chang
         ? { kind: "runtime_configuration", change: { operation: "memory_configuration", config: input.memory } }
         : null;
     case "web": {
+      // One governed owner per save: Firecrawl and the native engine order are separate plans.
       const firecrawl = input.web?.firecrawl;
+      const search = input.web?.search;
+      if (firecrawl && search) return null;
+      if (search?.engineOrder) {
+        return {
+          kind: "runtime_configuration",
+          change: { operation: "web_search_configuration", config: { engineOrder: search.engineOrder } },
+        };
+      }
       return firecrawl && Object.keys(firecrawl).length > 0
         ? { kind: "runtime_configuration", change: { operation: "web_firecrawl_configuration", config: firecrawl } }
         : null;

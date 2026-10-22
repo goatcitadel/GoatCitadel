@@ -81,7 +81,6 @@ export class ResearchService {
         toolName: "browser.search",
         args: {
           query: input.query,
-          engine: "duckduckgo",
           limit: input.mode === "deep" ? 10 : 5,
         },
         agentId: "research",

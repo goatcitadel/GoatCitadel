@@ -157,6 +157,16 @@ describe("Work run controls", () => {
     expect(container.textContent).toContain("Run moved to Queued");
   });
 
+  it("keeps cancel, retry and recover out of red: secondary trigger, primary confirm", async () => {
+    api.fetchDurableRun.mockResolvedValue({ ...run, status: "failed" });
+    await renderControls();
+    expect(button("Retry").className).not.toContain("text-status-failed");
+    expect(button("Retry").className).toContain("border-line-control");
+    await act(async () => button("Retry").click());
+    expect(button("Retry run").className).toContain("bg-accent");
+    expect(button("Retry run").className).not.toContain("text-status-failed");
+  });
+
   it("tones the result notice by the returned status instead of always reporting success", async () => {
     api.pauseDurableRun.mockResolvedValueOnce({ ...run, status: "failed", version: 3 });
     await renderControls();

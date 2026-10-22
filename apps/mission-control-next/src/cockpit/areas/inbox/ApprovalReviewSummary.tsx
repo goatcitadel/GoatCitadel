@@ -7,7 +7,16 @@ import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { splitApprovalSupport } from "./approval-preview";
-export function ApprovalReviewSummary({ approval, workspaceId }: { approval: ApprovalRequest; workspaceId: string }) {
+/** `showExpiry={false}` when the surrounding view already states the expiry once (IN-R04). */
+export function ApprovalReviewSummary({
+  approval,
+  workspaceId,
+  showExpiry = true,
+}: {
+  approval: ApprovalRequest;
+  workspaceId: string;
+  showExpiry?: boolean;
+}) {
   const evidence = buildApprovalRequestReviewEvidenceModel(approval);
   const { activeCitadelId } = useUiPreferences();
   const workspaceName = useWorkspaceNameLookup(activeCitadelId);
@@ -28,11 +37,13 @@ export function ApprovalReviewSummary({ approval, workspaceId }: { approval: App
       <p>
         <strong>Scope:</strong> {scope} This decision authorizes this request once.
       </p>
-      <p>
-        <strong>Expiry:</strong>{" "}
-        {approval.expiresAt ? <TimeText value={approval.expiresAt} absolute /> : "No expiry set"}
-        {approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now() ? " · Expired" : ""}
-      </p>
+      {showExpiry ? (
+        <p>
+          <strong>Expiry:</strong>{" "}
+          {approval.expiresAt ? <TimeText value={approval.expiresAt} absolute /> : "No expiry set"}
+          {approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now() ? " · Expired" : ""}
+        </p>
+      ) : null}
       {/* Generic targets arrive already labelled ("Path", "Target"); purpose-specific ones are bare values. */}
       {(evidence?.targetEntries ?? evidence?.targets.map((value) => ({ label: "Target", value })))?.map((target) => (
         <p key={target.label + target.value}>

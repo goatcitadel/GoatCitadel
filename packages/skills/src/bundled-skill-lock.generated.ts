@@ -98,9 +98,9 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:research",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "3bce6c0144921762e4d22edb47cfeb2f3fa2d4b9fd8eb4c2824fab52dbe5ff0f",
+    treeSha256: "ffe6e75adb906e3e1294676374b29f9cd58cc2289d2b82ba511021efcc1d5e4b",
     fileCount: 1,
-    totalBytes: 595,
+    totalBytes: 585,
   },
   {
     skillId: "bundled:sendclaw",

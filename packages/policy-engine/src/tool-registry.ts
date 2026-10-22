@@ -405,6 +405,29 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
                     {
                       type: "object",
                       properties: {
+                        operation: { const: "web_search_configuration" },
+                        config: {
+                          type: "object",
+                          properties: {
+                            engineOrder: {
+                              type: "array",
+                              minItems: 1,
+                              maxItems: 3,
+                              uniqueItems: true,
+                              items: { type: "string", enum: ["duckduckgo", "bing", "google"] },
+                              description: "Native search engines in order; the first is the default.",
+                            },
+                          },
+                          required: ["engineOrder"],
+                          additionalProperties: false,
+                        },
+                      },
+                      required: ["operation", "config"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
                         operation: { const: "mesh_configuration" },
                         config: {
                           type: "object",
@@ -1446,7 +1469,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     preferredForIntents: ["live_data", "web_lookup", "research"],
     usageHints: [
       "Use to discover candidate sources before navigating to a page.",
-      "Use backend=official for bounded Brave/Parallel API search; external request accounting is response-local only.",
+      "Set backend=official to search with Brave or Parallel (needs a configured key); otherwise native search or Firecrawl is used.",
     ],
     argSchema: {
       type: "object",

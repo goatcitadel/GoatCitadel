@@ -5,6 +5,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_COLUMN } from "../../ui/area-layout";
+import { EmbeddedClassicPage } from "../../ui/EmbeddedClassicPage";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
 // The heavy workbench stays lazy (Task16); it is the same shared owner Classic mounts, not a copy.
@@ -81,26 +82,28 @@ export function LibraryPromptPacks({ workspaceId }: { workspaceId: string }) {
   return (
     <>
       {header}
-      <Suspense
-        fallback={
-          <p role="status" className="p-4 text-sm text-fg-muted">
-            Loading prompt packs…
-          </p>
-        }
-      >
-        <PromptPacksWorkbenchPage
-          key={JSON.stringify([workspaceId, initialPackId, initialRunId, initialSessionId, requestedScoring])}
-          workspaceId={workspaceId}
-          variant="library"
-          navigate={navigate}
-          initialPackId={initialPackId}
-          initialRunId={initialRunId}
-          initialSessionId={initialSessionId}
-          initialDetailTab={
-            requestedScoring === "human" ? "review" : requestedScoring === "auto" ? "assessment" : undefined
+      <EmbeddedClassicPage>
+        <Suspense
+          fallback={
+            <p role="status" className="p-4 text-sm text-fg-muted">
+              Loading prompt packs…
+            </p>
           }
-        />
-      </Suspense>
+        >
+          <PromptPacksWorkbenchPage
+            key={JSON.stringify([workspaceId, initialPackId, initialRunId, initialSessionId, requestedScoring])}
+            workspaceId={workspaceId}
+            variant="library"
+            navigate={navigate}
+            initialPackId={initialPackId}
+            initialRunId={initialRunId}
+            initialSessionId={initialSessionId}
+            initialDetailTab={
+              requestedScoring === "human" ? "review" : requestedScoring === "auto" ? "assessment" : undefined
+            }
+          />
+        </Suspense>
+      </EmbeddedClassicPage>
     </>
   );
 }

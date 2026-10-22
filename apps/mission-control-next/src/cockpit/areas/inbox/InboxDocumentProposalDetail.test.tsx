@@ -159,11 +159,9 @@ describe("Inbox document proposal", () => {
       workspaceId: "default",
       signal: expect.any(AbortSignal),
     });
-    await act(async () => button("Review apply").click());
-    expect(document.body.textContent).toContain("Author: Assistant");
+    await act(async () => button("Apply change").click());
+    expect(document.body.textContent).toContain("Assistant proposed a full replacement");
     expect(document.body.textContent).not.toContain("proposal-a");
-    expect(api.applyDocumentPatchProposal).not.toHaveBeenCalled();
-    await act(async () => button("Confirm apply").click());
     // The decision re-reads the Inbox once and the proposal again, then the decided record is reset and read.
     expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
     expect(api.fetchDocumentPatchProposal).toHaveBeenCalledTimes(3);
@@ -173,22 +171,17 @@ describe("Inbox document proposal", () => {
 
   it("rejects the same exact reviewed proposal through its owner", async () => {
     await renderDetail();
-    await act(async () => button("Review rejection").click());
-    await act(async () => button("Confirm rejection").click());
+    await act(async () => button("Reject change").click());
     expect(api.rejectDocumentPatchProposal).toHaveBeenCalledWith("proposal-a", "default");
     expect(api.applyDocumentPatchProposal).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Proposal rejected.");
   });
 
-  it("applies (a versioned, reversible change) with a primary button and confirms either decision as primary", async () => {
+  it("applies (a versioned, reversible change) with a primary button and rejects with a secondary one, in place", async () => {
     await renderDetail();
-    expect(button("Review apply").className).toContain("bg-accent");
-    expect(button("Review rejection").className).toContain("bg-raised");
-    await act(async () => button("Review apply").click());
-    expect(button("Confirm apply").className).toContain("bg-accent");
-    await act(async () => button("Cancel").click());
-    await act(async () => button("Review rejection").click());
-    expect(button("Confirm rejection").className).toContain("bg-accent");
+    expect(button("Apply change").className).toContain("bg-accent");
+    expect(button("Reject change").className).toContain("bg-raised");
+    expect(document.body.querySelector("[role=dialog]")).toBeNull();
     expect(document.body.innerHTML).not.toContain("text-status-failed hover:bg-sunken");
   });
 
@@ -197,8 +190,7 @@ describe("Inbox document proposal", () => {
       item: { ...proposal, proposedContent: "Different", derivedDiff: "-Before\n+Different" },
     });
     await renderDetail();
-    await act(async () => button("Review apply").click());
-    await act(async () => button("Confirm apply").click());
+    await act(async () => button("Apply change").click());
     expect(api.applyDocumentPatchProposal).not.toHaveBeenCalled();
     expect(container.textContent).toContain("proposal changed or left the pending queue");
   });
@@ -212,7 +204,7 @@ describe("Inbox document proposal", () => {
   it("refuses a foreign owner record", async () => {
     api.fetchDocumentPatchProposal.mockResolvedValue({ item: { ...proposal, workspaceId: "other" } });
     await renderDetail();
-    expect(container.textContent).not.toContain("Review apply");
+    expect(container.textContent).not.toContain("Apply change");
     expect(api.applyDocumentPatchProposal).not.toHaveBeenCalled();
   });
 
@@ -222,7 +214,7 @@ describe("Inbox document proposal", () => {
     });
     await renderDetail();
     expect(container.textContent).toContain("too large to review in Inbox");
-    expect(container.textContent).not.toContain("Review apply");
+    expect(container.textContent).not.toContain("Apply change");
     expect(container.querySelector("pre")?.textContent?.length).toBeLessThanOrEqual(4_000);
   });
 
@@ -232,19 +224,10 @@ describe("Inbox document proposal", () => {
     expect(container.textContent).toContain("Checking for changes…");
     expect(container.textContent).toContain("+After");
     expect(container.textContent).not.toContain("Loading the current proposal");
-    expect(button("Review apply").disabled).toBe(true);
-    expect(button("Review rejection").disabled).toBe(true);
+    expect(button("Apply change").disabled).toBe(true);
+    expect(button("Reject change").disabled).toBe(true);
     await finish();
-    expect(button("Review apply").disabled).toBe(false);
-  });
-
-  it("keeps an open review open while the proposal is rechecked", async () => {
-    const client = await renderDetail();
-    await act(async () => button("Review apply").click());
-    const finish = await startRecheck(client);
-    expect(button("Confirm apply").disabled).toBe(true);
-    await finish();
-    expect(button("Confirm apply").disabled).toBe(false);
+    expect(button("Apply change").disabled).toBe(false);
   });
 
   it("keeps the diff beside a failed recheck", async () => {
@@ -261,11 +244,10 @@ describe("Inbox document proposal", () => {
 
   it("drops the decided proposal instead of showing it beside the outcome", async () => {
     await renderDetail();
-    await act(async () => button("Review apply").click());
     api.fetchDocumentPatchProposal
       .mockResolvedValueOnce({ item: proposal })
       .mockResolvedValue({ item: { ...proposal, state: "applied" } });
-    await act(async () => button("Confirm apply").click());
+    await act(async () => button("Apply change").click());
     await vi.waitFor(() => expect(container.textContent).toContain("This proposal is no longer waiting."));
     expect(container.textContent).toContain("Proposal applied. Use Open notes to see the current document.");
     expect(container.textContent).not.toContain("+After");
@@ -274,11 +256,10 @@ describe("Inbox document proposal", () => {
   it("locks another decision after an uncertain owner response", async () => {
     api.applyDocumentPatchProposal.mockRejectedValue(new Error("Connection lost"));
     await renderDetail();
-    await act(async () => button("Review apply").click());
-    await act(async () => button("Confirm apply").click());
+    await act(async () => button("Apply change").click());
     expect(api.applyDocumentPatchProposal).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("Document decision outcome is uncertain");
-    expect(container.textContent).not.toContain("Review apply");
+    expect(container.textContent).not.toContain("Apply change");
   });
 
   it("keeps the decision available after the owner refuses it", async () => {
@@ -292,13 +273,11 @@ describe("Inbox document proposal", () => {
       }),
     );
     await renderDetail();
-    await act(async () => button("Review apply").click());
-    await act(async () => button("Confirm apply").click());
+    await act(async () => button("Apply change").click());
     expect(container.textContent).toContain("Base revision no longer matches.");
     expect(container.textContent).not.toContain("uncertain");
-    expect(button("Review apply").disabled).toBe(false);
-    await act(async () => button("Review apply").click());
-    await act(async () => button("Confirm apply").click());
+    expect(button("Apply change").disabled).toBe(false);
+    await act(async () => button("Apply change").click());
     expect(api.applyDocumentPatchProposal).toHaveBeenCalledTimes(2);
     expect(container.textContent).toContain("Proposal applied. Use Open notes to see the current document.");
   });

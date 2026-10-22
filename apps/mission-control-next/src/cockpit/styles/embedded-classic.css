@@ -1,0 +1,43 @@
+/*
+ * Containment for Classic native-route pages mounted inside a cockpit tab (follow-up review SY-R02, SY-R03).
+ * Classic hides its kicker and styles NativeButton through rules scoped to `.mc-next-shell`, which only the Classic
+ * root sets, so inside the cockpit the hidden text showed and icons stacked above their labels. Every rule here is
+ * scoped to the EmbeddedClassicPage wrapper so cockpit-native surfaces are never affected.
+ */
+.cockpit-embedded-classic .mc-next-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.cockpit-embedded-classic .mc-pp-kicker,
+.cockpit-embedded-classic .mc-pp-command-copy > span {
+  display: none;
+}
+
+.cockpit-embedded-classic .mc-next-button,
+.cockpit-embedded-classic .mc-next-button-secondary,
+.cockpit-embedded-classic .mc-next-button-ghost,
+.cockpit-embedded-classic .mc-next-button-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+.cockpit-embedded-classic .mc-next-button svg,
+.cockpit-embedded-classic .mc-next-button-secondary svg,
+.cockpit-embedded-classic .mc-next-button-ghost svg,
+.cockpit-embedded-classic .mc-next-button-danger svg {
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* DESIGN.md: sentence case everywhere, no all-caps labels. The doubled class outranks Classic's label selectors. */
+.cockpit-embedded-classic.cockpit-embedded-classic * {
+  text-transform: none;
+  letter-spacing: normal;
+}

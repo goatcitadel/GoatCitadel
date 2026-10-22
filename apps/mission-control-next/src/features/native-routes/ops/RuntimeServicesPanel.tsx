@@ -6,7 +6,7 @@ import {
   readDaemonRuntimeDiagnostics,
 } from "./RuntimeDaemonPanels";
 import { LlamaCppRuntimeTruthCard } from "./LlamaCppRuntimeTruthCard";
-import { sourceFailed } from "./runtime-overview-model";
+import { presentPendingApprovals, presentRuntimeDaemon, sourceFailed } from "./runtime-overview-model";
 import {
   capitalize,
   formatDateTime,
@@ -26,6 +26,15 @@ import type { NativeRoutePagesProps } from "../types";
 import type { OpsRuntimeData } from "./runtime-overview-model";
 import type { RuntimePanelSetter, RuntimeTab } from "./runtime-panel-types";
 import { RuntimeEfficiencyPanels } from "./RuntimeEfficiencyPanels";
+
+// The daemon chip takes its colour from the same derivation as its words (shared describeRuntimeService).
+const DAEMON_CHIP_TONE = {
+  done: "success",
+  running: "success",
+  waiting: "warning",
+  failed: "critical",
+  neutral: "muted",
+} as const;
 
 export function RuntimeServicesPanel({
   runtimeTab,
@@ -47,7 +56,7 @@ export function RuntimeServicesPanel({
   supportPanel: string | null;
   activeWorkspaceId: string;
   navigate: NativeRoutePagesProps["navigate"];
-  pendingApprovals: number;
+  pendingApprovals?: number;
   runtime: Pick<ReturnType<typeof useOpsRuntimeSnapshot>, "notice" | "daemonBusy" | "runDaemonAction" | "reload">;
 }) {
   const daemonSourceUnavailable = sourceFailed(data, "daemon");
@@ -61,9 +70,6 @@ export function RuntimeServicesPanel({
   // and fall back to inert defaults, here and in the helpers below.
   const daemonControllable = data.daemon?.controllable ?? data.health?.daemonStatus?.controllable ?? false;
   const daemonHandoff = readDaemonControlHandoff(data);
-  const daemonRunning = daemonRuntimeUnavailable
-    ? null
-    : (data.daemon?.running ?? data.health?.daemonStatus?.running ?? null);
   const daemonHost = daemonRuntimeUnavailable
     ? "unavailable"
     : (data.daemon?.host ?? data.health?.daemonStatus?.host ?? "Unknown");
@@ -112,9 +118,7 @@ export function RuntimeServicesPanel({
               {
                 title: "Gateway",
                 meta: daemonState,
-                body:
-                  daemonDiagnostics[0]?.title ??
-                  (daemonRunning === null ? "Status unavailable" : daemonRunning ? "Running" : "Stopped"),
+                body: daemonDiagnostics[0]?.title ?? presentRuntimeDaemon(data).label,
                 actions: (
                   <NativeButton variant="outline" onClick={() => setSupportPanel("daemon")}>
                     Gateway details
@@ -205,7 +209,7 @@ export function RuntimeServicesPanel({
           density="compact"
           className="mc-next-runtime-posture-card"
           stats={[
-            { label: "Approvals", value: String(data.dashboard?.pendingApprovals ?? pendingApprovals) },
+            presentPendingApprovals(data, pendingApprovals),
             {
               label: "MCP",
               value:
@@ -215,8 +219,8 @@ export function RuntimeServicesPanel({
         >
           {runtime.notice ? <NoticeBanner tone={runtime.notice.tone} message={runtime.notice.message} /> : null}
           <div className="mc-next-runtime-chip-row">
-            <StatusChip tone={daemonRuntimeUnavailable ? "critical" : daemonRunning ? "success" : "warning"}>
-              {daemonRuntimeUnavailable ? "Daemon unavailable" : daemonRunning ? "Daemon running" : "Daemon stopped"}
+            <StatusChip tone={DAEMON_CHIP_TONE[presentRuntimeDaemon(data).tone]}>
+              {`Daemon: ${presentRuntimeDaemon(data).label}`}
             </StatusChip>
             <StatusChip
               tone={

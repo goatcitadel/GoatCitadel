@@ -615,13 +615,15 @@ describe("ChatTranscript", () => {
     await render(props);
     await vi.waitFor(() => {
       const review = [...container.querySelectorAll("button")].find(
-        (button) => button.textContent === "Review approval",
+        (button) => button.textContent === "Review danger approval",
       );
       expect(review).toBeDefined();
       expect(review!.disabled).toBe(false);
     });
     await act(async () =>
-      [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval")!.click(),
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Review danger approval")!
+        .click(),
     );
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     await render({
