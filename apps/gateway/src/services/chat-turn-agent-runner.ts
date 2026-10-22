@@ -1261,18 +1261,26 @@ export class ChatTurnAgentRunner {
     const localResearchContinuation = resolveLocalResearchContinuation(input.content, input.historyMessages);
     const presentationArtifactIntent =
       !suppressPromptLabCodeArtifactTools && detectPresentationArtifactIntent(input.content);
+    const detectedWebLookupIntent =
+      detectWebLookupIntent(intentDetectionContent, input.historyMessages) ||
+      (intentDetectionContent !== input.content
+        ? detectWebLookupIntent(input.content, input.historyMessages)
+        : false) ||
+      Boolean(localResearchContinuation);
+    const localFileIntent = detectLocalFileIntent(input.content);
     const intents = {
       liveData:
         detectLiveDataIntent(intentDetectionContent) ||
         (intentDetectionContent !== input.content ? detectLiveDataIntent(input.content) : false) ||
         Boolean(localResearchContinuation),
-      webLookup:
-        detectWebLookupIntent(intentDetectionContent, input.historyMessages) ||
-        (intentDetectionContent !== input.content
-          ? detectWebLookupIntent(input.content, input.historyMessages)
-          : false) ||
-        Boolean(localResearchContinuation),
-      localFile: detectLocalFileIntent(input.content),
+      // Deep mode counts as a web lookup on its own so a bounded schema keeps the web essentials.
+      webLookup: resolveTurnWebLookupIntent({
+        webMode: input.webMode,
+        detectedWebLookupIntent,
+        localFileIntent,
+        workflowSkillCapture: false,
+      }),
+      localFile: localFileIntent,
       presentationArtifact: presentationArtifactIntent,
       documentArtifact:
         !suppressPromptLabCodeArtifactTools &&
