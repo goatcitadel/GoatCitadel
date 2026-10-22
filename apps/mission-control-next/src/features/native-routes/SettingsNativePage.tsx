@@ -40,6 +40,9 @@ const ToolsSection = lazy(() =>
 const HooksSection = lazy(() =>
   import("./settings/sections/HooksSection").then((module) => ({ default: module.HooksSection })),
 );
+const WebSearchSection = lazy(() =>
+  import("./settings/sections/WebSearchSection").then((module) => ({ default: module.WebSearchSection })),
+);
 const RuntimeSection = lazy(() =>
   import("./settings/sections/RuntimeSection").then((module) => ({ default: module.RuntimeSection })),
 );
@@ -174,6 +177,8 @@ function renderSettingsSection(props: SettingsSectionProps) {
       return <ChannelsSection {...props} />;
     case "mcp":
       return <McpSection {...props} />;
+    case "web-search":
+      return <WebSearchSection {...props} />;
     case "tools":
       return <ToolsSection {...props} />;
     case "hooks":

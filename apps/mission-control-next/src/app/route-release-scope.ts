@@ -429,6 +429,15 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
   },
   {
     area: "settings",
+    section: "web-search",
+    status: "ship",
+    releaseAction:
+      "Configure Firecrawl (hosted or self-hosted), the native search engine order, and keychain-held Firecrawl, Brave, and Parallel keys.",
+    verification: "WebSearchSettings tests, gateway web-search credential and settings tests",
+    note: "Web & Search saves through the governed settings path; keys are live-checked and stored only in the OS keychain, with environment variables as the fallback.",
+  },
+  {
+    area: "settings",
     section: "tools",
     status: "ship",
     releaseAction: "Inspect low-level tool catalog and scoped allow/deny grants.",

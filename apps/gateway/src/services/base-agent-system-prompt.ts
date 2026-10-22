@@ -20,7 +20,7 @@
  * Pure functions only — all inputs are passed in, no I/O. The caller gathers
  * runtime info and feeds the rendered result into `mergeChatSystemInstructions`.
  */
-import type { ChatMode, ChatNormalizationProfile } from "@goatcitadel/contracts";
+import type { ChatMode, ChatNormalizationProfile, ChatWebMode } from "@goatcitadel/contracts";
 
 export interface BaseAgentRuntimeInfo {
   /** Human-formatted date, e.g. "Saturday, June 21, 2026". Caller formats it. */
@@ -62,6 +62,8 @@ export interface BuildBaseAgentSystemPromptInput {
   normalizationProfile?: ChatNormalizationProfile;
   /** Optional compact memory digest; only emitted when present (memory is otherwise injected downstream). */
   memoryDigest?: string;
+  /** The turn's web mode. `deep` adds the Deep research contract to the volatile tail. */
+  webMode?: ChatWebMode;
 }
 
 export interface BaseAgentSystemPrompt {
@@ -130,6 +132,21 @@ const OUTPUT_BAR_SECTION = [
   "- Answer the operator's actual question directly and first; add only supporting detail that earns its place.",
   "- Match depth to the request: concise for simple asks, thorough for complex ones. Do not pad with restatements, boilerplate disclaimers, or status headings unless asked.",
   "- If you could not fully complete the task, say so plainly: state what is done, what is not, and the next step. Never imply success you did not achieve.",
+].join("\n");
+
+/**
+ * Deep research sourcing contract. The operator toggles Deep research per message, so this lives
+ * in the volatile tail and never changes the cached stable prefix.
+ */
+export const DEEP_RESEARCH_PROMPT_SECTION = [
+  "## Web research: deep",
+  "The operator turned on Deep research for this message.",
+  "When this message needs information from the web:",
+  "- Run 2–4 differently worded searches before answering; do not stop at the first result page.",
+  "- Open at least two relevant pages from different sites before relying on them, preferring primary sources.",
+  "- Cross-check key facts across sources and say which claims you could not verify.",
+  "- Cite the pages you relied on by URL.",
+  "Skip web research for greetings and for questions about local files or this workspace.",
 ].join("\n");
 
 const QUICK_WEB_STABLE_PREFIX = [
@@ -236,6 +253,10 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
 
   if (input.memoryDigest?.trim()) {
     tailSections.push(`## Memory\n${input.memoryDigest.trim()}`);
+  }
+
+  if (input.webMode === "deep") {
+    tailSections.push(DEEP_RESEARCH_PROMPT_SECTION);
   }
 
   return { stablePrefix, volatileTail: tailSections.join("\n\n") };

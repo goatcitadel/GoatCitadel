@@ -75,3 +75,20 @@ it.each(["?runId=r%2F1&taskId=t&workspaceId=workspace-a", "?view=run-detail&work
     );
   },
 );
+it("wraps the Kanban in the cockpit column", () => {
+  act(() => root.render(<WorkKanban />));
+  const owner = [...host.querySelectorAll("p")].find((p) => p.textContent === "Existing revision-aware task owner");
+  expect(owner?.closest(".cockpit-embedded-classic")).not.toBeNull();
+});
+it("titles a run detail with Run, not the raw id", () => {
+  fixture.search = "?runId=run_0123456789abcdef&workspaceId=workspace-a";
+  act(() => root.render(<WorkKanban />));
+  expect(host.querySelector("h1")?.textContent).toBe("Run");
+  const run = [...host.querySelectorAll("p")].find((p) => p.textContent === "Existing run evidence owner");
+  expect(run?.closest(".cockpit-embedded-classic")).not.toBeNull();
+});
+it("points to archived tasks in a full sentence without theater copy", () => {
+  act(() => root.render(<WorkKanban />));
+  expect(host.textContent).toContain("Archived tasks are in Work › Archived tasks.");
+  expect(host.textContent).not.toMatch(/prove a run/);
+});

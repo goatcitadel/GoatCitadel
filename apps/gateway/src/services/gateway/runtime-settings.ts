@@ -1,3 +1,4 @@
+import { type WebSearchNativeEngine } from "@goatcitadel/contracts";
 import type {
   AuthRuntimeSettings,
   DeploymentProfile,
@@ -62,6 +63,11 @@ export interface RuntimeSettings {
       timeoutMs: number;
       defaultReadBackend: "native" | "firecrawl";
       fallbackToNative: boolean;
+      /** Whether tools may reach the base URL; reads fall back to native when false. */
+      baseUrlAllowlisted?: boolean;
+    };
+    search: {
+      engineOrder: WebSearchNativeEngine[];
     };
   };
   auth: AuthRuntimeSettings;

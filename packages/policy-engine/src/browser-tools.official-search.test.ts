@@ -124,3 +124,40 @@ describe("browser.search official provider path", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("browser.search sensitive-query refusal on native and Firecrawl backends", () => {
+  const refusal =
+    "browser.search refused: the query names internal infrastructure or a secret; remove it and search again.";
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["native", { query: "build.internal status", backend: "native" }],
+    ["native fallback retry", { query: "db01.corp outage", backend: "native", engine: "bing" }],
+    [
+      "firecrawl",
+      {
+        query: "sk-proj-abcdefghijklmnopqrstuvwx invalid",
+        backend: "firecrawl",
+        firecrawlBaseUrl: "https://firecrawl.example.com",
+        firecrawlFallbackToNative: false,
+      },
+    ],
+  ] as const)("refuses on the %s path before any network call", async (_label, args) => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "fc-test-key");
+    const fetchMock = vi.fn(async () => new Response("<html></html>", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      executeBrowserTool(
+        "browser.search",
+        { ...args },
+        config(["lite.duckduckgo.com", "www.bing.com", "www.google.com", "firecrawl.example.com"]),
+      ),
+    ).rejects.toThrow(refusal);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

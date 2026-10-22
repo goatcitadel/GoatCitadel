@@ -13,6 +13,7 @@ import {
   LlmProviderRequestConfigSchema,
   SemanticValidationError,
   ServiceUnavailableError,
+  WEB_SEARCH_NATIVE_ENGINES,
 } from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
 import { settingsChangePlanRequest, type SettingsChangePlanInput } from "./dashboard-settings-change-plan.js";
@@ -176,6 +177,12 @@ export const updateSettingsSchema = z.object({
           defaultReadBackend: z.enum(["native", "firecrawl"]).optional(),
           fallbackToNative: z.boolean().optional(),
         })
+        .optional(),
+      search: z
+        .object({
+          engineOrder: z.array(z.enum(WEB_SEARCH_NATIVE_ENGINES)).min(1).max(WEB_SEARCH_NATIVE_ENGINES.length),
+        })
+        .strict()
         .optional(),
     })
     .optional(),

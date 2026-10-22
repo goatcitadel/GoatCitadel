@@ -42,7 +42,7 @@ export const ANATOMY_RULES = [
   },
   {
     id: "card-surface",
-    budget: 19,
+    budget: 18,
     help: "make the page the only card; use ui/Section for sub-sections",
     // Card containers: a large radius with a border. Controls (inputs, buttons, chips) use rounded-md and stay out.
     count: (_relative, contents) =>
@@ -71,7 +71,8 @@ export const ANATOMY_RULES = [
       relative.startsWith("areas/settings/") && relative.endsWith(".tsx")
         ? [...contents.matchAll(/<(?:input|select|textarea)\b([^>]*)>/gs)].filter(
             (match) =>
-              !/\{\.\.\.(?:field|\w*[pP]rops)\b/.test(match[1]) && !/type=["'](?:checkbox|radio|hidden|file)["']/.test(match[1]),
+              !/\{\.\.\.(?:field|\w*[pP]rops)\b/.test(match[1]) &&
+              !/type=["'](?:checkbox|radio|hidden|file)["']/.test(match[1]),
           ).length
         : 0,
   },
@@ -80,6 +81,26 @@ export const ANATOMY_RULES = [
     budget: 0,
     help: "the guided model setup is built from cockpit primitives; do not bring back the Classic override sheet",
     count: (_relative, contents) => contents.match(/model-setup\.css/g)?.length ?? 0,
+  },
+  {
+    id: "unwrapped-classic-page",
+    budget: 0,
+    help: "render Classic route and workbench pages inside ui/EmbeddedClassicPage so they keep the cockpit column and lose Classic-only chrome",
+    // A Classic page (…RoutePage or …WorkbenchPage) rendered outside an enclosing <EmbeddedClassicPage>. Each page is
+    // checked on its own, so one wrapped page doesn't exempt the rest of the file.
+    count: (relative, contents) => {
+      if (!relative.startsWith("areas/") || !relative.endsWith(".tsx")) return 0;
+      let depth = 0;
+      let unwrapped = 0;
+      for (const match of contents.matchAll(
+        /<EmbeddedClassicPage\b[^>]*?(\/?)>|<\/EmbeddedClassicPage>|<[A-Z][A-Za-z]*(?:RoutePage|WorkbenchPage)\b/g,
+      )) {
+        if (match[0].startsWith("</")) depth = Math.max(0, depth - 1);
+        else if (match[0].startsWith("<EmbeddedClassicPage")) depth += match[1] ? 0 : 1;
+        else if (depth === 0) unwrapped += 1;
+      }
+      return unwrapped;
+    },
   },
 ];
 

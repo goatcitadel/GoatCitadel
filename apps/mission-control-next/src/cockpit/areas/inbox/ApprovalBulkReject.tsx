@@ -127,7 +127,7 @@ function BulkReject({ onResolved }: { onResolved: () => void }) {
             value={typed}
             onChange={setTyped}
             disabled={busy}
-            consequence="Reject all"
+            consequence="Confirm installation-wide rejection"
           />
           {outcome ? <p role="status">{outcome}</p> : null}
           <Button

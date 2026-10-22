@@ -624,6 +624,7 @@ export function createExecuteToolCallForTest(input: {
   persistToolArtifact?: NonNullable<ChatTurnAgentRunnerDeps["persistToolArtifact"]>;
   invokeMcpTool?: NonNullable<ChatTurnAgentRunnerDeps["invokeMcpTool"]>;
   listMcpBrowserFallbackTargets?: NonNullable<ChatTurnAgentRunnerDeps["listMcpBrowserFallbackTargets"]>;
+  getSearchEngineOrder?: NonNullable<ChatTurnAgentRunnerDeps["getSearchEngineOrder"]>;
   recordRuntimeDecision?: NonNullable<ChatTurnAgentRunnerDeps["recordRuntimeDecision"]>;
   enqueueRuntimeDecision?: NonNullable<ChatTurnAgentRunnerDeps["enqueueRuntimeDecision"]>;
   safeWriteFallbackDir?: string;
@@ -643,6 +644,7 @@ export function createExecuteToolCallForTest(input: {
     invokeToolWithEffectTruth: input.invokeToolWithEffectTruth,
     invokeMcpTool: input.invokeMcpTool,
     listMcpBrowserFallbackTargets: input.listMcpBrowserFallbackTargets,
+    getSearchEngineOrder: input.getSearchEngineOrder,
     recordRuntimeDecision: input.recordRuntimeDecision,
     enqueueRuntimeDecision: input.enqueueRuntimeDecision,
     persistToolArtifact: input.persistToolArtifact,
