@@ -358,14 +358,19 @@ describe("tool registry", () => {
 });
 
 describe("browser maxChars schema", () => {
-  it("advertises the 20000-char ceiling the runtime clamps to for navigate and extract", () => {
+  it("advertises each browser tool's maxChars maximum equal to its runtime clamp", () => {
+    // Runtime clamps in browser-tools.ts: navigate 20000, extract 50000.
+    const expectedMaximum: Record<string, number> = {
+      "browser.navigate": 20000,
+      "browser.extract": 50000,
+    };
     const catalog = createDefaultToolRegistry().toCatalog();
-    for (const name of ["browser.navigate", "browser.extract"]) {
+    for (const [name, maximum] of Object.entries(expectedMaximum)) {
       const tool = catalog.find((item) => item.toolName === name);
       expect(tool, `${name} should be registered`).toBeDefined();
       const properties = (tool?.argSchema as { properties?: { maxChars?: { maximum?: number } } } | undefined)
         ?.properties;
-      expect(properties?.maxChars?.maximum, `${name} maxChars maximum`).toBe(20000);
+      expect(properties?.maxChars?.maximum, `${name} maxChars maximum`).toBe(maximum);
     }
   });
 });
