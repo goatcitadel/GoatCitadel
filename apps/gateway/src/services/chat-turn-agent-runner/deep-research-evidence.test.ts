@@ -131,14 +131,12 @@ describe("buildDeepResearchThinEvidenceFooter", () => {
     expect(buildDeepResearchThinEvidenceFooter({ webMode: "deep", toolRuns, paused: true })).toBeUndefined();
   });
 
-  it("stays silent for a delegated child turn so the parent turn owns the note", () => {
+  it("flags a delegated child without a result contract so its note travels in its prose to the parent", () => {
     const toolRuns = [toolRun("browser.search", undefined)];
-    expect(
-      buildDeepResearchThinEvidenceFooter({ webMode: "deep", toolRuns, delegatedChildTurn: true }),
-    ).toBeUndefined();
-    expect(buildDeepResearchThinEvidenceFooter({ webMode: "deep", toolRuns, delegatedChildTurn: false })).toBe(
-      DEEP_RESEARCH_THIN_EVIDENCE_FOOTER,
-    );
+    // `delegatedChildTurn: true` is what the old skip keyed on; it is no longer an input, so the cast
+    // keeps this a regression guard that fails if the skip returns.
+    const input = { webMode: "deep", toolRuns, delegatedResultContract: false, delegatedChildTurn: true } as const;
+    expect(buildDeepResearchThinEvidenceFooter(input)).toBe(DEEP_RESEARCH_THIN_EVIDENCE_FOOTER);
   });
 
   it("stays silent outside Deep mode", () => {

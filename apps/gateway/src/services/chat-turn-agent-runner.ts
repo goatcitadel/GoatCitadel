@@ -6251,7 +6251,6 @@ export class ChatTurnAgentRunner {
         webMode: input.webMode,
         toolRuns,
         delegatedResultContract: Boolean(delegatedResultContract),
-        delegatedChildTurn: Boolean(input.parentDelegationStepId),
         paused: Boolean(approvalPayload || pendingUserInput),
       });
       if (deepResearchFooter && !assistantContent.includes(deepResearchFooter)) {
