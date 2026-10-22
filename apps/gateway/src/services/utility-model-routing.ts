@@ -1,4 +1,5 @@
 import type { LlmProviderSummary, LlmRuntimeConfig } from "@goatcitadel/contracts";
+import { isRouteLocalProvider } from "./chat-route-local-ward.js";
 
 export interface UtilityModelOverride {
   providerId: string;
@@ -56,16 +57,19 @@ const JUDGE_FALLBACK_PROVIDERS: ReadonlyArray<{ providerId: string; fallbackMode
  * Picks the model for background judge-style calls (post-turn commitment
  * classification, background review, proactive planning) when no utility
  * override applies. The operator's active provider wins whenever it is ready,
- * so background work follows the provider they chose for Chat.
+ * so background work follows the provider they chose for Chat. A keyless
+ * provider on a loopback endpoint (Ollama, LM Studio, llama.cpp) counts as
+ * ready, so a local choice never leaks post-turn transcripts to a remote
+ * fallback.
  */
 export function resolveJudgeModelDefaults(
   runtime: Pick<LlmRuntimeConfig, "activeProviderId" | "activeModel"> & {
-    providers: ReadonlyArray<Pick<LlmProviderSummary, "providerId" | "hasApiKey" | "defaultModel">>;
+    providers: ReadonlyArray<Pick<LlmProviderSummary, "providerId" | "baseUrl" | "hasApiKey" | "defaultModel">>;
   },
 ): JudgeModelDefaults {
   const active = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
   const activeModel = runtime.activeModel || active?.defaultModel;
-  if (active?.hasApiKey && activeModel) {
+  if (active && (active.hasApiKey || isRouteLocalProvider(active)) && activeModel) {
     return { providerId: active.providerId, model: activeModel };
   }
   for (const candidate of JUDGE_FALLBACK_PROVIDERS) {
