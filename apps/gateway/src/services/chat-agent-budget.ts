@@ -7,7 +7,12 @@ import {
   type ChatTurnFailureRecord,
   type ChatWebMode,
 } from "@goatcitadel/contracts";
-import { SUBAGENT_FANOUT_MAX_SUBTASKS, SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
+import {
+  isOfficialResearchSearchInvocation,
+  resolveOfficialSearchProviders,
+  SUBAGENT_FANOUT_MAX_SUBTASKS,
+  SUBAGENT_FANOUT_TOOL_NAME,
+} from "@goatcitadel/policy-engine";
 
 const MAX_TOOL_LOOPS = 6;
 const MAX_TOOL_RUNS_PER_TURN = 12;
@@ -442,6 +447,10 @@ export function minimumRemainingBudgetForToolStart(toolName: string, executionBu
 }
 
 export function toolRunBudgetCostForToolCall(toolName: string, args: Record<string, unknown>): number {
+  if (toolName === "browser.search" && isOfficialResearchSearchInvocation(args)) {
+    // Each official provider in the request is a separate paid API call, so charge per provider.
+    return Math.max(1, resolveOfficialSearchProviders(args).length);
+  }
   if (toolName !== SUBAGENT_FANOUT_TOOL_NAME) {
     return 1;
   }

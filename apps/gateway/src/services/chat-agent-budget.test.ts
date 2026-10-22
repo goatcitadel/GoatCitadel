@@ -528,6 +528,12 @@ describe("chat-agent-budget", () => {
     ).toBe(3);
   });
 
+  it("charges official research search tool-run budget once per requested provider", () => {
+    expect(toolRunBudgetCostForToolCall("browser.search", { backend: "official", mode: "research" })).toBe(2);
+    expect(toolRunBudgetCostForToolCall("browser.search", { backend: "official", providers: ["brave"] })).toBe(1);
+    expect(toolRunBudgetCostForToolCall("browser.search", { query: "x" })).toBe(1);
+  });
+
   it("enforces deadlines and produces user-safe budget/failure text", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-14T00:00:00.000Z"));
