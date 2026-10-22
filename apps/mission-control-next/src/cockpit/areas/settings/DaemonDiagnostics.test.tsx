@@ -58,9 +58,12 @@ it("shows actual owner diagnostics and manual handoffs without process mutation 
   expect(JSON.stringify(renderer.toJSON())).toContain("Passed");
   expect(JSON.stringify(renderer.toJSON())).not.toContain("fixture-host");
   expect(renderer.root.findAllByType("button").map((item) => item.children.join(""))).toEqual([
-    "Refresh Gateway process",
+    "Refresh process status",
   ]);
   expect(JSON.stringify(renderer.toJSON())).toContain("never runs the commands below");
+  // The server's control note is technical detail, hidden by default (WK-N09 / SY-N07).
+  expect(JSON.stringify(renderer.toJSON())).not.toContain("Process controls require the external owner.");
+  expect(renderer.root.findByType("h3").children.join("")).toBe("GoatCitadel process");
   expect(JSON.stringify(renderer.toJSON())).toContain("Verify process ownership");
 });
 it("shows unavailable evidence when the canonical read fails", async () => {

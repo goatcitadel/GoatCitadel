@@ -36,7 +36,9 @@ export function McpCreateReview({ input }: { input: McpCreateInput }) {
         </dd>
         <dt>First tool approval</dt>
         <dd>
-          {input.policy?.requireFirstToolApproval ? "Required by this server policy" : "Gateway policy still applies"}
+          {input.policy?.requireFirstToolApproval
+            ? "Required by this server policy"
+            : "GoatCitadel policy still applies"}
         </dd>
         <dt>Redaction</dt>
         <dd>{text(input.policy?.redactionMode)}</dd>

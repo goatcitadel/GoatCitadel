@@ -45,7 +45,7 @@ export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord;
     await owner.confirm(
       (updated) => {
         setTarget(updated.assignedAgentId ?? "");
-        setNotice("Gateway recorded the task assignment. This does not start a run or transfer runtime ownership.");
+        setNotice("Task assignment saved. This does not start a run or move a running execution.");
         void Promise.allSettled([
           client.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, updated.taskId] }),
           client.invalidateQueries({ queryKey: queryKeys.workTasks(workspaceId) }),
@@ -59,10 +59,10 @@ export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord;
     <section aria-label="Task assignment" className="border-t border-line-subtle pt-4">
       <h2 className="text-base font-semibold text-fg">Task assignment</h2>
       <p className="mt-1 text-sm text-fg-secondary">
-        Assign a board owner. This does not launch, resume, or transfer a running execution.
+        Assign an agent to this task. This does not launch, resume, or transfer a running execution.
       </p>
       {task.assignedAgentId && !currentAgent && !agents.isLoading ? (
-        <p className="mt-2 text-sm text-fg-muted">The current owner is outside the active agent list.</p>
+        <p className="mt-2 text-sm text-fg-muted">The assigned agent is not in the active agent list.</p>
       ) : null}
       {executionOwned ? (
         <p className="mt-2 text-sm text-fg-muted">

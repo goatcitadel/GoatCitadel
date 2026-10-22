@@ -88,7 +88,7 @@ export async function runCockpitSystemQualityProof({ context, browser, stack, ci
         const snapshot = await response.json();
         await page.getByRole("heading", { name: "Quality", exact: true }).waitFor();
         assert.equal(snapshot.metricScope.scope, "bounded_read");
-        await page.getByText("Installation-wide stored evidence. Refresh and exports do not run evaluations.", { exact: true }).waitFor();
+        await page.getByText("Stored quality results for this installation. Refresh and exports do not run evaluations.", { exact: true }).waitFor();
         stage = "exact prompt and security gate evidence";
         const packLink = page.getByRole("region", { name: "Prompt packs", exact: true }).getByRole("link", { name: `Review ${imported.pack.name}`, exact: true });
         const link = new URL(await packLink.getAttribute("href"), stack.uiUrl);
@@ -122,7 +122,7 @@ export async function runCockpitSystemQualityProof({ context, browser, stack, ci
           const owner = snapshot.evalProof.items[index];
           await page.getByRole("button", { name: `Inspect evaluation ${index + 1}`, exact: true }).click();
           const detail = page.getByRole("region", { name: "Selected evaluation", exact: true });
-          const technical = detail.locator("details").filter({ has: page.locator("summary", { hasText: /^Technical evidence$/u }) });
+          const technical = detail.locator("details").filter({ has: page.locator("summary", { hasText: /^Technical details$/u }) });
           if (await technical.getAttribute("open") === null) await technical.locator("summary").click();
           await detail.getByText(owner.runId, { exact: true }).waitFor();
           await detail.getByText(owner.promptHash, { exact: true }).waitFor();
@@ -143,11 +143,11 @@ export async function runCockpitSystemQualityProof({ context, browser, stack, ci
           await page.getByRole("region", { name: "Design quality checks", exact: true }).getByRole("status").waitFor();
         }
         stage = "read-only clipboard exports";
-        await page.locator("summary").filter({ hasText: /^Evidence exports$/u }).click();
+        await page.locator("summary").filter({ hasText: /^Quality exports$/u }).click();
         for (const kind of ["evaluations", "quality"]) {
           const route = kind === "evaluations" ? "/api/v1/llm/eval-proof/export" : "/api/v1/ops/quality/export";
           const resultPromise = page.waitForResponse((result) => result.request().method() === "GET" && new URL(result.url()).pathname === route);
-          await page.getByRole("button", { name: kind === "evaluations" ? "Copy evaluation evidence" : "Copy quality transport evidence", exact: true }).click();
+          await page.getByRole("button", { name: kind === "evaluations" ? "Copy evaluation records" : "Copy quality records", exact: true }).click();
           const result = await resultPromise;
           assert.equal(result.ok(), true);
           const receipt = await result.json();

@@ -28,7 +28,7 @@ export function McpElicitationRequests({ workspaceId }: { workspaceId: string })
     >
       <h4 className="font-semibold text-fg">Operator requests</h4>
       <p>
-        Inspect the Gateway's bounded elicitation list. Requests without a workspace are identified separately. This is
+        Inspect GoatCitadel's bounded elicitation list. Requests without a workspace are identified separately. This is
         not the approval inbox.
       </p>
       <Button
@@ -54,7 +54,7 @@ export function McpElicitationRequests({ workspaceId }: { workspaceId: string })
       {open && view.record ? (
         <>
           <p>
-            Showing up to 20 of {scoped.length} matching records in the loaded list. The Gateway returns at most 200
+            Showing up to 20 of {scoped.length} matching records in the loaded list. GoatCitadel returns at most 200
             records; this is not a complete history.
           </p>
           <ul className="space-y-2">

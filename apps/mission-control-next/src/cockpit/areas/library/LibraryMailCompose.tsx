@@ -101,7 +101,7 @@ function LibraryMailComposeContent({
       const record = await createMailDraft({ workspaceId, ...parsed.request });
       if (!operation.current()) return;
       if (record.status !== "draft" || !draftMatchesRequest(record, parsed.request, workspaceId))
-        throw new Error("The Gateway draft does not match what you entered.");
+        throw new Error("The saved draft does not match what you entered.");
       setReview({
         record,
         compose,
@@ -146,7 +146,7 @@ function LibraryMailComposeContent({
           )
             throw new Error("The send approval receipt does not match the reviewed draft.");
           if (value.status !== "approval_required" && value.status !== "failed" && value.status !== "outcome_unknown")
-            throw new Error("The Gateway returned an unexpected draft status.");
+            throw new Error("GoatCitadel returned an unexpected draft status.");
         },
         replay,
       );
@@ -194,7 +194,7 @@ function LibraryMailComposeContent({
     if (cancelled)
       setOutcome({
         error: false,
-        text: "Cancelled. No send approval was requested. The prepared draft stays saved on the Gateway and is never sent.",
+        text: "Cancelled. No send approval was requested. The prepared draft stays saved in GoatCitadel and is never sent.",
       });
   }
 
@@ -206,7 +206,7 @@ function LibraryMailComposeContent({
     <section className="grid min-w-0 grid-cols-1 gap-3 border-t border-line-subtle pt-4" aria-label="Compose email">
       <h2 className="text-base font-semibold text-fg">Compose email</h2>
       <p className="text-sm text-fg-secondary">
-        What you type stays in this browser session. Review saves the draft, including Bcc, on the Gateway. Only Request
+        What you type stays in this browser session. Review saves the draft, including Bcc, in GoatCitadel. Only Request
         send approval asks for an approval; approving sends this exact message once.
       </p>
       {!knownAccounts ? (
@@ -346,7 +346,7 @@ function LibraryMailComposeContent({
           if (!open) close();
         }}
         title="Review send request"
-        description="Check every recipient and the exact text. The Gateway records the approval request for this draft only."
+        description="Check every recipient and the exact text. GoatCitadel records the approval request for this draft only."
       >
         {reviewed && review ? (
           <div className="grid min-w-0 grid-cols-1 gap-3 text-sm wrap-anywhere">
@@ -375,7 +375,7 @@ function LibraryMailComposeContent({
               </Button>
               {canReplay ? (
                 <Button disabled={busy || !available} onClick={() => void requestSend(true)}>
-                  Replay exact send request
+                  Retry the exact send request
                 </Button>
               ) : (
                 <Button

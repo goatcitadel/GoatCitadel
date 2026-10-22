@@ -29,7 +29,7 @@ export function cockpitSendBlockReason(props: ComposerProps): string | null {
 
 const GATEWAY_UNAVAILABLE_BLOCK: ComposerSendBlock = {
   kind: "blocked",
-  message: "Gateway unavailable. Your draft is preserved; send resumes when the connection returns.",
+  message: "GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
 };
 
 /** True only once `active` has stayed true for `delayMs`. */

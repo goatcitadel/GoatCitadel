@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { CalendarAccountRecord, CommunicationsDashboardResponse, MailAccountRecord } from "@goatcitadel/contracts";
 import { fetchCommunicationsDashboard } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useWorkspaceName } from "../../data/use-workspace-name";
@@ -122,9 +123,7 @@ export function LibraryCommunications({ workspaceId }: { workspaceId: string }) 
                   </p>
                   {event.location ? <p className="text-sm">{event.location}</p> : null}
                   {event.description ? <p className="text-sm">{event.description}</p> : null}
-                  <p className="text-sm text-fg-secondary">
-                    {event.attendees.length === 1 ? "1 attendee" : `${event.attendees.length} attendees`}
-                  </p>
+                  <p className="text-sm text-fg-secondary">{plural(event.attendees.length, "attendee")}</p>
                 </li>
               ))}
             </ul>

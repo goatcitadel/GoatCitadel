@@ -74,8 +74,8 @@ export function SystemRuntime({ section = "runtime" }: { section?: "runtime" | "
           title={section === "costs" ? "Spend details" : "Runtime"}
           description={
             section === "costs"
-              ? "Cost coverage and per-provider records from the Gateway."
-              : "Runtime records, controls and held boundaries from the Gateway."
+              ? "Cost coverage and per-provider records."
+              : "Runtime records, controls and held boundaries."
           }
         />
       </div>

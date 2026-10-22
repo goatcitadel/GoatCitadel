@@ -518,7 +518,7 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           // Follow the live toast before its normal six-second display expires.
           // The pending-plan review below must not consume that attention window.
           await panel
-            .getByText("The draft remains unsaved until the Gateway confirms the change.", { exact: true })
+            .getByText("The draft remains unsaved until GoatCitadel confirms the change.", { exact: true })
             .waitFor();
           await panel.getByRole("button", { name: "Refresh approval change", exact: true }).click();
           const continueChange = panel.getByRole("button", { name: "Continue approved change", exact: true });

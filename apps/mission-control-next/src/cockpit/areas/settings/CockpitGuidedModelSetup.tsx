@@ -95,7 +95,7 @@ export function CockpitGuidedModelSetup({
             setup.connectionHint
               ? // Keep a catalog error visible beside the provider hint.
                 [setup.connectionHint.note, catalog.error].filter(Boolean).join(" ")
-              : (catalog.error ?? "The Gateway checks this connection before Chat can use it.")
+              : (catalog.error ?? "GoatCitadel checks this connection before Chat can use it.")
           }
         >
           {(fieldProps) => (

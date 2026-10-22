@@ -9,7 +9,7 @@ export function ToolGrantDetails({ grant, onClose }: { grant: ToolGrantRecord | 
         if (!open) onClose();
       }}
       title="Recorded tool grant"
-      description="The saved grant. The Gateway still checks permission for each action."
+      description="The saved grant. GoatCitadel still checks permission for each action."
     >
       {grant ? (
         <div className="space-y-3 break-words text-sm text-fg">

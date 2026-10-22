@@ -33,16 +33,19 @@ export function QualitySource({
       {!available ? (
         <p role="status" className="text-sm text-fg-secondary">
           {title}: {state === "unknown" ? "availability unknown" : "unavailable"}.
-          {error
-            ? ` ${describeApiError(new Error(error)).summary}`
-            : " The Gateway has no available evidence for this source."}
+          {error ? ` ${describeApiError(new Error(error)).summary}` : " No results are available for this source."}
         </p>
       ) : (
         children
       )}
-      <QualityNotes items={warnings.filter((item) => !globalWarnings.includes(item))} />
+      <QualityWarnings items={warnings.filter((item) => !globalWarnings.includes(item))} />
     </section>
   );
+}
+
+/** Server-written warnings state scope and limits (a pack that can't load, no provider to compare), so they stay visible. */
+export function QualityWarnings({ items }: { items: readonly string[] }) {
+  return <QualityNotes items={items} />;
 }
 
 export function QualityNotes({ items }: { items: readonly string[] }) {

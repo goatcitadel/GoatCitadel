@@ -33,8 +33,8 @@ export function GatewayUnavailableBanner({
         <p className="font-medium text-status-failed">
           <span role="alert">
             {inChat
-              ? "Gateway unavailable. Sending is paused; your draft is preserved."
-              : "Gateway unavailable. What you see here may be out of date."}
+              ? "GoatCitadel is unreachable. Sending is paused; your draft is kept."
+              : "GoatCitadel is unreachable. What you see here may be out of date."}
           </span>{" "}
           <span>{lastConfirmed}</span>
         </p>

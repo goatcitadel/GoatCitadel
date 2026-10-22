@@ -119,7 +119,7 @@ export function HealthBackupAction({
           </p>
           <p>
             Creation does not prove offline restore or installed-host readiness. Hashes in the manifest are recorded
-            values; verification is a separate Gateway operation.
+            values; checking them is a separate step.
           </p>
           <TechnicalDetails label="Backup manifest and recorded hashes">
             <dl className="mb-2 grid gap-1 text-xs">
@@ -154,12 +154,12 @@ export function HealthBackupAction({
         ) : review ? (
           <div className="grid gap-3 text-sm text-fg-secondary">
             <p>
-              Includes the configured database, transcripts, audit logs and recursive config JSON on this Gateway host.
-              Config may contain sensitive settings. All workspaces using this installation are affected.
+              Includes the configured database, transcripts, audit logs and recursive config JSON on this GoatCitadel
+              host. Config may contain sensitive settings. All workspaces using this installation are affected.
             </p>
             <p>
-              The Gateway chooses its configured backup directory and enforces path boundaries. This writes a new
-              snapshot and consumes disk space. Existing records: {review.before.length}. No online restore is offered.
+              GoatCitadel chooses its configured backup directory and enforces path boundaries. This writes a new backup
+              and consumes disk space. Existing records: {review.before.length}. No online restore is offered.
             </p>
             <p>
               Completion returns a creation receipt. Exact-byte/hash verification, restore-contract verification and

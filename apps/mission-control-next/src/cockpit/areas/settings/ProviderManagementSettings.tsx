@@ -146,7 +146,7 @@ export function ProviderManagementSettings() {
       <header>
         <h3 className="text-md font-semibold text-fg">Provider profiles</h3>
         <p className="mt-1 text-sm text-fg-secondary">
-          Pick a provider, then edit its profile, transport, connection, and credential in one place. The Gateway checks
+          Pick a provider, then edit its profile, transport, connection, and credential in one place. GoatCitadel checks
           and applies each change.
         </p>
       </header>

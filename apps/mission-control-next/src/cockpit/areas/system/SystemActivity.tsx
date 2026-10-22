@@ -66,7 +66,7 @@ function ActivityItem({ row }: { row: ActivityRow }) {
             Open source
           </SystemOwnerLink>
         ) : (
-          <span className="text-xs text-fg-muted">No source record link was supplied by the Gateway.</span>
+          <span className="text-xs text-fg-muted">This event has no link to its source record.</span>
         )}
       </div>
       <TechnicalDetails label="Event identifiers and raw payload">
@@ -113,7 +113,7 @@ export function SystemActivity() {
     <section className={AREA_PAGE}>
       <AreaHeader
         title="Activity log"
-        description="Recent Gateway signals across this installation."
+        description="Recent signals across this installation."
         actions={
           <Button size="sm" disabled={events.isFetching} onClick={() => void events.refetch()}>
             <RefreshCw aria-hidden="true" className="size-4" /> Refresh
@@ -122,11 +122,11 @@ export function SystemActivity() {
       >
         <p className="mt-1 text-xs text-fg-muted">
           This list keeps recent signals only, not the full history. Open the source record for full details. Signals
-          are retained Gateway records: a reported host or device does not establish its current health.
+          are saved records: a reported host or device does not show its current health.
         </p>
         {events.dataUpdatedAt ? (
           <p className="mt-1 text-xs text-fg-muted">
-            <TimeText value={events.dataUpdatedAt} prefix="Last owner read" />
+            <TimeText value={events.dataUpdatedAt} prefix="Updated" />
             {events.isError ? "; retained observations are stale" : ""}. Quiet live events do not prove current health.
           </p>
         ) : null}

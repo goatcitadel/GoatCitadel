@@ -659,7 +659,7 @@ export class ImprovementService {
     const existing = await this.ctx.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     await this.ctx.cronSpecOwner.reconcileSpec({
       jobId: IMPROVEMENT_WEEKLY_JOB_ID,
-      name: "Self-Improvement Weekly Replay",
+      name: "Weekly improvement review",
       action: "improvement",
       // SECURITY (codex finding #27): The weekly improvement run samples
       // recent chat turn traces and tool runs (args_json/result_json)

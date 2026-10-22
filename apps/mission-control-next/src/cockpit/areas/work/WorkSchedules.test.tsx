@@ -185,7 +185,7 @@ describe("Work schedules", () => {
     await click("Review schedule");
     await vi.waitFor(() =>
       expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain(
-        "Runs in UTC (the Gateway default",
+        "Runs in UTC (the GoatCitadel default",
       ),
     );
   });
@@ -831,7 +831,7 @@ describe("scheduler review and run evidence", () => {
     await render();
     await vi.waitFor(() =>
       expect(container.querySelector('[aria-label="Scheduler review"]')?.textContent).toContain(
-        "Scheduler review is unavailable on this Gateway",
+        "Scheduler review is unavailable on this installation",
       ),
     );
     expect(container.textContent).not.toContain("No scheduler review items");
@@ -842,12 +842,10 @@ describe("scheduler review and run evidence", () => {
     await render();
     await click("Review schedule");
     await vi.waitFor(() =>
-      expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain(
-        "Signed evidence recorded",
-      ),
+      expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain("Signed record saved"),
     );
     expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).not.toContain("env-abcdef123456");
-    expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain("Last run evidence");
+    expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain("Last run record");
   });
 });
 

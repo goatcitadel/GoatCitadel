@@ -177,8 +177,8 @@ function ApprovalDecisionReview({
           !specialistEvidenceMatches(approval, fresh) ||
           specialistEvidenceKey(fresh) !== specialistEvidenceKey(specialistEvidence)
         ) {
-          setError("Specialist evidence changed. Refresh and review the current target before approving.");
-          onInvalidated("Specialist evidence changed. Refresh and review the current target before approving.");
+          setError("Specialist review changed. Refresh and review the current target before approving.");
+          onInvalidated("Specialist review changed. Refresh and review the current target before approving.");
           return;
         }
       }

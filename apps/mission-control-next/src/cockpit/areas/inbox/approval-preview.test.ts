@@ -38,10 +38,13 @@ describe("approval preview", () => {
   it("makes expired and unknown expiry states explicit", () => {
     const now = Date.parse("2026-09-28T18:00:00Z");
     expect(approvalExpiryLabel("2026-09-28T18:02:00Z", now)).toBe("Expires in 2 minutes");
-    expect(approvalExpiryLabel("2026-09-28T17:59:00Z", now)).toBe("Expiry passed; verify its current status");
+    expect(approvalExpiryLabel("2026-09-28T17:59:00Z", now)).toBe("Expired");
     expect(approvalExpiryLabel("invalid", now)).toBeNull();
     expect(approvalExpiryLabel("2026-09-28T19:30:00Z", now)).toBe("Expires in about 2 hours");
     expect(approvalExpiryLabel("2026-09-28T18:01:00Z", now)).toBe("Expires in 1 minute");
+    // IN-N09: hours round to the nearest hour, and long expiries read in days.
+    expect(approvalExpiryLabel("2026-09-28T19:10:00Z", now)).toBe("Expires in about 1 hour");
+    expect(approvalExpiryLabel("2026-09-30T18:00:00Z", now)).toBe("Expires in about 2 days");
   });
 });
 

@@ -12,7 +12,7 @@ import {
 } from "./mcp-server-mutation";
 
 export function mcpToggleUnavailableReason(server: McpServerRecord) {
-  if (isGatewayMcpServer(server)) return "This server is managed by the Gateway.";
+  if (isGatewayMcpServer(server)) return "This server is managed by GoatCitadel.";
   if (!hasMcpServerBinding(server)) return "Current server identity or revision is unavailable.";
   if (!server.enabled && !isRuntimeInvokableMcpServer(server))
     return "Transport, trust, or authentication setup is incomplete. Review server setup before enabling.";

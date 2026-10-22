@@ -62,7 +62,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
     <div className={AREA_PAGE}>
       <AreaHeader
         title="Improvement"
-        description="Experimental. Suggestions, weekly reports and replay runs are advisory evidence. Nothing is applied from here: approving, activating or replaying happens through their governed owners. This view is not release-bearing evidence."
+        description="Experimental. Suggestions, weekly reports and test runs are advisory. Nothing is applied from here: approving, activating or running again happens on the pages that manage them. This view is not release proof."
       />
       <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="grid min-w-0 grid-cols-1 content-start gap-4">
@@ -88,7 +88,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
           <section className={CARD} aria-label="Improvement reports">
             <h2 className="text-base font-semibold">Weekly reports</h2>
             <p className="text-sm text-fg-secondary">
-              Reports and replay runs are Gateway-wide, not filtered to this workspace.
+              Reports and test runs cover the whole installation, not just this workspace.
             </p>
             {reports.error ? <Callout tone="error">{describeApiError(reports.error).summary}</Callout> : null}
             {reports.data && !reports.data.items.length ? (
@@ -114,11 +114,11 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
               ))}
             </ul>
           </section>
-          <section className={CARD} aria-label="Replay runs">
-            <h2 className="text-base font-semibold">Replay runs</h2>
+          <section className={CARD} aria-label="Test runs">
+            <h2 className="text-base font-semibold">Test runs</h2>
             {replays.error ? <Callout tone="error">{describeApiError(replays.error).summary}</Callout> : null}
             {replays.data && !replays.data.items.length ? (
-              <p className="text-sm text-fg-muted">No replay runs yet.</p>
+              <p className="text-sm text-fg-muted">No test runs yet.</p>
             ) : null}
             <ul className="grid min-w-0 grid-cols-1 gap-2">
               {replays.data?.items.map((item) => (
@@ -130,7 +130,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
                     className="grid min-h-11 w-full min-w-0 rounded-md border border-line p-2 text-left wrap-anywhere aria-[current=true]:border-accent"
                   >
                     <strong>
-                      {REPLAY_RUN_STATUS[item.status] ?? "Replay run"} · <TimeText value={item.startedAt} />
+                      {REPLAY_RUN_STATUS[item.status] ?? "Test run"} · <TimeText value={item.startedAt} />
                     </strong>
                     <span className="text-sm text-fg-secondary">
                       {item.totalScored} scored · {item.likelyWrongCount} likely wrong
@@ -151,7 +151,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
           ) : replayRunId ? (
             <ReplayDetail runId={replayRunId} identity={access.identity} />
           ) : (
-            <p className="text-sm text-fg-secondary">Select a report or replay run to inspect its record.</p>
+            <p className="text-sm text-fg-secondary">Select a report or test run to inspect its record.</p>
           )}
         </div>
       </div>
@@ -178,10 +178,10 @@ function Suggestion({ item, workspaceId }: { item: CuratorReviewItem; workspaceI
   return (
     <li className="grid min-w-0 gap-2 rounded-md border border-line p-3 text-sm wrap-anywhere">
       <strong>{item.candidate.summary}</strong>
-      <p>{item.proposedChange ?? item.observedIssue ?? "Review the linked evidence before deciding."}</p>
+      <p>{item.proposedChange ?? item.observedIssue ?? "Review the linked records before deciding."}</p>
       <p className="text-fg-secondary">
         {needsCodeMode
-          ? "Skill revision"
+          ? "Skill change"
           : ready
             ? "Ready for a Change Plan"
             : (CANDIDATE_STATUS[item.candidate.status] ?? "Under review")}{" "}
@@ -190,8 +190,8 @@ function Suggestion({ item, workspaceId }: { item: CuratorReviewItem; workspaceI
       </p>
       {needsCodeMode ? (
         <p>
-          A skill revision needs a Code Mode proposal reviewed in Chat; it cannot become a Change Plan. Nothing is
-          applied from here.
+          A skill change needs a Code Mode proposal reviewed in Chat; it cannot become a Change Plan. Nothing is applied
+          from here.
         </p>
       ) : (
         <>
@@ -242,8 +242,8 @@ function ReportDetail({
       {data ? (
         <>
           <p className="text-sm">
-            Advisory evidence for {data.weekStart} through {data.weekEnd}. Recommendations do not certify applied
-            changes or performance gains.
+            Advisory report for {data.weekStart} through {data.weekEnd}. Recommendations do not certify applied changes
+            or performance gains.
           </p>
           <p className="text-sm">
             {data.summary.sampledDecisions} sampled decisions · {data.summary.likelyWrongCount} flagged as likely wrong
@@ -251,7 +251,7 @@ function ReportDetail({
           </p>
           <div>
             <Button variant="ghost" onClick={() => onOpenReplay(data.runId)}>
-              Open the replay run for this report
+              Open the test run for this report
             </Button>
           </div>
           <ReportEvidence data={data} />
@@ -302,24 +302,24 @@ function ReplayDetail({ runId, identity }: { runId: string; identity: string }) 
     queryKey: ["system", "improvement-replay", runId, identity],
     queryFn: async () => {
       const value = await fetchImprovementReplayRun(runId);
-      if (value.run.runId !== runId) throw new Error("Replay identity did not match the selected run.");
+      if (value.run.runId !== runId) throw new Error("The returned test run did not match the selected run.");
       return value;
     },
     staleTime: 0,
   });
   const run = replay.data?.run;
   return (
-    <section className={CARD} aria-label="Replay run">
-      <h2 className="text-base font-semibold">Replay run</h2>
+    <section className={CARD} aria-label="Test run">
+      <h2 className="text-base font-semibold">Test run</h2>
       <p className="text-sm text-fg-secondary">
-        Inspection reads the retained replay record. Viewing it never re-runs or applies anything.
+        Inspection reads the saved test run record. Viewing it never re-runs or applies anything.
       </p>
-      {replay.isPending ? <p role="status">Reading replay run…</p> : null}
+      {replay.isPending ? <p role="status">Reading test run…</p> : null}
       {replay.error ? <Callout tone="error">{describeApiError(replay.error).summary}</Callout> : null}
       {run && replay.data ? (
         <>
           <p className="text-sm">
-            {REPLAY_RUN_STATUS[run.status] ?? "Replay run"} · {plural(run.totalCandidates, "candidate")} ·{" "}
+            {REPLAY_RUN_STATUS[run.status] ?? "Test run"} · {plural(run.totalCandidates, "candidate")} ·{" "}
             {run.totalScored} scored · {run.likelyWrongCount} likely wrong · {run.modelJudgedCount} model-judged
           </p>
           <p className="text-sm">
@@ -338,7 +338,7 @@ function ReplayDetail({ runId, identity }: { runId: string; identity: string }) 
             {plural(replay.data.findings.length, "finding")} · {plural(replay.data.items.length, "scored item")} ·{" "}
             {plural(replay.data.autoTunes.length, "auto-tune")}
           </p>
-          <TechnicalDetails label="Retained replay record">
+          <TechnicalDetails label="Saved test run record">
             <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2 font-mono text-xs">
               {JSON.stringify(replay.data, null, 2)}
             </pre>

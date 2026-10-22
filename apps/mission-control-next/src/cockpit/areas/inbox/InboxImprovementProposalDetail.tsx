@@ -231,7 +231,7 @@ export function InboxImprovementProposalDetail({
           {current.proposedChange ? <p>Proposed change: {current.proposedChange}</p> : null}
           <p className="text-xs text-fg-muted">
             Risk: {presentRiskLevel(curatorRiskAsApprovalRisk[current.risk]).label} ·{" "}
-            {callableImpactLabels[current.callableImpact] ?? "Callable impact unknown"} · Evidence:{" "}
+            {callableImpactLabels[current.callableImpact] ?? "Callable impact unknown"} · Sources:{" "}
             {plural(current.evidence.length, "reference")}
           </p>
           {current.latestEvaluation ? (

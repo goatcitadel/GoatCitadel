@@ -98,7 +98,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
       const accepted = change.receive(response, submitted, baseRevision);
       setNotice({
         tone: accepted ? "done" : "waiting",
-        message: accepted ? options.copy.saved : "Change submitted. Review its Gateway status before another save.",
+        message: accepted ? options.copy.saved : "Change submitted. Review its status before another save.",
       });
       await settings.refetch();
       return accepted;

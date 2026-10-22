@@ -67,7 +67,7 @@ it("bounds native descriptors and remote records, labels installation scope, and
     filter.value = "server";
     filter.dispatchEvent(new Event("change", { bubbles: true }));
   });
-  expect(container.textContent).toContain("No remote records match this snapshot view.");
+  expect(container.textContent).toContain("No remote records match this view.");
   expect([...container.querySelectorAll("button")].map((item) => item.textContent)).toEqual(["Refresh MCP previews"]);
   expect(api.fetchMcpServerModeManifest.mock.calls[0]).toHaveLength(1);
   expect(api.fetchMcpServerModeManifest.mock.calls[0]![0]).toBeInstanceOf(AbortSignal);

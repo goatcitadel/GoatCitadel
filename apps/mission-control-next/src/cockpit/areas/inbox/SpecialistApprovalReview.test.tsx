@@ -134,7 +134,7 @@ it.each([
   await click("Approve once");
   expect(api.source).toHaveBeenCalled();
   expect(api.decide).not.toHaveBeenCalled();
-  expect(host.textContent).toContain("Specialist evidence changed");
+  expect(host.textContent).toContain("Specialist review changed");
 });
 it("keeps code-source page, arrow, Tab and modified keys native", async () => {
   await render();
@@ -170,7 +170,7 @@ it("shows exact source in deliberate caution review; Cancel has no effect and co
   await click("Review approval");
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("return 1;");
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("source.js");
-  const scrollRegion = document.querySelector<HTMLElement>('[role="region"][aria-label="Approval action evidence"]')!;
+  const scrollRegion = document.querySelector<HTMLElement>('[role="region"][aria-label="Approval action details"]')!;
   expect(scrollRegion.tabIndex).toBe(0);
   scrollRegion.focus();
   expect(document.activeElement).toBe(scrollRegion);
@@ -227,7 +227,7 @@ it("blocks changed immutable source and actor changes before decision", async ()
   api.source.mockResolvedValue({ ...source, sha256: "changed" });
   await click("Approve once");
   expect(api.decide).not.toHaveBeenCalled();
-  expect(host.textContent).toContain("Specialist evidence changed");
+  expect(host.textContent).toContain("Specialist review changed");
   await act(async () => notifyGatewayAccessChanged());
   expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
@@ -482,7 +482,7 @@ it.each([
   await click("Review approval");
   await click("Approve once");
   expect(api.decide).not.toHaveBeenCalled();
-  expect(host.textContent).toContain("Specialist evidence changed");
+  expect(host.textContent).toContain("Specialist review changed");
 });
 it("refuses unreadable source without dispatch", async () => {
   api.source.mockRejectedValue(new Error("immutable artifact verification failed"));
@@ -564,5 +564,5 @@ it.each([
   await click("Review approval");
   await click("Approve once");
   expect(api.decide).not.toHaveBeenCalled();
-  expect(host.textContent).toContain("Specialist evidence changed");
+  expect(host.textContent).toContain("Specialist review changed");
 });

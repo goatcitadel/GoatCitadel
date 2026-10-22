@@ -65,7 +65,7 @@ export function PersonalitySettings() {
           <details className="text-xs text-fg-muted">
             <summary className="cursor-pointer">Catalog details</summary>
             <p className="mt-2">
-              Catalog revision: <code className="break-all font-mono">{data.revision}</code>
+              Catalog version: <code className="break-all font-mono">{data.revision}</code>
             </p>
           </details>
           <label className="block text-sm text-fg-secondary">
@@ -150,7 +150,7 @@ export function PersonalitySettings() {
       ) : null}
       {action.pending ? (
         <p role="status" className="text-sm text-fg-secondary">
-          Waiting for the Gateway to confirm the default change…
+          Waiting for GoatCitadel to confirm the default change…
         </p>
       ) : null}
       {editor.notice && !editor.editorOpen ? (

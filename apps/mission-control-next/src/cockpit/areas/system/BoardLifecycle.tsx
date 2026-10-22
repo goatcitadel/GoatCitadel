@@ -55,7 +55,7 @@ export function BoardLifecycle({
       setReview(undefined);
       onSettled(
         saved,
-        `Board ${review.kind === "archive" ? "archived" : "restored"} and confirmed at revision ${saved.revision}.`,
+        `Board ${review.kind === "archive" ? "archived" : "restored"} and checked at version ${saved.revision}.`,
       );
     } catch (failure) {
       if (!live.current) return;
@@ -66,7 +66,7 @@ export function BoardLifecycle({
         onConflict(failure.current);
       } else if (statusOf(failure) === 409) {
         setError(
-          `The Gateway refused the change because this board is no longer at revision ${review.before.revision}. Nothing changed; the current board is being reloaded behind this review.`,
+          `GoatCitadel refused the change because this board changed since you opened this review. Nothing changed; the current board is being reloaded behind this review.`,
         );
         onConflict(undefined);
       } else setError(describeApiError(failure).summary);
@@ -104,17 +104,17 @@ export function BoardLifecycle({
         {review ? (
           <div className="grid min-w-0 grid-cols-1 gap-3 text-sm wrap-anywhere">
             <p>
-              <strong>{review.before.name}</strong> · revision {review.before.revision} ·{" "}
+              <strong>{review.before.name}</strong> · version {review.before.revision} ·{" "}
               {review.before.status === "archived" ? "Archived" : "Active"} ·{" "}
               {plural(review.before.placements.length, "widget")}
             </p>
             <p>
               {review.kind === "archive"
-                ? `Archiving moves this saved layout out of the active list at revision ${review.before.revision}. Widgets and the data they read are untouched, and you can restore it from the archived list.`
-                : `Restoring returns this saved layout to the active list at revision ${review.before.revision}. Its widgets and layout are unchanged.`}
+                ? `Archiving moves this saved layout out of the active list. Widgets and the data they read are untouched, and you can restore it from the archived list.`
+                : `Restoring returns this saved layout to the active list. Its widgets and layout are unchanged.`}
             </p>
             <p className="text-fg-secondary">
-              The Gateway changes the board only if it is still at this revision when the request arrives.
+              GoatCitadel changes the board only if it is still at this version when the request arrives.
             </p>
             {uncertain ? (
               <Callout tone="warning">{mutation.message}</Callout>

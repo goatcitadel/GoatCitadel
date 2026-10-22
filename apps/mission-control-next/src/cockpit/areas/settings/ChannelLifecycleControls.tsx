@@ -161,7 +161,7 @@ export function ChannelLifecycleControls({
       if (current()) {
         setNotice(
           review.action === "delete"
-            ? "Deleted. The Gateway confirmed it."
+            ? "Deleted. GoatCitadel confirmed it."
             : "Saved channel state confirmed. Connectivity has not been tested.",
         );
         setReview(null);

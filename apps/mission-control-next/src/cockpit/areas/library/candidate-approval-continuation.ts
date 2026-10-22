@@ -85,7 +85,7 @@ export async function requireCandidateApproval(
       (item) => item.proposalId === request.proposalId && item.candidateId === reviewed.candidateId,
     )
   )
-    throw new Error("Candidate, proposal, workspace or reviewed revision does not match the plan.");
+    throw new Error("Candidate, proposal, workspace or reviewed version does not match the plan.");
   const versionId = request.versionId ?? reviewed.latestVersion?.versionId;
   const version = reviewed.versions.find((item) => item.versionId === versionId),
     nowVersion = current.versions.find((item) => item.versionId === versionId);
@@ -251,7 +251,7 @@ export function useCandidateApprovalContinuation({
       // Gateway answered and recorded nothing: no replay lock, the exact plan may be continued again.
       refused = dispatched && classifyOperationFailure(cause) === "refused";
       const message = refused
-        ? `Gateway did not accept the continuation. ${describeApiError(cause).summary}`
+        ? `GoatCitadel did not accept the continuation. ${describeApiError(cause).summary}`
         : dispatched
           ? "Candidate continuation outcome is uncertain. This attempt is locked; refresh to see the saved state."
           : cause instanceof Error

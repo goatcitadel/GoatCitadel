@@ -65,8 +65,7 @@ export function TrustPolicySettings() {
         <div>
           <h3 className="text-base font-semibold text-fg">Trust and policy</h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            Read-only snapshot of recorded trust. Profiles, grants, sources and usage records may cover different
-            scopes.
+            Read-only view of recorded trust. Profiles, grants, sources and usage records may cover different scopes.
           </p>
           <p className="mt-1 text-xs text-fg-muted">
             A recorded trust state does not allow any specific action. Policy, approvals and grants are still checked
@@ -74,27 +73,27 @@ export function TrustPolicySettings() {
           </p>
         </div>
         <Button size="sm" disabled={loading} onClick={() => void reload()}>
-          Refresh trust snapshot
+          Refresh trust records
         </Button>
       </header>
       {loading ? (
         <p role="status" className="text-sm text-fg-muted">
-          {data ? "Refreshing trust records; the previous snapshot stays visible." : "Loading trust snapshot…"}
+          {data ? "Refreshing trust records; the previous records stay visible." : "Loading trust records…"}
         </p>
       ) : null}
       {error ? (
         <p role="alert" className="text-sm text-status-failed">
-          Trust snapshot unavailable: {error}
+          Trust records unavailable: {error}
         </p>
       ) : null}
       {data ? (
         <>
           <p className="text-xs text-fg-muted">
-            Snapshot observed: {formatEvidenceDate(data.snapshot.generatedAt) ?? "Time unavailable"}
+            Checked: {formatEvidenceDate(data.snapshot.generatedAt) ?? "Time unavailable"}
           </p>
           {data.issues.length ? (
             <div role="status" className="rounded-md border border-line p-3 text-sm text-status-waiting">
-              <p>Partial snapshot. Unavailable sources are not empty or healthy.</p>
+              <p>Partial records. Unavailable sources are not empty or healthy.</p>
               <ul className="mt-1 list-disc pl-5">
                 {data.issues.map((issue, index) => (
                   <li key={`${issue.label}:${index}`}>
@@ -105,7 +104,7 @@ export function TrustPolicySettings() {
             </div>
           ) : null}
           <details className="rounded-md border border-line-subtle p-3 text-sm text-fg-secondary">
-            <summary className="cursor-pointer">Snapshot sources and enforcement</summary>
+            <summary className="cursor-pointer">Sources and enforcement</summary>
             <ul className="mt-2 space-y-1">
               {data.snapshot.sources.map((source) => (
                 <li key={source.key}>
@@ -192,7 +191,7 @@ export function TrustPolicySettings() {
             <p className="text-sm text-fg-muted">
               {rows.length
                 ? "No trust records match these filters."
-                : "No rows were returned by the available snapshot sources."}
+                : "No rows were returned by the available sources."}
             </p>
           )}
           {filtered.length > limit ? (
@@ -208,7 +207,7 @@ export function TrustPolicySettings() {
           if (!open) setSelectedId(null);
         }}
         title={selected ? `Trust record: ${selected.label}` : "Trust record unavailable"}
-        description="Recorded in the latest trust snapshot. To change it, open the page that manages it."
+        description="Recorded in the latest trust records. To change it, open the page that manages it."
       >
         {selected && data ? (
           <>
@@ -230,7 +229,7 @@ export function TrustPolicySettings() {
           </>
         ) : (
           <p role="status" className="text-sm text-fg-secondary">
-            This row is not in the latest snapshot. Refresh the snapshot and try again.
+            This row is not in the latest records. Refresh trust records and try again.
           </p>
         )}
       </Dialog>

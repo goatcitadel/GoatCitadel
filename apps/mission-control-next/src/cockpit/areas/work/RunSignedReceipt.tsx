@@ -35,7 +35,7 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
     try {
       const receipt = await fetchEvidenceReceipt(runId);
       if (receipt.manifest.runId !== runId || receipt.manifest.lineage.runId !== runId) {
-        throw new Error("The Gateway returned a receipt for another run.");
+        throw new Error("GoatCitadel returned a receipt for another run.");
       }
       const verification = await verifyEvidenceReceipt(receipt);
       setInspection({ receipt, verification });
@@ -46,6 +46,7 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
           : undefined;
       setError(
         typeof responseError === "string" &&
+          // copy-guard: not copy (matches the server error text; the operator reads the sentence below)
           responseError.startsWith("OS keychain is unavailable, so the Evidence Receipt signing key")
           ? "This host cannot build a signed receipt because its OS keychain is unavailable. Existing receipts can still be verified offline."
           : describeApiError(cause).summary,
@@ -87,13 +88,11 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
 
   const { receipt, verification } = inspection ?? {};
   return (
-    <section aria-label="Signed evidence receipt" className="border-t border-line-subtle pt-4">
+    <section aria-label="Signed run receipt" className="border-t border-line-subtle pt-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-fg">Signed evidence receipt</h2>
-          <p className="mt-1 text-sm text-fg-muted">
-            Build and verify a portable snapshot of this run through the Gateway.
-          </p>
+          <h2 className="text-base font-semibold text-fg">Signed run receipt</h2>
+          <p className="mt-1 text-sm text-fg-muted">Build and verify a portable, signed record of this run.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" onClick={() => void inspect()} disabled={busy}>
@@ -108,7 +107,7 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
       </div>
       {busy ? (
         <p role="status" className="mt-3 text-sm text-fg-muted">
-          Checking the Gateway signature…
+          Checking the signature…
         </p>
       ) : null}
       {error ? (
@@ -162,10 +161,10 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
               ))}
             </ul>
           ) : verification.valid ? (
-            <p className="text-sm text-fg-secondary">The Gateway reported no integrity failures for this receipt.</p>
+            <p className="text-sm text-fg-secondary">GoatCitadel reported no integrity failures for this receipt.</p>
           ) : (
             <p className="text-sm text-status-failed">
-              The Gateway did not provide a verification reason. Do not rely on this receipt.
+              GoatCitadel did not give a verification reason. Do not rely on this receipt.
             </p>
           )}
           <TechnicalDetails label="Receipt technical details">

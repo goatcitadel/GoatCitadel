@@ -149,7 +149,7 @@ describe("native first-run setup", () => {
     api.completeOnboarding.mockReturnValueOnce(response.promise);
     await click("Finish setup and open Chat");
     expect(button("Confirming setup…").disabled).toBe(true);
-    expect(container.querySelector("#first-run-finish-prerequisite")?.textContent).toContain("Wait for the Gateway");
+    expect(container.querySelector("#first-run-finish-prerequisite")?.textContent).toContain("Wait for GoatCitadel");
     expect(api.completeOnboarding).toHaveBeenCalledTimes(1);
     owner = { ...owner, completed: true, completedAt: "2026-09-30T12:00:00.000Z", completedBy: "operator" };
     await act(async () => response.resolve({ state: owner, appliedAt: owner.completedAt! }));

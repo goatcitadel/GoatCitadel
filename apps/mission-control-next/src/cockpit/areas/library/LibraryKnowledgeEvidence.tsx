@@ -72,10 +72,10 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
     staleTime: 0,
   });
   return (
-    <section className="grid gap-3" aria-label="Knowledge evidence">
-      <h2 className="text-base font-semibold">Context use and retrieval evidence</h2>
+    <section className="grid gap-3" aria-label="Knowledge retrieval history">
+      <h2 className="text-base font-semibold">Context use and retrieval history</h2>
       <p>
-        Retained installation retrieval records explain context selection. Recovered external snapshots are governed
+        Retained installation retrieval records explain context selection. Recovered external copies are governed
         Knowledge documents, separate from lifecycle memory items.
       </p>
       <Button
@@ -84,10 +84,10 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
           void recovered.refetch();
         }}
       >
-        Refresh Knowledge evidence
+        Check again
       </Button>
       {retrieval.error ? <Callout tone="error">{describeApiError(retrieval.error).summary}</Callout> : null}
-      {retrieval.isPending ? <p role="status">Reading retrieval evidence…</p> : null}
+      {retrieval.isPending ? <p role="status">Reading retrieval history…</p> : null}
       <Button onClick={() => setShowContext((value) => !value)}>
         {showContext ? "Hide context packs" : "Show context packs"}
       </Button>
@@ -153,18 +153,18 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
           </li>
         ))}
       </ul>
-      <h2 className="text-base font-semibold">Recovered external snapshots</h2>
+      <h2 className="text-base font-semibold">Recovered external copies</h2>
       {recovered.error ? <Callout tone="error">{describeApiError(recovered.error).summary}</Callout> : null}
-      {recovered.isPending ? <p role="status">Reading snapshot lifecycle…</p> : null}
+      {recovered.isPending ? <p role="status">Reading recovered copies…</p> : null}
       <ul className="grid gap-2">
         {recovered.data?.items.map((event) => (
           <li key={event.eventId} className="rounded-md border border-line p-3">
             <h3>
               {event.action === "snapshot_created"
-                ? "Snapshot created"
+                ? "Copy created"
                 : event.action === "approval_requested"
                   ? "Approval requested"
-                  : freeformLabel(event.action, "Snapshot event")}
+                  : freeformLabel(event.action, "Recovery event")}
             </h3>
             <p>
               <TimeText value={event.occurredAt} absolute />
@@ -179,7 +179,7 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
                 scope={access.identity}
                 href={"/chat?sessionId=" + encodeURIComponent(event.sessionId) + "&shell=cockpit"}
               >
-                Open snapshot conversation
+                Open source conversation
               </NativeOwnerLink>
             ) : null}
             {event.approvalId ? (
@@ -187,17 +187,17 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
                 scope={access.identity}
                 href={"/inbox?approvalId=" + encodeURIComponent(event.approvalId) + "&shell=cockpit"}
               >
-                Inspect snapshot approval
+                Inspect copy approval
               </NativeOwnerLink>
             ) : null}
-            <TechnicalDetails label="Snapshot provenance">
+            <TechnicalDetails label="Saved copy provenance">
               <p>{event.occurredAt}</p>
               <pre className="whitespace-pre-wrap break-words">{JSON.stringify(event.summary, null, 2)}</pre>
             </TechnicalDetails>
           </li>
         ))}
       </ul>
-      {recovered.data?.items.length === 0 ? <p>No retained snapshot lifecycle events in this workspace.</p> : null}
+      {recovered.data?.items.length === 0 ? <p>No recovered external copies in this workspace.</p> : null}
     </section>
   );
 }

@@ -81,7 +81,7 @@ export function McpServerEditor({
           if (!open) close();
         }}
         title="Edit saved MCP server"
-        description="Changes apply to the whole Gateway installation and close this server's current connections. Saving does not connect the server or grant tool permission."
+        description="Changes apply to the whole GoatCitadel installation and close this server's current connections. Saving does not connect the server or grant tool permission."
       >
         <div className="space-y-3 text-sm text-fg-secondary">
           {query.isFetching ? <p role="status">Reading current server configuration…</p> : null}
@@ -97,7 +97,7 @@ export function McpServerEditor({
             <p role={control.notice.tone === "error" ? "alert" : "status"}>{control.notice.message}</p>
           ) : null}
           {control.mutation.locked ? (
-            <p role="status">{control.mutation.message ?? "Waiting for the Gateway server owner…"}</p>
+            <p role="status">{control.mutation.message ?? "Waiting for GoatCitadel to confirm…"}</p>
           ) : null}
           {control.draft.isDirty ? (
             <p role="status" className="text-status-waiting">
@@ -105,7 +105,7 @@ export function McpServerEditor({
             </p>
           ) : null}
           {control.gatewayOwned ? (
-            <p>This server is managed by the Gateway. Configuration editing is unavailable.</p>
+            <p>This server is managed by GoatCitadel. Configuration editing is unavailable.</p>
           ) : null}
           {control.requiresReview ? (
             <section

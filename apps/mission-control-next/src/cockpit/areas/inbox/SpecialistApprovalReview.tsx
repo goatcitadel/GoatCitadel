@@ -123,7 +123,7 @@ export function SpecialistApprovalReview({
         <p>
           Workspace: {workspaceLabel(evidence.code.workspaceId)} ·{" "}
           {codeLanguageLabels[evidence.code.language] ?? "Code"} ·{" "}
-          {evidence.code.permissionProfileLabel ?? "Gateway permission policy"}
+          {evidence.code.permissionProfileLabel ?? "GoatCitadel permission policy"}
         </p>
         <p className="break-all">
           <strong>Source artifact:</strong> {evidence.code.codeArtifact.relPath}
@@ -165,5 +165,5 @@ export function SpecialistApprovalReview({
         </TechnicalDetails>
       </section>
     );
-  return <p role="alert">Specialist evidence is unavailable. Refresh or deny this request.</p>;
+  return <p role="alert">The specialist review is unavailable. Refresh or deny this request.</p>;
 }

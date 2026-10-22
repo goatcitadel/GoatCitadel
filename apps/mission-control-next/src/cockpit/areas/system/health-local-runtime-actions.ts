@@ -66,7 +66,7 @@ function assertSettingsEvidence(settings: RuntimeSettingsResponse, setup: LlamaC
     setup.runtime.baseUrl !== settings.llamaCpp.baseUrl ||
     setup.runtime.enabled !== settings.llamaCpp.enabled
   ) {
-    throw new Error("The runtime owners returned inconsistent settings evidence. Refresh the review.");
+    throw new Error("The saved settings and the runtime don't match. Refresh the review.");
   }
 }
 function unavailableReason(saved: SavedRuntime, setup: LlamaCppSetupProjection): string | undefined {
@@ -147,7 +147,7 @@ export async function startReviewedLocalRuntime(review: LocalRuntimeReview, isCu
     ) {
       throw new Error("The runtime configuration or ownership changed. Refresh and review it again.");
     }
-    publish({ ...identity, phase: "starting", message: "The Gateway is starting the saved managed runtime…" });
+    publish({ ...identity, phase: "starting", message: "GoatCitadel is starting the saved managed runtime…" });
     submitted = true;
     const response = await startLlamaCppRuntime();
     assertStartedRuntime(response, review.endpoint);
@@ -167,8 +167,8 @@ export async function startReviewedLocalRuntime(review: LocalRuntimeReview, isCu
       ...identity,
       phase: "verified",
       message: setup.runtime.healthy
-        ? "The Gateway reports that the managed runtime is running and its health probe passed. Chat readiness is a separate check."
-        : `The Gateway reports an owned runtime ${setup.runtime.processState}; its health probe has not passed.`,
+        ? "GoatCitadel reports that the managed runtime is running and its health probe passed. Chat readiness is a separate check."
+        : `GoatCitadel reports its managed runtime ${setup.runtime.processState}; its health probe has not passed.`,
     });
   } catch (error) {
     if (submitted) {

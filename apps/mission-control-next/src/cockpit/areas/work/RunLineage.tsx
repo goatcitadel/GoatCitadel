@@ -37,7 +37,7 @@ export function RunLineage({ trace, workspaceId }: { trace: ObserveRunTraceRespo
       <h2 className="text-base font-semibold text-fg">Delegation lineage</h2>
       <p className="mt-2 text-sm text-fg-secondary">
         Direct children watched by this run and the outputs cited by its selected synthesis. Run status is current;
-        output references describe recorded evidence.
+        output references describe saved records.
       </p>
       <p className="mt-1 text-xs text-fg-muted">
         This view covers one parent and its watched children. Open a child run to inspect another level.
@@ -97,7 +97,7 @@ function LineageSnapshot({ runId, sessionId, workspaceId }: { runId: string; ses
       ) : null}
       {snapshot && !bound ? (
         <p role="alert" className="text-sm text-status-failed">
-          Lineage has no matching run and workspace evidence.
+          Lineage doesn't match this run and workspace.
         </p>
       ) : null}
       {bound ? <LineageEvidence snapshot={snapshot} /> : null}
@@ -118,8 +118,8 @@ function LineageEvidence({ snapshot }: { snapshot: DurableBackgroundTaskRailResp
         <StatusBadge status={presentRunStatus(snapshot.parent.status)} />
       </div>
       <p className="text-xs text-fg-muted">
-        <TimeText value={snapshot.generatedAt} prefix="Gateway snapshot" />. Showing up to {MAX_CHILDREN} verified
-        children and {MAX_SOURCES} cited sources.
+        <TimeText value={snapshot.generatedAt} prefix="Updated" />. Showing up to {MAX_CHILDREN} verified children and{" "}
+        {MAX_SOURCES} cited sources.
       </p>
       {!snapshot.coverage.watchers.complete || !snapshot.coverage.parentSignals.complete ? (
         <p className="text-sm text-status-waiting">
@@ -193,7 +193,7 @@ function LineageEvidence({ snapshot }: { snapshot: DurableBackgroundTaskRailResp
       </section>
       {snapshot.unknowns.length ? (
         <details className="text-sm text-fg-secondary">
-          <summary className="cursor-pointer">Evidence limitations ({snapshot.unknowns.length})</summary>
+          <summary className="cursor-pointer">Known gaps ({snapshot.unknowns.length})</summary>
           <ul className="mt-2 grid gap-1">
             {snapshot.unknowns.slice(0, 8).map((unknown, index) => (
               <li key={index}>{unknown}</li>
@@ -233,7 +233,7 @@ function ChildEvidence({ task }: { task: DurableBackgroundTaskItem }) {
       {task.signalIntegrity.posture !== "clean" || !task.signalIntegrity.observationComplete ? (
         <p className="mt-2 text-xs text-fg-muted">
           Retained child signals are {SIGNAL_POSTURE_WORDS[task.signalIntegrity.posture] ?? "unknown"}
-          {!task.signalIntegrity.observationComplete ? " and incomplete" : ""}. Run status comes from its durable
+          {!task.signalIntegrity.observationComplete ? " and incomplete" : ""}. Run status comes from the run's saved
           record.
         </p>
       ) : null}

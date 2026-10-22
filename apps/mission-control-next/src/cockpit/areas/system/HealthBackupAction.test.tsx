@@ -62,7 +62,7 @@ it("shows governed scope, Cancel sends nothing, pending blocks duplicates, canon
       }),
   );
   await click("Confirm backup");
-  expect(container.textContent).toContain("Creating backup on the Gateway host");
+  expect(container.textContent).toContain("Creating backup on the GoatCitadel host");
   expect(
     [...container.querySelectorAll("button")].find((node) => node.textContent === "Creating backup…")?.disabled,
   ).toBe(true);

@@ -75,7 +75,7 @@ describe("risk approval action", () => {
     );
     await act(async () => container.querySelector("button")?.click());
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
-    const region = dialog.querySelector<HTMLElement>('[aria-label="Approval action evidence"]')!;
+    const region = dialog.querySelector<HTMLElement>('[aria-label="Approval action details"]')!;
     Object.defineProperties(region, { scrollHeight: { value: 1600 }, clientHeight: { value: 400 } });
     dialog.scrollTop = 640;
     region.scrollTop = 180;
@@ -109,7 +109,7 @@ describe("risk approval action", () => {
       ),
     );
     await act(async () => container.querySelector("button")?.click());
-    const region = document.querySelector<HTMLElement>('[aria-label="Approval action evidence"]')!;
+    const region = document.querySelector<HTMLElement>('[aria-label="Approval action details"]')!;
     region.scrollTop = 180;
     region.focus();
     const nativeKeys: KeyboardEventInit[] = [
@@ -159,7 +159,7 @@ describe("risk approval action", () => {
       ),
     );
     await act(async () => container.querySelector("button")?.click());
-    const region = document.querySelector<HTMLElement>('[aria-label="Approval action evidence"]')!;
+    const region = document.querySelector<HTMLElement>('[aria-label="Approval action details"]')!;
     region.focus();
     await act(async () => {
       region.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
@@ -182,7 +182,7 @@ describe("risk approval action", () => {
       ),
     );
     await act(async () => container.querySelector("button")?.click());
-    const region = document.querySelector<HTMLElement>('[role="region"][aria-label="Approval action evidence"]')!;
+    const region = document.querySelector<HTMLElement>('[role="region"][aria-label="Approval action details"]')!;
     expect(region.classList.contains("wrap-anywhere")).toBe(true);
     expect(region.classList.contains("max-w-full")).toBe(true);
     expect(region.textContent).toContain(target);

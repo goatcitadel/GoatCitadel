@@ -132,7 +132,7 @@ export function McpCreateFields({
       </div>
       <p className="text-xs text-fg-muted">
         Enabling saves metadata; it does not connect a server. Keep credential values out of commands and arguments.
-        Template authentication references remain under Gateway policy.
+        Template authentication references remain under GoatCitadel policy.
       </p>
     </fieldset>
   );

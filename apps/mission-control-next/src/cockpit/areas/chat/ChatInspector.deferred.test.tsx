@@ -140,7 +140,7 @@ it("does not load code for a registered closed inspector and preserves the exist
   await vi.waitFor(() => expect(loader.load).toHaveBeenCalledOnce());
   const panel = host.querySelector("[data-inspector-body]");
   expect(panel).not.toBeNull();
-  expect(host.textContent).toContain("Loading conversation evidence");
+  expect(host.textContent).toContain("Loading conversation details");
   await act(async () => held.resolve());
   await vi.waitFor(() => expect(host.querySelector('[aria-label="Ready inspector"]')).not.toBeNull());
   expect(host.querySelector("[data-inspector-body]")).toBe(panel);

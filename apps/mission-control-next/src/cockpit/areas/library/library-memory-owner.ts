@@ -14,7 +14,7 @@ export async function readLibraryMemoryItem(itemId: string, workspaceId: string)
         (legacy !== undefined && legacy !== workspaceId) ||
         (item.workspaceId && legacy !== undefined && item.workspaceId !== legacy)
       )
-        throw new Error("This memory item has inconsistent workspace evidence.");
+        throw new Error("This memory item names conflicting workspaces.");
       return item;
     }
     if (!result.nextCursor) return null;

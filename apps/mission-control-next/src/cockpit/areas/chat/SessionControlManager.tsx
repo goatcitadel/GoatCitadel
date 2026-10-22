@@ -23,9 +23,9 @@ type Attempt = { review: Review; idempotencyKey: string };
 const newKey = () => `op-ctl-${crypto.randomUUID()}`;
 /** A Gateway conflict is a definitive refusal (the generation compare-and-set failed): nothing was applied. */
 const refused = (error: unknown) => isApiRequestError(error) && error.status === 409;
-const CHANGED = "The Gateway refused this because control changed, so nothing was applied. Review the current state.";
+const CHANGED = "GoatCitadel refused this because control changed, so nothing was applied. Review the current state.";
 const UNKNOWN =
-  "The outcome is unknown. The current state was read again. Retry sends the identical request, which the Gateway applies at most once.";
+  "The outcome is unknown. The current state was read again. Retry sends the identical request, which GoatCitadel applies at most once.";
 const time = (value?: string) =>
   value && Number.isFinite(Date.parse(value)) ? <TimeText value={value} /> : "Not reported";
 

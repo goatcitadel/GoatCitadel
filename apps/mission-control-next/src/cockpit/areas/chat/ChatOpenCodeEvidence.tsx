@@ -34,7 +34,8 @@ export function ChatOpenCodeEvidence({
             </span>
           </div>
           <p>
-            These are external agent reports. Review the run and file evidence before treating them as applied changes.
+            These are external agent reports. Review the run and the reported files before treating them as applied
+            changes.
           </p>
           {report.error ? (
             <p role="alert" className="rounded-md border border-status-failed p-2 text-fg">
@@ -87,9 +88,9 @@ export function ChatOpenCodeEvidence({
               </ol>
             </details>
           ) : null}
-          {report.truncated ? <p>Some output was omitted. Open run details for captured evidence.</p> : null}
+          {report.truncated ? <p>Some output was omitted. Open run details for the full record.</p> : null}
           <button type="button" onClick={onOpenRunDetails} className="font-medium text-accent hover:underline">
-            Open run evidence
+            Open run details
           </button>
         </article>
       ))}

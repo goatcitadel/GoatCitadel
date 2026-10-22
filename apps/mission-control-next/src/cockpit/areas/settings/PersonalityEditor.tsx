@@ -157,7 +157,7 @@ export function PersonalityEditor({ control }: { control: Controller }) {
             </label>
           ))}
           <p className="text-xs text-fg-muted">
-            Safety notes use one entry per line. Empty notes restore the Gateway's standard safety notes.
+            Safety notes use one entry per line. Empty notes restore the standard safety notes.
             {c.editingBuiltin ? " Empty built-in fields use shipped values." : ""}
           </p>
           <div className="flex flex-wrap gap-2">
@@ -195,7 +195,7 @@ export function PersonalityEditor({ control }: { control: Controller }) {
         danger={!c.pendingRemove?.builtin}
         pending={c.removePending}
         confirmDisabled={!c.available || c.locked || c.data?.revision !== c.pendingRemove?.expectedRevision}
-        message={`${c.pendingRemove?.builtin ? `Reset ${c.pendingRemove.label} to the shipped preset? Local edits will be removed.` : `Remove ${c.pendingRemove?.label ?? "this personality"}? This cannot be undone.`} If it is the global Work default, the Gateway clears that default.`}
+        message={`${c.pendingRemove?.builtin ? `Reset ${c.pendingRemove.label} to the shipped preset? Local edits will be removed.` : `Remove ${c.pendingRemove?.label ?? "this personality"}? This cannot be undone.`} If it is the global Work default, GoatCitadel clears that default.`}
         confirmLabel={c.pendingRemove?.builtin ? "Reset personality" : "Remove personality"}
         onCancel={() => {
           if (!c.removePending) c.setPendingRemove(null);

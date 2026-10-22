@@ -23,14 +23,25 @@ const receipt: EvidenceReceipt = {
     runId,
     generatedAt: "2026-09-29T12:00:00.000Z",
     lineage: {
-      runId, workflowKey: "chat.turn.execute", status: "completed", attemptCount: 1,
-      maxAttempts: 3, outcome: "succeeded", createdAt: "2026-09-29T11:00:00.000Z",
+      runId,
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      attemptCount: 1,
+      maxAttempts: 3,
+      outcome: "succeeded",
+      createdAt: "2026-09-29T11:00:00.000Z",
       updatedAt: "2026-09-29T12:00:00.000Z",
     },
-    approvalEffects: [], sideEffects: [], artifacts: [], notes: [],
+    approvalEffects: [],
+    sideEffects: [],
+    artifacts: [],
+    notes: [],
   },
-  contentHash: "a".repeat(64), hashAlgorithm: "sha256", signatureAlgorithm: "ed25519",
-  signature: "signature", publicKey: "public-key",
+  contentHash: "a".repeat(64),
+  hashAlgorithm: "sha256",
+  signatureAlgorithm: "ed25519",
+  signature: "signature",
+  publicKey: "public-key",
 };
 
 let container: HTMLDivElement;
@@ -59,7 +70,9 @@ afterEach(() => {
 });
 
 function clickButton(label: string) {
-  const button = Array.from(container.querySelectorAll("button")).find((candidate) => candidate.textContent?.includes(label));
+  const button = Array.from(container.querySelectorAll("button")).find((candidate) =>
+    candidate.textContent?.includes(label),
+  );
   if (!button) throw new Error(`Missing button: ${label}`);
   button.click();
 }
@@ -72,7 +85,7 @@ describe("Work signed evidence receipt", () => {
     expect(fetchEvidenceReceipt).toHaveBeenCalledWith(runId);
     expect(verifyEvidenceReceipt).toHaveBeenCalledWith(receipt);
     expect(container.textContent).toContain("Signature valid");
-    expect(container.textContent).toContain("The Gateway reported no integrity failures");
+    expect(container.textContent).toContain("GoatCitadel reported no integrity failures");
     expect(container.textContent).toContain("Download inspected receipt");
 
     const createObjectURL = vi.fn().mockReturnValue("blob:receipt");
@@ -88,7 +101,10 @@ describe("Work signed evidence receipt", () => {
   });
 
   it("withholds verification and download for a receipt bound to another run", async () => {
-    vi.mocked(fetchEvidenceReceipt).mockResolvedValue({ ...receipt, manifest: { ...receipt.manifest, runId: "run-b" } });
+    vi.mocked(fetchEvidenceReceipt).mockResolvedValue({
+      ...receipt,
+      manifest: { ...receipt.manifest, runId: "run-b" },
+    });
     await act(async () => root.render(<RunSignedReceipt runId={runId} />));
     await act(async () => clickButton("Inspect signed receipt"));
     expect(container.textContent).toContain("receipt for another run");
@@ -103,7 +119,7 @@ describe("Work signed evidence receipt", () => {
     expect(container.textContent).toContain("Verification failed");
     expect(container.textContent).toContain("Untrusted");
     expect(container.textContent).toContain("Signature mismatch");
-    expect(container.textContent).not.toContain("The Gateway reported no integrity failures");
+    expect(container.textContent).not.toContain("GoatCitadel reported no integrity failures");
   });
 
   it("does not imply integrity when Gateway rejects a receipt without a reason", async () => {
@@ -117,7 +133,10 @@ describe("Work signed evidence receipt", () => {
   it("explains when the isolated host cannot create a signing key", async () => {
     vi.mocked(fetchEvidenceReceipt).mockRejectedValue({
       status: 503,
-      body: { error: "OS keychain is unavailable, so the Evidence Receipt signing key cannot be loaded or created on this host." },
+      body: {
+        error:
+          "OS keychain is unavailable, so the Evidence Receipt signing key cannot be loaded or created on this host.",
+      },
     });
     vi.mocked(isApiRequestError).mockReturnValue(true);
     await act(async () => root.render(<RunSignedReceipt runId={runId} />));

@@ -103,7 +103,7 @@ function Body({ provider, request }: { provider: ProviderModelCatalogOption; req
       <ul className="space-y-1">
         <li>Configured API: {presentApiStyle(provider.apiStyle)}</li>
         <li>
-          Gateway executes: {presentApiStyle(executed)}
+          GoatCitadel uses: {presentApiStyle(executed)}
           {executed !== provider.apiStyle ? " (differs from the configured API)" : ""}
         </li>
         <li>

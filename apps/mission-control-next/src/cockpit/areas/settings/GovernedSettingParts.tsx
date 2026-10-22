@@ -94,7 +94,7 @@ export function GovernedSettingChangeStatus<T extends GovernedSettingValue>({
             </p>
           ) : null}
           {change.change.blocking ? (
-            <p className="mt-1">The draft remains unsaved until the Gateway confirms the change.</p>
+            <p className="mt-1">The draft remains unsaved until GoatCitadel confirms the change.</p>
           ) : null}
           <div className="mt-2 flex flex-wrap gap-2">
             <Button size="sm" onClick={() => void change.refresh()}>

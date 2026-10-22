@@ -10,7 +10,7 @@ describe("provider secret field", () => {
     const markup = render("aws-sigv4");
     expect(markup).toContain(">AWS credentials JSON<");
     expect(markup).toContain(
-      "If no credential is stored, the gateway uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from its environment.",
+      "If no credential is stored, GoatCitadel uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from its environment.",
     );
     expect(markup).toContain("&quot;accessKeyId&quot;:&quot;…&quot;");
     expect(markup).not.toContain("Paste a new API key to save");

@@ -112,7 +112,7 @@ describe("native advanced first-run disclosure", () => {
     await click("Review defaults");
     const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain("Loopback auth bypass: off");
-    expect(dialog.textContent).toContain("Revision: 41");
+    expect(dialog.textContent).toContain("Version: 41");
     await click("Cancel");
     expect(api.bootstrapOnboarding).not.toHaveBeenCalled();
     await click("Review defaults");

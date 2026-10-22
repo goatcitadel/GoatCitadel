@@ -8,7 +8,7 @@ import { fetchMemoryItems } from "@goatcitadel/mission-control-shared/api/memory
 import { listNotes } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { fetchChatGeneratedArtifacts } from "@goatcitadel/mission-control-shared/api/chat";
 import { fetchFilesPage } from "@goatcitadel/mission-control-shared/api/operators-agents-files";
-import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
+import { formatBytes, plural } from "@goatcitadel/mission-control-shared/content/format";
 import { resourceFolder } from "./resource-title";
 import { artifactKindLabel, memoryNamespaceLabel, noteLifecycleLabel, presentMemoryStatus } from "./library-vocabulary";
 export { resourceFolder, resourceTitle } from "./resource-title";
@@ -132,7 +132,7 @@ export async function loadLibraryResources(input: ResourceQuery): Promise<Resour
     return {
       items: items.map((item) => ({ kind, item })),
       nextCursor: response.nextCursor,
-      coverage: `Workspace and global memory. ${withheld ? "Some inconsistent scope records were withheld." : `${response.total} matching records at the enumeration snapshot.`} ${response.nextCursor ? "More pages are available." : "End of this enumeration."}`,
+      coverage: `Workspace and global memory. ${withheld ? "Some inconsistent scope records were withheld." : `${response.total} matching records when this list was read.`} ${response.nextCursor ? "More pages are available." : "End of this list."}`,
     };
   }
   const text = query.trim().toLowerCase();
@@ -173,7 +173,7 @@ export async function loadLibraryResources(input: ResourceQuery): Promise<Resour
         .map((item) => ({ kind, item })),
       hasMore,
       coverage:
-        `Search and the source filter cover the ${response.items.length} most recent artifacts loaded. ${hasMore ? "Older records may not be shown; load more to include them." : response.items.length >= window ? `This list stops at the ${window} most recent artifacts; older ones are not shown.` : "There are no older artifacts."} ${scoped.length !== response.items.length ? "Records without this workspace binding were withheld." : ""}`.trim(),
+        `Search and the source filter cover the ${plural(response.items.length, "most recent artifact")} loaded. ${hasMore ? "Older records may not be shown; load more to include them." : response.items.length >= window ? `This list stops at the ${window} most recent artifacts; older ones are not shown.` : "There are no older artifacts."} ${scoped.length !== response.items.length ? "Records without this workspace binding were withheld." : ""}`.trim(),
     };
   }
   const dir = input.dir?.trim() || ".";
@@ -186,6 +186,6 @@ export async function loadLibraryResources(input: ResourceQuery): Promise<Resour
     items: response.items.map((item) => ({ kind, item: { ...item, relativePath: prefix + item.relativePath } })),
     folders: response.folders,
     hasMore,
-    coverage: `${response.items.length} newest ${query.trim() ? "matching " : ""}files in ${dir === "." ? "the shared file root" : dir} and its subfolders. ${hasMore ? "Load more to see older files." : "No more files."}${response.complete ? "" : " The Gateway stopped scanning at its limit, so some files may be missing."} This list is shared across workspaces.`,
+    coverage: `${response.items.length} newest ${query.trim() ? "matching " : ""}files in ${dir === "." ? "the shared file root" : dir} and its subfolders. ${hasMore ? "Load more to see older files." : "No more files."}${response.complete ? "" : " GoatCitadel stopped scanning at its limit, so some files may be missing."} This list is shared across workspaces.`,
   };
 }

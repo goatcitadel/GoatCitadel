@@ -73,7 +73,7 @@ const RUNTIME_CLASS_LABELS: Record<RoutingPreflightRuntimeClass, string> = {
 
 type ModelPopover = typeof import("./ChatModelOptionsPopover");
 let modelPopoverLoad: Promise<ModelPopover> | undefined;
-const PLAN_HELP = "Plan before acting. The Gateway still governs every tool and approval.";
+const PLAN_HELP = "Plan before acting. GoatCitadel still governs every tool and approval.";
 const REVIEW_HELP = "Request review of the answer before completion; availability follows the runtime.";
 
 const loadModelPopover = () =>
@@ -130,7 +130,7 @@ export function ChatComposerControls({
         Web
         <select
           aria-label="Web search"
-          title="Off disables web preference; Auto chooses when useful; Quick and Deep request search depth. Gateway policy and available tools still apply."
+          title="Off disables web preference; Auto chooses when useful; Quick and Deep request search depth. GoatCitadel policy and available tools still apply."
           value={props.currentWebMode}
           disabled={disabled || !props.onSetWebMode}
           onChange={(event) => props.onSetWebMode?.(event.target.value as ChatWebMode)}

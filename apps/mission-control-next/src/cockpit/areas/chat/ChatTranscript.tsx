@@ -222,7 +222,7 @@ export function ChatTranscript({
       <div className="flex-1 space-y-2 p-5 text-sm text-fg-secondary">
         <p role="alert">
           {gatewayUnavailable
-            ? "This conversation can’t load while the Gateway is unreachable. Reload it once the Gateway is back."
+            ? "This conversation can’t load while GoatCitadel is unreachable. Reload it once GoatCitadel is back."
             : "This conversation couldn’t load. Reload it, or choose it again from the list."}
         </p>
         <Button size="sm" onClick={props.onRefreshThread}>

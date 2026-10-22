@@ -26,7 +26,7 @@ const recordedSkillButton = () =>
   buttons().find((item) => item.querySelector("span")?.textContent === "Recorded skill")!;
 async function render() {
   await act(async () => root.render(<TrustPolicySettings />));
-  await vi.waitFor(() => expect(button("Refresh trust snapshot").disabled).toBe(false));
+  await vi.waitFor(() => expect(button("Refresh trust records").disabled).toBe(false));
 }
 async function search(value: string) {
   await act(async () => {
@@ -114,7 +114,7 @@ afterEach(() => {
 describe("native Trust evidence", () => {
   it("filters shared owner evidence by declarations, status and kind without asserting workspace authority", async () => {
     await render();
-    expect(container.textContent).toContain("Read-only snapshot of recorded trust");
+    expect(container.textContent).toContain("Read-only view of recorded trust");
     expect(container.textContent).not.toContain("current workspace");
     expect(container.textContent).toContain("2 matching rows");
     await search("SYNTHETIC_KEY");
@@ -176,14 +176,14 @@ describe("native Trust evidence", () => {
       error: "Catalog not reachable",
     });
     await render();
-    expect(container.textContent).toContain("Partial snapshot");
+    expect(container.textContent).toContain("Partial records");
     expect(container.textContent).toContain("Catalog not reachable");
     await act(async () => recordedSkillButton().click());
     api.fetchTrustPolicySnapshot.mockRejectedValue(new Error("Gateway offline"));
-    await act(async () => button("Refresh trust snapshot").click());
-    await vi.waitFor(() => expect(container.textContent).toContain("Trust snapshot unavailable"));
+    await act(async () => button("Refresh trust records").click());
+    await vi.waitFor(() => expect(container.textContent).toContain("Trust records unavailable"));
     expect(container.querySelector('[aria-label="Trust records"]')).toBeNull();
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("not in the latest snapshot");
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("not in the latest records");
     expect(container.querySelector('[role="dialog"] a')).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -201,9 +201,9 @@ describe("native Trust evidence", () => {
     expect(container.querySelectorAll('[aria-label="Trust records"] > li')).toHaveLength(61);
     await act(async () => recordedSkillButton().click());
     snapshot = { ...snapshot, skills: [], lastUseEvidence: [], generatedAt: "2026-09-30T13:00:00.000Z" };
-    await act(async () => button("Refresh trust snapshot").click());
+    await act(async () => button("Refresh trust records").click());
     await vi.waitFor(() =>
-      expect(container.querySelector('[role="dialog"]')?.textContent).toContain("not in the latest snapshot"),
+      expect(container.querySelector('[role="dialog"]')?.textContent).toContain("not in the latest records"),
     );
     expect(container.querySelector('[role="dialog"]')?.textContent).not.toContain("evidence-exact");
   });

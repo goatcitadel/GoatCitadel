@@ -232,7 +232,7 @@ describe("explicit bounded Library previews", () => {
     });
     const preview = await readLibraryResource({ kind: "artifacts", item }, "mine", "personal");
     expect(api.artifact).toHaveBeenLastCalledWith("artifact", "mine", "personal");
-    expect(preview.warning).toContain("Gateway redacted");
+    expect(preview.warning).toContain("GoatCitadel redacted");
   });
   it("bounds owner-supplied note content by UTF-8 bytes", async () => {
     await expect(

@@ -88,7 +88,7 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
       draft.acceptSaved(EMPTY, undefined, review);
       setResult({
         error: false,
-        message: `Gateway accepted ${receipt.relativePath} (${formatBytes(receipt.bytes)}).`,
+        message: `GoatCitadel accepted ${receipt.relativePath} (${formatBytes(receipt.bytes)}).`,
       });
       await client.invalidateQueries({ queryKey: ["library", "resources", "files"] });
     } catch (cause) {
@@ -121,7 +121,7 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
         </summary>
         <div className="mt-3 grid gap-3">
           <p className="text-sm text-fg-secondary">
-            UTF-8 text in the installation shared file root. All workspaces share this destination. Gateway path and
+            UTF-8 text in the installation shared file root. All workspaces share this destination. GoatCitadel path and
             size limits apply.
           </p>
           <Field label="Relative file path">
@@ -177,11 +177,11 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
               Checking whether a file already exists at this path…
             </p>
           ) : replaces ? (
-            <Callout tone="warning">{replaces} The Gateway enforces access and path restrictions.</Callout>
+            <Callout tone="warning">{replaces} GoatCitadel enforces access and path restrictions.</Callout>
           ) : existing.data === null ? null : (
             <Callout tone="warning">
               {existing.isError ? "The file check could not run. " : ""}This writes a shared file and may replace
-              existing content at this path. The Gateway enforces access and path restrictions.
+              existing content at this path. GoatCitadel enforces access and path restrictions.
             </Callout>
           )}
           {result ? <Callout tone={result.error ? "error" : "info"}>{result.message}</Callout> : null}

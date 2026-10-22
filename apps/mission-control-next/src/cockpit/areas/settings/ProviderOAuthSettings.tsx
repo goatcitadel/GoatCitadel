@@ -43,7 +43,7 @@ export function ProviderOAuthSettings({
         </p>
       ) : null}
       <p className="text-xs text-fg-muted">
-        The Gateway owns login, secure storage, and exact credential promotion. Login approval does not change
+        GoatCitadel handles login, secure storage, and exact credential promotion. Login approval does not change
         installation routing; review default routing separately.
       </p>
       <div className="flex flex-wrap gap-2">

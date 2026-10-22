@@ -25,7 +25,7 @@ export async function waitForTaskDetailsOwner({ page, details, owner, confirmedS
   if (confirmedSave) {
     // The query can publish our receipt before the verified save callback adopts it.
     // Its transient stale button is not a request to replace this successful draft.
-    await details.getByText("Gateway recorded the task details. This board edit does not change a running execution.",
+    await details.getByText("Task details saved. This board edit does not change a running execution.",
       { exact: true }).waitFor();
   } else {
     const load = details.getByRole("button", { name: "Load current details", exact: true });

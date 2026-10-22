@@ -223,7 +223,7 @@ const region = (label: string) => container.querySelector(`[aria-label="${label}
 describe("Quality evidence tabs", () => {
   it("uses a labelled tab list with arrow-key navigation between evidence views", async () => {
     await mount();
-    const list = container.querySelector('[role="tablist"][aria-label="Quality evidence"]')!;
+    const list = container.querySelector('[role="tablist"][aria-label="Quality results"]')!;
     const tabs = [...list.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     expect(tabs.map((tab) => tab.textContent)).toEqual(["Gates", "Evaluations", "Design"]);
     expect(tabs[0]!.getAttribute("aria-selected")).toBe("true");
@@ -246,6 +246,7 @@ describe("native Quality owner evidence", () => {
     data.warnings = ["Shared limitation", "Shared limitation"];
     data.securityQualityGates.warnings = ["Shared limitation", "Local gate warning", "Local gate warning"];
     api.snapshot.mockResolvedValue(data);
+    // Warnings state scope and limits, so they stay visible with Technical details off.
     await mount();
     expect(container.textContent?.split("Shared limitation").length).toBe(2);
     expect(container.textContent?.split("Local gate warning").length).toBe(2);
@@ -256,7 +257,7 @@ describe("native Quality owner evidence", () => {
     api.snapshot.mockResolvedValue(data);
     await mount();
     expect(api.snapshot).toHaveBeenCalledWith({ packLimit: 200, evalLimit: 25 });
-    expect(container.textContent).toContain("Installation-wide stored evidence");
+    expect(container.textContent).toContain("Stored quality results for this installation");
     expect(region("Prompt packs").textContent).toContain("availability unknown");
     expect(region("Prompt packs").textContent).not.toContain("Owner pack");
     await click("Inspect Defensive gate");
@@ -277,7 +278,7 @@ describe("native Quality owner evidence", () => {
       client.setQueryData(["quality", "eval-proof-runs", "snapshot", 200, 25], data);
       await new Promise((resolve) => setTimeout(resolve, 5));
     });
-    expect(region("Selected evaluation").textContent).toContain("no longer in the current evidence");
+    expect(region("Selected evaluation").textContent).toContain("no longer in the current results");
     await click("Inspect evaluation 1");
     const score = [...region("Selected evaluation").querySelectorAll("dt")].find(
       (item) => item.textContent === "Operator quality score",
@@ -356,15 +357,15 @@ describe("Quality read-only exports", () => {
     const writing = deferred<void>();
     clipboard.mockReturnValueOnce(writing.promise);
     await mount();
-    await click("Copy evaluation evidence");
+    await click("Copy evaluation records");
     expect(api.evalExport).toHaveBeenCalledWith(50);
     expect(clipboard).toHaveBeenCalledWith("exact eval payload");
     expect(container.textContent).not.toContain("Evaluation evidence copied.");
-    await click("Copying evaluation evidence…");
+    await click("Copying evaluation records…");
     expect(api.evalExport).toHaveBeenCalledOnce();
     await act(async () => writing.resolve());
     expect(container.textContent).toContain("Evaluation evidence copied.");
-    await click("Copy quality transport evidence");
+    await click("Copy quality records");
     expect(api.qualityExport).toHaveBeenCalledWith({ packLimit: 200, evalLimit: 25, format: "otel_json" });
     expect(clipboard).toHaveBeenLastCalledWith("exact quality payload");
     expect(fetch).not.toHaveBeenCalled();
@@ -372,7 +373,7 @@ describe("Quality read-only exports", () => {
   it("does not claim copy success when the clipboard rejects", async () => {
     clipboard.mockRejectedValueOnce(new Error("Permission denied"));
     await mount();
-    await click("Copy evaluation evidence");
+    await click("Copy evaluation records");
     expect(container.textContent).toContain("Evidence was not copied.");
     expect(container.textContent).not.toContain("Evaluation evidence copied.");
   });
@@ -380,7 +381,7 @@ describe("Quality read-only exports", () => {
     const result = deferred<{ content: string; posture: { readOnly: true; sideEffectPosture: "audit_only" } }>();
     api.evalExport.mockReturnValueOnce(result.promise);
     await act(async () => root.render(<QualityExports />));
-    await click("Copy evaluation evidence");
+    await click("Copy evaluation records");
     await act(async () => root.render(<p>Another view</p>));
     await act(async () =>
       result.resolve({ content: "delayed", posture: { readOnly: true, sideEffectPosture: "audit_only" } }),

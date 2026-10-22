@@ -98,26 +98,26 @@ function BoardEditorView({
       {conflict && !uncertain && !owner.hasEdits ? (
         <div role="alert" className="grid gap-2 rounded-md border border-line bg-sunken p-3 text-sm text-fg">
           <p>
-            <strong>Revision {conflict.revision} is now current.</strong> You have no unsaved edits.
+            <strong>Version {conflict.revision} is now current.</strong> You have no unsaved edits.
           </p>
           <div>
             <Button size="sm" disabled={busy} onClick={owner.discardForCurrent}>
-              Load revision {conflict.revision}
+              Load version {conflict.revision}
             </Button>
           </div>
         </div>
       ) : conflict && !uncertain ? (
         <div role="alert" className="grid gap-2 rounded-md border border-line bg-sunken p-3 text-sm text-fg">
           <p>
-            <strong>Revision {conflict.revision} is now current.</strong> Your draft is kept and nothing has been saved.
+            <strong>Version {conflict.revision} is now current.</strong> Your draft is kept and nothing has been saved.
           </p>
           <p className="text-fg-secondary">
-            Keeping your draft lets you review it against revision {conflict.revision}. Saving your draft replaces the
-            changes in revision {conflict.revision}.
+            Keeping your draft lets you review it against version {conflict.revision}. Saving your draft replaces the
+            changes in version {conflict.revision}.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" disabled={busy} onClick={owner.adoptCurrent}>
-              Keep my draft on revision {conflict.revision}
+              Keep my draft on version {conflict.revision}
             </Button>
             <Button size="sm" variant="ghost" disabled={busy} onClick={owner.discardForCurrent}>
               Discard my draft
@@ -302,8 +302,7 @@ function BoardEditorView({
       {preview ? (
         <section aria-label="Draft live widget preview" className="grid gap-3">
           <p className="text-sm text-fg-secondary">
-            Unsaved layout preview. Values read current Gateway owners; this does not save a board or create a
-            historical snapshot.
+            Unsaved layout preview. Values are read just now; this does not save a board or keep a saved copy.
           </p>
           {accessAvailable ? (
             <div className="grid gap-3 sm:grid-cols-2">
@@ -324,8 +323,8 @@ function BoardEditorView({
           <p className="text-sm text-fg">
             {base ? "Save changes to" : "Create"} {draft.name.trim()} with {plural(draft.placements.length, "widget")}?{" "}
             {base
-              ? "The Gateway will check the current version before saving."
-              : "The Gateway will validate and save this new layout."}
+              ? "GoatCitadel will check the current version before saving."
+              : "GoatCitadel will check and save this new layout."}
           </p>
           <div className="flex gap-2">
             <Button

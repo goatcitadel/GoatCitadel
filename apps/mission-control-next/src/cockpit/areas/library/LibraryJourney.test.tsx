@@ -150,7 +150,7 @@ it("inspects a selected event's evidence, references and provenance without raw 
   for (const text of [
     "missing approval",
     "Blocked",
-    "1 evidence reference recorded",
+    "1 linked record",
     "An operator",
     "The recurrence scan was incomplete",
     "This workspace",
@@ -185,7 +185,7 @@ it("states which producers Journey does not yet cover", async () => {
   await open("/library/journey");
   await vi.waitFor(() => expect(container.textContent).toContain("Memory written"));
   expect(container.textContent).toContain("not yet complete");
-  expect(container.textContent).toContain("not release-bearing parity evidence");
+  expect(container.textContent).toContain("outside sources are not connected yet");
 });
 
 it("says when a linked event is not in the loaded results", async () => {

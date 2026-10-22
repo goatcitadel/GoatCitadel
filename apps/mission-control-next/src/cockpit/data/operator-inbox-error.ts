@@ -25,6 +25,6 @@ export function describeOperatorInboxError(error: unknown) {
   return {
     ...description,
     summary:
-      "The Gateway did not provide the Inbox endpoint. Check that Mission Control and Gateway are running matching versions, then try again.",
+      "GoatCitadel didn't return the Inbox. Check that this app and GoatCitadel are the same version, then try again.",
   };
 }

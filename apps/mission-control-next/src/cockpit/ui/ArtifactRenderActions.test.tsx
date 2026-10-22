@@ -118,7 +118,7 @@ describe("ArtifactRenderActions", () => {
       },
     );
     expect(images[0]?.getAttribute("src")).toMatch(/^blob:render-/);
-    expect(container.textContent).toContain("Rendered 2 snapshots");
+    expect(container.textContent).toContain("Rendered 2 images");
   });
 
   it("reports a sent critique and the text-only marker from the response", async () => {
@@ -165,7 +165,7 @@ describe("ArtifactRenderActions", () => {
     act(() => root.render(view(artifact({ contentHash: "c".repeat(64), version: 3 }))));
 
     expect(container.querySelectorAll("img")).toHaveLength(0);
-    expect(container.textContent).not.toContain("Rendered 2 snapshots");
+    expect(container.textContent).not.toContain("Rendered 2 images");
   });
   it("mounts under every shared viewer through the cockpit actions slot", () => {
     act(() =>

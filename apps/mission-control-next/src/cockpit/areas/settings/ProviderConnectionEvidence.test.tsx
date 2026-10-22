@@ -79,7 +79,7 @@ describe("cockpit provider connection details", () => {
     expect(api.fetchProviderSecretStatus).toHaveBeenCalledExactlyOnceWith("provider-a", expect.anything());
     const text = container.textContent ?? "";
     expect(text).toContain("Configured API: OpenAI Responses");
-    expect(text).toContain("Gateway executes: OpenAI-compatible chat completions");
+    expect(text).toContain("GoatCitadel uses: OpenAI-compatible chat completions");
     expect(text).not.toContain("openai-responses");
     expect(text).toContain("Remote provider");
     const capabilities = container.querySelector('[aria-label="Provider A capabilities"]')!;
@@ -119,6 +119,6 @@ describe("cockpit provider connection details", () => {
     await open();
     expect(container.textContent).toContain("Local runtime");
     expect(container.textContent).toContain("Local endpoint, no key required");
-    expect(container.textContent).toContain("Gateway executes: OpenAI Responses");
+    expect(container.textContent).toContain("GoatCitadel uses: OpenAI Responses");
   });
 });

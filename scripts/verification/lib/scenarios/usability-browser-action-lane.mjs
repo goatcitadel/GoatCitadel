@@ -590,8 +590,9 @@ export function adaptCodeModeStepForCockpit(sourceStep) {
         { kind: "click", name: "Open run in Work", exact: true },
       ];
     }
+    // The cockpit Work run titles this receipt "Signed run receipt"; Classic keeps its own wording.
     if (operation.kind === "assert-text" && operation.value === "Signed evidence receipt") {
-      return [operation];
+      return [{ ...operation, value: "Signed run receipt" }];
     }
     if (operation.kind === "assert-text" && operation.value === "Timeline") {
       return [{ ...operation, value: "Run completed" }];

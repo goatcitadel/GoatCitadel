@@ -8,7 +8,7 @@ import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 
 const INTERRUPTED_SEND =
-  "This send request was interrupted before its approval was recorded. Nothing was sent. After a short safety wait, the Gateway can check for a recorded approval and release this draft so you can request one again.";
+  "This send request was interrupted before its approval was recorded. Nothing was sent. After a short safety wait, GoatCitadel can check for a recorded approval and release this draft so you can request one again.";
 const NOTHING_TO_RELEASE =
   "Nothing to release: this draft is no longer waiting on an interrupted send request. Check Inbox for its approval.";
 

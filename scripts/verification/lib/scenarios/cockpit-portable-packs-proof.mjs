@@ -359,8 +359,8 @@ export async function runCockpitPortablePacksProof({ context, browser, stack, ci
           await panel.getByRole("button", { name: `Record review for ${label}`, exact: true }).click();
           const recordPath = `/api/v1/capability-packs/staged/${encodeURIComponent(receipt.evidenceEnvelopeId)}/materialize`,
             recordResponse = waitPost(recordPath);
-          await dialog("Record pack review evidence")
-            .getByRole("button", { name: "Record reviewed evidence", exact: true })
+          await dialog("Record pack review")
+            .getByRole("button", { name: "Record pack review", exact: true })
             .click();
           const recordedResponse = await recordResponse;
           assert.equal(recordedResponse.status(), 200);

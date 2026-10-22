@@ -96,7 +96,7 @@ export function useFirstRunSetup(workspaceId: string | undefined) {
     : completion.attempt?.phase === "unknown"
       ? "Setup completion is uncertain. Refresh checks to inspect the recorded marker."
       : completion.locked
-        ? "Wait for the Gateway to confirm setup completion."
+        ? "Wait for GoatCitadel to confirm setup is complete."
         : query.isFetching || checking
           ? "Wait for the current setup checks to finish." // refetch-guard: allow Prerequisite text changes during checks; the current setup record remains visible.
           : !progress?.modelReady

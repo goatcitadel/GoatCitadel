@@ -1,3 +1,4 @@
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useRef, useState } from "react";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { presentProviderReadiness } from "@goatcitadel/mission-control-shared/content/provider-readiness";
@@ -38,7 +39,7 @@ function catalogEvidence(provider: ProviderModelCatalogOption): { label: string;
         "These names come from fallback data. A successful model refresh is needed to verify account availability.",
     };
   }
-  return { label: "Catalog not checked", detail: "Refresh models to ask the Gateway for the current account catalog." };
+  return { label: "Catalog not checked", detail: "Refresh models to load the current account catalog." };
 }
 
 /** The shared catalog owns discovery, freshness, and credential evidence. */
@@ -94,7 +95,7 @@ export function ProviderCatalogSettings() {
             Providers and model catalogs
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            Inspect configured providers and refresh the models the Gateway can discover.
+            Inspect configured providers and refresh the models GoatCitadel can discover.
           </p>
         </div>
         <Button size="sm" disabled={catalog.loading || refreshingId !== null} onClick={() => void catalog.reload()}>
@@ -251,7 +252,7 @@ export function ProviderCatalogSettings() {
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs text-fg-muted">
                     {models.length
-                      ? `${currentPage * MODEL_PAGE_SIZE + 1}–${Math.min((currentPage + 1) * MODEL_PAGE_SIZE, models.length)} of ${models.length} model names`
+                      ? `${currentPage * MODEL_PAGE_SIZE + 1}–${Math.min((currentPage + 1) * MODEL_PAGE_SIZE, models.length)} of ${plural(models.length, "model name")}`
                       : "0 displayed model names"}
                   </p>
                   {models.length > MODEL_PAGE_SIZE ? (

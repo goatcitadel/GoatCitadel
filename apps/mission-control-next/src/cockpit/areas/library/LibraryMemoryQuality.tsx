@@ -50,14 +50,14 @@ export function MemoryQualityView({
 }) {
   return (
     <>
-      <h3 className="font-semibold">Write evidence</h3>
-      <Button onClick={() => void evidence.refetch()}>Refresh write evidence</Button>
+      <h3 className="font-semibold">Write records</h3>
+      <Button onClick={() => void evidence.refetch()}>Check again</Button>
       {evidence.error ? <Callout tone="error">{describeApiError(evidence.error).summary}</Callout> : null}
       <ul className="grid min-w-0 max-w-full grid-cols-1 gap-2">
         {evidence.data?.items.map((item) => (
           <li key={item.envelopeId}>
             {evidenceKindLabel(item.eventKind)} · {signatureLabel(item.signatureStatus)} · {stamp(item.createdAt)}
-            <TechnicalDetails label="Write evidence provenance">
+            <TechnicalDetails label="Write record provenance">
               <p>
                 {item.envelopeId} · {item.contentHash} · {item.createdAt}
               </p>
@@ -235,7 +235,7 @@ function RecallProbeResult({ benchmark }: { benchmark: MemoryRetrievalBenchmarkR
           {warning}
         </Callout>
       ))}
-      <TechnicalDetails label="Recall evidence">
+      <TechnicalDetails label="Recall details">
         <pre className="min-w-0 max-w-full whitespace-pre-wrap wrap-anywhere">{JSON.stringify(benchmark, null, 2)}</pre>
       </TechnicalDetails>
     </section>

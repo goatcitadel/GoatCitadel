@@ -206,7 +206,7 @@ export async function runCockpitNotificationRoutingProof({ context, browser, sta
         stage = "read-only native refresh settles the retained test evidence";
         const writesBeforeRefresh = writes.length;
         await panel.getByRole("button", { name: "Refresh notification routing", exact: true }).click();
-        await panel.getByText(`Latest test for ${label}: delivered. Confirmed by the Gateway.`, { exact: true }).waitFor();
+        await panel.getByText(`Latest test for ${label}: delivered. Confirmed by GoatCitadel.`, { exact: true }).waitFor();
         assert.equal(writes.length, writesBeforeRefresh); assert.equal(deliveries.length, 1);
         assert.equal(writes.filter(item => item.method === "POST" && item.route.endsWith("/test")).length, 1);
         stage = "withhold stale archive and then apply the current exact revision";

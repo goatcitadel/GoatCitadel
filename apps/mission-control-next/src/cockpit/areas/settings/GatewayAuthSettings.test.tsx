@@ -84,6 +84,16 @@ afterEach(async () => {
   __resetSettingsChangesForTests();
 });
 describe("native Gateway authentication", () => {
+  it("warns that open access lets anyone change settings, with a way to set up sign-in (ST-N08)", async () => {
+    const warning = "Anyone who can reach this app can change settings. Set up sign-in.";
+    expect(JSON.stringify(renderer.toJSON())).not.toContain(warning);
+    owner = { ...owner, auth: { ...owner.auth, mode: "none" } };
+    await act(async () => client.invalidateQueries());
+    await vi.waitFor(() => expect(JSON.stringify(renderer.toJSON())).toContain(warning));
+    // The warning names the control that fixes it, which sits right below it in this section.
+    expect(JSON.stringify(renderer.toJSON())).toContain("Use Configure access below.");
+    expect(button("Configure access")).toBeDefined();
+  });
   it("renders installation scope, requires explicit review, and saves through the shared owner", async () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("every workspace");
     await click("Configure access");

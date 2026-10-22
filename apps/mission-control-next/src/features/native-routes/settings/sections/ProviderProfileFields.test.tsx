@@ -39,7 +39,7 @@ describe("native provider profile fields", () => {
     const markup = render({ apiStyle: "bedrock-messages", authMode: "aws-sigv4" });
     expect(markup).toContain("AWS credentials JSON env name");
     expect(markup).toContain('placeholder="BEDROCK_AWS_CREDENTIALS"');
-    expect(markup).toContain("(and AWS_SESSION_TOKEN) from the gateway environment.");
+    expect(markup).toContain("(and AWS_SESSION_TOKEN) from the GoatCitadel environment.");
     expect(markup).not.toContain("accessKeyId");
     expect(render({ apiStyle: "bedrock-messages" })).toContain('placeholder="OPENAI_API_KEY"');
   });

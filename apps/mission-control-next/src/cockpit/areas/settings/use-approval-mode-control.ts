@@ -146,14 +146,15 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
       }
       mutationAttempted = true;
       const response = await patchSettings({ expectedRevision: intent.revision, toolApprovalMode: intent.mode });
-      if (getGatewayApiBaseUrl() !== installation) throw new Error("Gateway installation changed during the save.");
+      if (getGatewayApiBaseUrl() !== installation)
+        throw new Error("You switched to a different GoatCitadel installation, so the save could not be confirmed.");
       // Retain the dispatched origin result even after its editor unmounts.
       const saved = change.receive(response, intent.mode, intent.revision);
       if (!isCurrent(intent.generation)) return false;
       setNotice(
         saved
-          ? "Tool approval rule saved and confirmed by the Gateway."
-          : "Change submitted. The Gateway must confirm settlement before this draft is saved.",
+          ? "Tool approval rule saved and confirmed by GoatCitadel."
+          : "Change submitted. GoatCitadel must confirm it before this draft is saved.",
       );
       await settings.refetch();
       return saved && live.current.mounted && getGatewayApiBaseUrl() === installation;

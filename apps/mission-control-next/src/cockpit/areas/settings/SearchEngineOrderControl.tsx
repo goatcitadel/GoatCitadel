@@ -60,7 +60,7 @@ export function SearchEngineOrderControl({ settings }: { settings: UseQueryResul
       <GovernedSettingLoadState
         governed={governed}
         loading="Loading search engines…"
-        incomplete="Gateway did not report a search engine order. Update the Gateway before changing it."
+        incomplete="GoatCitadel did not report a search engine order. Update GoatCitadel before changing it."
       />
       {ready ? (
         <>

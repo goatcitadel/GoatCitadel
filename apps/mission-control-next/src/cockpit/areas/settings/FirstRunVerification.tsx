@@ -79,7 +79,7 @@ export function FirstRunVerification() {
         <>
           <p className="text-sm text-fg-secondary">
             Setup marker: {state.completed ? "recorded" : "not recorded"}. First Chat response:{" "}
-            {state.firstTask?.status === "verified" ? `verified by the Gateway with ${firstTaskModel}` : "not observed"}
+            {state.firstTask?.status === "verified" ? `verified by GoatCitadel with ${firstTaskModel}` : "not observed"}
             . Neither sample records nor configured credentials certify execution.
           </p>
           <EvidenceList title="Setup Center" items={presentSetupCenterItems(state)} />
@@ -92,14 +92,14 @@ export function FirstRunVerification() {
             </p>
           </details>
           <details className="rounded-md border border-line p-3">
-            <summary className="cursor-pointer font-medium text-fg">Gateway access and remote readiness</summary>
+            <summary className="cursor-pointer font-medium text-fg">Sign-in and remote readiness</summary>
             {state.setupReadiness ? (
               <div className="mt-3 grid gap-3 text-sm text-fg-secondary">
                 <p>
-                  Gateway: <span className="break-all font-mono">{state.setupReadiness.profile.gatewayUrl}</span>
+                  Server address: <span className="break-all font-mono">{state.setupReadiness.profile.gatewayUrl}</span>
                 </p>
                 <p>
-                  Auth: {presentSetupLabel(AUTH_MODE_LABELS, state.setupReadiness.profile.authMode)} · Posture:{" "}
+                  Auth: {presentSetupLabel(AUTH_MODE_LABELS, state.setupReadiness.profile.authMode)} · Deployment:{" "}
                   {presentSetupLabel(DEPLOYMENT_POSTURE_LABELS, state.setupReadiness.profile.deploymentPosture)}
                 </p>
                 <ul className="grid gap-3">

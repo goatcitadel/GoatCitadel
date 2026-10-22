@@ -1252,7 +1252,7 @@ test("cockpit Code Mode journey keeps owner probes while using cockpit controls"
   );
   assert.deepEqual(cockpit.operations.slice(-5), [
     { kind: "click", name: "Inspect signed receipt", exact: true },
-    { kind: "assert-text", value: "Signed evidence receipt" },
+    { kind: "assert-text", value: "Signed run receipt" },
     { kind: "assert-text", value: "OS keychain is unavailable" },
     { kind: "assert-text", value: "Run completed" },
     { kind: "api", probe: "code-mode-helper-run-detail" },

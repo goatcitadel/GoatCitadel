@@ -89,7 +89,7 @@ it("shows only the pending turn while the first message sends (CH-04)", async ()
 
 it("says messages can't load while the Gateway is unreachable instead of calling the view empty (CH-04)", async () => {
   await render(<ChatTranscript gatewayUnavailable props={props()} />);
-  expect(container.textContent).toContain("Messages can’t load while the Gateway is unreachable.");
+  expect(container.textContent).toContain("Messages can’t load while GoatCitadel is unreachable.");
   expect(container.textContent).not.toContain("No messages in this view.");
 });
 

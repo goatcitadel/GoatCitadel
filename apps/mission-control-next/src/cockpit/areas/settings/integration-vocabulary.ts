@@ -13,7 +13,7 @@ export const SIDE_EFFECT_STATUS_LABELS: Record<ExternalSideEffectRunStatus, stri
   unknown_external_outcome: "Outcome unknown",
   blocked_duplicate: "Blocked as a duplicate",
   payload_mismatch: "Different from the original request",
-  idempotency_unavailable: "Replay protection unavailable",
+  idempotency_unavailable: "Duplicate protection unavailable",
 };
 export const RESUME_STATE_LABELS: Record<IntegrationExternalWritebackResumeState, string> = {
   not_resumable: "Cannot be resumed",
@@ -22,7 +22,7 @@ export const RESUME_STATE_LABELS: Record<IntegrationExternalWritebackResumeState
   manual_review_unknown_external_outcome: "Needs a manual check",
   in_progress: "In progress",
   payload_mismatch: "Different from the original request",
-  idempotency_unavailable: "Replay protection unavailable",
+  idempotency_unavailable: "Duplicate protection unavailable",
 };
 export const MEET_SESSION_STATE_LABELS: Record<GoogleMeetSessionState, string> = {
   blocked: "Blocked",

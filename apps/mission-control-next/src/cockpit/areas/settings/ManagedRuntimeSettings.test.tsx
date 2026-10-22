@@ -192,7 +192,7 @@ describe("native managed runtime configuration", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("saved and confirmed"));
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain("Process: Stopped");
-    expect(container.textContent).toContain("Read-only evidence");
+    expect(container.textContent).toContain("Read-only record");
     expect(container.querySelectorAll("input")).toHaveLength(4);
   });
   it("checks a lost runtime save's outcome and releases the lock after readback", async () => {

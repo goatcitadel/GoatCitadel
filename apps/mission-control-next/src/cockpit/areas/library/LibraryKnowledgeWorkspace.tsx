@@ -32,7 +32,7 @@ export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string
     <section className={AREA_PAGE} aria-label="Library Knowledge">
       <AreaHeader
         title={LIBRARY_SECTION_LABELS.knowledge}
-        description="Source material, governed imports, retrieval evidence and Engineering learnings."
+        description="Source material, governed imports, retrieval history and Engineering learnings."
       />
       <LibraryKnowledgeActions workspaceId={workspaceId} />
       <Field label="Filter Knowledge files">

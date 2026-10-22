@@ -183,8 +183,8 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       {eligible && !scopeChanged && !completed && !outcomeUncertain ? (
         <>
           <p className="text-xs text-fg-muted">
-            Recovery can rerun steps and external effects. Gateway policy and workflow checks still decide whether this
-            request is allowed.
+            Recovery can rerun steps and external effects. GoatCitadel policy and workflow checks still decide whether
+            this request is allowed.
           </p>
           <Button
             size="sm"

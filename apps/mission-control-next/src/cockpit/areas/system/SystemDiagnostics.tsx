@@ -202,7 +202,7 @@ export function SystemDiagnostics() {
         <h2 id="diagnostics-logs-title" className="text-base font-semibold text-fg">
           Daemon logs
         </h2>
-        <p className="mt-1 text-xs text-fg-muted">Latest 100 entries reported by the Gateway daemon log API.</p>
+        <p className="mt-1 text-xs text-fg-muted">Latest 100 entries from the daemon log.</p>
         {logs.isLoading ? (
           <p role="status" className="mt-3 text-sm text-fg-muted">
             Loading daemon logs…
@@ -232,7 +232,7 @@ export function SystemDiagnostics() {
           Diagnostic events
         </h2>
         <p className="mt-1 text-xs text-fg-muted">
-          Latest 100 client and Gateway diagnostic entries. This is a recent window, not complete history.
+          Latest 100 client and server diagnostic entries. This is a recent window, not complete history.
         </p>
         <div role="group" aria-label="Diagnostic event view" className="mt-3 flex flex-wrap items-center gap-2">
           <Button

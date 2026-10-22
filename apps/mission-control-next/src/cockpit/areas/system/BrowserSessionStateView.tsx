@@ -71,7 +71,7 @@ export function BrowserSessionStateView({
               <dd className="wrap-anywhere">{posture.hostPosture}</dd>
             </div>
             <div>
-              <dt className="font-medium">Retained evidence</dt>
+              <dt className="font-medium">Recorded access</dt>
               <dd>
                 {posture.grantedAccessCount} granted · {plural(posture.guardBlockCount, "guard block")} · last access{" "}
                 {formatTime(posture.lastAccessAt) ?? "none recorded"}

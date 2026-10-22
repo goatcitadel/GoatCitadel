@@ -220,7 +220,7 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode } = {}) {
     <section className={`${AREA_COLUMN} flex min-h-0 flex-1 flex-col gap-3 p-4 sm:p-6`}>
       <AreaHeader
         title={LIBRARY_SECTION_LABELS.capabilities}
-        description="Inspect skills, tools, and other capabilities from the Gateway catalog."
+        description="Inspect skills, tools, and other capabilities available in GoatCitadel."
         actions={
           <Button
             size="sm"

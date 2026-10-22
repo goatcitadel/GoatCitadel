@@ -33,7 +33,7 @@ export function RunWorkspaceContext({ trace, workspaceId }: { trace: ObserveRunT
     <section aria-label="Current conversation worktree" className="border-t border-line-subtle pt-4">
       <h2 className="text-base font-semibold text-fg">Current conversation worktree</h2>
       <p className="mt-2 text-sm text-fg-secondary">
-        Inspect the conversation's current worktree and files. This snapshot may include changes made after this run; it
+        Inspect the conversation's current worktree and files. This view may include changes made after this run; it
         does not identify which changes the run made.
       </p>
       {sessionId ? (
@@ -160,7 +160,7 @@ function WorkspaceInspector({ sessionId, workspaceId }: { sessionId: string; wor
             </p>
           ) : null}
           <p className="text-xs text-fg-muted">
-            Snapshot from your last inspection. Refresh to check for later changes.
+            Saved copy from your last inspection. Refresh to check for later changes.
           </p>
         </>
       ) : null}
@@ -180,13 +180,13 @@ function WorkspaceInspector({ sessionId, workspaceId }: { sessionId: string; wor
                 ))}
               </ul>
             ) : (
-              <p className="mt-2 text-sm text-fg-muted">No changed paths were returned in this snapshot.</p>
+              <p className="mt-2 text-sm text-fg-muted">No changed paths were returned in this inspection.</p>
             )}
           </section>
           <section className="min-w-0" aria-label="Current file tree">
             <h3 className="text-sm font-semibold text-fg">File tree</h3>
             <p className="mt-1 text-xs text-fg-muted">
-              Up to {MAX_TREE_ITEMS} returned entries. The Gateway tree is bounded and may omit other files.
+              Up to {MAX_TREE_ITEMS} returned entries. The file tree is limited and may omit other files.
             </p>
             {tree.items.length ? (
               <ul className="mt-2 grid gap-1">
@@ -218,7 +218,7 @@ function WorkspaceInspector({ sessionId, workspaceId }: { sessionId: string; wor
           <div className="grid min-w-0 gap-3">
             <p className="break-all text-sm font-medium text-fg">{preview.path}</p>
             <p className="text-xs text-fg-muted">
-              Read-only file content from the current worktree. This is not a historical run snapshot.
+              Read-only file content from the current worktree. This is not a saved copy from the run.
             </p>
             {preview.state === "loading" ? (
               <p role="status" className="text-sm text-fg-muted">

@@ -68,7 +68,7 @@ export function TaskDetailsEditor({ task, workspaceId }: { task: TaskRecord; wor
     await owner.confirm(
       (updated) => {
         editor.acceptSaved(draftFrom(updated), updated.revision, submitted);
-        setNotice("Gateway recorded the task details. This board edit does not change a running execution.");
+        setNotice("Task details saved. This board edit does not change a running execution.");
         void Promise.allSettled([
           client.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, updated.taskId] }),
           client.invalidateQueries({ queryKey: queryKeys.workTasks(workspaceId) }),

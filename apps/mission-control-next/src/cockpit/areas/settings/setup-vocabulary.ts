@@ -121,7 +121,7 @@ export function presentSetupCenterItems(state: OnboardingState) {
       return { ...item, description: `${approvalModeLabel(settings.toolApprovalMode)} · ${budget} budget.` };
     }
     if (item.label === "Access and auth" && authMode !== "none") {
-      return { ...item, description: `Gateway sign-in: ${presentSetupLabel(AUTH_MODE_LABELS, authMode)}.` };
+      return { ...item, description: `Sign-in: ${presentSetupLabel(AUTH_MODE_LABELS, authMode)}.` };
     }
     return item;
   });

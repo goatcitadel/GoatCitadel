@@ -157,7 +157,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
       <GovernedSettingLoadState
         governed={governed}
         loading="Loading Firecrawl settings…"
-        incomplete="Gateway did not report Firecrawl settings. Update the Gateway before changing them."
+        incomplete="GoatCitadel did not report Firecrawl settings. Update GoatCitadel before changing them."
       />
       {ready ? (
         <div className="mt-3 max-w-xl space-y-3">
@@ -260,7 +260,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
           {needsAllowlist ? (
             <Callout tone="warning" announce={false}>
               <p>
-                {draftHost} is not in the outbound allowlist. Tools cannot reach it, and the Gateway will not save
+                {draftHost} is not in the outbound allowlist. Tools cannot reach it, and GoatCitadel will not save
                 Firecrawl as on until the host is allowed.
               </p>
               <Button

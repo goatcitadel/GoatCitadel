@@ -126,7 +126,7 @@ const failureClasses: Record<ChatTurnFailureClass, string> = {
   turn_budget_exceeded: "the time limit for this message was reached",
   budget_exceeded: "the budget was reached",
   approval_required: "an approval is required",
-  interrupted_by_restart: "the Gateway restarted",
+  interrupted_by_restart: "GoatCitadel restarted",
   skill_security_blocked: "a skill was blocked by security checks",
   guidance_security_blocked: "guidance was blocked by security checks",
   unknown: "unknown",

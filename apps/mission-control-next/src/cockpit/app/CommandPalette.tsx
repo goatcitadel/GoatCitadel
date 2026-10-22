@@ -239,7 +239,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             </p>
             {creationNotice}
             <p className="px-3 py-2 text-sm text-fg-secondary">
-              {modelSummary} Opens reviewed Settings. Conversation overrides stay in Chat.
+              {modelSummary} Opens Settings to change it. Conversation overrides stay in Chat.
             </p>
             {viewCode.failed ? (
               <div role="alert" className="min-h-24 space-y-2 px-3 py-2 text-sm">

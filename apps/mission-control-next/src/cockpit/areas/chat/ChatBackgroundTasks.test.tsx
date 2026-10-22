@@ -23,7 +23,11 @@ const callbacks = vi.hoisted(() => ({ confirm: undefined as ComponentProps<"butt
 vi.mock("../../ui/Button", () => ({
   Button: ({ children, ...props }: ComponentProps<"button">) => {
     if (children === "Cancel task") callbacks.confirm = props.onClick;
-    return <button {...props} type={props.type ?? "button"}>{children}</button>;
+    return (
+      <button {...props} type={props.type ?? "button"}>
+        {children}
+      </button>
+    );
   },
 }));
 let root: Root;
@@ -133,7 +137,11 @@ beforeEach(async () => {
   document.body.append(container);
   root = createRoot(container);
   await act(async () => {
-    root.render(<CockpitNavigationProvider><ChatBackgroundTasks input={input()} turnId="turn" /></CockpitNavigationProvider>);
+    root.render(
+      <CockpitNavigationProvider>
+        <ChatBackgroundTasks input={input()} turnId="turn" />
+      </CockpitNavigationProvider>,
+    );
   });
 });
 afterEach(async () => {
@@ -149,7 +157,7 @@ afterEach(async () => {
 
 it("keeps an owner conflict visible inside the dialog through refresh and requires a fresh review", async () => {
   await click(container, "Cancel task");
-  expect(dialog().textContent).toContain("Task version 3 · Watcher revision 5");
+  expect(dialog().textContent).toContain("Task version 3 · Watcher version 5");
   control.mockRejectedValue(
     new ApiRequestError("409", {
       kind: "http",
@@ -162,13 +170,13 @@ it("keeps an owner conflict visible inside the dialog through refresh and requir
   state.tasks[0]!.childVersion = 4;
   await click(dialog(), "Cancel task");
   expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Close this review");
-  expect(dialog().textContent).toContain("Task version 3 · Watcher revision 5");
+  expect(dialog().textContent).toContain("Task version 3 · Watcher version 5");
   expect(buttons(dialog(), "Cancel task")[0]!.disabled).toBe(true);
   expect(control).toHaveBeenCalledTimes(1);
   await click(dialog(), "Keep running");
   await click(container, "Refresh");
   await click(container, "Cancel task");
-  expect(dialog().textContent).toContain("Task version 4 · Watcher revision 5");
+  expect(dialog().textContent).toContain("Task version 4 · Watcher version 5");
   expect(buttons(dialog(), "Cancel task")[0]!.disabled).toBe(false);
 });
 
@@ -254,7 +262,7 @@ it("guards exact run evidence navigation while retaining the real draft and unkn
   const push = vi.spyOn(window.history, "pushState");
   const href = "/work/runs/child%2Fone%3Fdetail?shell=cockpit";
   const evidence = container.querySelector<HTMLAnchorElement>("a")!;
-  expect(evidence.textContent).toBe("Open run evidence");
+  expect(evidence.textContent).toBe("Open run details");
   expect(evidence.getAttribute("href")).toBe(href);
   await act(async () => {
     evidence.click();

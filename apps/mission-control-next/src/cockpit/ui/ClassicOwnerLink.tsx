@@ -50,14 +50,14 @@ export function ClassicOwnerLink({
         data-inbox-owner={inboxOwner ? "" : undefined}
         onClick={request}
         aria-disabled={opening || undefined}
-        aria-label={opening ? (openingLabel ?? "Opening owner view…") : label}
+        aria-label={opening ? (openingLabel ?? "Opening the classic view…") : label}
         className={className ?? "inline-block text-sm text-accent hover:underline"}
       >
-        {opening ? (openingLabel ?? "Opening owner view…") : (children ?? label)}
+        {opening ? (openingLabel ?? "Opening the classic view…") : (children ?? label)}
       </a>
       {handoff.error ? (
         <span role="alert" className="block text-sm text-status-failed">
-          {errorLabel ?? "The owner view could not open. Your current drafts are still available."}
+          {errorLabel ?? "The classic view could not open. Your drafts are still here."}
         </span>
       ) : null}
       <UnsavedChangesDialog {...handoff.dialogProps} />

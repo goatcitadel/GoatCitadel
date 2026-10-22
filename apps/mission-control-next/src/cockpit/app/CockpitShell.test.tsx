@@ -235,11 +235,11 @@ describe("CockpitShell", () => {
       ),
     );
     const alert = container.querySelector("[data-gateway-banner]");
-    expect(alert?.querySelector('[role="alert"]')?.textContent).toContain("Gateway unavailable.");
+    expect(alert?.querySelector('[role="alert"]')?.textContent).toContain("GoatCitadel is unreachable.");
     // Above the scrolling area, so it never scrolls away and phones see it.
     expect(alert?.closest("#main-content")).toBeNull();
     // Only Chat sends, so other areas must not claim that sending is paused.
-    expect(alert?.textContent).toContain("Gateway unavailable. What you see here may be out of date.");
+    expect(alert?.textContent).toContain("GoatCitadel is unreachable. What you see here may be out of date.");
     expect(alert?.textContent).not.toContain("Sending is paused");
     expect(alert?.textContent).toContain("goatcitadel up");
     const retry = vi.fn();

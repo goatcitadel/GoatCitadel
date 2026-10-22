@@ -93,7 +93,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
         />
       ) : null}
       {!taskQuery.isLoading && !taskQuery.isError && !taskQuery.data ? (
-        <EmptyState title="Task not found" description="The Gateway returned no task record for this link." />
+        <EmptyState title="Task not found" description="No task was found for this link." />
       ) : null}
       {task ? (
         <>
@@ -179,7 +179,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
                 <p className="mt-2 text-sm text-fg-muted">No activity was returned.</p>
               ) : null}
               {!activities.isError && activities.data && activities.data.items.length >= 200 ? (
-                <p className="mt-2 text-xs text-fg-muted">The owner returns at most 200 recent activities.</p>
+                <p className="mt-2 text-xs text-fg-muted">Showing at most 200 recent activities.</p>
               ) : null}
             </section>
             <section className="border-t border-line-subtle pt-4">
@@ -215,7 +215,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
                 <p className="mt-2 text-sm text-fg-muted">No deliverables were returned.</p>
               ) : null}
               {!deliverables.isError && deliverables.data && deliverables.data.items.length >= 200 ? (
-                <p className="mt-2 text-xs text-fg-muted">The owner returns at most 200 recent deliverables.</p>
+                <p className="mt-2 text-xs text-fg-muted">Showing at most 200 recent deliverables.</p>
               ) : null}
             </section>
           </div>

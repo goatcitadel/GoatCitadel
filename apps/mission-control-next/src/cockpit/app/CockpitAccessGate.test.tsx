@@ -53,7 +53,7 @@ describe("cockpit access gate", () => {
     await act(async () =>
       root.render(<CockpitAccessGate access={{ status: "unreachable" } as never} busy={false} onRetry={onRetry} />),
     );
-    expect(container.textContent).toContain("Can't reach the GoatCitadel gateway");
+    expect(container.textContent).toContain("Can't reach GoatCitadel");
     expect(container.textContent).toContain("goatcitadel up");
     const retry = [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Try again");
     await act(async () => retry?.click());

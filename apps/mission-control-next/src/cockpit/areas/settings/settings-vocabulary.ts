@@ -111,7 +111,7 @@ export const WRITEBACK_REPLAY_OUTCOME_LABELS: Record<IntegrationExternalWritebac
   duplicate: "Duplicate, not sent again",
   in_progress: "Still in progress",
   payload_mismatch: "Different from the original request",
-  idempotency_unavailable: "Replay protection unavailable",
+  idempotency_unavailable: "Duplicate protection unavailable",
   unknown_after_send: "May have been sent, not retried",
 };
 
@@ -155,13 +155,13 @@ export const BEDROCK_CREDENTIAL_MODE_OPTIONS: ReadonlyArray<{ value: BedrockCred
 ];
 export const AWS_SIGV4_CREDENTIAL_LABEL = "AWS credentials JSON";
 export const AWS_SIGV4_CREDENTIAL_SHAPE = '{"accessKeyId":"…","secretAccessKey":"…","sessionToken":"…"}';
-export const AWS_SIGV4_CREDENTIAL_HELP = `${AWS_SIGV4_CREDENTIAL_SHAPE}. If no credential is stored, the gateway uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from its environment.`;
+export const AWS_SIGV4_CREDENTIAL_HELP = `${AWS_SIGV4_CREDENTIAL_SHAPE}. If no credential is stored, GoatCitadel uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from its environment.`;
 export const AWS_SIGV4_SECURE_INPUT_NOTE = `Enter the AWS credentials JSON: ${AWS_SIGV4_CREDENTIAL_SHAPE}.`;
 export const AWS_SIGV4_ENV_REFERENCE_LABEL = "AWS credentials JSON environment variable name";
 export const AWS_SIGV4_ENV_REFERENCE_SHORT_LABEL = "AWS credentials JSON env name";
 export const AWS_SIGV4_ENV_REFERENCE_PLACEHOLDER = "BEDROCK_AWS_CREDENTIALS";
 export const AWS_SIGV4_ENV_REFERENCE_HELP =
-  "Name of an environment variable whose value is the AWS credentials JSON. Leave empty to use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from the gateway environment.";
+  "Name of an environment variable whose value is the AWS credentials JSON. Leave empty to use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from the GoatCitadel environment.";
 /** Label and hint for the field where a provider secret value is pasted, by credential mode. */
 export function presentProviderSecretField(authMode: string | null | undefined): {
   label: string;
@@ -178,7 +178,7 @@ export function presentProviderSecretField(authMode: string | null | undefined):
   if (authMode === "google-service-account") {
     return {
       label: "Service-account JSON",
-      placeholder: "Paste service-account JSON to replace the Gateway-owned secret",
+      placeholder: "Paste service-account JSON to replace the saved secret",
     };
   }
   return { label: "Provider secret", placeholder: "Paste a new API key to save" };
@@ -211,7 +211,7 @@ export const MODEL_REFRESH_STATUS_LABELS: Record<
 export const HOOK_TRIGGER_LABELS: Record<HookTrigger, string> = {
   "llm.model.select.before": "Before a model is chosen",
   "llm.request.before": "Before a model request",
-  "gateway.dispatch.before": "Before Gateway dispatch",
+  "gateway.dispatch.before": "Before GoatCitadel dispatch",
   transform_llm_output: "Transform model output",
   "llm.response.after": "After a model response",
   before_prompt_build: "Before the prompt is built",

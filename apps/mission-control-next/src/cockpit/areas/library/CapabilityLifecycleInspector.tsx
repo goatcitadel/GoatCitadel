@@ -61,7 +61,7 @@ function LifecycleInspector({ item, workspaceId }: { item: CapabilityCatalogEntr
   });
   return (
     <section className="grid gap-3" aria-label="Capability lifecycle">
-      {proposal.isFetching || candidate.isFetching ? <p role="status">Reading governed capability evidence…</p> : null}
+      {proposal.isFetching || candidate.isFetching ? <p role="status">Reading capability lifecycle…</p> : null}
       {proposal.error || candidate.error ? (
         <Callout tone="error">
           {describeApiError(proposal.error ?? candidate.error).summary} No lifecycle change is available until the saved

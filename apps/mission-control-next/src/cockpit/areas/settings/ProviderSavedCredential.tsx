@@ -83,7 +83,7 @@ export function ProviderSavedCredential({
         description={`Remove the stored API credential for ${pending?.label ?? "this provider"}. Requests using it may fail until a replacement is configured.`}
       >
         <p className="mb-3 text-sm text-fg-secondary">
-          Reviewed settings version {pending?.revision}. The Gateway handles removal from each place the API key is
+          Reviewed settings version {pending?.revision}. GoatCitadel handles removal from each place the API key is
           saved.
         </p>
         {pending?.revision !== revision ? (

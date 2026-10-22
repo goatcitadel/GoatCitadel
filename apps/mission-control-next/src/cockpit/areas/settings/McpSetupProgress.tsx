@@ -1,3 +1,4 @@
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useState } from "react";
 import {
   resolveMcpServerConnectionMode,
@@ -67,8 +68,8 @@ export function McpSetupProgress({
         </li>
         <li>
           <strong>Discovered:</strong>{" "}
-          {tools ? `${tools.length} cached tool descriptors.` : "Cached inventory unavailable."} Connection discovery
-          and cached inventory do not establish permission.
+          {tools ? `${plural(tools.length, "cached tool descriptor")}.` : "Cached inventory unavailable."} Connection
+          discovery and cached inventory do not establish permission.
         </li>
         <li>
           <strong>Callable:</strong>{" "}
@@ -79,7 +80,7 @@ export function McpSetupProgress({
                 ? "Static MCP in Chat is disabled for this runtime. "
                 : "Static MCP availability in Chat is unverified. "
             : null}
-          Evaluated by the Gateway for the actual Chat request and its current grants. This inspection does not
+          Evaluated by GoatCitadel for the actual Chat request and its current grants. This inspection does not
           establish callability.
         </li>
         <li>
@@ -140,8 +141,8 @@ export function McpSetupProgress({
             <details>
               <summary className="cursor-pointer text-fg">Runtime operator setting</summary>
               <p className="mt-2">
-                The reviewed Gateway settings change uses <code>features.chatStaticMcpV1Enabled</code>. This view does
-                not change runtime settings or tool permissions.
+                The reviewed settings change uses <code>features.chatStaticMcpV1Enabled</code>. This view does not
+                change runtime settings or tool permissions.
               </p>
             </details>
           ) : null}

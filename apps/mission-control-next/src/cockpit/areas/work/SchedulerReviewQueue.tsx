@@ -119,7 +119,7 @@ export function SchedulerReviewQueue({
       ) : null}
       {settings.isSuccess && !enabled ? (
         <Callout tone="warning">
-          Scheduler review is switched off in runtime settings on this Gateway. No review items can be shown.
+          Scheduler review is switched off in runtime settings on this installation. No review items can be shown.
         </Callout>
       ) : null}
       {enabled && queue.isPending ? (
@@ -130,7 +130,7 @@ export function SchedulerReviewQueue({
       {enabled && queue.isError ? (
         <Callout tone={statusOf(queue.error) === 409 ? "warning" : "error"}>
           {statusOf(queue.error) === 409
-            ? "Scheduler review is unavailable on this Gateway; it is usually switched off in runtime settings. No review items can be shown."
+            ? "Scheduler review is unavailable on this installation; it is usually switched off in runtime settings. No review items can be shown."
             : describeApiError(queue.error).summary}
         </Callout>
       ) : null}

@@ -240,7 +240,7 @@ it("keeps a conflicting edit draft, exposes fresh fields and only retries after 
   expect(host.querySelector('[role="alert"]')?.textContent).toContain(conflictError);
   expect([...host.querySelectorAll("input")].some((item) => item.value === "F:/authorized/alpha")).toBe(true);
   expect([...host.querySelectorAll("input")].some((item) => item.value === "My draft")).toBe(true);
-  await click("Use current revision with my draft");
+  await click("Use current version with my draft");
   await click("Save project");
   expect(api.update).toHaveBeenLastCalledWith(
     "project-a",

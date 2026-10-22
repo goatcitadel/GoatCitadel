@@ -55,8 +55,8 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
       <header>
         <h3 className="text-md font-semibold text-fg">Saved integrations</h3>
         <p className="mt-1 text-sm text-fg-secondary">
-          Connections for this Gateway installation, across all workspaces. Review a saved connection before enabling or
-          disabling it.
+          Connections for this GoatCitadel installation, across all workspaces. Review a saved connection before
+          enabling or disabling it.
         </p>
         <p className="mt-1 text-xs text-fg-muted">
           Enabled state controls runtime availability. Connection health, tool policy, approvals, and plugin
@@ -158,7 +158,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
         className="min-w-0 grid-cols-1 break-words"
         open={reviewed !== null}
         title={reviewed?.enabled ? "Enable integration?" : "Disable integration?"}
-        message={`${reviewed?.enabled ? "Enable" : "Disable"} ${reviewed?.connection.label ?? "this connection"} for this Gateway installation? ${reviewed?.connection.workspaceId ? "Its saved workspace binding remains unchanged." : "Unbound connection: Personal Citadel policy applies."} This changes the saved enabled state and requests runtime synchronization. It does not test connectivity or override policy and approvals.`}
+        message={`${reviewed?.enabled ? "Enable" : "Disable"} ${reviewed?.connection.label ?? "this connection"} for this installation? ${reviewed?.connection.workspaceId ? "Its saved workspace binding remains unchanged." : "Unbound connection: Personal Citadel policy applies."} This changes the saved enabled state and requests runtime synchronization. It does not test connectivity or override policy and approvals.`}
         confirmLabel={reviewed?.enabled ? "Enable reviewed integration" : "Disable reviewed integration"}
         cancelLabel="Keep current state"
         pending={control.checking || control.attempt.pending}
@@ -238,7 +238,7 @@ function IntegrationRow({
       </div>
       {attempt.pending ? (
         <p role="status" className="mt-2 text-sm text-fg-muted">
-          Waiting for the Gateway to confirm…
+          Waiting for GoatCitadel to confirm…
         </p>
       ) : null}
       {attempt.phase === "uncertain" ? (

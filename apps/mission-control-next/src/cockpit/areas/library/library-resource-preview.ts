@@ -58,12 +58,12 @@ export async function readLibraryResource(
     case "memory":
       return {
         text: boundedText(resource.item.content),
-        warning: "Memory from the loaded directory snapshot. Refresh the directory for the latest saved content.",
+        warning: "Memory from the loaded directory list. Refresh the directory for the latest saved content.",
       };
     case "notes":
       return {
         text: boundedText(resource.item.body),
-        warning: "Note from the loaded directory snapshot. Refresh the directory for the latest saved content.",
+        warning: "Note from the loaded directory list. Refresh the directory for the latest saved content.",
       };
     case "files": {
       const expected = resource.item;
@@ -106,7 +106,7 @@ export async function readLibraryResource(
       return {
         artifact: item,
         ...(item.publicProjection?.contentRedacted
-          ? { warning: "The Gateway redacted this preview. Its recorded hash identifies the stored artifact." }
+          ? { warning: "GoatCitadel redacted this preview. Its recorded hash identifies the stored artifact." }
           : {}),
       };
     }

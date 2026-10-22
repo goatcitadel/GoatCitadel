@@ -69,7 +69,8 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
       {snapshot.isFetching ? <p role="status">Loading autonomous grants…</p> : null}
       {snapshot.isError ? (
         <p role="alert">
-          Grants could not load: {snapshot.error instanceof Error ? snapshot.error.message : "Gateway read failed"}
+          Grants could not load:{" "}
+          {snapshot.error instanceof Error ? snapshot.error.message : "No details were returned."}
         </p>
       ) : null}
       {control.checking ? <p role="status">Reviewing the exact current grant…</p> : null}

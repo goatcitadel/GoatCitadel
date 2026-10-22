@@ -266,7 +266,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
           if (!open && !pending) setReviewed(null);
         }}
         title={`${ACTIONS.find((entry) => entry.id === reviewed?.action)?.label ?? "Change"} this run?`}
-        description={`${description ?? "This changes the run."} Gateway will recheck policy and state.`}
+        description={`${description ?? "This changes the run."} GoatCitadel will recheck policy and state.`}
       >
         <div className="flex flex-wrap gap-2">
           <Button

@@ -35,13 +35,20 @@ const pack = {
       provenance: { relationScope: "session", freshness: "current", selectionReason: "Matched the request" },
     },
     { candidateId: "c-2", sourceType: "memory_item", sourceRef: "m-1", snippet: "Plain memory excerpt", score: 0.5 },
-    { candidateId: "c-3", sourceType: "transcript", sourceRef: "turn-2", snippet: '{"message":{"role":"assistant"}}', score: 0.25 },
+    {
+      candidateId: "c-3",
+      sourceType: "transcript",
+      sourceRef: "turn-2",
+      snippet: '{"message":{"role":"assistant"}}',
+      score: 0.25,
+    },
     // The Gateway caps excerpts, so real transcript snippets usually end mid-JSON.
     {
       candidateId: "c-4",
       sourceType: "transcript",
       sourceRef: "turn-3",
-      snippet: '{"message":{"role":"user","content":"Reply with the single word pong.","parts":[{"type":"text","text":"Reply with the si',
+      snippet:
+        '{"message":{"role":"user","content":"Reply with the single word pong.","parts":[{"type":"text","text":"Reply with the si',
       score: 0.614,
     },
   ],
@@ -77,9 +84,16 @@ it("renders transcript citations as role and message text and keeps the raw JSON
     ),
   );
   await vi.waitFor(() => expect(container.textContent).toContain("Draft the release notes for 1.0"));
-  const cards = [...container.querySelectorAll<HTMLElement>("section[aria-label='Knowledge evidence'] > ul > li > ul > li")];
+  const cards = [
+    ...container.querySelectorAll<HTMLElement>("section[aria-label='Knowledge retrieval history'] > ul > li > ul > li"),
+  ];
   expect(cards).toHaveLength(4);
-  const [transcriptCard, memoryCard, emptyCard, truncatedCard] = cards as [HTMLElement, HTMLElement, HTMLElement, HTMLElement];
+  const [transcriptCard, memoryCard, emptyCard, truncatedCard] = cards as [
+    HTMLElement,
+    HTMLElement,
+    HTMLElement,
+    HTMLElement,
+  ];
 
   const excerpt = transcriptCard.querySelector("p");
   expect(excerpt?.textContent).toBe("User: Draft the release notes for 1.0");
@@ -92,7 +106,9 @@ it("renders transcript citations as role and message text and keeps the raw JSON
   expect(details?.open).toBe(false);
 
   expect(memoryCard.querySelector("p")?.textContent).toBe("Plain memory excerpt");
-  expect([...memoryCard.querySelectorAll("summary")].map((node) => node.textContent)).not.toContain("Technical details");
+  expect([...memoryCard.querySelectorAll("summary")].map((node) => node.textContent)).not.toContain(
+    "Technical details",
+  );
 
   expect(emptyCard.querySelector("p")?.textContent).toBe("Assistant: No message text recorded");
 

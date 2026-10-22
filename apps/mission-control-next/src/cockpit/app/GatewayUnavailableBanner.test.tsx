@@ -25,13 +25,13 @@ describe("Gateway unavailable banner", () => {
     await act(async () =>
       root.render(<GatewayUnavailableBanner reachability={{ ...idle, lastConfirmedAt: 0 }} inChat />),
     );
-    expect(container.textContent).toContain("Sending is paused; your draft is preserved.");
+    expect(container.textContent).toContain("Sending is paused; your draft is kept.");
     await act(async () => root.render(<GatewayUnavailableBanner reachability={idle} inChat={false} />));
     expect(container.textContent).not.toContain("Sending is paused");
     expect(container.textContent).toContain("No confirmed connection yet.");
     // Only the static outage sentence is announced; the changing time stays outside the alert.
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      "Gateway unavailable. What you see here may be out of date.",
+      "GoatCitadel is unreachable. What you see here may be out of date.",
     );
   });
 

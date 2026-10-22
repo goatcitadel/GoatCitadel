@@ -49,7 +49,7 @@ export const meshEffectDiffLabel = (value: string) =>
 
 export const MESH_SETTLED_BY: Record<"node" | "gateway", string> = {
   node: "Settled by the node",
-  gateway: "Settled by the Gateway",
+  gateway: "Settled by GoatCitadel",
 };
 
 /** Error codes are open producer strings. */

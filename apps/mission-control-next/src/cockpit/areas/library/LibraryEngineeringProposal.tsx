@@ -62,7 +62,7 @@ export function LibraryEngineeringProposal({
         !evidence.subject.changedFiles.length
       )
         throw new Error(
-          "This source has no current complete verification evidence. Complete and verify the actual work in Chat first.",
+          "This source has no current, complete verification record. Complete and verify the actual work in Chat first.",
         );
       if (!operation.current()) return;
       const { runId: _runId, ...text } = draft.value;
@@ -93,7 +93,7 @@ export function LibraryEngineeringProposal({
         async () => {
           const source = await fetchCodeModeRun(review.source.runId, { workspaceId });
           if (canonicalJsonString(source) !== canonicalJsonString(review.source))
-            throw new Error("The reviewed source changed. Review its current evidence again.");
+            throw new Error("The reviewed source changed. Review it again.");
         },
         () => submitEngineeringLearningProposal(review.input),
         (record) => {
@@ -133,8 +133,8 @@ export function LibraryEngineeringProposal({
     <section className="grid gap-3" aria-label="Create Engineering learning">
       <h3 className="font-semibold">Create Engineering learning</h3>
       <p>
-        Choose an actual completed Code Mode source with current named verification evidence. The Gateway derives its
-        files and provenance. Proposals remain inactive; a previously captured source returns its existing learning.
+        Choose an actual completed Code Mode source with a current named verification. GoatCitadel derives its files and
+        provenance. Proposals remain inactive; a previously captured source returns its existing learning.
       </p>
       {runs.error ? <Callout tone="error">{describeApiError(runs.error).summary}</Callout> : null}
       <Field label="Completed Engineering source">
@@ -160,7 +160,7 @@ export function LibraryEngineeringProposal({
       !runs.data?.items.some((run) => run.workspaceId === workspaceId && run.verification?.status === "verified") ? (
         <Callout>
           No current verified source is available. Complete the governed code work and its named verification in Chat;
-          text or an arbitrary run identifier cannot substitute for this evidence.
+          text or an arbitrary run identifier cannot substitute for this verification.
         </Callout>
       ) : null}
       {TEXT_FIELDS.map((key) => (
@@ -200,7 +200,7 @@ export function LibraryEngineeringProposal({
             </p>
           ))}
           <p>Verified files: {review?.input.changedFiles.join(", ")}</p>
-          <TechnicalDetails label="Proposal source evidence">
+          <TechnicalDetails label="Proposal sources">
             <p>Run: {review?.source.runId}</p>
             <p>{review?.input.verificationEvidence.join(", ")}</p>
           </TechnicalDetails>

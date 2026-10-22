@@ -191,7 +191,7 @@ describe("cockpit saved-board editor", () => {
     );
     await click("Confirm save");
     // Port4 cycle 2: a newer revision now shows its recovery choices instead of a generic "changed" notice.
-    await vi.waitFor(() => expect(container.textContent).toContain("Revision 3 is now current"));
+    await vi.waitFor(() => expect(container.textContent).toContain("Version 3 is now current"));
     expect(updateOpsSavedBoard).not.toHaveBeenCalled();
   });
 
@@ -250,10 +250,10 @@ describe("cockpit saved-board editor", () => {
     await typeName("My edited name");
     const newer = board({ revision: 3, name: "Renamed elsewhere", updatedAt: "2026-09-29T02:00:00.000Z" });
     await rerender(newer);
-    expect(container.textContent).toContain("Revision 3 is now current");
-    expect(container.textContent).toContain("Saving your draft replaces the changes in revision 3");
+    expect(container.textContent).toContain("Version 3 is now current");
+    expect(container.textContent).toContain("Saving your draft replaces the changes in version 3");
     expect(button("Review changes")?.disabled).toBe(true);
-    await click("Keep my draft on revision 3");
+    await click("Keep my draft on version 3");
     expect(container.querySelector("input")?.value).toBe("My edited name");
     vi.mocked(fetchOpsSavedBoard).mockResolvedValue(newer);
     vi.mocked(updateOpsSavedBoard).mockResolvedValue(board({ revision: 4, name: "My edited name" }));
@@ -273,7 +273,7 @@ describe("cockpit saved-board editor", () => {
     await rerender(board({ revision: 3, name: "Renamed elsewhere", updatedAt: "2026-09-29T02:00:00.000Z" }));
     await click("Discard my draft");
     expect(container.querySelector("input")?.value).toBe("Renamed elsewhere");
-    expect(container.textContent).not.toContain("Revision 3 is now current");
+    expect(container.textContent).not.toContain("Version 3 is now current");
     expect(updateOpsSavedBoard).not.toHaveBeenCalled();
   });
 
@@ -285,19 +285,19 @@ describe("cockpit saved-board editor", () => {
       board({ revision: 3, name: "Renamed elsewhere", updatedAt: "2026-09-29T02:00:00.000Z" }),
     );
     await click("Confirm save");
-    await vi.waitFor(() => expect(container.textContent).toContain("Revision 3 is now current"));
+    await vi.waitFor(() => expect(container.textContent).toContain("Version 3 is now current"));
     expect(updateOpsSavedBoard).not.toHaveBeenCalled();
-    expect(button("Keep my draft on revision 3")).toBeDefined();
+    expect(button("Keep my draft on version 3")).toBeDefined();
   });
 
   it("loads a newer revision instead of re-targeting stale content when nothing was edited", async () => {
     await render();
     await rerender(board({ revision: 3, name: "Renamed elsewhere", updatedAt: "2026-09-29T02:00:00.000Z" }));
     expect(container.textContent).toContain("You have no unsaved edits");
-    expect(button("Keep my draft on revision 3")).toBeUndefined();
-    await click("Load revision 3");
+    expect(button("Keep my draft on version 3")).toBeUndefined();
+    await click("Load version 3");
     expect(container.querySelector("input")?.value).toBe("Renamed elsewhere");
-    expect(container.textContent).not.toContain("Revision 3 is now current");
+    expect(container.textContent).not.toContain("Version 3 is now current");
     expect(updateOpsSavedBoard).not.toHaveBeenCalled();
   });
 
@@ -314,8 +314,8 @@ describe("cockpit saved-board editor", () => {
     const newer = board({ revision: 3, name: "Renamed elsewhere", updatedAt: "2026-09-29T02:00:00.000Z" });
     await rerender(newer);
     expect(container.querySelector("input")?.value).toBe("My edited name");
-    expect(container.textContent).toContain("Revision 3 is now current");
-    await click("Keep my draft on revision 3");
+    expect(container.textContent).toContain("Version 3 is now current");
+    await click("Keep my draft on version 3");
     vi.mocked(fetchOpsSavedBoard).mockResolvedValue(newer);
     vi.mocked(updateOpsSavedBoard).mockResolvedValue(board({ revision: 4, name: "My edited name" }));
     await click("Review changes");
@@ -336,7 +336,7 @@ describe("cockpit saved-board editor", () => {
     await click("Confirm save");
     await vi.waitFor(() => expect(container.textContent).toContain("save outcome is unconfirmed"));
     await rerender(board({ revision: 3, name: "Renamed elsewhere", updatedAt: "2026-09-29T02:00:00.000Z" }));
-    expect(button("Keep my draft on revision 3")).toBeUndefined();
+    expect(button("Keep my draft on version 3")).toBeUndefined();
     expect(button("Discard my draft")).toBeUndefined();
   });
 

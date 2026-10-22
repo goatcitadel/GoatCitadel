@@ -164,7 +164,7 @@ export function ApprovalModeEditor({
               {change.change.error}
             </p>
           ) : null}
-          {change.change.blocking ? <p>The draft remains unsaved until the Gateway confirms the change.</p> : null}
+          {change.change.blocking ? <p>The draft remains unsaved until GoatCitadel confirms the change.</p> : null}
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => void change.refresh()}>
               Refresh approval change

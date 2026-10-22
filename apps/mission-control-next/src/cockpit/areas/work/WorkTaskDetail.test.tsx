@@ -172,7 +172,7 @@ describe("Work task detail", () => {
   it("keeps status mutation unavailable when a runtime execution owns the task", async () => {
     vi.mocked(fetchTask).mockResolvedValue(task({ agenticContext: { runId: "run-a" } }));
     await render();
-    await vi.waitFor(() => expect(container.textContent).toContain("runtime execution owner"));
+    await vi.waitFor(() => expect(container.textContent).toContain("A run is handling this task"));
     expect(container.querySelector("select")).toBeNull();
     expect(updateTask).not.toHaveBeenCalled();
   });

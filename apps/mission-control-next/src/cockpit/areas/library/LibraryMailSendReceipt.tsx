@@ -143,7 +143,7 @@ export function LibraryMailSendReceipt({ receipt, workspaceId, onRefresh, onDism
         </Callout>
       ) : (
         <Callout tone="error">
-          The Gateway cannot request an approval for this draft: it no longer holds it, or an earlier request for it
+          GoatCitadel cannot request an approval for this draft: it no longer holds it, or an earlier request for it
           ended without a confirmed outcome. Nothing was sent. Check Inbox, then review the send request again to
           prepare a new draft.
         </Callout>

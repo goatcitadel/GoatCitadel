@@ -104,7 +104,7 @@ describe("cockpit task details editor", () => {
         priority: "normal",
       }),
     );
-    await vi.waitFor(() => expect(container.textContent).toContain("Gateway recorded the task details"));
+    await vi.waitFor(() => expect(container.textContent).toContain("Task details saved"));
   });
 
   it("withholds an edit when the owner revision changes during review", async () => {

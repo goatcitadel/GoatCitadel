@@ -30,7 +30,7 @@ export function ProviderProfileReview({
       description={
         kind === "transport"
           ? "Apply only the request transport settings. Saving stops if they changed since your review."
-          : "Submit this public profile through the Gateway's governed Settings change plan. Saved transport stays unchanged."
+          : "Submit this public profile through the governed Settings change plan. Saved transport stays unchanged."
       }
     >
       {draft ? (

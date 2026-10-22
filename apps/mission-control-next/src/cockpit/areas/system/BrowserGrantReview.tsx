@@ -24,7 +24,7 @@ export function GrantReviewBody({ review }: { review: GrantReview }) {
         </p>
         {review.expiresAtPreview ? (
           <p>
-            <strong>Expires:</strong> about {formatTime(review.expiresAtPreview)} (the Gateway sets the exact time)
+            <strong>Expires:</strong> about {formatTime(review.expiresAtPreview)} (GoatCitadel sets the exact time)
           </p>
         ) : (
           <p role="note">

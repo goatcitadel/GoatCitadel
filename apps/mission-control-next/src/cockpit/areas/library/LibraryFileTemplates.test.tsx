@@ -124,7 +124,7 @@ it("re-reads the exact immutable template and creates once with a distinct canon
   await openReview();
   await click("Create reviewed file");
   await vi.waitFor(() =>
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Gateway accepted proof.md (27 B)"),
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("GoatCitadel accepted proof.md (27 B)"),
   );
   expect(fetchFileTemplates).toHaveBeenCalledTimes(2);
   expect(createFileFromTemplate).toHaveBeenCalledExactlyOnceWith("brief", "proof.md");
@@ -247,6 +247,6 @@ it("withholds success after a mismatched receipt and keeps the original attempt 
   await openReview();
   await click("Create reviewed file");
   await vi.waitFor(() => expect(container.textContent).toContain("request outcome is uncertain"));
-  expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("Gateway accepted");
+  expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("GoatCitadel accepted");
   expect(createFileFromTemplate).toHaveBeenCalledOnce();
 });

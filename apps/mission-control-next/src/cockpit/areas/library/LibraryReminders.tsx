@@ -134,7 +134,7 @@ function LibraryRemindersContent({ workspaceId, note }: { workspaceId: string; n
           </Field>
           <Field
             label="Reminder recurrence"
-            help="Optional recurrence rule supported by the Gateway. Leave empty for one time."
+            help="Optional recurrence rule supported by GoatCitadel. Leave empty for one time."
           >
             {(props) => (
               <input

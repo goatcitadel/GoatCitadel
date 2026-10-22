@@ -10,7 +10,7 @@ import { presentScheduleAction, presentScheduleReason } from "./work-vocabulary"
 
 /** A Gateway-reported schedule time, or a plain gap when the Gateway sent none. */
 export function ScheduleTime({ value }: { value: string | undefined }) {
-  return value ? <TimeText value={value} /> : <>Not reported by the Gateway</>;
+  return value ? <TimeText value={value} /> : <>Not reported</>;
 }
 
 const FAILED_FALLBACK = "The last run failed.";
@@ -167,8 +167,8 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
         </div>
         {selected.lastRunEvidenceEnvelopeId ? (
           <div>
-            <dt className="text-fg-muted">Last run evidence</dt>
-            <dd className="text-fg">Signed evidence recorded</dd>
+            <dt className="text-fg-muted">Last run record</dt>
+            <dd className="text-fg">Signed record saved</dd>
           </div>
         ) : null}
       </dl>
@@ -180,7 +180,7 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
       {selected.lastRunStatus === "skipped" ? (
         <p className="text-sm text-status-waiting">
           Last run was skipped and did no work.{" "}
-          {skipReason ? `Reason: ${presentScheduleReason(skipReason)}.` : "The Gateway did not report a skip reason."}
+          {skipReason ? `Reason: ${presentScheduleReason(skipReason)}.` : "No skip reason was reported."}
         </p>
       ) : null}
       {partial ? (
@@ -188,11 +188,11 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
           Last run stopped before finishing all of its work; the work it did is kept.{" "}
           {partial.reason
             ? `Reason: ${presentScheduleReason(partial.reason)}.`
-            : "The Gateway did not report why it stopped."}
+            : "No reason was reported for why it stopped."}
         </p>
       ) : null}
       <p className="text-sm text-fg-secondary">
-        Gateway-wide · Action: {presentScheduleAction(selected.action)}. Destination:{" "}
+        Installation-wide · Action: {presentScheduleAction(selected.action)}. Destination:{" "}
         {selected.workdir || "Not reported"}. {scheduleTimezoneSummary(selected.schedule)} Displayed dates use your
         browser timezone.
       </p>

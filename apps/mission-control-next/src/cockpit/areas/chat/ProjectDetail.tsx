@@ -204,7 +204,7 @@ export function ProjectDetail({
         </label>
         <p className="text-sm text-fg-secondary">
           Review destination context in the selected conversation before assigning it. Existing turns and drafts stay;
-          future turns use this project's context and the Gateway resets workbench context.
+          future turns use this project's context and GoatCitadel resets workbench context.
         </p>
         <Button
           disabled={!available || !assignment || Boolean(sessions.error) || project.lifecycleStatus !== "active"}

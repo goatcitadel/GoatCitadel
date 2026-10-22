@@ -145,7 +145,7 @@ export function ChatInspector(props: InspectorProps) {
         </div>
       ) : (
         <p role="status" className="min-h-24 text-sm text-fg-muted">
-          Loading conversation evidence…
+          Loading conversation details…
         </p>
       )}
       <Dialog

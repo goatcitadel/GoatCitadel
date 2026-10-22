@@ -115,7 +115,7 @@ describe("palette Gateway object search", () => {
     expect(group.items).toHaveLength(5);
     expect(group.items[0]?.target).toEqual({ href: "/inbox?shell=cockpit&workspaceId=workspace-a&item=approval%3A0" });
     expect(group.coverage).toContain("Coverage is incomplete");
-    expect(group.items[0]?.description).toBe("Approval · Open it to check the latest state before acting");
+    expect(group.items[0]?.description).toBe("Approval · Open to see its current state");
   });
 
   it("describes a defined Inbox scope and refuses another workspace's Inbox", () => {

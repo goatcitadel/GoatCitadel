@@ -17,7 +17,7 @@
     "jobs": [
       {
         "jobId": "self_improvement_weekly_replay",
-        "name": "Self-Improvement Weekly Replay",
+        "name": "Weekly improvement review",
         "action": "improvement",
         "schedule": "0 2 * * 0 America/Los_Angeles",
         "description": "Disabled by default because replay samples chat traces and tool payloads for LLM review. Enable only after operator review of redaction and provider scope.",

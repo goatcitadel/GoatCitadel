@@ -68,7 +68,7 @@ vi.mock("./InboxApprovalActions", () => ({
       <button
         type="button"
         onClick={() =>
-          onInvalidated("Specialist evidence changed. Refresh and review the current target before approving.")
+          onInvalidated("Specialist review changed. Refresh and review the current target before approving.")
         }
       >
         Report specialist change
@@ -211,10 +211,7 @@ describe("Inbox approval detail", () => {
   it.each([
     ["Record decision", "Approved decision recorded."],
     ["Report changed record", "The approval changed. Review the refreshed record before deciding."],
-    [
-      "Report specialist change",
-      "Specialist evidence changed. Refresh and review the current target before approving.",
-    ],
+    ["Report specialist change", "Specialist review changed. Refresh and review the current target before approving."],
   ])("drops the settled record while the queue is re-read after %s", async (action, notice) => {
     await act(async () =>
       root.render(
@@ -397,15 +394,15 @@ describe("Inbox approval detail states (IN-05, IN-07, IN-16)", () => {
     );
     api.fetchApproval.mockResolvedValue({ ...approval, kind: "remote_worker.native_runtime" });
     await render();
-    await settleUntil(() => Boolean(container.textContent?.includes("Checking specialist evidence")));
+    await settleUntil(() => Boolean(container.textContent?.includes("Checking the specialist review")));
     const checking = [...container.querySelectorAll('[role="status"]')].find((node) =>
-      node.textContent?.includes("Checking specialist evidence"),
+      node.textContent?.includes("Checking the specialist review"),
     );
     expect(checking).toBeDefined();
     expect(container.querySelector('[role="alert"]')).toBeNull();
     await act(async () => fail(new Error("replay read failed")));
     await settleUntil(() => Boolean(container.querySelector('[role="alert"]')));
-    expect(container.textContent).not.toContain("Checking specialist evidence");
+    expect(container.textContent).not.toContain("Checking the specialist review");
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
   });
 

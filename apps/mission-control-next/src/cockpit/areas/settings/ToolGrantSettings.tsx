@@ -257,7 +257,7 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
           if (!open) actions.cancel();
         }}
         title={record ? "Revoke tool grant" : "Review new tool grant"}
-        description="Review the exact scope and consequence before requesting the Gateway write."
+        description="Review the exact scope and consequence before you save the change."
       >
         {review?.kind === "create" ? (
           <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2 break-words text-sm text-fg">

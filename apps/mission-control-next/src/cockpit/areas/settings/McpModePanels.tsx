@@ -40,7 +40,7 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
         {serverMode ? (
           <>
             <p className="text-xs text-fg-muted">
-              Gateway snapshot: <time dateTime={serverMode.generatedAt}>{serverMode.generatedAt}</time>
+              Last read: <time dateTime={serverMode.generatedAt}>{serverMode.generatedAt}</time>
             </p>
             <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2">
               <dt>Runtime support</dt>
@@ -50,10 +50,10 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
               <dt>Blocked descriptors</dt>
               <dd>{serverMode.summary.blockedDescriptors}</dd>
               <dt>Governed call preview</dt>
-              <dd>{serverMode.runtime.callPreview.supported ? "Advertised by Gateway" : "Unavailable"}</dd>
+              <dd>{serverMode.runtime.callPreview.supported ? "Advertised by GoatCitadel" : "Unavailable"}</dd>
             </dl>
             <p>
-              Descriptors come from the Gateway callable catalog. Availability here does not grant this workspace
+              Descriptors come from the GoatCitadel callable catalog. Availability here does not grant this workspace
               permission or prove a tool ran.
             </p>
             <details>
@@ -66,8 +66,8 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
               ) : null}
               <p className="mt-2 break-words">{serverMode.runtime.stdio.reason}</p>
               <p>
-                Calls require Gateway authentication and an agent and session context, then re-enter policy and
-                approvals. This inspection makes no calls.
+                Calls require GoatCitadel sign-in and an agent and session context, then re-enter policy and approvals.
+                This inspection makes no calls.
               </p>
             </details>
             <Notes title="Governance" items={serverMode.governance} />
@@ -90,9 +90,7 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
                 </li>
               ))}
             </ul>
-            {!serverMode.tools.length ? (
-              <p>No callable capability descriptors were exported in this snapshot.</p>
-            ) : null}
+            {!serverMode.tools.length ? <p>No callable capability descriptors were exported.</p> : null}
             {descriptorLimit < serverMode.tools.length ? (
               <Button size="sm" onClick={() => setDescriptorLimit((value) => value + PAGE_SIZE)}>
                 Show more descriptors
@@ -108,11 +106,11 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
         {remotePreview ? (
           <>
             <p className="text-xs text-fg-muted">
-              Gateway snapshot: <time dateTime={remotePreview.generatedAt}>{remotePreview.generatedAt}</time>
+              Last read: <time dateTime={remotePreview.generatedAt}>{remotePreview.generatedAt}</time>
             </p>
             <p>
               {remotePreview.summary.remoteServers} saved remote servers · {remotePreview.summary.remoteTemplates}{" "}
-              catalog templates · {remotePreview.summary.runtimeSupported} eligible according to this projection.
+              catalog templates · {remotePreview.summary.runtimeSupported} eligible according to this list.
             </p>
             <p>
               Configuration and catalog records only. Eligibility is not a connection check, grant or successful tool
@@ -155,7 +153,7 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
                 </li>
               ))}
             </ul>
-            {!remotes.length ? <p>No remote records match this snapshot view.</p> : null}
+            {!remotes.length ? <p>No remote records match this view.</p> : null}
             {remoteLimit < remotes.length ? (
               <Button size="sm" onClick={() => setRemoteLimit((value) => value + PAGE_SIZE)}>
                 Show more preview records

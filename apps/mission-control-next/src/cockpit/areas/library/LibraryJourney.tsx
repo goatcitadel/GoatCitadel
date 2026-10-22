@@ -111,7 +111,7 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
     <div className={`${AREA_PAGE} min-w-0`}>
       <AreaHeader
         title={LIBRARY_SECTION_LABELS.journey}
-        description="Experimental, read-only governance history for this workspace. Journey explains records from the sources connected so far; it never activates skills or promotes memory. Blocked, quarantined, conflicting, foreign-scope and incomplete evidence stays visible and marked."
+        description="Experimental, read-only governance history for this workspace. Journey explains records from the sources connected so far; it never activates skills or promotes memory. Blocked, quarantined, conflicting, foreign-scope and incomplete records stay visible and marked."
         actions={
           <Button size="sm" disabled={query.isFetching} onClick={() => void query.refetch()}>
             Refresh
@@ -119,9 +119,8 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
         }
       >
         <p className="mt-1 max-w-3xl text-sm text-fg-secondary">
-          Coverage is not yet complete: broader memory lifecycle, legacy imports, direct skill state, improvement
-          rollback or revoke, and external source producers are not wired. This view is not release-bearing parity
-          evidence.
+          Coverage is not yet complete: memory lifecycle, older imports, direct skill changes, improvement rollback or
+          revoke, and outside sources are not connected yet.
         </p>
       </AreaHeader>
       <section className={CARD} aria-label="Journey filters">
@@ -142,7 +141,7 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
               </select>
             )}
           </Field>
-          <Field label="Evidence state">
+          <Field label="Record state">
             {(props) => (
               <select
                 {...props}
@@ -174,7 +173,7 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
               checked={includeGlobal}
               onChange={(event) => setParams({ includeGlobal: String(event.target.checked), eventId: undefined })}
             />
-            Include global evidence
+            Include global records
           </label>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -194,7 +193,7 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
           <section className={CARD} aria-label="Journey events">
             <h2 className="text-base font-semibold">Events</h2>
             <p className="text-sm text-fg-secondary">
-              {plural(items.length, "event")} loaded · {blocked} with blocked evidence
+              {plural(items.length, "event")} loaded · {blocked} with blocked records
             </p>
             {!items.length ? <p className="text-sm text-fg-muted">No Journey events match these filters.</p> : null}
             <ul className="grid min-w-0 grid-cols-1 gap-2">
@@ -231,7 +230,7 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
                 This event is not in the loaded results. Load older events or adjust the filters.
               </Callout>
             ) : (
-              <p className="text-sm text-fg-secondary">Select an event to inspect its evidence.</p>
+              <p className="text-sm text-fg-secondary">Select an event to inspect its record.</p>
             )}
           </div>
         </div>
@@ -276,11 +275,11 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
       <h2 className="text-base font-semibold wrap-anywhere">{humanize(item.action)}</h2>
       <p className="text-sm text-fg-secondary wrap-anywhere">
         {journeyWords(item.eventType, "Event")} · {journeyWords(item.subjectKind, "Subject")} ·{" "}
-        {item.scopeKind === "global" ? "Global evidence" : "This workspace"}
+        {item.scopeKind === "global" ? "All workspaces" : "This workspace"}
       </p>
       <dl className="grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2">
         <div>
-          <dt className="font-medium">Evidence</dt>
+          <dt className="font-medium">Record</dt>
           <dd>{formatJourneyEvidenceHealth(evidence.health)}</dd>
         </div>
         <div>
@@ -310,7 +309,7 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
           <dd>
             {recurrence
               ? `${plural(recurrence.observationCount, "observation")} in ${plural(recurrence.distinctSessionCount, "session")} · ${recurrence.complete ? "complete scan" : "bounded, partial scan"}`
-              : "No evidence fingerprint"}
+              : "No recurrence fingerprint"}
           </dd>
         </div>
         {evidence.blockerCodes.length ? (
@@ -327,9 +326,7 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
         ) : null}
       </dl>
       <p className="text-sm text-fg-secondary">
-        {item.evidenceRefs.length
-          ? `${plural(item.evidenceRefs.length, "evidence reference")} recorded.`
-          : "No evidence references recorded."}
+        {item.evidenceRefs.length ? `${plural(item.evidenceRefs.length, "linked record")}.` : "No linked records."}
       </p>
       <Rows title="Provenance" rows={semanticRecordRows(item.provenance)} />
       <Rows title="Event summary" rows={semanticRecordRows(item.summary)} />
@@ -337,7 +334,7 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
         <p className="break-all">
           Actor ID: {item.actorId} · Blocker codes: {evidence.blockerCodes.join(", ") || "none"}
         </p>
-        <Rows title="Evidence references" rows={item.evidenceRefs.map((ref) => [ref.owner, ref.refId] as const)} />
+        <Rows title="Linked records" rows={item.evidenceRefs.map((ref) => [ref.owner, ref.refId] as const)} />
         <p className="break-all">Event fingerprint {item.eventFingerprint}</p>
         {item.evidenceFingerprint ? <p className="break-all">Evidence fingerprint {item.evidenceFingerprint}</p> : null}
         <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2 font-mono text-xs">

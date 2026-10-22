@@ -91,7 +91,7 @@ export function PortablePackSetup({
       ) : null}
       <p className="text-xs text-fg-muted">
         Partial history: at most 20 matching plans from the latest 200 workspace records, with up to 64 explicitly
-        linked children. Refresh only reads; owner verification is a separate reviewed action.
+        linked children. Refresh only reads; checking the saved result is a separate reviewed action.
       </p>
       {owner.parents.map((plan) => (
         <PackPlanControls

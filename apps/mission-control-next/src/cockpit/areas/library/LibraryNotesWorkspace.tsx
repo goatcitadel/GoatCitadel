@@ -46,7 +46,7 @@ export function LibraryNotesWorkspace({ workspaceId }: { workspaceId: string }) 
     <section className={AREA_PAGE} aria-label="Library Notes">
       <AreaHeader
         title={LIBRARY_SECTION_LABELS.notes}
-        description="Workspace notes, revision history, sources and reminders."
+        description="Workspace notes, version history, sources and reminders."
       />
       <div className="flex flex-wrap gap-2">
         <Button

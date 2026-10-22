@@ -72,7 +72,7 @@ export function PermissionProfileFields({
             change((old) => ({ ...old, readAccessMode: event.target.value as FilesystemReadAccessMode | "" }))
           }
         >
-          <option value="">Keep Gateway default or existing value</option>
+          <option value="">Keep GoatCitadel default or existing value</option>
           <option value="roots_only">Allowed roots only</option>
           <option value="approval_required">Require approval outside roots</option>
           <option value="full_disk">Full disk subject to hard boundaries</option>

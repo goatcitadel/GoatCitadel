@@ -73,7 +73,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
         draft.acceptSaved({ repoUrl: "", ref: "" }, undefined, { repoUrl: review.repoUrl, ref: review.ref });
         setOutcome({
           error: false,
-          text: `Gateway imported ${result.importedCount} definitions from ${result.repoUrl} at ${result.ref}. Unsupported definitions: ${result.parseCounts.unsupported}. Import does not activate a Chat specialist.`,
+          text: `GoatCitadel imported ${result.importedCount} definitions from ${result.repoUrl} at ${result.ref}. Unsupported definitions: ${result.parseCounts.unsupported}. Import does not activate a Chat specialist.`,
         });
       } else {
         const fresh = await fetchImportedAgentCatalogEntry(review.entry.entryId);
@@ -86,7 +86,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
           throw new Error("Catalog receipt does not confirm the requested state.");
         setOutcome({
           error: false,
-          text: `Gateway confirmed catalog state: ${AGENT_CATALOG_STATE[result.state]}. Session activation is a separate Chat action.`,
+          text: `GoatCitadel confirmed catalog state: ${AGENT_CATALOG_STATE[result.state]}. Session activation is a separate Chat action.`,
         });
       }
       await client.invalidateQueries({ queryKey: ["library", "agent-catalog"] });
@@ -110,7 +110,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
       <details>
         <summary>Import agent catalog</summary>
         <div className="mt-2 grid gap-3">
-          <Field label="Catalog repository URL" help="Leave blank to use the Gateway configured source.">
+          <Field label="Catalog repository URL" help="Leave blank to use the configured source.">
             {(props) => (
               <input
                 {...props}
@@ -120,7 +120,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
               />
             )}
           </Field>
-          <Field label="Catalog Git reference" help="Leave blank to use the Gateway default.">
+          <Field label="Catalog Git reference" help="Leave blank to use the default reference.">
             {(props) => (
               <input
                 {...props}
@@ -240,13 +240,13 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
           if (!open && !busy) setReview(undefined);
         }}
         title="Review imported agent catalog"
-        description="The Gateway remains responsible for import validation, lifecycle policy and activation."
+        description="GoatCitadel remains responsible for import validation, lifecycle policy and activation."
       >
         <div className="grid gap-3">
           <p>Applies to this workspace.</p>
           <p className="break-words">
             {review?.kind === "import"
-              ? `${review.repoUrl || "Gateway configured source"} · ${review.ref || "Gateway default reference"}`
+              ? `${review.repoUrl || "Configured source"} · ${review.ref || "Default reference"}`
               : `${review?.entry.definition.frontmatter.name} → ${review ? AGENT_CATALOG_STATE[review.state] : ""}`}
           </p>
           <Callout tone="warning">

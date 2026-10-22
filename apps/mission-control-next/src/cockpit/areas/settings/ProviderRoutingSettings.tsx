@@ -208,7 +208,7 @@ export function ProviderRoutingSettings() {
         </div>
         {routing.routingUsesFallbackModels || routing.routingUsesStaleCatalog ? (
           <p className="mb-3 text-sm text-status-waiting">
-            This uses suggested or last-known model evidence; refresh has not verified availability.
+            This uses suggested or last-known model details; refresh has not verified availability.
           </p>
         ) : null}
         {!reviewCurrent ? (

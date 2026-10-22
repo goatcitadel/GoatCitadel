@@ -41,6 +41,16 @@ export type RuntimeAuthorityReference =
     };
 
 /**
+ * A coded form of an item's state, for clients to word themselves. Additive: `state` keeps the prose for older
+ * clients and technical details. Counts are whole numbers keyed by the code's own names.
+ */
+export interface RuntimeAuthorityMessage {
+  code: string;
+  count?: number;
+  counts?: Readonly<Record<string, number>>;
+}
+
+/**
  * A bounded public projection of runtime trust. All authority, owner, source,
  * basis, and reference fields are assigned by Gateway code; callers cannot
  * promote a cache, realtime signal, or client join into canonical truth.
@@ -56,6 +66,7 @@ export interface RuntimeAuthorityItem {
   freshness: RuntimeAuthorityFreshness;
   posture: RuntimeAuthorityPosture;
   state: string;
+  stateMessage?: RuntimeAuthorityMessage;
   basis: string;
   caveat?: string;
   scope: RuntimeAuthorityScope;

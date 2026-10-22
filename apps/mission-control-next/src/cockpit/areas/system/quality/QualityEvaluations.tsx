@@ -6,7 +6,7 @@ import { Button } from "../../../ui/Button";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { TimeText } from "../../../ui/TimeText";
 import { EVAL_RUN_STATUS, MEASUREMENT_SOURCE } from "../system-vocabulary";
-import { QualityFacts, QualityNotes, QualitySource, qualityNumber } from "./QualityEvidence";
+import { QualityFacts, QualityNotes, QualitySource, QualityWarnings, qualityNumber } from "./QualityEvidence";
 
 export function QualityEvaluations({ source }: { source: OpsQualitySnapshotResponse["evalProof"] }) {
   const [runId, setRunId] = useState<string | null>(null);
@@ -45,7 +45,7 @@ export function QualityEvaluations({ source }: { source: OpsQualitySnapshotRespo
               <p className="text-sm text-fg-secondary">
                 <TimeText value={selected.createdAt} absolute />
               </p>
-              <QualityNotes items={selected.warnings} />
+              <QualityWarnings items={selected.warnings} />
               {selected.results.length ? (
                 <ul className="grid gap-3">
                   {selected.results.map((result, index) => (
@@ -86,7 +86,7 @@ export function QualityEvaluations({ source }: { source: OpsQualitySnapshotRespo
               ) : (
                 <p className="text-sm text-fg-muted">No result rows were recorded for this evaluation.</p>
               )}
-              <TechnicalDetails label="Technical evidence">
+              <TechnicalDetails label="Technical details">
                 <QualityFacts
                   items={[
                     { label: "Evaluation identity", value: selected.runId },
@@ -101,7 +101,7 @@ export function QualityEvaluations({ source }: { source: OpsQualitySnapshotRespo
             </>
           ) : (
             <p role="status" className="text-sm text-fg-secondary">
-              The selected evaluation is no longer in the current evidence. Select an evaluation to inspect.
+              The selected evaluation is no longer in the current results. Select an evaluation to inspect.
             </p>
           )}
         </section>

@@ -49,7 +49,7 @@ export function McpDeleteControl({
           if (!open) control.cancel();
         }}
         title="Delete saved MCP server"
-        description="This removes the server configuration for the whole Gateway installation."
+        description="This removes the server configuration for the whole GoatCitadel installation."
       >
         {control.review ? (
           <div className="space-y-3 text-sm text-fg-secondary">

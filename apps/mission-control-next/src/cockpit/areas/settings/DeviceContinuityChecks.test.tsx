@@ -81,7 +81,7 @@ describe("cockpit desktop and mobile continuity", () => {
     await open();
     expect(container.querySelector('[aria-label="Desktop and mobile continuity checks"]')).toBeNull();
     expect(container.textContent).toContain(
-      "Continuity checks need the Gateway settings and device grants, which could not be read.",
+      "Continuity checks need the GoatCitadel settings and device grants, which could not be read.",
     );
   });
 

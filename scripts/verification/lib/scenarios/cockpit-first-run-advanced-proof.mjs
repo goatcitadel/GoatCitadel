@@ -177,7 +177,7 @@ export async function runCockpitFirstRunAdvancedProof({ context, browser, stack,
           await defaults.getByRole("button", { name: "Review defaults", exact: true }).click();
           await defaultsReview.waitFor();
           const reviewText = await defaultsReview.innerText();
-          assert.ok(reviewText.includes(`Revision: ${before.settings.revision}`));
+          assert.ok(reviewText.includes(`Version: ${before.settings.revision}`));
           assert.ok(reviewText.includes("Loopback auth bypass: off"));
           await capture("defaults-review", defaultsReview, ["Confirm defaults", "Cancel"]);
           await defaultsReview.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -215,7 +215,7 @@ export async function runCockpitFirstRunAdvancedProof({ context, browser, stack,
           stage = "retain unknown defaults outcome";
           await defaults.getByRole("button", { name: "Review defaults", exact: true }).click();
           await defaultsReview
-            .getByText(`Loopback auth bypass: off. Revision: ${after.settings.revision}.`, { exact: true })
+            .getByText(`Loopback auth bypass: off. Version: ${after.settings.revision}.`, { exact: true })
             .waitFor();
           await page.route("**/api/v1/onboarding/bootstrap", async (route) => {
             defaultsIntercepted++;

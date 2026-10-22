@@ -3,6 +3,7 @@ import type {
   RuntimeAuthorityDomain,
   RuntimeAuthorityFreshness,
   RuntimeAuthorityItem,
+  RuntimeAuthorityMessage,
   RuntimeAuthorityPosture,
   RuntimeAuthorityProjectionResponse,
   RuntimeAuthorityReference,
@@ -93,8 +94,34 @@ function parseAuthorityItem(value: unknown, workspaceId: string): RuntimeAuthori
     state: item.state,
     basis: item.basis,
     ...(item.caveat === undefined ? {} : { caveat: item.caveat }),
+    ...withStateMessage(item.stateMessage),
     scope,
     ...(canonicalRef ? { canonicalRef } : {}),
+  };
+}
+
+const MAX_MESSAGE_COUNTS = 8;
+const isWholeCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+
+/** A coded state is optional and advisory: a malformed one is dropped, never trusted, and never rejects the item. */
+function withStateMessage(value: unknown): { stateMessage?: RuntimeAuthorityMessage } {
+  const message = asRecord(value);
+  if (!message || typeof message.code !== "string" || !/^[a-z][a-z0-9_]{0,63}$/u.test(message.code)) return {};
+  const counts = asRecord(message.counts);
+  return {
+    stateMessage: {
+      code: message.code,
+      ...(isWholeCount(message.count) ? { count: message.count } : {}),
+      ...(counts
+        ? {
+            counts: Object.fromEntries(
+              Object.entries(counts)
+                .filter((entry): entry is [string, number] => /^\w{1,32}$/u.test(entry[0]) && isWholeCount(entry[1]))
+                .slice(0, MAX_MESSAGE_COUNTS),
+            ),
+          }
+        : {}),
+    },
   };
 }
 

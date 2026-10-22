@@ -14,7 +14,7 @@ function Checks() {
   if (settings.isError || grants.isError || (grants.data && !Array.isArray(grants.data.items)))
     return (
       <p role="alert" className="text-sm text-status-failed">
-        Continuity checks need the Gateway settings and device grants, which could not be read.
+        Continuity checks need the GoatCitadel settings and device grants, which could not be read.
       </p>
     );
   if (!settings.data || !grants.data || daemon.isLoading)
@@ -57,7 +57,7 @@ export function DeviceContinuityChecks() {
       {open ? (
         <div className="mt-3 space-y-2">
           <p className="text-sm text-fg-secondary">
-            Trusted devices, the desktop runtime, and companion handoff boundaries for this Gateway.
+            Trusted devices, the desktop runtime, and companion handoff boundaries for this installation.
           </p>
           <Checks />
         </div>

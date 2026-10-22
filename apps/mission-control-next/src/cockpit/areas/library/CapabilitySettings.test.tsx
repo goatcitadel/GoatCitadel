@@ -168,7 +168,7 @@ describe("Library skill state requests", () => {
     await act(async () => button("Request pause").click());
     await act(async () => button("Confirm request").click());
     expect(updateSkillState).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("This skill changed in Gateway");
+    expect(container.textContent).toContain("This skill changed. Refresh");
     expect(onRefresh).toHaveBeenCalledOnce();
   });
 

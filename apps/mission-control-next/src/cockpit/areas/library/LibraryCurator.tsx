@@ -271,7 +271,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
                     <dd className="wrap-anywhere">{selected.signals.join(", ") || "None"}</dd>
                   </div>
                 </dl>
-                <TechnicalDetails label="Curator evidence record">
+                <TechnicalDetails label="Curator record">
                   <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2 font-mono text-xs">
                     {JSON.stringify(selected, null, 2)}
                   </pre>
@@ -296,7 +296,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
                 This skill is not in the current curator report. Refresh, or choose another skill.
               </Callout>
             ) : (
-              <p className="text-sm text-fg-secondary">Select a skill to review its grade and evidence.</p>
+              <p className="text-sm text-fg-secondary">Select a skill to review its grade and supporting details.</p>
             )}
             <section className={CARD} aria-label="Archived skills">
               <h2 className="text-base font-semibold">Archived skills</h2>
@@ -334,7 +334,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
               <span>Disables this skill installation-wide, in every workspace.</span>
             </div>
             <p>
-              The Gateway records the disable through its governed skill-state path and Journey. Curator has no restore:
+              GoatCitadel records the disable through its governed skill-state path and Journey. Curator has no restore:
               re-enabling is a governed state change in Skills and tools, which may need approval.
             </p>
             <NativeOwnerLink
@@ -350,7 +350,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
               </Button>
               {canReplay ? (
                 <Button disabled={busy} onClick={() => void confirmArchive(true)}>
-                  Replay exact archive request
+                  Retry the exact archive request
                 </Button>
               ) : (
                 <Button variant="primary" disabled={busy || operation.locked} onClick={() => void confirmArchive()}>

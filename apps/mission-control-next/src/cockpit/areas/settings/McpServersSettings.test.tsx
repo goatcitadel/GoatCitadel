@@ -104,7 +104,7 @@ describe("native MCP saved-state control", () => {
     api.fetchMcpServers.mockImplementation(async () => ({ items: [internal, saved] }));
     await render();
     expect(container.querySelector('input[type="search"]')).not.toBeNull();
-    expect(container.textContent).toContain("This server is managed by the Gateway.");
+    expect(container.textContent).toContain("This server is managed by GoatCitadel.");
     expect(
       container.querySelector<HTMLButtonElement>('button[aria-label="Review disable Approval Inbox"]')?.disabled,
     ).toBe(true);

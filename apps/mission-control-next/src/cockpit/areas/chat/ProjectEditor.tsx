@@ -123,7 +123,7 @@ export function ProjectEditor({
             </p>
           </TechnicalDetails>
           <Button className="h-auto max-w-full whitespace-normal py-2 text-left" onClick={draft.rebaseToCurrent}>
-            Use current revision with my draft
+            Use current version with my draft
           </Button>
         </Callout>
       ) : null}

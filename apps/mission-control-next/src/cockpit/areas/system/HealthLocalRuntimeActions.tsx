@@ -112,7 +112,7 @@ function RuntimeStartReview({
         open={open}
         onOpenChange={closeReview}
         title="Start the managed local runtime?"
-        description="This starts the saved llama.cpp process on the Gateway host and affects every workspace using it."
+        description="This starts the saved llama.cpp process on the GoatCitadel host and affects every workspace using it."
       >
         <div className="space-y-3">
           {loading ? (
@@ -141,18 +141,18 @@ function RuntimeStartReview({
                   <dd className="break-all text-fg">{review.commandLabel}</dd>
                 </div>
                 <div>
-                  <dt className="text-fg-muted">Settings revision</dt>
+                  <dt className="text-fg-muted">Settings version</dt>
                   <dd className="text-fg">{review.settingsRevision}</dd>
                 </div>
               </dl>
               <p className="text-sm text-fg-secondary">{review.reason}</p>
               <p className="text-xs text-fg-muted">
-                Uses the saved configuration without changing it. The Gateway checks process ownership and startup
+                Uses the saved configuration without changing it. GoatCitadel checks process ownership and startup
                 eligibility. This can consume local memory and GPU resources.
               </p>
               <p className="text-xs text-fg-muted">
                 Configuration is checked again before and after the request. The current Start API cannot bind startup
-                atomically to this revision; concurrent settings changes may prevent verification.
+                atomically to this version; concurrent settings changes may prevent verification.
               </p>
             </>
           ) : null}

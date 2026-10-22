@@ -141,7 +141,7 @@ export function LlamaRuntimeLifecycle({
     run(async () => {
       try {
         await refreshLlamaCppRuntime();
-        return "Runtime status refreshed from the Gateway.";
+        return "Runtime status refreshed.";
       } catch (error) {
         return `Runtime status could not be refreshed: ${describeApiError(error).summary}`;
       }
@@ -166,7 +166,7 @@ export function LlamaRuntimeLifecycle({
       }
       try {
         await stopLlamaCppRuntime();
-        return "Stop requested. The status shown is read back from the Gateway.";
+        return "Stop requested. The status shown is what GoatCitadel reports now.";
       } catch {
         return "The stop outcome is unknown. The runtime status was read again; check it before acting.";
       }
@@ -180,7 +180,7 @@ export function LlamaRuntimeLifecycle({
         <LeaseEvidence diagnostics={diagnostics} />
       ) : (
         <p role="status" className="text-sm text-fg-muted">
-          This Gateway does not report llama.cpp lifecycle diagnostics.
+          This GoatCitadel version does not report llama.cpp lifecycle diagnostics.
         </p>
       )}
       <div className="flex flex-wrap gap-2">

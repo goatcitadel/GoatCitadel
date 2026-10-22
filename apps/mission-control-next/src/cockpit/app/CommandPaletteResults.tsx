@@ -63,7 +63,7 @@ export function CommandPaletteCoverage({ groups }: { groups: PaletteSearchGroup[
               Searching…
             </p>
           ) : !group.items.length && !group.error ? (
-            <p className="px-3 py-1 text-xs text-fg-muted">No matches in this source’s returned window.</p>
+            <p className="px-3 py-1 text-xs text-fg-muted">No matches in the loaded results.</p>
           ) : null}
           {group.searching || !group.coverage ? null : (
             <p className="px-3 py-1 break-words text-xs text-fg-muted">{group.coverage}</p>
