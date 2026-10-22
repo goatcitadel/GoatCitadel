@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveTurnWebLookupIntent } from "./web-research-mode.js";
+import { hasSubstantiveSeedQuery, resolveTurnWebLookupIntent } from "./web-research-mode.js";
 
 describe("resolveTurnWebLookupIntent", () => {
   it("treats Deep mode as web lookup when nothing else claims the turn", () => {
@@ -39,5 +39,24 @@ describe("resolveTurnWebLookupIntent", () => {
     const base = { webMode: "auto" as const, localFileIntent: false, workflowSkillCapture: false };
     expect(resolveTurnWebLookupIntent({ ...base, detectedWebLookupIntent: false })).toBe(false);
     expect(resolveTurnWebLookupIntent({ ...base, detectedWebLookupIntent: true })).toBe(true);
+  });
+});
+
+describe("hasSubstantiveSeedQuery", () => {
+  it("rejects a greeting", () => {
+    expect(hasSubstantiveSeedQuery("hi")).toBe(false);
+  });
+
+  it("rejects a short follow-up made of stopwords and two words", () => {
+    expect(hasSubstantiveSeedQuery("make it shorter")).toBe(false);
+  });
+
+  it("accepts a real research question", () => {
+    expect(hasSubstantiveSeedQuery("Compare Debezium vs Postgres logical replication")).toBe(true);
+  });
+
+  it("ignores one-character tokens and stopwords in any case", () => {
+    expect(hasSubstantiveSeedQuery("Hello, please  a b c")).toBe(false);
+    expect(hasSubstantiveSeedQuery("")).toBe(false);
   });
 });

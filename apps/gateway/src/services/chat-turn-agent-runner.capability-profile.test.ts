@@ -714,6 +714,20 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       expect(invokeTool).not.toHaveBeenCalled();
     });
 
+    it("does not seed a Deep web search for a greeting and still calls the model", async () => {
+      const { createChatCompletion, invokeTool } = await runFrozenTurn({ content: "hi", webMode: "deep" });
+
+      expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+      expect(createChatCompletion).toHaveBeenCalled();
+    });
+
+    it("does not seed a Deep web search for a short follow-up and still calls the model", async () => {
+      const { createChatCompletion, invokeTool } = await runFrozenTurn({ content: "make it shorter", webMode: "deep" });
+
+      expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+      expect(createChatCompletion).toHaveBeenCalled();
+    });
+
     it("does not seed a Deep web search with secret text and still calls the model", async () => {
       const { createChatCompletion, invokeTool } = await runFrozenTurn({
         content: "Why does my deploy fail? OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",

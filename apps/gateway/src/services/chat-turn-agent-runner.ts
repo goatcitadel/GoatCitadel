@@ -198,7 +198,7 @@ import {
   extractSkillSecurityFailureRecord,
 } from "./chat-turn-agent-runner/failure-records.js";
 import { buildToolResultDesignAdvisories, hasDesignSkillReceipt } from "./chat-turn-agent-runner/design-advisories.js";
-import { resolveTurnWebLookupIntent } from "./chat-turn-agent-runner/web-research-mode.js";
+import { hasSubstantiveSeedQuery, resolveTurnWebLookupIntent } from "./chat-turn-agent-runner/web-research-mode.js";
 import {
   analyzePresentationContentQuality,
   buildWorkspaceFileDownloadHref,
@@ -3948,8 +3948,12 @@ export class ChatTurnAgentRunner {
           ? (inferredLiveDataQuery ?? derivedLiveDataQuery)
           : derivedLiveDataQuery);
     }
+    // Deep alone (no detected web intent) must not open a greeting or a short follow-up with a search.
+    const deepOnlySeed = !intents.webLookup && controllerWebLookupIntent;
+    const deepOnlySeedTooThin =
+      deepOnlySeed && (!hasSubstantiveSeedQuery(liveDataQuery) || looksLikeContinuationSearchPrompt(liveDataQuery));
     // A seed is never the model's choice, so it must not carry secret or private-network text to a search backend.
-    if (controllerSeedGateOpen && !isSensitiveOfficialSearchQuery(liveDataQuery)) {
+    if (controllerSeedGateOpen && !isSensitiveOfficialSearchQuery(liveDataQuery) && !deepOnlySeedTooThin) {
       throwIfChatTurnCancelled(input);
       await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
