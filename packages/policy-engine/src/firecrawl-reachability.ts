@@ -1,4 +1,5 @@
 export const FIRECRAWL_UNREACHABLE_COOLDOWN_MS = 300_000;
+const MAX_TRACKED_FIRECRAWL_ENDPOINTS = 32;
 
 const CONNECT_ERROR_CODES = new Set([
   "ECONNREFUSED",
@@ -14,8 +15,21 @@ const cooldownUntil = new Map<string, number>();
 
 export class FirecrawlUnavailableError extends Error {
   constructor(baseUrl: string) {
-    super(`Firecrawl at ${baseUrl} is unreachable; skipping it for 5 minutes.`);
+    super(
+      `Firecrawl at ${describeEndpointHost(baseUrl)} is unreachable; skipping it for ${Math.round(
+        FIRECRAWL_UNREACHABLE_COOLDOWN_MS / 60_000,
+      )} minutes.`,
+    );
     this.name = "FirecrawlUnavailableError";
+  }
+}
+
+/** Host only: the base URL may carry a token in its userinfo, path, or query. */
+function describeEndpointHost(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host || "the configured endpoint";
+  } catch {
+    return "the configured endpoint";
   }
 }
 
@@ -70,7 +84,21 @@ export function isFirecrawlConnectFailure(
 }
 
 export function recordFirecrawlConnectFailure(baseUrl: string, now: number = Date.now()): void {
-  cooldownUntil.set(normalizeBaseUrl(baseUrl), now + FIRECRAWL_UNREACHABLE_COOLDOWN_MS);
+  for (const [key, until] of cooldownUntil) {
+    if (now >= until) {
+      cooldownUntil.delete(key);
+    }
+  }
+  const key = normalizeBaseUrl(baseUrl);
+  cooldownUntil.delete(key);
+  while (cooldownUntil.size >= MAX_TRACKED_FIRECRAWL_ENDPOINTS) {
+    const oldest = cooldownUntil.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    cooldownUntil.delete(oldest.value);
+  }
+  cooldownUntil.set(key, now + FIRECRAWL_UNREACHABLE_COOLDOWN_MS);
 }
 
 export function recordFirecrawlSuccess(baseUrl: string): void {
@@ -78,8 +106,20 @@ export function recordFirecrawlSuccess(baseUrl: string): void {
 }
 
 export function isFirecrawlCoolingDown(baseUrl: string, now: number = Date.now()): boolean {
-  const until = cooldownUntil.get(normalizeBaseUrl(baseUrl));
-  return until !== undefined && now < until;
+  const key = normalizeBaseUrl(baseUrl);
+  const until = cooldownUntil.get(key);
+  if (until === undefined) {
+    return false;
+  }
+  if (now >= until) {
+    cooldownUntil.delete(key);
+    return false;
+  }
+  return true;
+}
+
+export function firecrawlTrackedEndpointCountForTests(): number {
+  return cooldownUntil.size;
 }
 
 export function resetFirecrawlReachabilityForTests(): void {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   FIRECRAWL_UNREACHABLE_COOLDOWN_MS,
   FirecrawlUnavailableError,
+  firecrawlTrackedEndpointCountForTests,
   isFirecrawlConnectFailure,
   isFirecrawlCoolingDown,
   recordFirecrawlConnectFailure,
@@ -35,10 +36,44 @@ describe("firecrawl reachability cooldown", () => {
     expect(isFirecrawlCoolingDown(`${LOCAL}/`, 1)).toBe(true);
   });
 
-  it("formats the unavailable error message", () => {
+  it("formats the unavailable error message with the host only", () => {
     const error = new FirecrawlUnavailableError(LOCAL);
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).toBe(`Firecrawl at ${LOCAL} is unreachable; skipping it for 5 minutes.`);
+    expect(error.message).toBe("Firecrawl at 127.0.0.1:3002 is unreachable; skipping it for 5 minutes.");
+  });
+
+  it("keeps userinfo, path, and query secrets out of the error message", () => {
+    const error = new FirecrawlUnavailableError("https://user:secret@fc.example.com/v2?key=abc");
+    expect(error.message).toContain("fc.example.com");
+    expect(error.message).not.toContain("secret");
+    expect(error.message).not.toContain("key=abc");
+  });
+
+  it("falls back to a generic label when the base URL does not parse", () => {
+    const error = new FirecrawlUnavailableError("not a url");
+    expect(error.message).toBe("Firecrawl at the configured endpoint is unreachable; skipping it for 5 minutes.");
+  });
+
+  it("drops an expired entry once a later failure is recorded", () => {
+    recordFirecrawlConnectFailure("http://old.example.com", 0);
+    expect(firecrawlTrackedEndpointCountForTests()).toBe(1);
+    recordFirecrawlConnectFailure("http://new.example.com", FIRECRAWL_UNREACHABLE_COOLDOWN_MS + 1);
+    expect(firecrawlTrackedEndpointCountForTests()).toBe(1);
+  });
+
+  it("drops an expired entry when it is checked", () => {
+    recordFirecrawlConnectFailure(LOCAL, 0);
+    expect(isFirecrawlCoolingDown(LOCAL, FIRECRAWL_UNREACHABLE_COOLDOWN_MS)).toBe(false);
+    expect(firecrawlTrackedEndpointCountForTests()).toBe(0);
+  });
+
+  it("caps tracked endpoints, evicting the oldest", () => {
+    for (let i = 0; i < 33; i += 1) {
+      recordFirecrawlConnectFailure(`http://fc${i}.example.com`, i);
+    }
+    expect(firecrawlTrackedEndpointCountForTests()).toBe(32);
+    expect(isFirecrawlCoolingDown("http://fc0.example.com", 100)).toBe(false);
+    expect(isFirecrawlCoolingDown("http://fc32.example.com", 100)).toBe(true);
   });
 });
 
