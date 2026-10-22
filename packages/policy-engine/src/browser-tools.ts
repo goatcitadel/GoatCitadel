@@ -320,8 +320,9 @@ async function executeBrowserSearch(
       );
       return {
         ...nativeResult,
-        backend: "firecrawl",
-        backendUsed: false,
+        backend: "native",
+        requestedBackend: "firecrawl",
+        backendUsed: true,
         fallbackUsed: true,
         fallbackReason: (firecrawlError as Error).message,
       };
@@ -572,8 +573,9 @@ async function executeBrowserNavigate(
       const fallback = await executeBrowserNavigateNative(url, maxChars, args, config, executionContext);
       return {
         ...fallback,
-        backend: "firecrawl",
-        backendUsed: false,
+        backend: "native",
+        requestedBackend: "firecrawl",
+        backendUsed: true,
         fallbackUsed: true,
         fallbackReason: (firecrawlError as Error).message,
       };
@@ -669,8 +671,9 @@ async function executeBrowserExtract(
       const fallback = await executeBrowserExtractNative(url, selector, maxChars, args, config, executionContext);
       return {
         ...fallback,
-        backend: "firecrawl",
-        backendUsed: false,
+        backend: "native",
+        requestedBackend: "firecrawl",
+        backendUsed: true,
         fallbackUsed: true,
         fallbackReason: (firecrawlError as Error).message,
       };
