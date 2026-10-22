@@ -203,6 +203,12 @@ import { hasSubstantiveSeedQuery, resolveTurnWebLookupIntent } from "./chat-turn
 import { selectAnswerCitations } from "./chat-turn-agent-runner/answer-citations.js";
 import { buildDeepResearchThinEvidenceFooter } from "./chat-turn-agent-runner/deep-research-evidence.js";
 import {
+  isResearchSaturationTurn,
+  recordResearchIteration,
+  RESEARCH_SATURATION_INSTRUCTION,
+  startResearchSaturation,
+} from "./chat-turn-agent-runner/research-saturation.js";
+import {
   analyzePresentationContentQuality,
   buildWorkspaceFileDownloadHref,
   buildSafeWriteFallbackPath,
@@ -4221,9 +4227,32 @@ export class ChatTurnAgentRunner {
       } as ChatCompletionMessage);
     }
 
+    const researchSaturationTurn = isResearchSaturationTurn({
+      webMode: input.webMode,
+      budgetProfile: executionBudget.profile,
+      promptLabEvalIntegrity: promptLabEvalIntegrityTurn,
+    });
+    // Declared outside the loop so the once-per-turn nudge survives checkpoint continuation.
+    let researchSaturation = startResearchSaturation(toolRuns);
+    let researchPassStart = toolRuns.length;
     if (!assistantContent && !approvalPayload && !pendingUserInput) {
       try {
         for (let loop = 0; loop < executionBudget.maxToolLoops; loop += 1) {
+          if (researchSaturationTurn) {
+            // The previous pass ends here: recording it at the head of the next pass also covers passes that `continue`.
+            const step = recordResearchIteration(researchSaturation, {
+              toolRuns,
+              iterationRuns: toolRuns.slice(researchPassStart),
+            });
+            researchSaturation = step.state;
+            researchPassStart = toolRuns.length;
+            if (step.nudge) {
+              conversationMessages.push({
+                role: "system",
+                content: RESEARCH_SATURATION_INSTRUCTION,
+              } as ChatCompletionMessage);
+            }
+          }
           throwIfChatTurnCancelled(input);
           const optionalInput = await collectOptionalInput();
           if (optionalInput.prompt?.promptId !== visibleOptionalPromptId) {

@@ -22,6 +22,7 @@ import {
   navigateToolCallCompletion,
   toolCallCompletion,
 } from "./chat-turn-agent-runner-test-fixtures.js";
+import { RESEARCH_SATURATION_INSTRUCTION } from "./chat-turn-agent-runner/research-saturation.js";
 import {
   MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
   readMcpRequesterScopedTurnContext,
@@ -211,6 +212,92 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     );
     expect(result.turnTrace.failure?.message).toContain("candidate_discovery_incomplete");
     expect(result.turnTrace.routing.fallbackReason).toContain("repeated_tool_loop");
+  });
+
+  async function runSaturationScript(webMode: ChatWebMode) {
+    const prompt = "Research how the James Webb Space Telescope mirror segments are aligned and cite your sources.";
+    const answer: ChatCompletionResponse = {
+      model: "glm-5",
+      choices: [{ index: 0, message: { role: "assistant", content: "Mirror alignment answer from the sources." } }],
+    };
+    const script = [
+      toolCallCompletion("webb mirror segment alignment"),
+      toolCallCompletion("webb wavefront sensing phasing"),
+      toolCallCompletion("webb mirror actuators alignment steps"),
+      answer,
+    ];
+    const requestMessages: Array<Array<{ role: string; content?: unknown }>> = [];
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest) => {
+      requestMessages.push(structuredClone(request.messages) as Array<{ role: string; content?: unknown }>);
+      return script[Math.min(requestMessages.length - 1, script.length - 1)]!;
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-saturation-search",
+      result: {
+        results: [
+          {
+            title: "Webb mirror alignment",
+            url: "https://www.nasa.example/webb/mirror",
+            snippet: "Segment alignment.",
+          },
+          { title: "Webb wavefront sensing", url: "https://stsci.example/webb/wavefront", snippet: "Phasing steps." },
+        ],
+      },
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion: createChatCompletion as never,
+      invokeTool,
+    });
+    await orchestrator.run({
+      sessionId: `sess-saturation-${webMode}`,
+      turnId: randomUUID(),
+      userMessageId: `msg-saturation-${webMode}`,
+      content: prompt,
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode,
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+    const countInstruction = (messages: Array<{ role: string; content?: unknown }> | undefined) =>
+      (messages ?? []).filter(
+        (message) => message.role === "system" && message.content === RESEARCH_SATURATION_INSTRUCTION,
+      ).length;
+    return { requestMessages, countInstruction, invokeTool };
+  }
+
+  it("nudges a Deep research turn to answer once two searches in a row add no new sites", async () => {
+    const { requestMessages, countInstruction, invokeTool } = await runSaturationScript("deep");
+
+    // The Deep seed search already listed both sites, so the first two model searches each add none.
+    expect(invokeTool.mock.calls.map(([request]) => request.toolName)).toEqual([
+      "browser.search",
+      "browser.search",
+      "browser.search",
+      "browser.search",
+    ]);
+    expect(requestMessages).toHaveLength(4);
+    expect(countInstruction(requestMessages[1])).toBe(0);
+    expect(countInstruction(requestMessages[2])).toBe(1);
+    for (const messages of requestMessages.slice(3)) {
+      expect(countInstruction(messages)).toBe(1);
+    }
+  });
+
+  it("does not nudge an Auto turn that repeats the same search results", async () => {
+    const { requestMessages, countInstruction } = await runSaturationScript("auto");
+
+    expect(requestMessages.length).toBeGreaterThanOrEqual(3);
+    for (const messages of requestMessages) {
+      expect(countInstruction(messages)).toBe(0);
+    }
   });
 
   it("treats structured local-business blockers as Cowork checkpoint progress before blocking repeated loops", async () => {

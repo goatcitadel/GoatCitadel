@@ -3,7 +3,7 @@ import type { ChatToolRunRecord, ChatWebMode } from "@goatcitadel/contracts";
 /** Tools that open a page. A search result list does not count as an opened source. */
 const PAGE_OPENING_TOOL_NAMES = new Set(["browser.navigate", "browser.extract", "http.get"]);
 /** Runs that count as web research: a search or a page open. Posts and page interactions do not. */
-const WEB_RESEARCH_TOOL_NAMES = new Set(["browser.search", ...PAGE_OPENING_TOOL_NAMES]);
+export const WEB_RESEARCH_TOOL_NAMES: ReadonlySet<string> = new Set(["browser.search", ...PAGE_OPENING_TOOL_NAMES]);
 const MIN_INDEPENDENT_SOURCES = 2;
 
 export const DEEP_RESEARCH_THIN_EVIDENCE_FOOTER =
@@ -29,17 +29,11 @@ function landedUrl(run: ChatToolRunRecord): string | undefined {
   return undefined;
 }
 
-function openedHostname(run: ChatToolRunRecord): string | undefined {
-  if (run.status !== "executed" || !PAGE_OPENING_TOOL_NAMES.has(run.toolName)) {
-    return undefined;
-  }
-  const rawUrl = landedUrl(run);
-  if (rawUrl === undefined) {
-    return undefined;
-  }
+/** The site a URL points at: its lowercased hostname without a leading `www.`, for http(s) URLs only. */
+export function hostnameOf(url: string): string | undefined {
   let parsed: URL;
   try {
-    parsed = new URL(rawUrl.trim());
+    parsed = new URL(url.trim());
   } catch {
     return undefined;
   }
@@ -48,6 +42,15 @@ function openedHostname(run: ChatToolRunRecord): string | undefined {
   }
   const hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
   return hostname.length > 0 ? hostname : undefined;
+}
+
+/** The site an executed page-opening run landed on; undefined for searches and for runs that did not execute. */
+export function openedHostname(run: ChatToolRunRecord): string | undefined {
+  if (run.status !== "executed" || !PAGE_OPENING_TOOL_NAMES.has(run.toolName)) {
+    return undefined;
+  }
+  const rawUrl = landedUrl(run);
+  return rawUrl === undefined ? undefined : hostnameOf(rawUrl);
 }
 
 /**
