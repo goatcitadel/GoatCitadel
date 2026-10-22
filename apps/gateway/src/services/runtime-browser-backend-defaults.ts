@@ -3,7 +3,11 @@ import {
   type ToolAccessEvaluateRequest,
   type ToolInvokeRequest,
 } from "@goatcitadel/contracts";
-import { assertNotPrivateOrReservedHost, isHostAllowed } from "@goatcitadel/policy-engine";
+import {
+  assertNotPrivateOrReservedHost,
+  isHostAllowed,
+  isOfficialResearchSearchInvocation,
+} from "@goatcitadel/policy-engine";
 import type { WebRuntimeConfig } from "../config.js";
 
 const BROWSER_READ_TOOLS = new Set(["browser.search", "browser.navigate", "browser.extract"]);
@@ -36,6 +40,12 @@ export function applyRuntimeBrowserBackendDefaults<TRequest extends ToolInvokeRe
     // The operator order always replaces a caller-supplied one: engines turned off stay off.
     if (request.toolName === "browser.search") {
       args.searchEngineOrder = normalizeWebSearchEngineOrder(web.search?.engineOrder);
+    }
+    // A model that picked Brave or Parallel (engine or providers) asked for the official search
+    // backend; a Firecrawl default would turn that request into a Firecrawl one.
+    if (request.toolName === "browser.search" && !explicitBackend && isOfficialResearchSearchInvocation(args)) {
+      args.backend = "official";
+      return { ...request, args };
     }
     if (!explicitBackend && firecrawlUsable) {
       args.backend = firecrawl.defaultReadBackend;
