@@ -70,8 +70,8 @@ export interface CommitmentClassifierServiceDeps {
     request: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext,
   ): Promise<ChatCompletionResponse>;
-  /** Cheap-model defaults (mirrors the explainer judge-model resolution). */
-  resolveModelDefaults(): Promise<CommitmentClassifierModelDefaults>;
+  /** Background-job model; `undefined` means the active provider is not ready, so skip without a model call. */
+  resolveModelDefaults(): Promise<CommitmentClassifierModelDefaults | undefined>;
   /** Resolve the execution api-style so we can gate `response_format`/`temperature`. */
   resolveApiStyle(providerId?: string, model?: string): LlmApiStyle;
   now?: () => Date;
@@ -93,6 +93,9 @@ export class CommitmentClassifierService {
       return [];
     }
     const defaults = await this.deps.resolveModelDefaults();
+    if (!defaults) {
+      return [];
+    }
     const apiStyle = this.deps.resolveApiStyle(defaults.providerId, defaults.model);
     const nowIso = this.clockNow().toISOString();
 
