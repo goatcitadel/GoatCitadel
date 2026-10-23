@@ -5,7 +5,9 @@
 // It holds each `tools/call` (keyed by the CLI's `claudecode/toolUseId`) until
 // the Gateway, which runs the call through its own governed runner, stages the
 // runner's result as `<runDir>/results/<toolUseId>.json`; the stub then
-// delivers that text as the JSON-RPC answer. It executes nothing itself.
+// delivers that text as the JSON-RPC answer. A call without a valid id is
+// never answered (an error answer makes the CLI continue on its own). The
+// stub executes nothing itself.
 //
 // Constraints that keep it inert:
 // - it imports only `node:fs` and `node:process` (a test pins this);
@@ -35,7 +37,6 @@ export interface ClaudeCliStubOutcome {
 
 const DEFAULT_PROTOCOL_VERSION = "2025-11-25";
 const METHOD_NOT_FOUND = -32601;
-const INVALID_PARAMS = -32602;
 const TOOL_USE_ID_META_KEY = "claudecode/toolUseId";
 const RESULT_POLL_INTERVAL_MS = 100;
 
@@ -64,7 +65,8 @@ function readToolUseId(params: unknown): string | undefined {
 
 /**
  * Returns the JSON-RPC reply line (no trailing newline) and/or a `tools/call`
- * to hold. Notifications and unparseable input produce neither.
+ * to hold. Notifications, unparseable input and a `tools/call` without a valid
+ * tool-use id produce neither: that call simply stays unanswered.
  */
 export function handleClaudeCliStubLine(tools: readonly ClaudeCliStubTool[], line: string): ClaudeCliStubOutcome {
   let message: unknown;
@@ -101,7 +103,9 @@ export function handleClaudeCliStubLine(tools: readonly ClaudeCliStubTool[], lin
     case "tools/call": {
       const toolUseId = readToolUseId(message.params);
       if (toolUseId === undefined) {
-        return { reply: failure(id, INVALID_PARAMS, "tools/call needs a valid claudecode/toolUseId") };
+        // Held unanswered, never delivered. An error answer would make the CLI write its own
+        // tool_result and call the model by itself; silence lets the Gateway's tripwires end the step.
+        return {};
       }
       // Answered later, once the Gateway stages the runner's result for this id.
       return { hold: { rpcId: id, toolUseId } };

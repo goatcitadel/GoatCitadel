@@ -75,7 +75,7 @@ Not verified, and relied on only through fallbacks or tripwires: the exact size 
 
 The step-mode stub keeps its constraints: it imports only `node:fs` and `node:process`, uses erasable TypeScript, has the 1 MiB line cap, and exits on stdin EOF. Changes:
 
-- `tools/call` is held, keyed by `params._meta["claudecode/toolUseId"]`. A call without that id is answered with JSON-RPC error `-32602` and counts as a fault, because the adapter cannot bind it.
+- `tools/call` is held, keyed by `params._meta["claudecode/toolUseId"]`. A call without a valid id (missing, non-string, or failing `^toolu_[A-Za-z0-9_-]{1,128}$`) is held unanswered and never used as a path, because the adapter cannot bind it. An error answer would make the CLI write its own tool_result and make another model API call by itself (probe fact), so the step ends through the Gateway's tripwires and the park deadline instead.
 - The stub watches `<run dir>/results/` (`fs.watch` plus a 100 ms poll as backstop) for `<toolUseId>.json`. It also checks for an already-staged file when a call arrives, because the CLI asks for later calls only after earlier ones are answered.
 - A result file is `{ nonce, toolUseId, text }`. The stub answers only when `nonce` matches the step's manifest nonce and `toolUseId` matches the held call. Otherwise it ignores the file, and the adapter's echo check turns the resulting timeout into a fault.
 - The answer is `{ content: [{ type: "text", text }], isError: false }`. A runner tool message that reports a failure is still delivered as text, as in the cold transcript; `isError` is not inferred.
@@ -177,7 +177,7 @@ My call: no automatic cleanup in the profile. Deleting files in a directory the 
 - Ordering: no result file exists before the next step's `beginTrackedDispatch` resolves. A failed intent kills the parked entry and writes nothing.
 - Tripwires: an undelivered `tool_result`, a mismatched echo, a `message_start` before the echoes, and an exit while parked each poison and kill.
 - Reaping: deadline, cap eviction, shutdown hook, abort; the run dir is gone after each.
-- Stub: holds by `toolUseId`; delivers a pre-staged file at once; ignores a wrong nonce or id; answers a call without a `toolUseId` with `-32602`; the import list still pins `node:fs` and `node:process`.
+- Stub: holds by `toolUseId`; delivers a pre-staged file at once; ignores a wrong nonce or id; holds a call without a valid `toolUseId` unanswered; the import list still pins `node:fs` and `node:process`.
 - Env: `MCP_TOOL_TIMEOUT` is park deadline plus 60 s and is not taken from the host env.
 
 **Runner integration (fake CLI through `LlmService`):**

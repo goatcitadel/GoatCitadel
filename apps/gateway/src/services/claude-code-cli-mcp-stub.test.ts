@@ -68,19 +68,33 @@ describe("handleClaudeCliStubLine", () => {
     expect(out).toEqual({ hold: { rpcId: 7, toolUseId: "toolu_01ABC" } });
   });
 
-  it("tools/call without a toolUseId gets -32602", () => {
-    const reply = parseReply(handleClaudeCliStubLine(TOOLS, toolCall(8)).reply);
-    expect(reply.id).toBe(8);
-    expect(reply.error.code).toBe(-32602);
+  // An error answer would make the CLI write its own tool_result and call the model itself,
+  // so a call the stub cannot bind is neither answered nor held.
+  it("tools/call without a toolUseId is neither answered nor held", () => {
+    expect(handleClaudeCliStubLine(TOOLS, toolCall(8))).toEqual({});
     const noMeta = request(9, "tools/call", { name: "read_file", arguments: {} });
-    expect(parseReply(handleClaudeCliStubLine(TOOLS, noMeta).reply).error.code).toBe(-32602);
+    expect(handleClaudeCliStubLine(TOOLS, noMeta)).toEqual({});
   });
 
-  it("tools/call with a toolUseId that is not a plain toolu_ token gets -32602", () => {
-    for (const toolUseId of ["toolu_../../x", "toolu_", "", `toolu_${"a".repeat(129)}`, "other_1", "toolu_a/b"]) {
-      const out = handleClaudeCliStubLine(TOOLS, toolCall(10, toolUseId));
-      expect(out.hold).toBeUndefined();
-      expect(parseReply(out.reply).error.code).toBe(-32602);
+  it("tools/call with a toolUseId that is not a plain toolu_ token is neither answered nor held", () => {
+    const badIds: unknown[] = [
+      123,
+      null,
+      "toolu_../../x",
+      "toolu_",
+      "",
+      "x".repeat(200),
+      `toolu_${"a".repeat(129)}`,
+      "other_1",
+      "toolu_a/b",
+    ];
+    for (const toolUseId of badIds) {
+      const line = request(10, "tools/call", {
+        name: "read_file",
+        arguments: {},
+        _meta: { "claudecode/toolUseId": toolUseId },
+      });
+      expect(handleClaudeCliStubLine(TOOLS, line)).toEqual({});
     }
     expect(CLAUDE_CLI_TOOL_USE_ID_PATTERN.test(`toolu_${"a".repeat(128)}`)).toBe(true);
   });
@@ -244,6 +258,14 @@ describe("claude-code-cli-mcp-stub process", () => {
     child.stdin.write(toolCall(12, "toolu_bad") + "\n");
     child.stdin.write(toolCall(13, "toolu_swap") + "\n");
     await sleep(600);
+    expect(stdout()).toBe("");
+  }, 10_000);
+
+  it("a tools/call without a valid toolUseId stays silent over the wire", async () => {
+    const { child, stdout } = startStub();
+    child.stdin.write(toolCall(15) + "\n");
+    child.stdin.write(toolCall(16, "toolu_../../x") + "\n");
+    await sleep(500);
     expect(stdout()).toBe("");
   }, 10_000);
 

@@ -28,7 +28,7 @@
   - path `<runDir>/results/<toolUseId>.json`, body `{ "nonce": string, "toolUseId": string, "text": string }`;
   - written as a `.tmp` file and then renamed;
   - `toolUseId` must match `^toolu_[A-Za-z0-9_-]{1,128}$` on both sides, or it is never used as a path.
-- **Stub:** still imports only `node:fs` and `node:process`. It still executes nothing and writes nothing to disk. A `tools/call` without `_meta["claudecode/toolUseId"]`, or with an id failing the pattern, gets JSON-RPC error `-32602`.
+- **Stub:** still imports only `node:fs` and `node:process`. It still executes nothing and writes nothing to disk. A `tools/call` without `_meta["claudecode/toolUseId"]`, or with an id failing the pattern, is held unanswered (no reply).
 - **Ordering:** no result file may exist before the next step's `beginTrackedDispatch` resolves.
 - **Miss reasons**, logged once per miss through the module logger as `{ reason }` only:
   - `warm_miss_attribution`, `warm_miss_fingerprint`, `warm_miss_messages`, `warm_miss_assistant`, `warm_miss_ids`;
@@ -52,7 +52,7 @@
 - **A turn cancelled while its step is parked:** the turn signal aborts with no further request, and the entry must be reaped at once, not after 10 minutes. Test in Task 5.
 - **A result with non-ASCII, CRLF or an empty string** (CJK file names, emoji, `""` from a tool with no output): it is delivered byte-identical, and the echo check accepts it. Test in Task 3 (stub) and Task 6 (echo).
 - **A run dir whose path has spaces** (for example a temp dir under `C:\Users\Jane Doe\`): the stub finds `results/` and delivers. Test in Task 3.
-- **A hostile or odd tool-use id** (`toolu_../../x`, empty, 200 characters): it is never used as a file path. The stub returns `-32602`, and the match is a miss. Test in Tasks 3 and 4.
+- **A hostile or odd tool-use id** (`toolu_../../x`, empty, 200 characters): it is never used as a file path. The stub holds it unanswered (no reply), and the match is a miss. Test in Tasks 3 and 4.
 
 ---
 
@@ -145,8 +145,8 @@
 
 - [ ] **Step 1: Write the failing tests.**
   - "tools/call is held by toolUseId": the handler returns `hold` with the id and no reply.
-  - "tools/call without a toolUseId gets -32602".
-  - "tools/call with toolu_../../x gets -32602": also covers an empty id and a 200-character id.
+  - "tools/call without a toolUseId is held unanswered (no reply)".
+  - "tools/call with toolu_../../x is held unanswered (no reply)": also covers an empty id and a 200-character id.
   - "a result file staged before the call is delivered when the call arrives" (spawn the real stub with `node`, in a temp dir whose path contains a space).
   - "a result file with the wrong nonce is ignored".
   - "a result file is delivered byte-identical": the text is `"名前 🐐\r\nline2"`, and separately `""`.
