@@ -264,6 +264,8 @@ import {
   type ArtifactBrandInput,
   MESH_TOOL_POLICY_DEFINITION,
   isUnsafeSeedQuery,
+  detectShellScriptSyntax,
+  formatShellScriptSyntaxError,
 } from "@goatcitadel/policy-engine";
 import { MAX_PARALLEL_TOOL_CALLS, decideToolBatchParallelism } from "./chat-tool-parallelism.js";
 import {
@@ -9235,6 +9237,20 @@ export class ChatTurnAgentRunner {
         toolName: effectiveToolName,
         args,
         failureReason: `execution error: ${field} is required`,
+      };
+    }
+
+    // Fail a shell script sent to an execFile tool here, before the operator is asked to approve it.
+    const shellSyntax =
+      (input.toolName === "shell.exec" || input.toolName === "shell.exec_background") &&
+      typeof args.command === "string"
+        ? detectShellScriptSyntax(args.command)
+        : undefined;
+    if (shellSyntax) {
+      return {
+        toolName: effectiveToolName,
+        args,
+        failureReason: `execution error: ${formatShellScriptSyntaxError(input.toolName, shellSyntax)}`,
       };
     }
 

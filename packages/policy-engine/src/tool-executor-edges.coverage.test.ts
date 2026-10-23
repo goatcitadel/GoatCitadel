@@ -948,6 +948,21 @@ describe("tool executor edge coverage", () => {
     ).rejects.toThrow(/event abort/i);
   });
 
+  it("rejects shell script syntax in both shell tools before spawning anything", async () => {
+    mocked.spawn.mockClear();
+    const script = "$dir='C:\\workspace\\artifacts'\n$pdf=Join-Path $dir 'report.pdf'";
+
+    for (const toolName of ["shell.exec", "shell.exec_background"]) {
+      await expect(executeTool(request(toolName, { command: script }), config, storageStub())).rejects.toThrow(
+        `${toolName} runs one program with its arguments and does not start a shell`,
+      );
+    }
+    await expect(
+      executeTool(request("shell.exec", { command: "node build.js && node test.js" }), config, storageStub()),
+    ).rejects.toThrow(/command chaining \(&&\)/u);
+    expect(mocked.spawn).not.toHaveBeenCalled();
+  });
+
   it("covers shell command parsing and boolean coercion edge cases", async () => {
     mocked.spawnResult = { stdout: "shell-ok", stderr: "", exitCode: 0 };
 

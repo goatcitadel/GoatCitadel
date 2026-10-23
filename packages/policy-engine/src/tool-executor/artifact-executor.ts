@@ -38,6 +38,7 @@ import type { PreparePresentationVisuals, PreparedPresentationVisuals } from "..
 import { assertToolWritePath } from "../sandbox/tool-write-gate.js";
 
 const ARTIFACT_TOOL_NAMES = new Set(["artifacts.create", "documents.create", "presentations.create"]);
+const DESIGN_SKILL_NAMES = new Set(["impeccable", "design-intelligence"]);
 
 interface PresentationArtifactRuntime {
   request?: ToolInvokeRequest;
@@ -59,7 +60,7 @@ export async function executeArtifactTool(
     case "artifacts.create":
       return artifactsCreate(args, config);
     case "documents.create":
-      return documentsCreate(args, config);
+      return documentsCreate(args, config, runtime);
     case "presentations.create":
       return presentationsCreate(args, config, runtime);
     default:
@@ -104,7 +105,11 @@ async function artifactsCreate(args: Record<string, unknown>, config: ToolPolicy
   };
 }
 
-async function documentsCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
+async function documentsCreate(
+  args: Record<string, unknown>,
+  config: ToolPolicyConfig,
+  runtime: PresentationArtifactRuntime,
+) {
   const requestedPath = required(args.path, "path");
   const format = resolveDocumentFormat(asString(args.format), requestedPath);
   const p = ensureDocumentPath(requestedPath, format);
@@ -149,19 +154,37 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
     mimeType: artifact.mimeType,
     title,
     sectionCount: sections.length,
+    ...(artifact.warnings && artifact.warnings.length > 0 ? { warnings: artifact.warnings } : {}),
     designReport: buildArtifactDesignReport(design, {
       localPath: full,
       markup: artifact.markup,
       usedAssetIds: usedDocumentAssetIds(format, design.mode),
+      ...(artifact.renderedLayouts ? { renderedLayouts: artifact.renderedLayouts } : {}),
+      residualRisks: artifact.warnings ?? [],
       designQuality: {
         retryAttempted: design.mode !== "minimal" && design.mode !== "plain",
         findings: [
           ...repair.findings,
           ...documentAssetSpecificityFindings(format, design.mode, Boolean(args.visualAsset)),
         ],
+        runtimeInstructions: runtimeDesignInstructions(runtime.request),
       },
     }),
   };
+}
+
+/**
+ * The receipt counts as injected only when a design skill (impeccable or design-intelligence)
+ * was among the turn's activated skills; another skill's instructions are not a design receipt.
+ */
+function runtimeDesignInstructions(request: ToolInvokeRequest | undefined): {
+  status: "injected" | "not_injected";
+  skills: NonNullable<ToolInvokeRequest["runtimeSkillApplications"]>;
+} {
+  const skills = (request?.runtimeSkillApplications ?? []).filter((skill) =>
+    DESIGN_SKILL_NAMES.has(skill.skillId.slice(skill.skillId.lastIndexOf(":") + 1).toLowerCase()),
+  );
+  return { status: skills.length > 0 ? "injected" : "not_injected", skills };
 }
 
 async function presentationsCreate(
@@ -291,10 +314,7 @@ async function presentationsCreate(
           ...presentationQualityFindings(deckQuality),
           ...presentationAssetSpecificityFindings(visualAsset, preparedVisuals.assets.length, design.mode),
         ],
-        runtimeInstructions: {
-          status: runtime.request?.runtimeSkillApplications?.length ? "injected" : "not_injected",
-          skills: runtime.request?.runtimeSkillApplications ?? [],
-        },
+        runtimeInstructions: runtimeDesignInstructions(runtime.request),
         contentGrounding: {
           status: runtime.request?.presentationGrounding ? "passed" : "warning",
           detail: runtime.request?.presentationGrounding

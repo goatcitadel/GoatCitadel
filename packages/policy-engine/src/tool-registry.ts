@@ -1299,11 +1299,16 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "shell",
     riskLevel: "danger",
     requiresApproval: true,
-    description: "Run shell command with policy gating.",
+    description:
+      "Run one program with its arguments, with policy gating. No shell is started: pipes, ;, &&, redirection, variables and multi-line scripts are rejected.",
     argSchema: {
       type: "object",
       properties: {
-        command: { type: "string" },
+        command: {
+          type: "string",
+          description:
+            'One program and its arguments, for example "node --version". For a script, invoke a shell explicitly: pwsh -NoProfile -Command "<script>" or sh -c "<script>".',
+        },
         cwd: { type: "string" },
         timeoutMs: {
           type: "integer",
@@ -1333,11 +1338,16 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "shell",
     riskLevel: "danger",
     requiresApproval: true,
-    description: "Start a shell command in the background and return its process details.",
+    description:
+      "Start one program in the background and return its process details. No shell is started: pipes, ;, &&, redirection, variables and multi-line scripts are rejected.",
     argSchema: {
       type: "object",
       properties: {
-        command: { type: "string" },
+        command: {
+          type: "string",
+          description:
+            'One program and its arguments, for example "pnpm dev". For a script, invoke a shell explicitly: pwsh -NoProfile -Command "<script>" or sh -c "<script>".',
+        },
         cwd: { type: "string" },
       },
       required: ["command"],
@@ -1351,7 +1361,9 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "devops",
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["background_process", "long_running_command", "project_task"],
-    usageHints: ["Use for long-running dev servers or watchers that should not block the turn."],
+    usageHints: [
+      "Use for long-running dev servers or watchers that should not block the turn. For a one-off command whose result you need, such as a file conversion, use shell.exec so you see its exit code and output.",
+    ],
   },
   {
     name: "git.exec",
@@ -2017,6 +2029,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       "For non-plain DOCX, PDF, HTML, reports, briefs, and handouts, set design.skillId to impeccable so Design Quality V1 is reflected in the artifact design report.",
       "Keep renderer provenance in the design report rather than visible document body copy unless the user explicitly asks for an evidence appendix.",
       "For format html under a design receipt, you may author the whole page yourself in the html argument; the design report records markup: model-authored and the artifact can be rendered to PNG evidence from Chat.",
+      "A non-plain PDF renders as a portrait report in the design colors (design.preset, or design.brand.colors with the first color as the accent): a colored cover band, the summary in a callout box, accented section headings, marked bullets, and rows (an array of objects with the same keys) as a table after the sections. Put tabular data in rows, not in section text; keep each bullet under 220 characters, since longer bullets are cut. It embeds no photos or custom fonts; for slide-style visuals with provider images, use presentations.create with format pdf.",
+      "Describe the result from designReport.layouts, which lists only what the renderer drew, and from designReport.validation; do not claim a design skill was applied when design-skill-applied is a warning.",
     ],
   },
   {
