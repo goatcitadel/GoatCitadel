@@ -10,6 +10,7 @@ vi.mock("./HealthOverview", () => ({ HealthOverview: () => <p>Health page</p> })
 vi.mock("./SystemRuntime", () => ({
   SystemRuntime: ({ section }: { section?: string }) => <p>Runtime page {section ?? ""}</p>,
 }));
+vi.mock("./workers/SystemWorkers", () => ({ SystemWorkers: () => <p>Workers page</p> }));
 vi.mock("./SpendDetails", () => ({ SpendDetails: () => <p>Spend details page</p> }));
 vi.mock("./SpendOverview", () => ({ SpendOverview: () => <p>Spend page</p> }));
 vi.mock("./SystemActivity", () => ({ SystemActivity: () => <p>Activity page</p> }));
@@ -40,11 +41,17 @@ it("keeps old runtime diagnostics bookmarks on the native Diagnostics page", () 
 it("opens the native Runtime page at System › Runtime", () => {
   route.rest = ["runtime"];
   act(() => root.render(<SystemArea />));
-  expect(host.textContent?.trim()).toBe("Runtime page runtime");
+  expect(host.textContent?.trim()).toBe("Runtime page");
 });
 
 it("opens the native Spend details page", () => {
   route.rest = ["spend", "details"];
   act(() => root.render(<SystemArea />));
   expect(host.textContent).toBe("Spend details page");
+});
+
+it("opens the native Workers page with no Classic page behind it", () => {
+  route.rest = ["runtime", "workers"];
+  act(() => root.render(<SystemArea />));
+  expect(host.textContent).toBe("Workers page");
 });

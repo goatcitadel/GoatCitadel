@@ -2,6 +2,7 @@ import { HealthOverview } from "./HealthOverview";
 import { SystemRuntime } from "./SystemRuntime";
 import { SpendOverview } from "./SpendOverview";
 import { SpendDetails } from "./SpendDetails";
+import { SystemWorkers } from "./workers/SystemWorkers";
 import { SystemActivity } from "./SystemActivity";
 import { SystemSessions } from "./SystemSessions";
 import { SystemDashboards } from "./SystemDashboards";
@@ -54,8 +55,10 @@ export function SystemArea() {
       ) : view === "runtime" && rest[1] === "diagnostics" ? (
         // Runtime diagnostics folded into System › Diagnostics; old bookmarks keep working.
         <SystemDiagnostics />
+      ) : view === "runtime" && rest[1] === "workers" ? (
+        <SystemWorkers />
       ) : view === "runtime" ? (
-        <SystemRuntime section={rest[1] === "workers" ? "workers" : "runtime"} />
+        <SystemRuntime />
       ) : (
         <HealthOverview />
       )}
