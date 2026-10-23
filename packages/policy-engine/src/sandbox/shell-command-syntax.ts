@@ -31,7 +31,7 @@ export function formatShellScriptSyntaxError(toolName: string, finding: ShellScr
     `${toolName} runs one program with its arguments and does not start a shell, so ${finding.construct} cannot work.`,
     "Call the program directly (for example: msedge --headless --print-to-pdf=out.pdf page.html),",
     'or run the script through an explicit shell: pwsh -NoProfile -Command "<script>" on Windows, sh -c "<script>" elsewhere.',
-    "For a long script, write it to a file with fs.write first and run that file.",
+    "For a long script, write it to a file with fs.write first and run it through its interpreter: pwsh -NoProfile -File script.ps1 or sh script.sh.",
   ].join(" ");
 }
 
@@ -84,7 +84,9 @@ function unquotedOperatorAt(char: string, next: string, previous: string): Shell
     case "<":
       return { construct: "output or input redirection (> or <)" };
     case "$":
-      return next === "(" ? { construct: "command substitution ($(...))" } : undefined;
+      if (next === "(") return { construct: "command substitution ($(...))" };
+      // Unquoted $NAME or ${NAME} would reach the program as literal text, never the variable's value.
+      return /[A-Za-z_{]/u.test(next) ? { construct: "a shell variable reference ($NAME)" } : undefined;
     default:
       return undefined;
   }

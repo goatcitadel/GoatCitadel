@@ -118,6 +118,9 @@ async function documentsCreate(
   let title = truncateText(asString(args.title) ?? inferTitleFromPath(full) ?? "Document", 120);
   let body = truncateText(asString(args.body) ?? asString(args.content) ?? "", 12000);
   let sections = normalizeDocumentSections(args.sections, body);
+  // With no usable sections, the body is also repeated as a generated "Summary" section; renderers
+  // that already show the body (the PDF cover callout) skip that one section.
+  const bodySummaryIsFallback = normalizeDocumentSections(args.sections, "").length === 0 && sections.length > 0;
   const rows = normalizeDocumentRows(args.rows);
   const repair = repairDocumentDesignQuality({ title, body, sections });
   title = repair.title;
@@ -136,6 +139,7 @@ async function documentsCreate(
     title,
     body,
     sections,
+    bodySummaryIsFallback,
     rows,
     design,
     // Present only when the gateway admitted model-authored markup under a design receipt.

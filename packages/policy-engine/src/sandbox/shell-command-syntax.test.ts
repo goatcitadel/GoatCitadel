@@ -25,6 +25,8 @@ describe("detectShellScriptSyntax", () => {
     ["NODE_ENV=production node server.js", /environment assignment/u],
     ['& "C:\\Program Files\\app.exe" --flag', /call operator/u],
     ["node server.js &", /background or call operator/u],
+    ["echo $HOME", /variable reference/u],
+    ["node ${SCRIPT_DIR}/run.js", /variable reference/u],
   ])("flags %j", (command, construct) => {
     expect(detectShellScriptSyntax(command)?.construct).toMatch(construct);
   });
@@ -46,5 +48,12 @@ describe("detectShellScriptSyntax", () => {
 
     expect(message).toContain("shell.exec_background runs one program with its arguments and does not start a shell");
     expect(message).toContain('pwsh -NoProfile -Command "<script>"');
+    expect(message).toContain("pwsh -NoProfile -File script.ps1 or sh script.sh");
+  });
+
+  it("allows a literal dollar sign inside quotes or before a digit", () => {
+    expect(detectShellScriptSyntax("node -e 'console.log(\"$HOME\")'")).toBeUndefined();
+    expect(detectShellScriptSyntax('git commit -m "costs $5 now"')).toBeUndefined();
+    expect(detectShellScriptSyntax("node price.js $5")).toBeUndefined();
   });
 });

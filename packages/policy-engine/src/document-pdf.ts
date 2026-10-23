@@ -42,6 +42,8 @@ export interface DocumentPdfInput {
   title: string;
   body?: string;
   sections: DocumentPdfSection[];
+  /** True when sections[0] is the generated "Summary" copy of body; it is skipped, since body is the callout. */
+  bodySummaryIsFallback?: boolean;
   rows?: Array<Record<string, unknown> | unknown[]>;
   design: ArtifactDesignPlan;
   createdAt?: Date;
@@ -76,7 +78,7 @@ export function createDocumentPdf(input: DocumentPdfInput): DocumentPdfResult {
   const theme = resolveReportTheme(input.design);
   const table = rowsToTable(input.rows);
   const flow = new ReportFlow(theme, input.title);
-  const sections = [...input.sections];
+  const sections = input.bodySummaryIsFallback && input.body?.trim() ? input.sections.slice(1) : [...input.sections];
   // A leading summary section with body text becomes the cover callout; its bullets follow the
   // callout. A bullets-only summary stays an ordinary section so nothing is dropped.
   const promoted =
@@ -374,11 +376,12 @@ function resolveReportTheme(design: ArtifactDesignPlan): ReportTheme {
   const text = pdfColor(design.tokens.text);
   const accent = pdfColor(design.tokens.accent);
   const white = pdfColor("FFFFFF");
-  // The cover band and table header carry white text, so darken the accent toward the text color
-  // until white reaches 4.5:1; a dark brand color passes unchanged.
+  // The cover band and table header carry white text, so darken the accent toward black until white
+  // reaches 4.5:1 (black, not the text token, which is light in dark presets); a dark brand color passes unchanged.
+  const black = pdfColor("000000");
   let band = accent;
   for (let weight = 0.1; contrastRatio(white, band) < 4.5 && weight <= 1; weight += 0.1) {
-    band = mixPdfColors(accent, text, weight);
+    band = mixPdfColors(accent, black, weight);
   }
   return {
     background: pdfColor(design.tokens.background),
@@ -403,6 +406,7 @@ function latinWarnings(input: DocumentPdfInput, table: ReportTable | undefined):
   const text = [
     input.title,
     input.body ?? "",
+    input.design.audience ?? "",
     ...input.sections.flatMap((section) => [section.heading, section.body, ...section.bullets]),
     ...(table ? [...table.headers, ...table.rows.flat()] : []),
   ].join("\n");

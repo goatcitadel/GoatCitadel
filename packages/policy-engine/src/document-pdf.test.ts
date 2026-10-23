@@ -86,6 +86,32 @@ describe("createDocumentPdf", () => {
     expect(pdf.warnings).toEqual([expect.stringContaining("1 character(s)")]);
   });
 
+  it("keeps white cover text at 4.5:1 on a dark preset whose text token is light", () => {
+    const design = createArtifactDesignPlan({
+      kind: "pdf",
+      title: "Ops",
+      format: "pdf",
+      design: { mode: "polished", preset: "cyberpunk-ops" },
+    });
+    const pdf = createDocumentPdf({ title: "Ops", sections: SECTIONS, design });
+    const coverBand = /q ([\d. ]+) rg 0 492 612 300 re f Q/u.exec(contentStreams(pdf.buffer)[0] ?? "");
+    const [r, g, b] = (coverBand?.[1] ?? "").split(" ").map(Number) as [number, number, number];
+
+    expect(contrastWithWhite(r, g, b)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("counts the cover audience line in the Latin warning", () => {
+    const design = createArtifactDesignPlan({
+      kind: "pdf",
+      title: "Audience",
+      format: "pdf",
+      design: { mode: "polished", audience: "富士 hikers" },
+    });
+    const pdf = createDocumentPdf({ title: "Audience", sections: SECTIONS, design });
+
+    expect(pdf.warnings).toEqual([expect.stringContaining("2 character(s)")]);
+  });
+
   it("counts table cells in the Latin warning", () => {
     const design = createArtifactDesignPlan({ kind: "pdf", title: "Table", format: "pdf" });
     const rows = [{ Trail: "Mt. Baldy \u{1F3D4}", Note: "富士" }];
@@ -156,6 +182,30 @@ describe("documents.create pdf design report", () => {
       "PDF reports use standard Helvetica text and built-in color shapes; photos and custom fonts are not embedded.",
     );
     expect(contentStreams(fs.readFileSync(path.join(root, "trails.pdf"))).join("\n")).toContain("0.122 0.369 0.294 rg");
+  });
+
+  it("shows body-only input once, but keeps an explicit section that repeats the body", async () => {
+    const root = createRoot();
+    const create = async (name: string, extra: Record<string, unknown>) => {
+      const file = path.join(root, `${name}.pdf`);
+      await executeArtifactTool(
+        "documents.create",
+        { path: file, format: "pdf", title: "Body Only", body: "One overview paragraph.", ...extra },
+        createConfig(root),
+      );
+      return contentStreams(fs.readFileSync(file)).join("\n");
+    };
+    const occurrences = (text: string) => text.split("(One overview paragraph.) Tj").length - 1;
+
+    const bodyOnly = await create("body-only", {});
+    const explicit = await create("explicit", {
+      sections: [{ heading: "Summary", body: "One overview paragraph.", bullets: [] }],
+    });
+
+    expect(occurrences(bodyOnly)).toBe(1);
+    expect(bodyOnly).not.toContain("(Summary) Tj");
+    expect(occurrences(explicit)).toBe(2);
+    expect(explicit).toContain("(Summary) Tj");
   });
 
   it("keeps plain PDFs as unstyled text and says so", async () => {

@@ -26,6 +26,8 @@ export interface DocumentArtifactInput {
   title: string;
   body?: string;
   sections: DocumentArtifactSection[];
+  /** True when sections[0] is the generated "Summary" copy of body, not a section the caller sent. */
+  bodySummaryIsFallback?: boolean;
   rows?: Array<Record<string, unknown> | unknown[]>;
   createdAt?: Date;
   design?: ArtifactDesignPlan;
