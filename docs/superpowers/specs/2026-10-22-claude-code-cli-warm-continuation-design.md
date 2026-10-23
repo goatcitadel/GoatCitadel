@@ -6,7 +6,7 @@ Builds on the step-mode tool bridge (`docs/superpowers/specs/2026-10-20-claude-c
 
 ## Intent
 
-Step mode starts a new `claude -p` process for every model step in a tool loop. Each step pays the CLI's start-up and re-sends the whole transcript as labelled text. The live proof measured about 4–7 s per step, and a sustained-coding turn can run up to 120 tool runs.
+Step mode starts a new `claude -p` process for every model step in a tool loop. Each step pays the CLI's start-up and re-sends the whole transcript as labelled text. The step-mode live proof measured about 4–7 s per step, and a sustained-coding turn can run up to 120 tool runs.
 
 Warm continuation keeps the step's process alive while the runner executes the tool calls. Then it hands the results back to that same process, so the model continues without a new start and with its real `tool_use`/`tool_result` history. GoatCitadel still executes every tool call through the runner. The CLI still executes nothing.
 
@@ -118,6 +118,7 @@ Runner-internal keys and provider-native content are ignored. A repair-feedback 
 
 - **Park deadline: 10 minutes.** When it passes, the entry is reaped: tree killed, run dir removed. Plan finding: the adapter never sees the turn deadline, only the step's `timeoutMs` (already capped by the remaining turn budget, but often shorter than a tool run). So the deadline is a flat 10 minutes. The turn's end is caught instead by the turn's `AbortSignal`, which the runner passes on every step: the parked entry listens to it and is reaped on abort.
 - **`MCP_TOOL_TIMEOUT`** is set in the CLI's env to the park deadline plus 60 s. The adapter adds it explicitly; it is not read from the host env. The Gateway always reaps before the CLI's own timeout can fire, so the CLI never gets the chance to invent a result.
+- **Echo deadline: 30 s.** Once a resumed step has staged its result files, every delivered id must be echoed within 30 s, or the step kills the tree and fails with `claude_cli_bridge_mismatch` (the stub could not bind the call, or delivery failed). Without it the step would wait out its overall timeout, kept alive by heartbeats. The park deadline (600 s) plus the echo deadline (30 s) stays under `MCP_TOOL_TIMEOUT` (660 s from the original `tools/call`), so the CLI's own timeout cannot fire inside a resumed segment.
 - **Tripwire:** a `user` line with a `tool_result` for an id the adapter has not delivered, or with text different from what it delivered, poisons the entry and kills the tree at once. A model call may already be in flight then. That call is not attributed to any usage intent, so it is logged as a bounded `claude_cli_warm_unattributed_call` warning. With the deadline ordering above it should never happen.
 - The 120 s idle timeout does not apply while parked: heartbeats arrive every 30 s anyway, and the park deadline is the bound. It applies again from resume.
 
@@ -136,7 +137,7 @@ When a turn ends without another step (final answer elsewhere, approval wait, bu
 ### Usage and accounting
 
 - Step N settles at `message_stop`, as today.
-- Step N+1 opens its own usage attempt before any result file exists, and settles from the continuation segment's `message_delta` or `result` usage.
+- Step N+1 opens its own usage attempt before any result file exists, and settles from the continuation segment's own `message_delta` usage, whether it ends in tool calls or a text answer. It never settles from `result.usage`: the probe showed that figure is cumulative across every model call in the `-p` process (2.1.305: the final `result.usage` was the sum of both calls' `message_delta` usage). A cold process's text answer is its only model call, so it still settles from `result.usage`.
 - A parked process that is reaped makes no model call, so it settles nothing.
 
 ### Stream handling in a continuation segment
@@ -148,6 +149,7 @@ When a turn ends without another step (final answer elsewhere, approval wait, bu
 | `tool_progress` | Ignored. |
 | first `message_start` after all pending ids are echoed | Starts the segment's model message. |
 | `message_start` before all echoes, or a second one | `claude_cli_bridge_mismatch`. |
+| `result` before every delivered id is echoed | `claude_cli_bridge_mismatch`. |
 | everything else | As in step mode: tool blocks against the same manifest, text and thinking deltas forwarded, hook events fatal, `result` ends a text answer. |
 
 The init tripwire ran at step 1 of the process; a second `system/init` is a mismatch.
@@ -192,6 +194,9 @@ My call: no automatic cleanup in the profile. Deleting files in a directory the 
 
 - A Chat turn with at least three tool steps runs warm. Record per-step latency and cache-read tokens against the same turn with the warm flag off.
 - Record the warm hit rate and every `warm_miss_<reason>`.
+- Compare the final step's settled usage against the per-step sums, to confirm no step settled the process's cumulative total.
+- Capture the real echo forms for an empty result, a CRLF result and a result with trailing whitespace.
+- Confirm the projects-folder slug the spill check uses matches the folder the CLI actually creates for the run dir.
 - A tool that returns more than 40,000 characters runs cold, and nothing appears under the operator's Claude projects folder.
 - Killing the Gateway with a parked step leaves no `claude` process within 10 s.
 - The CLAUDE.md canary from the bridge spec still passes.
