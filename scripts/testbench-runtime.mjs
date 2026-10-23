@@ -7,6 +7,99 @@ import { repoRoot } from "./verification/lib/shared.mjs";
 
 export const TESTBENCH_STUB_KEY = "verification-stub-key";
 export const DEFAULT_REAL_GATEWAY_ORIGIN = "http://127.0.0.1:8787";
+export const TESTBENCH_PROVIDERS = Object.freeze(["stub", "claude-code-cli"]);
+export const CLAUDE_CODE_CLI_MODEL = "claude-sonnet-5-5";
+/** The gateway reads the operator's CLI location from this variable (see claude-code-cli-process.ts). */
+export const CLAUDE_CLI_PATH_ENV = "GOATCITADEL_CLAUDE_CLI_PATH";
+
+/** Same entry as the built-in `claude-code-cli` provider in apps/gateway/src/config.ts. */
+const CLAUDE_CODE_CLI_PROVIDER = Object.freeze({
+  providerId: "claude-code-cli",
+  label: "Claude Code CLI (local login)",
+  baseUrl: "https://api.anthropic.com/v1",
+  apiStyle: "claude-code-cli",
+  authMode: "claude-code-cli-login",
+});
+
+/** Parses the launcher's own options: only `--provider <id>` / `--provider=<id>`, defaulting to the stub. */
+export function parseTestbenchArgs(argv) {
+  let provider = "stub";
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    let value;
+    if (arg === "--provider") {
+      value = argv[index + 1];
+      index += 1;
+    } else if (arg.startsWith("--provider=")) {
+      value = arg.slice("--provider=".length);
+    } else {
+      throw new Error(
+        `Unknown test bench option "${arg}". The only option is --provider <${TESTBENCH_PROVIDERS.join("|")}>.`,
+      );
+    }
+    if (!TESTBENCH_PROVIDERS.includes(value)) {
+      throw new Error(`Unknown test bench provider "${value ?? ""}". Use one of: ${TESTBENCH_PROVIDERS.join(", ")}.`);
+    }
+    provider = value;
+  }
+  return { provider };
+}
+
+/**
+ * Makes the built-in Claude Code CLI provider the only, active provider of a sandbox runtime root, in both the unified
+ * config and the compatibility provider file (the same two files live-provider-preqa rewrites).
+ */
+export async function writeClaudeCodeCliProviderConfig(runtimeRoot, model = CLAUDE_CODE_CLI_MODEL) {
+  const llm = {
+    activeProviderId: CLAUDE_CODE_CLI_PROVIDER.providerId,
+    activeModel: model,
+    providers: [
+      {
+        providerId: CLAUDE_CODE_CLI_PROVIDER.providerId,
+        label: CLAUDE_CODE_CLI_PROVIDER.label,
+        baseUrl: CLAUDE_CODE_CLI_PROVIDER.baseUrl,
+        apiStyle: CLAUDE_CODE_CLI_PROVIDER.apiStyle,
+        defaultModel: model,
+        authMode: CLAUDE_CODE_CLI_PROVIDER.authMode,
+      },
+    ],
+  };
+  const unifiedPath = path.join(runtimeRoot, "config", "goatcitadel.json");
+  const unified = JSON.parse(await fs.readFile(unifiedPath, "utf8"));
+  const { generation: _generation, ...rest } = unified;
+  await fs.writeFile(unifiedPath, `${JSON.stringify({ ...rest, llm }, null, 2)}\n`, "utf8");
+  await fs.writeFile(
+    path.join(runtimeRoot, "config", "llm-providers.json"),
+    `${JSON.stringify(llm, null, 2)}\n`,
+    "utf8",
+  );
+  return llm;
+}
+
+/**
+ * Reads `claude auth status --json` with the gateway's own readiness rule (claude-code-cli-readiness.ts): ready only
+ * for a first-party subscription login. `accountEmail` exists so evidence can be scanned for it; never log it.
+ */
+export function parseClaudeAuthStatus(stdout) {
+  const text = typeof stdout === "string" ? stdout : "";
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  let parsed;
+  try {
+    parsed = start >= 0 && end > start ? JSON.parse(text.slice(start, end + 1)) : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  if (!parsed || typeof parsed !== "object") return { ready: false, reason: "unparseable" };
+  const accountEmail = typeof parsed.email === "string" ? { accountEmail: parsed.email } : {};
+  if (parsed.loggedIn !== true) return { ready: false, reason: "not_logged_in", ...accountEmail };
+  const authMethod = typeof parsed.authMethod === "string" ? parsed.authMethod : "";
+  const apiProvider = typeof parsed.apiProvider === "string" ? parsed.apiProvider : "firstParty";
+  if (apiProvider !== "firstParty" || /api[_\s-]?key|apikey|console/i.test(authMethod)) {
+    return { ready: false, reason: "not_subscription_login", ...accountEmail };
+  }
+  return { ready: true, reason: "ready", ...accountEmail };
+}
 
 /** Lists git-tracked files under `skills/`, relative to `sourceRoot`. Throws if git cannot answer. */
 function listTrackedSkillFiles(sourceRoot) {
@@ -104,8 +197,11 @@ const TESTBENCH_NODE_ENV = "development";
  * Code Mode roots (the stack itself also pins GOATCITADEL_ROOT_DIR). Nothing else GoatCitadel-specific comes from
  * the operator shell: the launcher omits every GOATCITADEL_* variable it exports (see `buildTestbenchEnvOmit`).
  */
-export function buildTestbenchGatewayEnv(runtimeRoot) {
+export function buildTestbenchGatewayEnv(runtimeRoot, { provider = "stub", env = process.env } = {}) {
+  // buildTestbenchEnvOmit strips every GOATCITADEL_* variable, so an operator's CLI location must be copied explicitly.
+  const cliPath = provider === "claude-code-cli" ? env[CLAUDE_CLI_PATH_ENV]?.trim() : undefined;
   return {
+    ...(cliPath ? { [CLAUDE_CLI_PATH_ENV]: cliPath } : {}),
     NODE_ENV: TESTBENCH_NODE_ENV,
     GOATCITADEL_HOME: path.join(runtimeRoot, "home"),
     GOATCITADEL_BACKUP_DIR: path.join(runtimeRoot, "backups"),

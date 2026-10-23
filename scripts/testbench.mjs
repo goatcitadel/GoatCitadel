@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -17,12 +18,17 @@ import { startDeterministicLlmStub } from "./verification/lib/scenarios/determin
 import { collectVerificationSecretEnvKeys } from "./verification/lib/scenarios/usability-coverage.mjs";
 import { createRunId, repoRoot } from "./verification/lib/shared.mjs";
 import {
+  CLAUDE_CLI_PATH_ENV,
+  CLAUDE_CODE_CLI_MODEL,
   TESTBENCH_STUB_KEY,
   buildTestbenchEnvOmit,
   buildTestbenchGatewayEnv,
   buildTestbenchUiEnv,
   buildTestbenchUrl,
+  parseClaudeAuthStatus,
+  parseTestbenchArgs,
   prepareTestbenchRuntime,
+  writeClaudeCodeCliProviderConfig,
 } from "./testbench-runtime.mjs";
 
 const STOP_FILE_NAME = "stop";
@@ -182,7 +188,32 @@ async function buildGatewayWorkspaceLocked(context, envOmit) {
  * the caller's teardown can stop it. Returns true when the sandbox is ready, and false when a stop was requested
  * first (the remaining phases, including the ready output, are skipped).
  */
-async function launchSandbox({ runId, artifactRoot, logRoot }, trigger, started) {
+const CLAUDE_AUTH_STATUS_TIMEOUT_MS = 15_000;
+
+/** Fails before any build when the operator's Claude Code CLI is missing or not signed in with a subscription. */
+function assertClaudeCodeCliReady() {
+  const command = process.env[CLAUDE_CLI_PATH_ENV]?.trim() || "claude";
+  const result = spawnSync(command, ["auth", "status", "--json"], {
+    encoding: "utf8",
+    timeout: CLAUDE_AUTH_STATUS_TIMEOUT_MS,
+    // A bare "claude" on Windows is a .cmd shim that only a shell resolves.
+    shell: process.platform === "win32" && !path.isAbsolute(command),
+  });
+  // The status output names the signed-in account; only the verdict is ever printed.
+  const status = result.error ? { ready: false, reason: "cli_unavailable" } : parseClaudeAuthStatus(result.stdout);
+  if (!status.ready) {
+    throw new Error(
+      `Claude Code CLI is not ready (${status.reason}). Run \`claude\` and sign in with your subscription, ` +
+        "then start the test bench again.",
+    );
+  }
+}
+
+async function launchSandbox({ runId, artifactRoot, logRoot, provider }, trigger, started) {
+  if (provider === "claude-code-cli") {
+    say("Checking the Claude Code CLI sign-in…");
+    assertClaudeCodeCliReady();
+  }
   // A plain context, not createRunContext: holding the worktree output lock for the whole session would block every
   // build in this checkout. Only the startup build takes it (see buildGatewayWorkspaceLocked).
   const context = { runId, artifactRoot };
@@ -191,6 +222,7 @@ async function launchSandbox({ runId, artifactRoot, logRoot }, trigger, started)
   if (trigger.requested()) return false;
   say("Preparing an isolated runtime from shipped defaults…");
   started.runtimeRoot = await prepareTestbenchRuntime({ runId, stubBaseUrl: started.stub.baseUrl });
+  if (provider === "claude-code-cli") await writeClaudeCodeCliProviderConfig(started.runtimeRoot);
   if (trigger.requested()) return false;
   // The children inherit no secrets and no GOATCITADEL_* / VITE_GOATCITADEL_* variables from this shell; only the
   // explicit gatewayEnv and uiEnv settings below apply. Computed before the build lock exists, so it never lists the
@@ -219,7 +251,7 @@ async function launchSandbox({ runId, artifactRoot, logRoot }, trigger, started)
       processLogPrefix: "testbench",
       gatewayEnvOmit: envOmit,
       uiEnvOmit: envOmit,
-      gatewayEnv: buildTestbenchGatewayEnv(started.runtimeRoot),
+      gatewayEnv: buildTestbenchGatewayEnv(started.runtimeRoot, { provider }),
       uiEnv: buildTestbenchUiEnv({ gatewayUrl, runtimeRoot: started.runtimeRoot }),
     }),
     trigger,
@@ -234,8 +266,13 @@ async function launchSandbox({ runId, artifactRoot, logRoot }, trigger, started)
   return !trigger.requested();
 }
 
-function announceReady({ stack, runtimeRoot }, { logRoot, stopFile }) {
+function announceReady({ stack, runtimeRoot }, { logRoot, stopFile, provider }) {
   say("Sandbox ready.");
+  say(
+    provider === "claude-code-cli"
+      ? `Provider: claude-code-cli (${CLAUDE_CODE_CLI_MODEL})`
+      : "Provider: deterministic LLM stub",
+  );
   say(`Test bench: ${buildTestbenchUrl(stack.uiUrl)}`);
   say(`Sandbox gateway: ${stack.gatewayUrl}`);
   say(`Sandbox runtime root: ${runtimeRoot}`);
@@ -245,6 +282,7 @@ function announceReady({ stack, runtimeRoot }, { logRoot, stopFile }) {
 }
 
 async function main() {
+  const { provider } = parseTestbenchArgs(process.argv.slice(2));
   const runId = createRunId("testbench");
   const artifactRoot = path.join(repoRoot, "artifacts", "testbench", runId);
   const paths = {
@@ -252,6 +290,7 @@ async function main() {
     artifactRoot,
     logRoot: path.join(artifactRoot, "diagnostics"),
     stopFile: path.join(artifactRoot, STOP_FILE_NAME),
+    provider,
   };
   const trigger = armShutdownTrigger(paths.stopFile);
   const started = {};
