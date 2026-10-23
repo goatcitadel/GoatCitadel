@@ -436,92 +436,120 @@ async function runAutomatableTasks(context, stack, correlationId) {
   }
 }
 
+/** Prepares the isolated runtime, starts its gateway and completes onboarding; cleans up whatever started if a step fails. */
+async function startSandbox(context) {
+  const secretEnvKeys = await collectVerificationSecretEnvKeys(path.join(repoRoot, "config"));
+  const runtimeRoot = await prepareTestbenchRuntime({
+    runId: `${context.runId}-isolated`,
+    stubBaseUrl: UNUSED_STUB_URL,
+  });
+  let stack;
+  try {
+    await writeClaudeCodeCliProviderConfig(runtimeRoot);
+    stack = await startVerificationStack(context, {
+      runtimeRoot,
+      includeUi: false,
+      processLogPrefix: LANE,
+      gatewayEnvOmit: buildTestbenchEnvOmit(secretEnvKeys),
+      gatewayEnv: buildTestbenchGatewayEnv(runtimeRoot, { provider: PROVIDER_ID }),
+    });
+    await ensureLiveProviderOnboardingComplete(stack.gatewayUrl);
+    return stack;
+  } catch (error) {
+    await stopSandbox(stack ?? { runtimeRoot });
+    throw error;
+  }
+}
+
+/** Stops the gateway, which is when its stdout/stderr logs are written into the run's evidence, and removes the runtime. */
+async function stopSandbox(sandbox) {
+  if (sandbox?.gateway) await stopVerificationStack(sandbox);
+  else if (sandbox?.runtimeRoot)
+    await fs.rm(sandbox.runtimeRoot, { recursive: true, force: true }).catch(() => undefined);
+}
+
+const DEFAULT_LANE_DEPS = Object.freeze({
+  readAuth: () => readClaudeCodeCliAuthStatus(),
+  runScenario,
+  startSandbox,
+  stopSandbox,
+  runTasks: (context, sandbox) => runAutomatableTasks(context, sandbox, randomUUID()),
+  assertRedaction: (root) => assertArtifactRedactionGate(root),
+  findLeaks: (root, needles) => findSecretTextLeaks(root, needles),
+  completeSourceState: (context, sourceState) => completeLiveProviderSourceState(context, sourceState),
+});
+
+/**
+ * Runs every lane scenario in order. The sandbox runs inside a startup scenario and is stopped before the evidence
+ * scenarios, because the gateway writes its logs into the evidence only when it exits; a startup failure is recorded
+ * and the evidence scenarios still run.
+ */
+export async function runLane(context, sourceState, overrides = {}) {
+  const deps = { ...DEFAULT_LANE_DEPS, ...overrides };
+  const auth = deps.readAuth();
+  const scenario = (id, title, subsystem, fn) =>
+    deps.runScenario(context, { id: `${LANE}.${id}`, lane: LANE, title, subsystem }, fn);
+  await scenario("preflight", "Claude Code CLI is signed in with a subscription", "provider-runtime", async () =>
+    auth.ready
+      ? { status: "passed", providerId: PROVIDER_ID }
+      : { status: "failed", error: `Claude Code CLI is not ready (${auth.reason}); run \`claude\` and sign in first` },
+  );
+  if (auth.ready) {
+    let sandbox;
+    try {
+      await scenario(
+        "startup",
+        "Isolated sandbox gateway starts on the Claude Code CLI provider",
+        "provider-runtime",
+        async () => {
+          sandbox = await deps.startSandbox(context);
+          return { status: "passed", providerId: PROVIDER_ID };
+        },
+      );
+      if (sandbox) await deps.runTasks(context, sandbox);
+    } finally {
+      if (sandbox) await deps.stopSandbox(sandbox);
+    }
+  }
+  await scenario(
+    "artifact-redaction",
+    "Evidence contains no secret-shaped values",
+    "verification-evidence",
+    async () => {
+      await deps.assertRedaction(context.artifactRoot);
+      return { status: "passed" };
+    },
+  );
+  await scenario(
+    "account-email",
+    "Evidence never contains the CLI account email",
+    "verification-evidence",
+    async () => {
+      if (!auth.accountEmail) return { status: "skipped", notes: ["the CLI reported no account email to scan for"] };
+      const leaks = await deps.findLeaks(context.artifactRoot, [auth.accountEmail]);
+      return leaks.length === 0
+        ? { status: "passed", metrics: { scannedForAccountEmail: true } }
+        : {
+            status: "failed",
+            error: `the CLI account email appears in ${leaks.length} evidence file(s): ${leaks.join(", ")}`,
+          };
+    },
+  );
+  await scenario("source-integrity", "Evidence remains bound to one source state", "verification-evidence", async () =>
+    deps.completeSourceState(context, sourceState),
+  );
+}
+
 export async function main() {
   const sourceState = snapshotUsabilitySourceState(repoRoot, process.env.GOATCITADEL_USABILITY_SOURCE_MODE);
   const context = await createRunContext(LANE, { profile: sourceState.mode });
-  let stack;
-  let runtimeRoot;
   try {
-    const auth = readClaudeCodeCliAuthStatus();
-    await runScenario(
-      context,
-      {
-        id: `${LANE}.preflight`,
-        lane: LANE,
-        title: "Claude Code CLI is signed in with a subscription",
-        subsystem: "provider-runtime",
-      },
-      async () =>
-        auth.ready
-          ? { status: "passed", providerId: PROVIDER_ID }
-          : {
-              status: "failed",
-              error: `Claude Code CLI is not ready (${auth.reason}); run \`claude\` and sign in first`,
-            },
-    );
-    if (auth.ready) {
-      const secretEnvKeys = await collectVerificationSecretEnvKeys(path.join(repoRoot, "config"));
-      runtimeRoot = await prepareTestbenchRuntime({ runId: `${context.runId}-isolated`, stubBaseUrl: UNUSED_STUB_URL });
-      await writeClaudeCodeCliProviderConfig(runtimeRoot);
-      stack = await startVerificationStack(context, {
-        runtimeRoot,
-        includeUi: false,
-        processLogPrefix: LANE,
-        gatewayEnvOmit: buildTestbenchEnvOmit(secretEnvKeys),
-        gatewayEnv: buildTestbenchGatewayEnv(runtimeRoot, { provider: PROVIDER_ID }),
-      });
-      await ensureLiveProviderOnboardingComplete(stack.gatewayUrl);
-      await runAutomatableTasks(context, stack, randomUUID());
-    }
-    await runScenario(
-      context,
-      {
-        id: `${LANE}.artifact-redaction`,
-        lane: LANE,
-        title: "Evidence contains no secret-shaped values",
-        subsystem: "verification-evidence",
-      },
-      async () => {
-        await assertArtifactRedactionGate(context.artifactRoot);
-        return { status: "passed" };
-      },
-    );
-    await runScenario(
-      context,
-      {
-        id: `${LANE}.account-email`,
-        lane: LANE,
-        title: "Evidence never contains the CLI account email",
-        subsystem: "verification-evidence",
-      },
-      async () => {
-        if (!auth.accountEmail) return { status: "passed", notes: ["the CLI reported no account email to scan for"] };
-        const leaks = await findSecretTextLeaks(context.artifactRoot, [auth.accountEmail]);
-        return leaks.length === 0
-          ? { status: "passed", metrics: { scannedForAccountEmail: true } }
-          : {
-              status: "failed",
-              error: `the CLI account email appears in ${leaks.length} evidence file(s): ${leaks.join(", ")}`,
-            };
-      },
-    );
-    await runScenario(
-      context,
-      {
-        id: `${LANE}.source-integrity`,
-        lane: LANE,
-        title: "Evidence remains bound to one source state",
-        subsystem: "verification-evidence",
-      },
-      async () => await completeLiveProviderSourceState(context, sourceState),
-    );
+    await runLane(context, sourceState);
     const manifest = await finalizeRunContext(context);
     console.log(`Artifact: ${context.artifactRoot}`);
     console.log(`Status: ${manifest.status}`);
     if (manifest.status !== "passed") process.exitCode = 1;
   } finally {
-    if (stack) await stopVerificationStack(stack);
-    else if (runtimeRoot) await fs.rm(runtimeRoot, { recursive: true, force: true }).catch(() => undefined);
     await releaseRunContext(context);
   }
 }

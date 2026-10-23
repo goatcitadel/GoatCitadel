@@ -11,6 +11,7 @@ import {
   classifyUsabilityOutcome,
   findSecretTextLeaks,
   isSettledTurnStatus,
+  runLane,
   runUsabilityTask,
   streamClosedWithoutTurnError,
 } from "./live-claude-cli-usability.mjs";
@@ -216,4 +217,68 @@ test("a turn cancelled before it was routed is not a provider failure, but a rou
     ).verdict,
     "failed",
   );
+});
+
+function fakeLaneDeps(order, overrides = {}) {
+  return {
+    readAuth: () => ({ ready: true, reason: "ready", accountEmail: "person@example.test" }),
+    runScenario: async (_context, definition, fn) => {
+      order.push(definition.id);
+      try {
+        const result = await fn();
+        order.push(`${definition.id}:${result?.status}`);
+      } catch {
+        order.push(`${definition.id}:failed`);
+      }
+    },
+    startSandbox: async () => {
+      order.push("start");
+      return { gatewayUrl: "http://gateway.test" };
+    },
+    stopSandbox: async () => order.push("stop"),
+    runTasks: async () => order.push("tasks"),
+    assertRedaction: async () => order.push("redaction-scan"),
+    findLeaks: async () => {
+      order.push("email-scan");
+      return [];
+    },
+    completeSourceState: async () => ({ status: "passed" }),
+    ...overrides,
+  };
+}
+
+test("runLane stops the sandbox, so its logs exist, before the evidence scans run", async () => {
+  const order = [];
+  await runLane({ artifactRoot: "root" }, {}, fakeLaneDeps(order));
+  assert.ok(order.indexOf("stop") > order.indexOf("tasks"));
+  assert.ok(order.indexOf("stop") < order.indexOf("redaction-scan"));
+  assert.ok(order.indexOf("stop") < order.indexOf("email-scan"));
+  assert.ok(order.includes("claude-cli-usability.startup:passed"));
+});
+
+test("runLane records a failed startup and still runs every evidence scenario", async () => {
+  const order = [];
+  const deps = fakeLaneDeps(order, {
+    startSandbox: async () => {
+      throw new Error("gateway did not start");
+    },
+  });
+  await runLane({ artifactRoot: "root" }, {}, deps);
+  assert.ok(order.includes("claude-cli-usability.startup:failed"));
+  assert.ok(!order.includes("tasks"));
+  for (const id of ["artifact-redaction", "account-email", "source-integrity"]) {
+    assert.ok(order.includes(`claude-cli-usability.${id}`), id);
+  }
+});
+
+test("runLane skips the sandbox when the CLI is not signed in, and reports the email scan as skipped without an email", async () => {
+  const order = [];
+  await runLane(
+    { artifactRoot: "root" },
+    {},
+    fakeLaneDeps(order, { readAuth: () => ({ ready: false, reason: "not_logged_in" }) }),
+  );
+  assert.ok(order.includes("claude-cli-usability.preflight:failed"));
+  assert.ok(!order.includes("start"));
+  assert.ok(order.includes("claude-cli-usability.account-email:skipped"));
 });
