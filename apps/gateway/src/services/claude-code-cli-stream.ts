@@ -252,7 +252,7 @@ function readAssistantToolCalls(
   return calls;
 }
 
-function renderContent(content: ChatCompletionMessage["content"] | null | undefined): string {
+export function renderContent(content: ChatCompletionMessage["content"] | null | undefined): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
