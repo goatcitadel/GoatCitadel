@@ -29,7 +29,7 @@
   ],
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*",
-    "zod": "3.25.76"
+    "zod": "4.6.6"
   },
   "scripts": {
     "clean": "node ../../scripts/run-with-worktree-output-lock.mjs --label=clean:extensions-sdk -- node scripts/clean-dist.mjs",
