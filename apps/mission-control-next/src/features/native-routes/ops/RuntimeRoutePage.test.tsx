@@ -1,5 +1,4 @@
 import { createElement, type ReactElement } from "react";
-import { SystemRuntime } from "../../../cockpit/areas/system/SystemRuntime";
 import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { resetScheduleOperationsForTests } from "./use-schedule-operations";
@@ -773,19 +772,21 @@ describe("RuntimeRoutePage", () => {
     runtimeSnapshotOverrides.runDaemonAction.mockClear();
   });
 
-  it("runs the original range, provider and coverage controls through native Costs and routes budget context natively", async () => {
+  it("runs the original range, provider and coverage controls on the Classic Costs route", async () => {
     let renderer: ReactTestRenderer | null = null;
+    const navigate = vi.fn();
     try {
       await act(async () => {
-        renderer = create(<SystemRuntime section="costs" />);
+        renderer = create(
+          <RuntimeRoutePage
+            route={{ area: "ops", section: "costs", theme: "ops" } as any}
+            activeWorkspaceId="default"
+            activeWorkspaceName="Default"
+            navigate={navigate}
+            setActiveWorkspaceId={vi.fn()}
+          />,
+        );
       });
-      expect(renderer!.root.findByType(RuntimeRoutePage).props.route).toEqual(
-        expect.objectContaining({
-          area: "ops",
-          section: "costs",
-          sessionId: "kept",
-        }),
-      );
       expect(findFieldControl(renderer!.root, "Time range", "select").props.value).toBe(7);
       for (const range of [3, 1, 7]) {
         await act(async () =>
@@ -824,15 +825,9 @@ describe("RuntimeRoutePage", () => {
       await act(async () => findExactButton(renderer!.root, "Coverage").props.onClick());
       expect(collectText(renderer!.root)).toContain("Cost coverage");
       expect(collectText(renderer!.root)).toContain("Accounting fields");
-      nativeRuntimeLocation.navigate.mockClear();
       await act(async () => findExactButton(renderer!.root, "Open budget controls").props.onClick());
-      const target = new URL(nativeRuntimeLocation.navigate.mock.calls[0]![0], "http://cockpit.invalid");
-      expect(target.pathname).toBe("/settings/budget");
-      expect(target.hash).toBe("#owner");
-      expect(target.searchParams.get("workspaceId")).toBe("default");
-      expect(target.searchParams.get("sessionId")).toBe("kept");
-      expect(target.searchParams.get("keep")).toBe("yes");
-      expect(target.searchParams.has("shell")).toBe(false);
+      expect(navigate).toHaveBeenCalledOnce();
+      expect(navigate.mock.calls[0]![0]).toMatchObject({ area: "settings", section: "budget" });
       expect(runtimeSnapshotOverrides.runDaemonAction).not.toHaveBeenCalled();
       expect(collectText(renderer!.root)).not.toContain("Classic");
     } finally {
@@ -840,12 +835,20 @@ describe("RuntimeRoutePage", () => {
     }
   });
 
-  it("keeps degraded cost evidence unavailable through native Costs instead of reporting a healthy zero", () => {
+  it("keeps degraded cost evidence unavailable on the Classic Costs route instead of reporting a healthy zero", () => {
     runtimeSnapshotOverrides.sourceStatus = {
       cost: { status: "error", error: "cost route failed" },
       dashboard: { status: "error", error: "dashboard route failed" },
     };
-    const markup = renderInspectedMarkup(<SystemRuntime section="costs" />);
+    const markup = renderInspectedMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "costs", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
     expect(markup).toContain('role="alert"');
     expect(markup).toContain("Live runtime data is degraded");
     expect(markup).toContain("not a healthy zero");

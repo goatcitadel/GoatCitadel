@@ -1,6 +1,7 @@
 import { HealthOverview } from "./HealthOverview";
 import { SystemRuntime } from "./SystemRuntime";
 import { SpendOverview } from "./SpendOverview";
+import { SpendDetails } from "./SpendDetails";
 import { SystemActivity } from "./SystemActivity";
 import { SystemSessions } from "./SystemSessions";
 import { SystemDashboards } from "./SystemDashboards";
@@ -32,7 +33,7 @@ export function SystemArea() {
     <AreaTabsProvider label="System views" tabs={TABS} current={view} navigate={(href) => navigate(href)}>
       {view === "spend" ? (
         rest[1] === "details" ? (
-          <SystemRuntime section="costs" />
+          <SpendDetails />
         ) : (
           <SpendOverview />
         )

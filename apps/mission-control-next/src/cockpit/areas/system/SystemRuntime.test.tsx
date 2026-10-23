@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, useEffect, useState } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,18 +44,6 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/use-current-access", () => ({
     };
   },
 }));
-vi.mock("../../../features/native-routes/ops/RuntimeRoutePage", () => ({
-  RuntimeRoutePage: (props: NativeRoutePagesProps) => {
-    fixture.props = props;
-    const [expanded, setExpanded] = useState(false);
-    useEffect(() => () => fixture.departed(props.activeWorkspaceId), [props.activeWorkspaceId]);
-    return (
-      <button type="button" onClick={() => setExpanded(true)}>
-        {expanded ? "Current owner details open" : "Existing runtime control owner"}
-      </button>
-    );
-  },
-}));
 const snapshot = vi.hoisted(() => ({ value: null as unknown, runDaemonAction: vi.fn(async () => undefined) }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () => ({
   useOpsRuntimeSnapshot: () => snapshot.value,
@@ -85,7 +73,7 @@ vi.mock("../../../features/native-routes/ops/RemoteWorkersRoutePage", () => ({
   },
 }));
 let host: HTMLDivElement, root: Root, client: QueryClient, previousCaller: string;
-function render(section: "runtime" | "costs" | "workers" = "costs") {
+function render(section: "runtime" | "workers" = "runtime") {
   root.render(
     <QueryClientProvider client={client}>
       <SystemRuntime section={section} />
@@ -117,120 +105,6 @@ afterEach(() => {
   client.clear();
   setGatewayCallerScope(previousCaller);
 });
-it.each(["costs"] as const)(
-  "delegates %s to the original control owner with active authority and requested record context",
-  (section) => {
-    act(() => render(section));
-    expect(fixture.props).toEqual(
-      expect.objectContaining({
-        activeWorkspaceId: "workspace-a",
-        activeWorkspaceName: "Aurora",
-        activeCitadelId: "citadel-a",
-        route: expect.objectContaining({ area: "ops", section, sessionId: "s/1", runId: "r/1" }),
-      }),
-    );
-    expect(host.textContent).toContain("Existing runtime control owner");
-  },
-);
-it("preserves query and fragment while internal runtime navigation uses the shared native resolver", () => {
-  act(() => render());
-  fixture.props!.navigate({ area: "ops", section: "diagnostics", theme: "ops" }, { replace: true });
-  const [href, options] = fixture.navigate.mock.calls[0]!,
-    target = new URL(href, "http://cockpit.invalid");
-  expect(target.pathname).toBe("/system/diagnostics");
-  expect(target.searchParams.get("workspaceId")).toBe("workspace-a");
-  expect(target.searchParams.get("citadelId")).toBe("citadel-a");
-  expect(target.searchParams.get("sessionId")).toBe("s/1");
-  expect(target.searchParams.get("runId")).toBe("r/1");
-  expect(target.searchParams.get("keep")).toBe("yes");
-  expect(target.searchParams.has("shell")).toBe(false);
-  expect(target.searchParams.has("shellScope")).toBe(false);
-  expect(target.hash).toBe("#ops-runtime-backups");
-  expect(options).toEqual({ replace: true });
-});
-it("preserves the exact selected run and session when the existing owner opens native session evidence", () => {
-  act(() => render());
-  fixture.props!.navigate({
-    area: "ops",
-    section: "sessions",
-    theme: "ops",
-    runId: "canonical/run",
-    sessionId: "canonical/session",
-  });
-  const target = new URL(fixture.navigate.mock.calls[0]![0], "http://cockpit.invalid");
-  expect(target.pathname).toBe("/system/sessions");
-  expect(target.searchParams.get("runId")).toBe("canonical/run");
-  expect(target.searchParams.get("sessionId")).toBe("canonical/session");
-  expect(target.searchParams.get("workspaceId")).toBe("workspace-a");
-  expect(target.searchParams.get("citadelId")).toBe("citadel-a");
-  expect(target.searchParams.get("keep")).toBe("yes");
-  expect(target.hash).toBe("#ops-runtime-backups");
-});
-it("withdraws the old runtime owner on caller/access scope departure and retains current controls", () => {
-  act(() => render());
-  act(() => host.querySelector("button")!.click());
-  expect(host.textContent).toContain("Current owner details open");
-  fixture.identity = "owner-after-access-change";
-  act(() => render());
-  expect(fixture.departed).toHaveBeenCalledWith("workspace-a");
-  expect(host.textContent).toContain("Existing runtime control owner");
-  fixture.workspaceId = "workspace-b";
-  fixture.identity = "owner-b";
-  act(() => render());
-  expect(fixture.props!.activeWorkspaceId).toBe("workspace-b");
-});
-it("announces an unsupported owner without switching shell or dispatching a navigation", () => {
-  act(() => render());
-  act(() => fixture.props!.navigate({ area: "ops", section: "unsupported", theme: "ops" } as never));
-  expect(fixture.navigate).not.toHaveBeenCalled();
-  expect(host.querySelector('[role="status"]')?.textContent).toContain("unavailable in Cockpit");
-  expect(host.textContent).toContain("Existing runtime control owner");
-});
-it("rejects a departed runtime navigation callback before touching the current dirty/history owner", () => {
-  act(() => render());
-  const departedNavigate = fixture.props!.navigate;
-  fixture.identity = "owner-after-caller-change";
-  act(() => render());
-  act(() => departedNavigate({ area: "ops", section: "diagnostics", theme: "ops" }));
-  expect(fixture.navigate).not.toHaveBeenCalled();
-  expect(host.querySelector('[role="status"]')).toBeNull();
-  act(() => fixture.props!.navigate({ area: "ops", section: "diagnostics", theme: "ops" }));
-  expect(fixture.navigate).toHaveBeenCalledOnce();
-});
-it("rejects an original caller callback even when a same-batch caller departure returns to its original name", () => {
-  act(() => render());
-  const departedNavigate = fixture.props!.navigate;
-  act(() => {
-    setGatewayCallerScope("runtime-caller-b");
-    setGatewayCallerScope("runtime-caller-a");
-    departedNavigate({ area: "ops", section: "diagnostics", theme: "ops" });
-  });
-  expect(fixture.navigate).not.toHaveBeenCalled();
-  expect(host.querySelector('[role="status"]')).toBeNull();
-  act(() => fixture.props!.navigate({ area: "ops", section: "diagnostics", theme: "ops" }));
-  expect(fixture.navigate).toHaveBeenCalledOnce();
-});
-it("reuses the existing current-Citadel workspace-name cache without another directory read", () => {
-  act(() => render());
-  expect(fixture.props!.activeWorkspaceName).toBe("Aurora");
-  expect(fixture.workspaces).not.toHaveBeenCalled();
-  fixture.citadelId = "citadel-b";
-  client.setQueryData(queryKeys.workspaces("citadel-b"), {
-    items: [{ workspaceId: "workspace-b", name: "Other Citadel" }],
-  });
-  act(() => render());
-  expect(fixture.props!.activeWorkspaceName).toBe("Current workspace");
-  expect(fixture.props!.activeWorkspaceName).not.toBe(fixture.workspaceId);
-  expect(fixture.workspaces).not.toHaveBeenCalled();
-});
-it("reads an uncached workspace name through the existing bounded current-Citadel directory owner", async () => {
-  fixture.citadelId = "citadel-new";
-  fixture.workspaces.mockResolvedValue({ items: [{ workspaceId: "workspace-a", name: "Current Citadel name" }] });
-  await act(async () => render());
-  await vi.waitFor(() => expect(fixture.props!.activeWorkspaceName).toBe("Current Citadel name"));
-  expect(fixture.workspaces).toHaveBeenCalledExactlyOnceWith("active", 200, "citadel-new");
-});
-
 it("mounts the full worker/budget owner with exact bookmarked worker and assignment under current authority", async () => {
   fixture.search += "&workerId=worker%2Fone&assignmentId=assignment%3Aone";
   await act(async () => {
@@ -290,11 +164,6 @@ it.each(["?workerId=", "?workerId=a&workerId=b", "?assignmentId=a", "?workerId=a
     expect(fixture.navigate).not.toHaveBeenCalled();
   },
 );
-it("renders the embedded spend details page inside the cockpit column", () => {
-  act(() => render());
-  const owner = [...host.querySelectorAll("button")].find((b) => b.textContent === "Existing runtime control owner");
-  expect(owner?.closest(".cockpit-embedded-classic")).not.toBeNull();
-});
 it("keeps the column when the embedded worker page renders its load error", () => {
   fixture.search = "?workerId=w1&assignmentId=a1";
   fixture.workerError = true;

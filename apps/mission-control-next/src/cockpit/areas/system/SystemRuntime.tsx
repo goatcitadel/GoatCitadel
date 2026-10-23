@@ -6,7 +6,6 @@ import {
   subscribeGatewayCallerScope,
 } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { buildAppHref, parseAppRoute } from "../../../app/route-model";
-import { RuntimeRoutePage } from "../../../features/native-routes/ops/RuntimeRoutePage";
 import type { NativeRoutePagesProps } from "../../../features/native-routes/types";
 import { resolveCockpitCompatibility } from "../../app/cockpit-compatibility";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
@@ -33,7 +32,7 @@ function readWorkerSelection(search: string) {
   return { workerId, assignmentId, invalid };
 }
 /** Keep the existing runtime reads, controls and held boundaries with their canonical owner. */
-export function SystemRuntime({ section = "runtime" }: { section?: "runtime" | "costs" | "workers" }) {
+export function SystemRuntime({ section = "runtime" }: { section?: "runtime" | "workers" }) {
   const preferences = useUiPreferences(),
     location = useCockpitRoute();
   const workspaceId = preferences.activeWorkspaceId ?? "default";
@@ -79,70 +78,47 @@ export function SystemRuntime({ section = "runtime" }: { section?: "runtime" | "
     <section className="min-w-0">
       {/* The area header keeps the System tabs in every state; the embedded runtime page below keeps its own controls. */}
       <div className={AREA_PAGE}>
-        <AreaHeader
-          title={section === "costs" ? "Spend details" : "Runtime"}
-          description={
-            section === "costs"
-              ? "Cost coverage and per-provider records."
-              : "Runtime records, controls and held boundaries."
-          }
-        />
+        <AreaHeader title="Runtime" description="Remote workers, their assignments and spending budgets." />
       </div>
       {navigationUnavailable === access.identity ? (
         <p role="status" className="p-4 text-sm text-fg-secondary">
           This source destination is unavailable in Cockpit.
         </p>
       ) : null}
-      {section === "workers" ? (
-        workerSelection.invalid ? (
-          <div role="alert" className="p-4 text-sm text-fg-secondary">
-            <p>This link does not identify one worker and its assignment.</p>
-            <NativeOwnerLink
-              href={workerRecoveryHref}
-              scope={[access.identity, location.search, location.hash]}
-              className="mt-2 inline-block text-sm font-medium text-accent hover:underline"
-            >
-              Open worker records
-            </NativeOwnerLink>
-          </div>
-        ) : (
-          <EmbeddedClassicPage>
-            <Suspense
-              fallback={
-                <p role="status" className="p-4 text-sm text-fg-secondary">
-                  Loading worker inspection…
-                </p>
-              }
-            >
-              <RemoteWorkersRoutePage
-                key={
-                  access.identity +
-                  ":workers:" +
-                  JSON.stringify([workerSelection.workerId, workerSelection.assignmentId])
-                }
-                initialWorkerId={workerSelection.workerId}
-                initialAssignmentId={workerSelection.assignmentId}
-                route={route}
-                activeWorkspaceId={workspaceId}
-                activeWorkspaceName={workspaceName ?? "Current workspace"}
-                activeCitadelId={preferences.activeCitadelId ?? undefined}
-                setActiveWorkspaceId={preferences.setActiveWorkspaceId}
-                navigate={navigate}
-              />
-            </Suspense>
-          </EmbeddedClassicPage>
-        )
+      {workerSelection.invalid ? (
+        <div role="alert" className="p-4 text-sm text-fg-secondary">
+          <p>This link does not identify one worker and its assignment.</p>
+          <NativeOwnerLink
+            href={workerRecoveryHref}
+            scope={[access.identity, location.search, location.hash]}
+            className="mt-2 inline-block text-sm font-medium text-accent hover:underline"
+          >
+            Open worker records
+          </NativeOwnerLink>
+        </div>
       ) : (
         <EmbeddedClassicPage>
-          <RuntimeRoutePage
-            key={access.identity + ":" + section}
-            route={route}
-            activeWorkspaceId={workspaceId}
-            activeWorkspaceName={workspaceName ?? "Current workspace"}
-            activeCitadelId={preferences.activeCitadelId ?? undefined}
-            setActiveWorkspaceId={preferences.setActiveWorkspaceId}
-            navigate={navigate}
-          />
+          <Suspense
+            fallback={
+              <p role="status" className="p-4 text-sm text-fg-secondary">
+                Loading worker inspection…
+              </p>
+            }
+          >
+            <RemoteWorkersRoutePage
+              key={
+                access.identity + ":workers:" + JSON.stringify([workerSelection.workerId, workerSelection.assignmentId])
+              }
+              initialWorkerId={workerSelection.workerId}
+              initialAssignmentId={workerSelection.assignmentId}
+              route={route}
+              activeWorkspaceId={workspaceId}
+              activeWorkspaceName={workspaceName ?? "Current workspace"}
+              activeCitadelId={preferences.activeCitadelId ?? undefined}
+              setActiveWorkspaceId={preferences.setActiveWorkspaceId}
+              navigate={navigate}
+            />
+          </Suspense>
         </EmbeddedClassicPage>
       )}
     </section>
