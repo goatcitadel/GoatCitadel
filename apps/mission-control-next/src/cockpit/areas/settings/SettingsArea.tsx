@@ -29,6 +29,7 @@ import {
   FilesystemWriteRootsControl,
   ModelsSettings,
   ClaudeCliToolBridgeControl,
+  ClaudeCliWarmContinuationControl,
   ToolGrantSettings,
   SafetyCatalogSummary,
   PermissionProfileSettings,
@@ -164,6 +165,7 @@ export function SettingsArea() {
           <>
             <ModelsSettings />
             <ClaudeCliToolBridgeControl />
+            <ClaudeCliWarmContinuationControl />
           </>
         );
       case "local-ai":
@@ -227,6 +229,7 @@ export function SettingsArea() {
               "application-updates",
               "approval-mode",
               "claude-cli-tool-bridge",
+              "claude-cli-warm-continuation",
               "filesystem-write-roots",
               "notification-routing",
             ].includes(hash) &&
