@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { describeRuntimeService } from "@goatcitadel/mission-control-shared/content/runtime-service";
 import {
+  comparisonRunStatus,
+  engineFitStatus,
   integrationRows,
+  modelPerformanceMetrics,
   localModelStatus,
   runtimeDiagnosticRows,
   runtimeSectionForHash,
@@ -88,5 +91,33 @@ describe("runtimeSectionForHash", () => {
     expect(runtimeSectionForHash("#ops-runtime-backups")).toBe("ops-runtime-backups");
     expect(runtimeSectionForHash("#ops-runtime-integrations")).toBe("runtime-integrations");
     expect(runtimeSectionForHash("#nope")).toBeNull();
+  });
+});
+
+describe("model performance", () => {
+  it("reads Unknown response time when measurements could not be read, not 0 ms", () => {
+    const metric = modelPerformanceMetrics(runtimeData({}, ["runtimeMeasurements"])).find(
+      (item) => item.term === "Average response time",
+    );
+    expect(metric?.value).toBe("Unknown");
+  });
+
+  it("averages completed calls only", () => {
+    const data = runtimeData({
+      runtimeMeasurements: [
+        { status: "completed", metrics: { latencyMs: 100 } },
+        { status: "completed", metrics: { latencyMs: 300 } },
+        { status: "failed", metrics: { latencyMs: 9000 } },
+      ],
+    });
+    const metric = modelPerformanceMetrics(data).find((item) => item.term === "Average response time");
+    expect(metric?.value).toBe("200 ms");
+  });
+
+  it("presents engine fit and comparison runs in operator words", () => {
+    expect(engineFitStatus("weak")).toEqual({ label: "Weak fit", tone: "waiting" });
+    expect(engineFitStatus("strong")).toEqual({ label: "Good fit", tone: "done" });
+    expect(engineFitStatus("unknown")).toEqual({ label: "Not measured", tone: "neutral" });
+    expect(comparisonRunStatus("completed_with_warnings")).toEqual({ label: "Done with warnings", tone: "waiting" });
   });
 });

@@ -1,5 +1,11 @@
 import type { DaemonRuntimeDiagnostic } from "@goatcitadel/mission-control-shared/api/types";
-import { formatBytes, formatDuration, formatSeconds, plural } from "@goatcitadel/mission-control-shared/content/format";
+import {
+  formatBytes,
+  formatDuration,
+  formatMoney,
+  formatSeconds,
+  plural,
+} from "@goatcitadel/mission-control-shared/content/format";
 import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { readDaemonRuntimeDiagnostics } from "../../../features/native-routes/ops/RuntimeDaemonPanels";
 import {
@@ -139,4 +145,44 @@ const LEGACY_SECTIONS: Readonly<Record<string, RuntimeSectionId>> = {
 /** Classic runtime anchors (Health and old bookmarks) mapped to the native section that now holds them. */
 export function runtimeSectionForHash(hash: string): RuntimeSectionId | null {
   return LEGACY_SECTIONS[hash.replace(/^#/, "")] ?? null;
+}
+
+type Measurement = OpsRuntimeData["runtimeMeasurements"][number];
+type LocalEngine = OpsRuntimeData["localEngines"][number];
+type ComparisonRun = OpsRuntimeData["evalProofRuns"][number];
+
+/** Response time, output speed and cost from measured model calls; Unknown, never 0, when they could not be read. */
+export function modelPerformanceMetrics(data: OpsRuntimeData): Metric[] {
+  const unavailable = sourceFailed(data, "runtimeMeasurements");
+  const latencies = data.runtimeMeasurements
+    .filter((item: Measurement) => item.status === "completed")
+    .map((item: Measurement) => item.metrics.latencyMs)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const latest = data.runtimeMeasurements[0];
+  const speed = latest?.metrics.outputTokensPerSecond;
+  return [
+    {
+      term: "Average response time",
+      value: known(
+        formatDuration(latencies.reduce((sum, value) => sum + value, 0) / latencies.length),
+        unavailable || !latencies.length,
+      ),
+      hint: "completed calls",
+    },
+    {
+      term: "Latest output speed",
+      value: known(`${Math.round(speed ?? 0)} tokens/s`, unavailable || typeof speed !== "number"),
+    },
+    { term: "Latest estimated cost", value: unavailable ? "Unknown" : formatMoney(latest?.metrics.estimatedCostUsd) },
+  ];
+}
+
+export function engineFitStatus(fit: LocalEngine["fit"]): StatusPresentation {
+  if (fit === "strong" || fit === "ok") return { label: "Good fit", tone: "done" };
+  if (fit === "weak") return { label: "Weak fit", tone: "waiting" };
+  return { label: "Not measured", tone: "neutral" };
+}
+
+export function comparisonRunStatus(status: ComparisonRun["status"]): StatusPresentation {
+  return status === "completed" ? { label: "Done", tone: "done" } : { label: "Done with warnings", tone: "waiting" };
 }
