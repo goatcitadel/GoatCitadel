@@ -8,6 +8,8 @@ import type { ClaudeCliParkDrain, ClaudeCliSession } from "./claude-code-cli-ses
 import { buildClaudeCliToolManifest } from "./claude-code-cli-tool-bridge.js";
 import { fingerprintClaudeCliStep, type ClaudeCliEmittedAssistant } from "./claude-code-cli-warm-match.js";
 import {
+  CLAUDE_CLI_WARM_ECHO_DEADLINE_MS,
+  CLAUDE_CLI_WARM_MCP_TOOL_TIMEOUT_MS,
   CLAUDE_CLI_WARM_PARK_DEADLINE_MS,
   ClaudeCliWarmRegistry,
   type ParkedClaudeCliStep,
@@ -145,6 +147,14 @@ describe("ClaudeCliWarmRegistry", () => {
   afterEach(async () => {
     await registry.reapAll("shutdown");
     vi.useRealTimers();
+  });
+
+  it("a parked call's park deadline plus the echo deadline stays under the CLI's MCP_TOOL_TIMEOUT", () => {
+    // Otherwise the CLI's own tool timeout could fire inside a resumed segment and invent an error result.
+    expect(CLAUDE_CLI_WARM_PARK_DEADLINE_MS + CLAUDE_CLI_WARM_ECHO_DEADLINE_MS).toBeLessThan(
+      CLAUDE_CLI_WARM_MCP_TOOL_TIMEOUT_MS,
+    );
+    expect(CLAUDE_CLI_WARM_ECHO_DEADLINE_MS).toBe(30_000);
   });
 
   it("take hits only for the same session and turn", () => {

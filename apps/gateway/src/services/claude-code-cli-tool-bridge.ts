@@ -8,8 +8,9 @@ import { CLAUDE_CLI_MCP_SERVER_NAME, CLAUDE_CLI_MCP_TOOL_PREFIX } from "./claude
 
 /**
  * Per-step tool manifest and run-dir files for the Claude Code CLI tool bridge.
- * The CLI sees GoatCitadel tools through an inert stdio MCP stub that only
- * serves the manifest; calls are intercepted and run by the governed runner.
+ * The CLI sees GoatCitadel tools through an inert stdio MCP stub that serves the
+ * manifest and holds each call; the governed runner executes it, and on a warm
+ * continuation the stub returns the result file the Gateway staged for that call.
  */
 
 // Defined beside the stream tripwires, which cannot import this module at runtime without a cycle.

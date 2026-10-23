@@ -257,12 +257,14 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
     if (!runtime) throw new ClaudeCliError("claude_cli_missing", claudeCliUserMessage("claude_cli_missing"));
     // Read once per step; warm continuation applies to bridged steps only.
     const warmFlag = runtime.warmContinuationEnabled();
-    // A request for this turn that will not continue warm ends the turn's parked process first.
+    // A request for this turn that will not continue warm ends the turn's parked process first. Like a
+    // take() miss, the reap is fire-and-forget: its tree kill is signalled synchronously, before any
+    // cold spawn below, and only the bounded close wait and run-dir removal finish in the background.
     const { sessionId, turnId } = attribution;
-    const releaseTurn = async () => {
-      if (sessionId && turnId) await runtime.warm.reapTurn(sessionId, turnId);
+    const releaseTurn = () => {
+      if (sessionId && turnId) void runtime.warm.reapTurn(sessionId, turnId);
     };
-    if (!(warmFlag && offersAutoTools(request))) await releaseTurn();
+    if (!(warmFlag && offersAutoTools(request))) releaseTurn();
     let invocation: ClaudeCliInvocation;
     let bridge: PreparedToolBridge | undefined;
     try {
@@ -273,7 +275,7 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
       // Resolved before the usage intent, so a missing stub leaves nothing to settle.
       bridge = prepareToolBridge(request, () => runtime.resolveToolBridgeLaunch());
     } catch (error) {
-      await releaseTurn();
+      releaseTurn();
       throw error;
     }
     const prompt = renderClaudeCliPrompt(request.messages, { bridged: bridge !== undefined });
@@ -304,7 +306,7 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
       bridge && warm
         ? fingerprintClaudeCliStep({ request, attribution, model, system: prompt.system, manifest: bridge.manifest })
         : undefined;
-    if (!fingerprint) await releaseTurn();
+    if (!fingerprint) releaseTurn();
     // A miss has already killed the parked tree for this turn, before the cold step below spawns.
     const resumed = fingerprint
       ? tryResumeClaudeCliWarmStep({ registry: runtime.warm, fingerprint, request, model, timeouts, runAccounted })

@@ -8,6 +8,7 @@ import {
   FAKE_CLAUDE_CLI_STUB_PATH as STUB_PATH,
   createFakeClaudeCliHarness as createHarness,
   createFakeModelUsageAccounting as createAccounting,
+  fakeWarmCallUsage,
   helloScript,
   toolStepScript,
   warmToolStepScript,
@@ -17,6 +18,7 @@ import {
 } from "../test/claude-code-cli-fake-spawn.js";
 import { createNoopSecretStore } from "../test/llm-fixtures.js";
 import { buildClaudeCliArgs } from "./claude-code-cli-process.js";
+import { CLAUDE_CLI_WARM_ECHO_DEADLINE_MS } from "./claude-code-cli-warm-registry.js";
 import { LlmService } from "./llm-service.js";
 
 /**
@@ -66,6 +68,18 @@ const listCall: FakeCall = { id: "toolu_list", name: "list_dir", input: { path: 
 
 function readDelta(chunk: Record<string, unknown>): Record<string, unknown> | undefined {
   return (chunk.choices as Array<{ delta?: Record<string, unknown> }> | undefined)?.[0]?.delta;
+}
+
+/** The usage a step settles when its model call reported `fakeWarmCallUsage(n)`. */
+function settledUsage(n: number): Record<string, number> {
+  const usage = fakeWarmCallUsage(n);
+  return {
+    prompt_tokens: usage.input_tokens as number,
+    completion_tokens: usage.output_tokens as number,
+    total_tokens: (usage.input_tokens as number) + (usage.output_tokens as number),
+    cache_read_input_tokens: usage.cache_read_input_tokens as number,
+    cache_creation_input_tokens: usage.cache_creation_input_tokens as number,
+  };
 }
 
 /** The runtime's parked-process count; the registry is private to LlmService. */
@@ -190,13 +204,13 @@ describe("claude-code-cli warm continuation through LlmService", () => {
     expect(textOf(chunks)).toBe("All done.");
     expect(chunks.at(-1)).toMatchObject({
       choices: [{ finish_reason: "stop" }],
-      usage: { prompt_tokens: 3, completion_tokens: 4 },
+      usage: settledUsage(1),
     });
     expect(accounting.prepareDispatch).toHaveBeenCalledTimes(2);
     expect(accounting.handle.succeed).toHaveBeenCalledTimes(2);
     expect(accounting.handle.fail).not.toHaveBeenCalled();
     expect(accounting.handle.cancel).not.toHaveBeenCalled();
-    expect(accounting.handle.observe).toHaveBeenLastCalledWith(expect.objectContaining({ completion_tokens: 4 }));
+    expect(accounting.handle.observe).toHaveBeenLastCalledWith(settledUsage(1));
     // The process ended on its own; its run dir goes with the resumed step.
     expect(harness.killTree).not.toHaveBeenCalled();
     expect(readdirSync(scratchRoot)).toEqual([]);
@@ -219,6 +233,24 @@ describe("claude-code-cli warm continuation through LlmService", () => {
     expect(harness.spawns).toHaveLength(1);
     expect(accounting.handle.succeed).toHaveBeenCalledTimes(3);
     expect(readdirSync(scratchRoot)).toEqual([]);
+  });
+
+  it("each step of a 3-step warm turn settles its own segment's usage, never the process total", async () => {
+    const harness = createHarness([warmToolStepScript([readCall], [{ calls: [listCall] }, { text: "Listed." }])]);
+    const { service, accounting } = createService(harness);
+
+    await collect(service, { messages: firstMessages, tools });
+    await collect(service, { messages: secondMessages, tools });
+    const third = await collect(service, {
+      messages: [...secondMessages, assistantFor([listCall]), toolResult(listCall.id, "plan.md")],
+      tools,
+    });
+
+    expect(harness.spawns).toHaveLength(1);
+    // The fake's final result.usage sums all three calls, like the real CLI's.
+    expect(accounting.handle.observe.mock.calls).toEqual([[settledUsage(0)], [settledUsage(1)], [settledUsage(2)]]);
+    expect(third.at(-1)).toMatchObject({ choices: [{ finish_reason: "stop" }], usage: settledUsage(2) });
+    expect(accounting.handle.succeed).toHaveBeenCalledTimes(3);
   });
 
   it("no result file exists until beginTrackedDispatch resolves", async () => {
@@ -288,7 +320,8 @@ describe("claude-code-cli warm continuation through LlmService", () => {
         bridge: { mcpConfigPath: "mcp.json" },
       }),
     );
-    expect(readdirSync(scratchRoot)).toEqual([]);
+    // The miss reap is fire-and-forget; only its kill is ordered before the cold spawn.
+    await vi.waitFor(() => expect(readdirSync(scratchRoot)).toEqual([]));
   });
 
   it("MCP_TOOL_TIMEOUT is 660000 on bridged steps with the warm flag on, absent otherwise, and never copied from the host env", async () => {
@@ -334,6 +367,8 @@ describe("claude-code-cli warm continuation through LlmService", () => {
       harness.spawn.mock.invocationCallOrder[1] as number,
     );
     expect(parkedCount(service)).toBe(0);
+    // The reap is fire-and-forget: the kill comes first, the run-dir removal later.
+    await vi.waitFor(() => expect(readdirSync(scratchRoot)).toEqual([]));
   });
 
   it.each([
@@ -353,6 +388,63 @@ describe("claude-code-cli warm continuation through LlmService", () => {
     expect(harness.killTree).toHaveBeenCalledWith(7000);
     expect(parkedCount(service)).toBe(0);
     await vi.waitFor(() => expect(readdirSync(scratchRoot)).toEqual([]));
+  });
+
+  it("a staged result that is never echoed fails the step as claude_cli_bridge_mismatch within the echo deadline", async () => {
+    const staging: FakeClaudeCliStaging = { read: [] };
+    const harness = createHarness([warmToolStepScript([readCall], [{ text: "unused" }], staging, { echo: false })]);
+    const { service, accounting } = createService(harness);
+    await collect(service, { messages: firstMessages, tools });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // An overall timeout far past the echo deadline, so only the echo deadline can end the step.
+      const outcome = expect(
+        collect(service, { messages: secondMessages, tools, timeoutMs: 3_600_000 }),
+      ).rejects.toMatchObject({
+        reasonCode: "claude_cli_bridge_mismatch",
+      });
+      await vi.waitFor(() => expect(staging.read).toEqual([`${readCall.id}.json`]));
+      expect(harness.killTree).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(CLAUDE_CLI_WARM_ECHO_DEADLINE_MS);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(harness.killTree).toHaveBeenCalledWith(7000);
+    expect(harness.spawns).toHaveLength(1);
+    expect(accounting.handle.fail).toHaveBeenCalledTimes(1);
+    expect(parkedCount(service)).toBe(0);
+    await vi.waitFor(() => expect(readdirSync(scratchRoot)).toEqual([]));
+  });
+
+  it("a request cancelled while its usage intent is in flight stages nothing and reaps the parked step", async () => {
+    const staged: string[] = [];
+    const harness = createHarness([warmToolStepScript([readCall], [{ text: "unused" }])]);
+    const { service, accounting } = createService(harness);
+    await collect(service, { messages: firstMessages, tools });
+    renameHook.before = async (target) => {
+      staged.push(path.basename(target));
+    };
+
+    const controller = new AbortController();
+    const accept = accounting.prepareDispatch.getMockImplementation();
+    accounting.prepareDispatch.mockImplementationOnce(async (...args: unknown[]) => {
+      const dispatch = await accept?.(...args);
+      controller.abort();
+      return dispatch;
+    });
+    await expect(
+      collect(service, { messages: secondMessages, tools, signal: controller.signal }),
+    ).rejects.toMatchObject({ reasonCode: "claude_cli_cancelled" });
+
+    expect(staged).toEqual([]);
+    expect(harness.spawns).toHaveLength(1);
+    expect(harness.killTree).toHaveBeenCalledWith(7000);
+    expect(accounting.handle.cancel).toHaveBeenCalledTimes(1);
+    expect(parkedCount(service)).toBe(0);
+    expect(readdirSync(scratchRoot)).toEqual([]);
   });
 
   it("an echo of the first result before the second is staged is accepted", async () => {

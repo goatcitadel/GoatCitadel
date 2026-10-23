@@ -201,4 +201,20 @@ describe("startClaudeCliSession", () => {
     expect(() => session.segment(segmentOptions)).toThrow(/one segment at a time/);
     await segment.return(closedExit);
   });
+
+  it.each([
+    ["the exit", (_session: ClaudeCliSession, child: FakeClaudeCliChild) => child.exit(0), { done: true }],
+    ["an error", (session: ClaudeCliSession) => void session.kill(), undefined],
+  ])("segment() after a segment consumed %s throws at once instead of waiting", async (_what, end, finalItem) => {
+    const { session, child } = await startSession();
+    const segment = session.segment(segmentOptions);
+    const next = segment.next();
+    end(session, child);
+    if (finalItem) expect(await next).toMatchObject(finalItem);
+    else await expect(next).rejects.toMatchObject({ reasonCode: "claude_cli_cancelled" });
+
+    expect(() => session.segment(segmentOptions)).toThrow(
+      expect.objectContaining({ reasonCode: "claude_cli_bridge_mismatch" }),
+    );
+  });
 });

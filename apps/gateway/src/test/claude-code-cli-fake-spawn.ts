@@ -86,7 +86,7 @@ export const helloScript: FakeClaudeCliScript = textStepScript("hello");
 export function toolStepScript(
   toolNames: readonly string[] | undefined,
   calls: readonly FakeClaudeCliCall[],
-  options: { stop?: boolean } = {},
+  options: { stop?: boolean; usage?: FakeClaudeCliCallUsage } = {},
 ): FakeClaudeCliScript {
   return ({ stdout }, spawned) => {
     stdout.write(initFor(spawned, toolNames));
@@ -98,7 +98,7 @@ export function toolStepScript(
 function writeToolMessage(
   stdout: PassThrough,
   calls: readonly FakeClaudeCliCall[],
-  options: { stop?: boolean } = {},
+  options: { stop?: boolean; usage?: FakeClaudeCliCallUsage } = {},
 ): void {
   stdout.write(streamEvent({ type: "message_start", message: { usage: { input_tokens: 2 } } }));
   calls.forEach((call, index) => {
@@ -130,7 +130,7 @@ function writeToolMessage(
     streamEvent({
       type: "message_delta",
       delta: { stop_reason: "tool_use" },
-      usage: { input_tokens: 5, output_tokens: 9 },
+      usage: options.usage ?? { input_tokens: 5, output_tokens: 9 },
     }),
   );
   stdout.write(streamEvent({ type: "message_stop" }));
@@ -148,20 +148,50 @@ export interface FakeClaudeCliStaging {
 
 const RESULT_POLL_MS = 5;
 
+/** One model call's usage as the CLI's `message_delta` reports it. */
+export type FakeClaudeCliCallUsage = Record<string, number>;
+
+/**
+ * The n-th model call's usage in a warm process (0-based): distinct per call, so a cumulative
+ * total can never pass for one call's own counts.
+ */
+export function fakeWarmCallUsage(n: number): FakeClaudeCliCallUsage {
+  return {
+    input_tokens: 2 + n,
+    cache_creation_input_tokens: 100 * (n + 1),
+    cache_read_input_tokens: 1000 * (n + 1),
+    output_tokens: 10 + n,
+  };
+}
+
+/** Like the real CLI, a `-p` process's `result.usage` is the sum over every model call it made. */
+function cumulativeUsage(perCall: readonly FakeClaudeCliCallUsage[]): FakeClaudeCliCallUsage {
+  const total: FakeClaudeCliCallUsage = {};
+  for (const usage of perCall) {
+    for (const [key, value] of Object.entries(usage)) total[key] = (total[key] ?? 0) + value;
+  }
+  return total;
+}
+
 /**
  * A process that parks like the real CLI: one tool step, then, per segment, it echoes each
  * pending call's result back as a `tool_result` as soon as the Gateway stages that call's file
  * (checking the step's nonce, like the stub), and once all are echoed it plays the segment. A text
- * segment ends with a result line and exit 0; a tool segment stops for tool_use again.
+ * segment ends with a result line and exit 0; a tool segment stops for tool_use again. The n-th
+ * model call reports `fakeWarmCallUsage(n)`, and the final result reports the cumulative sum.
+ * With `echo: false` it reads each staged result but never echoes it, like a stub that could
+ * not bind the call.
  */
 export function warmToolStepScript(
   calls: readonly FakeClaudeCliCall[],
   segments: readonly FakeClaudeCliSegment[],
   staging: FakeClaudeCliStaging = { read: [] },
+  options: { echo?: boolean } = {},
 ): FakeClaudeCliScript {
   return ({ stdout, exit }, spawned) => {
     stdout.write(initFor(spawned));
-    writeToolMessage(stdout, calls);
+    const perCall = [fakeWarmCallUsage(0)];
+    writeToolMessage(stdout, calls, { usage: fakeWarmCallUsage(0) });
     const configPath = spawned.args[spawned.args.indexOf("--mcp-config") + 1] as string;
     const resultsDir = path.join(path.dirname(configPath), "results");
     const nonce = spawned.toolsFileAtSpawn?.nonce;
@@ -178,27 +208,33 @@ export function warmToolStepScript(
         const text = readStagedResult(resultsDir, id, nonce);
         if (text === undefined) return;
         staging.read.push(`${id}.json`);
-        stdout.write(toolResultEcho(id, text));
         pending = pending.slice(1);
+        if (options.echo === false) {
+          if (pending.length === 0) clearInterval(timer);
+          continue;
+        }
+        stdout.write(toolResultEcho(id, text));
       }
+      if (options.echo === false) return;
       const [segment, ...rest] = remaining;
       remaining = rest;
+      const usage = fakeWarmCallUsage(perCall.length);
       if (segment && "calls" in segment) {
-        writeToolMessage(stdout, segment.calls);
+        perCall.push(usage);
+        writeToolMessage(stdout, segment.calls, { usage });
         pending = segment.calls.map((call) => call.id);
         return;
       }
       clearInterval(timer);
       if (!segment) return;
-      stdout.write(streamEvent({ type: "message_start", message: { usage: { input_tokens: 3 } } }));
+      perCall.push(usage);
+      stdout.write(streamEvent({ type: "message_start", message: { usage: { input_tokens: usage.input_tokens } } }));
       stdout.write(
         streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: segment.text } }),
       );
-      stdout.write(streamEvent({ type: "message_delta", delta: { stop_reason: "end_turn" } }));
+      stdout.write(streamEvent({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage }));
       stdout.write(streamEvent({ type: "message_stop" }));
-      stdout.write(
-        line({ type: "result", subtype: "success", is_error: false, usage: { input_tokens: 3, output_tokens: 4 } }),
-      );
+      stdout.write(line({ type: "result", subtype: "success", is_error: false, usage: cumulativeUsage(perCall) }));
       exit(0);
     }, RESULT_POLL_MS);
     timer.unref();

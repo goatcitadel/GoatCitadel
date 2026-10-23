@@ -18,6 +18,7 @@ import {
   bridgedInit,
   createFakeClaudeCliHarness,
   createFakeModelUsageAccounting,
+  fakeWarmCallUsage,
   line,
   manifestToolNames,
   streamEvent,
@@ -76,18 +77,20 @@ const executedStatus = async (request: ToolInvokeRequest): Promise<ToolInvokeRes
   result: { status: "healthy", probe: request.args.probe },
 });
 
-/** The cold twin of the warm text segment: the same stream lines and usage, from a fresh process. */
-function coldTextStepScript(text: string): FakeClaudeCliScript {
+/**
+ * The cold twin of the warm text segment: the same stream lines and per-call usage, from a fresh
+ * process. Its only model call is `callIndex`, so its result usage is that call's alone.
+ */
+function coldTextStepScript(text: string, callIndex: number): FakeClaudeCliScript {
+  const usage = fakeWarmCallUsage(callIndex);
   return ({ stdout, exit }, spawned) => {
     // A bridged step: the init must list the step's bridged tools, as the real CLI's does.
     stdout.write(bridgedInit(manifestToolNames(spawned) ?? []));
-    stdout.write(streamEvent({ type: "message_start", message: { usage: { input_tokens: 3 } } }));
+    stdout.write(streamEvent({ type: "message_start", message: { usage: { input_tokens: usage.input_tokens } } }));
     stdout.write(streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }));
-    stdout.write(streamEvent({ type: "message_delta", delta: { stop_reason: "end_turn" } }));
+    stdout.write(streamEvent({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage }));
     stdout.write(streamEvent({ type: "message_stop" }));
-    stdout.write(
-      line({ type: "result", subtype: "success", is_error: false, usage: { input_tokens: 3, output_tokens: 4 } }),
-    );
+    stdout.write(line({ type: "result", subtype: "success", is_error: false, usage }));
     exit(0);
   };
 }
@@ -182,9 +185,10 @@ describe("ChatTurnAgentRunner with warm Claude Code CLI continuation", () => {
       warm
         ? [warmToolStepScript([firstA, firstB], [{ calls: [second] }, { text: FINAL_TEXT }])]
         : [
-            toolStepScript(undefined, [firstA, firstB]),
-            toolStepScript(undefined, [second]),
-            coldTextStepScript(FINAL_TEXT),
+            // The warm process's per-call usage, so the turns' usage (and receipts) must match exactly.
+            toolStepScript(undefined, [firstA, firstB], { usage: fakeWarmCallUsage(0) }),
+            toolStepScript(undefined, [second], { usage: fakeWarmCallUsage(1) }),
+            coldTextStepScript(FINAL_TEXT, 2),
           ],
     );
     const service = createService(harness, warm);
@@ -342,7 +346,8 @@ describe("ChatTurnAgentRunner with warm Claude Code CLI continuation", () => {
     expect(result.turnTrace.status).toBe("completed");
     expect(result.assistantContent).toContain("Switched to the concise summary.");
     expect(parkedCount(service)).toBe(0);
-    expect(readdirSync(scratchRoot)).toEqual([]);
+    // The miss reap is fire-and-forget; only its kill is ordered before the cold spawn.
+    await vi.waitFor(() => expect(readdirSync(scratchRoot)).toEqual([]));
   });
 
   it("a cancelled turn leaves no parked entry", async () => {

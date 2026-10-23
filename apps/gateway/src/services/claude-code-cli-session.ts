@@ -84,6 +84,8 @@ export function startClaudeCliSession(input: RunClaudeCliInput): ClaudeCliSessio
   let killed = false;
   let closed = false;
   let segmentActive = false;
+  /** A segment consumed the final exit or error; nothing more can ever arrive. */
+  let ended = false;
   let timers: SegmentTimers | undefined;
   let parking: Parking | undefined;
   let stdoutBuffer = "";
@@ -227,7 +229,7 @@ export function startClaudeCliSession(input: RunClaudeCliInput): ClaudeCliSessio
   };
 
   async function* runSegment(options: ClaudeCliSegmentOptions): AsyncGenerator<string, ClaudeCliExit> {
-    assertNoActiveSegment();
+    assertSegmentAllowed();
     segmentActive = true;
     const segmentTimers = startTimers(options);
     timers = segmentTimers;
@@ -246,6 +248,7 @@ export function startClaudeCliSession(input: RunClaudeCliInput): ClaudeCliSessio
           yield item.line;
           continue;
         }
+        ended = true;
         if (item.kind === "error") throw item.error;
         return item.exit;
       }
@@ -269,8 +272,12 @@ export function startClaudeCliSession(input: RunClaudeCliInput): ClaudeCliSessio
     }
   }
 
-  function assertNoActiveSegment(): void {
+  function assertSegmentAllowed(): void {
     if (segmentActive) throw new Error("A Claude Code CLI session allows one segment at a time");
+    // The queue can never fill again, so a later segment would wait forever.
+    if (ended) {
+      throw new ClaudeCliError("claude_cli_bridge_mismatch", "The Claude Code CLI session has already ended");
+    }
   }
 
   return {
@@ -279,9 +286,9 @@ export function startClaudeCliSession(input: RunClaudeCliInput): ClaudeCliSessio
     },
     exited,
     segment(options) {
-      // Checked here so a second call throws at once, and again when the body starts,
-      // because a generator created earlier may start only now.
-      assertNoActiveSegment();
+      // Checked here so a second call (or one after the session ended) throws at once, and
+      // again when the body starts, because a generator created earlier may start only now.
+      assertSegmentAllowed();
       // The owner has decided to resume: detach the drain now, so a line arriving
       // before the first next() queues for this segment instead of being drained.
       parking = undefined;

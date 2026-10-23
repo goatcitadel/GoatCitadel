@@ -569,6 +569,62 @@ describe("continuation segments", () => {
     expect(final.usage).toMatchObject({ prompt_tokens: 3, completion_tokens: 9 });
   });
 
+  it("a continuation's text answer settles from its own message_delta, never the cumulative result usage", () => {
+    // Claude Code 2.1.305: the second model call's message_delta, then result.usage summing both calls.
+    const segmentUsage = {
+      input_tokens: 2,
+      cache_creation_input_tokens: 243,
+      cache_read_input_tokens: 1167,
+      output_tokens: 15,
+    };
+    const cumulative = {
+      input_tokens: 4,
+      cache_creation_input_tokens: 632,
+      cache_read_input_tokens: 1945,
+      output_tokens: 137,
+    };
+    const resultLine = line({ type: "result", subtype: "success", is_error: false, result: "ok", usage: cumulative });
+    const mapper = continuation({ [ID_A]: "value" });
+    pushAll(mapper, [
+      textEcho(ID_A, "value"),
+      messageStart,
+      segmentTextDelta("ok"),
+      streamEvent({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: segmentUsage }),
+      messageStop,
+      resultLine,
+    ]);
+    const expected = {
+      prompt_tokens: 2,
+      completion_tokens: 15,
+      total_tokens: 17,
+      cache_read_input_tokens: 1167,
+      cache_creation_input_tokens: 243,
+    };
+    const final = mapper.finish({ exitCode: 0, stderrTail: "" });
+    expect(final.usage).toEqual(expected);
+    expect(final.finalChunk.usage).toEqual(expected);
+
+    // No message_delta usage: unknown, not the process total.
+    const bare = continuation({ [ID_A]: "value" });
+    pushAll(bare, [
+      textEcho(ID_A, "value"),
+      messageStart,
+      segmentTextDelta("ok"),
+      streamEvent({ type: "message_delta", delta: { stop_reason: "end_turn" } }),
+      messageStop,
+      resultLine,
+    ]);
+    expect(bare.finish({ exitCode: 0, stderrTail: "" }).usage).toBeUndefined();
+
+    // A cold process's text answer is its only model call, so its result usage is that call's.
+    const cold = createClaudeCliStreamMapper(MODEL, { bridge });
+    pushAll(cold, [init, messageStart, segmentTextDelta("ok"), messageDelta("end_turn"), messageStop, resultLine]);
+    expect(cold.finish({ exitCode: 0, stderrTail: "" }).usage).toMatchObject({
+      prompt_tokens: 4,
+      completion_tokens: 137,
+    });
+  });
+
   it("a step-mode tool step reports the assistant message it emitted; a tool result still fails it", () => {
     const mapper = createClaudeCliStreamMapper(MODEL, { bridge });
     pushAll(mapper, [init, messageStart, ...toolCall(ID_A, { text: "hi" }), messageDelta("tool_use"), messageStop]);

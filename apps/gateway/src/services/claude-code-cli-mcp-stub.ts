@@ -204,7 +204,7 @@ function serve(manifest: StubManifest, manifestPath: string): void {
     watcher.on("error", () => undefined);
     watcher.unref();
   } catch {
-    // No results dir to watch; the poll still covers delivery.
+    // Best-effort: with no results dir to watch, the poll still covers delivery.
   }
   setInterval(deliverAll, RESULT_POLL_INTERVAL_MS).unref();
 

@@ -19,6 +19,11 @@ export const CLAUDE_CLI_WARM_MAX_PARKED = 3;
 export const CLAUDE_CLI_WARM_RESULT_MAX_CHARS = 40_000;
 /** `MCP_TOOL_TIMEOUT` for a bridged step: the park deadline plus a minute of slack. */
 export const CLAUDE_CLI_WARM_MCP_TOOL_TIMEOUT_MS = CLAUDE_CLI_WARM_PARK_DEADLINE_MS + 60_000;
+/**
+ * How long a resumed step waits, after staging, for the CLI to echo every delivered result.
+ * Park deadline plus this stays under MCP_TOOL_TIMEOUT, so the CLI's own tool timeout never fires first.
+ */
+export const CLAUDE_CLI_WARM_ECHO_DEADLINE_MS = 30_000;
 
 const log = logger.child("claude-code-cli-warm-registry");
 

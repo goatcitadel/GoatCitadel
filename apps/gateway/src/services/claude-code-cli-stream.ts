@@ -42,6 +42,8 @@ export interface ClaudeCliStreamMapper {
    * so a parked process can be matched against the assistant message the runner rebuilds from them.
    */
   emittedAssistant(): ClaudeCliEmittedAssistant | undefined;
+  /** Continuation only: true while a delivered tool result has not been echoed back yet. */
+  awaitingEchoes(): boolean;
 }
 
 export interface ClaudeCliStreamMapperOptions {
@@ -166,7 +168,13 @@ export function createClaudeCliStreamMapper(
           stderrTail: exit.stderrTail,
         });
       }
-      const usage = isRecord(result.usage) ? normalizeAnthropicUsage(result.usage) : undefined;
+      // `result.usage` sums every model call the `-p` process made. A cold process's text answer is
+      // its only call; a resumed segment is one of several, so it settles from its own message_delta.
+      const usage = options.continuation
+        ? collector?.usage()
+        : isRecord(result.usage)
+          ? normalizeAnthropicUsage(result.usage)
+          : undefined;
       return {
         finalChunk: { ...chunk({}, { finish_reason: "stop" }), ...(usage ? { usage } : {}) },
         ...(usage ? { usage } : {}),
@@ -182,6 +190,10 @@ export function createClaudeCliStreamMapper(
       // Content stops accumulating once the step completes, so the first answer is final.
       if (!emitted && collector?.step()) emitted = { text, calls: collector.emittedCalls() };
       return emitted;
+    },
+
+    awaitingEchoes() {
+      return collector?.awaitingEchoes() ?? false;
     },
   };
 }

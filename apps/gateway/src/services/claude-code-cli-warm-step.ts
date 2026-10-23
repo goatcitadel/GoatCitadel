@@ -19,7 +19,11 @@ import {
 } from "./claude-code-cli-stream.js";
 import type { ClaudeCliToolManifest } from "./claude-code-cli-tool-bridge.js";
 import type { ClaudeCliWarmFingerprint } from "./claude-code-cli-warm-match.js";
-import { CLAUDE_CLI_WARM_MCP_TOOL_TIMEOUT_MS, type ClaudeCliWarmRegistry } from "./claude-code-cli-warm-registry.js";
+import {
+  CLAUDE_CLI_WARM_ECHO_DEADLINE_MS,
+  CLAUDE_CLI_WARM_MCP_TOOL_TIMEOUT_MS,
+  type ClaudeCliWarmRegistry,
+} from "./claude-code-cli-warm-registry.js";
 
 /**
  * One Claude Code CLI step's line pump, plus warm continuation: parking a bridged
@@ -187,31 +191,55 @@ export function tryResumeClaudeCliWarmStep(input: {
       // echo of the first result, arriving while a later one is still being written, queues for this
       // segment instead of poisoning the park. If staging fails, cleanup's reap kills the session.
       const lines = step.session.segment({ signal: request.signal, ...input.timeouts });
+      // Cancelled while the usage intent was in flight: stage nothing; cleanup's reap kills the session.
+      if (request.signal?.aborted) {
+        throw new ClaudeCliError("claude_cli_cancelled", claudeCliUserMessage("claude_cli_cancelled"));
+      }
       await stageClaudeCliWarmResults(step.runDir, step.manifest.nonce, results);
       const mapper = createClaudeCliStreamMapper(input.model, {
         bridge: step.manifest,
         continuation: { delivered: new Map(results.map((result) => [result.toolUseId, result.text])) },
       });
-      const streamed = yield* streamClaudeCliStep({
-        lines,
-        mapper,
-        request,
-        context,
-        park: () =>
-          parkClaudeCliStep({
-            registry,
-            enabled: true,
-            session: step.session,
-            runDir: step.runDir,
-            manifest: step.manifest,
-            fingerprint: input.fingerprint,
-            mapper,
-            request,
-          }),
-      });
-      parked = streamed.parked;
-      finished = true;
-      return streamed.outcome;
+      // A result the stub never delivered is never echoed; fail fast instead of waiting out the overall
+      // timeout, and well before the CLI's own MCP_TOOL_TIMEOUT could invent an error result.
+      let echoDeadlineHit = false;
+      const echoTimer = setTimeout(() => {
+        if (!mapper.awaitingEchoes()) return;
+        echoDeadlineHit = true;
+        void step.session.kill();
+      }, CLAUDE_CLI_WARM_ECHO_DEADLINE_MS);
+      echoTimer.unref?.();
+      try {
+        const streamed = yield* streamClaudeCliStep({
+          lines,
+          mapper,
+          request,
+          context,
+          park: () =>
+            parkClaudeCliStep({
+              registry,
+              enabled: true,
+              session: step.session,
+              runDir: step.runDir,
+              manifest: step.manifest,
+              fingerprint: input.fingerprint,
+              mapper,
+              request,
+            }),
+        });
+        parked = streamed.parked;
+        finished = true;
+        return streamed.outcome;
+      } catch (error) {
+        if (!echoDeadlineHit) throw error;
+        throw new ClaudeCliError(
+          "claude_cli_bridge_mismatch",
+          `${claudeCliUserMessage("claude_cli_bridge_mismatch")}: a delivered tool result was never echoed`,
+          { cause: error },
+        );
+      } finally {
+        clearTimeout(echoTimer);
+      }
     },
     // Kills what is left of the tree, removes the run dir and runs the registry's spill check.
     cleanup: async () => {

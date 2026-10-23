@@ -34,6 +34,10 @@ export interface ClaudeCliToolStepCollector {
   step(): ClaudeCliToolStep | undefined;
   /** The tool calls in the step's `tool_calls` chunk, as emitted (model-facing names); empty until then. */
   emittedCalls(): ReadonlyArray<{ id: string; name: string; arguments: string }>;
+  /** This segment's model call usage, from its `message_delta`; undefined until one carried usage. */
+  usage(): ClaudeCliUsage | undefined;
+  /** Continuation only: true while a delivered result has not been echoed back yet. */
+  awaitingEchoes(): boolean;
 }
 
 export interface ClaudeCliToolStepOptions {
@@ -225,6 +229,12 @@ export function createClaudeCliToolStepCollector(
     },
     emittedCalls() {
       return emitted;
+    },
+    usage() {
+      return usage;
+    },
+    awaitingEchoes() {
+      return delivered !== undefined && echoed.size < delivered.size;
     },
   };
 }
