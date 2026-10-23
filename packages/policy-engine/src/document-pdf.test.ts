@@ -85,6 +85,53 @@ describe("createDocumentPdf", () => {
 
     expect(pdf.warnings).toEqual([expect.stringContaining("1 character(s)")]);
   });
+
+  it("counts table cells in the Latin warning", () => {
+    const design = createArtifactDesignPlan({ kind: "pdf", title: "Table", format: "pdf" });
+    const rows = [{ Trail: "Mt. Baldy \u{1F3D4}", Note: "富士" }];
+    const pdf = createDocumentPdf({ title: "Table", sections: [], rows, design });
+
+    expect(pdf.warnings).toEqual([expect.stringContaining("3 character(s)")]);
+  });
+
+  it("keeps the bullets of a summary section promoted to the cover callout", () => {
+    const design = createArtifactDesignPlan({ kind: "pdf", title: "Summary", format: "pdf" });
+    const withBody = createDocumentPdf({
+      title: "Summary",
+      sections: [{ heading: "Summary", body: "Short overview.", bullets: ["Start early", "Carry water"] }],
+      design,
+    });
+    const bulletsOnly = createDocumentPdf({
+      title: "Summary",
+      sections: [{ heading: "Overview", body: "", bullets: ["Only bullets here"] }],
+      design,
+    });
+    const withBodyText = contentStreams(withBody.buffer).join("\n");
+    const bulletsOnlyText = contentStreams(bulletsOnly.buffer).join("\n");
+
+    expect(withBodyText).toContain("(Short overview.) Tj");
+    expect(withBodyText).toContain("(Start early) Tj");
+    expect(withBodyText).toContain("(Carry water) Tj");
+    expect(bulletsOnlyText).toContain("(Overview) Tj");
+    expect(bulletsOnlyText).toContain("(Only bullets here) Tj");
+  });
+
+  it("shortens a table cell taller than a page instead of drawing past the page", () => {
+    const design = createArtifactDesignPlan({ kind: "pdf", title: "Long Cell", format: "pdf" });
+    const rows = [
+      { Trail: "Short", Notes: "Fine." },
+      { Trail: "Long", Notes: Array.from({ length: 900 }, (_, index) => `word${index}`).join(" ") },
+    ];
+    const pdf = createDocumentPdf({ title: "Long Cell", sections: [], rows, design });
+    const baselines = contentStreams(pdf.buffer).flatMap((stream) =>
+      [...stream.matchAll(/ (-?[\d.]+) Td \(/gu)].map((match) => Number(match[1])),
+    );
+
+    expect(pdf.warnings).toEqual([expect.stringContaining("1 table cell(s) were too long")]);
+    // PDF y runs upward; the page footer sits at 792 - 760 = 32, so body text must stay above it.
+    expect(Math.min(...baselines)).toBeGreaterThanOrEqual(32);
+    expect(contentStreams(pdf.buffer).join("\n")).toContain("\x85) Tj");
+  });
 });
 
 describe("documents.create pdf design report", () => {

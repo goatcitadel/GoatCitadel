@@ -27,6 +27,8 @@ const BODY_LEADING = 1.45;
 const HEADING_SIZE = 17;
 const TABLE_SIZE = 9.5;
 const TABLE_PADDING = 6;
+const TABLE_HEADER_MAX_LINES = 3;
+const ELLIPSIS = String.fromCharCode(0x85);
 const BULLET_INDENT = 18;
 const SUMMARY_HEADING = /^(summary|overview|executive summary|introduction|at a glance)$/iu;
 
@@ -72,16 +74,28 @@ interface ReportTheme {
  */
 export function createDocumentPdf(input: DocumentPdfInput): DocumentPdfResult {
   const theme = resolveReportTheme(input.design);
-  const warnings = latinWarnings(input);
+  const table = rowsToTable(input.rows);
   const flow = new ReportFlow(theme, input.title);
   const sections = [...input.sections];
-  const summarySection = !input.body?.trim() && sections[0] && SUMMARY_HEADING.test(sections[0].heading.trim());
-  const summary = input.body?.trim() || (summarySection ? sections.shift()!.body.trim() : "");
+  // A leading summary section with body text becomes the cover callout; its bullets follow the
+  // callout. A bullets-only summary stays an ordinary section so nothing is dropped.
+  const promoted =
+    !input.body?.trim() && sections[0]?.body.trim() && SUMMARY_HEADING.test(sections[0].heading.trim())
+      ? sections.shift()
+      : undefined;
+  const summary = input.body?.trim() || promoted?.body.trim() || "";
 
   drawCover(flow, input, summary);
+  for (const bullet of promoted?.bullets ?? []) drawBullet(flow, bullet);
+  if (promoted && promoted.bullets.length > 0) flow.y += 18;
   for (const section of sections) drawSection(flow, section);
-  const table = rowsToTable(input.rows);
-  if (table) drawTable(flow, table);
+  const shortenedCells = table ? drawTable(flow, table) : 0;
+  const warnings = [
+    ...latinWarnings(input, table),
+    ...(shortenedCells > 0
+      ? [`${shortenedCells} table cell(s) were too long to fit on one page and were shortened with an ellipsis.`]
+      : []),
+  ];
 
   const writer = new PdfDocumentWriter();
   const catalogId = writer.reserve();
@@ -235,17 +249,30 @@ interface ReportTable {
   rows: string[][];
 }
 
-function drawTable(flow: ReportFlow, table: ReportTable): void {
+/** Draws the table and returns how many cells were shortened to fit one page. */
+function drawTable(flow: ReportFlow, table: ReportTable): number {
   const widths = columnWidths(table);
   const leading = TABLE_SIZE * 1.3;
-  const layoutRow = (cells: string[], font: PdfFont) =>
-    widths.map((width, index) =>
-      wrapWinAnsi(toWinAnsiBytes(cells[index] ?? ""), font, TABLE_SIZE, width - TABLE_PADDING * 2),
-    );
+  let shortenedCells = 0;
+  const layoutRow = (cells: string[], font: PdfFont, maxLines: number) =>
+    widths.map((width, index) => {
+      const cellWidth = width - TABLE_PADDING * 2;
+      const lines = wrapWinAnsi(toWinAnsiBytes(cells[index] ?? ""), font, TABLE_SIZE, cellWidth);
+      if (lines.length <= maxLines) return lines;
+      shortenedCells += 1;
+      const kept = lines.slice(0, maxLines);
+      kept[maxLines - 1] = truncateWinAnsi(`${kept[maxLines - 1]}${ELLIPSIS}`, font, TABLE_SIZE, cellWidth);
+      return kept;
+    });
   const rowHeight = (row: string[][]) => Math.max(1, ...row.map((lines) => lines.length)) * leading + TABLE_PADDING * 2;
-  const header = layoutRow(table.headers, "bold");
+  const header = layoutRow(table.headers, "bold", TABLE_HEADER_MAX_LINES);
   const headerHeight = rowHeight(header);
-  const rows = table.rows.map((cells) => layoutRow(cells, "regular"));
+  // A row may fill at most one page below the header; a longer cell is shortened, never drawn past the page.
+  const maxRowLines = Math.max(
+    1,
+    Math.floor((CONTENT_BOTTOM - CONTENT_TOP - headerHeight - TABLE_PADDING * 2) / leading),
+  );
+  const rows = table.rows.map((cells) => layoutRow(cells, "regular", maxRowLines));
   const tableHeight = rows.reduce((sum, row) => sum + rowHeight(row), headerHeight);
   // Keep a table that fits on one page together, and never start one with fewer than three rows.
   const openingHeight = rows.slice(0, 3).reduce((sum, row) => sum + rowHeight(row), headerHeight);
@@ -273,6 +300,7 @@ function drawTable(flow: ReportFlow, table: ReportTable): void {
     flow.y += height;
   }
   flow.y += 18;
+  return shortenedCells;
 }
 
 function drawTableRow(flow: ReportFlow, row: string[][], widths: number[], font: PdfFont, color: PdfColor): void {
@@ -371,11 +399,12 @@ function contrastRatio(left: PdfColor, right: PdfColor): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-function latinWarnings(input: DocumentPdfInput): string[] {
+function latinWarnings(input: DocumentPdfInput, table: ReportTable | undefined): string[] {
   const text = [
     input.title,
     input.body ?? "",
     ...input.sections.flatMap((section) => [section.heading, section.body, ...section.bullets]),
+    ...(table ? [...table.headers, ...table.rows.flat()] : []),
   ].join("\n");
   const { lost } = countWinAnsiLoss(text);
   return lost > 0
