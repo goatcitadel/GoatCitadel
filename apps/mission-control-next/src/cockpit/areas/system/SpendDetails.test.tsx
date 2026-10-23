@@ -130,3 +130,14 @@ it("does not show seven-day call coverage under a shorter window", async () => {
   expect(terms).not.toContain("Tracked events");
   expect(host.textContent).toContain("reported for the last 7 days");
 });
+
+it("keeps the last spend figures and marks them stale when a refresh fails", async () => {
+  await render();
+  api.fetchCostSummary.mockRejectedValue(new Error("offline"));
+  await act(async () => {
+    await client.refetchQueries();
+  });
+  expect(host.textContent).toContain("Providers");
+  await vi.waitFor(() => expect(host.textContent).toContain("Spend could not be refreshed"));
+  expect(host.textContent).not.toContain("Spend unavailable");
+});

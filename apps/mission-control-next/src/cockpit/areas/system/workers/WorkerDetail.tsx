@@ -55,6 +55,7 @@ export function WorkerDetail({
           <p>{worker.error}</p>
         </div>
       ) : null}
+      {worker.stale ? <p className="text-sm text-status-waiting">{worker.stale}</p> : null}
       {item ? <WorkerIdentitySection item={item} reconciliation={worker.reconciliation} /> : null}
       <Section title="Assignments">
         {assignments === null ? (

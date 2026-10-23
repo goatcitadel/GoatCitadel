@@ -41,17 +41,24 @@ export function DiagnosticsHostSection() {
     queryFn: fetchHealthSummary,
     refetchInterval: 30_000,
   });
-  const vitals = health.isError ? undefined : health.data?.systemVitals;
-  const checks = health.isError ? [] : (health.data?.daemonStatus?.diagnostics ?? []);
+  // A failed background refresh keeps the last reported figures on screen, marked stale.
+  const vitals = health.data?.systemVitals;
+  const checks = health.data?.daemonStatus?.diagnostics ?? [];
   return (
     <Section title="Host" description="The machine the GoatCitadel server runs on.">
       {health.isLoading ? <p className="text-sm text-fg-muted">Loading host figures…</p> : null}
-      {health.isError ? (
+      {health.isError && health.data ? (
+        <p className="text-sm text-status-waiting">
+          Host figures could not be refreshed: {describeApiError(health.error).summary} The last reported figures are
+          shown.
+        </p>
+      ) : null}
+      {health.isError && !health.data ? (
         <p className="text-sm text-status-failed">
           Host figures are unavailable: {describeApiError(health.error).summary}
         </p>
       ) : null}
-      {health.data && !health.isError ? (
+      {health.data ? (
         <>
           <MetricList label="Host figures" items={hostMetrics(vitals)} />
           <TechnicalDetails label="Host details">

@@ -21,7 +21,14 @@ type Loaded = {
   assignments: RemoteWorkerAssignmentPage | null;
   reconciliation: RemoteWorkerReconciliation | null;
   error: string | null;
+  /** Set when a refresh of this worker failed in part and the last loaded records are shown instead. */
+  stale: string | null;
 };
+
+const STALE = "Some of this worker's records could not be refreshed. The last loaded ones are shown.";
+
+const pick = <T>(result: PromiseSettledResult<T>, previous: T | null | undefined): T | null =>
+  result.status === "fulfilled" ? result.value : (previous ?? null);
 
 /**
  * One worker's detail, assignments and reconciliation, moved unchanged from the Classic workers page: every load is
@@ -67,12 +74,19 @@ export function useWorkerDetail(workspaceId: string, workerId: string | undefine
         fetchRemoteWorkerReconciliation(workspaceId, id),
       ]);
       if (sequence.current !== loadId) return;
-      setLoaded({
-        workerId: id,
-        detail: detail.status === "fulfilled" ? detail.value : null,
-        assignments: assignments.status === "fulfilled" ? assignments.value : null,
-        reconciliation: reconciliation.status === "fulfilled" ? reconciliation.value : null,
-        error: detail.status === "rejected" ? "This worker's detail is unavailable." : null,
+      setLoaded((prev) => {
+        // A failed part of a refresh keeps the last loaded value for the same worker, marked stale.
+        const last = prev?.workerId === id ? prev : null;
+        const failed = [detail, assignments, reconciliation].some((result) => result.status === "rejected");
+        const kept = pick(detail, last?.detail);
+        return {
+          workerId: id,
+          detail: kept,
+          assignments: pick(assignments, last?.assignments),
+          reconciliation: pick(reconciliation, last?.reconciliation),
+          error: detail.status === "rejected" && !kept ? "This worker's detail is unavailable." : null,
+          stale: failed && last ? STALE : null,
+        };
       });
       setLoading(false);
     },
@@ -170,6 +184,7 @@ export function useWorkerDetail(workspaceId: string, workerId: string | undefine
     assignments: current?.assignments ?? null,
     reconciliation: current?.reconciliation ?? null,
     error: current?.error ?? null,
+    stale: current?.stale ?? null,
     loading,
     loadingMore,
     moreError,

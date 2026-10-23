@@ -52,7 +52,8 @@ export function SpendDetails() {
   const backParams = new URLSearchParams(location.search);
   backParams.delete("window");
   backParams.delete("provider");
-  const summary = costs.isError ? undefined : costs.data;
+  // A failed background refresh keeps the last loaded figures on screen, marked stale.
+  const summary = costs.data;
   const allProviders = summary
     ? projectProviderCostRows(filterCostSummary(summary, { ...filters, provider: "all" }))
     : [];
@@ -73,7 +74,12 @@ export function SpendDetails() {
         }
       />
       {costs.isLoading ? <p className="text-sm text-fg-muted">Loading usage and cost…</p> : null}
-      {costs.isError ? (
+      {costs.isError && summary ? (
+        <p className="text-sm text-status-waiting">
+          Spend could not be refreshed: {describeApiError(costs.error).summary} The last loaded figures are shown.
+        </p>
+      ) : null}
+      {costs.isError && !summary ? (
         <EmptyState
           title="Spend unavailable"
           description={describeApiError(costs.error).summary}

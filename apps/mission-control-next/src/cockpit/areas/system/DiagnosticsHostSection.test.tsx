@@ -83,3 +83,14 @@ it("says the host could not be read when the health summary fails", async () => 
   await render();
   expect(host.textContent).toContain("Host figures are unavailable");
 });
+
+it("keeps the last host figures and marks them stale when a refresh fails", async () => {
+  api.fetchHealthSummary.mockResolvedValueOnce({ systemVitals: vitals, daemonStatus: { diagnostics: [] } });
+  await render();
+  api.fetchHealthSummary.mockRejectedValue(new Error("offline"));
+  await act(async () => {
+    await client.refetchQueries();
+  });
+  expect(metric("Free memory")).toBe("4.0 GB");
+  await vi.waitFor(() => expect(host.textContent).toContain("Host figures could not be refreshed"));
+});

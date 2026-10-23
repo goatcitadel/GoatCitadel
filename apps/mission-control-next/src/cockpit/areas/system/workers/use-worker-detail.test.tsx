@@ -120,3 +120,16 @@ it("keeps the loaded assignments on screen while the same worker reloads", async
   });
   expect(seen.current?.assignments?.items).toHaveLength(2);
 });
+
+it("keeps the last loaded assignments and says so when a refresh of them fails", async () => {
+  await act(async () => root.render(<DetailProbe workspaceId="ws" workerId="w1" />));
+  api.fetchRemoteWorkerAssignments.mockRejectedValueOnce(new Error("timeout"));
+  await act(async () => {
+    await seen.current!.refresh();
+  });
+  expect(seen.current?.assignments?.items.map((item) => item.assignmentId)).toEqual(["a1"]);
+  expect(seen.current?.stale).toBe(
+    "Some of this worker's records could not be refreshed. The last loaded ones are shown.",
+  );
+  expect(seen.current?.error).toBeNull();
+});
