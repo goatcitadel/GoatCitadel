@@ -74,7 +74,9 @@ export function classifyUsabilityOutcome(turn, task) {
   const expect = task.expect;
   const toolRuns = Array.isArray(trace.toolRuns) ? trace.toolRuns : [];
   const reasons = [];
-  if (trace.routing?.effectiveProviderId !== PROVIDER_ID) {
+  // A turn cancelled before dispatch never records a provider; any provider it did record must still be the CLI.
+  const cancelledBeforeRouting = trace.status === "cancelled" && !trace.routing?.effectiveProviderId;
+  if (!cancelledBeforeRouting && trace.routing?.effectiveProviderId !== PROVIDER_ID) {
     reasons.push(`resolved to provider ${trace.routing?.effectiveProviderId ?? "missing"}`);
   }
   if (!expect.status.includes(trace.status)) {

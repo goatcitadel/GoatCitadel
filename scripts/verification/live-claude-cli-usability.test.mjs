@@ -202,3 +202,18 @@ test("runUsabilityTask lets the stream end on its own after the turn settles, so
   await runUsabilityTask("http://gateway.test", byId("C-01"), { deps });
   assert.deepEqual(order, ["settle", "ended", "finish"]);
 });
+
+test("a turn cancelled before it was routed is not a provider failure, but a routed one must be the CLI", () => {
+  const c02 = byId("C-02");
+  assert.equal(
+    classifyUsabilityOutcome({ trace: { ...base, status: "cancelled", routing: {} } }, c02).verdict,
+    "passed",
+  );
+  assert.equal(
+    classifyUsabilityOutcome(
+      { trace: { ...base, status: "cancelled", routing: { effectiveProviderId: "openai" } } },
+      c02,
+    ).verdict,
+    "failed",
+  );
+});
