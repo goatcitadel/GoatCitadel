@@ -121,3 +121,12 @@ it("narrows to the provider in the URL", async () => {
   expect(button("OpenAI").getAttribute("aria-pressed")).toBe("true");
   expect([...host.querySelectorAll("h3")].map((node) => node.textContent)).toEqual(["OpenAI"]);
 });
+
+it("does not show seven-day call coverage under a shorter window", async () => {
+  route.search = "?window=1";
+  await render();
+  const terms = [...host.querySelectorAll("dt")].map((node) => node.textContent);
+  expect(terms).not.toContain("Calls with a known cost");
+  expect(terms).not.toContain("Tracked events");
+  expect(host.textContent).toContain("reported for the last 7 days");
+});

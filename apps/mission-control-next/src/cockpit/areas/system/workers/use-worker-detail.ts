@@ -58,7 +58,8 @@ export function useWorkerDetail(workspaceId: string, workerId: string | undefine
   const load = useCallback(
     async (id: string) => {
       const loadId = ++sequence.current;
-      setLoaded(null);
+      // A reload of the same worker keeps its records on screen; only a different worker starts empty.
+      setLoaded((prev) => (prev?.workerId === id ? prev : null));
       setLoading(true);
       const [detail, assignments, reconciliation] = await Promise.allSettled([
         fetchRemoteWorkerDetail(workspaceId, id),

@@ -121,16 +121,16 @@ export function SpendDetails() {
 
           <Section title="Coverage" description={projection.coverageDescription}>
             <p className="mb-2 text-sm text-fg-secondary">
-              {filters.provider === "all"
+              {filters.provider === "all" && filters.days === 7
                 ? "How much of the recorded usage has a known cost, for every provider together."
-                : "Call coverage is reported for all providers together, so it is not split by provider here."}
+                : "Call coverage is reported for the last 7 days and all providers together, so it is not shown for this narrower view."}
             </p>
             <MetricList
               label="Spend coverage"
               items={[
                 { term: "Known cost", value: projection.costLabel },
                 { term: "Recorded tokens", value: projection.tokenLabel },
-                ...(filters.provider === "all"
+                ...(filters.provider === "all" && filters.days === 7
                   ? [
                       {
                         term: "Calls with a known cost",

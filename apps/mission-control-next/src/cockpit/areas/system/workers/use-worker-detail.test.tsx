@@ -103,3 +103,20 @@ it("withholds an event page whose generation differs from the selected assignmen
   expect(events.current?.page).toBeNull();
   expect(events.current?.error).toBe("Events for this assignment are unavailable.");
 });
+
+it("keeps the loaded assignments on screen while the same worker reloads", async () => {
+  await act(async () => root.render(<DetailProbe workspaceId="ws" workerId="w1" />));
+  expect(seen.current?.assignments?.items).toHaveLength(1);
+  let finish!: (value: unknown) => void;
+  api.fetchRemoteWorkerAssignments.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+  let reload!: Promise<unknown>;
+  act(() => {
+    reload = seen.current!.refresh();
+  });
+  expect(seen.current?.assignments?.items.map((item) => item.assignmentId)).toEqual(["a1"]);
+  await act(async () => {
+    finish(page(["a1", "a2"]));
+    await reload;
+  });
+  expect(seen.current?.assignments?.items).toHaveLength(2);
+});

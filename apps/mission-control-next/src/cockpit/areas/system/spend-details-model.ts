@@ -38,12 +38,14 @@ function providerDay(day: Day, provider: string): Day {
 /**
  * The summary narrowed to the latest `days` days and, optionally, one provider, so the shared Spend projections and
  * chart can render it unchanged. A missing cost stays missing; the window-wide count of calls without a cost is
- * dropped for a single provider, because it cannot be split by provider.
+ * dropped for a single provider or a shorter window, because it cannot be split by provider or by day.
  */
 export function filterCostSummary(summary: CostSummaryResponse, filters: SpendFilters): CostSummaryResponse {
   const kept = (summary.dailySeries ?? []).slice(-filters.days);
   const keptDates = new Set(kept.map((day) => day.isoDate));
   const byProvider = filters.provider !== "all";
+  // Call coverage is counted for the whole seven days; it cannot be split by provider or by day.
+  const narrowed = byProvider || filters.days < 7;
   const dailySeries = byProvider ? kept.map((day) => providerDay(day, filters.provider)) : kept;
   const items = byProvider
     ? dailySeries.map((day) => ({
@@ -64,7 +66,7 @@ export function filterCostSummary(summary: CostSummaryResponse, filters: SpendFi
     items,
     dailySeries,
     usageAvailability:
-      byProvider && availability && metrics
+      narrowed && availability && metrics
         ? {
             ...availability,
             metricAvailability: { ...metrics, costUsd: { ...metrics.costUsd, unknownAttemptCount: 0 } },

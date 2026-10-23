@@ -36,7 +36,13 @@ function BackupsSection({
     !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined,
     sourceFailed(data, "health") ? undefined : latest,
   );
-  const check = backupHealthCheck(trust, Boolean(latest));
+  // Without the health summary nothing says whether the latest backup was verified: say so, never "No backup yet".
+  const check = sourceFailed(data, "health")
+    ? {
+        status: { label: "Unknown", tone: "neutral" as const },
+        detail: "Backup verification could not be read because the health summary is unavailable.",
+      }
+    : backupHealthCheck(trust, Boolean(latest) || data.backups.length > 0);
   return (
     <Section
       id="ops-runtime-backups"

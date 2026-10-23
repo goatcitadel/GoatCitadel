@@ -80,3 +80,11 @@ it("says MCP servers could not be read when that source failed, instead of listi
   render(runtimeData({}, ["mcpServers"]));
   expect(section("Integrations").textContent).toContain("MCP servers could not be read.");
 });
+
+it("does not claim there is no backup when the health summary failed but backup records were read", () => {
+  render(runtimeData({ backups: [backup] }, ["health"]));
+  const backups = section("Backups");
+  expect(backups.textContent).not.toContain("No backup yet");
+  expect(backups.textContent).toContain("Unknown");
+  expect(backups.textContent).toContain("3 files");
+});

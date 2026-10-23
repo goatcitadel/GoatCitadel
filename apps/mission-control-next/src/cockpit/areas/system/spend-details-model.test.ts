@@ -109,3 +109,11 @@ describe("providerDayRows", () => {
     expect(rows[1]?.partial).toBe(false);
   });
 });
+
+describe("filterCostSummary window coverage", () => {
+  it("drops the seven-day unknown-call count for a shorter window", () => {
+    const result = filterCostSummary(summary(), { days: 3, provider: "all" });
+    expect(result.usageAvailability?.metricAvailability?.costUsd.unknownAttemptCount).toBe(0);
+    expect(result.usageAvailability?.metricAvailability?.costUsd.complete).toBe(false);
+  });
+});
