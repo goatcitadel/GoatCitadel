@@ -1,7 +1,12 @@
-import type { LlmConfigFile } from "@goatcitadel/contracts";
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import type { ChatCompletionRequest, LlmConfigFile } from "@goatcitadel/contracts";
+import { describe, expect, it, vi } from "vitest";
 import { createNoopSecretStore } from "../test/llm-fixtures.js";
-import { createClaudeCodeCliRuntime } from "./llm-provider-claude-code-cli.js";
+import type { ClaudeCliSession } from "./claude-code-cli-session.js";
+import { buildClaudeCliToolManifest } from "./claude-code-cli-tool-bridge.js";
+import { fingerprintClaudeCliStep } from "./claude-code-cli-warm-match.js";
+import { createClaudeCodeCliRuntime, type ClaudeCodeCliRuntime } from "./llm-provider-claude-code-cli.js";
 import { LlmService } from "./llm-service.js";
 
 function buildConfig(capabilities?: Record<string, boolean>): LlmConfigFile {
@@ -110,13 +115,75 @@ describe("claude-code-cli capability truth", () => {
   });
 
   it("the warm flag does not change reported toolCalling", () => {
-    expect(cliCapabilities(createService(buildConfig(), () => false, () => true)).toolCalling).toBe(false);
-    expect(cliCapabilities(createService(buildConfig(), () => true, () => false)).toolCalling).toBe(true);
-    expect(cliCapabilities(createService(buildConfig(), () => true, () => true)).toolCalling).toBe(true);
+    expect(
+      cliCapabilities(
+        createService(
+          buildConfig(),
+          () => false,
+          () => true,
+        ),
+      ).toolCalling,
+    ).toBe(false);
+    expect(
+      cliCapabilities(
+        createService(
+          buildConfig(),
+          () => true,
+          () => false,
+        ),
+      ).toolCalling,
+    ).toBe(true);
+    expect(
+      cliCapabilities(
+        createService(
+          buildConfig(),
+          () => true,
+          () => true,
+        ),
+      ).toolCalling,
+    ).toBe(true);
   });
 
-  it("close() reaps the warm registry without error", async () => {
-    const service = createService(buildConfig(), () => true, () => true);
+  it("close() kills a parked warm session", async () => {
+    const service = createService(
+      buildConfig(),
+      () => true,
+      () => true,
+    );
+    // The runtime is private; reach its registry to park one entry as the provider would.
+    const { warm } = (service as unknown as { claudeCodeCli: ClaudeCodeCliRuntime }).claudeCodeCli;
+    const kill = vi.fn(async () => undefined);
+    const session: ClaudeCliSession = {
+      pid: 4242,
+      exited: new Promise(() => undefined),
+      segment: vi.fn(),
+      park: vi.fn(),
+      kill,
+    };
+    const manifest = buildClaudeCliToolManifest([]);
+    const request = {
+      model: "claude-sonnet-5-5",
+      messages: [{ role: "user", content: "hi" }],
+    } as ChatCompletionRequest;
+    warm.park({
+      session,
+      runDir: path.join(os.tmpdir(), "goatcitadel-claude-cli", "run-close-test-missing"),
+      manifest,
+      fingerprint: fingerprintClaudeCliStep({
+        request,
+        attribution: { sessionId: "s1", turnId: "t1" },
+        model: "claude-sonnet-5-5",
+        system: "",
+        manifest,
+      })!,
+      emitted: { text: "", calls: [] },
+      pendingIds: [],
+    });
+    expect(warm.size).toBe(1);
+
     await expect(service.close()).resolves.toBeUndefined();
+
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(warm.size).toBe(0);
   });
 });

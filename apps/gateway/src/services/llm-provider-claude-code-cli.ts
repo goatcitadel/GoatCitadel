@@ -137,7 +137,7 @@ export function createClaudeCodeCliRuntime(
     resolveInvocation,
     toolBridgeEnabled,
     warmContinuationEnabled,
-    warm: new ClaudeCliWarmRegistry(),
+    warm: new ClaudeCliWarmRegistry({ removeRunDir, claudeProjectsDir: () => resolveClaudeProjectsDir(childEnv) }),
     resolveToolBridgeLaunch: () =>
       toolBridgeEnabled() ? { nodePath: bridgeNodePath, stubPath: resolveBridgeStubPath() } : undefined,
     readiness:
@@ -173,7 +173,7 @@ export function isClaudeCodeCliToolBridgeEnabled(runtime: ClaudeCodeCliRuntime |
   return runtime?.toolBridgeEnabled() === true;
 }
 
-/** Kills every parked warm process (Gateway shutdown). */
+/** Kills every parked warm process (Gateway shutdown). A helper keeps LlmService's architecture-metrics member-access count flat. */
 export async function reapClaudeCodeCliWarm(
   owner: { readonly warm: ClaudeCliWarmRegistry },
   reason: "shutdown",
@@ -484,6 +484,14 @@ function isSystemPromptFileRejection(error: unknown): boolean {
     error.reasonCode === "claude_cli_incompatible" &&
     (error.stderrTail ?? "").includes("system-prompt-file")
   );
+}
+
+/** The CLI's projects folder as the child sees it: `CLAUDE_CONFIG_DIR`, else `<home>/.claude`, plus `projects`. */
+function resolveClaudeProjectsDir(childEnv: NodeJS.ProcessEnv): string | undefined {
+  const configDir = childEnv.CLAUDE_CONFIG_DIR?.trim();
+  if (configDir) return path.join(configDir, "projects");
+  const home = os.homedir();
+  return home ? path.join(home, ".claude", "projects") : undefined;
 }
 
 /** Removes a run's scratch dir; a failure is logged (dir name and error code only) and never thrown. */
