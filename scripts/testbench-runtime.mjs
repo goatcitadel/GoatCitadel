@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DETERMINISTIC_LLM_KEY_ENV } from "./verification/lib/scenarios/deterministic-llm-stub.mjs";
@@ -102,20 +103,40 @@ export function parseClaudeAuthStatus(stdout) {
 }
 
 const CLAUDE_AUTH_STATUS_TIMEOUT_MS = 15_000;
+const WINDOWS_CLI_SHIM_EXTENSIONS = new Set([".cmd", ".bat", ".ps1"]);
 
 /**
  * Runs `claude auth status --json` (honouring GOATCITADEL_CLAUDE_CLI_PATH) and parses it. Its output names the
  * signed-in account, so callers print only `ready` and `reason`.
  */
-export function readClaudeCodeCliAuthStatus({ env = process.env, spawn = spawnSync } = {}) {
+export function readClaudeCodeCliAuthStatus({
+  env = process.env,
+  spawn = spawnSync,
+  platform = process.platform,
+  fileExists = existsSync,
+  execPath = process.execPath,
+} = {}) {
   const command = env[CLAUDE_CLI_PATH_ENV]?.trim() || "claude";
   const args = ["auth", "status", "--json"];
   const options = { encoding: "utf8", timeout: CLAUDE_AUTH_STATUS_TIMEOUT_MS };
-  // A bare "claude" on Windows is a .cmd shim that only a shell resolves; the shell gets one fixed command string.
-  const result =
-    process.platform === "win32" && !path.isAbsolute(command)
-      ? spawn(`"${command}" ${args.join(" ")}`, { ...options, shell: true })
-      : spawn(command, args, options);
+  let result;
+  if (platform === "win32" && !path.win32.isAbsolute(command)) {
+    // A bare "claude" on Windows is a .cmd shim that only a shell resolves; the shell gets one fixed command string.
+    result = spawn(`"${command}" ${args.join(" ")}`, { ...options, shell: true });
+  } else if (platform === "win32" && WINDOWS_CLI_SHIM_EXTENSIONS.has(path.win32.extname(command).toLowerCase())) {
+    // Same rule as the gateway's resolveClaudeCliInvocation: an npm shim runs as `node <its cli.js>`.
+    const cliJs = path.win32.join(
+      path.win32.dirname(command),
+      "node_modules",
+      "@anthropic-ai",
+      "claude-code",
+      "cli.js",
+    );
+    if (!fileExists(cliJs)) return { ready: false, reason: "cli_unsupported_shim" };
+    result = spawn(execPath, [cliJs, ...args], options);
+  } else {
+    result = spawn(command, args, options);
+  }
   if (result?.error) return { ready: false, reason: "cli_unavailable" };
   return parseClaudeAuthStatus(result?.stdout);
 }

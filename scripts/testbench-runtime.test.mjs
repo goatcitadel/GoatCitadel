@@ -316,3 +316,52 @@ test("readClaudeCodeCliAuthStatus runs `auth status --json` and reports an unava
   const missing = readClaudeCodeCliAuthStatus({ env: {}, spawn: () => ({ error: new Error("ENOENT") }) });
   assert.deepEqual(missing, { ready: false, reason: "cli_unavailable" });
 });
+
+test("readClaudeCodeCliAuthStatus runs a Windows npm shim through its cli.js, as the gateway does", () => {
+  const shimDir = path.win32.join("C:", "npm");
+  const cliJs = path.win32.join(shimDir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+  const nodeExe = path.win32.join("C:", "node", "node.exe");
+  const ok = JSON.stringify({ loggedIn: true });
+  for (const shim of ["claude.cmd", "claude.bat", "claude.ps1"]) {
+    const calls = [];
+    const status = readClaudeCodeCliAuthStatus({
+      env: { GOATCITADEL_CLAUDE_CLI_PATH: path.win32.join(shimDir, shim) },
+      platform: "win32",
+      execPath: nodeExe,
+      fileExists: (file) => file === cliJs,
+      spawn: (command, args, options) => {
+        calls.push({ command, args, shell: options?.shell });
+        return { stdout: ok };
+      },
+    });
+    assert.equal(status.ready, true, shim);
+    assert.deepEqual(calls, [{ command: nodeExe, args: [cliJs, "auth", "status", "--json"], shell: undefined }]);
+  }
+  const missing = readClaudeCodeCliAuthStatus({
+    env: { GOATCITADEL_CLAUDE_CLI_PATH: path.win32.join(shimDir, "claude.cmd") },
+    platform: "win32",
+    fileExists: () => false,
+    spawn: () => assert.fail("must not spawn an unsupported shim"),
+  });
+  assert.deepEqual(missing, { ready: false, reason: "cli_unsupported_shim" });
+});
+
+test("readClaudeCodeCliAuthStatus uses a shell only for a bare command on Windows", () => {
+  const seen = [];
+  const spawn = (command, args, options) => {
+    seen.push({ command, args, shell: (Array.isArray(args) ? options : args)?.shell === true });
+    return { stdout: JSON.stringify({ loggedIn: true }) };
+  };
+  readClaudeCodeCliAuthStatus({ env: {}, platform: "win32", spawn });
+  readClaudeCodeCliAuthStatus({ env: {}, platform: "linux", spawn });
+  const nativeExe = path.win32.join("C:", "bin", "claude.exe");
+  readClaudeCodeCliAuthStatus({ env: { GOATCITADEL_CLAUDE_CLI_PATH: nativeExe }, platform: "win32", spawn });
+  assert.deepEqual(
+    seen.map((call) => [call.command, call.shell]),
+    [
+      ['"claude" auth status --json', true],
+      ["claude", false],
+      [nativeExe, false],
+    ],
+  );
+});
