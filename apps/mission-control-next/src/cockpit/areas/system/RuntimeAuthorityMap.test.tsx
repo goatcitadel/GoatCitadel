@@ -201,6 +201,58 @@ describe("cockpit runtime authority map", () => {
     expect(container.textContent).toContain("Source: durable run rows");
   });
 
+  it("names a per-record approval and run in operator words, keeping the server label in technical details", async () => {
+    const approval = (approvalId: string, kind: string) =>
+      item({
+        id: `approval:${approvalId}`,
+        domain: "approvals",
+        label: `${kind} approval`,
+        stateMessage: { code: "approval_approved_effects_settled" },
+        canonicalRef: { kind: "approval", approvalId, label: "Open approval detail" },
+      });
+    const run = (runId: string, workflowKey: string) =>
+      item({
+        id: `run:${runId}`,
+        label: `${workflowKey} run`,
+        stateMessage: { code: "run_completed" },
+        canonicalRef: { kind: "durable_run", runId, label: "Open run detail" },
+      });
+    projection.value.data = {
+      items: [
+        approval("ap-1", "code_mode.run"),
+        approval("ap-3", "tool.invoke"),
+        approval("ap-2", "file.write"),
+        run("run-1", "chat.turn.execute"),
+        run("run-2", "custom.workflow"),
+        item({ id: "run:run-3", label: "Durable run", stateMessage: { code: "run_status_unknown" } }),
+      ],
+    };
+    preferences.showTechnicalDetails = false;
+    await render();
+    expect([...container.querySelectorAll("li h3")].map((h) => h.textContent)).toEqual([
+      "Approval: Run code (Code Mode)",
+      "Approval: Use a tool",
+      "Approval",
+      "Run: Chat reply",
+      "Run",
+      "Run",
+    ]);
+    const text = container.textContent ?? "";
+    expect(text).toContain("Approved; every follow-on action reached a final outcome.");
+    expect(text).toContain("This run finished.");
+    for (const raw of ["code_mode.run", "file.write", "chat.turn.execute", "custom.workflow", "Durable"])
+      expect(text).not.toContain(raw);
+    preferences.showTechnicalDetails = true;
+    await render();
+    for (const label of [
+      "code_mode.run approval",
+      "file.write approval",
+      "chat.turn.execute run",
+      "custom.workflow run",
+    ])
+      expect(container.textContent).toContain(label);
+  });
+
   it("shows an unavailable projection and reloads on request", async () => {
     projection.value.error = "The scoped runtime authority envelope is unavailable.";
     await render();
