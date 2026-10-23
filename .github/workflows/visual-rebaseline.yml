@@ -25,7 +25,9 @@ permissions:
 
 jobs:
   visual-rebaseline:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is moving to 26.04, where the pinned Playwright cannot install Chromium, and the visual
+    # baselines are rendered on 24.04. Move all Playwright workflows together, with a rebaseline, when upgrading.
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - name: Checkout

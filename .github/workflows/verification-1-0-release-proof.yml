@@ -29,74 +29,74 @@ jobs:
         include:
           - laneScript: verify:runtime:truth
             artifactSlug: runtime-truth
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:auth:matrix
             artifactSlug: auth-matrix
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:desktop
             artifactSlug: desktop
             runner: windows-latest
           - laneScript: verify:code-mode:sandbox
             artifactSlug: code-mode-sandbox
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:code-mode:hostile-sandbox
             artifactSlug: code-mode-hostile-sandbox
             runner: windows-latest
           - laneScript: verify:mesh:readiness
             artifactSlug: mesh-readiness
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:a2a:full
             artifactSlug: a2a-full
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:agentic:governance
             artifactSlug: agentic-governance
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:agentic:proof
             artifactSlug: agentic-proof
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:orchestration:perf
             artifactSlug: orchestration-performance
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:channels:runtime
             artifactSlug: channels-runtime
             reviewLane: agentic-channels-runtime
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:extensions:package
             artifactSlug: extensions-package
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:ui:parity
             artifactSlug: ui-parity
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:memory:truth
             artifactSlug: memory-truth
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:realtime:truth
             artifactSlug: realtime-truth
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:architecture:metrics
             artifactSlug: architecture-metrics
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:operator:proof
             artifactSlug: operator-proof
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:durable:recovery
             artifactSlug: durable-recovery
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:surface:regression
             artifactSlug: surface-regression
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:visual:regression
             artifactSlug: visual-regression
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:backup:roundtrip
             artifactSlug: backup-roundtrip
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:catalog:parity
             artifactSlug: catalog-parity
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - laneScript: verify:api:compat
             artifactSlug: api-compat
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -167,7 +167,7 @@ jobs:
           if-no-files-found: error
 
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Checkout
