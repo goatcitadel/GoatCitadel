@@ -2798,6 +2798,26 @@ export class ApprovalEffectsService {
         correlationId: asOptionalString(payload.correlationId) ?? effect.approvalId,
         payload: asRecord(payload.payload),
       });
+      // An approval answered before the turn commits its wait finds the run still running. The turn
+      // parks moments later, so retry rather than skip; a turn that ends without parking is skipped then.
+      if (
+        wakeResult.outcome === "skipped_not_waiting" &&
+        wakeResult.run?.status === "running" &&
+        (await this.isLinkedChatTurnStillRunning(effect.targetId, runId))
+      ) {
+        await this.deferClaimedEffectForRetry(
+          effect,
+          this.workerId,
+          new Error("The Chat turn has not parked on its approval yet."),
+          {
+            deliveryState: "retry_scheduled",
+            reason: "chat_turn_not_parked",
+            runId,
+          },
+          APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS,
+        );
+        return undefined;
+      }
       const wakeResultRecord = buildWakeResultRecord(wakeResult, effect, {
         turnId: effect.targetId,
         runId,
@@ -2865,6 +2885,16 @@ export class ApprovalEffectsService {
    * previously claimed wake parked until the approved action effect and its
    * model-consumable tool evidence have both committed.
    */
+  /** Whether the linked Chat turn is still executing the run this wake targets, i.e. it has not parked yet. */
+  private async isLinkedChatTurnStillRunning(turnId: string, runId: string): Promise<boolean> {
+    try {
+      const trace = await this.ctx.storage.chatTurnTraces.get(turnId);
+      return trace.status === "running" && trace.durable?.runId === runId;
+    } catch {
+      return false;
+    }
+  }
+
   private async deferLinkedChatTurnWakeUntilApprovedActionSettles(effect: ApprovalEffectRecord): Promise<boolean> {
     const approvalEffects = (this.ctx.storage as Partial<Pick<Storage, "approvalEffects">>).approvalEffects;
     if (!approvalEffects || typeof approvalEffects.listByApproval !== "function") {

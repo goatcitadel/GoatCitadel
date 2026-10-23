@@ -3247,6 +3247,9 @@ function isDurableChatWaitingStatus(
   return status === "waiting_for_approval" || status === "waiting_for_user_input" || status === "waiting_for_tool";
 }
 
+/** Tool-run states an approval-gated run reaches once its approval has been answered and acted on. */
+const APPROVAL_RESOLVED_TOOL_RUN_STATUSES: ReadonlySet<string> = new Set(["executed", "failed", "blocked"]);
+
 function hasDurableChatWaitingEvidence(trace: ChatTurnTraceRecord, toolRuns: ChatTurnTraceRecord["toolRuns"]): boolean {
   if (trace.status === "waiting_for_user_input") {
     return Boolean(
@@ -3256,12 +3259,18 @@ function hasDurableChatWaitingEvidence(trace: ChatTurnTraceRecord, toolRuns: Cha
     );
   }
   if (trace.status === "waiting_for_approval") {
-    return toolRuns.some(
-      (toolRun) =>
-        isDurableChatWaitToolRunLinked(toolRun, trace) &&
-        toolRun.status === "approval_required" &&
-        Boolean(toolRun.approvalId?.trim()),
+    const linked = toolRuns.filter((toolRun) => isDurableChatWaitToolRunLinked(toolRun, trace));
+    if (linked.some((toolRun) => toolRun.status === "approval_required" && Boolean(toolRun.approvalId?.trim()))) {
+      return true;
+    }
+    // An approval answered before the wait committed has already executed (or failed) its action,
+    // so the run the turn parked on, its latest, is no longer approval_required. It is still the
+    // approval this turn waits on, and the linked Chat wake resumes it.
+    const parkedOn = linked.reduce<(typeof linked)[number] | undefined>(
+      (latest, toolRun) => (!latest || toolRun.startedAt > latest.startedAt ? toolRun : latest),
+      undefined,
     );
+    return Boolean(parkedOn?.approvalId?.trim() && APPROVAL_RESOLVED_TOOL_RUN_STATUSES.has(parkedOn.status));
   }
   return toolRuns.some(
     (toolRun) => isDurableChatWaitToolRunLinked(toolRun, trace) && toolRun.status === "started" && !toolRun.finishedAt,
