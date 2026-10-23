@@ -34,6 +34,8 @@ export const LANE = "claude-cli-usability";
 const PROVIDER_ID = "claude-code-cli";
 const TURN_TIMEOUT_MS = 300_000;
 const POLL_MS = 500;
+// The gateway holds a session's write lock until the stream sends `done`, seconds after the turn settles.
+const STREAM_END_GRACE_MS = 30_000;
 const SETTLED_STATUSES = new Set(["completed", "partial", "failed", "cancelled"]);
 const RAW_TOOL_MARKUP = /<invoke\s+name="/u;
 // prepareTestbenchRuntime needs a stub URL for the fixture config it then hands to writeClaudeCodeCliProviderConfig,
@@ -307,7 +309,7 @@ async function openTurnStream(gatewayUrl, input) {
     await finish();
     throw streamClosedWithoutTurnError(input.task.id, errorEvents);
   }
-  return { turnId, started, finish };
+  return { turnId, started, ended: pump, finish };
 }
 
 async function cancelTurn(gatewayUrl, input) {
@@ -360,6 +362,11 @@ export async function runUsabilityTask(gatewayUrl, task, options = {}) {
       stopOnUserInput: options.stopOnUserInput === true,
     });
   } finally {
+    if (settled) {
+      let timer;
+      await Promise.race([stream.ended, new Promise((resolve) => (timer = setTimeout(resolve, STREAM_END_GRACE_MS)))]);
+      clearTimeout(timer);
+    }
     streamed = await stream.finish();
   }
   let forkSessionId;

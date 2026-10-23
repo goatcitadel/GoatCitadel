@@ -174,3 +174,31 @@ test("streamClosedWithoutTurnError carries the stream's own error events", () =>
     /C-03 stream closed without naming its turn: STATE_CONFLICT Turn is not editable; second/,
   );
 });
+
+test("runUsabilityTask lets the stream end on its own after the turn settles, so the session write lock is released", async () => {
+  const order = [];
+  const deps = {
+    createTaskSession: async () => "s1",
+    openTurnStream: async () => ({
+      turnId: "t1",
+      started: performance.now(),
+      ended: new Promise((resolve) =>
+        setTimeout(() => {
+          order.push("ended");
+          resolve();
+        }, 20),
+      ),
+      finish: async () => {
+        order.push("finish");
+        return { sseEventTypes: ["done"], firstDeltaSeconds: 1 };
+      },
+    }),
+    cancelTurn: async () => undefined,
+    settleTurn: async () => {
+      order.push("settle");
+      return { turn: { trace: { status: "completed" } }, approvalsResolved: 0 };
+    },
+  };
+  await runUsabilityTask("http://gateway.test", byId("C-01"), { deps });
+  assert.deepEqual(order, ["settle", "ended", "finish"]);
+});
