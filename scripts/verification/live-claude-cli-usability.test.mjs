@@ -149,3 +149,14 @@ test("runUsabilityTask settles the turn (and its approvals) while the stream is 
   await runUsabilityTask("http://gateway.test", byId("C-02"), { deps });
   assert.deepEqual(order, ["cancel", "settle:t1:none", "finish"]);
 });
+
+test("classifyUsabilityOutcome fails a reply that is raw tool-call markup, even when nothing else was expected", () => {
+  const markup = '<invoke name="fs.list">\n<parameter name="path">C:\tmp</parameter>\n</invoke>';
+  const k02 = classifyUsabilityOutcome(turn({}, markup), byId("K-02"));
+  assert.equal(k02.verdict, "failed");
+  assert.match(k02.reasons.join(";"), /raw tool-call markup/);
+  assert.equal(
+    classifyUsabilityOutcome(turn({}, "The invoke keyword is described below."), byId("K-02")).verdict,
+    "passed",
+  );
+});

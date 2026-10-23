@@ -35,6 +35,7 @@ const PROVIDER_ID = "claude-code-cli";
 const TURN_TIMEOUT_MS = 300_000;
 const POLL_MS = 500;
 const SETTLED_STATUSES = new Set(["completed", "partial", "failed", "cancelled"]);
+const RAW_TOOL_MARKUP = /<invoke\s+name="/u;
 // prepareTestbenchRuntime needs a stub URL for the fixture config it then hands to writeClaudeCodeCliProviderConfig,
 // which replaces the whole provider list; nothing ever calls this address.
 const UNUSED_STUB_URL = "http://127.0.0.1:9/v1";
@@ -103,6 +104,10 @@ export function classifyUsabilityOutcome(turn, task) {
   }
   if (typeof expect.reply === "string" && turn?.assistantMessage?.content?.trim() !== expect.reply) {
     reasons.push(`reply was not exactly ${expect.reply}`);
+  }
+  // A tool call the provider never executed can come back as plain text; that is a wrong answer, not a pass.
+  if (RAW_TOOL_MARKUP.test(turn?.assistantMessage?.content ?? "")) {
+    reasons.push("the reply is raw tool-call markup instead of an answer");
   }
   if (reasons.length > 0) return { verdict: "failed", reasons };
   if (declined)
