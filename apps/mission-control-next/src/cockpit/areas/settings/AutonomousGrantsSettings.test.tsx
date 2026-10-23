@@ -14,6 +14,12 @@ const api = vi.hoisted(() => ({
   revokeAutonomousActivationGrant: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
+const preferences = vi.hoisted(() => ({ showTechnicalDetails: false }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const useUiPreferences = actual.useUiPreferences as () => Record<string, unknown>;
+  return { ...actual, useUiPreferences: () => ({ ...useUiPreferences(), ...preferences }) };
+});
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
   fetchWorkspaces: async () => ({ items: [{ workspaceId: "workspace-a", name: "Research" }] }),
 }));
@@ -74,17 +80,26 @@ afterEach(async () => {
   client.clear();
   vi.unstubAllGlobals();
 });
-it("names the workspace and keeps its raw id inside the identity details", async () => {
+it("names the workspace and keeps grant, workspace and project IDs in technical details", async () => {
+  preferences.showTechnicalDetails = false;
   await render();
-  const card = view!.root.findAllByType("li")[0]!;
-  const summaryLine = card.findAllByType("p")[0]!;
-  expect(text(summaryLine)).not.toContain(grant.workspaceId);
-  expect(text(card)).toContain(grant.workspaceId);
+  const card = () => view!.root.findAllByType("li")[0]!;
+  expect(text(card().findAllByType("p")[0]!)).not.toContain(grant.workspaceId);
+  expect(text(card())).not.toContain(grant.workspaceId);
+  expect(text(card())).not.toContain(grant.grantId);
+  // The revoke action is named by the row's heading, the grant's reason, never its ID.
+  expect(text(button(`Review revocation: ${grant.reason}`))).not.toContain(grant.grantId);
+  await act(async () => view!.unmount());
+  preferences.showTechnicalDetails = true;
+  await render();
+  expect(text(card())).toContain(grant.workspaceId);
+  expect(text(card())).toContain(grant.grantId);
+  preferences.showTechnicalDetails = false;
 });
 
 it("shows exact scope and consequences, cancels with zero writes, then requires canonical revocation", async () => {
   await render();
-  await click(`Review revocation of ${grant.grantId}`);
+  await click(`Review revocation: ${grant.reason}`);
   const review = view!.root.findByProps({ role: "dialog" });
   expect(text(review)).toContain(`workspace ${grant.workspaceId}`);
   expect(text(review)).toContain(grant.capabilityPatterns[0]);
@@ -92,10 +107,10 @@ it("shows exact scope and consequences, cancels with zero writes, then requires 
   expect(text(review)).toContain("is not blocked");
   await click("Keep autonomous grant");
   expect(api.revokeAutonomousActivationGrant).not.toHaveBeenCalled();
-  await click(`Review revocation of ${grant.grantId}`);
+  await click(`Review revocation: ${grant.reason}`);
   await click("Revoke reviewed autonomous grant");
   expect(text(view!.root)).toContain("The Gateway confirmed this grant is revoked");
-  expect(button(`Review revocation of ${grant.grantId}`).props.disabled).toBe(true);
+  expect(button(`Review revocation: ${grant.reason}`).props.disabled).toBe(true);
   expect(fetch).not.toHaveBeenCalled();
 });
 it("pages the full installation list and searches exact workspace or grant identity", async () => {
@@ -114,7 +129,8 @@ it("pages the full installation list and searches exact workspace or grant ident
       .props.onChange({ target: { value: "other-workspace" } }),
   );
   expect(view!.root.findAllByType("li")).toHaveLength(1);
-  expect(text(view!.root)).toContain("grant-34");
+  // Search still matches by grant and workspace identity; the ID itself shows under technical details.
+  expect(text(view!.root)).not.toContain("grant-34");
   expect(api.revokeAutonomousActivationGrant).not.toHaveBeenCalled();
 });
 it("keeps an unacknowledged write locked across native remount even if the record now reads revoked", async () => {
@@ -123,12 +139,12 @@ it("keeps an unacknowledged write locked across native remount even if the recor
     throw new Error("lost acknowledgement");
   });
   await render();
-  await click(`Review revocation of ${grant.grantId}`);
+  await click(`Review revocation: ${grant.reason}`);
   await click("Revoke reviewed autonomous grant");
   await act(async () => view?.unmount());
   view = undefined;
   await render();
   expect(text(view!.root)).toContain("Revocation outcome is uncertain");
-  expect(button(`Review revocation of ${grant.grantId}`).props.disabled).toBe(true);
+  expect(button(`Review revocation: ${grant.reason}`).props.disabled).toBe(true);
   expect(api.revokeAutonomousActivationGrant).toHaveBeenCalledOnce();
 });

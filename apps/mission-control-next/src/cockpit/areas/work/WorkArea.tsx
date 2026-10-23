@@ -9,14 +9,8 @@ import { WorkTaskDetail } from "./WorkTaskDetail";
 import { WorkKanban, WorkArchive } from "./WorkKanban";
 import { WorkAutomation } from "./WorkAutomation";
 import { OLDER_KANBAN_VIEW } from "./WorkMoreViews";
+import { WORK_VIEWS as VIEWS } from "./work-views";
 
-const VIEWS = [
-  { id: "board", label: "Board", href: "/work" },
-  { id: "history", label: "History", href: "/work/history" },
-  { id: "schedules", label: "Schedules", href: "/work/schedules" },
-  { id: "archive", label: "Archived tasks", href: "/work/archive" },
-  { id: "automation", label: "Automation designer", href: "/work/automation" },
-] as const;
 const ROUTED_VIEWS: readonly string[] = [...VIEWS.map((item) => item.id), OLDER_KANBAN_VIEW.id];
 
 export function WorkArea() {

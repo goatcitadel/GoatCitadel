@@ -150,7 +150,8 @@ export async function revokeDisposableAutonomousGrant({ page, api, workspaceId, 
     const row = region
       .getByRole("listitem")
       .filter({ has: page.getByRole("heading", { name: request.reason, exact: true }) });
-    const review = row.getByRole("button", { name: `Review revocation of ${created.grantId}`, exact: true });
+    // The action is named by the row's heading, the grant's reason; the grant ID stays in technical details.
+    const review = row.getByRole("button", { name: `Review revocation: ${request.reason}`, exact: true });
     await review.click();
     const dialog = page.getByRole("dialog", { name: "Revoke autonomous activation grant?", exact: true });
     await dialog.waitFor();

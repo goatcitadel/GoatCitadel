@@ -10,18 +10,8 @@ import { SystemBrowserSessions } from "./SystemBrowserSessions";
 import { SystemImprovement } from "./SystemImprovement";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { AreaTabsProvider } from "../../ui/AreaHeader";
+import { SYSTEM_VIEWS as VIEWS } from "./system-views";
 
-const VIEWS = [
-  { id: "health", label: "Health", path: "/system" },
-  { id: "runtime", label: "Runtime", path: "/system/runtime" },
-  { id: "spend", label: "Spend", path: "/system/spend" },
-  { id: "quality", label: "Quality", path: "/system/quality" },
-  { id: "diagnostics", label: "Diagnostics", path: "/system/diagnostics" },
-  { id: "activity", label: "Activity", path: "/system/activity" },
-  { id: "sessions", label: "Sessions", path: "/system/sessions" },
-  { id: "dashboards", label: "Dashboards", path: "/system/dashboards" },
-  { id: "browser-sessions", label: "Browser sessions", path: "/system/browser-sessions" },
-] as const;
 const TABS = VIEWS.map((item) => ({ id: item.id, label: item.label, href: item.path }));
 
 export function SystemArea() {

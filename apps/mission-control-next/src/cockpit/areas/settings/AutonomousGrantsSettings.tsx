@@ -16,6 +16,7 @@ import {
 } from "../../../features/native-routes/settings/sections/PermissionProfileDraftFields";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import type { AutonomousActivationGrantStatus, AutonomousActivationKind } from "@goatcitadel/contracts";
 import { formatMoney } from "@goatcitadel/mission-control-shared/content/format";
@@ -112,17 +113,21 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
               ) : null}
               <details>
                 <summary className="cursor-pointer">Grant identity and limits</summary>
+                <TechnicalDetails label="Grant record">
+                  <dl className="space-y-1 break-words">
+                    <dt>Grant</dt>
+                    <dd className="font-mono">{grant.grantId}</dd>
+                    <dt>Workspace id</dt>
+                    <dd className="font-mono">{grant.workspaceId}</dd>
+                    {grant.projectId ? (
+                      <>
+                        <dt>Project id</dt>
+                        <dd className="font-mono">{grant.projectId}</dd>
+                      </>
+                    ) : null}
+                  </dl>
+                </TechnicalDetails>
                 <dl className="mt-2 space-y-1 break-words">
-                  <dt>Grant</dt>
-                  <dd className="font-mono">{grant.grantId}</dd>
-                  <dt>Workspace id</dt>
-                  <dd className="font-mono">{grant.workspaceId}</dd>
-                  {grant.projectId ? (
-                    <>
-                      <dt>Project id</dt>
-                      <dd className="font-mono">{grant.projectId}</dd>
-                    </>
-                  ) : null}
                   <dt>Capability patterns</dt>
                   <dd>{grant.capabilityPatterns.join(", ") || "None"}</dd>
                   <dt>Tool patterns</dt>
@@ -157,7 +162,8 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
                 }
                 onClick={() => void control.request(grant)}
               >
-                Review revocation of {grant.grantId}
+                {/* The row's heading is the grant's reason, so it names the action; the ID stays in technical details. */}
+                Review revocation<span className="sr-only">: {grant.reason}</span>
               </Button>
             </li>
           );
