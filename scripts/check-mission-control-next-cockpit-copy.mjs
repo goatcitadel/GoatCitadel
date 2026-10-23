@@ -9,6 +9,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import ts from "typescript";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "cockpit");
@@ -49,8 +50,8 @@ export function findClassicHandoffCopy(filePath, contents) {
 
 /*
  * Operator-language ratchets (UI audit 2026-10-14, workstream C; DESIGN.md › Copy and Glossary). Each counts uses in
- * text an operator can see: string literals with a space in them, JSX text between tags, and text-only lines. Each
- * budget is exact: above it fails, below it asks for a lower budget in the same change.
+ * text an operator can see (see visibleText). Each budget is exact: above it fails, below it asks for a lower budget
+ * in the same change.
  */
 export const COPY_RATCHETS = [
   {
@@ -95,72 +96,158 @@ export const COPY_RATCHETS = [
 export const ROOT_BUDGETS = {
   cockpit: { "glossary-terms": 0 },
   "native-routes": {
-    "internal-terms": 275,
+    "internal-terms": 304,
     "dead-end-pointer": 1,
     "aria-label-id": 10,
-    "glossary-terms": 971,
-    "plural-template": 37,
+    "glossary-terms": 1110,
+    "plural-template": 39,
   },
-  "shared-components": { "internal-terms": 21, "aria-label-id": 11, "glossary-terms": 45, "plural-template": 2 },
+  "shared-components": { "internal-terms": 23, "aria-label-id": 11, "glossary-terms": 55, "plural-template": 5 },
 };
 const ARIA_ID = /aria-label=\{`[^`]*\$\{[^}]*\b\w*(?:Id|ID)\b[^}]*\}[^`]*`\}/g;
-const CODE_LINE =
-  /^(?:import|export|const|let|var|return|if|else|for|while|function|type|interface|case|await|throw|switch|default|try|catch)\b/;
-
-/*
- * TechnicalDetails children and class names never reach operator copy; blank them, keeping line breaks. The
- * TechnicalDetails tag itself stays, because its label is the visible disclosure summary.
- */
-function stripHiddenText(contents) {
-  return contents
-    .replace(/(<TechnicalDetails\b[^>]*>)([\s\S]*?)(<\/TechnicalDetails>)/g, (_, open, body, close) => {
-      return `${open}${body.replace(/[^\n]/g, "")}${close}`;
-    })
-    .replace(/className=(?:"[^"]*"|\{`[^`]*`\})/g, "");
-}
-
-/** JSX props whose value an operator reads. */
-const COPY_PROP =
-  /\b(?:label|title|placeholder|aria-label|description|heading|summary|hint|helper|emptyTitle|emptyMessage)=(["'])([^"']+)\1/g;
+/** JSX props and object keys whose value an operator reads, even when it is one word. */
+const COPY_PROPS = new Set([
+  "label",
+  "title",
+  "placeholder",
+  "aria-label",
+  "description",
+  "heading",
+  "summary",
+  "hint",
+  "helper",
+  "emptyTitle",
+  "emptyMessage",
+]);
+/** JSX props whose value is code: class names, styles, ids, links and SVG geometry. */
+const CODE_PROPS =
+  /^(?:className|class|style|key|id|htmlFor|href|src|d|viewBox|points|transform|data-[\w-]+|aria-(?:controls|describedby|labelledby|owns))$/;
+const COMPARISON = new Set([
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+  ts.SyntaxKind.InKeyword,
+]);
 
 /** A line after `// copy-guard: not copy (…)` holds text an operator never reads, such as search keywords. */
 const NOT_COPY_MARKER = /\/\/\s*copy-guard: not copy\b/;
 
-/** The parts of a source file an operator can read. */
-export function visibleText(contents) {
-  const parts = [];
-  let skipNext = false;
-  for (const line of stripHiddenText(contents).split(/\r?\n/)) {
-    if (skipNext) {
-      skipNext = false;
-      continue;
-    }
-    if (NOT_COPY_MARKER.test(line)) {
-      skipNext = true;
-      continue;
-    }
-    if (isComment(line)) continue;
-    // A "literal" that starts or ends with an operator, or holds JSX attribute syntax, is the code between two
-    // literals, not copy.
-    for (const match of line.matchAll(/(["'`])((?:(?!\1).)*\s(?:(?!\1).)*)\1/g))
-      if (!/^\s*(?:&&|\|\||[=!]==?|\?\?|[?:+,)])|(?:&&|\|\||[=!]==?|\()\s*$|=\{|=>/.test(match[2]))
-        parts.push(match[2]);
-    for (const match of line.matchAll(/>([^<>{}=]*[A-Za-z][^<>{}=]*)</g)) parts.push(match[1]);
-    // One-word values of copy-bearing props (label="Gateway") are read too; other one-word literals are code values.
-    for (const match of line.matchAll(COPY_PROP)) if (!/\s/.test(match[2])) parts.push(match[2]);
-    const trimmed = line.trim();
-    // A text-only line is JSX text; parameter lists ("projection: Inbox,"), continued conditions and property
-    // access ("projection.items") are code.
-    const code =
-      CODE_LINE.test(trimmed) || /^\w+\??:\s/.test(trimmed) || /[,(]$/.test(trimmed) || /\w\.\w/.test(trimmed);
-    if (/^[A-Za-z(][^=;{}<>"'`|&]*$/.test(trimmed) && !code && /\s/.test(trimmed)) parts.push(trimmed);
+/** Zero-based numbers of the lines that follow a not-copy marker. */
+function notCopyLines(contents) {
+  const lines = new Set();
+  contents.split(/\r?\n/).forEach((line, index) => {
+    if (NOT_COPY_MARKER.test(line)) lines.add(index + 1);
+  });
+  return lines;
+}
+
+function isLiteral(node) {
+  return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node);
+}
+
+/** The literals an expression can evaluate to or join: `"A"`, `ok ? "A" : "B"`, `name ?? "A"`, `ok && "A"`, `"A" + b`. */
+function resultLiterals(node) {
+  if (!node) return [];
+  if (isLiteral(node)) return [node];
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isJsxExpression(node))
+    return resultLiterals(node.expression);
+  if (ts.isConditionalExpression(node)) return [...resultLiterals(node.whenTrue), ...resultLiterals(node.whenFalse)];
+  if (ts.isBinaryExpression(node)) {
+    const op = node.operatorToken.kind;
+    if (op === ts.SyntaxKind.AmpersandAmpersandToken) return resultLiterals(node.right);
+    if (
+      op === ts.SyntaxKind.BarBarToken ||
+      op === ts.SyntaxKind.QuestionQuestionToken ||
+      op === ts.SyntaxKind.PlusToken
+    )
+      return [...resultLiterals(node.left), ...resultLiterals(node.right)];
   }
+  return [];
+}
+
+/** A literal that is compared against, used as a key or case label, or names a module or type is code, not copy. */
+function isCodeLiteral(node) {
+  const parent = node.parent;
+  if (ts.isBinaryExpression(parent)) return COMPARISON.has(parent.operatorToken.kind);
+  if (ts.isElementAccessExpression(parent)) return parent.argumentExpression === node;
+  if (ts.isPropertyAssignment(parent) || ts.isPropertyDeclaration(parent)) return parent.name === node;
+  return (
+    ts.isCaseClause(parent) ||
+    ts.isLiteralTypeNode(parent) ||
+    ts.isImportDeclaration(parent) ||
+    ts.isExportDeclaration(parent) ||
+    ts.isExternalModuleReference(parent)
+  );
+}
+
+/*
+ * A template's text with each `${…}` kept as source. A `${…}` that evaluates to literals (`${ok ? "a" : `${n} b`}`)
+ * is elided, since those literals are read on their own; one that only uses a literal in code keeps its count.
+ */
+function templateText(node, source) {
+  const spans = node.templateSpans.map((span) => {
+    const expression = resultLiterals(span.expression).length ? "…" : span.expression.getText(source);
+    return `\${${expression}}${span.literal.text}`;
+  });
+  return node.head.text + spans.join("");
+}
+
+function propName(name, source) {
+  return ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : name.getText(source);
+}
+
+/*
+ * The parts of a source file an operator can read: JSX text, literals rendered as JSX children or passed to a
+ * copy-bearing prop (even one word), and other string or template literals with a space in them. Comments,
+ * TechnicalDetails children, class names and other code props, and literals in code positions are skipped; the
+ * TechnicalDetails label stays, because it is the visible disclosure summary. A template keeps its `${…}` source so
+ * the plural rule can read it.
+ */
+export function visibleText(contents, fileName = "source.tsx") {
+  const kind = fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const source = ts.createSourceFile(fileName, contents, ts.ScriptTarget.Latest, true, kind);
+  const skippedLines = notCopyLines(contents);
+  const rendered = new Set();
+  const parts = [];
+  const add = (node, text) => {
+    const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
+    if (!skippedLines.has(line) && /[A-Za-z]/.test(text)) parts.push(text);
+  };
+  const markRendered = (node) => resultLiterals(node).forEach((literal) => rendered.add(literal));
+
+  function visit(node) {
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(source) === "TechnicalDetails") {
+      visit(node.openingElement);
+      return;
+    }
+    if (ts.isJsxAttribute(node)) {
+      const name = propName(node.name, source);
+      if (CODE_PROPS.test(name)) return;
+      if (COPY_PROPS.has(name)) markRendered(node.initializer);
+    } else if (ts.isPropertyAssignment(node) && COPY_PROPS.has(propName(node.name, source))) {
+      markRendered(node.initializer);
+    } else if (ts.isJsxExpression(node) && (ts.isJsxElement(node.parent) || ts.isJsxFragment(node.parent))) {
+      markRendered(node.expression);
+    } else if (ts.isJsxText(node)) {
+      add(node, node.text.replace(/\s+/g, " ").trim());
+    } else if (isLiteral(node) && !isCodeLiteral(node)) {
+      const text = ts.isTemplateExpression(node) ? templateText(node, source) : node.text;
+      if (rendered.has(node) || /\s/.test(text)) {
+        add(node, text);
+        // The literals a copy template interpolates are copy too, even one word.
+        if (ts.isTemplateExpression(node)) node.templateSpans.forEach((span) => markRendered(span.expression));
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
   return parts;
 }
 
 export function countCopyRatchets(relativePath, contents) {
   const counts = {};
-  const text = visibleText(contents);
+  const text = visibleText(contents, relativePath);
   for (const rule of COPY_RATCHETS) {
     if (!rule.pattern) continue;
     // A template's ${…} is code; only the plural rule reads it, to catch `${count} items`.
@@ -235,7 +322,8 @@ async function main() {
     }
     if (findings.length) {
       console.error('[cockpit-copy] say "classic view" for handoffs, not "current …":');
-      for (const item of findings) console.error(`- ${path.relative(repoRoot, item.file)}:${item.line} -> ${item.text}`);
+      for (const item of findings)
+        console.error(`- ${path.relative(repoRoot, item.file)}:${item.line} -> ${item.text}`);
       process.exitCode = 1;
     }
   }

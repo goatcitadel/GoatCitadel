@@ -74,7 +74,7 @@ export function PackPlanControls({
         {owner.review ? (
           <div className="space-y-3">
             <p className="text-sm text-fg-secondary">
-              {owner.review.plan.title.slice(0, 240)} · revision {owner.review.plan.revision}
+              {owner.review.plan.title.slice(0, 240)} · version {owner.review.plan.revision}
             </p>
             <p className="break-words text-sm text-fg-secondary">{owner.review.plan.impact.slice(0, 3000)}</p>
             {owner.review.plan.requiredAction?.kind === "confirmation" ? (
