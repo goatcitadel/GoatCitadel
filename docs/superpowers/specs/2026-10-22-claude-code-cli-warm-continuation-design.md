@@ -1,6 +1,6 @@
 # Claude Code CLI tool bridge: warm continuation
 
-Status: approved by the operator on 2026-10-22, with all four **Operator decisions** settled (listed at the end). Implemented on branch `feat/claude-cli-warm-continuation` behind the off-by-default `claudeCliWarmContinuationEnabled` flag, with a Settings › Models switch. The live proof (see **Live proof** below) has not run yet. It is required before the default can change. The plan is `docs/superpowers/plans/2026-10-22-claude-code-cli-warm-continuation.md`. The probe facts below were measured on 2026-10-22.
+Status: approved by the operator on 2026-10-22, with all four **Operator decisions** settled (listed at the end). Merged in #485 behind the off-by-default `claudeCliWarmContinuationEnabled` flag, with a Settings › Models switch. The live proof ran on 2026-10-23 (see **Live proof results** below). It found two bugs, both fixed by the follow-up change that records these results. The default can change once that fix merges. The plan is `docs/superpowers/plans/2026-10-22-claude-code-cli-warm-continuation.md`. The probe facts below were measured on 2026-10-22.
 
 Builds on the step-mode tool bridge (`docs/superpowers/specs/2026-10-20-claude-code-cli-tool-bridge-design.md`, PRs #457–#460). Everything that spec decided still holds unless this one says otherwise.
 
@@ -200,6 +200,36 @@ My call: no automatic cleanup in the profile. Deleting files in a directory the 
 - A tool that returns more than 40,000 characters runs cold, and nothing appears under the operator's Claude projects folder.
 - Killing the Gateway with a parked step leaves no `claude` process within 10 s.
 - The CLAUDE.md canary from the bridge spec still passes.
+
+### Live proof results (2026-10-23)
+
+Run on the operator's own Claude login, Claude Code 2.1.305, `claude-haiku-5-5`, Windows. The gateway was built from `main` at #485, plus the fixes below. It ran in a zero-mutation sandbox: only tracked example config and `skills/` were copied, and every data, home, backup and temp directory was inside the sandbox. The OS keychain was disabled, auth was off and storage was SQLite. The sandbox alone also had read-tool grants so that multi-step turns ran unattended, and `http.get` and `browser.navigate` were limited to `127.0.0.1`.
+
+**Two bugs found and fixed:**
+
+1. **Warm continuation never hit.** Right after the `tool_use` `message_stop` that parks a step, the CLI prints a `rate_limit_event` line. The parked drain accepted only `tool_progress`, so every park was poisoned (`warm_miss_poisoned`) and the next step ran cold. Fix: the drain also accepts `rate_limit_event`. A `system/status` line still poisons the park, because it means a model call is starting. Any poisoning line now logs its type (`claude_cli_warm_park_fault`, bounded).
+2. **Claude Code auto-memory reached the model.** When the CLI's run dir sits inside a git repo, Claude Code loads that repo's per-project auto-memory (`MEMORY.md`), and `--setting-sources ""` does not stop it. In the sandbox, the run dirs were inside a GoatCitadel checkout, and the model quoted the operator's memory index. This affects bridged steps whether warm or not. Fix: the CLI isolation settings now include `"autoMemoryEnabled": false`. A direct probe confirmed that this, or `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, removes it.
+
+**Warm against cold** (the same three-file chain: four model steps, three `fs.read` calls; three runs each):
+
+| | Bridged CLI processes per turn | Tool-loop step latency | Cached input per tool step | Turn wall time |
+|---|---|---|---|---|
+| Warm | 1 (3 of 3 hit, 0 misses) | 0.94–1.45 s | 32,490–33,142 tokens | 8.5–14.3 s |
+| Cold | 4 | 3.03–3.95 s | 23,401–32,376 tokens | 14.9–20.0 s |
+
+The first step of a turn is cold either way (2.3–3.2 s). Utility side calls, such as titles and classification, are separate unbridged runs and always cold.
+
+**The other checks:**
+
+- **Usage:** each warm step settled its own `message_delta` usage. Final warm steps recorded 10–12 output tokens, not the process total.
+- **Echo forms:** a turn reading a CRLF file with trailing whitespace, then an empty file, then another file stayed warm with no mismatch and answered correctly. The runner hands tools' results to the stub as its serialized JSON payload, so a raw empty string or raw CRLF never reaches the echo check verbatim.
+- **Large results:** the runner virtualizes any tool output over 12,000 bytes into an artifact, with an inline snippet of at most 4,000 characters. A 62,000-character `fs.read` therefore stayed warm through its artifact reference, and the 40,000-character gate is a backstop that normal tools do not reach. Nothing appeared under `~/.claude/projects` for any sandbox run dir.
+- **Spill slug:** the CLI created no projects folder for any run dir, so the slug form could only be checked against the 2026-10-22 probe. There, a run dir `<temp>\gc-parked-big-result-…` spilled to `projects\<same path with every non-alphanumeric character as "-">`, which matches the registry's algorithm.
+- **Approval wait:** a turn that hit an approval ended as `waiting_for_approval`, and no `claude` process or run dir remained.
+- **Gateway killed while parked:** a bridged CLI and its stub were parked behind a 90-second `browser.navigate` call. After a hard kill of the gateway, both were gone within 1 s. That step's run dir (system prompt and tool manifest, no results) stayed in the temp folder, because a hard kill skips cleanup in step mode too. Follow-up: sweep stale run dirs at startup.
+- **CLAUDE.md canary:** phrases placed in the CLI's temp folder and its scratch folder never reached the model. A `CLAUDE.md` in the GoatCitadel root dir is injected by GoatCitadel's own guidance loader (`globalFilesUsed: ["CLAUDE.md"]`), by design.
+
+**Not covered:** macOS and Linux, Sonnet and Opus, and long sustained-coding turns.
 
 ## Docs and public truth
 
