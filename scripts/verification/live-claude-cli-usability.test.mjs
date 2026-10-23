@@ -99,7 +99,7 @@ test("classifyUsabilityOutcome enforces citations, Code Mode runs and forbidden 
   );
   assert.equal(classifyUsabilityOutcome(turn({ codeModeRunId: "run-1" }), k02).verdict, "passed");
   assert.equal(
-    classifyUsabilityOutcome(turn({ toolRuns: [{ toolName: "code.run", status: "executed" }] }), k02).verdict,
+    classifyUsabilityOutcome(turn({ toolRuns: [{ toolName: "code_mode.run", status: "executed" }] }), k02).verdict,
     "failed",
   );
   assert.equal(classifyUsabilityOutcome(turn({ codeModeRunId: "run-1" }), k01).verdict, "passed");
@@ -324,4 +324,25 @@ test("a failed turn's reasons carry the trace failure class and message", () => 
   const graded = classifyUsabilityOutcome(turn({ status: "failed", failure }), byId("C-01"));
   assert.equal(graded.verdict, "failed");
   assert.match(graded.reasons.join(";"), /provider_timeout: Claude Code CLI did not answer in time\./);
+});
+
+test("an expected tool only counts when it executed, so a failed or unapproved PDF is not a pass", () => {
+  const d01 = byId("D-01");
+  for (const status of ["failed", "blocked", "approval_required"]) {
+    const graded = classifyUsabilityOutcome(
+      turn({ status: "partial", toolRuns: [{ toolName: "documents.create", status }] }),
+      d01,
+    );
+    assert.equal(graded.verdict, "failed", status);
+    assert.ok(graded.reasons.join(";").includes(`documents.create did not execute (${status})`), status);
+  }
+});
+
+test("only code_mode.run counts as a Code Mode run; code search tools do not", () => {
+  const search = { toolRuns: [{ toolName: "code.search", status: "executed" }] };
+  assert.equal(classifyUsabilityOutcome(turn(search), byId("K-01")).verdict, "failed");
+  assert.equal(classifyUsabilityOutcome(turn(search), byId("K-02")).verdict, "passed");
+  const run = { toolRuns: [{ toolName: "code_mode.run", status: "executed" }] };
+  assert.equal(classifyUsabilityOutcome(turn(run), byId("K-01")).verdict, "passed");
+  assert.equal(classifyUsabilityOutcome(turn(run), byId("K-02")).verdict, "failed");
 });

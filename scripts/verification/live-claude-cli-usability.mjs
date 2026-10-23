@@ -64,8 +64,11 @@ export function buildClaudeCliChatMutation(task, model, action = "send") {
   return { action, preflight: { action, ...body }, body };
 }
 
+/** The gateway's one Code Mode tool; code search and other `code.*` tools are ordinary reads. */
+const CODE_MODE_TOOL = "code_mode.run";
+
 function isCodeToolRun(run) {
-  return typeof run?.toolName === "string" && run.toolName.startsWith("code") && run.status === "executed";
+  return run?.toolName === CODE_MODE_TOOL && run.status === "executed";
 }
 
 /**
@@ -107,12 +110,18 @@ export function classifyUsabilityOutcome(turn, task) {
   if (expect.codeModeRun === false && toolRuns.some(isCodeToolRun)) {
     reasons.push("a Code Mode run executed although its approval was rejected");
   }
-  if (expect.toolNamesAny?.length && !toolRuns.some((run) => expect.toolNamesAny.includes(run.toolName))) {
-    missedOutcome(
-      toolRuns.length === 0
-        ? `the model did not call ${expect.toolNamesAny.join("/")}`
-        : `no ${expect.toolNamesAny.join("/")} tool run (got ${toolRuns.map((run) => run.toolName).join(", ")})`,
-    );
+  if (expect.toolNamesAny?.length) {
+    // A matching tool counts only when it executed: a blocked, failed or unapproved call produced nothing.
+    const matching = toolRuns.filter((run) => expect.toolNamesAny.includes(run.toolName));
+    if (matching.length === 0) {
+      missedOutcome(
+        toolRuns.length === 0
+          ? `the model did not call ${expect.toolNamesAny.join("/")}`
+          : `no ${expect.toolNamesAny.join("/")} tool run (got ${toolRuns.map((run) => run.toolName).join(", ")})`,
+      );
+    } else if (!matching.some((run) => run.status === "executed")) {
+      reasons.push(`${matching[0].toolName} did not execute (${matching.map((run) => run.status).join(", ")})`);
+    }
   }
   if (typeof expect.reply === "string" && content.trim() !== expect.reply) {
     reasons.push(`reply was not exactly ${expect.reply}`);
