@@ -17,6 +17,7 @@ import {
   buildTestbenchUiEnv,
   buildTestbenchUrl,
   parseClaudeAuthStatus,
+  readClaudeCodeCliAuthStatus,
   parseTestbenchArgs,
   prepareTestbenchRuntime,
   writeClaudeCodeCliProviderConfig,
@@ -299,4 +300,19 @@ test("buildTestbenchGatewayEnv copies the CLI path only for the CLI provider", (
   );
   assert.equal(buildTestbenchGatewayEnv("/r", { provider: "stub", env }).GOATCITADEL_CLAUDE_CLI_PATH, undefined);
   assert.equal(buildTestbenchGatewayEnv("/r").GOATCITADEL_CLAUDE_CLI_PATH, undefined);
+});
+
+test("readClaudeCodeCliAuthStatus runs `auth status --json` and reports an unavailable CLI", () => {
+  const calls = [];
+  const ok = readClaudeCodeCliAuthStatus({
+    env: { GOATCITADEL_CLAUDE_CLI_PATH: " /opt/claude " },
+    spawn: (command, args, options) => {
+      calls.push({ command, args, timeout: options.timeout });
+      return { stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }) };
+    },
+  });
+  assert.deepEqual(ok, { ready: true, reason: "ready" });
+  assert.deepEqual(calls, [{ command: "/opt/claude", args: ["auth", "status", "--json"], timeout: 15_000 }]);
+  const missing = readClaudeCodeCliAuthStatus({ env: {}, spawn: () => ({ error: new Error("ENOENT") }) });
+  assert.deepEqual(missing, { ready: false, reason: "cli_unavailable" });
 });

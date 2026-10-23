@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -18,14 +17,13 @@ import { startDeterministicLlmStub } from "./verification/lib/scenarios/determin
 import { collectVerificationSecretEnvKeys } from "./verification/lib/scenarios/usability-coverage.mjs";
 import { createRunId, repoRoot } from "./verification/lib/shared.mjs";
 import {
-  CLAUDE_CLI_PATH_ENV,
   CLAUDE_CODE_CLI_MODEL,
   TESTBENCH_STUB_KEY,
   buildTestbenchEnvOmit,
   buildTestbenchGatewayEnv,
   buildTestbenchUiEnv,
   buildTestbenchUrl,
-  parseClaudeAuthStatus,
+  readClaudeCodeCliAuthStatus,
   parseTestbenchArgs,
   prepareTestbenchRuntime,
   writeClaudeCodeCliProviderConfig,
@@ -183,24 +181,9 @@ async function buildGatewayWorkspaceLocked(context, envOmit) {
   }
 }
 
-/**
- * Starts the stub, the isolated runtime, the gateway, and the UI. Everything started is recorded on `started` so
- * the caller's teardown can stop it. Returns true when the sandbox is ready, and false when a stop was requested
- * first (the remaining phases, including the ready output, are skipped).
- */
-const CLAUDE_AUTH_STATUS_TIMEOUT_MS = 15_000;
-
 /** Fails before any build when the operator's Claude Code CLI is missing or not signed in with a subscription. */
 function assertClaudeCodeCliReady() {
-  const command = process.env[CLAUDE_CLI_PATH_ENV]?.trim() || "claude";
-  const result = spawnSync(command, ["auth", "status", "--json"], {
-    encoding: "utf8",
-    timeout: CLAUDE_AUTH_STATUS_TIMEOUT_MS,
-    // A bare "claude" on Windows is a .cmd shim that only a shell resolves.
-    shell: process.platform === "win32" && !path.isAbsolute(command),
-  });
-  // The status output names the signed-in account; only the verdict is ever printed.
-  const status = result.error ? { ready: false, reason: "cli_unavailable" } : parseClaudeAuthStatus(result.stdout);
+  const status = readClaudeCodeCliAuthStatus();
   if (!status.ready) {
     throw new Error(
       `Claude Code CLI is not ready (${status.reason}). Run \`claude\` and sign in with your subscription, ` +
@@ -209,6 +192,11 @@ function assertClaudeCodeCliReady() {
   }
 }
 
+/**
+ * Starts the stub, the isolated runtime, the gateway, and the UI. Everything started is recorded on `started` so
+ * the caller's teardown can stop it. Returns true when the sandbox is ready, and false when a stop was requested
+ * first (the remaining phases, including the ready output, are skipped).
+ */
 async function launchSandbox({ runId, artifactRoot, logRoot, provider }, trigger, started) {
   if (provider === "claude-code-cli") {
     say("Checking the Claude Code CLI sign-in…");

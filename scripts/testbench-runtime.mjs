@@ -101,6 +101,25 @@ export function parseClaudeAuthStatus(stdout) {
   return { ready: true, reason: "ready", ...accountEmail };
 }
 
+const CLAUDE_AUTH_STATUS_TIMEOUT_MS = 15_000;
+
+/**
+ * Runs `claude auth status --json` (honouring GOATCITADEL_CLAUDE_CLI_PATH) and parses it. Its output names the
+ * signed-in account, so callers print only `ready` and `reason`.
+ */
+export function readClaudeCodeCliAuthStatus({ env = process.env, spawn = spawnSync } = {}) {
+  const command = env[CLAUDE_CLI_PATH_ENV]?.trim() || "claude";
+  const args = ["auth", "status", "--json"];
+  const options = { encoding: "utf8", timeout: CLAUDE_AUTH_STATUS_TIMEOUT_MS };
+  // A bare "claude" on Windows is a .cmd shim that only a shell resolves; the shell gets one fixed command string.
+  const result =
+    process.platform === "win32" && !path.isAbsolute(command)
+      ? spawn(`"${command}" ${args.join(" ")}`, { ...options, shell: true })
+      : spawn(command, args, options);
+  if (result?.error) return { ready: false, reason: "cli_unavailable" };
+  return parseClaudeAuthStatus(result?.stdout);
+}
+
 /** Lists git-tracked files under `skills/`, relative to `sourceRoot`. Throws if git cannot answer. */
 function listTrackedSkillFiles(sourceRoot) {
   const result = spawnSync("git", ["-C", sourceRoot, "ls-files", "-z", "--", "skills"], {
