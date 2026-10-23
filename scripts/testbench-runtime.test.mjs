@@ -9,13 +9,19 @@ import {
   DETERMINISTIC_LLM_PROVIDER_ID,
 } from "./verification/lib/scenarios/deterministic-llm-stub.mjs";
 import {
+  CLAUDE_CODE_CLI_MODEL,
   TESTBENCH_INHERITED_PATH_ENV_KEYS,
   TESTBENCH_STUB_KEY,
   buildTestbenchEnvOmit,
   buildTestbenchGatewayEnv,
   buildTestbenchUiEnv,
   buildTestbenchUrl,
+  claudeCliNotReadyMessage,
+  parseClaudeAuthStatus,
+  readClaudeCodeCliAuthStatus,
+  parseTestbenchArgs,
   prepareTestbenchRuntime,
+  writeClaudeCodeCliProviderConfig,
 } from "./testbench-runtime.mjs";
 import { buildVerificationProcessEnv } from "./verification/lib/runtime.mjs";
 
@@ -232,4 +238,156 @@ test("buildTestbenchUiEnv runs Vite in development and hands the page the sandbo
 
 test("buildTestbenchUrl points at the sandbox target", () => {
   assert.equal(buildTestbenchUrl("http://127.0.0.1:5199/"), "http://127.0.0.1:5199/testbench.html?target=sandbox");
+});
+
+test("parseTestbenchArgs defaults to the stub and accepts both provider spellings", () => {
+  assert.deepEqual(parseTestbenchArgs([]), { provider: "stub" });
+  assert.deepEqual(parseTestbenchArgs(["--provider", "claude-code-cli"]), { provider: "claude-code-cli" });
+  assert.deepEqual(parseTestbenchArgs(["--provider=claude-code-cli"]), { provider: "claude-code-cli" });
+  assert.throws(() => parseTestbenchArgs(["--provider", "openai"]), /stub, claude-code-cli/);
+  assert.throws(() => parseTestbenchArgs(["--provider"]), /stub, claude-code-cli/);
+  assert.throws(() => parseTestbenchArgs(["--nope"]), /Unknown test bench option/);
+});
+
+test("parseClaudeAuthStatus accepts only a first-party subscription login", () => {
+  const ok = JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", email: "a@b.test" });
+  assert.deepEqual(parseClaudeAuthStatus(ok), { ready: true, reason: "ready", accountEmail: "a@b.test" });
+  assert.deepEqual(parseClaudeAuthStatus(`warning: update available\n${ok}\n`).ready, true);
+  assert.equal(parseClaudeAuthStatus(JSON.stringify({ loggedIn: false })).reason, "not_logged_in");
+  assert.equal(
+    parseClaudeAuthStatus(JSON.stringify({ loggedIn: true, authMethod: "api_key" })).reason,
+    "not_subscription_login",
+  );
+  assert.equal(
+    parseClaudeAuthStatus(JSON.stringify({ loggedIn: true, apiProvider: "bedrock" })).reason,
+    "not_subscription_login",
+  );
+  assert.deepEqual(parseClaudeAuthStatus("warning: x"), { ready: false, reason: "unparseable" });
+});
+
+test("writeClaudeCodeCliProviderConfig makes the CLI the only active provider in both config files", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "testbench-cli-config-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "config"));
+  fs.writeFileSync(
+    path.join(root, "config", "goatcitadel.json"),
+    JSON.stringify({ assistant: { keep: true }, llm: {}, generation: {} }),
+  );
+  await writeClaudeCodeCliProviderConfig(root);
+  const unified = JSON.parse(fs.readFileSync(path.join(root, "config", "goatcitadel.json"), "utf8"));
+  const providers = JSON.parse(fs.readFileSync(path.join(root, "config", "llm-providers.json"), "utf8"));
+  const expected = {
+    providerId: "claude-code-cli",
+    label: "Claude Code CLI (local login)",
+    baseUrl: "https://api.anthropic.com/v1",
+    apiStyle: "claude-code-cli",
+    defaultModel: CLAUDE_CODE_CLI_MODEL,
+    authMode: "claude-code-cli-login",
+  };
+  for (const llm of [unified.llm, providers]) {
+    assert.equal(llm.activeProviderId, "claude-code-cli");
+    assert.equal(llm.activeModel, "claude-sonnet-5-5");
+    assert.deepEqual(llm.providers, [expected]);
+  }
+  assert.equal("generation" in unified, false);
+  assert.deepEqual(unified.assistant, { keep: true });
+});
+
+test("buildTestbenchGatewayEnv copies the CLI path only for the CLI provider", () => {
+  const env = { GOATCITADEL_CLAUDE_CLI_PATH: "/opt/claude" };
+  assert.equal(
+    buildTestbenchGatewayEnv("/r", { provider: "claude-code-cli", env }).GOATCITADEL_CLAUDE_CLI_PATH,
+    "/opt/claude",
+  );
+  assert.equal(buildTestbenchGatewayEnv("/r", { provider: "stub", env }).GOATCITADEL_CLAUDE_CLI_PATH, undefined);
+  assert.equal(buildTestbenchGatewayEnv("/r").GOATCITADEL_CLAUDE_CLI_PATH, undefined);
+});
+
+test("readClaudeCodeCliAuthStatus runs `auth status --json` and reports an unavailable CLI", () => {
+  const calls = [];
+  const ok = readClaudeCodeCliAuthStatus({
+    env: { GOATCITADEL_CLAUDE_CLI_PATH: " /opt/claude " },
+    spawn: (command, args, options) => {
+      calls.push({ command, args, timeout: options.timeout });
+      return { stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }) };
+    },
+  });
+  assert.deepEqual(ok, { ready: true, reason: "ready" });
+  assert.deepEqual(calls, [{ command: "/opt/claude", args: ["auth", "status", "--json"], timeout: 15_000 }]);
+  const missingError = Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" });
+  const missing = readClaudeCodeCliAuthStatus({ env: {}, spawn: () => ({ error: missingError }) });
+  assert.deepEqual(missing, { ready: false, reason: "cli_unavailable" });
+});
+
+test("readClaudeCodeCliAuthStatus runs a Windows npm shim through its cli.js, as the gateway does", () => {
+  const shimDir = path.win32.join("C:", "npm");
+  const cliJs = path.win32.join(shimDir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+  const nodeExe = path.win32.join("C:", "node", "node.exe");
+  const ok = JSON.stringify({ loggedIn: true });
+  for (const shim of ["claude.cmd", "claude.bat", "claude.ps1"]) {
+    const calls = [];
+    const status = readClaudeCodeCliAuthStatus({
+      env: { GOATCITADEL_CLAUDE_CLI_PATH: path.win32.join(shimDir, shim) },
+      platform: "win32",
+      execPath: nodeExe,
+      fileExists: (file) => file === cliJs,
+      spawn: (command, args, options) => {
+        calls.push({ command, args, shell: options?.shell });
+        return { stdout: ok };
+      },
+    });
+    assert.equal(status.ready, true, shim);
+    assert.deepEqual(calls, [{ command: nodeExe, args: [cliJs, "auth", "status", "--json"], shell: undefined }]);
+  }
+  const missing = readClaudeCodeCliAuthStatus({
+    env: { GOATCITADEL_CLAUDE_CLI_PATH: path.win32.join(shimDir, "claude.cmd") },
+    platform: "win32",
+    fileExists: () => false,
+    spawn: () => assert.fail("must not spawn an unsupported shim"),
+  });
+  assert.deepEqual(missing, { ready: false, reason: "cli_unsupported_shim" });
+});
+
+test("readClaudeCodeCliAuthStatus uses a shell only for a bare command on Windows", () => {
+  const seen = [];
+  const spawn = (command, args, options) => {
+    seen.push({ command, args, shell: (Array.isArray(args) ? options : args)?.shell === true });
+    return { stdout: JSON.stringify({ loggedIn: true }) };
+  };
+  readClaudeCodeCliAuthStatus({ env: {}, platform: "win32", spawn });
+  readClaudeCodeCliAuthStatus({ env: {}, platform: "linux", spawn });
+  const nativeExe = path.win32.join("C:", "bin", "claude.exe");
+  readClaudeCodeCliAuthStatus({ env: { GOATCITADEL_CLAUDE_CLI_PATH: nativeExe }, platform: "win32", spawn });
+  assert.deepEqual(
+    seen.map((call) => [call.command, call.shell]),
+    [
+      ['"claude" auth status --json', true],
+      ["claude", false],
+      [nativeExe, false],
+    ],
+  );
+});
+
+test("readClaudeCodeCliAuthStatus reports a CLI that exists but cannot start by its error code only", () => {
+  for (const code of ["EACCES", "EPERM", "ETIMEDOUT"]) {
+    const error = Object.assign(new Error(`spawnSync claude ${code} secret-looking output`), { code });
+    assert.deepEqual(readClaudeCodeCliAuthStatus({ env: {}, platform: "linux", spawn: () => ({ error }) }), {
+      ready: false,
+      reason: `cli_start_failed:${code}`,
+    });
+  }
+  const uncoded = readClaudeCodeCliAuthStatus({ env: {}, platform: "linux", spawn: () => ({ error: new Error("x") }) });
+  assert.deepEqual(uncoded, { ready: false, reason: "cli_start_failed:unknown" });
+});
+
+test("claudeCliNotReadyMessage gives sign-in guidance only for sign-in problems", () => {
+  for (const reason of ["not_logged_in", "not_subscription_login", "unparseable"]) {
+    assert.match(claudeCliNotReadyMessage(reason), /sign in/, reason);
+  }
+  for (const reason of ["cli_unavailable", "cli_unsupported_shim", "cli_start_failed:EACCES"]) {
+    const message = claudeCliNotReadyMessage(reason);
+    assert.doesNotMatch(message, /sign in/, reason);
+    assert.match(message, new RegExp(reason));
+    assert.match(message, /GOATCITADEL_CLAUDE_CLI_PATH|install|permission/i, reason);
+  }
 });
