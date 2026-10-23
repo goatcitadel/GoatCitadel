@@ -41,7 +41,7 @@ export function QualityDesign({ source }: { source: OpsQualitySnapshotResponse["
                 items={[
                   { label: "Status", value: formatDesignQualityStatus(selected.status) },
                   { label: "Severity", value: selected.severity },
-                  { label: "Owner", value: selected.owner },
+                  { label: "Responsible", value: selected.owner },
                 ]}
               />
               <p className="break-words text-sm text-fg-secondary">{selected.evidence}</p>

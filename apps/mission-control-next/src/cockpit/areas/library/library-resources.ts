@@ -132,7 +132,7 @@ export async function loadLibraryResources(input: ResourceQuery): Promise<Resour
     return {
       items: items.map((item) => ({ kind, item })),
       nextCursor: response.nextCursor,
-      coverage: `Workspace and global memory. ${withheld ? "Some inconsistent scope records were withheld." : `${response.total} matching records when this list was read.`} ${response.nextCursor ? "More pages are available." : "End of this list."}`,
+      coverage: `Workspace and global memory. ${withheld ? "Some inconsistent scope records were withheld." : `${plural(response.total, "matching record")} when this list was read.`} ${response.nextCursor ? "More pages are available." : "End of this list."}`,
     };
   }
   const text = query.trim().toLowerCase();

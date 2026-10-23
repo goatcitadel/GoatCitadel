@@ -283,7 +283,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                 .map((item) => (
                   <li key={item.draftId} className="flex flex-wrap items-center justify-between gap-2 py-3">
                     <span className="text-sm">
-                      {item.label || item.catalogId} · revision {item.revision} · {item.lifecycleMode}
+                      {item.label || item.catalogId} · version {item.revision} · {item.lifecycleMode}
                     </span>
                     <Button onClick={() => owner.draftSelectionGuard.requestTransition(item.draftId)}>
                       Edit {item.label || item.catalogId}
@@ -324,7 +324,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
               <details className="text-sm">
                 <summary className="cursor-pointer">Connection identity</summary>
                 <p className="break-all">
-                  {selectedConnection.connectionId} · revision {selectedConnection.revision}
+                  {selectedConnection.connectionId} · version {selectedConnection.revision}
                 </p>
               </details>
             </section>

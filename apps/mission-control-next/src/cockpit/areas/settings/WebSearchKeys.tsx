@@ -125,7 +125,7 @@ function WebSearchKeyRow({
       ) : null}
       {!status.keychainAvailable ? (
         <p className="mt-1 text-xs text-status-waiting">
-          The OS keychain is unavailable. Set {status.envNames.join(" or ")} in the Gateway environment instead.
+          The OS keychain is unavailable. Set {status.envNames.join(" or ")} in the GoatCitadel environment instead.
         </p>
       ) : null}
       <form
