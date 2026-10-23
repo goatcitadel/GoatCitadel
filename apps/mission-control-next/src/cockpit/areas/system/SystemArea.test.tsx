@@ -6,6 +6,11 @@ import { SystemArea } from "./SystemArea";
 
 const route = vi.hoisted(() => ({ rest: [] as string[] }));
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ rest: route.rest, navigate: vi.fn() }) }));
+vi.mock("../../ui/AreaHeader", () => ({
+  AreaTabsProvider: ({ current, children }: { current: string; children: React.ReactNode }) => (
+    <div data-current={current}>{children}</div>
+  ),
+}));
 vi.mock("./HealthOverview", () => ({ HealthOverview: () => <p>Health page</p> }));
 vi.mock("./SystemRuntime", () => ({
   SystemRuntime: ({ section }: { section?: string }) => <p>Runtime page {section ?? ""}</p>,
@@ -36,6 +41,7 @@ it("keeps old runtime diagnostics bookmarks on the native Diagnostics page", () 
   route.rest = ["runtime", "diagnostics"];
   act(() => root.render(<SystemArea />));
   expect(host.textContent).toBe("Diagnostics page");
+  expect(host.querySelector("[data-current]")?.getAttribute("data-current")).toBe("diagnostics");
 });
 
 it("opens the native Runtime page at System › Runtime", () => {

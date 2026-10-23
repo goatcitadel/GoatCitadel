@@ -332,3 +332,33 @@ describe("cockpit Diagnostics", () => {
     }
   });
 });
+
+describe("diagnostics export with only server checks", () => {
+  it("allows the export when events and logs fail but server checks were read", async () => {
+    api.fetchDevDiagnostics.mockRejectedValue(new Error("events offline"));
+    api.fetchDaemonLogs.mockRejectedValue(new Error("logs offline"));
+    api.fetchOperatorInbox.mockResolvedValue({ workspaceId: "ws-1", items: [], coverage: [] });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    try {
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <SystemDiagnostics />
+          </QueryClientProvider>,
+        ),
+      );
+      await vi.waitFor(() => expect(container.textContent).toContain("Logs unavailable"));
+      const exportButton = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Export recent diagnostics",
+      )!;
+      await vi.waitFor(() => expect(exportButton.disabled).toBe(false));
+    } finally {
+      act(() => root.unmount());
+      client.clear();
+      container.remove();
+    }
+  });
+});

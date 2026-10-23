@@ -41,6 +41,8 @@ function providerDay(day: Day, provider: string): Day {
  * dropped for a single provider or a shorter window, because it cannot be split by provider or by day.
  */
 export function filterCostSummary(summary: CostSummaryResponse, filters: SpendFilters): CostSummaryResponse {
+  // Without daily records nothing can be narrowed: keep the seven-day records as they are.
+  if (!summary.dailySeries) return summary;
   const kept = (summary.dailySeries ?? []).slice(-filters.days);
   const keptDates = new Set(kept.map((day) => day.isoDate));
   const byProvider = filters.provider !== "all";
@@ -66,12 +68,8 @@ export function filterCostSummary(summary: CostSummaryResponse, filters: SpendFi
     items,
     dailySeries,
     usageAvailability:
-      narrowed && availability && metrics
-        ? {
-            ...availability,
-            metricAvailability: { ...metrics, costUsd: { ...metrics.costUsd, unknownAttemptCount: 0 } },
-          }
-        : availability,
+      // Narrowed views judge completeness from their own days and segments, not the seven-day call coverage.
+      narrowed && availability && metrics ? { ...availability, metricAvailability: undefined } : availability,
   };
 }
 
@@ -90,7 +88,9 @@ export function providerDayRows(
         input: segment.tokenInput ?? null,
         output: segment.tokenOutput ?? null,
         cached: segment.tokenCachedInput ?? null,
-        partial: flags ? !(flags.inputTokensComplete && flags.outputTokensComplete) : false,
+        partial: flags
+          ? !(flags.inputTokensComplete && flags.outputTokensComplete && flags.cachedInputTokensComplete)
+          : false,
       },
     ];
   });

@@ -126,3 +126,11 @@ it("keeps the alert for an ambiguous worker link", async () => {
   expect(host.textContent).toContain("does not identify one worker");
   expect(api.fetchRemoteWorkerDetail).not.toHaveBeenCalled();
 });
+
+it("says assignments are unavailable when they could not be read, not that they are loading", async () => {
+  route.search = "?workerId=w1";
+  api.fetchRemoteWorkerAssignments.mockRejectedValue(new Error("offline"));
+  await render();
+  await vi.waitFor(() => expect(text()).toContain("Assignments are unavailable"));
+  expect(text()).not.toContain("loading or unavailable");
+});

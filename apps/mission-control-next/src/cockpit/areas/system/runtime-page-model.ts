@@ -158,7 +158,7 @@ export function modelPerformanceMetrics(data: OpsRuntimeData): Metric[] {
     .filter((item: Measurement) => item.status === "completed")
     .map((item: Measurement) => item.metrics.latencyMs)
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  const latest = data.runtimeMeasurements[0];
+  const latest = data.runtimeMeasurements.find((item: Measurement) => item.status !== "failed");
   const speed = latest?.metrics.outputTokensPerSecond;
   return [
     {

@@ -118,7 +118,9 @@ export function RuntimeServerSection({ data, runtime }: { data: OpsRuntimeData; 
                     : "No process needs to be stopped."}
                 </p>
                 {item.command ? (
-                  <code className="mt-1 block break-all font-mono text-xs text-fg-muted">{item.command}</code>
+                  <TechnicalDetails label="Command">
+                    <code className="block break-all font-mono text-xs text-fg-muted">{item.command}</code>
+                  </TechnicalDetails>
                 ) : null}
               </li>
             ))}

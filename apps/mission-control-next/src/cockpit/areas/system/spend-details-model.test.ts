@@ -90,8 +90,8 @@ describe("filterCostSummary", () => {
       true,
     );
     expect(result.items.reduce((sum, item) => sum + item.costUsd, 0)).toBe(8);
-    expect(result.usageAvailability?.metricAvailability?.costUsd.unknownAttemptCount).toBe(0);
-    expect(result.usageAvailability?.metricAvailability?.costUsd.complete).toBe(false);
+    expect(result.usageAvailability?.metricAvailability).toBeUndefined();
+    expect(result.usageAvailability?.trackedEvents).toBe(20);
   });
 });
 
@@ -113,7 +113,23 @@ describe("providerDayRows", () => {
 describe("filterCostSummary window coverage", () => {
   it("drops the seven-day unknown-call count for a shorter window", () => {
     const result = filterCostSummary(summary(), { days: 3, provider: "all" });
-    expect(result.usageAvailability?.metricAvailability?.costUsd.unknownAttemptCount).toBe(0);
-    expect(result.usageAvailability?.metricAvailability?.costUsd.complete).toBe(false);
+    expect(result.usageAvailability?.metricAvailability).toBeUndefined();
+  });
+
+  it("keeps the cost records when the summary has no daily series", () => {
+    const source = { ...summary(), dailySeries: undefined };
+    expect(filterCostSummary(source, { days: 7, provider: "all" }).items).toHaveLength(7);
+    expect(filterCostSummary(source, { days: 3, provider: "all" }).items).toHaveLength(7);
+  });
+});
+
+describe("providerDayRows cached tokens", () => {
+  it("marks a day partial when only cached-token reporting is incomplete", () => {
+    const source = summary();
+    source.dailySeries![0]!.segments[0] = {
+      ...openai(1),
+      metricAvailability: { ...complete, cachedInputTokensComplete: false },
+    };
+    expect(providerDayRows(source, "openai")[0]?.partial).toBe(true);
   });
 });

@@ -21,7 +21,12 @@ export function SystemArea() {
   // Improvement is experimental: reachable by direct link and the Classic /ops/improvement mapping, not a tab.
   const view = rest[0] === "improvement" ? "improvement" : (VIEWS.find((item) => item.id === rest[0])?.id ?? "health");
   return (
-    <AreaTabsProvider label="System views" tabs={TABS} current={view} navigate={(href) => navigate(href)}>
+    <AreaTabsProvider
+      label="System views"
+      tabs={TABS}
+      current={view === "runtime" && rest[1] === "diagnostics" ? "diagnostics" : view}
+      navigate={(href) => navigate(href)}
+    >
       {view === "spend" ? (
         rest[1] === "details" ? (
           <SpendDetails />

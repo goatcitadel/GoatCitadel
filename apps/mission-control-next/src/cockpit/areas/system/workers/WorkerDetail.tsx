@@ -59,7 +59,9 @@ export function WorkerDetail({
       {item ? <WorkerIdentitySection item={item} reconciliation={worker.reconciliation} /> : null}
       <Section title="Assignments">
         {assignments === null ? (
-          <p className="text-sm text-fg-muted">Assignments are loading or unavailable.</p>
+          <p className="text-sm text-fg-muted">
+            {worker.loading ? "Loading assignments…" : "Assignments are unavailable. Try Refresh worker."}
+          </p>
         ) : assignments.length === 0 ? (
           <p className="text-sm text-fg-muted">No assignments use this worker.</p>
         ) : (

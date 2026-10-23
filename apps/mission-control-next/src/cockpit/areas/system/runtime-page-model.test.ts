@@ -121,3 +121,17 @@ describe("model performance", () => {
     expect(comparisonRunStatus("completed_with_warnings")).toEqual({ label: "Done with warnings", tone: "waiting" });
   });
 });
+
+describe("latest model call", () => {
+  it("skips a failed newest call for speed and cost", () => {
+    const data = runtimeData({
+      runtimeMeasurements: [
+        { status: "failed", metrics: { outputTokensPerSecond: 1, estimatedCostUsd: 9 } },
+        { status: "completed", metrics: { latencyMs: 100, outputTokensPerSecond: 40, estimatedCostUsd: 0.5 } },
+      ],
+    });
+    const metrics = modelPerformanceMetrics(data);
+    expect(metrics.find((item) => item.term === "Latest output speed")?.value).toBe("40 tokens/s");
+    expect(metrics.find((item) => item.term === "Latest estimated cost")?.value).toBe("$0.50");
+  });
+});

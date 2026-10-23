@@ -41,6 +41,7 @@ export function WorkerBudgets({
   const name = admission?.workerLabel ?? "This worker";
   const key = "worker:" + workspaceId + ":" + worker.workerId + ":budget";
   const [items, setItems] = useState<RemoteWorkerBudgetBalance[] | null>(null);
+  const [reading, setReading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -66,6 +67,7 @@ export function WorkerBudgets({
 
   const reload = useCallback(async () => {
     const sequence = ++epoch.current.sequence;
+    setReading(true);
     try {
       const result = await fetchRemoteWorkerBudgets(workspaceId, workspaceId);
       if (sequence !== epoch.current.sequence) return;
@@ -76,6 +78,8 @@ export function WorkerBudgets({
         setItems(null);
         setError("Worker budgets are unavailable. Refresh to try again.");
       }
+    } finally {
+      if (sequence === epoch.current.sequence) setReading(false);
     }
   }, [workspaceId, worker.workerId]);
   useEffect(() => {
@@ -192,7 +196,7 @@ export function WorkerBudgets({
         </p>
       ) : null}
       {items === null ? (
-        <p className="text-sm text-fg-muted">Budgets are loading or unavailable.</p>
+        <p className="text-sm text-fg-muted">{reading ? "Loading budgets…" : "Budgets are unavailable."}</p>
       ) : items.length === 0 ? (
         <p className="text-sm text-fg-muted">No spending has been authorized for this worker.</p>
       ) : (
@@ -225,6 +229,21 @@ export function WorkerBudgets({
           <Button size="sm" onClick={() => setReviewOpen(true)}>
             Review pending authorization
           </Button>
+          {/* Only a request that can no longer succeed may be dropped; a matching saved grant still clears it first. */}
+          {items !== null &&
+          (attempt.request.workerGeneration !== admission?.workerGeneration ||
+            Date.parse(attempt.request.expiresAt) <= Date.now()) ? (
+            <Button
+              size="sm"
+              disabled={pending}
+              onClick={() => {
+                clearAttempt(attempt.request.grantId);
+                setReviewOpen(false);
+              }}
+            >
+              Discard unconfirmed request
+            </Button>
+          ) : null}
         </p>
       ) : null}
       {!editing && !attempt?.dispatched ? (

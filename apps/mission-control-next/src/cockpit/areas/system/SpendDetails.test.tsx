@@ -141,3 +141,16 @@ it("keeps the last spend figures and marks them stale when a refresh fails", asy
   await vi.waitFor(() => expect(host.textContent).toContain("Spend could not be refreshed"));
   expect(host.textContent).not.toContain("Spend unavailable");
 });
+
+it("says a narrower view needs daily records when the summary has none", async () => {
+  route.search = "?window=3";
+  api.fetchCostSummary.mockResolvedValue({ ...summary, dailySeries: undefined });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <SpendDetails />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(host.textContent).toContain("Daily records were not reported"));
+});

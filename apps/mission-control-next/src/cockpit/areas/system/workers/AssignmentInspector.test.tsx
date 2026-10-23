@@ -151,3 +151,11 @@ it("says a bookmarked assignment is not loaded and reads no events for it", asyn
   expect(text()).toContain("This assignment is not in the loaded records.");
   expect(api.fetchRemoteWorkerAssignmentEvents).not.toHaveBeenCalled();
 });
+
+it("says events are unavailable when the assignment's version was not reported, instead of loading forever", async () => {
+  const unversioned = assignment("assignment-1");
+  await render([{ ...unversioned, identity: { ...unversioned.identity, value: null } }]);
+  expect(text()).toContain("this assignment's version was not reported");
+  expect(text()).not.toContain("Loading events");
+  expect(api.fetchRemoteWorkerAssignmentEvents).not.toHaveBeenCalled();
+});

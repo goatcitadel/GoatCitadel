@@ -51,7 +51,11 @@ export function AssignmentInspector({
           </div>
           <section>
             <h3 className="text-sm font-semibold text-fg">Events</h3>
-            {events.error ? (
+            {generation === undefined ? (
+              <p className="text-sm text-fg-muted">
+                Events are unavailable because this assignment's version was not reported.
+              </p>
+            ) : events.error ? (
               <p className="text-sm text-status-failed">{events.error}</p>
             ) : !events.page ? (
               <p className="text-sm text-fg-muted">Loading events…</p>

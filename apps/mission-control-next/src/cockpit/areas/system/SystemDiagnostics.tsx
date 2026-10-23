@@ -83,7 +83,7 @@ export function SystemDiagnostics() {
     setShowAllEvents(false);
   };
   const exportRecent = () => {
-    if (!diagnostics.data && !logs.data) return;
+    if (!diagnostics.data && !logs.data && !host.data) return;
     if (typeof document === "undefined" || typeof URL.createObjectURL !== "function") {
       setExportNotice({ tone: "error", message: "Diagnostics export is unavailable in this environment." });
       return;
@@ -107,7 +107,7 @@ export function SystemDiagnostics() {
       setExportNotice({
         tone: "success",
         message:
-          !diagnostics.data || !logs.data || diagnostics.isError || logs.isError
+          !diagnostics.data || !logs.data || !host.data || diagnostics.isError || logs.isError || host.isError
             ? "Partial recent diagnostics downloaded. The file marks unavailable or stale sources."
             : "Recent diagnostics downloaded. Review the file before sharing.",
       });
@@ -124,7 +124,7 @@ export function SystemDiagnostics() {
           <>
             <Button
               size="sm"
-              disabled={diagnostics.isFetching || logs.isFetching || (!diagnostics.data && !logs.data)}
+              disabled={diagnostics.isFetching || logs.isFetching || (!diagnostics.data && !logs.data && !host.data)}
               onClick={exportRecent}
             >
               Export recent diagnostics

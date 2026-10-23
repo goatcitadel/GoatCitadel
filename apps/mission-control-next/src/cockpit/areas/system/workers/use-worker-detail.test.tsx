@@ -133,3 +133,23 @@ it("keeps the last loaded assignments and says so when a refresh of them fails",
   );
   expect(seen.current?.error).toBeNull();
 });
+
+it("clears the load-more state when a reload interrupts it", async () => {
+  api.fetchRemoteWorkerAssignments.mockResolvedValueOnce(page(["a1"], "c1"));
+  await act(async () => root.render(<DetailProbe workspaceId="ws" workerId="w1" />));
+  let finishMore!: (value: unknown) => void;
+  api.fetchRemoteWorkerAssignments.mockImplementationOnce(() => new Promise((resolve) => (finishMore = resolve)));
+  let more!: Promise<unknown>;
+  act(() => {
+    more = seen.current!.loadMoreAssignments();
+  });
+  expect(seen.current?.loadingMore).toBe(true);
+  await act(async () => {
+    await seen.current!.refresh();
+  });
+  await act(async () => {
+    finishMore(page(["a2"], "c2"));
+    await more;
+  });
+  expect(seen.current?.loadingMore).toBe(false);
+});

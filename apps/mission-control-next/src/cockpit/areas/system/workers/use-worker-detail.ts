@@ -175,7 +175,7 @@ export function useWorkerDetail(workspaceId: string, workerId: string | undefine
         setMoreError("Additional assignments are unavailable. Try again to continue from the loaded records.");
     } finally {
       moreLock.current = false;
-      if (id === sequence.current) setLoadingMore(false);
+      setLoadingMore(false);
     }
   };
 

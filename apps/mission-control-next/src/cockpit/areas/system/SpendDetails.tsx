@@ -125,6 +125,12 @@ export function SpendDetails() {
             </div>
           </div>
 
+          {!summary.dailySeries && (filters.days < 7 || filters.provider !== "all") ? (
+            <p className="text-sm text-status-waiting">
+              Daily records were not reported, so this window or provider cannot be shown; the figures below cover the
+              last 7 days and every provider.
+            </p>
+          ) : null}
           <Section title="Coverage" description={projection.coverageDescription}>
             <p className="mb-2 text-sm text-fg-secondary">
               {filters.provider === "all" && filters.days === 7

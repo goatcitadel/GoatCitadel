@@ -143,3 +143,30 @@ it("revokes a budget only after the danger confirmation", async () => {
   await act(async () => button("Revoke budget", dialog).click());
   expect(api.revokeRemoteWorkerBudget).toHaveBeenCalledExactlyOnceWith("ws", "grant-1", 1);
 });
+
+it("offers to discard an unconfirmed request that can no longer succeed", async () => {
+  api.authorizeRemoteWorkerBudget.mockRejectedValue(new Error("timeout"));
+  await render();
+  await act(async () => button("New budget").click());
+  await type("Provider request limit", "5");
+  await type("Dollar limit", "1");
+  await review();
+  await act(async () => button("Authorize budget", host.querySelector('[role="dialog"]')!).click());
+  act(() => root.unmount());
+  root = createRoot(host);
+  await render(workerItem("w1", { generation: 4 }));
+  await vi.waitFor(() => expect(host.textContent).toContain("Authorization outcome unconfirmed"));
+  await act(async () => button("Discard unconfirmed request").click());
+  expect(host.textContent).not.toContain("Authorization outcome unconfirmed");
+  // The draft survives the discard, so the button says it is unsaved.
+  expect([...host.querySelectorAll("button")].some((node) => node.textContent?.startsWith("New budget"))).toBe(true);
+});
+
+it("tells loading budgets apart from unavailable ones", async () => {
+  let finish!: (value: unknown) => void;
+  api.fetchRemoteWorkerBudgets.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+  await render();
+  expect(host.textContent).toContain("Loading budgets…");
+  await act(async () => finish([]));
+  expect(host.textContent).not.toContain("Loading budgets…");
+});
