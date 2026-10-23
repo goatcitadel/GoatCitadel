@@ -55,7 +55,7 @@ describe("Cockpit compatibility coverage", () => {
     ["/?tab=approvals&approvalId=a", "/inbox?approvalId=a"],
     ["/ops/activity", "/system/activity"],
     ["/ops/quality", "/system/quality"],
-    ["/ops/diagnostics", "/system/runtime/diagnostics"],
+    ["/ops/diagnostics", "/system/diagnostics"],
     ["/ops/costs", "/system/spend/details"],
     ["/ops/sessions?view=browser-sessions&sessionId=s1#grants", "/system/browser-sessions?sessionId=s1#grants"],
     ["/ops/improvement?reportId=rep-1", "/system/improvement?reportId=rep-1"],
@@ -324,7 +324,7 @@ it.each([
   ],
   [
     "/ops/diagnostics?workspaceId=w&sessionId=s&keep=yes#release",
-    "/system/runtime/diagnostics?workspaceId=w&sessionId=s&keep=yes#release",
+    "/system/diagnostics?workspaceId=w&sessionId=s&keep=yes#release",
   ],
   ["/system/runtime?workspaceId=w#ops-runtime-posture", "/system/runtime?workspaceId=w#ops-runtime-posture"],
   [

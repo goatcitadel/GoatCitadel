@@ -3,7 +3,7 @@ import type { StatusTone } from "@goatcitadel/mission-control-shared/content/sta
 import { describeRuntimeService } from "@goatcitadel/mission-control-shared/content/runtime-service";
 import type { BackupTrustState } from "./backup-trust";
 
-/** Full runtime controls and backup records use the existing native runtime owner inside Cockpit. */
+/** Runtime controls and backup records live on the native System › Runtime page. */
 export const RUNTIME_INSPECT_PATH = "/system/runtime";
 export const BACKUP_INSPECT_PATH = "/system/runtime#ops-runtime-backups";
 

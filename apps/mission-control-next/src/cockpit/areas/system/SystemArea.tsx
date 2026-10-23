@@ -1,6 +1,8 @@
 import { HealthOverview } from "./HealthOverview";
 import { SystemRuntime } from "./SystemRuntime";
 import { SpendOverview } from "./SpendOverview";
+import { SpendDetails } from "./SpendDetails";
+import { SystemWorkers } from "./workers/SystemWorkers";
 import { SystemActivity } from "./SystemActivity";
 import { SystemSessions } from "./SystemSessions";
 import { SystemDashboards } from "./SystemDashboards";
@@ -19,10 +21,15 @@ export function SystemArea() {
   // Improvement is experimental: reachable by direct link and the Classic /ops/improvement mapping, not a tab.
   const view = rest[0] === "improvement" ? "improvement" : (VIEWS.find((item) => item.id === rest[0])?.id ?? "health");
   return (
-    <AreaTabsProvider label="System views" tabs={TABS} current={view} navigate={(href) => navigate(href)}>
+    <AreaTabsProvider
+      label="System views"
+      tabs={TABS}
+      current={view === "runtime" && rest[1] === "diagnostics" ? "diagnostics" : view}
+      navigate={(href) => navigate(href)}
+    >
       {view === "spend" ? (
         rest[1] === "details" ? (
-          <SystemRuntime section="costs" />
+          <SpendDetails />
         ) : (
           <SpendOverview />
         )
@@ -40,10 +47,13 @@ export function SystemArea() {
         <SystemBrowserSessions />
       ) : view === "improvement" ? (
         <SystemImprovement />
+      ) : view === "runtime" && rest[1] === "diagnostics" ? (
+        // Runtime diagnostics folded into System › Diagnostics; old bookmarks keep working.
+        <SystemDiagnostics />
+      ) : view === "runtime" && rest[1] === "workers" ? (
+        <SystemWorkers />
       ) : view === "runtime" ? (
-        <SystemRuntime
-          section={rest[1] === "diagnostics" ? "diagnostics" : rest[1] === "workers" ? "workers" : "runtime"}
-        />
+        <SystemRuntime />
       ) : (
         <HealthOverview />
       )}

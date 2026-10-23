@@ -130,7 +130,7 @@ describe("shell preference", () => {
     ["/system", "/system/runtime"],
     ["/system/activity", "/system/activity"],
     ["/system/quality", "/system/quality"],
-    ["/system/diagnostics", "/system/runtime/diagnostics"],
+    ["/system/diagnostics", "/system/diagnostics"],
     ["/system/spend", "/system/spend"],
     ["/system/spend/details", "/system/spend/details"],
     ["/system/runtime/workers", "/system/runtime/workers"],
