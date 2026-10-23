@@ -137,8 +137,27 @@ export function readClaudeCodeCliAuthStatus({
   } else {
     result = spawn(command, args, options);
   }
-  if (result?.error) return { ready: false, reason: "cli_unavailable" };
+  if (result?.error) {
+    // Only a missing executable is "unavailable"; any other start failure keeps just its code, never CLI output.
+    const code = result.error.code;
+    return { ready: false, reason: code === "ENOENT" ? "cli_unavailable" : `cli_start_failed:${code ?? "unknown"}` };
+  }
   return parseClaudeAuthStatus(result?.stdout);
+}
+
+const SIGN_IN_REASONS = new Set(["not_logged_in", "not_subscription_login", "unparseable"]);
+
+/** One message for every not-ready reason; only sign-in problems get sign-in guidance. */
+export function claudeCliNotReadyMessage(reason) {
+  let guidance;
+  if (SIGN_IN_REASONS.has(reason)) guidance = "Run `claude` and sign in with your Claude subscription.";
+  else if (reason === "cli_unavailable") {
+    guidance = `Install the Claude Code CLI, or set ${CLAUDE_CLI_PATH_ENV} to its executable.`;
+  } else if (reason === "cli_unsupported_shim") {
+    guidance = `${CLAUDE_CLI_PATH_ENV} points at an npm shim without its cli.js; point it at claude.exe or a full npm install.`;
+  } else
+    guidance = `The Claude Code CLI could not start; check its install and file permissions, or ${CLAUDE_CLI_PATH_ENV}.`;
+  return `Claude Code CLI is not ready (${reason}). ${guidance}`;
 }
 
 /** Lists git-tracked files under `skills/`, relative to `sourceRoot`. Throws if git cannot answer. */

@@ -23,6 +23,7 @@ import {
   buildTestbenchGatewayEnv,
   buildTestbenchUiEnv,
   buildTestbenchUrl,
+  claudeCliNotReadyMessage,
   readClaudeCodeCliAuthStatus,
   parseTestbenchArgs,
   prepareTestbenchRuntime,
@@ -185,10 +186,7 @@ async function buildGatewayWorkspaceLocked(context, envOmit) {
 function assertClaudeCodeCliReady() {
   const status = readClaudeCodeCliAuthStatus();
   if (!status.ready) {
-    throw new Error(
-      `Claude Code CLI is not ready (${status.reason}). Run \`claude\` and sign in with your subscription, ` +
-        "then start the test bench again.",
-    );
+    throw new Error(`${claudeCliNotReadyMessage(status.reason)} Then start the test bench again.`);
   }
 }
 

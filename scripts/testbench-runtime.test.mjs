@@ -16,6 +16,7 @@ import {
   buildTestbenchGatewayEnv,
   buildTestbenchUiEnv,
   buildTestbenchUrl,
+  claudeCliNotReadyMessage,
   parseClaudeAuthStatus,
   readClaudeCodeCliAuthStatus,
   parseTestbenchArgs,
@@ -313,7 +314,8 @@ test("readClaudeCodeCliAuthStatus runs `auth status --json` and reports an unava
   });
   assert.deepEqual(ok, { ready: true, reason: "ready" });
   assert.deepEqual(calls, [{ command: "/opt/claude", args: ["auth", "status", "--json"], timeout: 15_000 }]);
-  const missing = readClaudeCodeCliAuthStatus({ env: {}, spawn: () => ({ error: new Error("ENOENT") }) });
+  const missingError = Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" });
+  const missing = readClaudeCodeCliAuthStatus({ env: {}, spawn: () => ({ error: missingError }) });
   assert.deepEqual(missing, { ready: false, reason: "cli_unavailable" });
 });
 
@@ -364,4 +366,28 @@ test("readClaudeCodeCliAuthStatus uses a shell only for a bare command on Window
       [nativeExe, false],
     ],
   );
+});
+
+test("readClaudeCodeCliAuthStatus reports a CLI that exists but cannot start by its error code only", () => {
+  for (const code of ["EACCES", "EPERM", "ETIMEDOUT"]) {
+    const error = Object.assign(new Error(`spawnSync claude ${code} secret-looking output`), { code });
+    assert.deepEqual(readClaudeCodeCliAuthStatus({ env: {}, platform: "linux", spawn: () => ({ error }) }), {
+      ready: false,
+      reason: `cli_start_failed:${code}`,
+    });
+  }
+  const uncoded = readClaudeCodeCliAuthStatus({ env: {}, platform: "linux", spawn: () => ({ error: new Error("x") }) });
+  assert.deepEqual(uncoded, { ready: false, reason: "cli_start_failed:unknown" });
+});
+
+test("claudeCliNotReadyMessage gives sign-in guidance only for sign-in problems", () => {
+  for (const reason of ["not_logged_in", "not_subscription_login", "unparseable"]) {
+    assert.match(claudeCliNotReadyMessage(reason), /sign in/, reason);
+  }
+  for (const reason of ["cli_unavailable", "cli_unsupported_shim", "cli_start_failed:EACCES"]) {
+    const message = claudeCliNotReadyMessage(reason);
+    assert.doesNotMatch(message, /sign in/, reason);
+    assert.match(message, new RegExp(reason));
+    assert.match(message, /GOATCITADEL_CLAUDE_CLI_PATH|install|permission/i, reason);
+  }
 });

@@ -8,6 +8,7 @@ import {
   CLAUDE_CODE_CLI_MODEL,
   buildTestbenchEnvOmit,
   buildTestbenchGatewayEnv,
+  claudeCliNotReadyMessage,
   prepareTestbenchRuntime,
   readClaudeCodeCliAuthStatus,
   writeClaudeCodeCliProviderConfig,
@@ -518,7 +519,7 @@ export async function runLane(context, sourceState, overrides = {}) {
   await scenario("preflight", "Claude Code CLI is signed in with a subscription", "provider-runtime", async () =>
     auth.ready
       ? { status: "passed", providerId: PROVIDER_ID }
-      : { status: "failed", error: `Claude Code CLI is not ready (${auth.reason}); run \`claude\` and sign in first` },
+      : { status: "failed", error: claudeCliNotReadyMessage(auth.reason) },
   );
   if (auth.ready) {
     let sandbox;
