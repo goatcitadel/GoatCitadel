@@ -30,7 +30,7 @@ const status = (label: string, tone: StatusTone): StatusPresentation => ({ label
 /** Classification is a description of the record, not a health signal, so it is plain text and never a badge. */
 export const AUTHORITY_CLASS_LABELS: Readonly<Record<RuntimeAuthorityClass, string>> = {
   canonical_record: "Saved record",
-  derived_projection: "Snapshot",
+  derived_projection: "Computed",
   retained_signal: "Recorded signal",
   inferred: "Inferred",
   unavailable: "Unavailable",
