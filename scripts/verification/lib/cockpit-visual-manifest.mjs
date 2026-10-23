@@ -50,7 +50,8 @@ export const COCKPIT_VISUAL_MANIFEST = [
     slug: `cockpit-settings-${label.toLowerCase()}`,
     href: `/settings/${label.toLowerCase()}`,
     shell: "cockpit",
-    readyText: "Settings",
+    // Each Settings page titles itself with its own name ("General", "Models"…); "Settings" is only the search title.
+    readyText: label,
     readySelector: `#main-content section[aria-label="${label}"]:not([hidden])`,
   })),
   {

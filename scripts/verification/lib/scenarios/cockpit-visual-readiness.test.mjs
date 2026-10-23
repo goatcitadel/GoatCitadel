@@ -64,11 +64,11 @@ test("native route wait requires exact active page selector and heading before d
     locator: selector => ({ first: () => ({ waitFor: async () => calls.push({ selector }) }) }),
     getByRole: (role, options) => ({ first: () => ({ waitFor: async () => calls.push({ role, options }) }) }),
   };
-  await waitForCockpitVisualRouteReady(page, { href: "/settings/safety", readySelector: 'section[aria-label="Safety"]', readyText: "Settings" }, 100);
+  await waitForCockpitVisualRouteReady(page, { href: "/settings/safety", readySelector: 'section[aria-label="Safety"]', readyText: "Safety" }, 100);
   assert.equal(calls[0].fn, cockpitVisualShellReady);
   assert.deepEqual(calls[0].args, expected);
   assert.equal(calls[1].selector, 'section[aria-label="Safety"]');
-  assert.deepEqual(calls[2], { role: "heading", options: { name: "Settings", exact: true } });
+  assert.deepEqual(calls[2], { role: "heading", options: { name: "Safety", exact: true } });
   assert.equal(calls[3].fn, cockpitVisualDataSettled);
 });
 

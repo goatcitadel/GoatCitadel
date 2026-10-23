@@ -86,6 +86,9 @@ test("native manifest covers cockpit destinations and binds fixture, theme and e
     assert.ok(route.readySelector || route.readyText);
     assert.equal(route.interaction, undefined, "Native routes do not use the classic inspector.");
   }
+  // Each Settings page titles itself with its own name, so its ready heading is that name, never "Settings".
+  for (const route of COCKPIT_VISUAL_MANIFEST.filter((item) => item.slug.startsWith("cockpit-settings-")))
+    assert.equal(route.readySelector, `#main-content section[aria-label="${route.readyText}"]:not([hidden])`);
   const chat = new URL(
     resolveReleaseSurfaceHref(
       COCKPIT_VISUAL_MANIFEST[0],
