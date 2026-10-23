@@ -2190,6 +2190,14 @@ export class ChatTurnAgentRunner {
       searchMaxResults: executionBudget.searchMaxResults,
       ...(executionBudget.maxTokens !== undefined ? { maxTokens: executionBudget.maxTokens } : {}),
     } as const;
+    // Persisted from the first running trace so a turn cancelled or interrupted
+    // mid-stream still records which provider and model it was sent to.
+    const requestedRouteIdentity = {
+      primaryProviderId: input.providerId,
+      primaryModel: input.model,
+      effectiveProviderId: input.providerId,
+      effectiveModel: input.model,
+    } satisfies ChatTurnTraceRecord["routing"];
     const loopGuardState = initializeToolLoopGuardState(this.deps.toolLoopDetection);
     const trace = await this.runCanonicalWrite(
       input,
@@ -2218,6 +2226,7 @@ export class ChatTurnAgentRunner {
             executionProfile,
             liveDataIntent: intents.liveData,
             executionBudget: executionBudgetTrace,
+            ...requestedRouteIdentity,
             ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
             ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
           },
@@ -2558,10 +2567,7 @@ export class ChatTurnAgentRunner {
       executionProfile,
       liveDataIntent: intents.liveData,
       executionBudget: executionBudgetTrace,
-      primaryProviderId: input.providerId,
-      primaryModel: input.model,
-      effectiveProviderId: input.providerId,
-      effectiveModel: input.model,
+      ...requestedRouteIdentity,
       ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
       ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
     };
