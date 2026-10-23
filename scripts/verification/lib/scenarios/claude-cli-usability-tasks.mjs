@@ -332,7 +332,7 @@ function checkEnum(problems, id, field, value, allowed) {
 /** Returns every problem in a task list; an empty array means the catalog is valid. */
 export function validateUsabilityTasks(tasks, qaPlanMarkdown) {
   const problems = [];
-  const seen = new Set();
+  const seen = new Map();
   for (const item of tasks) {
     const id = item.id;
     checkEnum(problems, id, "area", item.area, ENUMS.area);
@@ -351,9 +351,26 @@ export function validateUsabilityTasks(tasks, qaPlanMarkdown) {
     if (item.followUp) checkEnum(problems, id, "followUp.action", item.followUp.action, ENUMS.followUp);
     if (item.dependsOn && !seen.has(item.dependsOn))
       problems.push(`${id}: dependsOn ${item.dependsOn} is not an earlier task`);
+    if (item.automatable) problems.push(...liveLaneProblems(item, seen));
     if (PERSONAL_DATA.test(item.prompt ?? ""))
       problems.push(`${id}: prompt contains personal data (a user path or an email)`);
-    seen.add(id);
+    seen.set(id, item);
+  }
+  return problems;
+}
+
+/** Combinations the live lane cannot run; a manual task may still describe them for a person to follow. */
+function liveLaneProblems(item, earlierTasks) {
+  const problems = [];
+  if (item.followUp?.action === "edit" && !item.dependsOn) {
+    problems.push(`${item.id}: an automatable edit follow-up needs dependsOn naming the turn it edits`);
+  }
+  if (item.followUp?.action === "fork") {
+    problems.push(`${item.id}: the live lane does not run a fork follow-up; use expect.forkSession instead`);
+  }
+  const dependency = item.dependsOn ? earlierTasks.get(item.dependsOn) : undefined;
+  if (dependency && !dependency.automatable) {
+    problems.push(`${item.id}: depends on ${item.dependsOn}, which is not automatable, so the live lane never runs it`);
   }
   return problems;
 }

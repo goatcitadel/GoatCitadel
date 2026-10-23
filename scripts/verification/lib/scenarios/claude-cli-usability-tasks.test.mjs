@@ -49,3 +49,21 @@ test("tasks that need the web run with safe_auto tool autonomy, because manual a
     assert.equal(CLAUDE_CLI_USABILITY_TASKS.find((task) => task.id === id).prefs.toolAutonomy, "safe_auto", id);
   }
 });
+
+test("validateUsabilityTasks rejects automatable combinations the live lane cannot run, and allows them for manual tasks", () => {
+  const qaPlan = "### CHAT-01 Basic\n### CHAT-03 Edit\n";
+  const base = { ...CLAUDE_CLI_USABILITY_TASKS.find((task) => task.id === "C-01") };
+  const manual = { ...base, id: "C-10", automatable: false };
+  const problemsFor = (task, before = [base]) => validateUsabilityTasks([...before, task], qaPlan).join("\n");
+  assert.match(
+    problemsFor({ ...base, id: "C-11", followUp: { action: "edit", content: "x" } }),
+    /C-11: .*edit.*dependsOn/,
+  );
+  assert.match(problemsFor({ ...base, id: "C-12", followUp: { action: "fork" } }), /C-12: .*fork/);
+  assert.match(
+    problemsFor({ ...base, id: "C-13", dependsOn: "C-10" }, [base, manual]),
+    /C-13: .*C-10.*not automatable/,
+  );
+  assert.equal(problemsFor({ ...manual, id: "C-14", followUp: { action: "fork" } }), "");
+  assert.equal(problemsFor({ ...base, id: "C-15", dependsOn: "C-01", followUp: { action: "edit", content: "x" } }), "");
+});
