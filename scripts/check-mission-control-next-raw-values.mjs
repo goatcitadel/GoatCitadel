@@ -61,9 +61,9 @@ export const RULES = [
     pattern:
       /(?<!=)\{\s*[\w?.!]+\.(?:workspaceId|providerId|actorId|runId|taskId|sessionId|approvalId|grantId|localOperatorOverrideId)\s*\}/g,
     // IDs inside TechnicalDetails and key/href templates don't count; the run-detail headers read "Run" with the id in
-    // technical details. The budget rose by 6 when the rule learned grantId: Project fan-out, autonomous and browser
-    // grants still show grant IDs (a later PR names them).
-    budget: 26,
+    // technical details. Autonomous grants name their revoke action by reason and keep their IDs in technical details;
+    // what remains is mostly browser-session actor IDs, which are the grant's visible subject.
+    budget: 23,
     help: "show a name or plain label; put the ID in TechnicalDetails",
   },
   {

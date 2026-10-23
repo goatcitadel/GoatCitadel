@@ -1,4 +1,6 @@
 import { navigationRailItems, RAIL_GROUPS, RAIL_ITEMS } from "../../app/route-model";
+import { SYSTEM_IMPROVEMENT_VIEW, SYSTEM_VIEWS } from "../areas/system/system-views";
+import { WORK_VIEWS } from "../areas/work/work-views";
 
 type RouteModelArea = "settings" | "library" | "ops";
 
@@ -9,30 +11,16 @@ const ROUTE_MODEL_AREAS: Readonly<Record<string, { area: RouteModelArea }>> = {
   work: { area: "ops" },
 };
 
+const labelsById = (views: ReadonlyArray<{ id: string; label: string }>) =>
+  Object.fromEntries(views.map((view) => [view.id, view.label]));
+
 /**
- * The cockpit's own tab labels (SystemArea and WorkArea VIEWS), so the title matches the tab the operator clicked:
- * System › Spend is "Spend", not the Classic "Costs", and Browser sessions is not Sessions. Keep in step with those tabs.
+ * The cockpit's own tab labels, read from the same lists the System and Work tab rows use, so the title matches the
+ * tab the operator clicked: System › Spend is "Spend", not the Classic "Costs", and Browser sessions is not Sessions.
  */
 const COCKPIT_TAB_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  system: {
-    health: "Health",
-    runtime: "Runtime",
-    spend: "Spend",
-    quality: "Quality",
-    diagnostics: "Diagnostics",
-    activity: "Activity",
-    sessions: "Sessions",
-    dashboards: "Dashboards",
-    "browser-sessions": "Browser sessions",
-    improvement: "Improvement",
-  },
-  work: {
-    board: "Board",
-    history: "History",
-    schedules: "Schedules",
-    archive: "Archived tasks",
-    automation: "Automation designer",
-  },
+  system: labelsById([...SYSTEM_VIEWS, SYSTEM_IMPROVEMENT_VIEW]),
+  work: labelsById(WORK_VIEWS),
 };
 
 /** "GoatCitadel Inbox", "GoatCitadel Settings · Get started": the same prefix and labels the classic shell uses. */
