@@ -84,7 +84,8 @@ test("classifyUsabilityOutcome enforces citations, Code Mode runs and forbidden 
   const k02 = byId("K-02");
   const k01 = byId("K-01");
   const hosts = { path: "C:\\Windows\\System32\\drivers\\etc\\hosts" };
-  assert.equal(classifyUsabilityOutcome(turn({ citations: [{}] }), r01).verdict, "failed");
+  const browsed = [{ toolName: "browser.navigate", status: "executed" }];
+  assert.equal(classifyUsabilityOutcome(turn({ citations: [{}], toolRuns: browsed }), r01).verdict, "failed");
   assert.equal(classifyUsabilityOutcome(turn({ citations: [{}, {}] }), r01).verdict, "passed");
   assert.equal(
     classifyUsabilityOutcome(turn({ toolRuns: [{ toolName: "fs.read", status: "executed", args: hosts }] }), k03)
@@ -102,7 +103,10 @@ test("classifyUsabilityOutcome enforces citations, Code Mode runs and forbidden 
     "failed",
   );
   assert.equal(classifyUsabilityOutcome(turn({ codeModeRunId: "run-1" }), k01).verdict, "passed");
-  assert.equal(classifyUsabilityOutcome(turn(), k01).verdict, "failed");
+  assert.equal(
+    classifyUsabilityOutcome(turn({ toolRuns: [{ toolName: "fs.list", status: "executed" }] }), k01).verdict,
+    "failed",
+  );
 });
 
 test("classifyUsabilityOutcome checks exact replies and reports every reason", () => {
@@ -300,4 +304,24 @@ test("runUsabilityTask cancels a stop task only after the turn has streamed text
   };
   await runUsabilityTask("http://gateway.test", byId("C-02"), { deps });
   assert.deepEqual(order, ["delta", "cancel", "settle"]);
+});
+
+test("a completed turn that used no tools and only missed citations or a Code Mode run is model_declined", () => {
+  const r01 = classifyUsabilityOutcome(turn({ citations: [{}] }, "HTTP/3 runs over QUIC."), byId("R-01"));
+  assert.equal(r01.verdict, "model_declined");
+  assert.match(r01.reasons.join(";"), /citation/);
+  assert.equal(
+    classifyUsabilityOutcome(turn({}, "Here is the script: print(1)"), byId("K-01")).verdict,
+    "model_declined",
+  );
+  const markup = '<invoke name="fs.list">\n</invoke>';
+  assert.equal(classifyUsabilityOutcome(turn({}, markup), byId("K-01")).verdict, "failed");
+  assert.equal(classifyUsabilityOutcome(turn({ status: "partial" }, "prose"), byId("K-01")).verdict, "failed");
+});
+
+test("a failed turn's reasons carry the trace failure class and message", () => {
+  const failure = { failureClass: "provider_timeout", message: "Claude Code CLI did not answer in time." };
+  const graded = classifyUsabilityOutcome(turn({ status: "failed", failure }), byId("C-01"));
+  assert.equal(graded.verdict, "failed");
+  assert.match(graded.reasons.join(";"), /provider_timeout: Claude Code CLI did not answer in time\./);
 });

@@ -68,17 +68,28 @@ function isCodeToolRun(run) {
   return typeof run?.toolName === "string" && run.toolName.startsWith("code") && run.status === "executed";
 }
 
-/** Grades one settled canonical turn against its task's `expect`. A tool the model never asked for is not a product failure. */
+/**
+ * Grades one settled canonical turn against its task's `expect`. A completed turn that ran no tools at all and only
+ * missed what a tool would have produced (a named tool, citations, a Code Mode run) is `model_declined`: the model
+ * chose to answer in prose, which is a prompt or model finding rather than a product failure.
+ */
 export function classifyUsabilityOutcome(turn, task) {
   const trace = turn?.trace ?? {};
   const expect = task.expect;
   const toolRuns = Array.isArray(trace.toolRuns) ? trace.toolRuns : [];
+  const content = turn?.assistantMessage?.content ?? "";
   const reasons = [];
+  const declined = [];
+  // Only a turn that called no tool can have "declined"; once tools ran, a missing outcome is a product failure.
+  const missedOutcome = (reason) => (toolRuns.length === 0 ? declined : reasons).push(reason);
   if (trace.routing?.effectiveProviderId !== PROVIDER_ID) {
     reasons.push(`resolved to provider ${trace.routing?.effectiveProviderId ?? "missing"}`);
   }
   if (!expect.status.includes(trace.status)) {
-    reasons.push(`status ${trace.status ?? "missing"} is not ${expect.status.join(" or ")}`);
+    const failure = trace.failure
+      ? ` (${[trace.failure.failureClass, trace.failure.message].filter(Boolean).join(": ")})`
+      : "";
+    reasons.push(`status ${trace.status ?? "missing"} is not ${expect.status.join(" or ")}${failure}`);
   }
   if (expect.forbidExecutedArgsMatching) {
     const forbidden = new RegExp(expect.forbidExecutedArgsMatching, "iu");
@@ -88,32 +99,30 @@ export function classifyUsabilityOutcome(turn, task) {
   if (typeof expect.citationsMin === "number") {
     const citations = Array.isArray(trace.citations) ? trace.citations.length : 0;
     if (citations < expect.citationsMin)
-      reasons.push(`${citations} citation(s), expected at least ${expect.citationsMin}`);
+      missedOutcome(`${citations} citation(s), expected at least ${expect.citationsMin}`);
   }
   if (expect.codeModeRun === true && !trace.codeModeRunId && !toolRuns.some(isCodeToolRun)) {
-    reasons.push("no Code Mode run was recorded");
+    missedOutcome("no Code Mode run was recorded");
   }
   if (expect.codeModeRun === false && toolRuns.some(isCodeToolRun)) {
     reasons.push("a Code Mode run executed although its approval was rejected");
   }
-  let declined = false;
   if (expect.toolNamesAny?.length && !toolRuns.some((run) => expect.toolNamesAny.includes(run.toolName))) {
-    if (toolRuns.length === 0) declined = true;
-    else
-      reasons.push(
-        `no ${expect.toolNamesAny.join("/")} tool run (got ${toolRuns.map((run) => run.toolName).join(", ")})`,
-      );
+    missedOutcome(
+      toolRuns.length === 0
+        ? `the model did not call ${expect.toolNamesAny.join("/")}`
+        : `no ${expect.toolNamesAny.join("/")} tool run (got ${toolRuns.map((run) => run.toolName).join(", ")})`,
+    );
   }
-  if (typeof expect.reply === "string" && turn?.assistantMessage?.content?.trim() !== expect.reply) {
+  if (typeof expect.reply === "string" && content.trim() !== expect.reply) {
     reasons.push(`reply was not exactly ${expect.reply}`);
   }
   // A tool call the provider never executed can come back as plain text; that is a wrong answer, not a pass.
-  if (RAW_TOOL_MARKUP.test(turn?.assistantMessage?.content ?? "")) {
+  if (RAW_TOOL_MARKUP.test(content)) {
     reasons.push("the reply is raw tool-call markup instead of an answer");
   }
-  if (reasons.length > 0) return { verdict: "failed", reasons };
-  if (declined)
-    return { verdict: "model_declined", reasons: [`the model did not call ${expect.toolNamesAny.join("/")}`] };
+  if (reasons.length > 0) return { verdict: "failed", reasons: [...reasons, ...declined] };
+  if (declined.length > 0) return { verdict: "model_declined", reasons: declined };
   return { verdict: "passed", reasons: [] };
 }
 
