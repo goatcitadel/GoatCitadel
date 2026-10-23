@@ -634,6 +634,8 @@ export interface RuntimeSettingsResponse {
     chatRequesterMcpV1Enabled?: boolean;
     chatStaticMcpV1Enabled?: boolean;
     claudeCliToolBridgeEnabled?: boolean;
+    /** Lets a bridged Claude Code CLI tool step park its process and resume it. Absent/false => each step spawns a fresh process. */
+    claudeCliWarmContinuationEnabled?: boolean;
     evolutionControlPlaneV1Enabled?: boolean;
     improvementLocalObservationV1Enabled?: boolean;
     improvementModelEvaluationV1Enabled?: boolean;

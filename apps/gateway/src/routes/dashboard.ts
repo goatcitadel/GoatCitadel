@@ -269,6 +269,7 @@ export const updateSettingsSchema = z.object({
       chatRequesterMcpV1Enabled: z.boolean().optional(),
       chatStaticMcpV1Enabled: z.boolean().optional(),
       claudeCliToolBridgeEnabled: z.boolean().optional(),
+      claudeCliWarmContinuationEnabled: z.boolean().optional(),
       evolutionControlPlaneV1Enabled: z.boolean().optional(),
       improvementLocalObservationV1Enabled: z.boolean().optional(),
       improvementModelEvaluationV1Enabled: z.boolean().optional(),

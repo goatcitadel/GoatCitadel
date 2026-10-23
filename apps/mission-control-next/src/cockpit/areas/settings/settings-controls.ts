@@ -39,6 +39,9 @@ export const WebSearchSettings = preloadable(async () => ({
 export const ClaudeCliToolBridgeControl = preloadable(async () => ({
   default: (await import("./ClaudeCliToolBridgeControl")).ClaudeCliToolBridgeControl,
 }));
+export const ClaudeCliWarmContinuationControl = preloadable(async () => ({
+  default: (await import("./ClaudeCliWarmContinuationControl")).ClaudeCliWarmContinuationControl,
+}));
 export const ToolGrantSettings = preloadable(async () => ({
   default: (await import("./ToolGrantSettings")).ToolGrantSettings,
 }));
@@ -113,7 +116,7 @@ const SECTION_CONTROLS: Record<string, readonly { preload: () => Promise<void> }
   "web-search": [WebSearchSettings],
   addons: [AddonsSettings, PortablePacksSettings],
   runtime: [ManagedRuntimeSettings, DaemonDiagnostics, VoiceRuntimeSettings],
-  providers: [ModelsSettings, ClaudeCliToolBridgeControl],
+  providers: [ModelsSettings, ClaudeCliToolBridgeControl, ClaudeCliWarmContinuationControl],
   "local-ai": [LlamaSetupSettings, LocalAiSettings],
   permissions: [PermissionProfileSettings],
   hooks: [HooksSettings],

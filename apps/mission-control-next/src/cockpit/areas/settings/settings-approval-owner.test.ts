@@ -36,6 +36,16 @@ function fixture(owner: SettingsApprovalOwner): ChangePlanRecord {
       },
       target: { ...base.target, resourceId: "feature:claudeCliToolBridgeEnabled" },
     };
+  if (owner === "claude-cli-warm-continuation")
+    return {
+      ...base,
+      origin: { surface: "settings", workspaceId: "default" },
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "feature_flag", flag: "claudeCliWarmContinuationEnabled", enabled: true },
+      },
+      target: { ...base.target, resourceId: "feature:claudeCliWarmContinuationEnabled" },
+    };
   if (owner === "filesystem-write-access")
     return {
       ...base,
@@ -77,6 +87,7 @@ const owners: SettingsApprovalOwner[] = [
   "budget-mode",
   "filesystem-write-access",
   "claude-cli-tool-bridge",
+  "claude-cli-warm-continuation",
 ];
 
 describe("native Settings exact approval owner binding", () => {
@@ -119,7 +130,19 @@ describe("native Settings exact approval owner binding", () => {
     };
     expect(settingsApprovalOwnerBinding(foreign, "claude-cli-tool-bridge", "workspace-a")).toBeNull();
   });
-  it.each(["tool-approval", "budget-mode", "filesystem-write-access", "claude-cli-tool-bridge"] as const)(
+  it("keeps the two Claude Code CLI flags apart", () => {
+    const bridge = fixture("claude-cli-tool-bridge");
+    const warm = fixture("claude-cli-warm-continuation");
+    expect(settingsApprovalOwnerBinding(bridge, "claude-cli-warm-continuation", "workspace-a")).toBeNull();
+    expect(settingsApprovalOwnerBinding(warm, "claude-cli-tool-bridge", "workspace-a")).toBeNull();
+  });
+  it.each([
+    "tool-approval",
+    "budget-mode",
+    "filesystem-write-access",
+    "claude-cli-tool-bridge",
+    "claude-cli-warm-continuation",
+  ] as const)(
     "rejects another runtime operation for %s even with the expected target",
     (owner) => {
       const plan = fixture(owner);

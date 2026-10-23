@@ -128,6 +128,7 @@ describe("writeClaudeCliBridgeFiles", () => {
     expect(tools.tools).toEqual(manifest.tools);
     expect(tools.sha256).toBe(manifest.sha256);
     expect(tools.nonce).toBe(manifest.nonce);
+    expect(fs.statSync(path.join(runDir, "results")).isDirectory()).toBe(true);
   });
 });
 

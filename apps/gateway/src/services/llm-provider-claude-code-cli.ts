@@ -16,6 +16,7 @@ import type {
   LlmTrackedProcessDispatch,
 } from "./llm-provider-adapter.js";
 import { claudeCodeHarnessExecutableNames, listExecutableCandidates } from "./agentic-harness-availability.js";
+import { ClaudeCliWarmRegistry } from "./claude-code-cli-warm-registry.js";
 import {
   ClaudeCliError,
   buildClaudeCliArgs,
@@ -23,7 +24,6 @@ import {
   buildClaudeCliEnv,
   resolveClaudeCliInvocation,
   runClaudeCli,
-  type ClaudeCliExit,
   type ClaudeCliInvocation,
   type ClaudeCliSpawn,
 } from "./claude-code-cli-process.js";
@@ -32,10 +32,18 @@ import {
   claudeCliUserMessage,
   createClaudeCliStreamMapper,
   renderClaudeCliPrompt,
-  type ClaudeCliStreamOutcome,
-  type ClaudeCliToolStep,
   type ClaudeCliUsage,
 } from "./claude-code-cli-stream.js";
+import { fingerprintClaudeCliStep } from "./claude-code-cli-warm-match.js";
+import {
+  openClaudeCliStepLines,
+  parkClaudeCliStep,
+  readClaudeCliDelta,
+  streamClaudeCliStep,
+  tryResumeClaudeCliWarmStep,
+  withClaudeCliWarmEnv,
+  type ClaudeCliAccountedStep,
+} from "./claude-code-cli-warm-step.js";
 import {
   buildClaudeCliToolManifest,
   resolveClaudeCliStubPath,
@@ -91,15 +99,24 @@ export interface ClaudeCodeCliRuntime {
   toolBridgeEnabled(): boolean;
   /** This step's stub launch, or undefined when the flag is off. Resolved per step, never cached. */
   resolveToolBridgeLaunch(): ClaudeCodeCliToolBridgeLaunch | undefined;
+  /** Warm continuation flag; true only while the bridge flag is also on. Read per call, never cached. */
+  warmContinuationEnabled(): boolean;
+  /** Parked `claude -p` processes awaiting their tool results. */
+  readonly warm: ClaudeCliWarmRegistry;
   resolveInvocation(): ClaudeCliInvocation;
 }
 
 export function createClaudeCodeCliRuntime(
   env: NodeJS.ProcessEnv,
-  serviceOptions: { claudeCli?: ClaudeCodeCliRuntimeOptions; claudeCliToolBridgeEnabled?: () => boolean } = {},
+  serviceOptions: {
+    claudeCli?: ClaudeCodeCliRuntimeOptions;
+    claudeCliToolBridgeEnabled?: () => boolean;
+    claudeCliWarmContinuationEnabled?: () => boolean;
+  } = {},
 ): ClaudeCodeCliRuntime {
   const options = serviceOptions.claudeCli ?? {};
   const bridgeEnabled = serviceOptions.claudeCliToolBridgeEnabled;
+  const warmEnabled = serviceOptions.claudeCliWarmContinuationEnabled;
   const childEnv = buildClaudeCliEnv(env);
   let cached: { at: number; invocation: ClaudeCliInvocation } | undefined;
   const resolveInvocation =
@@ -116,6 +133,7 @@ export function createClaudeCodeCliRuntime(
       return resolved;
     });
   const toolBridgeEnabled = () => bridgeEnabled?.() === true;
+  const warmContinuationEnabled = () => toolBridgeEnabled() && warmEnabled?.() === true;
   const bridgeNodePath = options.toolBridge?.nodePath ?? process.execPath;
   const resolveBridgeStubPath = options.toolBridge?.stubPath ?? (() => resolveClaudeCliStubPath(existsSync));
   const runtime: ClaudeCodeCliRuntime = {
@@ -125,6 +143,8 @@ export function createClaudeCodeCliRuntime(
     killTree: options.killTree,
     resolveInvocation,
     toolBridgeEnabled,
+    warmContinuationEnabled,
+    warm: new ClaudeCliWarmRegistry({ removeRunDir, claudeProjectsDir: () => resolveClaudeProjectsDir(childEnv) }),
     resolveToolBridgeLaunch: () =>
       toolBridgeEnabled() ? { nodePath: bridgeNodePath, stubPath: resolveBridgeStubPath() } : undefined,
     readiness:
@@ -160,6 +180,14 @@ export function isClaudeCodeCliToolBridgeEnabled(runtime: ClaudeCodeCliRuntime |
   return runtime?.toolBridgeEnabled() === true;
 }
 
+/** Kills every parked warm process (Gateway shutdown). A helper keeps LlmService's architecture-metrics member-access count flat. */
+export async function reapClaudeCodeCliWarm(
+  owner: { readonly warm: ClaudeCliWarmRegistry },
+  reason: "shutdown",
+): Promise<void> {
+  await owner.warm.reapAll(reason);
+}
+
 /** Last probed readiness without spawning anything. */
 export function peekClaudeCodeCliReadiness(runtime: ClaudeCodeCliRuntime): ClaudeCodeCliReadinessResult | undefined {
   return runtime.readiness.peek();
@@ -192,7 +220,7 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
       attribution,
     )) {
       id ??= typeof chunk.id === "string" ? chunk.id : undefined;
-      const delta = readDelta(chunk);
+      const delta = readClaudeCliDelta(chunk);
       if (typeof delta?.content === "string") text += delta.content;
       toolCalls.absorb(delta?.tool_calls);
       const chunkFinish = readFinishReason(chunk);
@@ -227,117 +255,196 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
   ): AsyncGenerator<Record<string, unknown>> {
     const runtime = host.claudeCodeCliRuntime?.();
     if (!runtime) throw new ClaudeCliError("claude_cli_missing", claudeCliUserMessage("claude_cli_missing"));
-    assertNoRequiredToolCall(request);
-    await assertCliReady(runtime);
-    const invocation = runtime.resolveInvocation();
-    buildClaudeCliArgs({ model }); // Validate the model id before any usage intent exists.
-    // Resolved before the usage intent, so a missing stub leaves nothing to settle.
-    const bridge = prepareToolBridge(request, () => runtime.resolveToolBridgeLaunch());
+    // Read once per step; warm continuation applies to bridged steps only.
+    const warmFlag = runtime.warmContinuationEnabled();
+    // A request for this turn that will not continue warm ends the turn's parked process first. Like a
+    // take() miss, the reap is fire-and-forget: its tree kill is signalled synchronously, before any
+    // cold spawn below, and only the bounded close wait and run-dir removal finish in the background.
+    const { sessionId, turnId } = attribution;
+    const releaseTurn = () => {
+      if (sessionId && turnId) runtime.warm.reapTurnInBackground(sessionId, turnId);
+    };
+    if (!(warmFlag && offersAutoTools(request))) releaseTurn();
+    let invocation: ClaudeCliInvocation;
+    let bridge: PreparedToolBridge | undefined;
+    try {
+      assertNoRequiredToolCall(request);
+      await assertCliReady(runtime);
+      invocation = runtime.resolveInvocation();
+      buildClaudeCliArgs({ model }); // Validate the model id before any usage intent exists.
+      // Resolved before the usage intent, so a missing stub leaves nothing to settle.
+      bridge = prepareToolBridge(request, () => runtime.resolveToolBridgeLaunch());
+    } catch (error) {
+      releaseTurn();
+      throw error;
+    }
     const prompt = renderClaudeCliPrompt(request.messages, { bridged: bridge !== undefined });
+    const timeouts = {
+      overallTimeoutMs: positiveOr(request.timeoutMs, DEFAULT_OVERALL_TIMEOUT_MS),
+      idleTimeoutMs: IDLE_TIMEOUT_MS,
+    };
+    const runAccounted = (step: ClaudeCliAccountedStep) =>
+      runAccountedClaudeCliStep(
+        () => runtime.readiness.invalidate(),
+        model,
+        step,
+        () =>
+          host.beginTrackedDispatch({
+            resolved,
+            model,
+            requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+            requestedModelId: attribution.requestedModelId ?? request.model,
+            attribution,
+            transportAttemptIndex: 0,
+            // The CLI ignores the profile baseUrl; authorize the origin it actually reaches.
+            targetUrl: `${CLAUDE_CODE_CLI_EGRESS_BASE_URL}/messages`,
+          }),
+      );
+
+    const warm = bridge !== undefined && warmFlag;
+    const fingerprint =
+      bridge && warm
+        ? fingerprintClaudeCliStep({ request, attribution, model, system: prompt.system, manifest: bridge.manifest })
+        : undefined;
+    if (!fingerprint) releaseTurn();
+    // A miss has already killed the parked tree for this turn, before the cold step below spawns.
+    const resumed = fingerprint
+      ? tryResumeClaudeCliWarmStep({ registry: runtime.warm, fingerprint, request, model, timeouts, runAccounted })
+      : undefined;
+    if (resumed) {
+      yield* resumed;
+      return;
+    }
 
     // Prepare local state before the usage intent exists, so a scratch-dir failure
     // cannot leave an accepted intent unsettled.
     const runDir = await mkdtempSafe(runtime.scratchRoot);
-    let dispatch: LlmTrackedProcessDispatch;
-    try {
-      dispatch = await host.beginTrackedDispatch({
-        resolved,
-        model,
-        requestedProviderId: attribution.requestedProviderId ?? request.providerId,
-        requestedModelId: attribution.requestedModelId ?? request.model,
-        attribution,
-        transportAttemptIndex: 0,
-        // The CLI ignores the profile baseUrl; authorize the origin it actually reaches.
-        targetUrl: `${CLAUDE_CODE_CLI_EGRESS_BASE_URL}/messages`,
-      });
-    } catch (error) {
-      await removeRunDir(runDir);
-      throw error;
-    }
-    const accounting = dispatch.usage;
-    const tag = <T extends object>(value: T) =>
-      withUsageEvent(value, accounting, dispatch.priorModelUsageEventIds ?? []);
-    let settled = false;
-    try {
-      const bridgeArgs = bridge
-        ? { bridge: await writeClaudeCliBridgeFiles({ runDir, manifest: bridge.manifest, ...bridge.files }) }
-        : {};
-      let inlineSystem = false;
-      for (;;) {
-        let yielded = false;
-        try {
-          const systemPromptFile = prompt.system && !inlineSystem ? path.join(runDir, "system-prompt.txt") : undefined;
-          if (systemPromptFile) await writeFile(systemPromptFile, prompt.system, "utf8");
-          const mapper = createClaudeCliStreamMapper(model, bridge ? { bridge: bridge.manifest } : {});
-          const lines = runClaudeCli({
-            invocation,
-            args: buildClaudeCliArgs({ model, systemPromptFile, ...bridgeArgs }),
-            env: runtime.env,
-            cwd: runDir,
-            stdinPayload: buildStdinPayload(prompt, inlineSystem, bridge !== undefined),
-            signal: request.signal,
-            overallTimeoutMs: positiveOr(request.timeoutMs, DEFAULT_OVERALL_TIMEOUT_MS),
-            idleTimeoutMs: IDLE_TIMEOUT_MS,
-            spawn: runtime.spawn,
-            killTree: runtime.killTree,
-          });
-          let ended: { exit: ClaudeCliExit } | { toolStep: ClaudeCliToolStep } | undefined;
+    let parked = false;
+    yield* runAccounted({
+      abandon: () => removeRunDir(runDir),
+      async *run(context) {
+        const bridgeArgs = bridge
+          ? { bridge: await writeClaudeCliBridgeFiles({ runDir, manifest: bridge.manifest, ...bridge.files }) }
+          : {};
+        // A copy: the warm flag adds the CLI's tool timeout and never touches the shared env.
+        const env = warm ? withClaudeCliWarmEnv(runtime.env) : runtime.env;
+        let inlineSystem = false;
+        for (;;) {
+          let yielded = false;
           try {
-            while (!ended) {
-              const next = await lines.next();
-              if (next.done) {
-                ended = { exit: next.value };
-                break;
-              }
-              for (const chunk of mapper.push(next.value)) {
+            const systemPromptFile =
+              prompt.system && !inlineSystem ? path.join(runDir, "system-prompt.txt") : undefined;
+            if (systemPromptFile) await writeFile(systemPromptFile, prompt.system, "utf8");
+            const mapper = createClaudeCliStreamMapper(model, bridge ? { bridge: bridge.manifest } : {});
+            const { lines, session } = openClaudeCliStepLines(
+              {
+                invocation,
+                args: buildClaudeCliArgs({ model, systemPromptFile, ...bridgeArgs }),
+                env,
+                cwd: runDir,
+                stdinPayload: buildStdinPayload(prompt, inlineSystem, bridge !== undefined),
+                signal: request.signal,
+                ...timeouts,
+                spawn: runtime.spawn,
+                killTree: runtime.killTree,
+              },
+              warm,
+            );
+            const park =
+              session && bridge
+                ? () =>
+                    parkClaudeCliStep({
+                      registry: runtime.warm,
+                      enabled: warm,
+                      session,
+                      runDir,
+                      manifest: bridge.manifest,
+                      fingerprint,
+                      mapper,
+                      request,
+                    })
+                : undefined;
+            const streamed = yield* streamClaudeCliStep({
+              lines,
+              mapper,
+              request,
+              context,
+              park,
+              onYield: () => {
                 yielded = true;
-                await accounting?.renewLease();
-                yield tag(chunk);
-              }
-              // Step mode: the CLI now waits on the inert stub, so the step ends here.
-              const toolStep = mapper.toolStep();
-              if (toolStep) ended = { toolStep };
+              },
+            });
+            parked = streamed.parked;
+            return streamed.outcome;
+          } catch (error) {
+            if (!yielded && !inlineSystem && prompt.system && isSystemPromptFileRejection(error)) {
+              inlineSystem = true;
+              continue;
             }
-          } finally {
-            // Closing the line source runs its cleanup, which kills a still-running CLI.
-            if (!ended || !("exit" in ended)) await lines.return({ exitCode: null, stderrTail: "" });
+            throw error;
           }
-          const outcome =
-            "exit" in ended ? finishedOutcome(mapper.finish(ended.exit)) : toolStepOutcome(ended, request);
-          if (outcome.usage) accounting?.observe(outcome.usage);
-          accounting?.observeNormalized({ effectiveModelId: model });
-          settled = true;
-          await accounting?.succeed();
-          for (const chunk of outcome.chunks) yield tag(chunk);
-          return;
-        } catch (error) {
-          if (!yielded && !inlineSystem && prompt.system && isSystemPromptFileRejection(error)) {
-            inlineSystem = true;
-            continue;
-          }
-          throw error;
         }
-      }
-    } catch (error) {
-      if (error instanceof ClaudeCliError && error.reasonCode === "claude_cli_logged_out") {
-        runtime.readiness.invalidate();
-      }
-      if (!settled) {
-        settled = true;
-        if (error instanceof ClaudeCliError && error.reasonCode === "claude_cli_cancelled") {
-          await accounting?.cancel(error);
-        } else {
-          await accounting?.fail(error);
-        }
-      }
-      throw error;
-    } finally {
-      // A consumer that stops early cancels the attempt; the CLI itself is killed by runClaudeCli.
-      if (!settled) await accounting?.cancel(new Error("Claude Code CLI stream closed by consumer"));
-      await removeRunDir(runDir);
-    }
+      },
+      // A parked step's run dir now belongs to the registry.
+      cleanup: async () => {
+        if (!parked) await removeRunDir(runDir);
+      },
+    });
   },
 };
+
+/**
+ * One step inside one usage attempt: the intent first (a refusal undoes the step's local
+ * preparation), then the body, then settlement from the body's outcome. A consumer that
+ * stops early cancels the attempt; closing the body's line source kills an unparked CLI.
+ */
+async function* runAccountedClaudeCliStep(
+  invalidateReadiness: () => void,
+  model: string,
+  step: ClaudeCliAccountedStep,
+  begin: () => Promise<LlmTrackedProcessDispatch>,
+): AsyncGenerator<Record<string, unknown>> {
+  let dispatch: LlmTrackedProcessDispatch;
+  try {
+    dispatch = await begin();
+  } catch (error) {
+    await step.abandon();
+    throw error;
+  }
+  const accounting = dispatch.usage;
+  const tag = (chunk: Record<string, unknown>) =>
+    withUsageEvent(chunk, accounting, dispatch.priorModelUsageEventIds ?? []);
+  let settled = false;
+  try {
+    const outcome = yield* step.run({
+      tag,
+      renewLease: async () => {
+        await accounting?.renewLease();
+      },
+    });
+    if (outcome.usage) accounting?.observe(outcome.usage);
+    accounting?.observeNormalized({ effectiveModelId: model });
+    settled = true;
+    await accounting?.succeed();
+    for (const chunk of outcome.chunks) yield tag(chunk);
+  } catch (error) {
+    if (error instanceof ClaudeCliError && error.reasonCode === "claude_cli_logged_out") {
+      invalidateReadiness();
+    }
+    if (!settled) {
+      settled = true;
+      if (error instanceof ClaudeCliError && error.reasonCode === "claude_cli_cancelled") {
+        await accounting?.cancel(error);
+      } else {
+        await accounting?.fail(error);
+      }
+    }
+    throw error;
+  } finally {
+    if (!settled) await accounting?.cancel(new Error("Claude Code CLI stream closed by consumer"));
+    await step.cleanup();
+  }
+}
 
 /** Operator decision: required tool calls fail clearly; offered tools are dropped. */
 function assertNoRequiredToolCall(request: ChatCompletionRequest): void {
@@ -365,7 +472,7 @@ function prepareToolBridge(
   request: ChatCompletionRequest,
   resolveLaunch: () => ClaudeCodeCliToolBridgeLaunch | undefined,
 ): PreparedToolBridge | undefined {
-  if (!request.tools || request.tools.length === 0 || !isAutoToolChoice(request.tool_choice)) return undefined;
+  if (!offersAutoTools(request)) return undefined;
   const launch = resolveLaunch();
   if (!launch) return undefined;
   const manifest = buildClaudeCliToolManifest(request.tools);
@@ -374,6 +481,13 @@ function prepareToolBridge(
     throw new ClaudeCliError("claude_cli_bridge_unavailable", claudeCliUserMessage("claude_cli_bridge_unavailable"));
   }
   return { manifest, files: { nodePath, stubPath } };
+}
+
+/** Tools are offered and the model may choose freely: the only requests that can be bridged. */
+function offersAutoTools(
+  request: ChatCompletionRequest,
+): request is ChatCompletionRequest & { tools: NonNullable<ChatCompletionRequest["tools"]> } {
+  return request.tools !== undefined && request.tools.length > 0 && isAutoToolChoice(request.tool_choice);
 }
 
 function isAutoToolChoice(choice: ChatCompletionRequest["tool_choice"]): boolean {
@@ -395,33 +509,6 @@ function buildStdinPayload(
     return buildStreamJsonUserMessage(systemBlock ? [systemBlock, ...prompt.userBlocks] : prompt.userBlocks);
   }
   return buildStreamJsonUserMessage(systemBlock ? `${systemBlock}\n\n${prompt.userText}` : prompt.userText);
-}
-
-interface StepOutcome {
-  chunks: readonly Record<string, unknown>[];
-  usage?: ClaudeCliUsage;
-}
-
-function finishedOutcome(outcome: ClaudeCliStreamOutcome): StepOutcome {
-  return { chunks: [outcome.finalChunk], ...(outcome.usage ? { usage: outcome.usage } : {}) };
-}
-
-function toolStepOutcome(ended: { toolStep: ClaudeCliToolStep }, request: ChatCompletionRequest): StepOutcome {
-  const { chunks, usage } = ended.toolStep;
-  return {
-    chunks: request.parallel_tool_calls === false ? keepFirstToolCall(chunks) : chunks,
-    ...(usage ? { usage } : {}),
-  };
-}
-
-/** `parallel_tool_calls: false`: only the step's first tool call reaches the runner. */
-function keepFirstToolCall(chunks: readonly Record<string, unknown>[]): Record<string, unknown>[] {
-  return chunks.map((chunk) => {
-    const delta = readDelta(chunk);
-    if (!delta || !Array.isArray(delta.tool_calls) || delta.tool_calls.length <= 1) return chunk;
-    const choice = (chunk.choices as Record<string, unknown>[])[0];
-    return { ...chunk, choices: [{ ...choice, delta: { ...delta, tool_calls: delta.tool_calls.slice(0, 1) } }] };
-  });
 }
 
 /** Folds streamed `tool_calls` deltas (by index) into non-streaming `message.tool_calls`. */
@@ -465,6 +552,14 @@ function isSystemPromptFileRejection(error: unknown): boolean {
   );
 }
 
+/** The CLI's projects folder as the child sees it: `CLAUDE_CONFIG_DIR`, else `<home>/.claude`, plus `projects`. */
+function resolveClaudeProjectsDir(childEnv: NodeJS.ProcessEnv): string | undefined {
+  const configDir = childEnv.CLAUDE_CONFIG_DIR?.trim();
+  if (configDir) return path.join(configDir, "projects");
+  const home = os.homedir();
+  return home ? path.join(home, ".claude", "projects") : undefined;
+}
+
 /** Removes a run's scratch dir; a failure is logged (dir name and error code only) and never thrown. */
 async function removeRunDir(runDir: string): Promise<void> {
   try {
@@ -490,13 +585,6 @@ async function mkdtempSafe(root: string): Promise<string> {
 
 function positiveOr(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-function readDelta(chunk: Record<string, unknown>): Record<string, unknown> | undefined {
-  const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
-  return typeof choice === "object" && choice !== null && typeof (choice as { delta?: unknown }).delta === "object"
-    ? ((choice as { delta: Record<string, unknown> }).delta ?? undefined)
-    : undefined;
 }
 
 function readFinishReason(chunk: Record<string, unknown>): string | undefined {

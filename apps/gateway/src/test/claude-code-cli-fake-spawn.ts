@@ -86,47 +86,184 @@ export const helloScript: FakeClaudeCliScript = textStepScript("hello");
 export function toolStepScript(
   toolNames: readonly string[] | undefined,
   calls: readonly FakeClaudeCliCall[],
-  options: { stop?: boolean } = {},
+  options: { stop?: boolean; usage?: FakeClaudeCliCallUsage } = {},
 ): FakeClaudeCliScript {
   return ({ stdout }, spawned) => {
     stdout.write(initFor(spawned, toolNames));
-    stdout.write(streamEvent({ type: "message_start", message: { usage: { input_tokens: 2 } } }));
-    calls.forEach((call, index) => {
-      const name = `mcp__goatcitadel__${call.name}`;
-      stdout.write(
-        streamEvent({
-          type: "content_block_start",
-          index,
-          content_block: { type: "tool_use", id: call.id, name, input: {} },
-        }),
-      );
-      stdout.write(
-        streamEvent({
-          type: "content_block_delta",
-          index,
-          delta: { type: "input_json_delta", partial_json: JSON.stringify(call.input) },
-        }),
-      );
-      stdout.write(
-        line({
-          type: "assistant",
-          message: { content: [{ type: "tool_use", id: call.id, name, input: call.input }] },
-        }),
-      );
-      stdout.write(streamEvent({ type: "content_block_stop", index }));
-    });
-    if (options.stop === false) return;
+    writeToolMessage(stdout, calls, options);
+  };
+}
+
+/** One model message with tool_use blocks; with `stop` (the default) it ends at a tool_use stop and a heartbeat. */
+function writeToolMessage(
+  stdout: PassThrough,
+  calls: readonly FakeClaudeCliCall[],
+  options: { stop?: boolean; usage?: FakeClaudeCliCallUsage } = {},
+): void {
+  stdout.write(streamEvent({ type: "message_start", message: { usage: { input_tokens: 2 } } }));
+  calls.forEach((call, index) => {
+    const name = `mcp__goatcitadel__${call.name}`;
     stdout.write(
       streamEvent({
-        type: "message_delta",
-        delta: { stop_reason: "tool_use" },
-        usage: { input_tokens: 5, output_tokens: 9 },
+        type: "content_block_start",
+        index,
+        content_block: { type: "tool_use", id: call.id, name, input: {} },
       }),
     );
-    stdout.write(streamEvent({ type: "message_stop" }));
-    // A heartbeat after the stop is ignored; the CLI never exits on its own here.
-    stdout.write(line({ type: "tool_progress", heartbeat: true }));
+    stdout.write(
+      streamEvent({
+        type: "content_block_delta",
+        index,
+        delta: { type: "input_json_delta", partial_json: JSON.stringify(call.input) },
+      }),
+    );
+    stdout.write(
+      line({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id: call.id, name, input: call.input }] },
+      }),
+    );
+    stdout.write(streamEvent({ type: "content_block_stop", index }));
+  });
+  if (options.stop === false) return;
+  stdout.write(
+    streamEvent({
+      type: "message_delta",
+      delta: { stop_reason: "tool_use" },
+      usage: options.usage ?? { input_tokens: 5, output_tokens: 9 },
+    }),
+  );
+  stdout.write(streamEvent({ type: "message_stop" }));
+  // A heartbeat after the stop is ignored; the CLI never exits on its own here.
+  stdout.write(line({ type: "tool_progress", heartbeat: true }));
+}
+
+/** What a warm continuation segment plays once every pending result is staged. */
+export type FakeClaudeCliSegment = { calls: readonly FakeClaudeCliCall[] } | { text: string };
+
+export interface FakeClaudeCliStaging {
+  /** Every result file the fake CLI accepted, as `<toolUseId>.json`, in order. */
+  read: string[];
+}
+
+const RESULT_POLL_MS = 5;
+
+/** One model call's usage as the CLI's `message_delta` reports it. */
+export type FakeClaudeCliCallUsage = Record<string, number>;
+
+/**
+ * The n-th model call's usage in a warm process (0-based): distinct per call, so a cumulative
+ * total can never pass for one call's own counts.
+ */
+export function fakeWarmCallUsage(n: number): FakeClaudeCliCallUsage {
+  return {
+    input_tokens: 2 + n,
+    cache_creation_input_tokens: 100 * (n + 1),
+    cache_read_input_tokens: 1000 * (n + 1),
+    output_tokens: 10 + n,
   };
+}
+
+/** Like the real CLI, a `-p` process's `result.usage` is the sum over every model call it made. */
+function cumulativeUsage(perCall: readonly FakeClaudeCliCallUsage[]): FakeClaudeCliCallUsage {
+  const total: FakeClaudeCliCallUsage = {};
+  for (const usage of perCall) {
+    for (const [key, value] of Object.entries(usage)) total[key] = (total[key] ?? 0) + value;
+  }
+  return total;
+}
+
+/**
+ * A process that parks like the real CLI: one tool step, then, per segment, it echoes each
+ * pending call's result back as a `tool_result` as soon as the Gateway stages that call's file
+ * (checking the step's nonce, like the stub), and once all are echoed it plays the segment. A text
+ * segment ends with a result line and exit 0; a tool segment stops for tool_use again. The n-th
+ * model call reports `fakeWarmCallUsage(n)`, and the final result reports the cumulative sum.
+ * With `echo: false` it reads each staged result but never echoes it, like a stub that could
+ * not bind the call.
+ */
+export function warmToolStepScript(
+  calls: readonly FakeClaudeCliCall[],
+  segments: readonly FakeClaudeCliSegment[],
+  staging: FakeClaudeCliStaging = { read: [] },
+  options: { echo?: boolean } = {},
+): FakeClaudeCliScript {
+  return ({ stdout, exit }, spawned) => {
+    stdout.write(initFor(spawned));
+    const perCall = [fakeWarmCallUsage(0)];
+    writeToolMessage(stdout, calls, { usage: fakeWarmCallUsage(0) });
+    const configPath = spawned.args[spawned.args.indexOf("--mcp-config") + 1] as string;
+    const resultsDir = path.join(path.dirname(configPath), "results");
+    const nonce = spawned.toolsFileAtSpawn?.nonce;
+    let pending = calls.map((call) => call.id);
+    let remaining = [...segments];
+    const timer = setInterval(() => {
+      if (stdout.writableEnded) {
+        clearInterval(timer);
+        return;
+      }
+      // Like the CLI: each call is answered, and echoed, in order, as soon as its own result is staged.
+      while (pending.length > 0) {
+        const id = pending[0] as string;
+        const text = readStagedResult(resultsDir, id, nonce);
+        if (text === undefined) return;
+        staging.read.push(`${id}.json`);
+        pending = pending.slice(1);
+        if (options.echo === false) {
+          if (pending.length === 0) clearInterval(timer);
+          continue;
+        }
+        stdout.write(toolResultEcho(id, text));
+      }
+      if (options.echo === false) return;
+      const [segment, ...rest] = remaining;
+      remaining = rest;
+      const usage = fakeWarmCallUsage(perCall.length);
+      if (segment && "calls" in segment) {
+        perCall.push(usage);
+        writeToolMessage(stdout, segment.calls, { usage });
+        pending = segment.calls.map((call) => call.id);
+        return;
+      }
+      clearInterval(timer);
+      if (!segment) return;
+      perCall.push(usage);
+      stdout.write(streamEvent({ type: "message_start", message: { usage: { input_tokens: usage.input_tokens } } }));
+      stdout.write(
+        streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: segment.text } }),
+      );
+      stdout.write(streamEvent({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage }));
+      stdout.write(streamEvent({ type: "message_stop" }));
+      stdout.write(line({ type: "result", subtype: "success", is_error: false, usage: cumulativeUsage(perCall) }));
+      exit(0);
+    }, RESULT_POLL_MS);
+    timer.unref();
+  };
+}
+
+function readStagedResult(resultsDir: string, toolUseId: string, nonce: unknown): string | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(resultsDir, `${toolUseId}.json`), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const ours = parsed.nonce === nonce && parsed.toolUseId === toolUseId && typeof parsed.text === "string";
+    return ours ? (parsed.text as string) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The CLI's echo of a delivered result, in the shape Claude Code 2.1.305 prints. */
+function toolResultEcho(toolUseId: string, text: string): string {
+  return line({
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ tool_use_id: toolUseId, type: "tool_result", content: [{ type: "text", text }] }],
+    },
+    parent_tool_use_id: null,
+  });
 }
 
 function readJson(filePath: string | undefined): Record<string, unknown> | undefined {
