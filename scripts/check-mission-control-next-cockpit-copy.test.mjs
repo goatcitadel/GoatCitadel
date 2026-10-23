@@ -193,6 +193,13 @@ describe("glossary and plurals (GL-R02)", () => {
     assert.deepEqual(countCopyRatchets("areas/x/X.ts", filtered), { "plural-template": 1 });
   });
 
+  it("reads one-word literals joined into rendered copy or interpolated by a copy template", () => {
+    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", '<p>{"Gateway" + " status"}</p>'), { "glossary-terms": 1 });
+    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", '<p>{`${ready ? "Gateway" : "Owner"} status`}</p>'), {
+      "glossary-terms": 2,
+    });
+  });
+
   it("fails on an unreadable directory", async () => {
     await assert.rejects(walk(path.join(os.tmpdir(), `missing-copy-root-${process.pid}-${Date.now()}`)));
   });

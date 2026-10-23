@@ -96,10 +96,10 @@ export const COPY_RATCHETS = [
 export const ROOT_BUDGETS = {
   cockpit: { "glossary-terms": 0 },
   "native-routes": {
-    "internal-terms": 303,
+    "internal-terms": 304,
     "dead-end-pointer": 1,
     "aria-label-id": 10,
-    "glossary-terms": 1109,
+    "glossary-terms": 1110,
     "plural-template": 39,
   },
   "shared-components": { "internal-terms": 23, "aria-label-id": 11, "glossary-terms": 55, "plural-template": 5 },
@@ -146,7 +146,7 @@ function isLiteral(node) {
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node);
 }
 
-/** The literals an expression can evaluate to: `"A"`, `ok ? "A" : "B"`, `name ?? "A"`, `ok && "A"`. */
+/** The literals an expression can evaluate to or join: `"A"`, `ok ? "A" : "B"`, `name ?? "A"`, `ok && "A"`, `"A" + b`. */
 function resultLiterals(node) {
   if (!node) return [];
   if (isLiteral(node)) return [node];
@@ -156,7 +156,11 @@ function resultLiterals(node) {
   if (ts.isBinaryExpression(node)) {
     const op = node.operatorToken.kind;
     if (op === ts.SyntaxKind.AmpersandAmpersandToken) return resultLiterals(node.right);
-    if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken)
+    if (
+      op === ts.SyntaxKind.BarBarToken ||
+      op === ts.SyntaxKind.QuestionQuestionToken ||
+      op === ts.SyntaxKind.PlusToken
+    )
       return [...resultLiterals(node.left), ...resultLiterals(node.right)];
   }
   return [];
@@ -229,7 +233,11 @@ export function visibleText(contents, fileName = "source.tsx") {
       add(node, node.text.replace(/\s+/g, " ").trim());
     } else if (isLiteral(node) && !isCodeLiteral(node)) {
       const text = ts.isTemplateExpression(node) ? templateText(node, source) : node.text;
-      if (rendered.has(node) || /\s/.test(text)) add(node, text);
+      if (rendered.has(node) || /\s/.test(text)) {
+        add(node, text);
+        // The literals a copy template interpolates are copy too, even one word.
+        if (ts.isTemplateExpression(node)) node.templateSpans.forEach((span) => markRendered(span.expression));
+      }
     }
     ts.forEachChild(node, visit);
   }
