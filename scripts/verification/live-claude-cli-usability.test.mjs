@@ -346,3 +346,12 @@ test("only code_mode.run counts as a Code Mode run; code search tools do not", (
   assert.equal(classifyUsabilityOutcome(turn(run), byId("K-01")).verdict, "passed");
   assert.equal(classifyUsabilityOutcome(turn(run), byId("K-02")).verdict, "failed");
 });
+
+test("streamClosedWithoutTurnError keeps a stream read failure as the cause", () => {
+  const readError = Object.assign(new Error("terminated"), { name: "TypeError" });
+  const error = streamClosedWithoutTurnError("C-01", [], readError);
+  assert.match(error.message, /C-01 stream closed without naming its turn: stream read failed: TypeError: terminated/);
+  assert.equal(error.cause, readError);
+  const both = streamClosedWithoutTurnError("C-01", [{ type: "error", error: "Conflict" }], readError);
+  assert.match(both.message, /Conflict; stream read failed: TypeError: terminated/);
+});

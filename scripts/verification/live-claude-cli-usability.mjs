@@ -240,12 +240,17 @@ async function settleTurn(gatewayUrl, input) {
 }
 
 /** The error for a stream that ended before naming its turn, carrying the stream's own error events. */
-export function streamClosedWithoutTurnError(taskId, errorEvents) {
-  const details = errorEvents
-    .map((event) => [event.code, event.error ?? event.message].filter(Boolean).join(" "))
+export function streamClosedWithoutTurnError(taskId, errorEvents, readError) {
+  const details = [
+    ...errorEvents.map((event) => [event.code, event.error ?? event.message].filter(Boolean).join(" ")),
+    readError ? `stream read failed: ${readError.name}: ${readError.message}` : "",
+  ]
     .filter(Boolean)
     .join("; ");
-  return new Error(`${taskId} stream closed without naming its turn${details ? `: ${details}` : ""}`);
+  return new Error(
+    `${taskId} stream closed without naming its turn${details ? `: ${details}` : ""}`,
+    readError ? { cause: readError } : undefined,
+  );
 }
 
 /**
@@ -303,6 +308,8 @@ async function openTurnStream(gatewayUrl, input) {
   const turnIdSeen = new Promise((resolve) => {
     announceTurnId = resolve;
   });
+  let finishing = false;
+  let readError;
   const pump = (async () => {
     let buffer = "";
     for (;;) {
@@ -321,8 +328,12 @@ async function openTurnStream(gatewayUrl, input) {
         }
       }
     }
-  })().catch(() => undefined);
+  })().catch((error) => {
+    // A read failure from our own cancel is cleanup; anything earlier is the stream's real failure.
+    if (!finishing) readError = error;
+  });
   const finish = async () => {
+    finishing = true;
     await reader.cancel().catch(() => undefined);
     controller.abort();
     await pump;
@@ -331,7 +342,7 @@ async function openTurnStream(gatewayUrl, input) {
   const turnId = await Promise.race([turnIdSeen, pump.then(() => undefined)]);
   if (!turnId) {
     await finish();
-    throw streamClosedWithoutTurnError(input.task.id, errorEvents);
+    throw streamClosedWithoutTurnError(input.task.id, errorEvents, readError);
   }
   return { turnId, started, ended: pump, firstDelta, finish };
 }
