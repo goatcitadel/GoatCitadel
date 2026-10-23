@@ -13,6 +13,11 @@ vi.mock("../settings/FirstRunVerification", () => ({
 vi.mock("./RuntimeAuthorityMap", () => ({
   RuntimeAuthorityMap: ({ workspaceId }: { workspaceId: string }) => <p>Runtime authority owner {workspaceId}</p>,
 }));
+vi.mock("./DiagnosticsHostSection", () => ({ DiagnosticsHostSection: () => <p>Host section</p> }));
+vi.mock("./ReleaseReadinessSection", () => ({ ReleaseReadinessSection: () => <p>Readiness section</p> }));
+vi.mock("@goatcitadel/mission-control-shared/api/system", () => ({
+  fetchHealthSummary: vi.fn(async () => ({ daemonStatus: {} })),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/diagnostics", () => ({
   fetchDevDiagnostics: api.fetchDevDiagnostics,
 }));
@@ -85,11 +90,14 @@ describe("cockpit Diagnostics", () => {
       preferences.showTechnicalDetails = false;
       expect(container.textContent).toContain("Existing setup verification owner");
       expect(container.textContent).toContain("Runtime authority owner ws-1");
-      const fullOwner = [...container.querySelectorAll("a")].find(
-        (anchor) => anchor.textContent === "Open full diagnostics and export controls",
+      expect(container.textContent).not.toContain("Open full diagnostics and export controls");
+      expect(container.textContent).toContain("Host section");
+      expect(container.textContent).toContain("Readiness section");
+      const backups = [...container.querySelectorAll("a")].find(
+        (anchor) => anchor.textContent === "Open System › Runtime",
       );
-      expect(new URL(fullOwner!.href).pathname).toBe("/system/runtime/diagnostics");
-      expect(new URL(fullOwner!.href).searchParams.get("shell")).toBe("cockpit");
+      expect(new URL(backups!.href).pathname).toBe("/system/runtime");
+      expect(new URL(backups!.href).hash).toBe("#ops-runtime-backups");
     } finally {
       act(() => root.unmount());
       client.clear();
@@ -283,6 +291,44 @@ describe("cockpit Diagnostics", () => {
       else Reflect.deleteProperty(URL, "createObjectURL");
       if (originalRevoke) Object.defineProperty(URL, "revokeObjectURL", originalRevoke);
       else Reflect.deleteProperty(URL, "revokeObjectURL");
+    }
+  });
+
+  it("filters daemon log entries by the text typed into the log search", async () => {
+    api.fetchDevDiagnostics.mockResolvedValue({ items: [] });
+    api.fetchDaemonLogs.mockResolvedValue({
+      items: [
+        { timestamp: "2026-09-28T00:00:00.000Z", level: "warn", message: "Upstream timeout after 30 s" },
+        { timestamp: "2026-09-28T00:00:01.000Z", level: "info", message: "Listening on port 8787" },
+      ],
+    });
+    api.fetchOperatorInbox.mockResolvedValue({ workspaceId: "ws-1", items: [], coverage: [] });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    try {
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <SystemDiagnostics />
+          </QueryClientProvider>,
+        ),
+      );
+      await vi.waitFor(() => expect(container.textContent).toContain("Listening on port 8787"));
+      const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+      expect(search.getAttribute("aria-label")).toBe("Search daemon logs");
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+        setter.call(search, "timeout");
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(container.textContent).toContain("Upstream timeout after 30 s");
+      expect(container.textContent).not.toContain("Listening on port 8787");
+    } finally {
+      act(() => root.unmount());
+      client.clear();
+      container.remove();
     }
   });
 });

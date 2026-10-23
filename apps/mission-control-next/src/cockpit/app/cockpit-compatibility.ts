@@ -57,10 +57,10 @@ const opsNative: Record<string, string> = {
   approvals: "/inbox",
   activity: "/system/activity",
   quality: "/system/quality",
-  diagnostics: "/system/runtime/diagnostics",
+  diagnostics: "/system/diagnostics",
   costs: "/system/spend/details",
   improvement: "/system/improvement",
-  // Runtime reuses its existing Services, efficiency, backup and diagnostics owners inside Cockpit.
+  // Runtime is native: services, backups, integrations and model performance; diagnostics live on System › Diagnostics.
   // Worker status remains an inspection boundary; desktop notifications land in Inbox.
   runtime: "/system/runtime",
   workers: "/system/runtime/workers",

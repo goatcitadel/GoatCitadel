@@ -33,7 +33,7 @@ function readWorkerSelection(search: string) {
   return { workerId, assignmentId, invalid };
 }
 /** Keep the existing runtime reads, controls and held boundaries with their canonical owner. */
-export function SystemRuntime({ section = "runtime" }: { section?: "runtime" | "diagnostics" | "costs" | "workers" }) {
+export function SystemRuntime({ section = "runtime" }: { section?: "runtime" | "costs" | "workers" }) {
   const preferences = useUiPreferences(),
     location = useCockpitRoute();
   const workspaceId = preferences.activeWorkspaceId ?? "default";

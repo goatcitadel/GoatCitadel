@@ -85,7 +85,7 @@ vi.mock("../../../features/native-routes/ops/RemoteWorkersRoutePage", () => ({
   },
 }));
 let host: HTMLDivElement, root: Root, client: QueryClient, previousCaller: string;
-function render(section: "runtime" | "diagnostics" | "costs" | "workers" = "diagnostics") {
+function render(section: "runtime" | "costs" | "workers" = "costs") {
   root.render(
     <QueryClientProvider client={client}>
       <SystemRuntime section={section} />
@@ -117,7 +117,7 @@ afterEach(() => {
   client.clear();
   setGatewayCallerScope(previousCaller);
 });
-it.each(["diagnostics", "costs"] as const)(
+it.each(["costs"] as const)(
   "delegates %s to the original control owner with active authority and requested record context",
   (section) => {
     act(() => render(section));
@@ -137,7 +137,7 @@ it("preserves query and fragment while internal runtime navigation uses the shar
   fixture.props!.navigate({ area: "ops", section: "diagnostics", theme: "ops" }, { replace: true });
   const [href, options] = fixture.navigate.mock.calls[0]!,
     target = new URL(href, "http://cockpit.invalid");
-  expect(target.pathname).toBe("/system/runtime/diagnostics");
+  expect(target.pathname).toBe("/system/diagnostics");
   expect(target.searchParams.get("workspaceId")).toBe("workspace-a");
   expect(target.searchParams.get("citadelId")).toBe("citadel-a");
   expect(target.searchParams.get("sessionId")).toBe("s/1");
@@ -290,7 +290,7 @@ it.each(["?workerId=", "?workerId=a&workerId=b", "?assignmentId=a", "?workerId=a
     expect(fixture.navigate).not.toHaveBeenCalled();
   },
 );
-it("renders the embedded diagnostics page inside the cockpit column", () => {
+it("renders the embedded spend details page inside the cockpit column", () => {
   act(() => render());
   const owner = [...host.querySelectorAll("button")].find((b) => b.textContent === "Existing runtime control owner");
   expect(owner?.closest(".cockpit-embedded-classic")).not.toBeNull();

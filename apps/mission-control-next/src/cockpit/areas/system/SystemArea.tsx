@@ -50,10 +50,11 @@ export function SystemArea() {
         <SystemBrowserSessions />
       ) : view === "improvement" ? (
         <SystemImprovement />
+      ) : view === "runtime" && rest[1] === "diagnostics" ? (
+        // Runtime diagnostics folded into System › Diagnostics; old bookmarks keep working.
+        <SystemDiagnostics />
       ) : view === "runtime" ? (
-        <SystemRuntime
-          section={rest[1] === "diagnostics" ? "diagnostics" : rest[1] === "workers" ? "workers" : "runtime"}
-        />
+        <SystemRuntime section={rest[1] === "workers" ? "workers" : "runtime"} />
       ) : (
         <HealthOverview />
       )}
