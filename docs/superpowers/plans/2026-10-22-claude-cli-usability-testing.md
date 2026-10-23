@@ -24,7 +24,7 @@
 - Never print, log or persist the CLI account email. Earlier live proof found that the CLI injects it into model context.
 - Heavy work runs at low priority, one heavy job at a time, with vitest `--maxWorkers=2`. Never run the live lane and a typecheck or build at the same time.
 - Evidence goes under the gitignored `artifacts/usability-claude-cli/<YYYY-MM-DD>/`, never only in the session scratchpad, which has been wiped mid-session before.
-- Tracked files contain no personal paths (`C:\Users\…`, `F:\code\`, `/f/code/`) and no emails.
+- Tracked files contain no emails and none of the personal path patterns that `scripts/verify-repo-hygiene.mjs` bans.
 - Run `prettier` only on files this plan creates or edits. Never `git stash`. Code tasks run on branch `test/claude-cli-usability` in a worktree, because the main checkout holds someone else's uncommitted storage work.
 - Report copy makes no hostile-code sandboxing claim for Code Mode. Code Mode is "governed trusted code".
 - Budget: at most 22 catalog tasks per exploratory session, and 8 tasks in the live lane. Each CLI tool step costs about 4–7 s and about 20k cache-read tokens.
