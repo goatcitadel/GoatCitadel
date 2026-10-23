@@ -27,6 +27,8 @@ const USER_FACING_MESSAGES: Record<ClaudeCliReasonCode, string> = {
     "A Claude Code hook ran during this turn, which GoatCitadel blocks because hooks bypass its approvals",
   claude_cli_managed_hooks_active:
     "This Claude Code install has organization-managed hooks, which GoatCitadel cannot disable. Use another provider",
+  claude_cli_managed_auto_memory:
+    "This Claude Code install has organization-managed settings that force auto-memory on, which would add other projects' memory to GoatCitadel's model context. Use another provider",
   claude_cli_bridge_unavailable: "GoatCitadel could not connect its tools to the Claude Code CLI for this step",
   claude_cli_bridge_mismatch:
     "The Claude Code CLI reported tools or activity outside the GoatCitadel tool bridge, so GoatCitadel stopped the step",

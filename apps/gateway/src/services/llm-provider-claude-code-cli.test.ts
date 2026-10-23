@@ -167,7 +167,11 @@ describe("claude-code-cli provider through LlmService", () => {
     expect(spawned?.args[spawned.args.indexOf("--model") + 1]).toBe("claude-sonnet-5-5");
     expect(spawned?.args[spawned.args.indexOf("--tools") + 1]).toBe("");
     expect(spawned?.args.join(" ")).not.toContain("say hello");
-    expect(spawned?.options.env).toEqual({ PATH: "C:\\Windows", USERPROFILE: "C:\\Users\\op" });
+    expect(spawned?.options.env).toEqual({
+      PATH: "C:\\Windows",
+      USERPROFILE: "C:\\Users\\op",
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+    });
     expect(spawned?.systemPromptAtSpawn).toBe("You are GoatCitadel.");
     expect(JSON.parse(spawned?.stdin() ?? "{}")).toEqual({
       type: "user",

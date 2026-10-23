@@ -349,6 +349,8 @@ export function describeClaudeCodeCliLoginGuidance(reasonCode: string | undefine
       return "Claude Code is signed in with an API key or a cloud provider, not a Claude subscription. Run /login in claude and choose your Claude account, then check again.";
     case "claude_cli_managed_hooks_active":
       return "Organization-managed Claude Code hooks are active, so GoatCitadel will not run this CLI.";
+    case "claude_cli_managed_auto_memory":
+      return "Organization-managed Claude Code settings force auto-memory on, so GoatCitadel will not run this CLI.";
     case "claude_cli_not_probed":
       return "GoatCitadel has not checked the Claude Code login yet. Check it to continue.";
     default:

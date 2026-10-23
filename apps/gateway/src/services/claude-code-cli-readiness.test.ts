@@ -160,6 +160,53 @@ describe("managed hooks", () => {
     ).toBe("unreadable");
   });
 
+  it("refuses the provider when organization-managed settings force auto-memory on", async () => {
+    const run = status({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty" });
+    const readiness = new ClaudeCodeCliReadiness({ run, managedHooks: () => "auto_memory" });
+    await expect(readiness.check()).resolves.toEqual({
+      status: "invalid",
+      reasonCode: "claude_cli_managed_auto_memory",
+      liveVerified: true,
+    });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("detects managed settings that force auto-memory on, without masking managed hooks", () => {
+    const file = "/etc/claude-code/managed-settings.json";
+    expect(detectClaudeManagedHooks(["/etc/claude-code"], fsWith({ [file]: '{"autoMemoryEnabled":true}' }))).toBe(
+      "auto_memory",
+    );
+    expect(
+      detectClaudeManagedHooks(
+        ["/etc/claude-code"],
+        fsWith({ [file]: '{"env":{"CLAUDE_CODE_DISABLE_AUTO_MEMORY":"0"}}' }),
+      ),
+    ).toBe("auto_memory");
+    // Managed settings that keep it off, or say nothing, are fine.
+    expect(detectClaudeManagedHooks(["/etc/claude-code"], fsWith({ [file]: '{"autoMemoryEnabled":false}' }))).toBe(
+      "none",
+    );
+    expect(
+      detectClaudeManagedHooks(
+        ["/etc/claude-code"],
+        fsWith({ [file]: '{"env":{"CLAUDE_CODE_DISABLE_AUTO_MEMORY":"1"}}' }),
+      ),
+    ).toBe("none");
+    // Hooks are the stronger refusal: they win even when a later drop-in forces auto-memory.
+    expect(
+      detectClaudeManagedHooks(
+        ["/etc/claude-code"],
+        fsWith(
+          {
+            [file]: '{"autoMemoryEnabled":true}',
+            "/etc/claude-code/managed-settings.d/10-org.json": '{"hooks":{"Stop":[{"hooks":[]}]}}',
+          },
+          { "/etc/claude-code/managed-settings.d": ["10-org.json"] },
+        ),
+      ),
+    ).toBe("active");
+  });
+
   it("knows the managed settings locations per platform", () => {
     expect(
       claudeManagedSettingsDirs("win32", { ProgramFiles: "D:\\Program Files", ProgramData: "D:\\ProgramData" }),

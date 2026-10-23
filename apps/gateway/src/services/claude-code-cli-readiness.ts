@@ -16,7 +16,8 @@ export interface ClaudeCodeCliStatusRun {
 }
 
 /** Whether organization-managed Claude Code settings define hooks (which no user flag can disable). */
-export type ClaudeManagedHooksState = "none" | "active" | "unreadable";
+/** Managed settings GoatCitadel cannot override: hooks, or ("auto_memory") auto-memory forced on. */
+export type ClaudeManagedHooksState = "none" | "active" | "unreadable" | "auto_memory";
 
 export const CLAUDE_CLI_AUTH_STATUS_ARGS = ["auth", "status", "--json"] as const;
 const DEFAULT_TTL_MS = 60_000;
@@ -71,7 +72,12 @@ export class ClaudeCodeCliReadiness {
   private async probe(): Promise<ClaudeCodeCliReadinessResult> {
     // Managed hooks run even with --safe-mode and disableAllHooks, outside GoatCitadel's approvals.
     // An unreadable managed file fails closed too.
-    if (this.managedHooks() !== "none") {
+    const managed = this.managedHooks();
+    // Managed settings outrank --settings, so a managed auto-memory override cannot be undone per run.
+    if (managed === "auto_memory") {
+      return { status: "invalid", reasonCode: "claude_cli_managed_auto_memory", liveVerified: true };
+    }
+    if (managed !== "none") {
       return { status: "invalid", reasonCode: "claude_cli_managed_hooks_active", liveVerified: true };
     }
     let output: { exitCode: number | null; stdout: string };
@@ -151,6 +157,7 @@ export function detectClaudeManagedHooks(
       files.push(`${dropIn}${separator}${name}`);
     }
   }
+  let autoMemoryForced = false;
   for (const file of files) {
     const text = fs.readFile(file);
     if (text === undefined) continue;
@@ -160,8 +167,19 @@ export function detectClaudeManagedHooks(
     } catch {
       return "unreadable";
     }
-    const hooks = typeof parsed === "object" && parsed !== null ? (parsed as { hooks?: unknown }).hooks : undefined;
+    const settings = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    const hooks = settings.hooks;
     if (typeof hooks === "object" && hooks !== null && Object.keys(hooks).length > 0) return "active";
+    if (forcesAutoMemory(settings)) autoMemoryForced = true;
   }
-  return "none";
+  return autoMemoryForced ? "auto_memory" : "none";
+}
+
+/** Managed `autoMemoryEnabled: true`, or a managed env that sets the auto-memory switch to anything but "1". */
+function forcesAutoMemory(settings: Record<string, unknown>): boolean {
+  if (settings.autoMemoryEnabled === true) return true;
+  const env = settings.env;
+  if (typeof env !== "object" || env === null) return false;
+  const value = (env as Record<string, unknown>).CLAUDE_CODE_DISABLE_AUTO_MEMORY;
+  return value !== undefined && String(value) !== "1";
 }

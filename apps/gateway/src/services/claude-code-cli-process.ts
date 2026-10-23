@@ -26,6 +26,7 @@ export const CLAUDE_CLI_REASON_CODES = [
   "claude_cli_cancelled",
   "claude_cli_hook_blocked",
   "claude_cli_managed_hooks_active",
+  "claude_cli_managed_auto_memory",
   "claude_cli_bridge_unavailable",
   "claude_cli_bridge_mismatch",
 ] as const;
@@ -73,7 +74,9 @@ export const CLAUDE_CLI_MAX_LINE_BYTES = 1024 * 1024;
 export const CLAUDE_CLI_STDERR_TAIL_BYTES = 16 * 1024;
 const CLAUDE_CLI_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 const SHIM_EXTENSIONS = new Set([".cmd", ".bat", ".ps1"]);
-const CLAUDE_CLI_ISOLATION_SETTINGS = JSON.stringify({ disableAllHooks: true });
+// autoMemoryEnabled: false keeps Claude Code's per-project auto-memory (MEMORY.md) out of the model's
+// context; `--setting-sources ""` does not, and a run dir inside a git repo maps to that repo's memory.
+const CLAUDE_CLI_ISOLATION_SETTINGS = JSON.stringify({ disableAllHooks: true, autoMemoryEnabled: false });
 /** How long cleanup waits for a killed CLI tree to close, so callers can remove its cwd afterwards. */
 export const CLAUDE_CLI_KILL_CLOSE_WAIT_MS = 5000;
 
@@ -190,12 +193,17 @@ const CLAUDE_CLI_ENV_ALLOWLIST = new Set(
   ].map((key) => key.toUpperCase()),
 );
 
-/** Only allowlisted keys reach the child; Anthropic credentials and Gateway secrets never do. */
+/**
+ * Only allowlisted keys reach the child; Anthropic credentials and Gateway secrets never do.
+ * Auto-memory is switched off here too: `--settings` ranks below organization-managed settings,
+ * and readiness refuses any managed configuration that forces it back on.
+ */
 export function buildClaudeCliEnv(env: NodeJS.ProcessEnv | Record<string, string | undefined>): NodeJS.ProcessEnv {
   const scrubbed: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined && CLAUDE_CLI_ENV_ALLOWLIST.has(key.toUpperCase())) scrubbed[key] = value;
   }
+  scrubbed.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
   return scrubbed;
 }
 

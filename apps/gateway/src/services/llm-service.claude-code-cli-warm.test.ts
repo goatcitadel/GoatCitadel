@@ -496,6 +496,8 @@ describe("claude-code-cli warm continuation through LlmService", () => {
       PATH: "C:\\Windows",
       USERPROFILE: "C:\\Users\\op",
       CLAUDE_CONFIG_DIR: configRoot,
+      // Every CLI run disables auto-memory, warm or not.
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
     });
     expect(harness.killTree).toHaveBeenCalledTimes(1);
     expect(harness.killTree).toHaveBeenCalledWith(7000);
