@@ -137,7 +137,7 @@ export const CLAUDE_CLI_USABILITY_TASKS = Object.freeze([
     title: "Quick web answer with citations",
     prompt:
       "Summarize the main differences between HTTP/2 and HTTP/3 in five bullets, with at least two cited sources.",
-    prefs: { webMode: "quick" },
+    prefs: { webMode: "quick", toolAutonomy: "safe_auto" },
     automatable: true,
     expect: { status: ["completed"], citationsMin: 2 },
     observe: ["Citations are visible and open the cited page"],
@@ -149,7 +149,7 @@ export const CLAUDE_CLI_USABILITY_TASKS = Object.freeze([
     title: "Deep research comparison",
     prompt:
       "Compare three open-source vector databases for a small local-first desktop app: license, Windows support, and maximum embedding dimension. Cite every claim and say where sources disagree.",
-    prefs: { webMode: "deep", thinkingLevel: "extended" },
+    prefs: { webMode: "deep", thinkingLevel: "extended", toolAutonomy: "safe_auto" },
     observe: ["Every claim is cited", "Disagreements between sources are named", "Progress is visible during the run"],
   }),
   task({
@@ -319,7 +319,7 @@ export const CLAUDE_CLI_USABILITY_TASKS = Object.freeze([
     qaIds: ["CHAT-06"],
     title: "Large tool result",
     prompt: "Fetch https://www.rfc-editor.org/rfc/rfc9114.txt and summarize section 4 in five bullets.",
-    prefs: { webMode: "quick" },
+    prefs: { webMode: "quick", toolAutonomy: "safe_auto" },
     requires: "warm-continuation",
     observe: ["A large tool result is handled without an error or a spill"],
   }),

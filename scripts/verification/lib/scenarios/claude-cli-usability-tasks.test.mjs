@@ -43,3 +43,9 @@ test("validateUsabilityTasks reports unknown QA ids, bad enums, dangling depends
   const problems = validateUsabilityTasks(bad, "### CHAT-01 Basic\n").join("\n");
   for (const fragment of ["NOPE-01", "webMode", "X-01", "personal"]) assert.match(problems, new RegExp(fragment));
 });
+
+test("tasks that need the web run with safe_auto tool autonomy, because manual autonomy blocks web tools", () => {
+  for (const id of ["R-01", "R-02", "E-02"]) {
+    assert.equal(CLAUDE_CLI_USABILITY_TASKS.find((task) => task.id === id).prefs.toolAutonomy, "safe_auto", id);
+  }
+});

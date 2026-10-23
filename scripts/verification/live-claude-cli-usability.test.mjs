@@ -46,7 +46,7 @@ test("buildClaudeCliChatMutation carries the CLI provider and the task prefs", (
   assert.equal(body.providerId, "claude-code-cli");
   assert.equal(body.model, "claude-sonnet-5-5");
   assert.equal(body.webMode, "quick");
-  assert.equal(body.prefsOverride.toolAutonomy, "manual");
+  assert.equal(body.prefsOverride.toolAutonomy, "safe_auto");
   assert.equal(body.prefsOverride.orchestrationEnabled, false);
   assert.equal(preflight.action, "send");
   assert.equal(body.content, byId("R-01").prompt);
