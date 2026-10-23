@@ -218,6 +218,15 @@ async function settleTurn(gatewayUrl, input) {
   throw new Error(`turn ${input.turnId} did not settle (${latest?.trace?.status ?? "missing"})`);
 }
 
+/** The error for a stream that ended before naming its turn, carrying the stream's own error events. */
+export function streamClosedWithoutTurnError(taskId, errorEvents) {
+  const details = errorEvents
+    .map((event) => [event.code, event.error ?? event.message].filter(Boolean).join(" "))
+    .filter(Boolean)
+    .join("; ");
+  return new Error(`${taskId} stream closed without naming its turn${details ? `: ${details}` : ""}`);
+}
+
 /**
  * Starts one send or edit stream and resolves as soon as the stream names its turn. The stream stays open while the
  * turn waits on an approval, so the caller settles the turn (resolving approvals) with the stream still open and then
@@ -263,6 +272,7 @@ async function openTurnStream(gatewayUrl, input) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const types = new Set();
+  const errorEvents = [];
   let firstDeltaSeconds;
   let announceTurnId;
   const turnIdSeen = new Promise((resolve) => {
@@ -278,6 +288,7 @@ async function openTurnStream(gatewayUrl, input) {
       buffer = consumed.remainder;
       for (const event of consumed.events) {
         if (typeof event.type === "string") types.add(event.type);
+        if (event.type === "error") errorEvents.push(event);
         if (typeof event.turnId === "string" && event.turnId.trim()) announceTurnId(event.turnId);
         if (event.type === "delta" && firstDeltaSeconds === undefined) {
           firstDeltaSeconds = (performance.now() - started) / 1000;
@@ -294,7 +305,7 @@ async function openTurnStream(gatewayUrl, input) {
   const turnId = await Promise.race([turnIdSeen, pump.then(() => undefined)]);
   if (!turnId) {
     await finish();
-    throw new Error(`${input.task.id} stream closed without naming its turn`);
+    throw streamClosedWithoutTurnError(input.task.id, errorEvents);
   }
   return { turnId, started, finish };
 }

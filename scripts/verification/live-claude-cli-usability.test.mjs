@@ -12,6 +12,7 @@ import {
   findSecretTextLeaks,
   isSettledTurnStatus,
   runUsabilityTask,
+  streamClosedWithoutTurnError,
 } from "./live-claude-cli-usability.mjs";
 
 const byId = (id) => CLAUDE_CLI_USABILITY_TASKS.find((task) => task.id === id);
@@ -158,5 +159,18 @@ test("classifyUsabilityOutcome fails a reply that is raw tool-call markup, even 
   assert.equal(
     classifyUsabilityOutcome(turn({}, "The invoke keyword is described below."), byId("K-02")).verdict,
     "passed",
+  );
+});
+
+test("streamClosedWithoutTurnError carries the stream's own error events", () => {
+  const plain = streamClosedWithoutTurnError("C-03", []);
+  assert.equal(plain.message, "C-03 stream closed without naming its turn");
+  const withErrors = streamClosedWithoutTurnError("C-03", [
+    { type: "error", code: "STATE_CONFLICT", error: "Turn is not editable" },
+    { type: "error", message: "second" },
+  ]);
+  assert.match(
+    withErrors.message,
+    /C-03 stream closed without naming its turn: STATE_CONFLICT Turn is not editable; second/,
   );
 });
