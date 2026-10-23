@@ -14,7 +14,7 @@ import {
 export const CLAUDE_CLI_WARM_CONTINUATION_ANCHOR = "claude-cli-warm-continuation";
 const FLAG = "claudeCliWarmContinuationEnabled";
 const COPY =
-  "Faster Claude Code tool steps. Keeps one Claude Code process running between tool steps in a turn instead of starting a new one. Tools still run in GoatCitadel. Experimental and off by default.";
+  "Faster Claude Code tool steps. When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one; any other step still starts a new one. Tools still run in GoatCitadel. Experimental and off by default.";
 const onOff = (value: boolean) => (value ? "On" : "Off");
 const readFlag = (settings: RuntimeSettingsResponse) => {
   const value = settings.features?.[FLAG];

@@ -352,7 +352,7 @@
 - Produces:
   - anchor `CLAUDE_CLI_WARM_CONTINUATION_ANCHOR = "claude-cli-warm-continuation"`;
   - the control is disabled, with a note, while the bridge flag is off.
-- **Copy (exact):** "Faster Claude Code tool steps. Keeps one Claude Code process running between tool steps in a turn instead of starting a new one. Tools still run in GoatCitadel. Experimental and off by default."
+- **Copy (exact):** "Faster Claude Code tool steps. When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one; any other step still starts a new one. Tools still run in GoatCitadel. Experimental and off by default." (Amended after PR review so it agrees with the tool-bridge switch, whose cost line now says a step starts a new `claude -p` run unless this switch reuses the process for an exact continuation.)
 
 - [ ] **Step 1: Write the failing tests:**
   - "the control shows the exact copy and is off by default";

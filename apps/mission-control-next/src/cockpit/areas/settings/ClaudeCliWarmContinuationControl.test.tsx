@@ -21,7 +21,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 }));
 
 const COPY =
-  "Faster Claude Code tool steps. Keeps one Claude Code process running between tool steps in a turn instead of starting a new one. Tools still run in GoatCitadel. Experimental and off by default.";
+  "Faster Claude Code tool steps. When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one; any other step still starts a new one. Tools still run in GoatCitadel. Experimental and off by default.";
 
 const settingsAt = (revision: number, flags: { bridge?: boolean; warm?: boolean }) => ({
   revision,
