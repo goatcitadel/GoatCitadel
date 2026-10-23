@@ -680,6 +680,27 @@ describe("RuntimeAuthorityProjectionService", () => {
     expect(serialized).not.toMatch(/internal-host|private|llama\.exe|sk-secret-value|1234/);
   });
 
+  it.each([
+    ["not_checked", "config_recovery_not_checked"],
+    ["no_config", "config_recovery_no_config"],
+    ["not_needed", "config_recovery_not_needed"],
+  ])(
+    "codes an unrecovered %s startup as %s, never claiming an unchecked recovery was unnecessary",
+    async (outcome, code) => {
+      const service = createService({
+        getConfigGenerationHealth: () => ({
+          revision: 8,
+          generationId: "generation-8",
+          transactionState: "idle",
+          mirrorRepairPending: false,
+          lastRecovery: { outcome, recovered: false },
+        }),
+      });
+      const result = await service.getProjection({ workspaceId: "workspace-a" });
+      expect(result.items.find((item) => item.id === "config-generation-recovery")?.stateMessage).toEqual({ code });
+    },
+  );
+
   it("gives every item a bounded code, so the cockpit never has to print server prose (SY-N06)", async () => {
     const quiet = await createService().getProjection({ workspaceId: "workspace-a" });
     const failing = await createService({

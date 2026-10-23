@@ -47,6 +47,8 @@ const PLAIN_CODES = [
   "config_generation_unavailable",
   "config_reconciliation_clear",
   "config_recovery_not_needed",
+  "config_recovery_not_checked",
+  "config_recovery_no_config",
   "manual_reconciliation_unavailable",
   "manual_reconciliation_window_incomplete",
   "manual_reconciliation_malformed",

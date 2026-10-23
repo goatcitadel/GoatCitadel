@@ -1040,7 +1040,15 @@ function buildConfigItems(read: ReadResult<unknown>, scope: RuntimeAuthorityScop
             code: recoveryNeedsAttention ? "config_recovered_attention" : "config_recovered",
             ...(recovery.revision === undefined ? {} : { counts: { revision: recovery.revision } }),
           }
-        : { code: "config_recovery_not_needed" },
+        : // An unchecked recovery must not read as one that was found unnecessary.
+          {
+            code:
+              recovery.outcome === "not_checked"
+                ? "config_recovery_not_checked"
+                : recovery.outcome === "no_config"
+                  ? "config_recovery_no_config"
+                  : "config_recovery_not_needed",
+          },
       basis: "The config owner reports the bounded startup recovery result for the active generation.",
       caveat: "Recovery evidence does not imply every runtime owner has completed reconciliation.",
       scope,

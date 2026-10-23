@@ -48,6 +48,8 @@ export const AUTHORITY_SENTENCES: Readonly<Record<string, string>> = {
   config_generation_unavailable: "The active configuration version can't be read right now.",
   config_reconciliation_clear: "Every runtime part is using the current configuration.",
   config_recovery_not_needed: "Startup didn't need to recover the configuration.",
+  config_recovery_not_checked: "Startup recovery hasn't been checked yet.",
+  config_recovery_no_config: "There was no saved configuration for startup to recover.",
   manual_reconciliation_unavailable: "Outside actions that may need checking can't be read for this workspace.",
   manual_reconciliation_window_incomplete:
     "Too many outside actions to read at once, so an older one needing a check may be missing.",
