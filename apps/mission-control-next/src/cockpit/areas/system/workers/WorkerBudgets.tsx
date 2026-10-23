@@ -234,7 +234,7 @@ export function WorkerBudgets({
       ) : editing ? (
         <div className="mt-3 space-y-3">
           {draft.hasRemoteChanges ? (
-            <p role="alert" className="text-sm text-status-waiting">
+            <p className="text-sm text-status-waiting">
               This worker changed since your draft started.{" "}
               <Button size="sm" onClick={draft.rebaseToCurrent}>
                 Start from the current version
@@ -320,16 +320,12 @@ export function WorkerBudgets({
           </p>
         ) : null}
         {review && review.workerGeneration !== admission?.workerGeneration ? (
-          <p role="alert" className="mt-2 text-sm text-status-waiting">
+          <p className="mt-2 text-sm text-status-waiting">
             This authorization was for an earlier version of the worker. Its outcome is unconfirmed; refresh budgets to
             check it. It cannot be retried for the current version.
           </p>
         ) : null}
-        {error ? (
-          <p role="alert" className="mt-2 text-sm text-status-failed">
-            {error}
-          </p>
-        ) : null}
+        {error ? <p className="mt-2 text-sm text-status-failed">{error}</p> : null}
         <div className="mt-4 flex justify-end gap-2">
           <Button disabled={pending} onClick={() => setReviewOpen(false)}>
             Cancel

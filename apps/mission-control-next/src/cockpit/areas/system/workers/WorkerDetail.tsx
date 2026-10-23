@@ -48,13 +48,9 @@ export function WorkerDetail({
         <h2 className="text-lg font-semibold text-fg">{item?.admission.value?.workerLabel ?? "Worker"}</h2>
         <StatusBadge status={workerStatus(item?.posture.value)} />
       </div>
-      {worker.loading && !item ? (
-        <p role="status" className="text-sm text-fg-muted">
-          Loading worker…
-        </p>
-      ) : null}
+      {worker.loading && !item ? <p className="text-sm text-fg-muted">Loading worker…</p> : null}
       {worker.error ? (
-        <div role="alert" className="text-sm text-status-failed">
+        <div className="text-sm text-status-failed">
           <p className="font-medium">Detail unavailable</p>
           <p>{worker.error}</p>
         </div>
@@ -93,11 +89,7 @@ export function WorkerDetail({
             })}
           </ul>
         )}
-        {worker.moreError ? (
-          <p role="alert" className="text-sm text-status-failed">
-            {worker.moreError}
-          </p>
-        ) : null}
+        {worker.moreError ? <p className="text-sm text-status-failed">{worker.moreError}</p> : null}
         {worker.assignments?.nextCursor ? (
           <Button
             className="mt-2"

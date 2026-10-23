@@ -123,6 +123,6 @@ it("opens the worker's assignments and names each details button after its visib
 it("keeps the alert for an ambiguous worker link", async () => {
   route.search = "?workerId=a&workerId=b";
   await render();
-  expect(host.querySelector('[role="alert"]')?.textContent).toContain("does not identify one worker");
+  expect(host.textContent).toContain("does not identify one worker");
   expect(api.fetchRemoteWorkerDetail).not.toHaveBeenCalled();
 });

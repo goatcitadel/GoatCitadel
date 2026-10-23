@@ -52,13 +52,9 @@ export function AssignmentInspector({
           <section>
             <h3 className="text-sm font-semibold text-fg">Events</h3>
             {events.error ? (
-              <p role="alert" className="text-sm text-status-failed">
-                {events.error}
-              </p>
+              <p className="text-sm text-status-failed">{events.error}</p>
             ) : !events.page ? (
-              <p role="status" className="text-sm text-fg-muted">
-                Loading events…
-              </p>
+              <p className="text-sm text-fg-muted">Loading events…</p>
             ) : events.page.items.length === 0 ? (
               <p className="text-sm text-fg-muted">No events for this version of the assignment.</p>
             ) : (
@@ -77,11 +73,7 @@ export function AssignmentInspector({
                 </p>
               </>
             )}
-            {events.moreError ? (
-              <p role="alert" className="text-sm text-status-failed">
-                {events.moreError}
-              </p>
-            ) : null}
+            {events.moreError ? <p className="text-sm text-status-failed">{events.moreError}</p> : null}
             <Button
               className="mt-2"
               size="sm"

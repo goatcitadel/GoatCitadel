@@ -72,11 +72,7 @@ export function SpendDetails() {
           </Button>
         }
       />
-      {costs.isLoading ? (
-        <p role="status" className="text-sm text-fg-muted">
-          Loading usage and cost…
-        </p>
-      ) : null}
+      {costs.isLoading ? <p className="text-sm text-fg-muted">Loading usage and cost…</p> : null}
       {costs.isError ? (
         <EmptyState
           title="Spend unavailable"

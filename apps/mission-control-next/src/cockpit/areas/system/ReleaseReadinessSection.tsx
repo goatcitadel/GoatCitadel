@@ -30,9 +30,9 @@ export function ReleaseReadinessSection() {
       <details onToggle={(event) => setOpen(event.currentTarget.open)}>
         <summary className="cursor-pointer text-base font-semibold text-fg">Release and review readiness</summary>
         <div className="mt-3 space-y-3 text-sm text-fg-secondary">
-          {readiness.isLoading ? <p role="status">Checking release readiness…</p> : null}
+          {readiness.isLoading ? <p>Checking release readiness…</p> : null}
           {readiness.isError ? (
-            <p role="alert" className="text-status-failed">
+            <p className="text-status-failed">
               Release readiness is unavailable: {describeApiError(readiness.error).summary}
             </p>
           ) : null}
@@ -97,9 +97,7 @@ export function ReleaseReadinessSection() {
                 </ul>
               </TechnicalDetails>
               {recheck.isError ? (
-                <p role="alert" className="text-status-failed">
-                  Could not check again: {describeApiError(recheck.error).summary}
-                </p>
+                <p className="text-status-failed">Could not check again: {describeApiError(recheck.error).summary}</p>
               ) : null}
               <Button size="sm" loading={recheck.isPending} loadingLabel="Checking…" onClick={() => recheck.mutate()}>
                 Check again

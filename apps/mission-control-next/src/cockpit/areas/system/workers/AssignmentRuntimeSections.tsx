@@ -18,7 +18,7 @@ const size = (value: number | null | undefined) =>
 
 function Facts({ rows }: { rows: [string, ReactNode][] }) {
   return (
-    <dl className="grid grid-cols-[minmax(0,12rem)_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
+    <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
       {rows.map(([term, value]) => (
         <div key={term} className="contents">
           <dt className="text-fg-muted">{term}</dt>
@@ -106,18 +106,13 @@ export function AssignmentRuntimeSections({
   const { data, error, reload } = useRemoteWorkerAssignmentRuntime({ workspaceId, assignment, refreshKey });
   if (error)
     return (
-      <p role="alert" className="text-sm text-status-failed">
+      <p className="text-sm text-status-failed">
         {error.startsWith("Assignment identity changed")
           ? error
           : "Assignment runtime is unavailable. Nothing about health, usage or settlement was assumed."}
       </p>
     );
-  if (!data)
-    return (
-      <p role="status" className="text-sm text-fg-muted">
-        Loading assignment runtime…
-      </p>
-    );
+  if (!data) return <p className="text-sm text-fg-muted">Loading assignment runtime…</p>;
   const contact = data.connectionHealth.value;
   const usage = data.usageAndCost.value;
   const cell = data.resourceCell.value;

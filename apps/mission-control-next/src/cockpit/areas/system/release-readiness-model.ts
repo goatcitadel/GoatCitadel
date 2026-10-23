@@ -41,7 +41,7 @@ export function releaseReadinessSummary(summary: ReviewReadinessSummary): {
   const proof = release.requiredProof;
   const sentence =
     `Version ${identity.version}, ${BUILD_KIND[identity.kind] ?? "build"}. ` +
-    `${proof.passed} of ${proof.total} required checks passed; ` +
+    `${proof.passed} of ${plural(proof.total, "required check")} passed; ` +
     `${plural(summary.openFindings, "open review finding")}.`;
   return {
     status,

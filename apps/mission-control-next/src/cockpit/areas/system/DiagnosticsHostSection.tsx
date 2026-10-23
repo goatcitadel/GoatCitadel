@@ -45,13 +45,9 @@ export function DiagnosticsHostSection() {
   const checks = health.isError ? [] : (health.data?.daemonStatus?.diagnostics ?? []);
   return (
     <Section title="Host" description="The machine the GoatCitadel server runs on.">
-      {health.isLoading ? (
-        <p role="status" className="text-sm text-fg-muted">
-          Loading host figures…
-        </p>
-      ) : null}
+      {health.isLoading ? <p className="text-sm text-fg-muted">Loading host figures…</p> : null}
       {health.isError ? (
-        <p role="alert" className="text-sm text-status-failed">
+        <p className="text-sm text-status-failed">
           Host figures are unavailable: {describeApiError(health.error).summary}
         </p>
       ) : null}

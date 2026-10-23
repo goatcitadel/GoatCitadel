@@ -81,5 +81,5 @@ it("lists server checks with their severity", async () => {
 it("says the host could not be read when the health summary fails", async () => {
   api.fetchHealthSummary.mockRejectedValue(new Error("offline"));
   await render();
-  expect(host.querySelector('[role="alert"]')?.textContent).toContain("Host figures are unavailable");
+  expect(host.textContent).toContain("Host figures are unavailable");
 });

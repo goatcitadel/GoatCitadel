@@ -47,7 +47,7 @@ function WorkersPage({ workspaceId, workspaceName }: { workspaceId: string; work
         }
       />
       {selection.invalid ? (
-        <div role="alert" className="text-sm text-fg-secondary">
+        <div className="text-sm text-fg-secondary">
           <p>This link does not identify one worker and its assignment.</p>
           <NativeOwnerLink
             href={PATH + (recovery.size ? "?" + recovery : "") + location.hash}

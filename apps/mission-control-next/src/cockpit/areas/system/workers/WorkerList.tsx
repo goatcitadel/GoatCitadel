@@ -23,12 +23,7 @@ export function WorkerList({
         action={<Button onClick={() => void registry.reload()}>Try again</Button>}
       />
     );
-  if (registry.loading && !registry.page)
-    return (
-      <p role="status" className="text-sm text-fg-muted">
-        Loading workers…
-      </p>
-    );
+  if (registry.loading && !registry.page) return <p className="text-sm text-fg-muted">Loading workers…</p>;
   if (!items.length)
     return (
       <EmptyState
@@ -65,11 +60,7 @@ export function WorkerList({
           );
         })}
       </ul>
-      {registry.moreError ? (
-        <p role="alert" className="text-sm text-status-failed">
-          {registry.moreError}
-        </p>
-      ) : null}
+      {registry.moreError ? <p className="text-sm text-status-failed">{registry.moreError}</p> : null}
       {registry.page?.nextCursor ? (
         <Button
           size="sm"

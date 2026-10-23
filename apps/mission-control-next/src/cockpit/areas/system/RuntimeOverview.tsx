@@ -57,11 +57,7 @@ export function RuntimeOverview({ workspaceId, sessionId }: { workspaceId: strin
           </p>
         ) : null}
       </AreaHeader>
-      {runtime.loading && !data ? (
-        <p role="status" className="text-sm text-fg-muted">
-          Loading runtime…
-        </p>
-      ) : null}
+      {runtime.loading && !data ? <p className="text-sm text-fg-muted">Loading runtime…</p> : null}
       {runtime.error && !data ? (
         <EmptyState
           title="Runtime unavailable"
@@ -72,7 +68,7 @@ export function RuntimeOverview({ workspaceId, sessionId }: { workspaceId: strin
       {data ? (
         <>
           {degraded.length ? (
-            <details className="rounded-md border border-status-waiting/40 p-3 text-sm text-fg-secondary">
+            <details className="text-sm text-fg-secondary">
               <summary className="cursor-pointer font-medium">
                 {degraded.length} runtime {degraded.length === 1 ? "source is" : "sources are"} unavailable
               </summary>
