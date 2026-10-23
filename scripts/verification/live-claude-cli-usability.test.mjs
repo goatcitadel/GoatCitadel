@@ -204,19 +204,13 @@ test("runUsabilityTask lets the stream end on its own after the turn settles, so
   assert.deepEqual(order, ["settle", "ended", "finish"]);
 });
 
-test("a turn cancelled before it was routed is not a provider failure, but a routed one must be the CLI", () => {
+test("a cancelled turn must still have been routed to the CLI", () => {
   const c02 = byId("C-02");
   assert.equal(
     classifyUsabilityOutcome({ trace: { ...base, status: "cancelled", routing: {} } }, c02).verdict,
-    "passed",
-  );
-  assert.equal(
-    classifyUsabilityOutcome(
-      { trace: { ...base, status: "cancelled", routing: { effectiveProviderId: "openai" } } },
-      c02,
-    ).verdict,
     "failed",
   );
+  assert.equal(classifyUsabilityOutcome({ trace: { ...base, status: "cancelled" } }, c02).verdict, "passed");
 });
 
 function fakeLaneDeps(order, overrides = {}) {
@@ -281,4 +275,29 @@ test("runLane skips the sandbox when the CLI is not signed in, and reports the e
   assert.ok(order.includes("claude-cli-usability.preflight:failed"));
   assert.ok(!order.includes("start"));
   assert.ok(order.includes("claude-cli-usability.account-email:skipped"));
+});
+
+test("runUsabilityTask cancels a stop task only after the turn has streamed text", async () => {
+  const order = [];
+  const deps = {
+    createTaskSession: async () => "s1",
+    openTurnStream: async () => ({
+      turnId: "t1",
+      started: performance.now(),
+      firstDelta: new Promise((resolve) =>
+        setTimeout(() => {
+          order.push("delta");
+          resolve();
+        }, 20),
+      ),
+      finish: async () => ({ sseEventTypes: ["delta"], firstDeltaSeconds: 0.02 }),
+    }),
+    cancelTurn: async () => order.push("cancel"),
+    settleTurn: async () => {
+      order.push("settle");
+      return { turn: { trace: { status: "cancelled" } }, approvalsResolved: 0 };
+    },
+  };
+  await runUsabilityTask("http://gateway.test", byId("C-02"), { deps });
+  assert.deepEqual(order, ["delta", "cancel", "settle"]);
 });

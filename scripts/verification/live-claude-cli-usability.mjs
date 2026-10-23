@@ -74,9 +74,7 @@ export function classifyUsabilityOutcome(turn, task) {
   const expect = task.expect;
   const toolRuns = Array.isArray(trace.toolRuns) ? trace.toolRuns : [];
   const reasons = [];
-  // A turn cancelled before dispatch never records a provider; any provider it did record must still be the CLI.
-  const cancelledBeforeRouting = trace.status === "cancelled" && !trace.routing?.effectiveProviderId;
-  if (!cancelledBeforeRouting && trace.routing?.effectiveProviderId !== PROVIDER_ID) {
+  if (trace.routing?.effectiveProviderId !== PROVIDER_ID) {
     reasons.push(`resolved to provider ${trace.routing?.effectiveProviderId ?? "missing"}`);
   }
   if (!expect.status.includes(trace.status)) {
@@ -278,6 +276,10 @@ async function openTurnStream(gatewayUrl, input) {
   const types = new Set();
   const errorEvents = [];
   let firstDeltaSeconds;
+  let announceFirstDelta;
+  const firstDelta = new Promise((resolve) => {
+    announceFirstDelta = resolve;
+  });
   let announceTurnId;
   const turnIdSeen = new Promise((resolve) => {
     announceTurnId = resolve;
@@ -296,6 +298,7 @@ async function openTurnStream(gatewayUrl, input) {
         if (typeof event.turnId === "string" && event.turnId.trim()) announceTurnId(event.turnId);
         if (event.type === "delta" && firstDeltaSeconds === undefined) {
           firstDeltaSeconds = (performance.now() - started) / 1000;
+          announceFirstDelta();
         }
       }
     }
@@ -311,7 +314,14 @@ async function openTurnStream(gatewayUrl, input) {
     await finish();
     throw streamClosedWithoutTurnError(input.task.id, errorEvents);
   }
-  return { turnId, started, ended: pump, finish };
+  return { turnId, started, ended: pump, firstDelta, finish };
+}
+
+/** Waits for `promise` (which may be absent) or `ms`, whichever comes first, and leaves no timer behind. */
+async function waitAtMost(promise, ms) {
+  let timer;
+  await Promise.race([promise, new Promise((resolve) => (timer = setTimeout(resolve, ms)))]);
+  clearTimeout(timer);
 }
 
 async function cancelTurn(gatewayUrl, input) {
@@ -354,6 +364,8 @@ export async function runUsabilityTask(gatewayUrl, task, options = {}) {
   let streamed;
   try {
     if (task.followUp?.action === "cancel") {
+      // Stop a turn that is actually streaming, so the cancel reaches the running CLI step.
+      await waitAtMost(stream.firstDelta, STREAM_END_GRACE_MS);
       await deps.cancelTurn(gatewayUrl, { task, sessionId, turnId: stream.turnId, correlationId });
     }
     settled = await deps.settleTurn(gatewayUrl, {
@@ -364,11 +376,7 @@ export async function runUsabilityTask(gatewayUrl, task, options = {}) {
       stopOnUserInput: options.stopOnUserInput === true,
     });
   } finally {
-    if (settled) {
-      let timer;
-      await Promise.race([stream.ended, new Promise((resolve) => (timer = setTimeout(resolve, STREAM_END_GRACE_MS)))]);
-      clearTimeout(timer);
-    }
+    if (settled) await waitAtMost(stream.ended, STREAM_END_GRACE_MS);
     streamed = await stream.finish();
   }
   let forkSessionId;
