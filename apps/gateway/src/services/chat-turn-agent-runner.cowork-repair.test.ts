@@ -1197,7 +1197,7 @@ describe("ChatTurnAgentRunner Cowork repair behavior", () => {
                   function: {
                     name: "shell_exec",
                     arguments: JSON.stringify({
-                      command: "cat package.json | jq .name",
+                      command: "jq .name package.json",
                       cwd: "fixtures/prompt-pack-workspace",
                     }),
                   },

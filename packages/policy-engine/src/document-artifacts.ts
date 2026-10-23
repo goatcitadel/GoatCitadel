@@ -11,6 +11,7 @@ import {
   WidthType,
 } from "docx";
 import { createArtifactDesignPlan, cssColor, type ArtifactDesignPlan } from "./artifact-design.js";
+import { createDocumentPdf } from "./document-pdf.js";
 import { createStoredZip, type ZipEntry } from "./presentation-pptx.js";
 
 export type DocumentArtifactFormat = "markdown" | "txt" | "html" | "json" | "csv" | "docx" | "pdf";
@@ -25,6 +26,8 @@ export interface DocumentArtifactInput {
   title: string;
   body?: string;
   sections: DocumentArtifactSection[];
+  /** True when sections[0] is the generated "Summary" copy of body, not a section the caller sent. */
+  bodySummaryIsFallback?: boolean;
   rows?: Array<Record<string, unknown> | unknown[]>;
   createdAt?: Date;
   design?: ArtifactDesignPlan;
@@ -44,6 +47,10 @@ export interface DocumentArtifactOutput {
   binary: boolean;
   /** Whether the bytes came from the fixed renderer template or from model-authored markup. */
   markup: DocumentArtifactMarkup;
+  /** PDF only: the layouts the renderer actually drew, so the design report never claims more. */
+  renderedLayouts?: string[];
+  /** PDF only: renderer warnings, such as characters the Latin font could not show. */
+  warnings?: string[];
 }
 
 export const MODEL_AUTHORED_HTML_MAX_BYTES = 512 * 1024;
@@ -91,8 +98,14 @@ export async function createDocumentArtifact(
       return { ...output, data: buildCsv(input) };
     case "docx":
       return { ...output, data: await buildDocx(input) };
-    case "pdf":
-      return { ...output, data: buildPdf(input) };
+    case "pdf": {
+      const design = input.design;
+      if (!design || design.mode === "plain" || design.mode === "minimal") {
+        return { ...output, data: buildPdf(input), renderedLayouts: ["plain-text"], warnings: [] };
+      }
+      const pdf = createDocumentPdf({ ...input, design });
+      return { ...output, data: pdf.buffer, renderedLayouts: pdf.layouts, warnings: pdf.warnings };
+    }
   }
 }
 

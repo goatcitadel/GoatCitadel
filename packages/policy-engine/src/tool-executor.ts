@@ -47,6 +47,7 @@ import {
 } from "./tool-registry.js";
 import type { AcquireLocalEmbeddingLease, PrepareEmbeddingUsageDispatch } from "./local-embeddings.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
+import { detectShellScriptSyntax, formatShellScriptSyntaxError } from "./sandbox/shell-command-syntax.js";
 import { resolveShellExecTimeout } from "./tool-executor/shell-timeout.js";
 import { captureBackgroundProcessIdentity } from "./tool-executor/background-process-identity.js";
 import {
@@ -720,6 +721,7 @@ async function shellExec(
   const args = request.args;
   const timeoutMs = resolveShellExecTimeout(args.timeoutMs, shellExecTimeoutMs);
   const command = required(args.command, "command");
+  assertNoShellScriptSyntax(request.toolName, command);
   const cwd = await resolveOptionalCwd(args.cwd, request, config, storage);
   const shellRisk = classifyShellRisk(command, config.sandbox.riskyShellPatterns);
   const approvalBypass = await hasVerifiedApprovalBypass(request, storage);
@@ -892,6 +894,7 @@ async function shellExecBackground(
 ) {
   const args = request.args;
   const command = required(args.command, "command");
+  assertNoShellScriptSyntax(request.toolName, command);
   const cwd = await resolveOptionalCwd(args.cwd, request, config, storage);
   const shellRisk = classifyShellRisk(command, config.sandbox.riskyShellPatterns);
   const approvalBypass = await hasVerifiedApprovalBypass(request, storage);
@@ -1395,6 +1398,13 @@ async function resolveOptionalCwd(
 function stringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((entry) => asString(entry)).filter((entry): entry is string => Boolean(entry));
+}
+
+function assertNoShellScriptSyntax(toolName: string, command: string): void {
+  const finding = detectShellScriptSyntax(command);
+  if (finding) {
+    throw new Error(formatShellScriptSyntaxError(toolName, finding));
+  }
 }
 
 function parseExecFileCommand(command: string): { file: string; args: string[] } {

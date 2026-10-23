@@ -372,6 +372,8 @@ export function buildArtifactDesignReport(
     validationResults?: Record<string, Partial<Pick<ArtifactValidationCheck, "status" | "detail">>>;
     designQuality?: Partial<ArtifactDesignQualityReport>;
     markup?: ArtifactDesignReport["markup"];
+    /** Layouts the renderer actually drew; when present they replace the plan's intended layouts. */
+    renderedLayouts?: string[];
   } = {},
 ): ArtifactDesignReport {
   const google = resolveGoogleImportStatus(plan.destination, output.google);
@@ -390,7 +392,7 @@ export function buildArtifactDesignReport(
     preset: plan.preset,
     visualLevel: plan.visualLevel,
     assetPolicy: plan.assetPolicy,
-    layouts: plan.layouts.map((layout) => layout.name),
+    layouts: output.renderedLayouts ?? plan.layouts.map((layout) => layout.name),
     assetSources: assetPlan.filter((asset) => asset.status !== "skipped"),
     skippedAssets: assetPlan.filter((asset) => asset.status === "skipped"),
     validation,
@@ -738,7 +740,9 @@ function buildResidualRisks(
   }
   if (plan.kind === "pdf") {
     risks.push(
-      "PDF output uses the existing lightweight renderer and has less visual richness than DOCX, HTML, or PPTX.",
+      plan.mode === "plain" || plan.mode === "minimal"
+        ? "Plain PDF output is unstyled text: no cover, color, callouts, or tables."
+        : "PDF reports use standard Helvetica text and built-in color shapes; photos and custom fonts are not embedded.",
     );
   }
   for (const finding of designQuality.findings) {
