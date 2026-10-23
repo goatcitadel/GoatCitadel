@@ -33,7 +33,16 @@ export interface ParkedClaudeCliStep {
   turnSignal?: AbortSignal;
 }
 
-export type ClaudeCliWarmReapReason = "deadline" | "cap" | "miss" | "fault" | "abort" | "shutdown" | "resumed_failure";
+/** `resumed_done`: a resumed step ended without parking again; its owner releases what is left. */
+export type ClaudeCliWarmReapReason =
+  | "deadline"
+  | "cap"
+  | "miss"
+  | "fault"
+  | "abort"
+  | "shutdown"
+  | "resumed_failure"
+  | "resumed_done";
 
 export type ClaudeCliWarmTake =
   | { hit: true; step: ParkedClaudeCliStep; results: ReadonlyArray<{ toolUseId: string; text: string }> }
