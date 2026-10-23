@@ -120,7 +120,12 @@ async function countSpilledToolResults(dir: string): Promise<{ files: number; by
 export class ClaudeCliWarmRegistry {
   private readonly entries = new Map<string, WarmEntry>();
   private readonly tombstones = new Map<string, WarmTombstone>();
-  private readonly reaped = new WeakSet<ParkedClaudeCliStep>();
+  /** One reap per step; a second reap() of the same step awaits the first. */
+  private readonly reaping = new WeakMap<ParkedClaudeCliStep, Promise<void>>();
+  /** Reaps still running, so reapAll() can wait for the ones a timer, miss or fault started. */
+  private readonly pending = new Set<Promise<void>>();
+  /** Set once reapAll() starts: the Gateway is shutting down and nothing parks again. */
+  private closed = false;
   private readonly removeRunDir: (dir: string) => Promise<void>;
   private readonly claudeProjectsDir: () => string | undefined;
   private readonly now: () => number;
@@ -144,6 +149,12 @@ export class ClaudeCliWarmRegistry {
    * listens to the turn signal, and installs the heartbeat-only drain.
    */
   park(step: ParkedClaudeCliStep): void {
+    if (this.closed) {
+      void this.reap(step, "shutdown");
+      return;
+    }
+    // A reaped step's session is dead and its run dir gone; it can never wait again.
+    if (this.reaping.has(step)) return;
     const key = keyOf(step.fingerprint);
     // First, so a session that cannot park throws before anything else is evicted.
     step.session.park(drainParkedLine, (reason) => this.onParkFault(step, reason));
@@ -201,11 +212,28 @@ export class ClaudeCliWarmRegistry {
   }
 
   /** Kills the tree, removes the run dir, then checks for spilled tool results. Idempotent; never throws. */
-  async reap(step: ParkedClaudeCliStep, reason: ClaudeCliWarmReapReason): Promise<void> {
-    if (this.reaped.has(step)) return;
-    this.reaped.add(step);
+  reap(step: ParkedClaudeCliStep, reason: ClaudeCliWarmReapReason): Promise<void> {
+    // Detach first, unconditionally, so a registered step always leaves the map (cap eviction relies on it).
     const entry = this.entries.get(keyOf(step.fingerprint));
     if (entry?.step === step) this.detach(entry);
+    const running = this.reaping.get(step);
+    if (running) return running;
+    const reaped = this.finishReap(step, reason);
+    this.reaping.set(step, reaped);
+    this.pending.add(reaped);
+    void reaped.finally(() => this.pending.delete(reaped));
+    return reaped;
+  }
+
+  /** Kills every parked process, clears their run directories, and waits for reaps already running. */
+  async reapAll(reason: "shutdown"): Promise<void> {
+    this.closed = true;
+    this.tombstones.clear();
+    for (const entry of [...this.entries.values()]) void this.reap(entry.step, reason);
+    while (this.pending.size > 0) await Promise.all([...this.pending]);
+  }
+
+  private async finishReap(step: ParkedClaudeCliStep, reason: ClaudeCliWarmReapReason): Promise<void> {
     try {
       await step.session.kill();
     } catch (error) {
@@ -221,13 +249,6 @@ export class ClaudeCliWarmRegistry {
     } catch (error) {
       log.warn("Claude Code CLI warm spill check failed", { reason, code: errorCode(error) });
     }
-  }
-
-  /** Kills every parked process and clears their run directories. */
-  async reapAll(reason: "shutdown"): Promise<void> {
-    const steps = [...this.entries.values()].map((entry) => entry.step);
-    this.tombstones.clear();
-    await Promise.all(steps.map((step) => this.reap(step, reason)));
   }
 
   private miss(reason: ClaudeCliWarmMissReason): ClaudeCliWarmTake {

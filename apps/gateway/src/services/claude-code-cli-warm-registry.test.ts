@@ -345,6 +345,68 @@ describe("ClaudeCliWarmRegistry", () => {
     expect(registry.size).toBe(0);
   });
 
+  it("re-parking a reaped step is refused, so cap eviction cannot hang", async () => {
+    const reapedFake = fakeSession();
+    const reapedStep = stepOf(reapedFake, { sessionId: "s-reaped" });
+    registry.park(reapedStep);
+    await registry.reap(reapedStep, "miss");
+
+    registry.park(reapedStep);
+    expect(registry.size).toBe(0);
+    expect(reapedFake.session.park).toHaveBeenCalledTimes(1);
+
+    const fakes = [fakeSession(), fakeSession(), fakeSession(), fakeSession()];
+    fakes.forEach((fake, index) => {
+      registry.park(stepOf(fake, { sessionId: `s${index}` }));
+      vi.advanceTimersByTime(1);
+    });
+    await settle();
+
+    expect(registry.size).toBe(3);
+    expect(fakes[0]!.kill).toHaveBeenCalledTimes(1);
+    expect(reapedFake.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("reapAll waits for a reap already in flight", async () => {
+    const fake = fakeSession();
+    let releaseKill: () => void = () => undefined;
+    fake.kill.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseKill = resolve;
+        }),
+    );
+    registry.park(stepOf(fake));
+    await vi.advanceTimersByTimeAsync(CLAUDE_CLI_WARM_PARK_DEADLINE_MS);
+    expect(fake.kill).toHaveBeenCalledTimes(1);
+    expect(registry.size).toBe(0);
+
+    let done = false;
+    const all = registry.reapAll("shutdown").then(() => {
+      done = true;
+    });
+    await settle();
+    expect(done).toBe(false);
+    expect(removeRunDir).not.toHaveBeenCalled();
+
+    releaseKill();
+    await all;
+    expect(removeRunDir).toHaveBeenCalledWith("/scratch/run-s1");
+  });
+
+  it("a park after reapAll reaps the step at once instead of registering it", async () => {
+    await registry.reapAll("shutdown");
+    const fake = fakeSession();
+
+    registry.park(stepOf(fake));
+
+    expect(registry.size).toBe(0);
+    expect(fake.session.park).not.toHaveBeenCalled();
+    expect(fake.kill).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(removeRunDir).toHaveBeenCalledWith("/scratch/run-s1");
+  });
+
   it("reapAll kills every entry", async () => {
     const fakes = [fakeSession(), fakeSession(), fakeSession()];
     fakes.forEach((fake, index) => registry.park(stepOf(fake, { sessionId: `s${index}` })));

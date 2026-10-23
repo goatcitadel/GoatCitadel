@@ -1,7 +1,8 @@
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChatCompletionRequest, LlmConfigFile } from "@goatcitadel/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createNoopSecretStore } from "../test/llm-fixtures.js";
 import type { ClaudeCliSession } from "./claude-code-cli-session.js";
 import { buildClaudeCliToolManifest } from "./claude-code-cli-tool-bridge.js";
@@ -26,17 +27,18 @@ function buildConfig(capabilities?: Record<string, boolean>): LlmConfigFile {
   };
 }
 
-function createService(config: LlmConfigFile, bridgeEnabled?: () => boolean, warmEnabled?: () => boolean) {
-  return new LlmService(
-    config,
-    {},
-    {
-      secretStore: createNoopSecretStore(),
-      enforceNetworkAllowlist: false,
-      ...(bridgeEnabled ? { claudeCliToolBridgeEnabled: bridgeEnabled } : {}),
-      ...(warmEnabled ? { claudeCliWarmContinuationEnabled: warmEnabled } : {}),
-    },
-  );
+function createService(
+  config: LlmConfigFile,
+  bridgeEnabled?: () => boolean,
+  warmEnabled?: () => boolean,
+  env: NodeJS.ProcessEnv = {},
+) {
+  return new LlmService(config, env, {
+    secretStore: createNoopSecretStore(),
+    enforceNetworkAllowlist: false,
+    ...(bridgeEnabled ? { claudeCliToolBridgeEnabled: bridgeEnabled } : {}),
+    ...(warmEnabled ? { claudeCliWarmContinuationEnabled: warmEnabled } : {}),
+  });
 }
 
 function cliCapabilities(service: LlmService) {
@@ -145,10 +147,14 @@ describe("claude-code-cli capability truth", () => {
   });
 
   it("close() kills a parked warm session", async () => {
+    // A temp CLAUDE_CONFIG_DIR keeps the reap's spill check out of the operator's real Claude profile.
+    const configDir = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-claude-config-"));
+    onTestFinished(() => rm(configDir, { recursive: true, force: true }));
     const service = createService(
       buildConfig(),
       () => true,
       () => true,
+      { CLAUDE_CONFIG_DIR: configDir },
     );
     // The runtime is private; reach its registry to park one entry as the provider would.
     const { warm } = (service as unknown as { claudeCodeCli: ClaudeCodeCliRuntime }).claudeCodeCli;
@@ -167,7 +173,7 @@ describe("claude-code-cli capability truth", () => {
     } as ChatCompletionRequest;
     warm.park({
       session,
-      runDir: path.join(os.tmpdir(), "goatcitadel-claude-cli", "run-close-test-missing"),
+      runDir: path.join(configDir, "run-close-test-missing"),
       manifest,
       fingerprint: fingerprintClaudeCliStep({
         request,
