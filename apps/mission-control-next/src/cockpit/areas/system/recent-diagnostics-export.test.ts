@@ -40,4 +40,21 @@ describe("recent diagnostics export", () => {
     });
     expect(JSON.stringify(result)).not.toContain("hidden-context-value");
   });
+
+  it("adds the server checks the page shows when they were read", () => {
+    const result = buildRecentDiagnosticsExport({
+      generatedAt: "2026-09-28T02:00:00.000Z",
+      events: { items: [], failed: false, fetchedAt: 0 },
+      logs: { items: [], failed: false, fetchedAt: 0 },
+      serverChecks: {
+        items: [{ id: "port", title: "Port busy", detail: "8787 is taken", severity: "warn" }],
+        failed: false,
+        fetchedAt: 0,
+      },
+    });
+    expect(result.sourceStatus).toMatchObject({ serverChecks: { state: "available" } });
+    expect(result.serverChecks).toEqual([
+      { id: "port", title: "Port busy", detail: "8787 is taken", severity: "warn" },
+    ]);
+  });
 });

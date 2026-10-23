@@ -178,8 +178,8 @@ function RuntimeWidget() {
     <WidgetFrame
       title="Runtime truth"
       source="Host-wide health"
-      ownerHref="/system/runtime/diagnostics"
-      ownerLabel="Open runtime diagnostics"
+      ownerHref="/system/diagnostics"
+      ownerLabel="Open System › Diagnostics"
       loading={query.isLoading}
       refreshing={query.isFetching}
       error={query.error}

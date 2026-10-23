@@ -411,6 +411,99 @@ describe("approval-resolution-effects-service", () => {
     expect(requestRunProcessing).toHaveBeenCalledWith("durable-resumed");
   });
 
+  it("retries a linked Chat wake instead of skipping it while the turn has not parked yet", async () => {
+    // An approval answered before the turn commits its wait finds the durable run still running.
+    // Skipping that wake would strand the turn once it parks moments later.
+    const effect = createEffect({
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: "turn-early",
+      status: "running",
+      payload: { runId: "durable-early" },
+    });
+    let trace: ChatTurnTraceRecord = {
+      ...createWaitingChildTrace("session-early", effect.targetId),
+      status: "running",
+      durable: { runId: "durable-early", status: "running", checkpointKind: "run_started" },
+    };
+    let runStatus: "running" | "completed" = "running";
+    const deferEffectForRetry = vi.fn(() => ({ ...effect, status: "pending" as const }));
+    const skipEffect = vi.fn(() => ({ ...effect, status: "skipped" as const }));
+    const patchIfStatus = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            completeEffect: vi.fn(),
+            failEffect: vi.fn(),
+            skipEffect,
+            deferEffectForRetry,
+            listByApproval: vi.fn(() => []),
+          },
+          chatTurnTraces: { get: vi.fn(() => trace), patchIfStatus },
+          pendingApprovalActions: {
+            find: vi.fn(() => ({
+              approvalId: effect.approvalId,
+              actionType: "tool.invoke",
+              resolutionStatus: "executed",
+            })),
+          },
+          runImmediateTransaction: <T>(work: () => T): T => work(),
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        wakeDurableRun: vi.fn(
+          (): DurableWakeResult => ({
+            runId: "durable-early",
+            eventKey: "approval.resolved",
+            correlationId: effect.approvalId,
+            outcome: "skipped_not_waiting",
+            detail: `Durable run durable-early is ${runStatus}.`,
+            run: {
+              runId: "durable-early",
+              workflowKey: "chat.turn.execute",
+              status: runStatus,
+              attemptCount: 0,
+              maxAttempts: 3,
+              version: 2,
+              payload: {},
+              createdAt: "2026-10-23T00:00:00.000Z",
+              updatedAt: "2026-10-23T00:00:00.000Z",
+            },
+          }),
+        ),
+      },
+    );
+    const owner = service as unknown as { handleLinkedChatTurnWake(current: ApprovalEffectRecord): Promise<void> };
+
+    await owner.handleLinkedChatTurnWake(effect);
+
+    expect(skipEffect).not.toHaveBeenCalled();
+    expect(patchIfStatus).not.toHaveBeenCalled();
+    expect(deferEffectForRetry).toHaveBeenCalledWith(
+      effect.effectId,
+      expect.any(String),
+      effect.version,
+      expect.objectContaining({
+        result: expect.objectContaining({
+          reason: "chat_turn_not_parked",
+          runId: "durable-early",
+          retryDelayMs: 2_000,
+        }),
+      }),
+    );
+
+    // Once the turn has finished without parking, the wake has nothing to resume and is skipped as before.
+    trace = { ...trace, status: "completed" };
+    runStatus = "completed";
+    deferEffectForRetry.mockClear();
+    await owner.handleLinkedChatTurnWake(effect);
+    expect(deferEffectForRetry).not.toHaveBeenCalled();
+    expect(skipEffect).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["remote_worker.native_runtime", "remote_worker.native_runtime_install"])(
     "keeps an early %s review waiting until its exact parent wake completes",
     async (kind) => {

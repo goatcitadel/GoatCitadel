@@ -1,6 +1,5 @@
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
-import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Callout } from "../../ui/Callout";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
@@ -10,6 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { fetchDevDiagnostics } from "@goatcitadel/mission-control-shared/api/diagnostics";
 import { fetchDaemonLogs } from "@goatcitadel/mission-control-shared/api/platform";
+import { fetchHealthSummary } from "@goatcitadel/mission-control-shared/api/system";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
@@ -21,6 +21,9 @@ import { saveLibraryDownload } from "../library/library-download";
 import { buildRecentDiagnosticsExport } from "./recent-diagnostics-export";
 import { FirstRunVerification } from "../settings/FirstRunVerification";
 import { RuntimeAuthorityMap } from "./RuntimeAuthorityMap";
+import { DiagnosticsHostSection } from "./DiagnosticsHostSection";
+import { ReleaseReadinessSection } from "./ReleaseReadinessSection";
+import { cockpitInputClass } from "../../ui/input-class";
 import { TimeText } from "../../ui/TimeText";
 import { DIAGNOSTIC_LEVEL, presentDiagnosticCategory, presentDiagnosticEvent } from "./system-vocabulary";
 
@@ -28,9 +31,9 @@ import { DIAGNOSTIC_LEVEL, presentDiagnosticCategory, presentDiagnosticEvent } f
 const EVENT_VIEW_TOGGLE = "aria-[pressed=true]:border-fg aria-[pressed=true]:bg-sunken";
 
 export function SystemDiagnostics() {
-  const location = useCockpitRoute();
   const [eventView, setEventView] = useState<"issues" | "all">("issues");
   const [showAllEvents, setShowAllEvents] = useState(false);
+  const [logQuery, setLogQuery] = useState("");
   const [exportNotice, setExportNotice] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
@@ -44,11 +47,21 @@ export function SystemDiagnostics() {
     queryFn: () => fetchDaemonLogs(100),
     refetchInterval: 30_000,
   });
+  // The same query as the Host section, so the export carries the server checks the page shows.
+  const host = useQuery({
+    queryKey: ["system", "diagnostics-host"],
+    queryFn: fetchHealthSummary,
+    refetchInterval: 30_000,
+  });
   const inbox = useOperatorInbox(workspaceId);
   const scopedInbox = !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined;
   const deadLetters =
     scopedInbox?.items.filter((item) => item.kind === "dead_letter" && item.source.workspaceId === workspaceId) ?? [];
   const deadLetterCoverage = scopedInbox?.coverage.find((source) => source.source === "dead_letters");
+  const logNeedle = logQuery.trim().toLowerCase();
+  const visibleLogs = (logs.data?.items ?? []).filter(
+    (item) => !logNeedle || item.message.toLowerCase().includes(logNeedle),
+  );
   const fetching = diagnostics.isFetching || logs.isFetching || inbox.isFetching;
   const eventWindow = diagnostics.data?.items ?? [];
   const filteredEvents =
@@ -70,7 +83,7 @@ export function SystemDiagnostics() {
     setShowAllEvents(false);
   };
   const exportRecent = () => {
-    if (!diagnostics.data && !logs.data) return;
+    if (!diagnostics.data && !logs.data && !host.data) return;
     if (typeof document === "undefined" || typeof URL.createObjectURL !== "function") {
       setExportNotice({ tone: "error", message: "Diagnostics export is unavailable in this environment." });
       return;
@@ -80,6 +93,11 @@ export function SystemDiagnostics() {
         generatedAt: new Date().toISOString(),
         events: { items: diagnostics.data?.items, failed: diagnostics.isError, fetchedAt: diagnostics.dataUpdatedAt },
         logs: { items: logs.data?.items, failed: logs.isError, fetchedAt: logs.dataUpdatedAt },
+        serverChecks: {
+          items: host.data?.daemonStatus?.diagnostics,
+          failed: host.isError,
+          fetchedAt: host.dataUpdatedAt,
+        },
       });
       // The shared helper attaches the anchor and defers revoking the URL, so Firefox and Safari keep the download.
       saveLibraryDownload(
@@ -89,7 +107,7 @@ export function SystemDiagnostics() {
       setExportNotice({
         tone: "success",
         message:
-          !diagnostics.data || !logs.data || diagnostics.isError || logs.isError
+          !diagnostics.data || !logs.data || !host.data || diagnostics.isError || logs.isError || host.isError
             ? "Partial recent diagnostics downloaded. The file marks unavailable or stale sources."
             : "Recent diagnostics downloaded. Review the file before sharing.",
       });
@@ -106,7 +124,7 @@ export function SystemDiagnostics() {
           <>
             <Button
               size="sm"
-              disabled={diagnostics.isFetching || logs.isFetching || (!diagnostics.data && !logs.data)}
+              disabled={diagnostics.isFetching || logs.isFetching || (!diagnostics.data && !logs.data && !host.data)}
               onClick={exportRecent}
             >
               Export recent diagnostics
@@ -117,6 +135,7 @@ export function SystemDiagnostics() {
               onClick={() => {
                 void diagnostics.refetch();
                 void logs.refetch();
+                void host.refetch();
                 void inbox.refetch();
               }}
             >
@@ -139,6 +158,7 @@ export function SystemDiagnostics() {
         </p>
       ) : null}
       <FirstRunVerification />
+      <DiagnosticsHostSection />
 
       <section aria-labelledby="diagnostics-recovery-title" className="border-t border-line-subtle pt-4">
         <h2 id="diagnostics-recovery-title" className="text-base font-semibold text-fg">
@@ -204,6 +224,14 @@ export function SystemDiagnostics() {
           Daemon logs
         </h2>
         <p className="mt-1 text-xs text-fg-muted">Latest 100 entries from the daemon log.</p>
+        <input
+          type="search"
+          aria-label="Search daemon logs"
+          placeholder="Search logs"
+          value={logQuery}
+          onChange={(event) => setLogQuery(event.target.value)}
+          className={`mt-3 w-full max-w-sm ${cockpitInputClass}`}
+        />
         {logs.isLoading ? (
           <p role="status" className="mt-3 text-sm text-fg-muted">
             Loading daemon logs…
@@ -213,7 +241,10 @@ export function SystemDiagnostics() {
         {logs.data && !logs.isError ? (
           logs.data.items.length ? (
             <ul className="mt-2 divide-y divide-line-subtle">
-              {logs.data.items.map((item, index) => (
+              {visibleLogs.length ? null : (
+                <li className="py-3 text-sm text-fg-muted">No log entries match this search.</li>
+              )}
+              {visibleLogs.map((item, index) => (
                 <li key={`${item.timestamp}:${index}`} className="py-3">
                   <p className="text-xs font-medium text-fg-muted">
                     {DIAGNOSTIC_LEVEL[item.level] ?? "Log"} · <TimeText value={item.timestamp} />
@@ -314,13 +345,17 @@ export function SystemDiagnostics() {
         ) : null}
       </section>
       <RuntimeAuthorityMap key={workspaceId} workspaceId={workspaceId} />
-      <NativeOwnerLink
-        href={`/system/runtime/diagnostics${location.search}${location.hash}`}
-        className="text-sm font-medium text-accent hover:underline"
-        scope={workspaceId}
-      >
-        Open full diagnostics and export controls
-      </NativeOwnerLink>
+      <ReleaseReadinessSection />
+      <p className="border-t border-line-subtle pt-4 text-sm text-fg-secondary">
+        Backups and offline restore are on the Runtime page; restoring stays an offline step you run yourself.{" "}
+        <SystemOwnerLink
+          href="/system/runtime#ops-runtime-backups"
+          scope={workspaceId}
+          className="font-medium text-accent hover:underline"
+        >
+          Open System › Runtime
+        </SystemOwnerLink>
+      </p>
     </section>
   );
 }

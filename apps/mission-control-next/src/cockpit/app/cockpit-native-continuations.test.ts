@@ -11,7 +11,7 @@ const context = {
 describe("internal native owner continuations", () => {
   it.each([
     ["/ops/runtime?shell=classic", "/system/runtime"],
-    ["/ops/diagnostics?shell=classic", "/system/runtime/diagnostics"],
+    ["/ops/diagnostics?shell=classic", "/system/diagnostics"],
     ["/ops/boards?shell=classic", "/system/dashboards"],
     ["/ops/costs?shell=classic", "/system/spend/details"],
     ["/system/dashboards/board%2Fone?workspaceId=workspace-a", "/system/dashboards/board%2Fone"],

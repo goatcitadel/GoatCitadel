@@ -150,7 +150,7 @@ describe("cockpit saved board detail", () => {
     expect(links).toEqual(
       expect.arrayContaining([
         ["Open spend details", "/system/spend/details"],
-        ["Open runtime diagnostics", "/system/runtime/diagnostics"],
+        ["Open System › Diagnostics", "/system/diagnostics"],
       ]),
     );
     expect(container.textContent).not.toContain("Open source controls");

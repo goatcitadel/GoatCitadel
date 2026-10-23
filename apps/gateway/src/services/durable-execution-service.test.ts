@@ -4634,6 +4634,87 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
   });
 
+  it("accepts an approval wait whose latest approval-gated tool run was already resolved before the turn parked", async () => {
+    // An approval answered quickly executes its action before the turn's wait commits, so the
+    // parked trace no longer has an approval_required run. That is still a real approval wait.
+    const run = buildRunWithPayload("chat.turn.execute", {
+      version: "chat.turn.execute.v1",
+      sessionId: "session-resting",
+      turnId: "turn-resting",
+      userMessageId: "user-resting",
+      assistantMessageId: "assistant-resting",
+      branchKind: "new",
+      threadEventType: "chat_thread_turn_appended",
+      request: { content: "Make a deck." },
+    });
+    const trace = {
+      turnId: "turn-resting",
+      sessionId: "session-resting",
+      userMessageId: "user-resting",
+      assistantMessageId: "assistant-resting",
+      status: "waiting_for_approval",
+      toolRuns: [],
+    } as ChatTurnTraceRecord;
+    const approved = {
+      toolRunId: "tool-approved",
+      turnId: "turn-resting",
+      sessionId: "session-resting",
+      toolName: "presentations.create",
+      status: "executed",
+      approvalId: "approval-fast",
+      startedAt: "2026-10-23T18:44:37.464Z",
+      finishedAt: "2026-10-23T18:44:39.773Z",
+    } as ChatTurnTraceRecord["toolRuns"][number];
+    const earlierRead = {
+      toolRunId: "tool-read",
+      turnId: "turn-resting",
+      sessionId: "session-resting",
+      toolName: "fs.list",
+      status: "executed",
+      startedAt: "2026-10-23T18:44:30.000Z",
+      finishedAt: "2026-10-23T18:44:30.500Z",
+    } as ChatTurnTraceRecord["toolRuns"][number];
+    let toolRuns: ChatTurnTraceRecord["toolRuns"] = [earlierRead, approved];
+    const host = {
+      storage: {
+        chatTurnTraces: { get: vi.fn(() => trace) },
+        chatMessages: {
+          get: vi.fn((messageId: string) =>
+            messageId === "user-resting"
+              ? { messageId, sessionId: "session-resting", role: "user", content: "Make a deck." }
+              : undefined,
+          ),
+        },
+        chatToolRuns: { listByTurn: vi.fn(() => toolRuns) },
+      },
+    };
+    const lacksEvidence = {
+      recoverable: false,
+      reason: "Durable Chat trace turn-resting lacks canonical evidence for waiting_for_approval.",
+    };
+
+    for (const status of ["executed", "failed", "blocked"] as const) {
+      toolRuns = [earlierRead, { ...approved, status }];
+      expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+    }
+
+    // A resolved approval run only counts when it is the run the turn parked on.
+    toolRuns = [approved, { ...earlierRead, startedAt: "2026-10-23T18:44:40.000Z" }];
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual(lacksEvidence);
+
+    // An executed run that never went through an approval is not approval-wait evidence.
+    toolRuns = [earlierRead, { ...approved, approvalId: undefined }];
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual(lacksEvidence);
+
+    // Still started is neither waiting for approval nor resolved by one.
+    toolRuns = [earlierRead, { ...approved, status: "started", finishedAt: undefined }];
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual(lacksEvidence);
+
+    // Another turn's resolved approval never counts.
+    toolRuns = [{ ...approved, turnId: "turn-other" }];
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual(lacksEvidence);
+  });
+
   it("recovers a confirmed delegation wait only from its matching stored plan and confirmation", async () => {
     const run = buildRunWithPayload("chat.turn.execute", {
       version: "chat.turn.execute.v1",
