@@ -306,6 +306,32 @@ describe("ClaudeCliWarmRegistry", () => {
     expect(registry.take(fingerprintOf(continuation()), requestOf(continuation()))).toEqual({ hit: false });
   });
 
+  it("the rate_limit_event the CLI prints right after a tool_use stop keeps it parked", async () => {
+    const fake = fakeSession();
+    registry.park(stepOf(fake));
+
+    // Claude Code 2.1.305 prints this after every model response, including the one that parked.
+    expect(
+      fake.emit(
+        JSON.stringify({
+          type: "rate_limit_event",
+          rate_limit_info: { status: "allowed", rateLimitType: "five_hour" },
+          uuid: "u-1",
+          session_id: "cli-session",
+        }),
+      ),
+    ).toBe("ok");
+    expect(fake.emit(heartbeat)).toBe("ok");
+    expect(registry.size).toBe(1);
+    expect(fake.kill).not.toHaveBeenCalled();
+
+    // A status line means the CLI is starting a model call on its own: still a fault.
+    expect(fake.emit(JSON.stringify({ type: "system", subtype: "status", status: "requesting" }))).toBe("fault");
+    await settle();
+    expect(registry.size).toBe(0);
+    expect(fake.kill).toHaveBeenCalledTimes(1);
+  });
+
   it("a non-JSON line poisons, and an unexpected tool_result also logs an unattributed call", async () => {
     const garbled = fakeSession();
     registry.park(stepOf(garbled, { sessionId: "s1" }));

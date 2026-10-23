@@ -137,7 +137,12 @@ describe("buildClaudeCliArgs", () => {
     expect(args[args.indexOf("--tools") + 1]).toBe("");
     expect(args[args.indexOf("--permission-mode") + 1]).toBe("dontAsk");
     expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
-    expect(JSON.parse(args[args.indexOf("--settings") + 1] ?? "null")).toEqual({ disableAllHooks: true });
+    // autoMemoryEnabled: a run dir inside a git repo otherwise loads that repo's Claude Code
+    // auto-memory (MEMORY.md) into the model's context (live proof 2026-10-23).
+    expect(JSON.parse(args[args.indexOf("--settings") + 1] ?? "null")).toEqual({
+      disableAllHooks: true,
+      autoMemoryEnabled: false,
+    });
     expect(args[args.indexOf("--model") + 1]).toBe("claude-sonnet-5-5");
     expect(args[args.indexOf("--system-prompt-file") + 1]).toBe("C:\\tmp\\sys.txt");
   });

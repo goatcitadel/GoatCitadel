@@ -100,19 +100,38 @@ function countToolResultBlocks(parsed: unknown): number {
   return content.filter((block) => isRecord(block) && block.type === "tool_result").length;
 }
 
-/** While parked only heartbeats are expected; any other line means the CLI moved on without us. */
+/**
+ * Lines a parked CLI may print without moving on: tool_progress heartbeats while it waits on the
+ * stub, and the rate_limit_event it prints after every model response (live proof 2026-10-23,
+ * Claude Code 2.1.305: it arrives right after the tool_use message_stop that parked the step).
+ */
+const PARKED_BENIGN_LINE_TYPES = new Set(["tool_progress", "rate_limit_event"]);
+
+/** While parked only heartbeats and rate-limit notices are expected; any other line means the CLI moved on. */
 function drainParkedLine(line: string): "ok" | "fault" {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
+    log.warn("claude_cli_warm_park_fault", { lineType: "unparseable" });
     return "fault";
   }
-  if (isRecord(parsed) && parsed.type === "tool_progress") return "ok";
+  if (isRecord(parsed) && typeof parsed.type === "string" && PARKED_BENIGN_LINE_TYPES.has(parsed.type)) return "ok";
   const toolResults = countToolResultBlocks(parsed);
   // A tool result we never delivered: the CLI may already have a model call in flight.
   if (toolResults > 0) log.warn("claude_cli_warm_unattributed_call", { toolResults });
+  // Bounded diagnostics only: which kind of line poisoned the park, never its content.
+  log.warn("claude_cli_warm_park_fault", { lineType: describeLineType(parsed) });
   return "fault";
+}
+
+function describeLineType(parsed: unknown): string {
+  if (!isRecord(parsed)) return "non_object";
+  const type = typeof parsed.type === "string" ? parsed.type.slice(0, 32) : "untyped";
+  const subtype = typeof parsed.subtype === "string" ? `/${parsed.subtype.slice(0, 32)}` : "";
+  const event =
+    isRecord(parsed.event) && typeof parsed.event.type === "string" ? `:${parsed.event.type.slice(0, 32)}` : "";
+  return `${type}${subtype}${event}`;
 }
 
 /** Files (and their bytes) under any `tool-results` folder below dir; zero when dir is missing. */

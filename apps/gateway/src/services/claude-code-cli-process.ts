@@ -73,7 +73,9 @@ export const CLAUDE_CLI_MAX_LINE_BYTES = 1024 * 1024;
 export const CLAUDE_CLI_STDERR_TAIL_BYTES = 16 * 1024;
 const CLAUDE_CLI_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 const SHIM_EXTENSIONS = new Set([".cmd", ".bat", ".ps1"]);
-const CLAUDE_CLI_ISOLATION_SETTINGS = JSON.stringify({ disableAllHooks: true });
+// autoMemoryEnabled: false keeps Claude Code's per-project auto-memory (MEMORY.md) out of the model's
+// context; `--setting-sources ""` does not, and a run dir inside a git repo maps to that repo's memory.
+const CLAUDE_CLI_ISOLATION_SETTINGS = JSON.stringify({ disableAllHooks: true, autoMemoryEnabled: false });
 /** How long cleanup waits for a killed CLI tree to close, so callers can remove its cwd afterwards. */
 export const CLAUDE_CLI_KILL_CLOSE_WAIT_MS = 5000;
 

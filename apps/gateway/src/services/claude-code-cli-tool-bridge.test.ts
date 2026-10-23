@@ -204,7 +204,7 @@ describe("buildClaudeCliArgs bridge option", () => {
       "--setting-sources",
       "",
       "--settings",
-      JSON.stringify({ disableAllHooks: true }),
+      JSON.stringify({ disableAllHooks: true, autoMemoryEnabled: false }),
     ]);
   });
 });
