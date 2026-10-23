@@ -7,6 +7,7 @@ import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { presentAuthorityMessage } from "./runtime-authority-copy";
+import { headingForCode } from "./runtime-authority-wording";
 import { SystemOwnerLink } from "./SystemOwnerLink";
 import { AUTHORITY_CLASS_LABELS, AUTHORITY_DOMAIN, AUTHORITY_FRESHNESS, AUTHORITY_POSTURE } from "./system-vocabulary";
 
@@ -30,13 +31,29 @@ function observed(value?: string) {
   return value && Number.isFinite(Date.parse(value)) ? <TimeText value={value} /> : "Not available";
 }
 
+/** Link text per reference kind, in the cockpit's words rather than the server's label. */
+function linkLabelFor(reference: RuntimeAuthorityReference): string {
+  switch (reference.kind) {
+    case "durable_run":
+      return "Open run";
+    case "approval":
+      return "Open approval";
+    case "release_evidence":
+      return "Open release details";
+    case "external_side_effects":
+      return "Open outside actions";
+  }
+}
+
 function AuthorityRecord({ item, workspaceId }: { item: RuntimeAuthorityItem; workspaceId: string }) {
-  // A coded state is worded here; the server's own prose is kept for technical details.
+  // The coded state words the heading and the sentence (SY-N06); the server's own label, prose, owner and source
+  // stay in technical details. A per-record run or approval keeps its own name.
   const worded = item.stateMessage ? presentAuthorityMessage(item.stateMessage) : undefined;
+  const heading = (item.stateMessage ? headingForCode(item.stateMessage.code) : undefined) ?? item.label;
   return (
     <li className="space-y-2 py-3 text-sm text-fg-secondary">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <h3 className="min-w-0 break-words font-semibold text-fg">{item.label}</h3>
+        <h3 className="min-w-0 break-words font-semibold text-fg">{heading}</h3>
         <div className="flex flex-wrap gap-1">
           <StatusBadge status={AUTHORITY_FRESHNESS[item.freshness]} />
           <StatusBadge status={AUTHORITY_POSTURE[item.posture]} />
@@ -47,19 +64,20 @@ function AuthorityRecord({ item, workspaceId }: { item: RuntimeAuthorityItem; wo
         <li className="text-xs text-fg-muted">
           {AUTHORITY_DOMAIN[item.domain] ?? "Runtime"} · {AUTHORITY_CLASS_LABELS[item.authorityClass] ?? "Unclassified"}
         </li>
-        <li className="break-words">Managed by: {item.owner}</li>
-        <li className="break-words">Source: {item.source}</li>
         <li>Scope: {item.scope.kind === "workspace" ? "Current workspace" : "Citadel runtime"}</li>
         <li>Observed: {observed(item.observedAt)}</li>
       </ul>
       <TechnicalDetails label="Classification basis">
+        {heading !== item.label ? <p className="break-words">{item.label}</p> : null}
         {worded ? <p className="break-words">{item.state}</p> : null}
+        <p className="break-words">Managed by: {item.owner}</p>
+        <p className="break-words">Source: {item.source}</p>
         <p className="break-words">{item.basis}</p>
         {item.caveat ? <p className="break-words text-status-waiting">{item.caveat}</p> : null}
       </TechnicalDetails>
       {item.canonicalRef ? (
         <SystemOwnerLink href={hrefFor(item.canonicalRef)} scope={[workspaceId, item.id]}>
-          {item.canonicalRef.label}
+          {linkLabelFor(item.canonicalRef)}
         </SystemOwnerLink>
       ) : null}
     </li>

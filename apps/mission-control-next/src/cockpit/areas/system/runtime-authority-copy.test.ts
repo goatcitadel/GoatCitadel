@@ -1,5 +1,114 @@
 import { describe, expect, it } from "vitest";
 import { presentAuthorityMessage } from "./runtime-authority-copy";
+import { headingForCode } from "./runtime-authority-wording";
+
+/** Every code the Gateway's runtime authority projection emits without counts. */
+const PLAIN_CODES = [
+  "approvals_unavailable",
+  "approvals_malformed",
+  "approvals_some_malformed",
+  "approvals_empty",
+  "runs_unavailable",
+  "runs_malformed",
+  "runs_some_malformed",
+  "runs_window_incomplete",
+  "runs_empty",
+  "run_signal",
+  "run_signals_unavailable",
+  "run_status_unknown",
+  "durable_workers_unavailable",
+  "durable_workers_malformed",
+  "durable_workers_window_incomplete",
+  "durable_workers_some_malformed",
+  "durable_workers_more_beyond_window",
+  "durable_worker_idle",
+  "worker_lease_expired",
+  "worker_heartbeat_stale",
+  "worker_lease_current",
+  "mesh_workers_unavailable",
+  "mesh_workers_window_incomplete",
+  "mesh_workers_malformed",
+  "mesh_workers_empty",
+  "local_runtime_unavailable",
+  "backup_none_published",
+  "backup_unreadable",
+  "backup_malformed",
+  "backup_verified",
+  "backup_verified_stale",
+  "release_verified",
+  "release_unverified",
+  "release_certificate_malformed",
+  "release_metadata_incomplete",
+  "release_certificate_missing",
+  "build_modified",
+  "build_clean",
+  "build_integrity_unknown",
+  "running_build_identity_unavailable",
+  "config_generation_unavailable",
+  "config_reconciliation_clear",
+  "config_recovery_not_needed",
+  "config_recovery_not_checked",
+  "config_recovery_no_config",
+  "manual_reconciliation_unavailable",
+  "manual_reconciliation_window_incomplete",
+  "manual_reconciliation_malformed",
+  "manual_reconciliation_clear",
+  "manual_reconciliation",
+  "manual_reconciliation_some_malformed",
+  "manual_reconciliation_more_beyond_window",
+];
+const GLOSSARY =
+  /\b(Gateway|evidence|owner|replay|revision|snapshot|posture|projection|canonical|durable|admitted|readback)\b/i;
+
+describe("every runtime authority code is worded (SY-N06)", () => {
+  it.each(PLAIN_CODES)("%s has a sentence and a heading in operator words", (code) => {
+    const sentence = presentAuthorityMessage({ code });
+    expect(sentence, code).toBeTruthy();
+    expect(sentence).not.toMatch(GLOSSARY);
+    // A single run keeps its own name as its heading.
+    if (code === "run_status_unknown") return;
+    expect(headingForCode(code), code).toBeTruthy();
+    expect(headingForCode(code)).not.toMatch(GLOSSARY);
+  });
+
+  it("words run status and approval settlement codes, and leaves an unknown part to the fallback", () => {
+    expect(presentAuthorityMessage({ code: "run_failed" })).toBe("This run failed.");
+    expect(presentAuthorityMessage({ code: "run_dead_lettered" })).toBe("This run stopped after repeated failures.");
+    expect(presentAuthorityMessage({ code: "approval_rejected_effects_settled" })).toBe(
+      "Denied; every follow-on action reached a final outcome.",
+    );
+    expect(presentAuthorityMessage({ code: "approval_pending_awaiting_decision" })).toBe("Waiting for a decision.");
+    expect(presentAuthorityMessage({ code: "approval_approved_something_new" })).toBeUndefined();
+    expect(presentAuthorityMessage({ code: "run_teleported" })).toBeUndefined();
+  });
+
+  it("words counted codes, and falls back when a needed count is missing", () => {
+    expect(presentAuthorityMessage({ code: "config_generation", counts: { revision: 8 } })).toBe(
+      "Version 8 of the configuration is active.",
+    );
+    expect(presentAuthorityMessage({ code: "config_generation" })).toBeUndefined();
+    expect(presentAuthorityMessage({ code: "backup_failed", count: 2 })).toBe(
+      "The latest backup didn't verify: 2 problems found.",
+    );
+    expect(
+      presentAuthorityMessage({
+        code: "config_reconciliation_pending",
+        counts: { owners: 1, transaction: 0, mirrors: 1 },
+      }),
+    ).toBe("Waiting on runtime parts picking up the new configuration and a configuration copy being repaired.");
+    expect(presentAuthorityMessage({ code: "config_recovered_attention", counts: { revision: 3 } })).toBe(
+      "Startup recovered the configuration at version 3, but the result needs a look.",
+    );
+  });
+
+  it("heads each kind by its longest known prefix and leaves per-record runs and approvals to their own names", () => {
+    expect(headingForCode("backup_verified_stale")).toBe("Latest backup");
+    expect(headingForCode("worker_leases_checked")).toBe("Workers");
+    expect(headingForCode("approval_records_available")).toBe("Approvals");
+    expect(headingForCode("run_completed")).toBeUndefined();
+    expect(headingForCode("approval_approved_effects_settled")).toBeUndefined();
+  });
+});
 
 describe("presentAuthorityMessage (SY-N06)", () => {
   it("words approval record counts with real plurals, as a recent window", () => {

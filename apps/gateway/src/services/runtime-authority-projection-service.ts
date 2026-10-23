@@ -296,6 +296,7 @@ export class RuntimeAuthorityProjectionService {
         freshness: settlement.freshness,
         posture: settlement.posture,
         state: settlement.state,
+        stateMessage: { code: `approval_${approvalDecisionCode(approval.status)}_${settlement.code}` },
         basis: "The approval row owns the decision; approval effect rows own whether follow-on work settled.",
         caveat:
           "Mission Control approval cards are derived materializations and cannot upgrade a pending or failed effect.",
@@ -309,6 +310,7 @@ export class RuntimeAuthorityProjectionService {
           id: "approvals-malformed",
           domain: "approvals",
           label: "Some approval records unavailable",
+          stateMessage: { code: "approvals_some_malformed" },
           owner: "ApprovalRepository + ApprovalEffectRepository",
           source: "canonical approval stores",
           state: "Malformed or duplicate approval rows were omitted from the trusted projection.",
@@ -389,6 +391,7 @@ function buildRunItems(
       state: terminal
         ? `Terminal outcome: ${labelRunStatus(run.status)}.`
         : `Execution state: ${labelRunStatus(run.status)}.`,
+      stateMessage: { code: isKnownRunStatus(run.status) ? `run_${run.status}` : "run_status_unknown" },
       basis: "The durable run repository owns resumable execution state and terminal outcome.",
       caveat: "A retained event may describe this run, but it does not overwrite the repository row.",
       scope,
@@ -426,6 +429,7 @@ function buildRunItems(
         id: "runs-malformed",
         domain: "runs",
         label: "Some durable runs unavailable",
+        stateMessage: { code: "runs_some_malformed" },
         owner: "DurableRunRepository",
         source: "durable run rows",
         state: "Malformed or duplicate durable run rows were omitted from the trusted projection.",
@@ -552,6 +556,9 @@ function buildWorkerItems(
       freshness,
       posture,
       state,
+      stateMessage: {
+        code: expired ? "worker_lease_expired" : staleHeartbeat ? "worker_heartbeat_stale" : "worker_lease_current",
+      },
       basis: "Lease expiry and heartbeat freshness are computed from canonical run fields at read time.",
       caveat: "Worker health is a projection; the durable run row remains the execution authority.",
       scope,
@@ -592,6 +599,9 @@ function buildWorkerItems(
         id: malformedRunCount > 0 ? "durable-workers-malformed" : "durable-workers-window-incomplete",
         domain: "workers",
         label: malformedRunCount > 0 ? "Some durable worker leases unavailable" : "Durable worker window incomplete",
+        stateMessage: {
+          code: malformedRunCount > 0 ? "durable_workers_some_malformed" : "durable_workers_more_beyond_window",
+        },
         owner: "DurableRunRepository",
         source: "running durable run lease fields",
         state:
@@ -784,6 +794,7 @@ function buildBackupItem(read: ReadResult<unknown>, scope: RuntimeAuthorityScope
       state: read.ok
         ? "No published backup directory is available for verification."
         : "Gateway could not inspect the latest published backup.",
+      stateMessage: { code: read.ok ? "backup_none_published" : "backup_unreadable" },
       basis: "Current filesystem presence alone is not backup proof; a manifest and payload verification are required.",
       scope,
     });
@@ -817,6 +828,9 @@ function buildBackupItem(read: ReadResult<unknown>, scope: RuntimeAuthorityScope
     state: valid
       ? `Manifest and payload verification passed${stale ? ", but the backup is stale" : ""}.`
       : `Backup verification failed with ${inspection.issueCount} bounded issue code(s).`,
+    stateMessage: valid
+      ? { code: stale ? "backup_verified_stale" : "backup_verified" }
+      : { code: "backup_failed", count: inspection.issueCount },
     basis:
       "The published manifest records the backup set; exact-byte and contract verification tests the current payload.",
     caveat: valid
@@ -848,6 +862,7 @@ function buildReleaseItems(read: ReadResult<unknown>, scope: RuntimeAuthoritySco
           verified === true
             ? "Certificate, required lanes, exact SHA, and bound release assets agree."
             : "A release certificate exists, but current identity or bound evidence does not verify.",
+        stateMessage: { code: verified === true ? "release_verified" : "release_unverified" },
         basis: "The certificate and its bound artifacts are the durable release-evidence record.",
         caveat: "A development filesystem or diagnostics snapshot cannot upgrade failed release evidence.",
         scope,
@@ -865,6 +880,14 @@ function buildReleaseItems(read: ReadResult<unknown>, scope: RuntimeAuthoritySco
             : certificateState === "parsed"
               ? "The parsed release certificate has malformed or incomplete trust metadata."
               : "No parsed release certificate is available to the running Gateway.",
+        stateMessage: {
+          code:
+            certificateState === "malformed"
+              ? "release_certificate_malformed"
+              : certificateState === "parsed"
+                ? "release_metadata_incomplete"
+                : "release_certificate_missing",
+        },
         basis: "Build success or current filesystem state is not a substitute for bound release evidence.",
         scope,
         freshness: certificateState === "malformed" || certificateState === "parsed" ? "contradictory" : "missing",
@@ -893,6 +916,14 @@ function buildReleaseItems(read: ReadResult<unknown>, scope: RuntimeAuthoritySco
             : integrity === "clean"
               ? "The running identity inspection reports a clean source boundary."
               : "The running identity integrity could not be established.",
+        stateMessage: {
+          code:
+            integrity === "modified"
+              ? "build_modified"
+              : integrity === "clean"
+                ? "build_clean"
+                : "build_integrity_unknown",
+        },
         basis: "This is a read-time inspection of the process and filesystem boundary.",
         caveat: "Runtime identity is inferred current-state evidence; release certification remains separate.",
         scope,
@@ -959,6 +990,7 @@ function buildConfigItems(read: ReadResult<unknown>, scope: RuntimeAuthorityScop
       freshness: "current",
       posture: "ok",
       state: `Revision ${Math.max(0, Math.trunc(revision))} is the active canonical generation.`,
+      stateMessage: { code: "config_generation", counts: { revision: Math.max(0, Math.trunc(revision)) } },
       basis: "The generation metadata and digest own the committed configuration decision.",
       caveat: "Individual runtime owners are projections of this generation and may still require reconciliation.",
       scope,
@@ -976,6 +1008,16 @@ function buildConfigItems(read: ReadResult<unknown>, scope: RuntimeAuthorityScop
       state: pending
         ? `${ownerReconciliationPending ? "Runtime-owner reconciliation is pending. " : ""}${mutationPending ? "A config transaction is pending. " : ""}${mirrorRepairPending ? "Mirror repair is pending." : ""}`.trim()
         : "Runtime owners and config mirrors report no pending reconciliation.",
+      stateMessage: pending
+        ? {
+            code: "config_reconciliation_pending",
+            counts: {
+              owners: ownerReconciliationPending ? 1 : 0,
+              transaction: mutationPending ? 1 : 0,
+              mirrors: mirrorRepairPending ? 1 : 0,
+            },
+          }
+        : { code: "config_reconciliation_clear" },
       basis: "This status is projected from the durable generation transaction and mirror-repair state.",
       caveat: "Projection health cannot rewrite or roll back the committed canonical generation.",
       scope,
@@ -993,6 +1035,20 @@ function buildConfigItems(read: ReadResult<unknown>, scope: RuntimeAuthorityScop
       state: recovery.recovered
         ? `Startup recovery outcome: ${recovery.outcome.replaceAll("_", " ")}${recovery.revision === undefined ? "" : ` at revision ${recovery.revision}`}.`
         : `Startup recovery outcome: ${recovery.outcome.replaceAll("_", " ")}; no generation was recovered.`,
+      stateMessage: recovery.recovered
+        ? {
+            code: recoveryNeedsAttention ? "config_recovered_attention" : "config_recovered",
+            ...(recovery.revision === undefined ? {} : { counts: { revision: recovery.revision } }),
+          }
+        : // An unchecked recovery must not read as one that was found unnecessary.
+          {
+            code:
+              recovery.outcome === "not_checked"
+                ? "config_recovery_not_checked"
+                : recovery.outcome === "no_config"
+                  ? "config_recovery_no_config"
+                  : "config_recovery_not_needed",
+          },
       basis: "The config owner reports the bounded startup recovery result for the active generation.",
       caveat: "Recovery evidence does not imply every runtime owner has completed reconciliation.",
       scope,
@@ -1110,6 +1166,7 @@ function buildManualReconciliationItems(
         id: "manual-reconciliation-malformed",
         domain: "reconciliation",
         label: "Some reconciliation rows unavailable",
+        stateMessage: { code: "manual_reconciliation_some_malformed" },
         owner: "ExternalSideEffectRunRepository",
         source: "workspace-scoped external side-effect ledger",
         state: "Malformed recent ledger rows were omitted from the trusted projection.",
@@ -1124,6 +1181,7 @@ function buildManualReconciliationItems(
         id: "manual-reconciliation-window-incomplete",
         domain: "reconciliation",
         label: "Additional reconciliation rows unavailable",
+        stateMessage: { code: "manual_reconciliation_more_beyond_window" },
         owner: "ExternalSideEffectRunRepository",
         source: "bounded workspace-scoped external side-effect ledger",
         state: "Known unresolved outcomes are shown, but the saturated ledger window may omit older rows.",
@@ -1167,10 +1225,11 @@ function summarizeApprovalSettlement(
   approvalStatus: string,
   effects: Array<{ status: string; updatedAt?: string; manualReconciliation: boolean }>,
   effectsReadOk: boolean,
-): { state: string; posture: RuntimeAuthorityPosture; freshness: RuntimeAuthorityFreshness } {
+): { state: string; code: string; posture: RuntimeAuthorityPosture; freshness: RuntimeAuthorityFreshness } {
   if (!effectsReadOk) {
     return {
       state: `Decision ${labelApprovalStatus(approvalStatus)}; follow-on effect settlement is unavailable.`,
+      code: "effects_unavailable",
       posture: "unavailable",
       freshness: "missing",
     };
@@ -1178,6 +1237,7 @@ function summarizeApprovalSettlement(
   if (approvalStatus === "pending") {
     return {
       state: "Decision pending; no effect may be treated as settled.",
+      code: "awaiting_decision",
       posture: "attention",
       freshness: "current",
     };
@@ -1185,6 +1245,7 @@ function summarizeApprovalSettlement(
   if (effects.some((effect) => effect.manualReconciliation)) {
     return {
       state: `Decision ${labelApprovalStatus(approvalStatus)}; an effect requires manual reconciliation.`,
+      code: "effects_manual",
       posture: "critical",
       freshness: "current",
     };
@@ -1192,6 +1253,7 @@ function summarizeApprovalSettlement(
   if (effects.some((effect) => effect.status === "failed")) {
     return {
       state: `Decision ${labelApprovalStatus(approvalStatus)}; at least one follow-on effect failed.`,
+      code: "effects_failed",
       posture: "critical",
       freshness: "current",
     };
@@ -1199,6 +1261,7 @@ function summarizeApprovalSettlement(
   if (effects.some((effect) => effect.status === "pending" || effect.status === "running")) {
     return {
       state: `Decision ${labelApprovalStatus(approvalStatus)}; follow-on effect settlement is pending.`,
+      code: "effects_pending",
       posture: "attention",
       freshness: "current",
     };
@@ -1206,12 +1269,14 @@ function summarizeApprovalSettlement(
   if (effects.length === 0) {
     return {
       state: `Decision ${labelApprovalStatus(approvalStatus)}; no follow-on effect row is registered.`,
+      code: "no_effects",
       posture: "neutral",
       freshness: "current",
     };
   }
   return {
     state: `Decision ${labelApprovalStatus(approvalStatus)}; all recorded follow-on effects settled.`,
+    code: "effects_settled",
     posture: "ok",
     freshness: "current",
   };
@@ -1500,6 +1565,11 @@ function labelRunStatus(status: string): string {
   return status.replaceAll("_", " ");
 }
 
+/** The decision part of an approval record's code; an unrecognised status reads as "decided". */
+function approvalDecisionCode(status: string): string {
+  return ["pending", "approved", "rejected", "edited"].includes(status) ? status : "decided";
+}
+
 function labelApprovalStatus(status: string): string {
   return status === "edited" ? "approved with edits" : status;
 }
@@ -1598,9 +1668,14 @@ function boundAuthorityItem(item: RuntimeAuthorityItem): RuntimeAuthorityItem {
     state: publicText(item.state, MAX_PUBLIC_TEXT_LENGTH, "State unavailable."),
     basis: publicText(item.basis, MAX_PUBLIC_TEXT_LENGTH, "Authority basis unavailable."),
     caveat: publicOptionalText(item.caveat, MAX_PUBLIC_TEXT_LENGTH),
-    stateMessage: boundAuthorityMessage(item.stateMessage),
+    stateMessage: boundAuthorityMessage(item.stateMessage ?? familyAuthorityMessage(item.id)),
     observedAt: validIso(item.observedAt),
   };
+}
+
+/** An item without its own code is coded by its id family: "runs-empty" → runs_empty, "run-signal:<id>" → run_signal. */
+function familyAuthorityMessage(id: string): RuntimeAuthorityMessage {
+  return { code: (id.split(":")[0] ?? id).replaceAll("-", "_") };
 }
 
 /** A coded state keeps a short code and only whole, non-negative counts; anything else is dropped. */

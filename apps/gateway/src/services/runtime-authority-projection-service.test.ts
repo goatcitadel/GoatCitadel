@@ -97,6 +97,16 @@ describe("RuntimeAuthorityProjectionService", () => {
     expect(result.items.find((item) => item.id === "approval:pending-effect")?.state).toMatch(/settlement is pending/i);
     expect(result.items.find((item) => item.id === "approval:failed-effect")?.state).toMatch(/effect failed/i);
     expect(result.items.find((item) => item.id === "approval:manual-effect")?.state).toMatch(/manual reconciliation/i);
+    // Each record also carries a code the cockpit words (SY-N06): decision, then what happened next.
+    expect(result.items.find((item) => item.id === "approval:pending-effect")?.stateMessage?.code).toMatch(
+      /^approval_[a-z]+_effects_pending$/,
+    );
+    expect(result.items.find((item) => item.id === "approval:failed-effect")?.stateMessage?.code).toMatch(
+      /^approval_[a-z]+_effects_failed$/,
+    );
+    expect(result.items.find((item) => item.id === "approval:manual-effect")?.stateMessage?.code).toMatch(
+      /^approval_[a-z]+_effects_manual$/,
+    );
     expect(result.items.find((item) => item.id === "approval-ui-materialization")).toMatchObject({
       authorityClass: "derived_projection",
       owner: "Mission Control",
@@ -662,8 +672,51 @@ describe("RuntimeAuthorityProjectionService", () => {
     expect(result.items.find((item) => item.id === "config-generation-recovery")).toMatchObject({
       authorityClass: "derived_projection",
       posture: "attention",
+      stateMessage: { code: "config_recovered_attention" },
     });
+    expect(result.items.find((item) => item.id === "running-build-identity")?.stateMessage?.code).toMatch(
+      /^build_(modified|clean|integrity_unknown)$/,
+    );
     expect(serialized).not.toMatch(/internal-host|private|llama\.exe|sk-secret-value|1234/);
+  });
+
+  it.each([
+    ["not_checked", "config_recovery_not_checked"],
+    ["no_config", "config_recovery_no_config"],
+    ["not_needed", "config_recovery_not_needed"],
+  ])(
+    "codes an unrecovered %s startup as %s, never claiming an unchecked recovery was unnecessary",
+    async (outcome, code) => {
+      const service = createService({
+        getConfigGenerationHealth: () => ({
+          revision: 8,
+          generationId: "generation-8",
+          transactionState: "idle",
+          mirrorRepairPending: false,
+          lastRecovery: { outcome, recovered: false },
+        }),
+      });
+      const result = await service.getProjection({ workspaceId: "workspace-a" });
+      expect(result.items.find((item) => item.id === "config-generation-recovery")?.stateMessage).toEqual({ code });
+    },
+  );
+
+  it("gives every item a bounded code, so the cockpit never has to print server prose (SY-N06)", async () => {
+    const quiet = await createService().getProjection({ workspaceId: "workspace-a" });
+    const failing = await createService({
+      listDurableRuns: () => Array.from({ length: 501 }, () => ({})),
+      listApprovals: () => Array.from({ length: 13 }, () => ({})),
+      listExternalSideEffects: () => Array.from({ length: 51 }, () => ({})),
+    }).getProjection({ workspaceId: "workspace-a" });
+    for (const item of [...quiet.items, ...failing.items])
+      expect(item.stateMessage?.code, item.id).toMatch(/^[a-z][a-z0-9_]{0,63}$/);
+    // An item without its own code is coded by its id family.
+    expect(failing.items.find((item) => item.id === "runs-unavailable")?.stateMessage).toEqual({
+      code: "runs_unavailable",
+    });
+    expect(failing.items.find((item) => item.id === "approvals-unavailable")?.stateMessage).toEqual({
+      code: "approvals_unavailable",
+    });
   });
 
   it.each([

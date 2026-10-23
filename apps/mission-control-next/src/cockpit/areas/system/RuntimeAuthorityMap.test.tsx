@@ -115,9 +115,11 @@ describe("cockpit runtime authority map", () => {
     await render();
     const href = (label: string) =>
       [...container.querySelectorAll("a")].find((link) => link.textContent === label)?.getAttribute("href");
-    expect(href("Open run detail")).toContain("/work/runs/run-7");
-    expect(href("Open approval detail")).toMatch(/\/inbox\?approvalId=ap(\+|%20)1/);
-    expect(href("Open release evidence")).toContain("/system/diagnostics");
+    // Link text is the cockpit's own, by reference kind; the server's label is not shown.
+    expect(href("Open run")).toContain("/work/runs/run-7");
+    expect(href("Open approval")).toMatch(/\/inbox\?approvalId=ap(\+|%20)1/);
+    expect(href("Open release details")).toContain("/system/diagnostics");
+    expect(container.textContent).not.toContain("Open release evidence");
   });
 
   it("states an empty projection without inventing records", async () => {
@@ -147,6 +149,56 @@ describe("cockpit runtime authority map", () => {
     expect(container.textContent).not.toContain("non-canonical");
     expect(container.textContent).not.toContain("Classification basis");
     expect(container.textContent).not.toContain("Gateway");
+  });
+
+  it("heads and words every coded record, with owner, source and the server label in technical details", async () => {
+    projection.value.data = {
+      items: [
+        item({
+          id: "runs-empty",
+          label: "No canonical run record",
+          owner: "DurableRunRepository",
+          source: "durable run rows",
+          state: "No valid durable run record is available in this workspace window.",
+          stateMessage: { code: "runs_empty" },
+          canonicalRef: undefined,
+        }),
+        item({
+          id: "config-generation",
+          domain: "reconciliation",
+          label: "Canonical config generation",
+          authorityClass: "derived_projection",
+          state: "Revision 8 is the active canonical generation.",
+          stateMessage: { code: "config_generation", counts: { revision: 8 } },
+          canonicalRef: undefined,
+        }),
+      ] as RuntimeAuthorityItem[],
+    };
+    preferences.showTechnicalDetails = false;
+    await render();
+    const text = container.textContent ?? "";
+    expect([...container.querySelectorAll("li h3")].map((h) => h.textContent)).toEqual([
+      "Runs",
+      "Configuration version",
+    ]);
+    expect(text).toContain("No runs are recorded in this workspace's recent window.");
+    expect(text).toContain("Version 8 of the configuration is active.");
+    expect(text).toContain("Reconciliation · Computed");
+    for (const word of [
+      "canonical",
+      "durable",
+      "Revision",
+      "DurableRunRepository",
+      "Managed by",
+      "Source:",
+      "Snapshot",
+    ])
+      expect(text).not.toContain(word);
+    preferences.showTechnicalDetails = true;
+    await render();
+    expect(container.textContent).toContain("No canonical run record");
+    expect(container.textContent).toContain("Managed by: DurableRunRepository");
+    expect(container.textContent).toContain("Source: durable run rows");
   });
 
   it("shows an unavailable projection and reloads on request", async () => {
