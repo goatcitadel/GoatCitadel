@@ -213,8 +213,12 @@ async function settleTurn(gatewayUrl, input) {
   throw new Error(`turn ${input.turnId} did not settle (${latest?.trace?.status ?? "missing"})`);
 }
 
-/** Streams one send or edit and returns the turn id, SSE event types, and seconds to the first text delta. */
-async function streamMutation(gatewayUrl, input) {
+/**
+ * Starts one send or edit stream and resolves as soon as the stream names its turn. The stream stays open while the
+ * turn waits on an approval, so the caller settles the turn (resolving approvals) with the stream still open and then
+ * calls `finish()`, which closes it and reports the SSE event types and the seconds to the first text delta.
+ */
+async function openTurnStream(gatewayUrl, input) {
   const mutation = buildClaudeCliChatMutation(input.task, input.model, input.action);
   const preflight = await requestJson(
     gatewayUrl,
@@ -254,74 +258,94 @@ async function streamMutation(gatewayUrl, input) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const types = new Set();
-  let buffer = "";
-  let turnId;
   let firstDeltaSeconds;
-  let cancelled = false;
-  try {
+  let announceTurnId;
+  const turnIdSeen = new Promise((resolve) => {
+    announceTurnId = resolve;
+  });
+  const pump = (async () => {
+    let buffer = "";
     for (;;) {
       const next = await reader.read();
-      if (next.done) break;
+      if (next.done) return;
       buffer += decoder.decode(next.value, { stream: true });
       const consumed = consumeCompleteSseFrames(buffer);
       buffer = consumed.remainder;
       for (const event of consumed.events) {
         if (typeof event.type === "string") types.add(event.type);
-        if (!turnId && typeof event.turnId === "string" && event.turnId.trim()) turnId = event.turnId;
+        if (typeof event.turnId === "string" && event.turnId.trim()) announceTurnId(event.turnId);
         if (event.type === "delta" && firstDeltaSeconds === undefined) {
           firstDeltaSeconds = (performance.now() - started) / 1000;
         }
       }
-      if (input.cancelOnTurnId && turnId && !cancelled) {
-        const cancel = await requestJson(
-          gatewayUrl,
-          `/api/v1/chat/sessions/${encodeURIComponent(input.sessionId)}/turns/${encodeURIComponent(turnId)}/cancel`,
-          {
-            method: "POST",
-            headers: headers(input.correlationId, input.sessionId),
-            body: { cancelledBy: `verification-${LANE}` },
-          },
-        );
-        assertOk(cancel, `${input.task.id} cancel`);
-        cancelled = true;
-        break;
-      }
     }
-  } finally {
+  })().catch(() => undefined);
+  const finish = async () => {
     await reader.cancel().catch(() => undefined);
     controller.abort();
+    await pump;
+    return { sseEventTypes: [...types], firstDeltaSeconds };
+  };
+  const turnId = await Promise.race([turnIdSeen, pump.then(() => undefined)]);
+  if (!turnId) {
+    await finish();
+    throw new Error(`${input.task.id} stream closed without naming its turn`);
   }
-  if (!turnId) throw new Error(`${input.task.id} stream carried no turn id`);
-  return { turnId, sseEventTypes: [...types], firstDeltaSeconds, started };
+  return { turnId, started, finish };
 }
+
+async function cancelTurn(gatewayUrl, input) {
+  const cancel = await requestJson(
+    gatewayUrl,
+    `/api/v1/chat/sessions/${encodeURIComponent(input.sessionId)}/turns/${encodeURIComponent(input.turnId)}/cancel`,
+    {
+      method: "POST",
+      headers: headers(input.correlationId, input.sessionId),
+      body: { cancelledBy: `verification-${LANE}` },
+    },
+  );
+  assertOk(cancel, `${input.task.id} cancel`);
+}
+
+const DEFAULT_TASK_DEPS = Object.freeze({ createTaskSession, openTurnStream, cancelTurn, settleTurn });
 
 /**
  * Runs one catalog task against a running gateway and returns its settled canonical turn plus timings. Used by the
- * lane for the automatable subset and by the exploratory runner for the rest of the catalog.
+ * lane for the automatable subset and by the exploratory runner for the rest of the catalog. `options.deps` replaces
+ * the network steps in tests.
  */
 export async function runUsabilityTask(gatewayUrl, task, options = {}) {
+  const deps = { ...DEFAULT_TASK_DEPS, ...options.deps };
   const model = options.model ?? CLAUDE_CODE_CLI_MODEL;
   const correlationId = options.correlationId ?? randomUUID();
   const prior = task.dependsOn ? options.results?.get(task.dependsOn) : undefined;
   if (task.dependsOn && !prior) throw new Error(`${task.id} depends on ${task.dependsOn}, which has no result`);
-  const sessionId = prior?.sessionId ?? (await createTaskSession(gatewayUrl, task, model));
+  const sessionId = prior?.sessionId ?? (await deps.createTaskSession(gatewayUrl, task, model));
   const editing = task.followUp?.action === "edit";
-  const stream = await streamMutation(gatewayUrl, {
+  const stream = await deps.openTurnStream(gatewayUrl, {
     task,
     model,
     correlationId,
     sessionId,
     action: editing ? "edit" : "send",
     sourceTurnId: editing ? prior.turnId : undefined,
-    cancelOnTurnId: task.followUp?.action === "cancel",
   });
-  const settled = await settleTurn(gatewayUrl, {
-    sessionId,
-    turnId: stream.turnId,
-    correlationId,
-    approval: task.approval,
-    stopOnUserInput: options.stopOnUserInput === true,
-  });
+  let settled;
+  let streamed;
+  try {
+    if (task.followUp?.action === "cancel") {
+      await deps.cancelTurn(gatewayUrl, { task, sessionId, turnId: stream.turnId, correlationId });
+    }
+    settled = await deps.settleTurn(gatewayUrl, {
+      sessionId,
+      turnId: stream.turnId,
+      correlationId,
+      approval: task.approval,
+      stopOnUserInput: options.stopOnUserInput === true,
+    });
+  } finally {
+    streamed = await stream.finish();
+  }
   let forkSessionId;
   if (task.expect.forkSession) {
     const fork = await requestJson(
@@ -339,8 +363,8 @@ export async function runUsabilityTask(gatewayUrl, task, options = {}) {
     forkSessionId,
     turn: settled.turn,
     approvalsResolved: settled.approvalsResolved,
-    sseEventTypes: stream.sseEventTypes,
-    secondsToFirstDelta: stream.firstDeltaSeconds,
+    sseEventTypes: streamed.sseEventTypes,
+    secondsToFirstDelta: streamed.firstDeltaSeconds,
     secondsTotal: (performance.now() - stream.started) / 1000,
   };
 }

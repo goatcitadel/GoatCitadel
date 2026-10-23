@@ -11,6 +11,7 @@ import {
   classifyUsabilityOutcome,
   findSecretTextLeaks,
   isSettledTurnStatus,
+  runUsabilityTask,
 } from "./live-claude-cli-usability.mjs";
 
 const byId = (id) => CLAUDE_CLI_USABILITY_TASKS.find((task) => task.id === id);
@@ -118,4 +119,33 @@ test("findSecretTextLeaks reports files containing the needle and ignores empty 
   await fs.writeFile(path.join(dir, "nested", "b.json"), '{"who":"nobody"}');
   assert.deepEqual(await findSecretTextLeaks(dir, ["person@example.test"]), ["a.json"]);
   assert.deepEqual(await findSecretTextLeaks(dir, ["", undefined]), []);
+});
+
+test("runUsabilityTask settles the turn (and its approvals) while the stream is still open, then closes the stream", async () => {
+  const order = [];
+  const deps = {
+    createTaskSession: async () => "s1",
+    openTurnStream: async () => ({
+      turnId: "t1",
+      started: performance.now(),
+      finish: async () => {
+        order.push("finish");
+        return { sseEventTypes: ["delta"], firstDeltaSeconds: 1.5 };
+      },
+    }),
+    cancelTurn: async () => order.push("cancel"),
+    settleTurn: async (_gatewayUrl, input) => {
+      order.push(`settle:${input.turnId}:${input.approval}`);
+      return { turn: { trace: { status: "completed" } }, approvalsResolved: 1 };
+    },
+  };
+  const result = await runUsabilityTask("http://gateway.test", byId("D-01"), { deps });
+  assert.deepEqual(order, ["settle:t1:approve", "finish"]);
+  assert.equal(result.approvalsResolved, 1);
+  assert.equal(result.secondsToFirstDelta, 1.5);
+  assert.equal(result.sessionId, "s1");
+
+  order.length = 0;
+  await runUsabilityTask("http://gateway.test", byId("C-02"), { deps });
+  assert.deepEqual(order, ["cancel", "settle:t1:none", "finish"]);
 });
