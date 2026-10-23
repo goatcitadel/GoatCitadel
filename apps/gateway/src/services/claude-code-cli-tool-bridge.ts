@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ClaudeCliError } from "./claude-code-cli-process.js";
 import { claudeCliUserMessage, failClaudeCliStep } from "./claude-code-cli-output.js";
-import type { ClaudeCliStubTool } from "./claude-code-cli-mcp-stub.js";
+import { CLAUDE_CLI_RESULTS_DIR, type ClaudeCliStubTool } from "./claude-code-cli-mcp-stub.js";
 import { CLAUDE_CLI_MCP_SERVER_NAME, CLAUDE_CLI_MCP_TOOL_PREFIX } from "./claude-code-cli-tool-step.js";
 
 /**
@@ -95,6 +95,8 @@ export async function writeClaudeCliBridgeFiles(input: {
     },
   };
   try {
+    // Where the Gateway stages tool results for the parked stub to deliver.
+    await fs.promises.mkdir(path.join(input.runDir, CLAUDE_CLI_RESULTS_DIR), { recursive: true, mode: 0o700 });
     await fs.promises.writeFile(toolsPath, JSON.stringify(toolsFile), { mode: 0o600 });
     await fs.promises.writeFile(mcpConfigPath, JSON.stringify(mcpConfig), { mode: 0o600 });
   } catch (error) {
