@@ -262,7 +262,7 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
     // cold spawn below, and only the bounded close wait and run-dir removal finish in the background.
     const { sessionId, turnId } = attribution;
     const releaseTurn = () => {
-      if (sessionId && turnId) void runtime.warm.reapTurn(sessionId, turnId);
+      if (sessionId && turnId) runtime.warm.reapTurnInBackground(sessionId, turnId);
     };
     if (!(warmFlag && offersAutoTools(request))) releaseTurn();
     let invocation: ClaudeCliInvocation;

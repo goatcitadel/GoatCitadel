@@ -22,6 +22,7 @@ import type { ClaudeCliWarmFingerprint } from "./claude-code-cli-warm-match.js";
 import {
   CLAUDE_CLI_WARM_ECHO_DEADLINE_MS,
   CLAUDE_CLI_WARM_MCP_TOOL_TIMEOUT_MS,
+  logBackgroundReapFailure,
   type ClaudeCliWarmRegistry,
 } from "./claude-code-cli-warm-registry.js";
 
@@ -179,7 +180,7 @@ export function tryResumeClaudeCliWarmStep(input: {
   const { step, results } = take;
   // Never resume with nothing delivered: an empty map would also disable the init tripwire.
   if (results.length === 0) {
-    void registry.reap(step, "resumed_failure");
+    registry.reapInBackground(step, "resumed_failure");
     return undefined;
   }
   let parked = false;
@@ -206,7 +207,7 @@ export function tryResumeClaudeCliWarmStep(input: {
       const echoTimer = setTimeout(() => {
         if (!mapper.awaitingEchoes()) return;
         echoDeadlineHit = true;
-        void step.session.kill();
+        void step.session.kill().catch(logBackgroundReapFailure);
       }, CLAUDE_CLI_WARM_ECHO_DEADLINE_MS);
       echoTimer.unref?.();
       try {

@@ -88,6 +88,11 @@ function errorCode(error: unknown): string {
   return typeof code === "string" ? code.slice(0, 32) : "unknown";
 }
 
+/** Terminal handler for fire-and-forget reaps and kills; bounded fields only. */
+export function logBackgroundReapFailure(error: unknown): void {
+  log.warn("Claude Code CLI warm background cleanup failed", { code: errorCode(error) });
+}
+
 function countToolResultBlocks(parsed: unknown): number {
   if (!isRecord(parsed) || parsed.type !== "user" || !isRecord(parsed.message)) return 0;
   const content = parsed.message.content;
@@ -164,7 +169,7 @@ export class ClaudeCliWarmRegistry {
    */
   park(step: ParkedClaudeCliStep): void {
     if (this.closed) {
-      void this.reap(step, "shutdown");
+      this.reapInBackground(step, "shutdown");
       return;
     }
     // A reaped step's session is dead and its run dir gone; it can never wait again.
@@ -174,19 +179,19 @@ export class ClaudeCliWarmRegistry {
     step.session.park(drainParkedLine, (reason) => this.onParkFault(step, reason));
     this.tombstones.delete(key);
     const previous = this.entries.get(key);
-    if (previous) void this.reap(previous.step, "miss");
+    if (previous) this.reapInBackground(previous.step, "miss");
     while (this.entries.size >= this.maxParked) {
       const oldest = this.oldestEntry();
       if (!oldest) break;
-      void this.reap(oldest.step, "cap");
+      this.reapInBackground(oldest.step, "cap");
     }
 
     const timer = setTimeout(() => {
       this.tombstone(key, "warm_miss_expired");
-      void this.reap(step, "deadline");
+      this.reapInBackground(step, "deadline");
     }, this.parkDeadlineMs);
     timer.unref?.();
-    const onAbort = () => void this.reap(step, "abort");
+    const onAbort = () => this.reapInBackground(step, "abort");
     step.turnSignal?.addEventListener("abort", onAbort, { once: true });
     this.entries.set(key, {
       key,
@@ -212,13 +217,13 @@ export class ClaudeCliWarmRegistry {
       return this.miss(tombstone);
     }
     if (this.now() - entry.parkedAt >= this.parkDeadlineMs) {
-      void this.reap(entry.step, "deadline");
+      this.reapInBackground(entry.step, "deadline");
       return this.miss("warm_miss_expired");
     }
     const match = matchClaudeCliWarmContinuation({ parked: entry.step, next, request });
     if (!match.hit) {
       // The kill is issued synchronously, so the tree is signalled before any cold step starts.
-      void this.reap(entry.step, "miss");
+      this.reapInBackground(entry.step, "miss");
       return this.miss(match.reason);
     }
     this.detach(entry);
@@ -236,6 +241,19 @@ export class ClaudeCliWarmRegistry {
     return entry ? this.reap(entry.step, "miss") : Promise.resolve();
   }
 
+  /** `reapTurn` without waiting: the tree kill is still signalled before this returns. */
+  reapTurnInBackground(sessionId: string, turnId: string): void {
+    void this.reapTurn(sessionId, turnId).catch(logBackgroundReapFailure);
+  }
+
+  /**
+   * `reap` without waiting; the kill is still signalled before this returns. `reap` never rejects,
+   * so the handler only records the unexpected and keeps the promise owned.
+   */
+  reapInBackground(step: ParkedClaudeCliStep, reason: ClaudeCliWarmReapReason): void {
+    void this.reap(step, reason).catch(logBackgroundReapFailure);
+  }
+
   /** Kills the tree, removes the run dir, then checks for spilled tool results. Idempotent; never throws. */
   reap(step: ParkedClaudeCliStep, reason: ClaudeCliWarmReapReason): Promise<void> {
     // Detach first, unconditionally, so a registered step always leaves the map (cap eviction relies on it).
@@ -246,7 +264,7 @@ export class ClaudeCliWarmRegistry {
     const reaped = this.finishReap(step, reason);
     this.reaping.set(step, reaped);
     this.pending.add(reaped);
-    void reaped.finally(() => this.pending.delete(reaped));
+    void reaped.finally(() => this.pending.delete(reaped)).catch(logBackgroundReapFailure);
     return reaped;
   }
 
@@ -254,7 +272,7 @@ export class ClaudeCliWarmRegistry {
   async reapAll(reason: "shutdown"): Promise<void> {
     this.closed = true;
     this.tombstones.clear();
-    for (const entry of [...this.entries.values()]) void this.reap(entry.step, reason);
+    for (const entry of [...this.entries.values()]) this.reapInBackground(entry.step, reason);
     while (this.pending.size > 0) await Promise.all([...this.pending]);
   }
 
@@ -288,7 +306,7 @@ export class ClaudeCliWarmRegistry {
       // A step already handed over (or reaped) belongs to someone else now.
       if (this.entries.get(key)?.step !== step) return;
       this.tombstone(key, reason === "line" ? "warm_miss_poisoned" : "warm_miss_exited");
-      void this.reap(step, "fault");
+      this.reapInBackground(step, "fault");
     } catch (error) {
       log.warn("Claude Code CLI warm fault handling failed", { code: errorCode(error) });
     }
