@@ -110,6 +110,22 @@ describe("startClaudeCliSession", () => {
     expect(harness.killTree).not.toHaveBeenCalled();
   });
 
+  it("a line arriving between segment() and its first next() goes to the new segment, not the drain", async () => {
+    const { harness, session, child } = await startSession();
+    const drain = vi.fn<(line: string) => "ok" | "fault">(() => "fault");
+    const onFault = vi.fn();
+    await readOneAndPark(session, child, drain, onFault);
+
+    const resumed = session.segment(segmentOptions);
+    child.stdout.write("two\n");
+    await tick();
+    expect(drain).not.toHaveBeenCalled();
+    expect(await resumed.next()).toEqual({ done: false, value: "two" });
+    expect(onFault).not.toHaveBeenCalled();
+    expect(harness.killTree).not.toHaveBeenCalled();
+    await resumed.return(closedExit);
+  });
+
   it("drain fault kills the tree", async () => {
     const { harness, session, child } = await startSession();
     const onFault = vi.fn();

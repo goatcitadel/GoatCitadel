@@ -17,9 +17,10 @@ import {
  * listener. Closing a segment kills the tree, unless the session was parked first:
  * then a drain vets every later line until the next segment resumes reading.
  *
- * A segment takes over at its first next(): that is when its timers start and the
- * park ends. Lines queued before park() but not yet read stay queued for the next
- * segment; the drain sees only lines that arrive while parked, and drops them.
+ * Calling segment() ends the park at once: later lines queue for the new segment.
+ * Its timers start at its first next(). Lines queued before park() but not yet read
+ * stay queued for the next segment; the drain sees only lines that arrive while
+ * parked, and drops them.
  */
 
 export interface ClaudeCliSegmentOptions {
@@ -35,7 +36,10 @@ export interface ClaudeCliSession {
   readonly exited: Promise<ClaudeCliExit>;
   /** One consumer at a time. Closing it kills the tree, unless park() was called first. */
   segment(options: ClaudeCliSegmentOptions): AsyncGenerator<string, ClaudeCliExit>;
-  /** Stops the segment's timers and routes later lines to drain. "fault" or an exit kills the tree. */
+  /**
+   * Stops the segment's timers and routes later lines to drain. "fault" kills the tree and
+   * reports onFault("line"); an exit while parked reports onFault("exit"), with nothing left to kill.
+   */
   park(drain: ClaudeCliParkDrain, onFault: (reason: "line" | "exit") => void): void;
   /** Tree kill plus the bounded close wait (CLAUDE_CLI_KILL_CLOSE_WAIT_MS). Idempotent. */
   kill(): Promise<void>;
@@ -225,8 +229,6 @@ export function startClaudeCliSession(input: RunClaudeCliInput): ClaudeCliSessio
   async function* runSegment(options: ClaudeCliSegmentOptions): AsyncGenerator<string, ClaudeCliExit> {
     assertNoActiveSegment();
     segmentActive = true;
-    // Resuming ends the park: from here on lines queue for this segment again.
-    parking = undefined;
     const segmentTimers = startTimers(options);
     timers = segmentTimers;
     try {
@@ -280,6 +282,9 @@ export function startClaudeCliSession(input: RunClaudeCliInput): ClaudeCliSessio
       // Checked here so a second call throws at once, and again when the body starts,
       // because a generator created earlier may start only now.
       assertNoActiveSegment();
+      // The owner has decided to resume: detach the drain now, so a line arriving
+      // before the first next() queues for this segment instead of being drained.
+      parking = undefined;
       return runSegment(options);
     },
     park(drain, onFault) {
