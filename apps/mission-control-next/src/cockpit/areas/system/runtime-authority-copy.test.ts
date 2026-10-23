@@ -75,7 +75,7 @@ describe("every runtime authority code is worded (SY-N06)", () => {
     expect(presentAuthorityMessage({ code: "run_failed" })).toBe("This run failed.");
     expect(presentAuthorityMessage({ code: "run_dead_lettered" })).toBe("This run stopped after repeated failures.");
     expect(presentAuthorityMessage({ code: "approval_rejected_effects_settled" })).toBe(
-      "Denied; every follow-on action finished.",
+      "Denied; every follow-on action reached a final outcome.",
     );
     expect(presentAuthorityMessage({ code: "approval_pending_awaiting_decision" })).toBe("Waiting for a decision.");
     expect(presentAuthorityMessage({ code: "approval_approved_something_new" })).toBeUndefined();

@@ -112,7 +112,8 @@ const APPROVAL_SETTLEMENT: Readonly<Record<string, string>> = {
   effects_failed: "a follow-on action failed",
   effects_pending: "follow-on actions are still finishing",
   no_effects: "no follow-on action was recorded",
-  effects_settled: "every follow-on action finished",
+  // Settled includes skipped effects, so this must not say an action ran.
+  effects_settled: "every follow-on action reached a final outcome",
 };
 
 /** Codes that carry their own part of the sentence: run_<status> and approval_<decision>_<settlement>. */
