@@ -103,6 +103,51 @@ describe("cockpit Claude Code CLI warm continuation setting", () => {
     }
   });
 
+  it("warm On, bridge Off: can still be turned off", async () => {
+    api.fetchSettings.mockResolvedValue(settingsAt(2, { bridge: false, warm: true }));
+    const base = awaitingLlamaApproval(llamaPlanFixture());
+    const canonical = {
+      ...base,
+      revision: 1,
+      summary: "Approval required",
+      origin: { workspaceId: "default", surface: "settings" as const },
+      request: {
+        kind: "runtime_configuration" as const,
+        change: {
+          operation: "feature_flag" as const,
+          flag: "claudeCliWarmContinuationEnabled" as const,
+          enabled: false,
+        },
+      },
+      target: {
+        ownerId: "runtime_settings",
+        resourceId: "feature:claudeCliWarmContinuationEnabled",
+        expectedRevision: 2,
+      },
+    };
+    api.patchSettings.mockResolvedValue({
+      ...settingsAt(2, { bridge: false, warm: true }),
+      changePlanReceipt: canonical,
+    });
+    api.fetchChangePlan.mockResolvedValue(canonical);
+    const { container, unmount } = await mount();
+    try {
+      await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+      expect(checkbox(container).checked).toBe(true);
+      expect(checkbox(container).disabled).toBe(false);
+      const note = document.getElementById(checkbox(container).getAttribute("aria-describedby")!)!;
+      expect(note.textContent).toContain("Turn on “Let the Claude Code CLI use GoatCitadel tools” first.");
+      await toggleAndSave(container);
+      expect(api.patchSettings).toHaveBeenLastCalledWith({
+        expectedRevision: 2,
+        features: { claudeCliWarmContinuationEnabled: false },
+      });
+      expect(container.textContent).toContain("Approval required");
+    } finally {
+      unmount();
+    }
+  });
+
   it("toggling raises a feature_flag change plan for claudeCliWarmContinuationEnabled", async () => {
     api.fetchSettings.mockResolvedValue(settingsAt(2, { bridge: true, warm: false }));
     window.history.replaceState({}, "", "/settings/models?source=cli&shell=cockpit#claude-cli-warm-continuation");

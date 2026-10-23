@@ -57,6 +57,8 @@ export function ClaudeCliWarmContinuationControl() {
   });
   const { settings, ready, current, draft } = governed;
   const bridgeOn = bridgeIsOn(settings.data);
+  // Only the turn-ON direction waits for the bridge; a stale On value or draft can always be turned off.
+  const blockedOn = !bridgeOn && !draft.value;
 
   return (
     <section
@@ -93,7 +95,7 @@ export function ClaudeCliWarmContinuationControl() {
               type="checkbox"
               checked={draft.value}
               aria-describedby="claude-cli-warm-continuation-note"
-              disabled={governed.locked || !bridgeOn}
+              disabled={governed.locked || blockedOn}
               onChange={(event) => {
                 governed.clearNotice();
                 draft.setValue(event.target.checked);
@@ -114,7 +116,7 @@ export function ClaudeCliWarmContinuationControl() {
           <Button
             variant="primary"
             className="mt-3"
-            disabled={!governed.canSave || !bridgeOn}
+            disabled={!governed.canSave || (!bridgeOn && draft.value)}
             onClick={() => void governed.save()}
           >
             {governed.busy ? "Saving…" : "Save setting"}
