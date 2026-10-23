@@ -2,11 +2,12 @@
 import { act, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGatewayCallerScope, setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 import type { NativeRoutePagesProps } from "../../../features/native-routes/types";
 import { queryKeys } from "../../data/query-keys";
 import { SystemRuntime } from "./SystemRuntime";
+import { runtimeData } from "./runtime-page.test-data";
 
 const fixture = vi.hoisted(() => ({
   search: "",
@@ -55,6 +56,21 @@ vi.mock("../../../features/native-routes/ops/RuntimeRoutePage", () => ({
     );
   },
 }));
+const snapshot = vi.hoisted(() => ({ value: null as unknown, runDaemonAction: vi.fn(async () => undefined) }));
+vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () => ({
+  useOpsRuntimeSnapshot: () => snapshot.value,
+}));
+vi.mock("../../data/use-operator-inbox", () => ({ useOperatorInbox: () => ({ data: undefined, isError: false }) }));
+vi.mock("../../data/use-model-label", () => ({ useProviderLabelLookup: () => () => undefined }));
+vi.mock("./HealthBackupAction", () => ({ HealthBackupAction: () => null }));
+vi.mock("../../ui/Dialog", () => ({
+  Dialog: ({ open, title, children }: { open: boolean; title: string; children: React.ReactNode }) =>
+    open ? (
+      <div role="dialog" aria-label={title}>
+        {children}
+      </div>
+    ) : null,
+}));
 vi.mock("../../../features/native-routes/ops/RemoteWorkersRoutePage", () => ({
   RemoteWorkersRoutePage: (
     props: import("../../../features/native-routes/ops/RemoteWorkersRoutePage").RemoteWorkersRoutePageProps,
@@ -69,7 +85,7 @@ vi.mock("../../../features/native-routes/ops/RemoteWorkersRoutePage", () => ({
   },
 }));
 let host: HTMLDivElement, root: Root, client: QueryClient, previousCaller: string;
-function render(section: "runtime" | "diagnostics" | "costs" | "workers" = "runtime") {
+function render(section: "runtime" | "diagnostics" | "costs" | "workers" = "diagnostics") {
   root.render(
     <QueryClientProvider client={client}>
       <SystemRuntime section={section} />
@@ -101,7 +117,7 @@ afterEach(() => {
   client.clear();
   setGatewayCallerScope(previousCaller);
 });
-it.each(["runtime", "diagnostics", "costs"] as const)(
+it.each(["diagnostics", "costs"] as const)(
   "delegates %s to the original control owner with active authority and requested record context",
   (section) => {
     act(() => render(section));
@@ -274,7 +290,7 @@ it.each(["?workerId=", "?workerId=a&workerId=b", "?assignmentId=a", "?workerId=a
     expect(fixture.navigate).not.toHaveBeenCalled();
   },
 );
-it("renders the runtime page inside the cockpit column", () => {
+it("renders the embedded diagnostics page inside the cockpit column", () => {
   act(() => render());
   const owner = [...host.querySelectorAll("button")].find((b) => b.textContent === "Existing runtime control owner");
   expect(owner?.closest(".cockpit-embedded-classic")).not.toBeNull();
@@ -286,4 +302,69 @@ it("keeps the column when the embedded worker page renders its load error", () =
   const alert = host.querySelector("[role=alert]");
   expect(alert?.textContent).toBe("Could not load workers");
   expect(alert?.closest(".cockpit-embedded-classic")?.className).toContain("max-w-5xl");
+});
+
+describe("native Runtime page", () => {
+  const ready = (failed: Parameters<typeof runtimeData>[1] = []) => {
+    snapshot.value = {
+      data: runtimeData({}, failed),
+      loading: false,
+      error: null,
+      notice: null,
+      daemonBusy: null,
+      lastFetchedAt: Date.parse("2026-10-23T08:00:00Z"),
+      isStale: false,
+      reload: vi.fn(async () => undefined),
+      runDaemonAction: snapshot.runDaemonAction,
+    };
+  };
+  beforeEach(() => {
+    fixture.hash = "";
+    ready();
+  });
+
+  it("renders no Classic page and leads with the Runtime heading", () => {
+    act(() => render("runtime"));
+    expect(host.querySelector(".cockpit-embedded-classic")).toBeNull();
+    expect(host.textContent).not.toContain("Existing runtime control owner");
+    expect(host.querySelector("h1")?.textContent).toBe("Runtime");
+    expect([...host.querySelectorAll("h2")].map((node) => node.textContent)).toEqual([
+      "GoatCitadel server",
+      "Backups",
+      "Local model runtime",
+      "Integrations",
+      "Runtime records and capabilities",
+      "Model performance",
+    ]);
+  });
+
+  it("names unavailable sources and never reads a failed server as running", () => {
+    ready(["daemon", "health"]);
+    act(() => render("runtime"));
+    expect(host.querySelector("summary")?.textContent).toBe("2 runtime sources are unavailable");
+    const server = [...host.querySelectorAll("section")].find(
+      (node) => node.querySelector("h2")?.textContent === "GoatCitadel server",
+    )!;
+    expect(server.textContent).toContain("Unknown");
+    expect(server.textContent).not.toContain("Running");
+  });
+
+  it("closes an open stop confirmation without stopping when access changes", async () => {
+    act(() => render("runtime"));
+    const stop = [...host.querySelectorAll("button")].find((node) => node.textContent === "Stop server")!;
+    await act(async () => stop.click());
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    fixture.identity = "owner-after-access-change";
+    act(() => render("runtime"));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(snapshot.runDaemonAction).not.toHaveBeenCalled();
+  });
+
+  it("gives Refresh an accessible name that starts with its visible text", () => {
+    act(() => render("runtime"));
+    const refresh = [...host.querySelectorAll("button")].find((node) =>
+      node.textContent?.trim().startsWith("Refresh"),
+    )!;
+    expect(refresh.textContent?.trim()).toBe("Refresh runtime");
+  });
 });

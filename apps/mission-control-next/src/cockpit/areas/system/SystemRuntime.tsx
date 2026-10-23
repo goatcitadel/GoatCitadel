@@ -15,6 +15,7 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { EmbeddedClassicPage } from "../../ui/EmbeddedClassicPage";
+import { RuntimeOverview } from "./RuntimeOverview";
 
 const RemoteWorkersRoutePage = lazy(async () => ({
   default: (await import("../../../features/native-routes/ops/RemoteWorkersRoutePage")).RemoteWorkersRoutePage,
@@ -66,6 +67,14 @@ export function SystemRuntime({ section = "runtime" }: { section?: "runtime" | "
     setNavigationUnavailable(null);
     location.navigate(resolution.href, options);
   };
+  if (section === "runtime")
+    return (
+      <RuntimeOverview
+        key={access.identity + ":runtime"}
+        workspaceId={workspaceId}
+        sessionId={new URLSearchParams(location.search).get("sessionId") ?? undefined}
+      />
+    );
   return (
     <section className="min-w-0">
       {/* The area header keeps the System tabs in every state; the embedded runtime page below keeps its own controls. */}
