@@ -173,6 +173,11 @@ const actionKinds: Record<string, string> = {
   "citadel_ward.a2a_push": "Citadel Ward: A2A push delivery",
 };
 
+/** Plain name for a known approval kind only, for callers that must not show a humanized raw kind. */
+export function knownApprovalActionName(kind: string): string | undefined {
+  return Object.hasOwn(actionKinds, kind) ? actionKinds[kind] : undefined;
+}
+
 /**
  * Plain name for the action an approval asks about. Tool and approval kinds are open registry strings, so an
  * unknown one falls back to its humanized name; the raw value belongs in technical details.
