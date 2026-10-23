@@ -158,6 +158,8 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
     },
     inboundChannelEventService: { start: vi.fn(async () => undefined) },
     llamaCppRuntime: { close: vi.fn(async () => undefined), init: vi.fn(async () => undefined) },
+    // close() reaps parked warm Claude Code CLI processes through LlmService.close().
+    llmService: { close: vi.fn(async () => undefined) },
     isFeatureEnabled: vi.fn((flag: string) => flag === "chatTurnInterruptionRecoveryV1Disabled"),
     mediaVoiceService: { resumeInterruptedMediaJobs: vi.fn() },
     meshService: { init: vi.fn() },
@@ -453,6 +455,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
       improvementService: { stopScheduler: vi.fn() },
       inboundChannelEventService: { close: vi.fn() },
       llamaCppRuntime: { close: vi.fn(async () => undefined) },
+      llmService: { close: vi.fn(async () => undefined) },
       maintenanceScheduler: { stop: maintenanceStop },
       npuSidecar: { close: vi.fn(async () => undefined) },
       orchestrationWorktreeService: { close: vi.fn() },
@@ -475,6 +478,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.assemblyService.close).toHaveBeenCalled();
     expect(gateway.npuSidecar.close).toHaveBeenCalled();
     expect(gateway.llamaCppRuntime.close).toHaveBeenCalled();
+    expect(gateway.llmService.close).toHaveBeenCalled();
     expect(gateway.orchestrationWorktreeService.close).toHaveBeenCalled();
     expect(gateway.storage.close).toHaveBeenCalled();
   });

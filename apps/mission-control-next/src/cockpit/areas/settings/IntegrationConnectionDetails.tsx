@@ -168,7 +168,7 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
           {s.lastOperatorActionResult.durableWriteback ? (
             <p className="break-words">
               Writeback: {WRITEBACK_STATUS_LABELS[s.lastOperatorActionResult.durableWriteback.status] ?? "Unknown"} ·
-              Replay:{" "}
+              Delivery:{" "}
               {s.lastOperatorActionResult.durableWriteback.replayOutcome
                 ? (WRITEBACK_REPLAY_OUTCOME_LABELS[s.lastOperatorActionResult.durableWriteback.replayOutcome] ??
                   "Unknown")

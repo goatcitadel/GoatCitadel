@@ -36,7 +36,7 @@ export function selectedSettingsSection(page: SettingsIndexPage, routeSection: s
       ? "appearance"
       : hash === "approval-mode" || hash === "filesystem-write-roots"
         ? "tools"
-        : hash === "claude-cli-tool-bridge"
+        : hash === "claude-cli-tool-bridge" || hash === "claude-cli-warm-continuation"
           ? "providers"
           : hash;
   return (

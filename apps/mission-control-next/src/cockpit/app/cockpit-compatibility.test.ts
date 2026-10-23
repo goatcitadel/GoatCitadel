@@ -231,7 +231,7 @@ it.each([
   "/ops/kanban?shell=classic&taskId=t#details",
   "/ops/runtime?shell=classic#backups",
 ])("preserves the explicit owner rollback: %s", (href) => {
-  expect(resolveCockpitCompatibility(href)).toEqual({ kind: "classic", href, label: "Open in Classic" });
+  expect(resolveCockpitCompatibility(href)).toEqual({ kind: "classic", href, label: "Open the classic view" });
 });
 it.each(["/system/sessions/extra", "/ops/kanban/unknown", "/ops/sessions/unknown"])(
   "does not claim an unsupported evidence destination: %s",
@@ -313,7 +313,7 @@ describe("Exact native approval record compatibility", () => {
   });
   it("keeps an explicit Classic record path before native normalization", () => {
     const href = "/inbox/approvals/a%2Fb?approvalId=other&workspaceId=w&shell=classic#review";
-    expect(resolveCockpitCompatibility(href)).toEqual({ kind: "classic", href, label: "Open in Classic" });
+    expect(resolveCockpitCompatibility(href)).toEqual({ kind: "classic", href, label: "Open the classic view" });
   });
 });
 

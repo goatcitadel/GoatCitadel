@@ -167,11 +167,17 @@ const actionKinds: Record<string, string> = {
   "code_mode.run": "Run code (Code Mode)",
   "remote_worker.native_runtime": "Run on a remote worker",
   change_plan_effect: "Apply a change plan",
+  "tool.invoke": "Use a tool",
   tool_invoke: "Use a tool",
   "citadel_ward.integration_action": "Citadel Ward: integration action",
   "citadel_ward.a2a_outbound": "Citadel Ward: outbound A2A call",
   "citadel_ward.a2a_push": "Citadel Ward: A2A push delivery",
 };
+
+/** Plain name for a known approval kind only, for callers that must not show a humanized raw kind. */
+export function knownApprovalActionName(kind: string): string | undefined {
+  return Object.hasOwn(actionKinds, kind) ? actionKinds[kind] : undefined;
+}
 
 /**
  * Plain name for the action an approval asks about. Tool and approval kinds are open registry strings, so an

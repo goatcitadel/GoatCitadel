@@ -180,7 +180,7 @@ This feeds `LlmProviderAuthReadiness` (`source: "metadata"`, `liveVerified: true
 ## Follow-ups (not in this PR)
 
 - PR 3: wizard support, with a "Use my local Claude Code login" path, a readiness panel, and the logged-out remediation copy.
-- A Gateway-hosted MCP bridge, so GoatCitadel tools can be offered to the CLI under policy and approvals. Designed in `2026-10-20-claude-code-cli-tool-bridge-design.md` and implemented behind the `claudeCliToolBridgeEnabled` feature flag, which defaulted to off until the live proof passed on 2026-10-21 and is now on by default. Tools run in GoatCitadel, not in Claude Code, and each tool step is a separate CLI run.
+- A Gateway-hosted MCP bridge, so GoatCitadel tools can be offered to the CLI under policy and approvals. Designed in `2026-10-20-claude-code-cli-tool-bridge-design.md` and implemented behind the `claudeCliToolBridgeEnabled` feature flag, which defaulted to off until the live proof passed on 2026-10-21 and is now on by default. Tools run in GoatCitadel, not in Claude Code, and tool steps reuse one CLI process within a turn when they can (warm continuation, off by default behind `claudeCliWarmContinuationEnabled`) and start a new one otherwise.
 - Image input via stream-json content blocks.
 
 ## Terms note

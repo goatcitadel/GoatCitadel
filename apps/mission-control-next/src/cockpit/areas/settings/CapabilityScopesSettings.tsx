@@ -220,7 +220,7 @@ function ScopeSelection({
                 Citadel: <code className="break-all font-mono">{review.before.selectionReview.citadelId}</code>
               </p>
               <p>
-                Revision: <code className="break-all font-mono">{review.before.selectionReview.revision}</code>
+                Version: <code className="break-all font-mono">{review.before.selectionReview.revision}</code>
               </p>
             </details>
             {scope.error ? (

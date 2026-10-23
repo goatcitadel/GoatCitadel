@@ -119,6 +119,8 @@ export interface FeatureFlagsConfig {
   chatRequesterMcpV1Enabled?: boolean;
   chatStaticMcpV1Enabled?: boolean;
   claudeCliToolBridgeEnabled?: boolean;
+  /** Lets a bridged Claude Code CLI tool step park its process and resume it. Off by default; inert while the bridge is off. */
+  claudeCliWarmContinuationEnabled?: boolean;
   /** Gateway-owned governed Change Plan authority. Default-on after foundation proof, with an explicit kill switch. */
   evolutionControlPlaneV1Enabled?: boolean;
   /** Cheap local improvement signal collection. Enabled only after the control plane rolls out. */
@@ -880,6 +882,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["chatRequesterMcpV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_REQUESTER_MCP_V1_ENABLED],
     ["chatStaticMcpV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_STATIC_MCP_V1_ENABLED],
     ["claudeCliToolBridgeEnabled", process.env.GOATCITADEL_FEATURE_CLAUDE_CLI_TOOL_BRIDGE_ENABLED],
+    ["claudeCliWarmContinuationEnabled", process.env.GOATCITADEL_FEATURE_CLAUDE_CLI_WARM_CONTINUATION_ENABLED],
     ["evolutionControlPlaneV1Enabled", process.env.GOATCITADEL_FEATURE_EVOLUTION_CONTROL_PLANE_V1_ENABLED],
     ["improvementLocalObservationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LOCAL_OBSERVATION_V1_ENABLED],
     ["improvementModelEvaluationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_MODEL_EVALUATION_V1_ENABLED],
@@ -1507,6 +1510,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       chatRequesterMcpV1Enabled: featuresInput.chatRequesterMcpV1Enabled ?? false,
       chatStaticMcpV1Enabled: featuresInput.chatStaticMcpV1Enabled ?? false,
       claudeCliToolBridgeEnabled: featuresInput.claudeCliToolBridgeEnabled ?? true,
+      claudeCliWarmContinuationEnabled: featuresInput.claudeCliWarmContinuationEnabled ?? false,
       evolutionControlPlaneV1Enabled: featuresInput.evolutionControlPlaneV1Enabled ?? true,
       improvementLocalObservationV1Enabled: featuresInput.improvementLocalObservationV1Enabled ?? true,
       improvementModelEvaluationV1Enabled: featuresInput.improvementModelEvaluationV1Enabled ?? false,

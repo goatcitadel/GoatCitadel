@@ -183,9 +183,16 @@ const workflowLabels: Readonly<Record<DurableSupportedWorkflowKey, string>> = {
   "curator.tick": "Library curation",
 };
 
+/** Plain name for a known durable workflow only, so a caller can choose its own fallback. */
+export function knownWorkflowName(workflowKey: string): string | undefined {
+  return Object.hasOwn(workflowLabels, workflowKey)
+    ? workflowLabels[workflowKey as DurableSupportedWorkflowKey]
+    : undefined;
+}
+
 /** Plain name for a durable workflow; unknown keys read as generic background work. */
 export function presentWorkflow(workflowKey: string): string {
-  return workflowLabels[workflowKey as DurableSupportedWorkflowKey] ?? "Background work";
+  return knownWorkflowName(workflowKey) ?? "Background work";
 }
 
 export const memoryCandidateTypeLabels: Readonly<Record<TraceMemoryCandidateType, string>> = {

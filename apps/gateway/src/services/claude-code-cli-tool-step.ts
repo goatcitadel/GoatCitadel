@@ -11,7 +11,8 @@ import { normalizeAnthropicUsage } from "./llm-provider-anthropic.js";
  * Bridged ("step mode") handling for the Claude Code CLI stream mapper: the
  * init tripwire, the governance faults, and the collection of one model step's
  * `tool_use` blocks into OpenAI-shaped `tool_calls`. Anything the bridge does
- * not expect fails the step closed.
+ * not expect fails the step closed. A continuation segment of a parked process
+ * additionally accepts the CLI's echo of each tool result the Gateway delivered.
  *
  * This module has no runtime imports from the stream or bridge modules (both
  * import this one), so the server name lives here and the bridge re-exports it. Chunk shape and typed failures come from the shared
@@ -31,6 +32,21 @@ export interface ClaudeCliToolStepCollector {
   observe(event: Record<string, unknown>): boolean;
   /** Defined once `message_stop` follows `stop_reason` "tool_use" or "max_tokens"; the same object on every call. */
   step(): ClaudeCliToolStep | undefined;
+  /** The tool calls in the step's `tool_calls` chunk, as emitted (model-facing names); empty until then. */
+  emittedCalls(): ReadonlyArray<{ id: string; name: string; arguments: string }>;
+  /** This segment's model call usage, from its `message_delta`; undefined until one carried usage. */
+  usage(): ClaudeCliUsage | undefined;
+  /** Continuation only: true while a delivered result has not been echoed back yet. */
+  awaitingEchoes(): boolean;
+}
+
+export interface ClaudeCliToolStepOptions {
+  /**
+   * Continuation segment of a parked process: the results the Gateway delivered, keyed by tool-use id.
+   * The init tripwire already ran at the process's first step, and each delivered result must be
+   * echoed back exactly once, with the delivered text, before the segment's one model message starts.
+   */
+  continuation?: { delivered: ReadonlyMap<string, string> };
 }
 
 export function isClaudeCliToolUseBlock(block: Record<string, unknown>): boolean {
@@ -46,17 +62,22 @@ export function createClaudeCliToolStepCollector(
   manifest: ClaudeCliToolManifest,
   /** The mapper's run identity, so this step's chunks match the rest of the run. */
   identity: ClaudeCliChunkIdentity,
+  options: ClaudeCliToolStepOptions = {},
 ): ClaudeCliToolStepCollector {
   const chunk = (delta: Record<string, unknown>, extra?: Record<string, unknown>) =>
     buildClaudeCliChunk(identity, delta, extra);
   /** In `content_block_start` order, which is the order of the emitted tool_calls. */
   const calls: StartedCall[] = [];
   const argumentsById = new Map<string, string>();
-  let sawInit = false;
+  const delivered = options.continuation?.delivered;
+  const echoed = new Set<string>();
+  // A continuation resumes a process whose init was checked at its first step; another init is a mismatch.
+  let sawInit = delivered !== undefined;
   let messageStarts = 0;
   let stopReason: string | undefined;
   let usage: ClaudeCliUsage | undefined;
   let completed: ClaudeCliToolStep | undefined;
+  let emitted: ReadonlyArray<{ id: string; name: string; arguments: string }> = [];
 
   const requireInit = (): void => {
     if (!sawInit) fail("claude_cli_bridge_mismatch", "model output arrived before the CLI reported its tools");
@@ -115,6 +136,32 @@ export function createClaudeCliToolStepCollector(
     });
     const step = finalStep("tool_calls");
     completed = { ...step, chunks: [chunk({ tool_calls: toolCalls }), ...step.chunks] };
+    emitted = toolCalls.map(({ id, function: fn }) => ({ id, name: fn.name, arguments: fn.arguments }));
+  };
+
+  /** Continuation only: accepts each delivered result's echo once, before the segment's model message. */
+  const onToolResults = (message: unknown): void => {
+    if (!delivered) return fail("claude_cli_bridge_mismatch", "the CLI produced a tool result itself");
+    const content = isRecord(message) && Array.isArray(message.content) ? message.content : [];
+    for (const block of content) {
+      if (!isRecord(block) || block.type !== "tool_result") continue;
+      const id = typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
+      const expected = id === undefined ? undefined : delivered.get(id);
+      if (messageStarts > 0 || id === undefined || expected === undefined || echoed.has(id)) {
+        return fail("claude_cli_bridge_mismatch", "the CLI produced a tool result the Gateway did not deliver");
+      }
+      // The Gateway always delivers a success; an error echo (e.g. the CLI's own timeout) is not ours.
+      if (block.is_error === true || toolResultText(block.content) !== expected) {
+        return fail("claude_cli_bridge_mismatch", "the CLI echoed a tool result that differs from the delivered one");
+      }
+      echoed.add(id);
+    }
+  };
+
+  const requireEchoes = (what: string): void => {
+    if (delivered && echoed.size < delivered.size) {
+      fail("claude_cli_bridge_mismatch", `${what} before every delivered tool result was echoed`);
+    }
   };
 
   const finalStep = (finishReason: string): ClaudeCliToolStep => ({
@@ -126,6 +173,8 @@ export function createClaudeCliToolStepCollector(
     switch (inner.type) {
       case "message_start":
         requireInit();
+        requireEchoes("a model message started");
+        // Per segment: a continuation collector sees only its own segment's lines.
         messageStarts += 1;
         if (messageStarts > 1) fail("claude_cli_bridge_mismatch", "a second model message started");
         return false;
@@ -157,7 +206,8 @@ export function createClaudeCliToolStepCollector(
         fail("claude_cli_bridge_mismatch", "the CLI denied a tool call itself");
       }
       if (event.type === "user" && hasToolResult(event.message)) {
-        fail("claude_cli_bridge_mismatch", "the CLI produced a tool result itself");
+        onToolResults(event.message);
+        return true;
       }
       if (event.type === "stream_event" && isRecord(event.event)) return onStreamEvent(event.event);
       if (event.type === "assistant" && isRecord(event.message) && Array.isArray(event.message.content)) {
@@ -166,6 +216,7 @@ export function createClaudeCliToolStepCollector(
       }
       if (event.type === "result") {
         requireInit();
+        requireEchoes("a result arrived");
         // A started tool call must end at message_stop; a result first would finish the step as text.
         if (calls.length > 0 && !completed) {
           fail("claude_cli_bridge_mismatch", "a result arrived before the tool step ended");
@@ -176,7 +227,28 @@ export function createClaudeCliToolStepCollector(
     step() {
       return completed;
     },
+    emittedCalls() {
+      return emitted;
+    },
+    usage() {
+      return usage;
+    },
+    awaitingEchoes() {
+      return delivered !== undefined && echoed.size < delivered.size;
+    },
   };
+}
+
+/** A `tool_result` echo's text: a string as is, or text blocks joined with no separator. */
+function toolResultText(content: unknown): string | undefined {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return undefined;
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") return undefined;
+    parts.push(block.text);
+  }
+  return parts.join("");
 }
 
 function checkInitServers(servers: unknown): void {

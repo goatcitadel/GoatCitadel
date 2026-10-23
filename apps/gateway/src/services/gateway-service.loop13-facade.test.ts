@@ -1488,6 +1488,8 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       improvementService: { initialize: vi.fn(async () => undefined), stopScheduler: vi.fn() },
       initCritical: vi.fn(async () => undefined),
       llamaCppRuntime: { close: vi.fn(async () => undefined) },
+      // close() reaps parked warm Claude Code CLI processes through LlmService.close().
+      llmService: { close: vi.fn(async () => undefined) },
       mcpStdioSessions: { close: vi.fn() },
       loadOnboardingMarker: vi.fn(async () => undefined),
       npuSidecar: { close: vi.fn(async () => undefined) },
@@ -1548,6 +1550,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
     expect(gateway.mcpStdioSessions.close).toHaveBeenCalledTimes(1);
     expect(gateway.chatProactiveService.stopScheduler).toHaveBeenCalled();
     expect(gateway.approvalEffectsService.stopWorker).toHaveBeenCalled();
+    expect(gateway.llmService.close).toHaveBeenCalled();
     expect(gateway.storage.close).toHaveBeenCalled();
     expect(gateway.closing).toBe(true);
   });

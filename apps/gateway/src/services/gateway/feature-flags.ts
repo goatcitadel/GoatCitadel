@@ -76,6 +76,8 @@ export function buildUpdatedFeatureFlags(
     chatRequesterMcpV1Enabled: patch.chatRequesterMcpV1Enabled ?? current.chatRequesterMcpV1Enabled ?? false,
     chatStaticMcpV1Enabled: patch.chatStaticMcpV1Enabled ?? current.chatStaticMcpV1Enabled ?? false,
     claudeCliToolBridgeEnabled: patch.claudeCliToolBridgeEnabled ?? current.claudeCliToolBridgeEnabled ?? true,
+    claudeCliWarmContinuationEnabled:
+      patch.claudeCliWarmContinuationEnabled ?? current.claudeCliWarmContinuationEnabled ?? false,
     evolutionControlPlaneV1Enabled: patch.evolutionControlPlaneV1Enabled ?? current.evolutionControlPlaneV1Enabled,
     improvementLocalObservationV1Enabled:
       patch.improvementLocalObservationV1Enabled ?? current.improvementLocalObservationV1Enabled,
@@ -172,6 +174,8 @@ export function resolveGatewayFeatureFlags(
     chatRequesterMcpV1Enabled: stored?.chatRequesterMcpV1Enabled ?? fromConfig.chatRequesterMcpV1Enabled ?? false,
     chatStaticMcpV1Enabled: stored?.chatStaticMcpV1Enabled ?? fromConfig.chatStaticMcpV1Enabled ?? false,
     claudeCliToolBridgeEnabled: stored?.claudeCliToolBridgeEnabled ?? fromConfig.claudeCliToolBridgeEnabled ?? true,
+    claudeCliWarmContinuationEnabled:
+      stored?.claudeCliWarmContinuationEnabled ?? fromConfig.claudeCliWarmContinuationEnabled ?? false,
     evolutionControlPlaneV1Enabled:
       stored?.evolutionControlPlaneV1Enabled ?? fromConfig.evolutionControlPlaneV1Enabled ?? true,
     improvementLocalObservationV1Enabled:

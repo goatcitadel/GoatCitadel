@@ -58,7 +58,7 @@ export function MeshInvocationOutcomes({
         <p className="text-fg-muted">No recent mesh invocations.</p>
       )}
       <p className="text-xs text-fg-muted">
-        Read-only: outcomes come from retained events. Nothing here acknowledges or replays an invocation; there is no
+        Read-only: outcomes come from retained events. Nothing here acknowledges or reruns an invocation; there is no
         operator route for the reconciliation queue yet.
       </p>
     </section>

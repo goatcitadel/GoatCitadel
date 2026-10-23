@@ -42,8 +42,10 @@ describe("operator-language ratchets", () => {
       "const durableRun = await fetchDurableRun(runId);",
       'const key = ["durable", "projection"];',
       "<p>The Gateway-authored Inbox projection is stale.</p>",
-      'description="Cost posture comes from the canonical record."',
+      '<Field description="Cost posture comes from the canonical record." />',
+      "<p>",
       "      Read status is checked for this caller.",
+      "</p>",
       "// The durable projection is canonical.",
     ].join("\n");
     // "Gateway-authored" is both an internal term and a glossary word.
@@ -73,7 +75,7 @@ describe("glossary and plurals (GL-R02)", () => {
   it("flags glossary words in JSX text and string props", () => {
     const source = [
       "<p>The Gateway returned evidence for this owner.</p>",
-      'description="Replay the revision from the snapshot."',
+      '<Field description="Replay the revision from the snapshot." />',
       "<span>Cost posture and canonical durable projection</span>",
     ].join("\n");
     assert.deepEqual(countCopyRatchets("areas/x/X.tsx", source), { "glossary-terms": 6, "internal-terms": 4 });
@@ -81,7 +83,7 @@ describe("glossary and plurals (GL-R02)", () => {
 
   it("reads one-word copy props but not one-word code values", () => {
     const source = [
-      '<Field label="Gateway">',
+      '<Field label="Gateway" />',
       "<Button title='Evidence' />",
       'if (kind === "evidence") return source === "gateway";',
       'const owner = { id: "owner" };',
@@ -96,15 +98,18 @@ describe("glossary and plurals (GL-R02)", () => {
       "<TechnicalDetails>",
       "  <p>Gateway revision 41 from the owner snapshot.</p>",
       "</TechnicalDetails>",
-      '<TechnicalDetails><code>Replay evidence</code></TechnicalDetails>',
+      "<TechnicalDetails><code>Replay evidence</code></TechnicalDetails>",
     ].join("\n");
     assert.deepEqual(countCopyRatchets("areas/x/X.tsx", source), {});
   });
 
   it("still reads a TechnicalDetails label, concatenated copy and adjective plurals", () => {
-    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", '<TechnicalDetails label="Recall evidence">x</TechnicalDetails>'), {
-      "glossary-terms": 1,
-    });
+    assert.deepEqual(
+      countCopyRatchets("areas/x/X.tsx", '<TechnicalDetails label="Recall evidence">x</TechnicalDetails>'),
+      {
+        "glossary-terms": 1,
+      },
+    );
     assert.deepEqual(countCopyRatchets("areas/x/X.ts", 'const text = "Waiting on evidence, " + name;'), {
       "glossary-terms": 1,
     });
@@ -113,7 +118,10 @@ describe("glossary and plurals (GL-R02)", () => {
     });
     // A ternary picks a verb for an already-pluralised count; it isn't a number-noun pair.
     assert.deepEqual(
-      countCopyRatchets("areas/x/X.ts", 'const text = `${plural(n, "run")} ${count === 1 ? "is" : "are"} in this list`;'),
+      countCopyRatchets(
+        "areas/x/X.ts",
+        'const text = `${plural(n, "run")} ${count === 1 ? "is" : "are"} in this list`;',
+      ),
       {},
     );
   });
@@ -124,6 +132,32 @@ describe("glossary and plurals (GL-R02)", () => {
     assert.deepEqual(countCopyRatchets("areas/settings/x.ts", '  access: "gateway sign-in token",'), {
       "glossary-terms": 1,
     });
+  });
+
+  it("reads the JSX text the line scanner missed", () => {
+    // Text followed by an expression on the same line.
+    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", "<p>The Gateway sent {count} items.</p>"), {
+      "glossary-terms": 1,
+    });
+    // A single word on its own line.
+    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", ["<dt>", "  Evidence", "</dt>"].join("\n")), {
+      "glossary-terms": 1,
+    });
+    // A text line that ends in a semicolon.
+    assert.deepEqual(
+      countCopyRatchets("areas/x/X.tsx", ["<p>", "  Ask the owner to review it; then retry.", "</p>"].join("\n")),
+      { "glossary-terms": 1 },
+    );
+  });
+
+  it("reads literals rendered as JSX children or copy props, but not other one-word values", () => {
+    const source = [
+      '<p>{ready ? "Snapshot" : "Waiting"}</p>',
+      '<Field label={name ?? "Owner"} />',
+      'const tab = { id: "evidence", title: "Evidence" };',
+      '<Link href="/evidence" data-kind="owner" />',
+    ].join("\n");
+    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", source), { "glossary-terms": 3 });
   });
 
   it("does not count identifiers inside a template's ${…} as copy", () => {
@@ -144,12 +178,26 @@ describe("glossary and plurals (GL-R02)", () => {
     assert.deepEqual(countCopyRatchets("areas/x/X.tsx", "const text = `${items.length} runs`;"), {
       "plural-template": 1,
     });
-    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", '<p>Approval(s) are pending.</p>'), { "plural-template": 1 });
-    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", "const text = plural(count, \"item\");"), {});
+    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", "<p>Approval(s) are pending.</p>"), { "plural-template": 1 });
+    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", 'const text = plural(count, "item");'), {});
     assert.deepEqual(
       countCopyRatchets("areas/x/X.tsx", 'const text = `Rejects ${plural(count, "request")} across workspaces`;'),
       {},
     );
+  });
+
+  it("counts a template once when a ${…} holds literals, but keeps counts that only use a literal in code", () => {
+    const nested = 'const text = `${ok ? "Nothing to show." : `${response.total} matching records`} here`;';
+    assert.deepEqual(countCopyRatchets("areas/x/X.ts", nested), { "plural-template": 1 });
+    const filtered = 'const text = `${items.filter((item) => item.kind === "active").length} items`;';
+    assert.deepEqual(countCopyRatchets("areas/x/X.ts", filtered), { "plural-template": 1 });
+  });
+
+  it("reads one-word literals joined into rendered copy or interpolated by a copy template", () => {
+    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", '<p>{"Gateway" + " status"}</p>'), { "glossary-terms": 1 });
+    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", '<p>{`${ready ? "Gateway" : "Owner"} status`}</p>'), {
+      "glossary-terms": 2,
+    });
   });
 
   it("fails on an unreadable directory", async () => {

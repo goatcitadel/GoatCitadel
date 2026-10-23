@@ -97,7 +97,11 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
   const classic = (): CockpitResolution => {
     const fallback = new URL(url);
     fallback.searchParams.set("shell", "classic");
-    return { kind: "classic", href: fallback.pathname + fallback.search + fallback.hash, label: "Open in Classic" };
+    return {
+      kind: "classic",
+      href: fallback.pathname + fallback.search + fallback.hash,
+      label: "Open the classic view",
+    };
   };
   if (url.searchParams.get("shell") === "classic") return classic();
   if (input.startsWith("/inbox/approvals/") && !url.pathname.startsWith("/inbox/approvals/"))

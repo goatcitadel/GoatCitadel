@@ -14,12 +14,13 @@ import {
 export const CLAUDE_CLI_TOOL_BRIDGE_ANCHOR = "claude-cli-tool-bridge";
 const FLAG = "claudeCliToolBridgeEnabled";
 /**
- * What the switch changes today. Tools run in the Gateway's governed runner, and every tool step
- * is its own `claude -p` run, so the copy must not suggest Claude Code runs or isolates the tools.
+ * What the switch changes today. Tools run in the Gateway's governed runner, and a tool step starts
+ * its own `claude -p` run unless warm continuation reuses the turn's process for an exact
+ * continuation, so the copy must not suggest Claude Code runs or isolates the tools.
  */
 const BRIDGE_FACTS = [
   "Tools run in GoatCitadel, not inside Claude Code. Your permissions, tool grants and approvals still decide what may run.",
-  "Each tool step is a separate claude -p run with your own Claude sign-in, so a turn that uses tools counts more against your Claude subscription.",
+  "Each tool step starts a new claude -p run with your own Claude sign-in, unless Faster Claude Code tool steps is on and the step continues the previous one exactly. A turn that uses tools counts more against your Claude subscription.",
   "Tools are not sandboxed by this setting. It is a GoatCitadel option, not an Anthropic feature.",
 ];
 const onOff = (value: boolean) => (value ? "On" : "Off");

@@ -6,6 +6,8 @@ import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
+import { knownApprovalActionName } from "../chat/chat-vocabulary";
+import { knownWorkflowName } from "../inbox/inbox-vocabulary";
 import { presentAuthorityMessage } from "./runtime-authority-copy";
 import { headingForCode } from "./runtime-authority-wording";
 import { SystemOwnerLink } from "./SystemOwnerLink";
@@ -45,11 +47,33 @@ function linkLabelFor(reference: RuntimeAuthorityReference): string {
   }
 }
 
+/** The raw kind or key the server put before a per-record label's suffix, or "" when the label has another shape. */
+function labelSubject(label: string, suffix: string): string {
+  return label.endsWith(suffix) ? label.slice(0, -suffix.length) : "";
+}
+
+/**
+ * A per-record approval or run has no coded heading, and its server label holds a raw kind or workflow key. Only a
+ * kind or key the cockpit already words is named; any other reads as a plain "Approval" or "Run".
+ */
+function recordHeading(item: RuntimeAuthorityItem): string | undefined {
+  if (item.id.startsWith("approval:")) {
+    const action = knownApprovalActionName(labelSubject(item.label, " approval"));
+    return action ? `Approval: ${action}` : "Approval";
+  }
+  if (item.id.startsWith("run:")) {
+    const workflow = knownWorkflowName(labelSubject(item.label, " run"));
+    return workflow ? `Run: ${workflow}` : "Run";
+  }
+  return undefined;
+}
+
 function AuthorityRecord({ item, workspaceId }: { item: RuntimeAuthorityItem; workspaceId: string }) {
   // The coded state words the heading and the sentence (SY-N06); the server's own label, prose, owner and source
-  // stay in technical details. A per-record run or approval keeps its own name.
+  // stay in technical details. A per-record run or approval is named from its kind or workflow instead.
   const worded = item.stateMessage ? presentAuthorityMessage(item.stateMessage) : undefined;
-  const heading = (item.stateMessage ? headingForCode(item.stateMessage.code) : undefined) ?? item.label;
+  const heading =
+    (item.stateMessage ? headingForCode(item.stateMessage.code) : undefined) ?? recordHeading(item) ?? item.label;
   return (
     <li className="space-y-2 py-3 text-sm text-fg-secondary">
       <div className="flex flex-wrap items-start justify-between gap-2">

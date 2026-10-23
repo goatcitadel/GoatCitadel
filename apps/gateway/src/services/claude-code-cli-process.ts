@@ -2,6 +2,7 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:c
 import path from "node:path";
 import process from "node:process";
 import { redactSecretText } from "@goatcitadel/contracts";
+import { startClaudeCliSession } from "./claude-code-cli-session.js";
 
 /**
  * Process plumbing for the `claude-code-cli` provider. The Gateway runs the
@@ -73,8 +74,6 @@ export const CLAUDE_CLI_STDERR_TAIL_BYTES = 16 * 1024;
 const CLAUDE_CLI_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 const SHIM_EXTENSIONS = new Set([".cmd", ".bat", ".ps1"]);
 const CLAUDE_CLI_ISOLATION_SETTINGS = JSON.stringify({ disableAllHooks: true });
-const QUEUE_HIGH_WATER = 256;
-const QUEUE_LOW_WATER = 32;
 /** How long cleanup waits for a killed CLI tree to close, so callers can remove its cwd afterwards. */
 export const CLAUDE_CLI_KILL_CLOSE_WAIT_MS = 5000;
 
@@ -249,161 +248,11 @@ export interface RunClaudeCliInput {
   killTree?: (pid: number) => void;
 }
 
-type QueueItem =
-  | { kind: "line"; line: string }
-  | { kind: "done"; exit: ClaudeCliExit }
-  | { kind: "error"; error: Error };
-
 /** Runs the CLI once and yields complete stdout lines; the return value carries the exit code and stderr tail. */
 export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<string, ClaudeCliExit> {
   if (input.signal?.aborted) {
     throw new ClaudeCliError("claude_cli_cancelled", "The Claude Code CLI run was cancelled before it started");
   }
-  const spawnFn = input.spawn ?? (nodeSpawn as ClaudeCliSpawn);
-  const killTree = input.killTree ?? ((pid: number) => killClaudeCliProcessTree(pid));
-  const child = spawnFn(input.invocation.command, [...input.invocation.prefixArgs, ...input.args], {
-    cwd: input.cwd,
-    env: input.env,
-    shell: false,
-    windowsHide: true,
-    // Own process group on POSIX so cancellation reaches the CLI's children too.
-    detached: process.platform !== "win32",
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-
-  const queue: QueueItem[] = [];
-  let wake: (() => void) | undefined;
-  let settled = false;
-  let killed = false;
-  let closed = false;
-  let finished = false;
-  let stdoutBuffer = "";
-  let stderrTail = "";
-  let markClosed: () => void = () => undefined;
-  const childClosed = new Promise<void>((resolve) => {
-    markClosed = resolve;
-  });
-  const push = (item: QueueItem) => {
-    if (settled) return;
-    if (item.kind !== "line") settled = true;
-    queue.push(item);
-    if (queue.length >= QUEUE_HIGH_WATER) child.stdout?.pause();
-    wake?.();
-  };
-  const terminate = (error: Error) => {
-    if (settled) return;
-    push({ kind: "error", error });
-    if (!killed && !closed && child.pid !== undefined) {
-      killed = true;
-      killTree(child.pid);
-    }
-  };
-
-  let idleTimer: NodeJS.Timeout | undefined;
-  const armIdle = () => {
-    if (idleTimer) clearTimeout(idleTimer);
-    if (finished || settled) return;
-    idleTimer = setTimeout(
-      () => terminate(new ClaudeCliError("claude_cli_timeout", "The Claude Code CLI stopped producing output")),
-      input.idleTimeoutMs,
-    );
-  };
-  const overallTimer = setTimeout(
-    () => terminate(new ClaudeCliError("claude_cli_timeout", "The Claude Code CLI run exceeded its time limit")),
-    input.overallTimeoutMs,
-  );
-  const onAbort = () => terminate(new ClaudeCliError("claude_cli_cancelled", "The Claude Code CLI run was cancelled"));
-  input.signal?.addEventListener("abort", onAbort, { once: true });
-  armIdle();
-
-  child.stdout?.setEncoding("utf8");
-  child.stdout?.on("data", (chunk: string) => {
-    armIdle();
-    stdoutBuffer += chunk;
-    let newline = stdoutBuffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = stdoutBuffer.slice(0, newline).replace(/\r$/, "");
-      stdoutBuffer = stdoutBuffer.slice(newline + 1);
-      if (line.trim()) push({ kind: "line", line });
-      newline = stdoutBuffer.indexOf("\n");
-    }
-    if (Buffer.byteLength(stdoutBuffer, "utf8") > CLAUDE_CLI_MAX_LINE_BYTES) {
-      stdoutBuffer = "";
-      terminate(new ClaudeCliError("claude_cli_failed", "The Claude Code CLI emitted an oversized output line"));
-    }
-  });
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk: string) => {
-    stderrTail = (stderrTail + chunk).slice(-CLAUDE_CLI_STDERR_TAIL_BYTES);
-  });
-  child.on("error", (error: NodeJS.ErrnoException) => {
-    terminate(
-      error.code === "ENOENT"
-        ? new ClaudeCliError("claude_cli_missing", "The Claude Code CLI executable was not found", { cause: error })
-        : new ClaudeCliError("claude_cli_failed", "The Claude Code CLI could not be started", { cause: error }),
-    );
-  });
-  child.on("close", (code: number | null) => {
-    closed = true;
-    markClosed();
-    const tail = stdoutBuffer.replace(/\r$/, "");
-    stdoutBuffer = "";
-    if (tail.trim()) push({ kind: "line", line: tail });
-    push({ kind: "done", exit: { exitCode: code, stderrTail } });
-  });
-
-  child.stdin?.on("error", () => undefined);
-  child.stdout?.on("error", (error) =>
-    terminate(new ClaudeCliError("claude_cli_failed", "The Claude Code CLI output stream failed", { cause: error })),
-  );
-  child.stderr?.on("error", () => undefined);
-  child.stdin?.end(Buffer.from(input.stdinPayload, "utf8"));
-
-  try {
-    for (;;) {
-      const item = queue.shift();
-      if (queue.length <= QUEUE_LOW_WATER && child.stdout?.isPaused()) child.stdout.resume();
-      if (!item) {
-        await new Promise<void>((resolve) => {
-          wake = resolve;
-        });
-        wake = undefined;
-        continue;
-      }
-      if (item.kind === "line") {
-        yield item.line;
-        continue;
-      }
-      if (item.kind === "error") throw item.error;
-      return item.exit;
-    }
-  } finally {
-    finished = true;
-    clearTimeout(overallTimer);
-    if (idleTimer) clearTimeout(idleTimer);
-    input.signal?.removeEventListener("abort", onAbort);
-    // A consumer that stops early (or fails mid-stream) must not leave the CLI running.
-    if (!killed && !closed && child.pid !== undefined) {
-      settled = true;
-      killed = true;
-      killTree(child.pid);
-    }
-    // Windows taskkill is fire-and-forget: wait (bounded) for the tree to close so the
-    // caller's cwd cleanup does not race the dying CLI and its stub children.
-    if (killed && !closed) await waitBounded(childClosed, CLAUDE_CLI_KILL_CLOSE_WAIT_MS);
-  }
-}
-
-/** Resolves when promise settles or after ms, whichever comes first; never rejects. */
-async function waitBounded(promise: Promise<void>, ms: number): Promise<void> {
-  let timer: NodeJS.Timeout | undefined;
-  const bound = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, ms);
-    timer.unref();
-  });
-  try {
-    await Promise.race([promise.catch(() => undefined), bound]);
-  } finally {
-    clearTimeout(timer);
-  }
+  // A single segment that never parks: closing it early kills the tree and waits (bounded) for it to close.
+  return yield* startClaudeCliSession(input).segment(input);
 }
