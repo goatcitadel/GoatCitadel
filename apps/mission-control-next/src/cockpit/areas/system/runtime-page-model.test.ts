@@ -1,0 +1,141 @@
+import { describe, expect, it } from "vitest";
+import { describeRuntimeService } from "@goatcitadel/mission-control-shared/content/runtime-service";
+import type { OpsRuntimeData } from "../../../features/native-routes/ops/runtime-overview-model";
+import {
+  integrationRows,
+  localModelStatus,
+  runtimeDiagnosticRows,
+  runtimeSectionForHash,
+  runtimeServerMetrics,
+  runtimeServerStatus,
+} from "./runtime-page-model";
+
+type SourceKey = keyof OpsRuntimeData["sourceStatus"];
+const SOURCES: SourceKey[] = [
+  "dashboard",
+  "timeline",
+  "health",
+  "cost",
+  "daemon",
+  "llamaCpp",
+  "backups",
+  "sessions",
+  "mcpServers",
+  "runtimeMeasurements",
+  "localEngines",
+  "evalProofRuns",
+];
+
+const daemon = {
+  supported: true,
+  running: true,
+  state: "running",
+  host: "host-a",
+  pid: 42,
+  uptimeSeconds: 3600,
+  controllable: true,
+  diagnostics: [],
+};
+
+function runtimeData(overrides: Record<string, unknown> = {}, failed: SourceKey[] = []): OpsRuntimeData {
+  const sourceStatus = Object.fromEntries(
+    SOURCES.map((key) => [key, failed.includes(key) ? { status: "error", message: "down" } : { status: "ok" }]),
+  );
+  return {
+    dashboard: null,
+    timeline: null,
+    cost: null,
+    health: { daemonStatus: daemon, systemVitals: { memoryUsedBytes: 2048, processRssBytes: 1024 }, database: {} },
+    daemon,
+    llamaCpp: null,
+    backups: [],
+    sessions: [],
+    mcpServers: [],
+    runtimeMeasurements: [],
+    localEngines: [],
+    evalProofRuns: [],
+    sourceStatus,
+    ...overrides,
+  } as unknown as OpsRuntimeData;
+}
+
+describe("runtimeServerStatus", () => {
+  it("reads Unknown when the daemon and health sources both failed", () => {
+    const status = runtimeServerStatus(runtimeData({}, ["daemon", "health"]));
+    expect(status).toMatchObject({ label: "Unknown", tone: "neutral" });
+  });
+
+  it("agrees with System › Health for a running daemon", () => {
+    const expected = describeRuntimeService(daemon as never);
+    expect(runtimeServerStatus(runtimeData())).toMatchObject({ label: expected.label, tone: expected.tone });
+  });
+});
+
+describe("runtimeServerMetrics", () => {
+  it("reads Unknown memory when the health source failed", () => {
+    const memory = runtimeServerMetrics(runtimeData({}, ["health"])).find((item) => item.term === "Memory used");
+    expect(memory?.value).toBe("Unknown");
+  });
+
+  it("adds database waits when the health summary reports them", () => {
+    const data = runtimeData({
+      health: {
+        daemonStatus: daemon,
+        systemVitals: {},
+        database: { storageWait: { p95Ms: 12, maxMs: 40, count: 3, criticalCount: 0 } },
+      },
+    });
+    const terms = runtimeServerMetrics(data).map((item) => item.term);
+    expect(terms).toContain("Database wait p95");
+    expect(terms).toContain("Database wait max");
+  });
+});
+
+describe("runtimeDiagnosticRows", () => {
+  it("presents a warning diagnostic as waiting", () => {
+    const data = runtimeData({
+      daemon: { ...daemon, diagnostics: [{ id: "d1", title: "Port in use", detail: "8787", severity: "warn" }] },
+    });
+    expect(runtimeDiagnosticRows(data)[0]).toMatchObject({
+      title: "Port in use",
+      severity: { label: "Warning", tone: "waiting" },
+    });
+  });
+});
+
+describe("localModelStatus", () => {
+  it("reads Unknown when the local model source failed", () => {
+    expect(localModelStatus(runtimeData({}, ["llamaCpp"]))).toMatchObject({ label: "Unknown", tone: "neutral" });
+  });
+
+  it("reads Running for a healthy running process", () => {
+    const data = runtimeData({ llamaCpp: { processState: "running", healthy: true } });
+    expect(localModelStatus(data)).toMatchObject({ label: "Running", tone: "done" });
+  });
+
+  it("asks for review when the process is unhealthy", () => {
+    const data = runtimeData({ llamaCpp: { processState: "running", healthy: false } });
+    expect(localModelStatus(data)).toMatchObject({ label: "Needs review", tone: "waiting" });
+  });
+});
+
+describe("integrationRows", () => {
+  it("presents enabled and disabled MCP servers as On and Off", () => {
+    const data = runtimeData({
+      mcpServers: [
+        { serverId: "a", label: "Files", enabled: true, transport: "stdio", category: "files" },
+        { serverId: "b", label: "Search", enabled: false, transport: "http" },
+      ],
+    });
+    expect(integrationRows(data).map((row) => row.status.label)).toEqual(["On", "Off"]);
+  });
+});
+
+describe("runtimeSectionForHash", () => {
+  it("maps legacy runtime anchors to native sections", () => {
+    expect(runtimeSectionForHash("#ops-runtime-posture")).toBe("runtime-server");
+    expect(runtimeSectionForHash("#ops-runtime-backups")).toBe("ops-runtime-backups");
+    expect(runtimeSectionForHash("#ops-runtime-integrations")).toBe("runtime-integrations");
+    expect(runtimeSectionForHash("#nope")).toBeNull();
+  });
+});
