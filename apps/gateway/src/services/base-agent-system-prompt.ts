@@ -64,7 +64,18 @@ export interface BuildBaseAgentSystemPromptInput {
   memoryDigest?: string;
   /** The turn's web mode. `deep` adds the Deep research contract to the volatile tail. */
   webMode?: ChatWebMode;
+  /**
+   * False when this turn sends the provider no tools (manual tool autonomy). The catalog and skills
+   * are then left out, because naming tools the turn cannot call makes models write the calls as text.
+   */
+  toolsCallable?: boolean;
 }
+
+const NO_CALLABLE_TOOLS_SECTION = [
+  "## Tools",
+  "No tools can be called in this turn: tool autonomy is Manual for this conversation. Answer from the conversation and the context provided. Do not write tool calls or tool-call markup as text.",
+  "If the request needs a tool (reading files, running code, browsing, memory), say which one and that switching tool autonomy to Safe Auto would let you run it.",
+].join("\n");
 
 export interface BaseAgentSystemPrompt {
   /** Identity / doctrine / safety / output bar / mode doctrine — byte-stable for a given mode. */
@@ -229,19 +240,25 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
     tailSections.push(projectLines.join("\n"));
   }
 
-  const toolNames = toolset.toolNames
-    .slice(0, MAX_BASE_PROMPT_TOOL_NAMES)
-    .map((name) => sanitizePromptCatalogText(name, 80))
-    .filter((name) => name.length > 0);
-  if (toolNames.length > 0) {
+  const toolsCallable = input.toolsCallable !== false;
+  const toolNames = toolsCallable
+    ? toolset.toolNames
+        .slice(0, MAX_BASE_PROMPT_TOOL_NAMES)
+        .map((name) => sanitizePromptCatalogText(name, 80))
+        .filter((name) => name.length > 0)
+    : [];
+  if (!toolsCallable) {
+    tailSections.push(NO_CALLABLE_TOOLS_SECTION);
+  } else if (toolNames.length > 0) {
     const overflow = toolset.toolNames.length - toolNames.length;
     const suffix = overflow > 0 ? `, and ${overflow} more` : "";
     tailSections.push(`## Tool catalog (current policy still applies)\n${toolNames.join(", ")}${suffix}`);
   }
 
-  const skills = [...(toolset.skills ?? [])]
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .slice(0, MAX_BASE_PROMPT_SKILLS);
+  // Skills are read through a tool, so a turn without callable tools cannot draw on them either.
+  const skills = toolsCallable
+    ? [...(toolset.skills ?? [])].sort((a, b) => a.name.localeCompare(b.name)).slice(0, MAX_BASE_PROMPT_SKILLS)
+    : [];
   if (skills.length > 0) {
     const skillLines = skills.map((skill) => {
       const name = sanitizePromptCatalogText(skill.name, 80);

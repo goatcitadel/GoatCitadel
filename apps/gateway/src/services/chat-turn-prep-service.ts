@@ -1115,6 +1115,8 @@ export async function prepareAgentChatTurn(
           mode: effectiveMode,
         },
         toolset: promptCapabilityCatalog,
+        // Mirrors the runner's tool schema: manual autonomy outside quick web sends the provider no tools.
+        toolsCallable: !(effectiveToolAutonomy === "manual" && !quickWebTurn),
         webMode: normalized.webMode ?? prefs.webMode,
         ...(memoryDigest ? { memoryDigest } : {}),
       }),

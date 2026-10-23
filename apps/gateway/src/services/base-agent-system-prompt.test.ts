@@ -122,6 +122,33 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect([...names]).toEqual([...names].sort((a, b) => a.localeCompare(b)));
   });
 
+  it("lists no tools or skills and says tools are off when this turn cannot call tools", () => {
+    // A catalog of tools the turn cannot call makes models write the calls out as text instead.
+    const prompt = buildBaseAgentSystemPrompt(
+      input({
+        toolsCallable: false,
+        toolset: { toolNames: ["fs.read", "web.search"], skills: [{ name: "pdf-generator", summary: "Make PDFs" }] },
+      }),
+    );
+    expect(prompt.volatileTail).not.toContain("## Tool catalog");
+    expect(prompt.volatileTail).not.toContain("fs.read");
+    expect(prompt.volatileTail).not.toContain("## Skills you can draw on");
+    expect(prompt.volatileTail).toContain("## Tools");
+    expect(prompt.volatileTail).toContain("No tools can be called in this turn");
+    expect(prompt.volatileTail).toContain("Do not write tool calls");
+    expect(prompt.volatileTail).toContain("Safe Auto");
+    // The cached prefix stays byte-identical, so turning tools off never busts the prompt cache.
+    expect(prompt.stablePrefix).toBe(buildBaseAgentSystemPrompt(input()).stablePrefix);
+  });
+
+  it("keeps the tool catalog when the turn can call tools", () => {
+    for (const toolsCallable of [true, undefined]) {
+      const prompt = buildBaseAgentSystemPrompt(input({ toolsCallable }));
+      expect(prompt.volatileTail).toContain("## Tool catalog (current policy still applies)\nfs.read, web.search");
+      expect(prompt.volatileTail).not.toContain("No tools can be called in this turn");
+    }
+  });
+
   it("caps the tool-name list and notes the overflow", () => {
     const toolNames = Array.from({ length: MAX_BASE_PROMPT_TOOL_NAMES + 7 }, (_, i) => `tool_${i}`);
     const prompt = buildBaseAgentSystemPrompt(input({ toolset: { toolNames } }));
