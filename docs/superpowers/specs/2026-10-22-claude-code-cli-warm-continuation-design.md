@@ -1,6 +1,6 @@
 # Claude Code CLI tool bridge: warm continuation
 
-Status: approved by the operator on 2026-10-22, with all four **Operator decisions** settled (listed at the end). Not built yet; the plan is `docs/superpowers/plans/2026-10-22-claude-code-cli-warm-continuation.md`. The probe facts below were measured on 2026-10-22.
+Status: approved by the operator on 2026-10-22, with all four **Operator decisions** settled (listed at the end). Implemented on branch `feat/claude-cli-warm-continuation` behind the off-by-default `claudeCliWarmContinuationEnabled` flag, with a Settings › Models switch. The live proof (see **Live proof** below) has not run yet. It is required before the default can change. The plan is `docs/superpowers/plans/2026-10-22-claude-code-cli-warm-continuation.md`. The probe facts below were measured on 2026-10-22.
 
 Builds on the step-mode tool bridge (`docs/superpowers/specs/2026-10-20-claude-code-cli-tool-bridge-design.md`, PRs #457–#460). Everything that spec decided still holds unless this one says otherwise.
 
