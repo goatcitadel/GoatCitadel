@@ -183,9 +183,11 @@ export function tryResumeClaudeCliWarmStep(input: {
   return input.runAccounted({
     abandon: () => registry.reap(step, "resumed_failure"),
     async *run(context) {
-      await stageClaudeCliWarmResults(step.runDir, step.manifest.nonce, results);
-      // Iterated at once below: a segment never read would leave the session unparked with no timers.
+      // Opened before any result is staged: segment() detaches the heartbeat-only drain at once, so an
+      // echo of the first result, arriving while a later one is still being written, queues for this
+      // segment instead of poisoning the park. If staging fails, cleanup's reap kills the session.
       const lines = step.session.segment({ signal: request.signal, ...input.timeouts });
+      await stageClaudeCliWarmResults(step.runDir, step.manifest.nonce, results);
       const mapper = createClaudeCliStreamMapper(input.model, {
         bridge: step.manifest,
         continuation: { delivered: new Map(results.map((result) => [result.toolUseId, result.text])) },

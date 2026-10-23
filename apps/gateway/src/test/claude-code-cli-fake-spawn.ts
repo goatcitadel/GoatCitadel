@@ -149,9 +149,9 @@ export interface FakeClaudeCliStaging {
 const RESULT_POLL_MS = 5;
 
 /**
- * A process that parks like the real CLI: one tool step, then, per segment, it waits for the
- * Gateway to stage a result file for every pending call (checking the step's nonce, like the
- * stub), echoes each delivered text back as a `tool_result`, and plays the segment. A text
+ * A process that parks like the real CLI: one tool step, then, per segment, it echoes each
+ * pending call's result back as a `tool_result` as soon as the Gateway stages that call's file
+ * (checking the step's nonce, like the stub), and once all are echoed it plays the segment. A text
  * segment ends with a result line and exit 0; a tool segment stops for tool_use again.
  */
 export function warmToolStepScript(
@@ -168,13 +168,19 @@ export function warmToolStepScript(
     let pending = calls.map((call) => call.id);
     let remaining = [...segments];
     const timer = setInterval(() => {
-      const staged = pending.map((id) => readStagedResult(resultsDir, id, nonce));
-      if (stdout.writableEnded || staged.some((text) => text === undefined)) {
-        if (stdout.writableEnded) clearInterval(timer);
+      if (stdout.writableEnded) {
+        clearInterval(timer);
         return;
       }
-      staging.read.push(...pending.map((id) => `${id}.json`));
-      pending.forEach((id, index) => stdout.write(toolResultEcho(id, staged[index] as string)));
+      // Like the CLI: each call is answered, and echoed, in order, as soon as its own result is staged.
+      while (pending.length > 0) {
+        const id = pending[0] as string;
+        const text = readStagedResult(resultsDir, id, nonce);
+        if (text === undefined) return;
+        staging.read.push(`${id}.json`);
+        stdout.write(toolResultEcho(id, text));
+        pending = pending.slice(1);
+      }
       const [segment, ...rest] = remaining;
       remaining = rest;
       if (segment && "calls" in segment) {

@@ -255,12 +255,27 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
   ): AsyncGenerator<Record<string, unknown>> {
     const runtime = host.claudeCodeCliRuntime?.();
     if (!runtime) throw new ClaudeCliError("claude_cli_missing", claudeCliUserMessage("claude_cli_missing"));
-    assertNoRequiredToolCall(request);
-    await assertCliReady(runtime);
-    const invocation = runtime.resolveInvocation();
-    buildClaudeCliArgs({ model }); // Validate the model id before any usage intent exists.
-    // Resolved before the usage intent, so a missing stub leaves nothing to settle.
-    const bridge = prepareToolBridge(request, () => runtime.resolveToolBridgeLaunch());
+    // Read once per step; warm continuation applies to bridged steps only.
+    const warmFlag = runtime.warmContinuationEnabled();
+    // A request for this turn that will not continue warm ends the turn's parked process first.
+    const { sessionId, turnId } = attribution;
+    const releaseTurn = async () => {
+      if (sessionId && turnId) await runtime.warm.reapTurn(sessionId, turnId);
+    };
+    if (!(warmFlag && offersAutoTools(request))) await releaseTurn();
+    let invocation: ClaudeCliInvocation;
+    let bridge: PreparedToolBridge | undefined;
+    try {
+      assertNoRequiredToolCall(request);
+      await assertCliReady(runtime);
+      invocation = runtime.resolveInvocation();
+      buildClaudeCliArgs({ model }); // Validate the model id before any usage intent exists.
+      // Resolved before the usage intent, so a missing stub leaves nothing to settle.
+      bridge = prepareToolBridge(request, () => runtime.resolveToolBridgeLaunch());
+    } catch (error) {
+      await releaseTurn();
+      throw error;
+    }
     const prompt = renderClaudeCliPrompt(request.messages, { bridged: bridge !== undefined });
     const timeouts = {
       overallTimeoutMs: positiveOr(request.timeoutMs, DEFAULT_OVERALL_TIMEOUT_MS),
@@ -284,12 +299,12 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
           }),
       );
 
-    // Read once per step; warm continuation applies to bridged steps only.
-    const warm = bridge !== undefined && runtime.warmContinuationEnabled();
+    const warm = bridge !== undefined && warmFlag;
     const fingerprint =
       bridge && warm
         ? fingerprintClaudeCliStep({ request, attribution, model, system: prompt.system, manifest: bridge.manifest })
         : undefined;
+    if (!fingerprint) await releaseTurn();
     // A miss has already killed the parked tree for this turn, before the cold step below spawns.
     const resumed = fingerprint
       ? tryResumeClaudeCliWarmStep({ registry: runtime.warm, fingerprint, request, model, timeouts, runAccounted })
@@ -455,7 +470,7 @@ function prepareToolBridge(
   request: ChatCompletionRequest,
   resolveLaunch: () => ClaudeCodeCliToolBridgeLaunch | undefined,
 ): PreparedToolBridge | undefined {
-  if (!request.tools || request.tools.length === 0 || !isAutoToolChoice(request.tool_choice)) return undefined;
+  if (!offersAutoTools(request)) return undefined;
   const launch = resolveLaunch();
   if (!launch) return undefined;
   const manifest = buildClaudeCliToolManifest(request.tools);
@@ -464,6 +479,13 @@ function prepareToolBridge(
     throw new ClaudeCliError("claude_cli_bridge_unavailable", claudeCliUserMessage("claude_cli_bridge_unavailable"));
   }
   return { manifest, files: { nodePath, stubPath } };
+}
+
+/** Tools are offered and the model may choose freely: the only requests that can be bridged. */
+function offersAutoTools(
+  request: ChatCompletionRequest,
+): request is ChatCompletionRequest & { tools: NonNullable<ChatCompletionRequest["tools"]> } {
+  return request.tools !== undefined && request.tools.length > 0 && isAutoToolChoice(request.tool_choice);
 }
 
 function isAutoToolChoice(choice: ChatCompletionRequest["tool_choice"]): boolean {

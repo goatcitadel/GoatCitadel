@@ -74,7 +74,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function keyOf(fingerprint: ClaudeCliWarmFingerprint): string {
+function keyOf(fingerprint: Pick<ClaudeCliWarmFingerprint, "sessionId" | "turnId">): string {
   return JSON.stringify([fingerprint.sessionId, fingerprint.turnId]);
 }
 
@@ -218,6 +218,17 @@ export class ClaudeCliWarmRegistry {
     }
     this.detach(entry);
     return { hit: true, step: entry.step, results: match.results };
+  }
+
+  /**
+   * A request for this session and turn that will not continue warm: reaps its parked entry
+   * (the kill is signalled before this returns) and forgets any tombstone for it.
+   */
+  reapTurn(sessionId: string, turnId: string): Promise<void> {
+    const key = keyOf({ sessionId, turnId });
+    this.tombstones.delete(key);
+    const entry = this.entries.get(key);
+    return entry ? this.reap(entry.step, "miss") : Promise.resolve();
   }
 
   /** Kills the tree, removes the run dir, then checks for spilled tool results. Idempotent; never throws. */

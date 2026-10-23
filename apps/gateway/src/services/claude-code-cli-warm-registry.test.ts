@@ -407,6 +407,29 @@ describe("ClaudeCliWarmRegistry", () => {
     expect(removeRunDir).toHaveBeenCalledWith("/scratch/run-s1");
   });
 
+  it("reapTurn kills only that session and turn's entry, and clears its tombstone", async () => {
+    const mine = fakeSession();
+    const other = fakeSession();
+    registry.park(stepOf(mine));
+    registry.park(stepOf(other, { turnId: "t2" }));
+
+    const reaped = registry.reapTurn("s1", "t1");
+    // Signalled before the cold step that follows can spawn.
+    expect(mine.kill).toHaveBeenCalledTimes(1);
+    await reaped;
+    expect(removeRunDir).toHaveBeenCalledWith("/scratch/run-s1");
+    expect(other.kill).not.toHaveBeenCalled();
+    expect(registry.size).toBe(1);
+    await expect(registry.reapTurn("s1", "t1")).resolves.toBeUndefined();
+
+    const poisoned = fakeSession();
+    registry.park(stepOf(poisoned, { turnId: "t3" }));
+    poisoned.emit("not json");
+    await settle();
+    await registry.reapTurn("s1", "t3");
+    expect(registry.take(fingerprintOf(continuation(), "s1", "t3"), requestOf(continuation()))).toEqual({ hit: false });
+  });
+
   it("reapAll kills every entry", async () => {
     const fakes = [fakeSession(), fakeSession(), fakeSession()];
     fakes.forEach((fake, index) => registry.park(stepOf(fake, { sessionId: `s${index}` })));
