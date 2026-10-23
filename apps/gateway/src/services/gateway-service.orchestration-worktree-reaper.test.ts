@@ -162,6 +162,7 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
       assemblyService: { close: () => Promise<void> };
       npuSidecar: { close: () => Promise<void> };
       llamaCppRuntime: { close: () => Promise<void> };
+      llmService: { close: () => Promise<void> };
       storage: { close: () => void };
       orchestrationWorktreeReapScheduler?: BackgroundIntervalHandle;
     };
@@ -175,6 +176,7 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
     closable.assemblyService = { close: vi.fn(async () => undefined) };
     closable.npuSidecar = { close: vi.fn(async () => undefined) };
     closable.llamaCppRuntime = { close: vi.fn(async () => undefined) };
+    closable.llmService = { close: vi.fn(async () => undefined) };
     closable.storage = { close: vi.fn() };
 
     (
