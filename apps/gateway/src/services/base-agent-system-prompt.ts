@@ -64,6 +64,53 @@ export interface BuildBaseAgentSystemPromptInput {
   memoryDigest?: string;
   /** The turn's web mode. `deep` adds the Deep research contract to the volatile tail. */
   webMode?: ChatWebMode;
+  /**
+   * Set when this turn sends the provider no tools, naming why. The catalog and skills are then left out,
+   * because naming tools the turn cannot call makes models write the calls as text. Unset: tools are callable.
+   */
+  toolsUnavailableReason?: BaseAgentToolsUnavailableReason;
+}
+
+/** Why a turn's tool schema is empty; each one needs a different fix from the operator. */
+export type BaseAgentToolsUnavailableReason =
+  | "manual_autonomy"
+  | "advisory_planning"
+  | "capability_profile"
+  | "project_binding_required";
+
+const TOOLS_UNAVAILABLE_GUIDANCE: Record<BaseAgentToolsUnavailableReason, { cause: string; remedy: string }> = {
+  manual_autonomy: {
+    cause: "tool autonomy is Manual for this conversation",
+    remedy: "switching tool autonomy to Safe Auto would let you run it",
+  },
+  advisory_planning: {
+    cause: "this conversation uses advisory planning, which plans without running tools",
+    remedy: "the operator can run it once advisory planning is turned off",
+  },
+  capability_profile: {
+    cause: "this conversation's capability profile keeps tools off",
+    remedy: "a capability profile that allows tools would let you run it",
+  },
+  project_binding_required: {
+    cause: "this conversation is not bound to a project, which this work requires",
+    remedy: "binding a project to this conversation would let you run it",
+  },
+};
+
+function buildToolsUnavailableSection(reason: BaseAgentToolsUnavailableReason, webMode?: ChatWebMode): string {
+  const { cause, remedy } = TOOLS_UNAVAILABLE_GUIDANCE[reason];
+  const lines = [
+    "## Tools",
+    `No tools can be called in this turn: ${cause}. Answer from the conversation and the context provided. Do not write tool calls or tool-call markup as text.`,
+    `If the request needs a tool (reading files, running code, browsing, memory), say which one and that ${remedy}.`,
+  ];
+  if (webMode === "deep") {
+    // Deep research needs search and page tools; promising it without them would invent sources.
+    lines.push(
+      "Deep research needs web tools, which are off for this turn. Say plainly that you could not research the question, and answer only from what you already know, labelled as unverified.",
+    );
+  }
+  return lines.join("\n");
 }
 
 export interface BaseAgentSystemPrompt {
@@ -229,19 +276,26 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
     tailSections.push(projectLines.join("\n"));
   }
 
-  const toolNames = toolset.toolNames
-    .slice(0, MAX_BASE_PROMPT_TOOL_NAMES)
-    .map((name) => sanitizePromptCatalogText(name, 80))
-    .filter((name) => name.length > 0);
-  if (toolNames.length > 0) {
+  const toolsUnavailableReason = input.toolsUnavailableReason;
+  const toolsCallable = toolsUnavailableReason === undefined;
+  const toolNames = toolsCallable
+    ? toolset.toolNames
+        .slice(0, MAX_BASE_PROMPT_TOOL_NAMES)
+        .map((name) => sanitizePromptCatalogText(name, 80))
+        .filter((name) => name.length > 0)
+    : [];
+  if (toolsUnavailableReason) {
+    tailSections.push(buildToolsUnavailableSection(toolsUnavailableReason, input.webMode));
+  } else if (toolNames.length > 0) {
     const overflow = toolset.toolNames.length - toolNames.length;
     const suffix = overflow > 0 ? `, and ${overflow} more` : "";
     tailSections.push(`## Tool catalog (current policy still applies)\n${toolNames.join(", ")}${suffix}`);
   }
 
-  const skills = [...(toolset.skills ?? [])]
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .slice(0, MAX_BASE_PROMPT_SKILLS);
+  // Skills are read through a tool, so a turn without callable tools cannot draw on them either.
+  const skills = toolsCallable
+    ? [...(toolset.skills ?? [])].sort((a, b) => a.name.localeCompare(b.name)).slice(0, MAX_BASE_PROMPT_SKILLS)
+    : [];
   if (skills.length > 0) {
     const skillLines = skills.map((skill) => {
       const name = sanitizePromptCatalogText(skill.name, 80);
@@ -255,7 +309,8 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
     tailSections.push(`## Memory\n${input.memoryDigest.trim()}`);
   }
 
-  if (input.webMode === "deep") {
+  // Without callable tools, the tools section already says Deep research could not run.
+  if (input.webMode === "deep" && toolsCallable) {
     tailSections.push(DEEP_RESEARCH_PROMPT_SECTION);
   }
 
