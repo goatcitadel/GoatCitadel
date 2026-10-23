@@ -147,7 +147,7 @@ export const updateSettingsSchema = z.object({
           apiKeyEnv: z.string().min(1).optional(),
           googleCloud: LlmProviderGoogleCloudConfigSchema.optional(),
           request: LlmProviderRequestConfigSchema.optional(),
-          headers: z.record(z.string()).optional(),
+          headers: z.record(z.string(), z.string()).optional(),
           capabilities: LlmProviderCapabilitiesSchema.partial().optional(),
         })
         .optional(),

@@ -58,7 +58,7 @@ const AddonInstalledRecordSchema = z.object({
 });
 
 const AddonManifestFileSchema = z.object({
-  items: z.record(AddonInstalledRecordSchema).default({}),
+  items: z.record(z.string(), AddonInstalledRecordSchema).default({}),
 });
 
 const ARENA_REPO_URL = "https://github.com/spurnout/goatcitadel-arena";

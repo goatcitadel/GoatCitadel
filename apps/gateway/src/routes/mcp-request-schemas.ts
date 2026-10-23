@@ -84,7 +84,7 @@ export const oauthCompleteSchema = z.object({
 export const invokeSchema = z.object({
   serverId: z.string().min(1),
   toolName: z.string().min(1),
-  arguments: z.record(z.unknown()).optional(),
+  arguments: z.record(z.string(), z.unknown()).optional(),
   agentId: z.string().optional(),
   sessionId: z.string().optional(),
   workspaceId: z.string().optional(),
@@ -99,7 +99,7 @@ export const invokeSchema = z.object({
 
 export const serverModeCallSchema = z.object({
   descriptorName: z.string().min(1),
-  args: z.record(z.unknown()).optional(),
+  args: z.record(z.string(), z.unknown()).optional(),
   agentId: z.string().min(1),
   sessionId: z.string().min(1),
   workspaceId: z.string().optional(),
@@ -132,7 +132,7 @@ export const elicitationCreateSchema = z
   .object({
     prompt: z.string().optional(),
     message: z.string().optional(),
-    requestedSchema: z.record(z.unknown()),
+    requestedSchema: z.record(z.string(), z.unknown()),
     owner: elicitationOwnerSchema.optional(),
     source: elicitationSourceSchema.optional(),
     serverId: z.string().trim().min(1).optional(),
@@ -149,7 +149,7 @@ export const elicitationParamsSchema = z.object({
 });
 export const elicitationResponseSchema = z.object({
   action: elicitationActionSchema,
-  content: z.record(z.unknown()).optional(),
+  content: z.record(z.string(), z.unknown()).optional(),
   owner: elicitationOwnerSchema.optional(),
 });
 export const elicitationListQuerySchema = z.object({

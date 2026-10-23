@@ -447,7 +447,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const params = serverParamsSchema.safeParse(request.params);
       const body = connectionReviewSchema
-        .extend({ code: z.string().trim().min(1).max(8192), state: z.string().uuid() })
+        .extend({ code: z.string().trim().min(1).max(8192), state: z.guid() })
         .strict()
         .safeParse(request.body);
       if (!params.success || !body.success)

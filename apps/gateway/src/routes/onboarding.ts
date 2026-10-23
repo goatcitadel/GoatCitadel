@@ -83,7 +83,7 @@ const llmProviderRequestTlsSchema = z
   });
 
 const llmProviderRequestSchema = z.object({
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
   auth: llmProviderRequestAuthSchema.optional(),
   proxy: z
     .object({
@@ -128,7 +128,7 @@ const bootstrapSchema = z.object({
           googleCloud: LlmProviderGoogleCloudConfigSchema.optional(),
           persistSecretToSecureStore: z.boolean().optional(),
           request: llmProviderRequestSchema.optional(),
-          headers: z.record(z.string()).optional(),
+          headers: z.record(z.string(), z.string()).optional(),
           capabilities: LlmProviderCapabilitiesSchema.partial().optional(),
         })
         .optional(),

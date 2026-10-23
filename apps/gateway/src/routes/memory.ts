@@ -14,11 +14,7 @@ import {
   maintenanceRunParamsSchema,
 } from "./memory-maintenance-schemas.js";
 
-import {
-  composeSchema,
-  statsQuerySchema,
-  retrievalBenchmarkSchema,
-} from "./memory-context-request-schemas.js";
+import { composeSchema, statsQuerySchema, retrievalBenchmarkSchema } from "./memory-context-request-schemas.js";
 
 const itemParamsSchema = z.object({
   itemId: z.string().trim().min(1),
@@ -153,7 +149,7 @@ const feedbackCreateSchema = z.object({
   contextId: z.string().trim().min(1).optional(),
   citationId: z.string().trim().min(1).optional(),
   note: z.string().trim().min(1).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const memoryQualityIssueKindSchema = z.enum([
@@ -207,7 +203,7 @@ const traceCandidateCreateSchema = z.object({
   proposedInsight: z.string().trim().min(1),
   confidence: z.number().min(0).max(1).optional(),
   sourceRefs: z.array(structuredSourceRefSchema).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const learningFileRefSchema = z.object({
@@ -241,7 +237,7 @@ const entityCreateSchema = z.object({
   summary: z.string().trim().min(1).optional(),
   confidence: z.number().min(0).max(1).optional(),
   sourceRefs: z.array(structuredSourceRefSchema).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   authority: structuredAuthoritySchema.optional(),
 });
 
@@ -254,7 +250,7 @@ const relationCreateSchema = z.object({
   relationType: z.string().trim().min(1),
   confidence: z.number().min(0).max(1).optional(),
   sourceRefs: z.array(structuredSourceRefSchema).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   authority: structuredAuthoritySchema.optional(),
 });
 
@@ -273,7 +269,7 @@ const decisionCreateSchema = z.object({
   runId: z.string().trim().min(1).optional(),
   confidence: z.number().min(0).max(1).optional(),
   sourceRefs: z.array(structuredSourceRefSchema).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   authority: structuredAuthoritySchema.optional(),
 });
 
@@ -286,7 +282,7 @@ const decisionRetrospectiveSchema = z.object({
 const patchItemSchema = z.object({
   title: z.string().min(1).optional(),
   content: z.string().min(1).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   pinned: z.boolean().optional(),
   ttlOverrideSeconds: z.number().int().positive().max(31_536_000).nullable().optional(),
 });

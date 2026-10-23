@@ -8,7 +8,7 @@ const sessionParamsSchema = z.object({
 });
 
 const actionParamsSchema = sessionParamsSchema.extend({
-  actionId: z.string().uuid(),
+  actionId: z.guid(),
 });
 
 const createActionSchema = z

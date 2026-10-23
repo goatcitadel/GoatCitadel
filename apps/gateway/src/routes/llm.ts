@@ -101,7 +101,7 @@ const providerRequestTlsSchema = z
   });
 
 const providerRequestSchema = z.object({
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
   auth: providerRequestAuthSchema.optional(),
   proxy: z
     .object({
@@ -132,7 +132,7 @@ const updateConfigSchema = z.object({
       apiKeyEnv: z.string().min(1).optional(),
       googleCloud: LlmProviderGoogleCloudConfigSchema.optional(),
       request: providerRequestSchema.optional(),
-      headers: z.record(z.string()).optional(),
+      headers: z.record(z.string(), z.string()).optional(),
       capabilities: LlmProviderCapabilitiesSchema.partial().optional(),
     })
     .optional(),
@@ -183,7 +183,7 @@ const modelPreviewSchema = z.object({
   apiKey: z.string().min(1).optional(),
   apiKeyEnv: z.string().min(1).optional(),
   request: providerRequestSchema.optional(),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
 });
 
 const codexOAuthPollSchema = z.object({
@@ -219,7 +219,7 @@ const chatCompletionSchema = z.object({
     .array(
       z.object({
         role: z.enum(["system", "developer", "user", "assistant", "tool"]),
-        content: z.union([z.string(), z.array(z.record(z.unknown()))]),
+        content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
         name: z.string().optional(),
         tool_call_id: z.string().optional(),
       }),
@@ -247,14 +247,14 @@ const chatCompletionSchema = z.object({
     .optional(),
   verbosity: z.enum(["low", "medium", "high"]).optional(),
   stream: z.boolean().optional(),
-  tools: z.array(z.record(z.unknown())).optional(),
-  tool_choice: z.union([z.string(), z.record(z.unknown())]).optional(),
+  tools: z.array(z.record(z.string(), z.unknown())).optional(),
+  tool_choice: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
   parallel_tool_calls: z.boolean().optional(),
   stop: z.union([z.string(), z.array(z.string())]).optional(),
-  response_format: z.record(z.unknown()).optional(),
+  response_format: z.record(z.string(), z.unknown()).optional(),
   service_tier: z.string().min(1).optional(),
   prompt_cache_retention: z.string().min(1).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const llmRoutes: FastifyPluginAsync = async (fastify) => {

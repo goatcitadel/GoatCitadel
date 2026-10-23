@@ -3,7 +3,7 @@ import { ValidationError } from "@goatcitadel/contracts";
 import { getChatToolArtifactContent, type ChatToolArtifactHost } from "./chat-tool-artifact-service.js";
 const toolArtifactReadSchema = z
   .object({
-    artifactId: z.string().uuid(),
+    artifactId: z.guid(),
     offset: z.number().int().min(0).default(0),
     maxChars: z.number().int().min(1).max(12000).default(8000),
   })

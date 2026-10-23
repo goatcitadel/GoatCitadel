@@ -16,7 +16,9 @@ export const catalogQuerySchema = z.object({
   kind: kindEnum.optional(),
 });
 
-export async function resolveRoutePersonalityCatalog(services: unknown): Promise<Omit<PersonalityCatalogResponse, "revision">> {
+export async function resolveRoutePersonalityCatalog(
+  services: unknown,
+): Promise<Omit<PersonalityCatalogResponse, "revision">> {
   const settings = (
     services as {
       settings?: { getPersonalityCatalog?: () => PersonalityCatalogResponse | Promise<PersonalityCatalogResponse> };
@@ -100,7 +102,7 @@ export const createConnectionSchema = z.object({
   enabled: z.boolean().optional(),
   status: z.enum(["connected", "disconnected", "error", "paused"]).optional(),
   workspaceId: z.string().trim().min(1).max(120).optional(),
-  config: z.record(z.unknown()).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const updateConnectionSchema = z.object({
@@ -110,28 +112,28 @@ export const updateConnectionSchema = z.object({
   status: z.enum(["connected", "disconnected", "error", "paused"]).optional(),
   // null clears an existing workspace binding.
   workspaceId: z.string().trim().min(1).max(120).nullable().optional(),
-  config: z.record(z.unknown()).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
   lastSyncAt: z.string().datetime().optional(),
   lastError: z.string().max(4000).optional(),
 });
 
 export const connectionParamsSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
 });
 
 export const connectionActionParamsSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
   actionId: z.string().min(1).max(120),
 });
 
 export const connectionActionBodySchema = z.object({
-  input: z.record(z.unknown()).optional(),
+  input: z.record(z.string(), z.unknown()).optional(),
   idempotencyKey: z.string().trim().min(8).max(200).optional(),
 });
 
 export const discordPairingParamsSchema = z.object({
-  connectionId: z.string().uuid(),
-  pairingId: z.string().uuid(),
+  connectionId: z.guid(),
+  pairingId: z.guid(),
 });
 
 export const catalogParamsSchema = z.object({
@@ -139,18 +141,18 @@ export const catalogParamsSchema = z.object({
 });
 
 export const channelDraftParamsSchema = z.object({
-  draftId: z.string().uuid(),
+  draftId: z.guid(),
 });
 
 export const channelDraftListQuerySchema = z.object({
   catalogId: z.string().min(3).optional(),
-  connectionId: z.string().uuid().optional(),
+  connectionId: z.guid().optional(),
   limit: z.coerce.number().int().positive().max(100).default(20),
 });
 
 export const createChannelDraftSchema = z.object({
   catalogId: z.string().min(3),
-  connectionId: z.string().uuid().optional(),
+  connectionId: z.guid().optional(),
   lifecycleMode: z.enum(["create", "edit", "repair", "rotate_secret", "retest"]).optional(),
 });
 
@@ -158,7 +160,7 @@ export const updateChannelDraftSchema = z.object({
   expectedRevision: z.number().int().positive(),
   label: z.string().min(1).max(120).optional(),
   enabled: z.boolean().optional(),
-  draft: z.record(z.unknown()).optional(),
+  draft: z.record(z.string(), z.unknown()).optional(),
   lastFailureCategory: z
     .enum([
       "missing_input",
@@ -239,11 +241,11 @@ export const slackOAuthCallbackQuerySchema = z.object({
 });
 
 export const slackOAuthDisconnectSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
 });
 
 export const telegramDiscoverTargetsSchema = z.object({
-  connectionId: z.string().uuid().optional(),
+  connectionId: z.guid().optional(),
   botToken: z.string().min(1).optional(),
   botTokenEnv: z.string().min(1).optional(),
   setupCode: z.string().min(1).optional(),

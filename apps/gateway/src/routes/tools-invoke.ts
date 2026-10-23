@@ -5,7 +5,7 @@ import { projectPublicSecretValue } from "../services/public-secret-projection.j
 
 const bodySchema = z.object({
   toolName: z.string().min(1),
-  args: z.record(z.unknown()),
+  args: z.record(z.string(), z.unknown()),
   agentId: z.string().min(1),
   sessionId: z.string().min(1),
   workspaceId: z.string().min(1).optional(),

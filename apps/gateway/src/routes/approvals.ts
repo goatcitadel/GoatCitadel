@@ -11,8 +11,8 @@ const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "c
 const createSchema = z.object({
   kind: z.string().min(1),
   riskLevel: z.enum(["safe", "caution", "danger", "nuclear"]),
-  payload: z.record(z.unknown()),
-  preview: z.record(z.unknown()),
+  payload: z.record(z.string(), z.unknown()),
+  preview: z.record(z.string(), z.unknown()),
   linkage: z
     .object({
       sessionId: z.string().min(1).optional(),
@@ -38,7 +38,7 @@ const createSchema = z.object({
 
 const resolveSchema = z.object({
   decision: z.enum(["approve", "reject", "edit"]),
-  editedPayload: z.record(z.unknown()).optional(),
+  editedPayload: z.record(z.string(), z.unknown()).optional(),
   resolutionNote: z.string().optional(),
 });
 
@@ -74,7 +74,7 @@ const remoteTokenSchema = z.object({
 const remoteResolveSchema = z.object({
   token: z.string().trim().min(1).max(4096),
   decision: z.enum(["approve", "reject", "edit"]),
-  editedPayload: z.record(z.unknown()).optional(),
+  editedPayload: z.record(z.string(), z.unknown()).optional(),
   resolutionNote: z.string().max(4096).optional(),
 });
 
@@ -249,7 +249,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/api/v1/approvals/:approvalId/resolve", operatorOrCompanion, async (request, reply) => {
-    const params = z.object({ approvalId: z.string().uuid() }).safeParse(request.params);
+    const params = z.object({ approvalId: z.guid() }).safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "Invalid approval ID format." });
     }
@@ -279,7 +279,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/api/v1/approvals/:approvalId/remote-token", operatorOnly, async (request, reply) => {
-    const params = z.object({ approvalId: z.string().uuid() }).safeParse(request.params);
+    const params = z.object({ approvalId: z.guid() }).safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "Invalid approval ID format." });
     }
@@ -334,7 +334,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   fastify.get("/api/v1/approvals/:approvalId/replay", operatorOnly, async (request, reply) => {
-    const params = z.object({ approvalId: z.string().uuid() }).safeParse(request.params);
+    const params = z.object({ approvalId: z.guid() }).safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "Invalid approval ID format." });
     }

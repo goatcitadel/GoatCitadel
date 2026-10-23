@@ -22,7 +22,7 @@ const grantParamsSchema = sessionParamsSchema.extend({
 const createSessionSchema = z.object({
   workspaceId: z.string().trim().min(1).optional(),
   label: z.string().trim().min(1).optional(),
-  requestId: z.string().uuid().optional(),
+  requestId: z.guid().optional(),
 });
 
 const grantSchema = z.object({
@@ -30,7 +30,7 @@ const grantSchema = z.object({
   scopes: z.array(scopeSchema).min(1),
   allowedHosts: z.array(z.string().trim().min(1)).optional(),
   ttlSeconds: z.number().int().positive().optional(),
-  requestId: z.string().uuid().optional(),
+  requestId: z.guid().optional(),
 });
 
 const eventQuerySchema = z.object({

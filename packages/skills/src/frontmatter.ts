@@ -30,12 +30,8 @@ const REQUIRED_FIELDS_MESSAGE = "SKILL.md frontmatter requires name and descript
 
 export const SkillFrontmatterSchema = z
   .object({
-    name: z
-      .string({ required_error: REQUIRED_FIELDS_MESSAGE, invalid_type_error: REQUIRED_FIELDS_MESSAGE })
-      .min(1, REQUIRED_FIELDS_MESSAGE),
-    description: z
-      .string({ required_error: REQUIRED_FIELDS_MESSAGE, invalid_type_error: REQUIRED_FIELDS_MESSAGE })
-      .min(1, REQUIRED_FIELDS_MESSAGE),
+    name: z.string({ error: REQUIRED_FIELDS_MESSAGE }).min(1, REQUIRED_FIELDS_MESSAGE),
+    description: z.string({ error: REQUIRED_FIELDS_MESSAGE }).min(1, REQUIRED_FIELDS_MESSAGE),
     metadata: SkillMetadataSchema.optional(),
   })
   .passthrough();

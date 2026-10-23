@@ -69,7 +69,7 @@ const a2aJsonRpcMethodSchema = z.enum([
 const a2aOutboundBodySchema = z.object({
   peerId: z.string().min(1),
   method: a2aJsonRpcMethodSchema,
-  params: z.record(z.unknown()).default({}),
+  params: z.record(z.string(), z.unknown()).default({}),
   transport: z.enum(["JSONRPC", "GRPC"]).optional(),
   idempotencyKey: z.string().min(1).optional(),
 });
@@ -134,7 +134,7 @@ const createActivitySchema = z.object({
     "delivery",
   ]),
   message: z.string().min(1),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const createDeliverableSchema = z.object({
@@ -172,11 +172,11 @@ const agenticSubagentMetadataSchema = z
         "other",
       ])
       .optional(),
-    diagnostics: z.array(z.record(z.unknown())).optional(),
+    diagnostics: z.array(z.record(z.string(), z.unknown())).optional(),
     costUsd: z.number().nonnegative().optional(),
     tokenTotal: z.number().int().nonnegative().optional(),
     filesTouched: z.array(z.string().min(1)).optional(),
-    handoffEvidence: z.record(z.unknown()).optional(),
+    handoffEvidence: z.record(z.string(), z.unknown()).optional(),
   })
   .strict()
   .transform((value) => value as AgenticSubagentMetadata);

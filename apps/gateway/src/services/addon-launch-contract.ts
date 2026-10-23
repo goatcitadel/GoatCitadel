@@ -37,7 +37,7 @@ const AddonLaunchContractSchema = z
             return url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname);
           }, "Add-on health probes must target a loopback http URL."),
         readyWhen: z
-          .record(z.union([z.string(), z.number(), z.boolean()]))
+          .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
           .refine((value) => Object.keys(value).length > 0, "readyWhen needs at least one field."),
         readyTimeoutMs: z.number().int().min(1_000).max(120_000),
       })

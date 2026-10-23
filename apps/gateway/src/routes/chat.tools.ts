@@ -23,7 +23,7 @@ const chatToolApprovalsQuerySchema = z.object({
 });
 
 const chatToolArtifactParamsSchema = z.object({
-  artifactId: z.string().uuid(),
+  artifactId: z.guid(),
 });
 
 const chatToolArtifactQuerySchema = z.object({

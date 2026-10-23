@@ -124,7 +124,7 @@ const watchChildBodySchema = z
   .object({
     watcherId: z.string().trim().min(1).max(DURABLE_CHILD_WATCHER_LIMITS.watcherIdBytes).optional(),
     source: z.string().trim().min(1).max(DURABLE_CHILD_WATCHER_LIMITS.sourceBytes).optional(),
-    metadata: z.record(z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 
@@ -134,8 +134,8 @@ const deadLetterParamsSchema = z.object({
 
 const createRunBodySchema = z.object({
   workflowKey: z.string().min(1),
-  payload: z.record(z.unknown()).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   retryPolicy: z
     .object({
       maxAttempts: z.number().int().positive().max(20).optional(),
@@ -161,7 +161,7 @@ const retryBodySchema = z
 
 const wakeBodySchema = z.object({
   eventKey: z.string().min(1),
-  payload: z.record(z.unknown()).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
   correlationId: z.string().optional(),
 });
 

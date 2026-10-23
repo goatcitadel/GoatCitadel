@@ -54,7 +54,7 @@ const entrySchema = z
   .object({
     localId,
     kind: z.enum(["tool", "mcp_server", "skill"]),
-    descriptor: z.record(z.unknown()),
+    descriptor: z.record(z.string(), z.unknown()),
     descriptorSha256: sha256,
   })
   .strict();
@@ -114,7 +114,7 @@ const invocationSettlementBodySchema = z
     disposition: z.enum(["succeeded", "failed", "cancelled", "timed_out", "unknown"]),
     settlementSha256: sha256,
     outputSha256: sha256.optional(),
-    output: z.record(z.unknown()).optional(),
+    output: z.record(z.string(), z.unknown()).optional(),
     errorCode: z
       .string()
       .regex(/^[a-z0-9][a-z0-9._:-]{0,127}$/u)

@@ -21,7 +21,7 @@ const createWorkspaceSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   slug: z.string().min(1).optional(),
-  workspacePrefs: z.record(z.unknown()).optional(),
+  workspacePrefs: z.record(z.string(), z.unknown()).optional(),
 });
 
 const updateWorkspaceSchema = z.object({
@@ -30,7 +30,7 @@ const updateWorkspaceSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   slug: z.string().min(1).optional(),
-  workspacePrefs: z.record(z.unknown()).optional(),
+  workspacePrefs: z.record(z.string(), z.unknown()).optional(),
 });
 
 const workspaceRevisionSchema = z.object({
