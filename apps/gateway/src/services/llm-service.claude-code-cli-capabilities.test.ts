@@ -1,6 +1,7 @@
 import type { LlmConfigFile } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
 import { createNoopSecretStore } from "../test/llm-fixtures.js";
+import { createClaudeCodeCliRuntime } from "./llm-provider-claude-code-cli.js";
 import { LlmService } from "./llm-service.js";
 
 function buildConfig(capabilities?: Record<string, boolean>): LlmConfigFile {
@@ -20,7 +21,7 @@ function buildConfig(capabilities?: Record<string, boolean>): LlmConfigFile {
   };
 }
 
-function createService(config: LlmConfigFile, bridgeEnabled?: () => boolean) {
+function createService(config: LlmConfigFile, bridgeEnabled?: () => boolean, warmEnabled?: () => boolean) {
   return new LlmService(
     config,
     {},
@@ -28,6 +29,7 @@ function createService(config: LlmConfigFile, bridgeEnabled?: () => boolean) {
       secretStore: createNoopSecretStore(),
       enforceNetworkAllowlist: false,
       ...(bridgeEnabled ? { claudeCliToolBridgeEnabled: bridgeEnabled } : {}),
+      ...(warmEnabled ? { claudeCliWarmContinuationEnabled: warmEnabled } : {}),
     },
   );
 }
@@ -83,5 +85,38 @@ describe("claude-code-cli capability truth", () => {
     const on = cliCapabilities(createService(overridden, () => true));
     expect(on.toolCalling).toBe(true);
     for (const key of NEVER_ON) expect(on[key], key).toBe(false);
+  });
+
+  it("warm continuation needs both flags", () => {
+    let bridge = false;
+    let warm = true;
+    const runtime = createClaudeCodeCliRuntime(
+      {},
+      { claudeCliToolBridgeEnabled: () => bridge, claudeCliWarmContinuationEnabled: () => warm },
+    );
+    expect(runtime.warmContinuationEnabled()).toBe(false);
+
+    bridge = true;
+    warm = false;
+    expect(runtime.warmContinuationEnabled()).toBe(false);
+
+    warm = true;
+    expect(runtime.warmContinuationEnabled()).toBe(true);
+
+    bridge = false;
+    expect(runtime.warmContinuationEnabled()).toBe(false);
+
+    expect(createClaudeCodeCliRuntime({}).warmContinuationEnabled()).toBe(false);
+  });
+
+  it("the warm flag does not change reported toolCalling", () => {
+    expect(cliCapabilities(createService(buildConfig(), () => false, () => true)).toolCalling).toBe(false);
+    expect(cliCapabilities(createService(buildConfig(), () => true, () => false)).toolCalling).toBe(true);
+    expect(cliCapabilities(createService(buildConfig(), () => true, () => true)).toolCalling).toBe(true);
+  });
+
+  it("close() reaps the warm registry without error", async () => {
+    const service = createService(buildConfig(), () => true, () => true);
+    await expect(service.close()).resolves.toBeUndefined();
   });
 });

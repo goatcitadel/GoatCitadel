@@ -89,6 +89,7 @@ import {
   createClaudeCodeCliRuntime,
   isClaudeCodeCliToolBridgeEnabled,
   peekClaudeCodeCliReadiness,
+  reapClaudeCodeCliWarm,
   type ClaudeCodeCliRuntime,
   type ClaudeCodeCliRuntimeOptions,
 } from "./llm-provider-claude-code-cli.js";
@@ -234,6 +235,8 @@ export interface LlmServiceOptions {
   claudeCli?: ClaudeCodeCliRuntimeOptions;
   /** Read per call: whether the Claude Code CLI provider may call Gateway tools through the MCP bridge. Absent means off. */
   claudeCliToolBridgeEnabled?: () => boolean;
+  /** Read per call: whether a bridged Claude Code CLI tool step may park its process for a warm continuation. Absent means off. */
+  claudeCliWarmContinuationEnabled?: () => boolean;
   /** Injected only for deterministic auth integration tests. */
   googleCloudAuthService?: GoogleCloudAuthService;
 }
@@ -584,6 +587,11 @@ export class LlmService {
   /** Whether the Claude Code CLI provider may call Gateway tools through the MCP bridge (read per call). */
   public isClaudeCliToolBridgeEnabled(): boolean {
     return isClaudeCodeCliToolBridgeEnabled(this.claudeCodeCli);
+  }
+
+  /** Shuts down Claude Code CLI warm state (parked processes) when the Gateway closes. */
+  public async close(): Promise<void> {
+    await reapClaudeCodeCliWarm(this.claudeCodeCli, "shutdown");
   }
 
   /** Whether a configured provider can call Gateway tools (and so create files). */

@@ -16,6 +16,7 @@ import type {
   LlmTrackedProcessDispatch,
 } from "./llm-provider-adapter.js";
 import { claudeCodeHarnessExecutableNames, listExecutableCandidates } from "./agentic-harness-availability.js";
+import { ClaudeCliWarmRegistry } from "./claude-code-cli-warm-registry.js";
 import {
   ClaudeCliError,
   buildClaudeCliArgs,
@@ -91,15 +92,24 @@ export interface ClaudeCodeCliRuntime {
   toolBridgeEnabled(): boolean;
   /** This step's stub launch, or undefined when the flag is off. Resolved per step, never cached. */
   resolveToolBridgeLaunch(): ClaudeCodeCliToolBridgeLaunch | undefined;
+  /** Warm continuation flag; true only while the bridge flag is also on. Read per call, never cached. */
+  warmContinuationEnabled(): boolean;
+  /** Parked `claude -p` processes awaiting their tool results. */
+  readonly warm: ClaudeCliWarmRegistry;
   resolveInvocation(): ClaudeCliInvocation;
 }
 
 export function createClaudeCodeCliRuntime(
   env: NodeJS.ProcessEnv,
-  serviceOptions: { claudeCli?: ClaudeCodeCliRuntimeOptions; claudeCliToolBridgeEnabled?: () => boolean } = {},
+  serviceOptions: {
+    claudeCli?: ClaudeCodeCliRuntimeOptions;
+    claudeCliToolBridgeEnabled?: () => boolean;
+    claudeCliWarmContinuationEnabled?: () => boolean;
+  } = {},
 ): ClaudeCodeCliRuntime {
   const options = serviceOptions.claudeCli ?? {};
   const bridgeEnabled = serviceOptions.claudeCliToolBridgeEnabled;
+  const warmEnabled = serviceOptions.claudeCliWarmContinuationEnabled;
   const childEnv = buildClaudeCliEnv(env);
   let cached: { at: number; invocation: ClaudeCliInvocation } | undefined;
   const resolveInvocation =
@@ -116,6 +126,7 @@ export function createClaudeCodeCliRuntime(
       return resolved;
     });
   const toolBridgeEnabled = () => bridgeEnabled?.() === true;
+  const warmContinuationEnabled = () => toolBridgeEnabled() && warmEnabled?.() === true;
   const bridgeNodePath = options.toolBridge?.nodePath ?? process.execPath;
   const resolveBridgeStubPath = options.toolBridge?.stubPath ?? (() => resolveClaudeCliStubPath(existsSync));
   const runtime: ClaudeCodeCliRuntime = {
@@ -125,6 +136,8 @@ export function createClaudeCodeCliRuntime(
     killTree: options.killTree,
     resolveInvocation,
     toolBridgeEnabled,
+    warmContinuationEnabled,
+    warm: new ClaudeCliWarmRegistry(),
     resolveToolBridgeLaunch: () =>
       toolBridgeEnabled() ? { nodePath: bridgeNodePath, stubPath: resolveBridgeStubPath() } : undefined,
     readiness:
@@ -158,6 +171,14 @@ export function createClaudeCodeCliRuntime(
 /** Whether this runtime may bridge Gateway tools (the feature flag, read per call). */
 export function isClaudeCodeCliToolBridgeEnabled(runtime: ClaudeCodeCliRuntime | undefined): boolean {
   return runtime?.toolBridgeEnabled() === true;
+}
+
+/** Kills every parked warm process (Gateway shutdown). */
+export async function reapClaudeCodeCliWarm(
+  owner: { readonly warm: ClaudeCliWarmRegistry },
+  reason: "shutdown",
+): Promise<void> {
+  await owner.warm.reapAll(reason);
 }
 
 /** Last probed readiness without spawning anything. */

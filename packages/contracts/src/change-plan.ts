@@ -166,6 +166,7 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAGS = [
   "subagentFanoutV1Disabled",
   "durableChatFanoutV1Enabled",
   "claudeCliToolBridgeEnabled",
+  "claudeCliWarmContinuationEnabled",
   ...CHAT_RESTORATION_FEATURE_FLAGS,
   "evolutionControlPlaneV1Enabled",
   "improvementLocalObservationV1Enabled",

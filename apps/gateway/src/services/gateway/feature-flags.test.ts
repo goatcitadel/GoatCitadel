@@ -36,3 +36,18 @@ describe("claudeCliToolBridgeEnabled feature flag", () => {
     );
   });
 });
+
+describe("claudeCliWarmContinuationEnabled feature flag", () => {
+  const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
+
+  it("warm continuation defaults off", () => {
+    expect(defaults.claudeCliWarmContinuationEnabled).toBe(false);
+    expect(buildUpdatedFeatureFlags(defaults, {}).claudeCliWarmContinuationEnabled).toBe(false);
+  });
+
+  it("warm continuation follows a stored true", () => {
+    const stored = { claudeCliWarmContinuationEnabled: true };
+    expect(resolveGatewayFeatureFlags(stored, defaults).claudeCliWarmContinuationEnabled).toBe(true);
+    expect(buildUpdatedFeatureFlags(defaults, stored).claudeCliWarmContinuationEnabled).toBe(true);
+  });
+});

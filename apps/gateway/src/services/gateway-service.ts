@@ -1685,6 +1685,7 @@ export class GatewayService {
       secretStore,
       modelUsageAccounting: this.modelUsageAccounting,
       claudeCliToolBridgeEnabled: () => this.config.assistant.features.claudeCliToolBridgeEnabled === true,
+      claudeCliWarmContinuationEnabled: () => this.config.assistant.features.claudeCliWarmContinuationEnabled === true,
       localServiceLeaseAcquirer: (request) => {
         this.configGenerationService.assertRuntimeReadsReady();
         return acquireBoundLlamaCppLease({
@@ -12156,6 +12157,7 @@ export class GatewayService {
     await this.assemblyService.close();
     await this.npuSidecar.close();
     await this.llamaCppRuntime.close();
+    await this.llmService.close();
     await this.storage.close();
   }
 
