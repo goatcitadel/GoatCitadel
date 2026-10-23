@@ -126,7 +126,7 @@ describe("buildBaseAgentSystemPrompt", () => {
     // A catalog of tools the turn cannot call makes models write the calls out as text instead.
     const prompt = buildBaseAgentSystemPrompt(
       input({
-        toolsCallable: false,
+        toolsUnavailableReason: "manual_autonomy",
         toolset: { toolNames: ["fs.read", "web.search"], skills: [{ name: "pdf-generator", summary: "Make PDFs" }] },
       }),
     );
@@ -142,11 +142,33 @@ describe("buildBaseAgentSystemPrompt", () => {
   });
 
   it("keeps the tool catalog when the turn can call tools", () => {
-    for (const toolsCallable of [true, undefined]) {
-      const prompt = buildBaseAgentSystemPrompt(input({ toolsCallable }));
-      expect(prompt.volatileTail).toContain("## Tool catalog (current policy still applies)\nfs.read, web.search");
-      expect(prompt.volatileTail).not.toContain("No tools can be called in this turn");
+    const prompt = buildBaseAgentSystemPrompt(input({ toolsUnavailableReason: undefined }));
+    expect(prompt.volatileTail).toContain("## Tool catalog (current policy still applies)\nfs.read, web.search");
+    expect(prompt.volatileTail).not.toContain("No tools can be called in this turn");
+  });
+
+  it("names what actually turns tools off, and only suggests Safe Auto when that is the fix", () => {
+    const tail = (toolsUnavailableReason: BuildBaseAgentSystemPromptInput["toolsUnavailableReason"]) =>
+      buildBaseAgentSystemPrompt(input({ toolsUnavailableReason })).volatileTail;
+    expect(tail("manual_autonomy")).toContain("tool autonomy is Manual");
+    for (const [reason, cause] of [
+      ["advisory_planning", "advisory planning"],
+      ["capability_profile", "capability profile"],
+      ["project_binding_required", "bound to a project"],
+    ] as const) {
+      expect(tail(reason)).toContain("No tools can be called in this turn");
+      expect(tail(reason)).toContain(cause);
+      expect(tail(reason)).not.toContain("Safe Auto");
     }
+  });
+
+  it("replaces the Deep research contract with an honest no-research note when tools are off", () => {
+    const prompt = buildBaseAgentSystemPrompt(input({ webMode: "deep", toolsUnavailableReason: "manual_autonomy" }));
+    expect(prompt.volatileTail).not.toContain(DEEP_RESEARCH_PROMPT_SECTION);
+    expect(prompt.volatileTail).toContain("could not research");
+    expect(prompt.volatileTail).toContain("unverified");
+    // With tools available, Deep mode keeps its full contract.
+    expect(buildBaseAgentSystemPrompt(input({ webMode: "deep" })).volatileTail).toContain(DEEP_RESEARCH_PROMPT_SECTION);
   });
 
   it("caps the tool-name list and notes the overflow", () => {

@@ -766,7 +766,8 @@ describe("prepareAgentChatTurn personality overlay", () => {
 
   it("tells the model Deep research is on through the volatile base-prompt block only", async () => {
     // The composer sends the session's web mode on every request (useChatOutboundExecution).
-    const deep = createHost("chat", { webMode: "deep" });
+    // Deep research needs callable web tools, which manual autonomy (the helper default) removes.
+    const deep = createHost("chat", { webMode: "deep", toolAutonomy: "safe_auto" });
     await prepareAgentChatTurn(deep.host, "session-1", {
       content: "compare heat pump rebates in Oregon",
       webMode: "deep",
@@ -775,7 +776,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(deepBlocks[0]?.text).not.toContain("## Web research: deep");
     expect(deepBlocks[1]?.text).toContain("## Web research: deep");
 
-    const auto = createHost("chat", { webMode: "auto" });
+    const auto = createHost("chat", { webMode: "auto", toolAutonomy: "safe_auto" });
     await prepareAgentChatTurn(auto.host, "session-1", {
       content: "compare heat pump rebates in Oregon",
       webMode: "auto",
@@ -826,6 +827,19 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(guidance).not.toContain("browser.search");
     expect(guidance).not.toContain("## Skills you can draw on");
     expect(guidance).toContain("No tools can be called in this turn");
+  });
+
+  it("blames advisory planning, not tool autonomy, when advisory planning turns tools off", async () => {
+    // Advisory planning forces manual even with Safe Auto saved, so "switch to Safe Auto" would be wrong.
+    const harness = createHost("cowork", { toolAutonomy: "safe_auto", planningMode: "advisory" });
+    withCapabilityCatalog(harness.host, { toolNames: ["browser.search"], skills: [] });
+
+    await prepareAgentChatTurn(harness.host, "session-1", { content: "hello" });
+
+    const guidance = harness.readGuidance();
+    expect(guidance).not.toContain("## Tool catalog");
+    expect(guidance).toContain("advisory planning");
+    expect(guidance).not.toContain("Safe Auto");
   });
 
   it("sanitizes callable catalog text before interpolating it into the base prompt", async () => {

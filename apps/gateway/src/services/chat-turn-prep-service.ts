@@ -73,6 +73,7 @@ import {
   buildBaseAgentSystemPrompt,
   renderBaseAgentSystemPromptBlocks,
   type BaseAgentPromptToolset,
+  type BaseAgentToolsUnavailableReason,
 } from "./base-agent-system-prompt.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
 import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
@@ -572,6 +573,24 @@ export function buildChatCompactionDimension(input: {
     profileFingerprint,
     persistState: input.persistState ?? true,
   };
+}
+
+/**
+ * Why this turn's tool schema will be empty, in the same order `effectiveToolAutonomy` is derived; undefined when
+ * the turn can call tools. Quick-web turns keep their web tools even under manual autonomy.
+ */
+function resolveToolsUnavailableReason(input: {
+  effectiveToolAutonomy: ChatSessionPrefsRecord["toolAutonomy"];
+  quickWebTurn: boolean;
+  capabilityProfileToolAutonomy: ChatSessionPrefsRecord["toolAutonomy"] | undefined;
+  advisoryPlanning: boolean;
+  missingRequiredProjectBinding: boolean;
+}): BaseAgentToolsUnavailableReason | undefined {
+  if (input.effectiveToolAutonomy !== "manual" || input.quickWebTurn) return undefined;
+  if (input.capabilityProfileToolAutonomy !== undefined) return "capability_profile";
+  if (input.advisoryPlanning) return "advisory_planning";
+  if (input.missingRequiredProjectBinding) return "project_binding_required";
+  return "manual_autonomy";
 }
 
 export async function prepareAgentChatTurn(
@@ -1116,7 +1135,13 @@ export async function prepareAgentChatTurn(
         },
         toolset: promptCapabilityCatalog,
         // Mirrors the runner's tool schema: manual autonomy outside quick web sends the provider no tools.
-        toolsCallable: !(effectiveToolAutonomy === "manual" && !quickWebTurn),
+        toolsUnavailableReason: resolveToolsUnavailableReason({
+          effectiveToolAutonomy,
+          quickWebTurn,
+          capabilityProfileToolAutonomy: boundCapabilityProfile?.selection.toolAutonomy,
+          advisoryPlanning: prefs.planningMode === "advisory",
+          missingRequiredProjectBinding,
+        }),
         webMode: normalized.webMode ?? prefs.webMode,
         ...(memoryDigest ? { memoryDigest } : {}),
       }),
