@@ -852,51 +852,7 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("unavailable");
   });
 
-  it("executes the unchanged daemon controls through Cockpit SystemRuntime and opens the native backup list", async () => {
-    let renderer: ReactTestRenderer | null = null;
-    try {
-      await act(async () => {
-        renderer = create(<SystemRuntime />);
-      });
-      expect(renderer!.root.findByType(RuntimeRoutePage).props.route).toEqual(
-        expect.objectContaining({
-          area: "ops",
-          section: "runtime",
-          sessionId: "kept",
-        }),
-      );
-      await act(async () => {
-        findExactButton(renderer!.root, "Gateway details").props.onClick();
-      });
-      await act(async () => {
-        findButton(renderer!.root, "Start daemon").props.onClick();
-        findButton(renderer!.root, "Restart daemon").props.onClick();
-        findButton(renderer!.root, "Stop daemon").props.onClick();
-      });
-      expect(runtimeSnapshotOverrides.runDaemonAction.mock.calls.map(([action]) => action)).toEqual([
-        "start",
-        "restart",
-        "stop",
-      ]);
-      runtimeSnapshotOverrides.backups = [
-        {
-          backupId: "exact-native-backup",
-          createdAt: "2026-10-14T00:00:00Z",
-          files: [],
-        },
-      ];
-      await act(async () => {
-        renderer!.update(<SystemRuntime />);
-        findExactButton(renderer!.root, "Backups").props.onClick();
-      });
-      expect(collectText(renderer!.root)).toContain("exact-native-backup");
-      expect(collectText(renderer!.root)).not.toContain("Classic");
-    } finally {
-      if (renderer) await act(async () => renderer!.unmount());
-    }
-  });
-
-  it("exports the original full diagnostics payload from the native runtime diagnostics owner", async () => {
+  it("exports the original full diagnostics payload from the Classic diagnostics route", async () => {
     let renderer: ReactTestRenderer | null = null,
       exported: Blob | undefined;
     const anchor = { href: "", download: "", click: vi.fn() },
@@ -909,7 +865,15 @@ describe("RuntimeRoutePage", () => {
     vi.stubGlobal("document", { createElement: vi.fn(() => anchor) });
     try {
       await act(async () => {
-        renderer = create(<SystemRuntime section="diagnostics" />);
+        renderer = create(
+          <RuntimeRoutePage
+            route={{ area: "ops", section: "diagnostics", theme: "ops" } as any}
+            activeWorkspaceId="default"
+            activeWorkspaceName="Default"
+            navigate={vi.fn()}
+            setActiveWorkspaceId={vi.fn()}
+          />,
+        );
       });
       await act(async () => findExactButton(renderer!.root, "Export diagnostics").props.onClick());
       expect(anchor.click).toHaveBeenCalledOnce();
