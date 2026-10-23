@@ -167,6 +167,7 @@ const actionKinds: Record<string, string> = {
   "code_mode.run": "Run code (Code Mode)",
   "remote_worker.native_runtime": "Run on a remote worker",
   change_plan_effect: "Apply a change plan",
+  "tool.invoke": "Use a tool",
   tool_invoke: "Use a tool",
   "citadel_ward.integration_action": "Citadel Ward: integration action",
   "citadel_ward.a2a_outbound": "Citadel Ward: outbound A2A call",

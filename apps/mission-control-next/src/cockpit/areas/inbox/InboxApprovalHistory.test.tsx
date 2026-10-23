@@ -145,15 +145,15 @@ it("labels an expiry sweep as expired and shows who settled an operator decision
   const bulk = card("bulk");
   const plain = card("plain");
   expect(expired).not.toBe("");
-  expect(expired).toContain("Tool invoke · Expired ·");
+  expect(expired).toContain("Use a tool · Expired ·");
   expect(expired).toContain(
     "Expired without an operator decision. Approval expired expired before operator resolution.",
   );
   expect(expired).not.toContain("Denied");
-  expect(bulk).toContain("Tool invoke · Denied ·");
+  expect(bulk).toContain("Use a tool · Denied ·");
   expect(bulk).toContain("Decided by an operator. Bulk rejected from the approvals queue.");
   expect(bulk).not.toContain("Decided by operator:ana");
-  expect(plain).toContain("Tool invoke · Denied ·");
+  expect(plain).toContain("Use a tool · Denied ·");
   expect(plain).not.toContain("Decided by");
   const options = [...host.querySelectorAll("option")].map((option) => option.textContent);
   expect(options).toEqual(["All records", "Waiting on you", "Approved", "Denied", "Approved with edits", "Recovery"]);

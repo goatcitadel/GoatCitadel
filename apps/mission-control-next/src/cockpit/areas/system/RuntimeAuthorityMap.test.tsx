@@ -220,6 +220,7 @@ describe("cockpit runtime authority map", () => {
     projection.value.data = {
       items: [
         approval("ap-1", "code_mode.run"),
+        approval("ap-3", "tool.invoke"),
         approval("ap-2", "file.write"),
         run("run-1", "chat.turn.execute"),
         run("run-2", "custom.workflow"),
@@ -230,6 +231,7 @@ describe("cockpit runtime authority map", () => {
     await render();
     expect([...container.querySelectorAll("li h3")].map((h) => h.textContent)).toEqual([
       "Approval: Run code (Code Mode)",
+      "Approval: Use a tool",
       "Approval",
       "Run: Chat reply",
       "Run",
