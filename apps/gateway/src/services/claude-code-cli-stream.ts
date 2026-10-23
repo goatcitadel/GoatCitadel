@@ -8,6 +8,7 @@ import {
   isClaudeCliToolUseBlock,
   type ClaudeCliToolStep,
 } from "./claude-code-cli-tool-step.js";
+import type { ClaudeCliEmittedAssistant } from "./claude-code-cli-warm-match.js";
 import { normalizeAnthropicUsage } from "./llm-provider-anthropic.js";
 
 export type { ClaudeCliToolStep } from "./claude-code-cli-tool-step.js";
@@ -36,11 +37,18 @@ export interface ClaudeCliStreamMapper {
    * then yields these chunks and kills the CLI instead of calling `finish`, which has no `result` to read.
    */
   toolStep(): ClaudeCliToolStep | undefined;
+  /**
+   * Defined once `toolStep()` is: the content text and tool calls this step emitted, exactly as yielded,
+   * so a parked process can be matched against the assistant message the runner rebuilds from them.
+   */
+  emittedAssistant(): ClaudeCliEmittedAssistant | undefined;
 }
 
 export interface ClaudeCliStreamMapperOptions {
   /** Step mode: the step's tool manifest. Without it, any CLI tool use is a governance fault. */
   bridge?: ClaudeCliToolManifest;
+  /** With `bridge`: a warm continuation segment, keyed by tool-use id to the delivered result text. */
+  continuation?: { delivered: ReadonlyMap<string, string> };
 }
 
 export function classifyClaudeCliFailure(text: string): ClaudeCliReasonCode {
@@ -76,7 +84,10 @@ export function createClaudeCliStreamMapper(
   const blockToolUse = (): never => {
     throw new ClaudeCliError("claude_cli_tool_use_blocked", claudeCliUserMessage("claude_cli_tool_use_blocked"));
   };
-  const collector = options.bridge ? createClaudeCliToolStepCollector(options.bridge, identity) : undefined;
+  const collector = options.bridge
+    ? createClaudeCliToolStepCollector(options.bridge, identity, { continuation: options.continuation })
+    : undefined;
+  let emitted: ClaudeCliEmittedAssistant | undefined;
 
   return {
     push(line) {
@@ -165,6 +176,12 @@ export function createClaudeCliStreamMapper(
 
     toolStep() {
       return collector?.step();
+    },
+
+    emittedAssistant() {
+      // Content stops accumulating once the step completes, so the first answer is final.
+      if (!emitted && collector?.step()) emitted = { text, calls: collector.emittedCalls() };
+      return emitted;
     },
   };
 }

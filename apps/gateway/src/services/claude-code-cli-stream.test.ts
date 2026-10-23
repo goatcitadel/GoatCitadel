@@ -8,6 +8,7 @@ import {
   createClaudeCliStreamMapper,
   renderClaudeCliPrompt,
 } from "./claude-code-cli-stream.js";
+import { buildClaudeCliToolManifest } from "./claude-code-cli-tool-bridge.js";
 
 const line = (value: unknown) => JSON.stringify(value);
 const textDelta = (text: string) =>
@@ -351,5 +352,234 @@ describe("claudeCliUserMessage", () => {
     const message = claudeCliUserMessage("claude_cli_tools_unsupported");
     expect(message).toMatch(/forces a specific tool call/);
     expect(message).not.toMatch(/agentic|Code Mode/i);
+  });
+});
+
+describe("continuation segments", () => {
+  // Echo shape observed from Claude Code 2.1.305 after the stub delivered a staged result.
+  const MODEL = "claude-haiku-5-5";
+  const ECHO_TOOL = "mcp__goatcitadel__notes_echo";
+  const ID_A = "toolu_01Alpha";
+  const ID_B = "toolu_01Beta";
+  const bridge = buildClaudeCliToolManifest([
+    { type: "function", function: { name: "notes_echo", description: "Echo", parameters: {} } },
+  ]);
+  const init = line({
+    type: "system",
+    subtype: "init",
+    tools: [ECHO_TOOL],
+    mcp_servers: [{ name: "goatcitadel", status: "connected" }],
+    model: MODEL,
+  });
+  const streamEvent = (event: Record<string, unknown>) => line({ type: "stream_event", event });
+  const messageStart = streamEvent({
+    type: "message_start",
+    message: { model: MODEL, id: "msg_02", type: "message", role: "assistant", content: [], stop_reason: null },
+  });
+  const segmentTextDelta = (text: string) =>
+    streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } });
+  const messageDelta = (stopReason: string) =>
+    streamEvent({
+      type: "message_delta",
+      delta: { stop_reason: stopReason, stop_sequence: null },
+      usage: { input_tokens: 3, output_tokens: 9 },
+    });
+  const messageStop = streamEvent({ type: "message_stop" });
+  const echo = (id: string, content: unknown, extra: Record<string, unknown> = {}) =>
+    line({
+      type: "user",
+      message: { role: "user", content: [{ tool_use_id: id, type: "tool_result", content, ...extra }] },
+      parent_tool_use_id: null,
+      session_id: "session-1",
+      tool_use_result: content,
+      tool_result_meta: [{ id, permission_decision: { decision: "accept", source: "config", reason_type: "rule" } }],
+    });
+  const textEcho = (id: string, text: string) => echo(id, [{ type: "text", text }]);
+  const toolCall = (id: string, input: unknown) => [
+    streamEvent({
+      type: "content_block_start",
+      index: 1,
+      content_block: { type: "tool_use", id, name: ECHO_TOOL, input: {} },
+    }),
+    streamEvent({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{}" } }),
+    line({
+      type: "assistant",
+      message: { model: MODEL, role: "assistant", content: [{ type: "tool_use", id, name: ECHO_TOOL, input }] },
+    }),
+  ];
+  const continuation = (delivered: Record<string, string>) =>
+    createClaudeCliStreamMapper(MODEL, { bridge, continuation: { delivered: new Map(Object.entries(delivered)) } });
+  const pushAll = (mapper: ReturnType<typeof createClaudeCliStreamMapper>, lines: string[]) =>
+    lines.flatMap((entry) => mapper.push(entry));
+  const expectMismatch = (fn: () => unknown) =>
+    expect(fn).toThrow(expect.objectContaining({ reasonCode: "claude_cli_bridge_mismatch" }));
+
+  it("continuation accepts one echo per delivered id, then a model message", () => {
+    const tricky = "名前 🐐\r\nline2";
+    const mapper = continuation({ [ID_A]: tricky, [ID_B]: "" });
+    const toolProgress = line({ type: "tool_progress", tool_use_id: ID_A, tool_name: ECHO_TOOL, heartbeat: true });
+    const chunks = pushAll(mapper, [
+      toolProgress,
+      textEcho(ID_A, tricky),
+      echo(ID_B, [{ type: "text", text: "" }]),
+      messageStart,
+      segmentTextDelta("done"),
+      messageDelta("end_turn"),
+      messageStop,
+      line({ type: "result", subtype: "success", is_error: false, result: "done" }),
+    ]);
+    expect(chunks).toEqual([expect.objectContaining({ choices: [{ index: 0, delta: { content: "done" } }] })]);
+    expect(mapper.finish({ exitCode: 0, stderrTail: "" }).text).toBe("done");
+
+    // Split text blocks join with no separator.
+    const split = continuation({ [ID_A]: tricky });
+    expect(
+      split.push(
+        echo(ID_A, [
+          { type: "text", text: "名前 " },
+          { type: "text", text: "🐐\r\nline2" },
+        ]),
+      ),
+    ).toEqual([]);
+    expect(split.push(messageStart)).toEqual([]);
+
+    // A string content compares as the text itself, and "" stays "".
+    const asString = continuation({ [ID_A]: tricky, [ID_B]: "" });
+    expect(pushAll(asString, [echo(ID_A, tricky), echo(ID_B, ""), messageStart])).toEqual([]);
+  });
+
+  it("echo with different text is claude_cli_bridge_mismatch", () => {
+    expectMismatch(() => continuation({ [ID_A]: "value-for-alpha" }).push(textEcho(ID_A, "value-for-alpha ")));
+    expectMismatch(() => continuation({ [ID_A]: "" }).push(textEcho(ID_A, " ")));
+    expectMismatch(() => continuation({ [ID_A]: "名前 🐐\r\nline2" }).push(textEcho(ID_A, "名前 🐐\nline2")));
+    expectMismatch(() => continuation({ [ID_A]: "value" }).push(echo(ID_A, [{ type: "image", source: {} }])));
+    expectMismatch(() => continuation({ [ID_A]: "" }).push(echo(ID_A, undefined)));
+    // The CLI's own timeout result: string content and is_error, never what the Gateway delivers.
+    expectMismatch(() =>
+      continuation({ [ID_A]: "value" }).push(
+        echo(ID_A, 'MCP server "goatcitadel" tool "notes_echo" timed out after 20s', { is_error: true }),
+      ),
+    );
+    expectMismatch(() => continuation({ [ID_A]: "value" }).push(echo(ID_A, "value", { is_error: true })));
+  });
+
+  it("echo for an undelivered id is claude_cli_bridge_mismatch", () => {
+    expectMismatch(() => continuation({ [ID_A]: "value" }).push(textEcho(ID_B, "value")));
+    const twice = continuation({ [ID_A]: "value" });
+    twice.push(textEcho(ID_A, "value"));
+    expectMismatch(() => twice.push(textEcho(ID_A, "value")));
+  });
+
+  it("message_start before every echo is claude_cli_bridge_mismatch", () => {
+    expectMismatch(() => continuation({ [ID_A]: "value" }).push(messageStart));
+    const partial = continuation({ [ID_A]: "a", [ID_B]: "b" });
+    partial.push(textEcho(ID_A, "a"));
+    expectMismatch(() => partial.push(messageStart));
+    // Nor may the segment end before the model message it owes.
+    expectMismatch(() =>
+      continuation({ [ID_A]: "a" }).push(line({ type: "result", subtype: "success", is_error: false, result: "x" })),
+    );
+  });
+
+  it("a second message_start is claude_cli_bridge_mismatch", () => {
+    const mapper = continuation({ [ID_A]: "value" });
+    pushAll(mapper, [textEcho(ID_A, "value"), messageStart]);
+    expectMismatch(() => mapper.push(messageStart));
+    // An echo after the segment's model message started is a tool result the CLI produced itself.
+    const late = continuation({ [ID_A]: "value" });
+    pushAll(late, [textEcho(ID_A, "value"), messageStart]);
+    expectMismatch(() => late.push(textEcho(ID_A, "value")));
+  });
+
+  it("init in continuation is claude_cli_bridge_mismatch", () => {
+    expectMismatch(() => continuation({ [ID_A]: "value" }).push(init));
+    const afterEcho = continuation({ [ID_A]: "value" });
+    afterEcho.push(textEcho(ID_A, "value"));
+    expectMismatch(() => afterEcho.push(init));
+  });
+
+  it("a continuation that ends in another tool_use yields tool_calls and emittedAssistant", () => {
+    const mapper = continuation({ [ID_A]: "value" });
+    const streamed = pushAll(mapper, [
+      textEcho(ID_A, "value"),
+      messageStart,
+      segmentTextDelta("Checking "),
+      segmentTextDelta("again."),
+      ...toolCall("toolu_01Gamma", { text: "again" }),
+      messageDelta("tool_use"),
+    ]);
+    expect(streamed.map((entry) => (entry.choices as Array<{ delta: unknown }>)[0]?.delta)).toEqual([
+      { content: "Checking " },
+      { content: "again." },
+    ]);
+    expect(mapper.toolStep()).toBeUndefined();
+    expect(mapper.emittedAssistant()).toBeUndefined();
+
+    mapper.push(messageStop);
+    const step = mapper.toolStep();
+    expect(step?.chunks[0]).toMatchObject({
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "toolu_01Gamma",
+                type: "function",
+                function: { name: "notes_echo", arguments: '{"text":"again"}' },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(step?.chunks.at(-1)).toMatchObject({
+      choices: [{ finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 3, completion_tokens: 9 },
+    });
+    const emitted = mapper.emittedAssistant();
+    expect(emitted).toEqual({
+      text: "Checking again.",
+      calls: [{ id: "toolu_01Gamma", name: "notes_echo", arguments: '{"text":"again"}' }],
+    });
+    expect(mapper.emittedAssistant()).toBe(emitted);
+  });
+
+  it("a continuation that ends with a result finishes as text", () => {
+    const mapper = continuation({ [ID_A]: "value" });
+    pushAll(mapper, [
+      textEcho(ID_A, "value"),
+      messageStart,
+      segmentTextDelta("All done."),
+      messageDelta("end_turn"),
+      messageStop,
+      line({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "All done.",
+        usage: { input_tokens: 3, output_tokens: 9 },
+      }),
+    ]);
+    expect(mapper.toolStep()).toBeUndefined();
+    expect(mapper.emittedAssistant()).toBeUndefined();
+    const final = mapper.finish({ exitCode: 0, stderrTail: "" });
+    expect(final.text).toBe("All done.");
+    expect(final.finalChunk).toMatchObject({ choices: [{ finish_reason: "stop" }] });
+    expect(final.usage).toMatchObject({ prompt_tokens: 3, completion_tokens: 9 });
+  });
+
+  it("a step-mode tool step reports the assistant message it emitted; a tool result still fails it", () => {
+    const mapper = createClaudeCliStreamMapper(MODEL, { bridge });
+    pushAll(mapper, [init, messageStart, ...toolCall(ID_A, { text: "hi" }), messageDelta("tool_use"), messageStop]);
+    expect(mapper.emittedAssistant()).toEqual({
+      text: "",
+      calls: [{ id: ID_A, name: "notes_echo", arguments: '{"text":"hi"}' }],
+    });
+
+    const fresh = createClaudeCliStreamMapper(MODEL, { bridge });
+    fresh.push(init);
+    expectMismatch(() => fresh.push(textEcho(ID_A, "value")));
+    expect(createClaudeCliStreamMapper(MODEL).emittedAssistant()).toBeUndefined();
   });
 });
