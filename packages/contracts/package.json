@@ -52,7 +52,7 @@
     "@noble/hashes": "1.8.0",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
-    "zod": "3.25.76"
+    "zod": "4.6.6"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",

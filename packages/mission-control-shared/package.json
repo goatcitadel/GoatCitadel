@@ -100,7 +100,7 @@
     "three": "0.183.1",
     "unified": "11.0.5",
     "vaul": "1.1.2",
-    "zod": "3.25.76"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@types/hast": "3.0.4",
