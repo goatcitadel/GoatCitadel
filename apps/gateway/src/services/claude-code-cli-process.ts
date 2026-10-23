@@ -26,6 +26,7 @@ export const CLAUDE_CLI_REASON_CODES = [
   "claude_cli_cancelled",
   "claude_cli_hook_blocked",
   "claude_cli_managed_hooks_active",
+  "claude_cli_managed_auto_memory",
   "claude_cli_bridge_unavailable",
   "claude_cli_bridge_mismatch",
 ] as const;
@@ -192,12 +193,17 @@ const CLAUDE_CLI_ENV_ALLOWLIST = new Set(
   ].map((key) => key.toUpperCase()),
 );
 
-/** Only allowlisted keys reach the child; Anthropic credentials and Gateway secrets never do. */
+/**
+ * Only allowlisted keys reach the child; Anthropic credentials and Gateway secrets never do.
+ * Auto-memory is switched off here too: `--settings` ranks below organization-managed settings,
+ * and readiness refuses any managed configuration that forces it back on.
+ */
 export function buildClaudeCliEnv(env: NodeJS.ProcessEnv | Record<string, string | undefined>): NodeJS.ProcessEnv {
   const scrubbed: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined && CLAUDE_CLI_ENV_ALLOWLIST.has(key.toUpperCase())) scrubbed[key] = value;
   }
+  scrubbed.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
   return scrubbed;
 }
 

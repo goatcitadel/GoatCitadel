@@ -751,8 +751,11 @@ describe("CronJobSchema no_agent + chaining fields", () => {
 describe("describeClaudeCodeCliLoginGuidance", () => {
   it("gives a concrete next step for each local Claude Code login state", () => {
     expect(describeClaudeCodeCliLoginGuidance("claude_cli_logged_out")).toContain("sign in with /login");
-    expect(describeClaudeCodeCliLoginGuidance("claude_cli_not_subscription_login")).toContain("not a Claude subscription");
+    expect(describeClaudeCodeCliLoginGuidance("claude_cli_not_subscription_login")).toContain(
+      "not a Claude subscription",
+    );
     expect(describeClaudeCodeCliLoginGuidance("claude_cli_managed_hooks_active")).toContain("Organization-managed");
+    expect(describeClaudeCodeCliLoginGuidance("claude_cli_managed_auto_memory")).toContain("force auto-memory on");
     expect(describeClaudeCodeCliLoginGuidance("claude_cli_logged_in")).toContain("signed in");
     expect(describeClaudeCodeCliLoginGuidance("claude_cli_spawn_failed")).toContain("Install Claude Code");
     expect(describeClaudeCodeCliLoginGuidance(undefined)).toContain("Install Claude Code");

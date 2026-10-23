@@ -176,7 +176,14 @@ describe("buildClaudeCliEnv", () => {
       USERPROFILE: "C:\\Users\\op",
       APPDATA: "C:\\Users\\op\\AppData\\Roaming",
       CLAUDE_CONFIG_DIR: "C:\\Users\\op\\.claude",
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
     });
+  });
+
+  it("always disables Claude Code auto-memory, whatever the host sets", () => {
+    // --settings autoMemoryEnabled:false ranks below managed settings; the env switch is a second layer.
+    expect(buildClaudeCliEnv({ CLAUDE_CODE_DISABLE_AUTO_MEMORY: "0" }).CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+    expect(buildClaudeCliEnv({}).CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
   });
 });
 
