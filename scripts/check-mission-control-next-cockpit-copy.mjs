@@ -177,14 +177,13 @@ function isCodeLiteral(node) {
   );
 }
 
-function containsLiteral(node) {
-  return isLiteral(node) || Boolean(ts.forEachChild(node, containsLiteral));
-}
-
-/** A template's text with each `${…}` kept as source; one holding literals is elided, since those are read on their own. */
+/*
+ * A template's text with each `${…}` kept as source. A `${…}` that evaluates to literals (`${ok ? "a" : `${n} b`}`)
+ * is elided, since those literals are read on their own; one that only uses a literal in code keeps its count.
+ */
 function templateText(node, source) {
   const spans = node.templateSpans.map((span) => {
-    const expression = containsLiteral(span.expression) ? "…" : span.expression.getText(source);
+    const expression = resultLiterals(span.expression).length ? "…" : span.expression.getText(source);
     return `\${${expression}}${span.literal.text}`;
   });
   return node.head.text + spans.join("");

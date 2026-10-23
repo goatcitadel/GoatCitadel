@@ -186,6 +186,13 @@ describe("glossary and plurals (GL-R02)", () => {
     );
   });
 
+  it("counts a template once when a ${…} holds literals, but keeps counts that only use a literal in code", () => {
+    const nested = 'const text = `${ok ? "Nothing to show." : `${response.total} matching records`} here`;';
+    assert.deepEqual(countCopyRatchets("areas/x/X.ts", nested), { "plural-template": 1 });
+    const filtered = 'const text = `${items.filter((item) => item.kind === "active").length} items`;';
+    assert.deepEqual(countCopyRatchets("areas/x/X.ts", filtered), { "plural-template": 1 });
+  });
+
   it("fails on an unreadable directory", async () => {
     await assert.rejects(walk(path.join(os.tmpdir(), `missing-copy-root-${process.pid}-${Date.now()}`)));
   });
