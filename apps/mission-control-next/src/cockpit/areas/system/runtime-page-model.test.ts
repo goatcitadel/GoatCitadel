@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { describeRuntimeService } from "@goatcitadel/mission-control-shared/content/runtime-service";
-import type { OpsRuntimeData } from "../../../features/native-routes/ops/runtime-overview-model";
 import {
   integrationRows,
   localModelStatus,
@@ -9,55 +8,7 @@ import {
   runtimeServerMetrics,
   runtimeServerStatus,
 } from "./runtime-page-model";
-
-type SourceKey = keyof OpsRuntimeData["sourceStatus"];
-const SOURCES: SourceKey[] = [
-  "dashboard",
-  "timeline",
-  "health",
-  "cost",
-  "daemon",
-  "llamaCpp",
-  "backups",
-  "sessions",
-  "mcpServers",
-  "runtimeMeasurements",
-  "localEngines",
-  "evalProofRuns",
-];
-
-const daemon = {
-  supported: true,
-  running: true,
-  state: "running",
-  host: "host-a",
-  pid: 42,
-  uptimeSeconds: 3600,
-  controllable: true,
-  diagnostics: [],
-};
-
-function runtimeData(overrides: Record<string, unknown> = {}, failed: SourceKey[] = []): OpsRuntimeData {
-  const sourceStatus = Object.fromEntries(
-    SOURCES.map((key) => [key, failed.includes(key) ? { status: "error", message: "down" } : { status: "ok" }]),
-  );
-  return {
-    dashboard: null,
-    timeline: null,
-    cost: null,
-    health: { daemonStatus: daemon, systemVitals: { memoryUsedBytes: 2048, processRssBytes: 1024 }, database: {} },
-    daemon,
-    llamaCpp: null,
-    backups: [],
-    sessions: [],
-    mcpServers: [],
-    runtimeMeasurements: [],
-    localEngines: [],
-    evalProofRuns: [],
-    sourceStatus,
-    ...overrides,
-  } as unknown as OpsRuntimeData;
-}
+import { runtimeData, testDaemon as daemon } from "./runtime-page.test-data";
 
 describe("runtimeServerStatus", () => {
   it("reads Unknown when the daemon and health sources both failed", () => {
