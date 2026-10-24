@@ -1,11 +1,15 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { readApprovalFollowOn } from "./approval-follow-on";
-import { ApprovalChangePlanOutcome, approvalChangePlanId } from "./ApprovalChangePlanOutcome";
+import {
+  ApprovalChangePlanOutcome,
+  approvalChangePlanId,
+  approvalChangePlanQueryKey,
+} from "./ApprovalChangePlanOutcome";
 import { approvalDecisionMessage, approvalResolutionLine } from "./approval-settlement";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
@@ -29,6 +33,7 @@ export function ApprovalSettlement({
   focusDecision?: boolean;
 }) {
   const access = useProjectAccess(workspaceId);
+  const queryClient = useQueryClient();
   const route = useCockpitRoute();
   const decisionParams = new URLSearchParams(route.search);
   decisionParams.set("approvalId", approval.approvalId);
@@ -138,7 +143,15 @@ export function ApprovalSettlement({
       ) : (
         <p>Original linked work outcome is not yet verified.</p>
       )}
-      <Button size="sm" disabled={query.isFetching} onClick={() => void query.refetch()}>
+      <Button
+        size="sm"
+        disabled={query.isFetching}
+        onClick={() => {
+          void query.refetch();
+          if (planId)
+            void queryClient.invalidateQueries({ queryKey: approvalChangePlanQueryKey(approval, workspaceId) });
+        }}
+      >
         Refresh follow-on work
       </Button>
       <div className="pt-3">

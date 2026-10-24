@@ -23,8 +23,17 @@ export function changePlanOutcomeLine(plan: ChangePlanRecord): string {
 }
 
 /**
+ * Under the ["change-plan"] prefix, so the realtime change-plan events that re-read every plan view also re-read
+ * this one: a read made before approval reconciliation applied the change must not stick on "not applied yet".
+ */
+export function approvalChangePlanQueryKey(approval: ApprovalRequest, workspaceId: string) {
+  return ["change-plan", "approval-outcome", workspaceId, approval.approvalId] as const;
+}
+
+/**
  * A change-plan approval has no original run: what it decides is the plan, so the settled view reports the
- * plan's own outcome ("Applied. … is now off.") instead of "No original run was found" (#496).
+ * plan's own outcome ("Applied. … is now off.") instead of "No original run was found" (#496). The decision line
+ * above it is the announced outcome, so this text is not a live region.
  */
 export function ApprovalChangePlanOutcome({
   approval,
@@ -35,10 +44,17 @@ export function ApprovalChangePlanOutcome({
   planId: string;
   workspaceId: string;
 }) {
+  // A plan proposed from Chat is visible only with its conversation, which the approval's linkage carries.
+  const sessionId = approval.linkage?.sessionId;
+  const turnId = approval.linkage?.turnId;
   const query = useQuery({
-    queryKey: ["approval-change-plan", workspaceId, approval.approvalId, planId],
+    queryKey: [...approvalChangePlanQueryKey(approval, workspaceId), planId, sessionId, turnId],
     queryFn: async () => {
-      const plan = await fetchChangePlan(planId, { workspaceId });
+      const plan = await fetchChangePlan(planId, {
+        workspaceId,
+        ...(sessionId ? { sessionId } : {}),
+        ...(turnId ? { turnId } : {}),
+      });
       if (
         plan.planId !== planId ||
         plan.origin.workspaceId !== workspaceId ||
@@ -51,11 +67,10 @@ export function ApprovalChangePlanOutcome({
     refetchInterval: (current) =>
       current.state.data && IN_PROGRESS.includes(current.state.data.status) ? 2000 : false,
   });
-  if (query.isError)
-    return <p role="alert">The linked change could not be checked. {describeApiError(query.error).summary}</p>;
+  if (query.isError) return <p>The linked change could not be checked. {describeApiError(query.error).summary}</p>;
   if (!query.data) return <p>Linked change outcome is not yet verified.</p>;
   return (
-    <p role={FAILED.includes(query.data.status) ? "alert" : "status"}>
+    <p className={FAILED.includes(query.data.status) ? "text-status-failed" : undefined}>
       Linked change: {changePlanOutcomeLine(query.data)}
     </p>
   );

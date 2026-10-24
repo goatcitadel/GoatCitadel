@@ -185,14 +185,14 @@ function SettledChangePlan({
   readOwner: boolean;
 }) {
   const settled = useQuery({
-    queryKey: ["inbox-settled-change-plan", workspaceId, item.id],
+    queryKey: ["change-plan", "inbox-settled", workspaceId, item.id],
     queryFn: () => readSettledInboxPlan(item, workspaceId),
     enabled: readOwner,
     retry: false,
   });
   if (settled.data)
     return (
-      <div role="status" className="space-y-1 text-fg-secondary">
+      <div className="space-y-1 text-fg-secondary">
         <p className="font-medium text-fg">{settled.data.title}</p>
         <p>{changePlanOutcomeLine(settled.data)}</p>
       </div>

@@ -242,7 +242,58 @@ it("does not report a change that is not bound to this approval", async () => {
     result: { summary: "Something else is now on." },
   });
   await renderPlanApproval();
-  await vi.waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/linked change/i));
+  await vi.waitFor(() => expect(container.textContent).toContain("The linked change could not be checked."));
   expect(container.textContent).not.toContain("Something else is now on.");
   expect(container.textContent).not.toContain("Applied.");
+});
+
+it("reads a Chat change plan with its conversation, which the owner requires", async () => {
+  const chatApproval = {
+    ...planApproval,
+    linkage: { workspaceId: "default", sessionId: "session-a", turnId: "turn-a", actionType: "change_plan_effect" },
+  } as unknown as ApprovalRequest;
+  mocks.plan.mockResolvedValue({
+    planId: "plan-a",
+    status: "completed",
+    approvalRefs: ["approval-plan"],
+    origin: { workspaceId: "default", surface: "chat", sessionId: "session-a", turnId: "turn-a" },
+    result: { summary: "The Chat model is now reviewed-model." },
+  });
+  mocks.read.mockResolvedValue({ replay: { approval: chatApproval, effects: [], events: [] } });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ApprovalSettlement approval={chatApproval} workspaceId="default" />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("Applied. The Chat model is now reviewed-model."));
+  expect(mocks.plan).toHaveBeenCalledWith("plan-a", {
+    workspaceId: "default",
+    sessionId: "session-a",
+    turnId: "turn-a",
+  });
+});
+
+it("re-reads the linked change when a change-plan event arrives, so 'not applied yet' does not stick", async () => {
+  mocks.plan.mockResolvedValueOnce({
+    planId: "plan-a",
+    status: "awaiting_approval",
+    approvalRefs: ["approval-plan"],
+    origin: { workspaceId: "default", surface: "settings" },
+  });
+  await renderPlanApproval();
+  await vi.waitFor(() => expect(container.textContent).toContain("The change has not been applied yet."));
+  mocks.plan.mockResolvedValue({
+    planId: "plan-a",
+    status: "completed",
+    approvalRefs: ["approval-plan"],
+    origin: { workspaceId: "default", surface: "settings" },
+    result: { summary: "The switch is now off." },
+  });
+  // The realtime event map invalidates every ["change-plan"] query on an evolution_control_plane event.
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ["change-plan"] });
+  });
+  await vi.waitFor(() => expect(container.textContent).toContain("Applied. The switch is now off."));
 });
