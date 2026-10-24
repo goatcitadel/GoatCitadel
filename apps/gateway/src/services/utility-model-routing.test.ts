@@ -277,6 +277,23 @@ describe("resolveBackgroundJobModel", () => {
     expect(ensureActiveProviderReadiness).not.toHaveBeenCalled();
   });
 
+  it("still skips when the active provider becomes the Claude Code CLI while the readiness probe runs", async () => {
+    let probed = false;
+    const readyProbed = {
+      ...notReadyProbed,
+      providers: notReadyProbed.providers.map((item) => ({ ...item, hasApiKey: true })),
+    };
+    await expect(
+      resolveBackgroundJobModel({
+        getUtilityModelOverride: async () => undefined,
+        ensureActiveProviderReadiness: async () => {
+          probed = true;
+        },
+        getRuntimeConfig: () => (probed ? signedInCli : readyProbed),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("probes the active provider before deciding, so a not-yet-checked provider is used once it is ready", async () => {
     let probed = false;
     const result = await resolveBackgroundJobModel({

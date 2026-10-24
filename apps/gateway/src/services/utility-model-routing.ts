@@ -134,7 +134,12 @@ export async function resolveBackgroundJobModel(
     // result, so a check that just failed must not be overridden by it.
     return undefined;
   }
-  return resolveBackgroundJobModelDefaults(readRuntime());
+  // Checked again: the active provider can change to the CLI while the probe runs.
+  const runtime = readRuntime();
+  if (isActiveProviderPerCallCli(runtime)) {
+    return undefined;
+  }
+  return resolveBackgroundJobModelDefaults(runtime);
 }
 
 /**
