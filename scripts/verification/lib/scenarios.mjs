@@ -3912,6 +3912,10 @@ export async function runMemoryTruthLane(context, _options = {}) {
   }
 }
 
+// These scenarios prove the Classic Activity feed and System status realtime pills. Cockpit (the default
+// shell) maps /ops/activity to /system/activity with different controls, so pin Classic explicitly.
+const REALTIME_CLASSIC_ACTIVITY_HREF = "/ops/activity?shell=classic";
+
 export async function runRealtimeTruthLane(context, _options = {}) {
   let stack;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
@@ -3960,7 +3964,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
           const browserLog = attachBrowserLogging(page);
           const browserLogCursor = browserLog.mark();
 
-          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/ops/activity"), {
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, REALTIME_CLASSIC_ACTIVITY_HREF), {
             waitUntil: "domcontentloaded",
           });
           await waitForVerificationRouteReady(
@@ -3968,6 +3972,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             {
               expectedArea: "ops",
               expectedSection: "activity",
+              shell: "classic",
               readyText: "Activity feed",
             },
             NEXT_UI_PACKAGE,
@@ -4023,7 +4028,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             },
             String(seeded.body?.staleCursor ?? ""),
           );
-          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/ops/activity"), {
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, REALTIME_CLASSIC_ACTIVITY_HREF), {
             waitUntil: "domcontentloaded",
           });
           await waitForVerificationRouteReady(
@@ -4031,6 +4036,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             {
               expectedArea: "ops",
               expectedSection: "activity",
+              shell: "classic",
               readyText: "Activity feed",
             },
             NEXT_UI_PACKAGE,
@@ -4104,7 +4110,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
           const page = await browserContext.newPage();
           const browserLog = attachBrowserLogging(page);
 
-          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/ops/activity"), {
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, REALTIME_CLASSIC_ACTIVITY_HREF), {
             waitUntil: "domcontentloaded",
           });
           await waitForVerificationRouteReady(
@@ -4112,6 +4118,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             {
               expectedArea: "ops",
               expectedSection: "activity",
+              shell: "classic",
               readyText: "Activity feed",
             },
             NEXT_UI_PACKAGE,
