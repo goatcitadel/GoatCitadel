@@ -18,11 +18,11 @@
     "@goatcitadel/storage": "workspace:*",
     "docx": "9.6.1",
     "mammoth": "1.12.0",
-    "nodemailer": "10.0.12",
+    "nodemailer": "10.1.4",
     "playwright": "1.58.2",
     "pptxgenjs": "4.0.1",
     "sharp": "0.35.5",
-    "undici": "6.28.1",
+    "undici": "6.29.1",
     "unpdf": "1.6.2"
   },
   "scripts": {
