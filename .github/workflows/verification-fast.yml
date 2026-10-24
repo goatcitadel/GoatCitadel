@@ -22,7 +22,9 @@ permissions:
 jobs:
   checks:
     name: Checks
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is moving to 26.04, where the pinned Playwright cannot install Chromium, and the visual
+    # baselines are rendered on 24.04. Move all Playwright workflows together, with a rebaseline, when upgrading.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -82,7 +84,7 @@ jobs:
 
   tests:
     name: Tests (${{ matrix.slice }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Storage shards use separate runners while retaining serial file execution
     # within each shard. The complete unsharded suite exceeded a 60-minute job.
     timeout-minutes: ${{ startsWith(matrix.slice, 'storage-') && 60 || 30 }}
@@ -156,7 +158,7 @@ jobs:
 
   postgres:
     name: Real Postgres lanes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
       postgres:
@@ -210,7 +212,7 @@ jobs:
 
   bundled-postgres-restart:
     name: Bundled Postgres stopped-container restart
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -238,7 +240,7 @@ jobs:
 
   code-mode-docker-proof:
     name: Code Mode Docker backend proof
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -283,7 +285,7 @@ jobs:
     # failing aggregate check.
     name: fast
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     needs: [checks, tests, postgres, bundled-postgres-restart, code-mode-docker-proof]
     steps:

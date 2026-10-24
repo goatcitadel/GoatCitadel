@@ -3,7 +3,7 @@ name: Verification UX Budgets Nightly
 # Runs the cockpit UX-budgets lane every night without gating releases. It is a separate workflow, not a
 # verification-1-0-release-proof.yml matrix row: release-installers.yml waits for the whole release-proof
 # workflow, so a red row there would block tagged releases. Promote it into that matrix (laneScript
-# verify:ux:budgets, artifactSlug ux-budgets, runner ubuntu-latest) after 14 consecutive green nights.
+# verify:ux:budgets, artifactSlug ux-budgets, runner ubuntu-24.04) after 14 consecutive green nights.
 #
 # long_list_count is NOT usable yet: the long-lists proof asserts exactly 105 records, and owner reads
 # cap at 200, so any value other than empty fails. Leave it empty until the proof is count-aware (see
@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   ux-budgets:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - name: Checkout
