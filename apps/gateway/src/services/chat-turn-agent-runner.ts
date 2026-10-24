@@ -100,6 +100,7 @@ import {
   canonicalJsonString,
   validateChatDelegationResult,
   CHAT_ROUTED_CONTEXT_TOOL_NAMES,
+  isChatTurnActiveStatus,
   buildToolEffectEvidence,
   classifyToolEffectPotential,
   getChatTurnRecoveryAction,
@@ -1552,6 +1553,30 @@ export class ChatTurnAgentRunner {
     );
   }
 
+  /**
+   * Merges the effective route into the stored routing rather than replacing it,
+   * so turn control and receipts written by other owners survive, and never
+   * writes onto a turn that has already been cancelled or settled.
+   */
+  private async recordEstablishedEffectiveRoute(
+    input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence" | "turnId">,
+    effectiveProviderId: string | undefined,
+    effectiveModel: string | undefined,
+  ): Promise<void> {
+    if (!effectiveProviderId) return;
+    const storage = this.deps.storage;
+    const write = async () => {
+      const current = await storage.chatTurnTraces.get(input.turnId);
+      if (!isChatTurnActiveStatus(current.status)) return;
+      await storage.chatTurnTraces.patch(input.turnId, {
+        routing: { ...current.routing, effectiveProviderId, effectiveModel },
+      });
+    };
+    await this.runCanonicalWrite(input, async () =>
+      storage.runImmediateTransaction ? await storage.runImmediateTransaction(write) : await write(),
+    );
+  }
+
   private async createToolRun(
     input: Pick<
       ChatTurnAgentRunnerInput,
@@ -2191,12 +2216,11 @@ export class ChatTurnAgentRunner {
       ...(executionBudget.maxTokens !== undefined ? { maxTokens: executionBudget.maxTokens } : {}),
     } as const;
     // Persisted from the first running trace so a turn cancelled or interrupted
-    // mid-stream still records which provider and model it was sent to.
+    // mid-stream still records which provider and model it was sent to. The
+    // effective route is recorded only once no fallback can answer instead.
     const requestedRouteIdentity = {
       primaryProviderId: input.providerId,
       primaryModel: input.model,
-      effectiveProviderId: input.providerId,
-      effectiveModel: input.model,
     } satisfies ChatTurnTraceRecord["routing"];
     const loopGuardState = initializeToolLoopGuardState(this.deps.toolLoopDetection);
     const trace = await this.runCanonicalWrite(
@@ -4243,6 +4267,8 @@ export class ChatTurnAgentRunner {
     // Declared outside the loop so the once-per-turn nudge survives checkpoint continuation.
     let researchSaturation = startResearchSaturation(toolRuns);
     let researchPassStart = toolRuns.length;
+    let fallbackAuthorization: ChatProviderFallbackAuthorization | undefined;
+    let effectiveRouteRecorded = false;
     if (!assistantContent && !approvalPayload && !pendingUserInput) {
       try {
         for (let loop = 0; loop < executionBudget.maxToolLoops; loop += 1) {
@@ -4424,9 +4450,17 @@ export class ChatTurnAgentRunner {
             this.deps.authorizeProviderFallback
           ) {
             await this.assertExternalDispatch(input);
-            const authorization = await this.deps.authorizeProviderFallback(input, completionRequest);
-            if (authorization)
-              completionRequest = attachChatProviderFallbackAuthorization(completionRequest, authorization);
+            fallbackAuthorization = await this.deps.authorizeProviderFallback(input, completionRequest);
+            if (fallbackAuthorization)
+              completionRequest = attachChatProviderFallbackAuthorization(completionRequest, fallbackAuthorization);
+          }
+          // Only the first request can admit a cross-provider fallback. Without one,
+          // every request in this turn goes to the requested route, so it is the
+          // effective route before any text streams.
+          if (loop === 0 && !fallbackAuthorization && !effectiveRouteRecorded) {
+            effectiveRouteRecorded = true;
+            routingState = { ...routingState, effectiveProviderId: input.providerId, effectiveModel: input.model };
+            await this.recordEstablishedEffectiveRoute(input, input.providerId, input.model);
           }
 
           const thinkingStreamEnabled = (await this.deps.chatThinkingStreamV1Enabled?.()) === true;
@@ -6508,8 +6542,9 @@ export class ChatTurnAgentRunner {
         ...routingState,
         turnControl: await readChatTurnControl(storage, input.sessionId, input.turnId),
         liveDataIntent: intents.liveData,
-        effectiveProviderId: routingState.effectiveProviderId ?? input.providerId,
-        effectiveModel: routingState.effectiveModel ?? assistantModel,
+        // With an authorized fallback, only the completion's routing can say who answered.
+        effectiveProviderId: routingState.effectiveProviderId ?? (fallbackAuthorization ? undefined : input.providerId),
+        effectiveModel: routingState.effectiveModel ?? (fallbackAuthorization ? undefined : assistantModel),
       },
       loopGuard: createLoopGuardTrace(loopGuardState),
       ...(deferSystemHeartbeatTerminalCommit ? {} : { finishedAt }),
