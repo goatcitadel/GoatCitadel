@@ -147,6 +147,58 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(prompt.volatileTail).not.toContain("No tools can be called in this turn");
   });
 
+  it("says every tool asks for approval first when the policy probe found that (#502)", () => {
+    // The safe profile asks before every action; the model used to guess "based on risk, not confirmed policy".
+    const tail = buildBaseAgentSystemPrompt(
+      input({
+        toolset: { toolNames: ["fs.read", "web.search"], approvalRequiredToolNames: ["fs.read", "web.search"] },
+      }),
+    ).volatileTail;
+    expect(tail).toContain("## Tool catalog (current policy still applies)\nfs.read, web.search");
+    expect(tail).toContain("Approval: every tool listed here asks the operator for approval before it runs.");
+    expect(tail).toMatch(/a specific call can still be blocked or need approval because of its arguments/i);
+  });
+
+  it("names the tools that ask first, and says the rest run without asking, when only some need approval", () => {
+    const tail = buildBaseAgentSystemPrompt(
+      input({
+        toolset: { toolNames: ["fs.read", "web.search", "time.now"], approvalRequiredToolNames: ["web.search"] },
+      }),
+    ).volatileTail;
+    expect(tail).toContain("Approval: these ask the operator for approval before they run: web.search.");
+    expect(tail).toContain("The other listed tools run without asking.");
+  });
+
+  it("only describes approval for the tools the catalog shows, not the ones folded into 'and N more'", () => {
+    // Live P-03 (#502): the approval line named tools past the catalog cap that the catalog never listed.
+    const toolNames = Array.from({ length: MAX_BASE_PROMPT_TOOL_NAMES + 2 }, (_, index) => `tool.n${index}`);
+    const hidden = toolNames[MAX_BASE_PROMPT_TOOL_NAMES]!;
+    const some = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames, approvalRequiredToolNames: ["tool.n1", hidden] } }),
+    ).volatileTail;
+    expect(some).toContain(", and 2 more");
+    expect(some).toContain("Approval: these ask the operator for approval before they run: tool.n1.");
+    expect(some).not.toContain(hidden);
+    const onlyHidden = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames, approvalRequiredToolNames: [hidden] } }),
+    ).volatileTail;
+    expect(onlyHidden).toContain("Approval: none of the listed tools asks for approval");
+    const allShown = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames, approvalRequiredToolNames: toolNames.slice(0, MAX_BASE_PROMPT_TOOL_NAMES) } }),
+    ).volatileTail;
+    expect(allShown).toContain("Approval: every tool listed here asks the operator for approval before it runs.");
+  });
+
+  it("says none need approval when the probe found none, and says nothing when approval is unknown", () => {
+    const none = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames: ["fs.read", "web.search"], approvalRequiredToolNames: [] } }),
+    ).volatileTail;
+    expect(none).toContain("Approval: none of the listed tools asks for approval");
+    // A toolset without a policy probe (no turn scope) must not claim anything about approval.
+    const unknown = buildBaseAgentSystemPrompt(input()).volatileTail;
+    expect(unknown).not.toContain("Approval:");
+  });
+
   it("tells the model to decline write-and-run plainly and names the real switch when policy denies writes and shell (#494)", () => {
     const tail = buildBaseAgentSystemPrompt(
       input({

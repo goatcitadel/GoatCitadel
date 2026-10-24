@@ -55,6 +55,8 @@ export interface BaseAgentPromptToolset {
   skills?: readonly BaseAgentPromptSkill[];
   /** Catalog tools this turn's policy denies; they are never offered, so the prompt says what is off instead. */
   policyDeniedToolNames?: readonly string[];
+  /** Callable tools the turn's policy probe says ask the operator first; absent when no probe ran. */
+  approvalRequiredToolNames?: readonly string[];
 }
 
 export interface BuildBaseAgentSystemPromptInput {
@@ -98,6 +100,26 @@ const TOOLS_UNAVAILABLE_GUIDANCE: Record<BaseAgentToolsUnavailableReason, { caus
     remedy: "binding a project to this conversation would let you run it",
   },
 };
+
+/**
+ * Which callable tools ask the operator first, from the same policy probe that filters the catalog (#502).
+ * Without it the model could only guess "based on risk, not confirmed policy". Omitted when no probe ran.
+ * Describes only the tools the catalog shows, so it never names one folded into "and N more".
+ */
+function buildApprovalLine(toolset: BaseAgentPromptToolset): string | undefined {
+  const approvalRequired = toolset.approvalRequiredToolNames;
+  if (!approvalRequired) return undefined;
+  const shown = toolset.toolNames.slice(0, MAX_BASE_PROMPT_TOOL_NAMES);
+  const asksFirst = shown.filter((name) => approvalRequired.includes(name));
+  const caveat =
+    "This is the current policy for typical arguments; a specific call can still be blocked or need approval because of its arguments, and the approval prompt the operator sees is the final word.";
+  if (asksFirst.length === 0) return `Approval: none of the listed tools asks for approval before it runs. ${caveat}`;
+  if (asksFirst.length === shown.length) {
+    return `Approval: every tool listed here asks the operator for approval before it runs. ${caveat}`;
+  }
+  const names = asksFirst.map((name) => sanitizePromptCatalogText(name, 80));
+  return `Approval: these ask the operator for approval before they run: ${names.join(", ")}. The other listed tools run without asking. ${caveat}`;
+}
 
 /**
  * When the tool policy denies file writes or shell commands (the shipped default), a "write and run"
@@ -322,7 +344,10 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
   } else if (toolNames.length > 0) {
     const overflow = toolset.toolNames.length - toolNames.length;
     const suffix = overflow > 0 ? `, and ${overflow} more` : "";
-    tailSections.push(`## Tool catalog (current policy still applies)\n${toolNames.join(", ")}${suffix}`);
+    const approvalLine = buildApprovalLine(toolset);
+    tailSections.push(
+      `## Tool catalog (current policy still applies)\n${toolNames.join(", ")}${suffix}${approvalLine ? `\n${approvalLine}` : ""}`,
+    );
   }
   const writeAndRunSection = toolsCallable ? buildWriteAndRunPolicySection(toolset) : undefined;
   if (writeAndRunSection) tailSections.push(writeAndRunSection);

@@ -9682,6 +9682,9 @@ export class ChatTurnAgentRunner {
           max_tokens: constrainedLocalRepair ? 520 : undefined,
           temperature: constrainedLocalRepair ? 0 : undefined,
           messages: [
+            // The draft was written with these instructions (tool catalog, approval policy, guidance); without
+            // them the repair pass cannot tell a grounded draft from an invented one and may disown it (#502).
+            ...input.conversationMessages.filter((message) => message.role === "system"),
             {
               role: "system",
               content: [

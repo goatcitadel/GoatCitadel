@@ -30,7 +30,8 @@ export async function filterBasePromptToolsetByPolicy(
   inspect: BasePromptToolAccessProbe,
   safeWriteFallbackDir?: string,
 ): Promise<BaseAgentPromptToolset> {
-  const isAllowed = async (toolName: string): Promise<boolean> => {
+  /** `undefined` when the tool is not callable this turn; otherwise whether it asks the operator first. */
+  const probe = async (toolName: string): Promise<{ requiresApproval: boolean } | undefined> => {
     try {
       const access = await inspect({
         toolName,
@@ -40,24 +41,29 @@ export async function filterBasePromptToolsetByPolicy(
         surface: scope.mode,
         args: buildToolAccessProbeArgs(toolName, safeWriteFallbackDir),
       });
-      return access.allowed;
+      return access.allowed ? { requiresApproval: access.requiresApproval } : undefined;
     } catch {
       // Like the runner: a tool whose policy cannot be evaluated is not callable this turn.
-      return false;
+      return undefined;
     }
   };
   const allowed = new Set<string>();
+  const asksFirst = new Set<string>();
   const names = [...toolset.toolNames];
   for (let start = 0; start < names.length; start += PROBE_CONCURRENCY) {
     const batch = names.slice(start, start + PROBE_CONCURRENCY);
-    const verdicts = await Promise.all(batch.map(isAllowed));
+    const verdicts = await Promise.all(batch.map(probe));
     batch.forEach((toolName, index) => {
-      if (verdicts[index]) allowed.add(toolName);
+      const verdict = verdicts[index];
+      if (!verdict) return;
+      allowed.add(toolName);
+      if (verdict.requiresApproval) asksFirst.add(toolName);
     });
   }
   return {
     ...toolset,
     toolNames: names.filter((toolName) => allowed.has(toolName)),
     policyDeniedToolNames: names.filter((toolName) => !allowed.has(toolName)),
+    approvalRequiredToolNames: names.filter((toolName) => asksFirst.has(toolName)),
   };
 }

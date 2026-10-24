@@ -57,6 +57,69 @@ const CCG_EVIDENCE = [
 ] as const;
 
 describe("ChatTurnAgentRunner loop 24 coverage", () => {
+  it("keeps the turn's system context in the repair pass, so a grounded draft is not disowned (#502)", async () => {
+    // Live P-03: a long tool/approval listing was cut off; the repair call got only its own short system
+    // prompt, said it had "no tool catalog or approval policy in front of me", and discarded a correct draft.
+    const systemContext =
+      "## Tool catalog (current policy still applies)\nfs.read, web.search\nApproval: every tool listed here asks the operator for approval before it runs.";
+    const requests: ChatCompletionRequest[] = [];
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockImplementationOnce(async (request) => {
+        requests.push(request);
+        return {
+          model: "glm-5",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "length",
+              message: { role: "assistant", content: "Both tools ask for your approval first: fs.read and" },
+            },
+          ],
+        };
+      })
+      .mockImplementationOnce(async (request) => {
+        requests.push(request);
+        return {
+          model: "glm-5",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: "Both tools ask for your approval first: fs.read and web.search.",
+              },
+            },
+          ],
+        };
+      });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    await orchestrator.run(
+      turnInput({
+        content: "Which tools need my approval?",
+        historyMessages: [
+          { role: "system", content: systemContext },
+          { role: "user", content: "Which tools need my approval?" },
+        ],
+      }),
+    );
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    const repairSystem = requests[1]?.messages
+      .filter((message) => message.role === "system")
+      .map((message) => String(message.content))
+      .join("\n");
+    expect(repairSystem).toContain("You are repairing a partially completed assistant answer.");
+    expect(repairSystem).toContain("Approval: every tool listed here asks the operator for approval before it runs.");
+  });
+
   it("repairs content-filter interrupted direct completions through the repair pass", async () => {
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
