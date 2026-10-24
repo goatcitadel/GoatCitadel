@@ -36,7 +36,11 @@ import {
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { LlmService } from "./llm-service.js";
-import { isImplicitPerCallCliDistiller, MemoryDistillerSkippedError } from "./memory-distiller-route.js";
+import {
+  isImplicitPerCallCliDistiller,
+  MEMORY_DISTILLER_SKIPPED_PER_CALL_CLI_REASON,
+  MemoryDistillerSkippedError,
+} from "./memory-distiller-route.js";
 import { walkMemoryFiles } from "./memory-file-walk.js";
 import {
   enrichMemoryCitations,
@@ -291,9 +295,20 @@ export class MemoryContextService {
       queryEmbedding,
     });
 
+    const runtime = this.llmService.getRuntimeConfig();
+    const providerId = qmd.distiller.providerId ?? runtime.activeProviderId;
+    const model =
+      qmd.distiller.model ??
+      (providerId === runtime.activeProviderId ? runtime.activeModel : qmd.distiller.fallbackCheapModel);
+    const skipPerCallCliDistiller = isImplicitPerCallCliDistiller(
+      qmd.distiller.providerId,
+      providerId,
+      runtime.providers,
+    );
+
     if (!input.forceRefresh) {
       const cacheStarted = performance.now();
-      const cached = await this.storage.memoryContexts.findFreshByCacheKey({
+      const found = await this.storage.memoryContexts.findFreshByCacheKey({
         cacheKey,
         scope: input.scope,
         sessionId: input.sessionId,
@@ -302,7 +317,11 @@ export class MemoryContextService {
         phaseId: input.phaseId,
       });
       diagnostics.timings.contextCacheMs = elapsedMs(cacheStarted);
-      diagnostics.contextCacheStatus = cached ? "hit" : "miss";
+      // A context cached because the distiller was skipped must not outlive the route that skipped it.
+      const staleSkippedDistill =
+        found?.quality.reason === MEMORY_DISTILLER_SKIPPED_PER_CALL_CLI_REASON && !skipPerCallCliDistiller;
+      const cached = staleSkippedDistill ? undefined : found;
+      diagnostics.contextCacheStatus = cached ? "hit" : staleSkippedDistill ? "refresh" : "miss";
       if (cached) {
         const enrichedCached = refreshMemoryPackAssembly(enrichMemoryPack(cached, relationScope, new Map()), assembly);
         await this.storage.memoryQmdRuns.append({
@@ -382,16 +401,6 @@ export class MemoryContextService {
       return enrichedFallback;
     }
 
-    const runtime = this.llmService.getRuntimeConfig();
-    const providerId = qmd.distiller.providerId ?? runtime.activeProviderId;
-    const model =
-      qmd.distiller.model ??
-      (providerId === runtime.activeProviderId ? runtime.activeModel : qmd.distiller.fallbackCheapModel);
-    const skipPerCallCliDistiller = isImplicitPerCallCliDistiller(
-      qmd.distiller.providerId,
-      providerId,
-      runtime.providers,
-    );
     try {
       if (skipPerCallCliDistiller) throw new MemoryDistillerSkippedError();
       const attribution = createUtilityModelUsageAttribution({

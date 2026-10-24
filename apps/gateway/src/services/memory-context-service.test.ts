@@ -394,6 +394,52 @@ describe("MemoryContextService", () => {
     expect(pack.contextText).toContain("Alpha diagnostics");
   });
 
+  it("does not serve a cached skipped-distiller context once the distiller route no longer skips", async () => {
+    const rootDir = await createWorkspaceRoot();
+    await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "workspace", "memory", "alpha.md"),
+      "Alpha diagnostics mention gateway readiness, test evidence, and release risk.",
+      "utf8",
+    );
+    const chatCompletions = vi.fn(async () => {
+      throw new Error("distiller unavailable in this fixture");
+    });
+    const llmService = createLlmService({
+      chatCompletions,
+      activeProviderId: "claude-code-cli",
+      activeModel: "claude-sonnet-5-5",
+      apiStyle: "claude-code-cli",
+    });
+    const service = new MemoryContextService(
+      createStorage() as never,
+      llmService as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+    const input = {
+      scope: "chat" as const,
+      prompt: "Explain Alpha gateway diagnostics release evidence.",
+      sessionId: "session-route-change",
+      workspace: "memory",
+      maxContextTokens: 360,
+    };
+
+    const skipped = await service.compose(input);
+    expect(skipped.quality.reason).toBe(MEMORY_DISTILLER_SKIPPED_PER_CALL_CLI_REASON);
+    expect(chatCompletions).not.toHaveBeenCalled();
+
+    // The operator switches Chat to an API provider before the cached pack expires.
+    llmService.getRuntimeConfig.mockReturnValue({
+      activeProviderId: "openai",
+      activeModel: "gpt-test",
+      providers: [{ providerId: "openai", apiStyle: "openai-chat-completions" }],
+    });
+    await service.compose(input);
+
+    expect(chatCompletions).toHaveBeenCalledTimes(1);
+  });
+
   it("still distills on the Claude Code CLI when the operator configured it as the distiller", async () => {
     const rootDir = await createWorkspaceRoot();
     await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
