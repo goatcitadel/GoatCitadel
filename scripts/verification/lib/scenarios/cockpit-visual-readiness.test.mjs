@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
 import {
-  cockpitVisualDataSettled, cockpitVisualShellReady, installCockpitVisualPreferences, waitForCockpitVisualRouteReady,
+  cockpitVisualDataSettled, cockpitVisualShellReady, cockpitVisualTranscriptAtLatest, installCockpitVisualPreferences,
+  waitForCockpitVisualRouteReady,
 } from "./cockpit-visual-readiness.mjs";
+import { COCKPIT_VISUAL_MANIFEST } from "../cockpit-visual-manifest.mjs";
 
 const run = (fn, input, scope) => vm.runInNewContext(`(${fn.toString()})(input)`, { ...scope, input });
 function shell(overrides = {}) {
@@ -70,6 +72,37 @@ test("native route wait requires exact active page selector and heading before d
   assert.equal(calls[1].selector, 'section[aria-label="Safety"]');
   assert.deepEqual(calls[2], { role: "heading", options: { name: "Safety", exact: true } });
   assert.equal(calls[3].fn, cockpitVisualDataSettled);
+});
+
+test("chat capture waits for the transcript to sit at its latest turn", async () => {
+  const button = textContent => ({ textContent });
+  const atLatest = ({ found = true, buttons = [], scrollTop = 800 } = {}) => {
+    const scroller = { scrollHeight: 1000, clientHeight: 200, scrollTop };
+    const region = { querySelector: () => scroller, querySelectorAll: () => buttons };
+    return run(cockpitVisualTranscriptAtLatest, "[aria-label=Messages]", { document: { querySelector: () => (found ? region : null) } });
+  };
+  assert.equal(atLatest(), true);
+  assert.equal(atLatest({ scrollTop: 740 }), true);
+  assert.equal(atLatest({ scrollTop: 0 }), false);
+  assert.equal(atLatest({ buttons: [button("Jump to latest · 2 new messages")] }), false);
+  assert.equal(atLatest({ buttons: [button("Approve once")] }), true);
+  assert.equal(atLatest({ found: false }), false);
+
+  const calls = [];
+  const page = {
+    url: () => "http://test.invalid/chat?theme=dark&shell=cockpit",
+    waitForFunction: async (fn, args) => calls.push({ fn, args }),
+    locator: selector => ({ first: () => ({ waitFor: async () => calls.push({ selector }) }) }),
+    getByRole: () => ({ first: () => ({ waitFor: async () => {} }) }),
+  };
+  const chat = COCKPIT_VISUAL_MANIFEST.find(route => route.slug === "cockpit-chat");
+  assert.equal(chat.readyAtLatest, true);
+  await waitForCockpitVisualRouteReady(page, chat, 100);
+  assert.equal(calls.at(-2).fn, cockpitVisualDataSettled);
+  assert.deepEqual(calls.at(-1), { fn: cockpitVisualTranscriptAtLatest, args: chat.readySelector });
+  calls.length = 0;
+  await waitForCockpitVisualRouteReady(page, { href: "/inbox", readyText: "Inbox" }, 100);
+  assert.ok(!calls.some(call => call.fn === cockpitVisualTranscriptAtLatest));
 });
 
 test("gallery capture waits for the actual component gallery and its visible heading", async () => {

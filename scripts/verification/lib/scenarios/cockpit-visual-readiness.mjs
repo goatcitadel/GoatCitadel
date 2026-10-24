@@ -28,6 +28,15 @@ export function cockpitVisualDataSettled() {
   });
 }
 
+/** Executed in the browser: a following transcript sits at its end (the app's 80px near-bottom band) with no "Jump to latest". */
+export function cockpitVisualTranscriptAtLatest(regionSelector) {
+  const region = document.querySelector(regionSelector);
+  const scroller = region?.querySelector("[data-transcript-scroller]");
+  if (!region || !scroller) return false;
+  if (Array.from(region.querySelectorAll("button")).some(button => /^Jump to latest\b/u.test(button.textContent?.trim() ?? ""))) return false;
+  return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 80;
+}
+
 export async function waitForCockpitVisualRouteReady(page, route, timeoutMs) {
   const href = new URL(route.href, "http://verification.invalid");
   await page.waitForFunction(cockpitVisualShellReady, {
@@ -38,4 +47,5 @@ export async function waitForCockpitVisualRouteReady(page, route, timeoutMs) {
   if (route.readySelector) await page.locator(route.readySelector).first().waitFor({ state: "visible", timeout: timeoutMs });
   if (route.readyText) await page.getByRole("heading", { name: route.readyText, exact: true }).first().waitFor({ state: "visible", timeout: timeoutMs });
   await page.waitForFunction(cockpitVisualDataSettled, undefined, { timeout: timeoutMs });
+  if (route.readyAtLatest) await page.waitForFunction(cockpitVisualTranscriptAtLatest, route.readySelector, { timeout: timeoutMs });
 }

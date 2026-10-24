@@ -286,6 +286,43 @@ describe("ChatTranscript", () => {
     await flushFrames();
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
+  it("keeps following when layout resets the scroller to the top without a reader gesture", async () => {
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const onBottomStateChange = vi.fn();
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={{ ...sessionProps([turn("reset", true)]), followOutput: true, onBottomStateChange }} />
+        </InspectorProvider>,
+      ),
+    );
+    const scroller = container.querySelector<HTMLElement>("[data-transcript-scroller]")!;
+    const scrollIntoView = vi.fn();
+    container.querySelector<HTMLElement>('div[aria-hidden="true"].h-px')!.scrollIntoView = scrollIntoView;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, writable: true, value: 800 },
+    });
+    await act(async () => scroller.dispatchEvent(new Event("scroll")));
+    scrollIntoView.mockClear();
+    onBottomStateChange.mockClear();
+    // Same height, back at the top, and no wheel, touch, key or pointer input.
+    scroller.scrollTop = 0;
+    await act(async () => scroller.dispatchEvent(new Event("scroll")));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
+    scroller.scrollTop = 800;
+    await act(async () => scroller.dispatchEvent(new Event("scroll")));
+    scrollIntoView.mockClear();
+    // The same move made by the reader releases follow.
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -800 }));
+    scroller.scrollTop = 0;
+    await act(async () => scroller.dispatchEvent(new Event("scroll")));
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(onBottomStateChange).toHaveBeenLastCalledWith(false);
+  });
   it("moves outer Home instantly through the shared reading owner despite measured height growth", async () => {
     const cancelFrame = vi.fn();
     vi.stubGlobal("requestAnimationFrame", () => 1);

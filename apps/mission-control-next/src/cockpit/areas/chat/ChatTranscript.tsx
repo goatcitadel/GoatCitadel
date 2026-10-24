@@ -144,7 +144,11 @@ export function ChatTranscript({
     // Virtuoso can reset position while measuring a replacement or growing row.
     // Keep a pinned reader at the end through that layout change. Real wheel,
     // touch, keyboard and scrollbar input still enters the shared reading owner.
-    if (props.followOutput && previous && element.scrollHeight !== previous.height && !readerMoved) {
+    // A box that was hidden or re-laid out (a suspended subtree, a theme or font
+    // swap) can also come back at the very top with an unchanged height; without
+    // a reader gesture that reset is layout, not reading.
+    const layoutReset = element.scrollTop <= 1 && previous !== null && previous.top > 1;
+    if (props.followOutput && previous && (element.scrollHeight !== previous.height || layoutReset) && !readerMoved) {
       jumpToLatest();
       return;
     }

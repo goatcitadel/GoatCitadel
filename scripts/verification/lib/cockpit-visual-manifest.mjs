@@ -6,6 +6,8 @@ export const COCKPIT_VISUAL_MANIFEST = [
     shell: "cockpit",
     fixtureSessionKey: "approval",
     readySelector: 'section[aria-label="Chat"] [aria-label="Messages"]',
+    // A following transcript opens at its newest turn; never capture it mid-pin.
+    readyAtLatest: true,
   },
   { slug: "cockpit-inbox", href: "/inbox", shell: "cockpit", readyText: "Inbox" },
   ...[
