@@ -21,6 +21,7 @@ import "../../styles/chat-display.css";
 const TRANSCRIPT_COMPONENTS = { EmptyPlaceholder: ChatTranscriptEmpty };
 
 const IGNORE_BOTTOM_STATE = () => {};
+const READING_GESTURE_TAIL_MS = 400;
 
 export function ChatTranscript({
   props,
@@ -122,6 +123,10 @@ export function ChatTranscript({
   const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
   const lastScroll = useRef<{ top: number; height: number } | null>(null);
   const readingGesture = useRef(false);
+  // One drag, fling or animated wheel/key scroll emits several scroll events.
+  // Reader intent lasts while a pointer or touch is held and briefly after.
+  const gestureHeld = useRef(false);
+  const gestureUntil = useRef(0);
   const observeReadingGesture = useCallback(
     (event: Event) => {
       if (
@@ -130,15 +135,29 @@ export function ChatTranscript({
       )
         return;
       if (event.type === "pointerdown" && event.target !== scrollRef.current) return;
+      if (event.type === "pointerdown" || event.type === "touchstart") gestureHeld.current = true;
       readingGesture.current = true;
+      gestureUntil.current = performance.now() + READING_GESTURE_TAIL_MS;
     },
     [scrollRef],
   );
+  useEffect(() => {
+    const release = () => {
+      if (!gestureHeld.current) return;
+      gestureHeld.current = false;
+      gestureUntil.current = performance.now() + READING_GESTURE_TAIL_MS;
+    };
+    const types = ["pointerup", "pointercancel", "touchend", "touchcancel"];
+    for (const type of types) window.addEventListener(type, release, { passive: true });
+    return () => {
+      for (const type of types) window.removeEventListener(type, release);
+    };
+  }, []);
   const observeScroll = useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
     const previous = lastScroll.current;
-    const readerMoved = readingGesture.current;
+    const readerMoved = readingGesture.current || gestureHeld.current || performance.now() < gestureUntil.current;
     readingGesture.current = false;
     lastScroll.current = { top: element.scrollTop, height: element.scrollHeight };
     // Virtuoso can reset position while measuring a replacement or growing row.
@@ -193,6 +212,8 @@ export function ChatTranscript({
       scrollRef.current = next;
       setScrollElement(next);
       readingGesture.current = false;
+      gestureHeld.current = false;
+      gestureUntil.current = 0;
       lastScroll.current = scrollRef.current
         ? { top: scrollRef.current.scrollTop, height: scrollRef.current.scrollHeight }
         : null;
