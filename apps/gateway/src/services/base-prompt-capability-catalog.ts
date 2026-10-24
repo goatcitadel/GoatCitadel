@@ -30,26 +30,30 @@ export async function filterBasePromptToolsetByPolicy(
   inspect: BasePromptToolAccessProbe,
   safeWriteFallbackDir?: string,
 ): Promise<BaseAgentPromptToolset> {
+  const isAllowed = async (toolName: string): Promise<boolean> => {
+    try {
+      const access = await inspect({
+        toolName,
+        agentId: "assistant",
+        sessionId: scope.sessionId,
+        ...(scope.workspaceId ? { workspaceId: scope.workspaceId } : {}),
+        surface: scope.mode,
+        args: buildToolAccessProbeArgs(toolName, safeWriteFallbackDir),
+      });
+      return access.allowed;
+    } catch {
+      // Like the runner: a tool whose policy cannot be evaluated is not callable this turn.
+      return false;
+    }
+  };
   const allowed = new Set<string>();
   const names = [...toolset.toolNames];
   for (let start = 0; start < names.length; start += PROBE_CONCURRENCY) {
-    await Promise.all(
-      names.slice(start, start + PROBE_CONCURRENCY).map(async (toolName) => {
-        try {
-          const access = await inspect({
-            toolName,
-            agentId: "assistant",
-            sessionId: scope.sessionId,
-            ...(scope.workspaceId ? { workspaceId: scope.workspaceId } : {}),
-            surface: scope.mode,
-            args: buildToolAccessProbeArgs(toolName, safeWriteFallbackDir),
-          });
-          if (access.allowed) allowed.add(toolName);
-        } catch {
-          // Like the runner: a tool whose policy cannot be evaluated is not callable this turn.
-        }
-      }),
-    );
+    const batch = names.slice(start, start + PROBE_CONCURRENCY);
+    const verdicts = await Promise.all(batch.map(isAllowed));
+    batch.forEach((toolName, index) => {
+      if (verdicts[index]) allowed.add(toolName);
+    });
   }
   return { ...toolset, toolNames: names.filter((toolName) => allowed.has(toolName)) };
 }
