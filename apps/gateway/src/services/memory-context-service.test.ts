@@ -11,6 +11,7 @@ import {
 } from "@goatcitadel/contracts";
 import { EmbeddingUsageSettlementError, generateEmbedding } from "@goatcitadel/policy-engine";
 import { MemoryContextService } from "./memory-context-service.js";
+import { MEMORY_DISTILLER_SKIPPED_PER_CALL_CLI_REASON } from "./memory-distiller-route.js";
 import { matchesMemoryWorkspaceScope } from "./memory-lifecycle-policy.js";
 
 // P0-#3: the ranker only counts the embedding signal when a real embedding
@@ -74,10 +75,19 @@ describe("MemoryContextService", () => {
     const firstObservation = vi.fn();
     const secondObservation = vi.fn();
     const service = new MemoryContextService(
-      createStorage() as never, createLlmService() as never, createConfig(await createWorkspaceRoot()) as never,
-      vi.fn(), undefined, undefined, observations,
+      createStorage() as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      observations,
     );
-    const input = { scope: "chat" as const, sessionId: "session-1", prompt: "Recall private Alpha gateway diagnostics and release evidence." };
+    const input = {
+      scope: "chat" as const,
+      sessionId: "session-1",
+      prompt: "Recall private Alpha gateway diagnostics and release evidence.",
+    };
     const first = service.compose(input, { turnId: "turn-1" }, firstObservation);
     const second = service.compose(input, { turnId: "turn-1" }, secondObservation);
     try {
@@ -89,20 +99,28 @@ describe("MemoryContextService", () => {
       expect(secondObservation).toHaveBeenCalledOnce();
       expect(firstObservation.mock.calls[0]![0].embeddingCacheStatus).toBe("miss");
       expect(secondObservation.mock.calls[0]![0].embeddingCacheStatus).toBe("shared");
-      expect(observations.mock.calls.map(([diagnostics]) => diagnostics.embeddingCacheStatus).sort()).toEqual(["miss", "shared"]);
+      expect(observations.mock.calls.map(([diagnostics]) => diagnostics.embeddingCacheStatus).sort()).toEqual([
+        "miss",
+        "shared",
+      ]);
       for (const [diagnostics] of observations.mock.calls) {
         expect(diagnostics.outcome).toBe("completed");
         expect(Object.values(diagnostics.timings).every((value) => typeof value === "number" && value >= 0)).toBe(true);
         expect(JSON.stringify(diagnostics)).not.toContain(input.prompt);
         expect(Object.isFrozen(diagnostics.timings)).toBe(true);
       }
-    } finally { held.release(); }
+    } finally {
+      held.release();
+    }
   });
 
   it("partitions in-flight work by usage lineage and bypasses it for force refresh", async () => {
     const held = holdEmbeddingCalls(4);
     const service = new MemoryContextService(
-      createStorage() as never, createLlmService() as never, createConfig(await createWorkspaceRoot()) as never, vi.fn(),
+      createStorage() as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),
     );
     const input = { scope: "chat" as const, prompt: "Recall Alpha gateway diagnostics and release evidence." };
     const requests = [
@@ -115,13 +133,18 @@ describe("MemoryContextService", () => {
       await vi.waitFor(() => expect(generateEmbedding).toHaveBeenCalledTimes(4));
       held.release();
       await Promise.all(requests);
-    } finally { held.release(); }
+    } finally {
+      held.release();
+    }
   });
 
   it("cancels one retrieval waiter without cancelling a shared provider attempt", async () => {
     const held = holdEmbeddingCalls(1);
     const service = new MemoryContextService(
-      createStorage() as never, createLlmService() as never, createConfig(await createWorkspaceRoot()) as never, vi.fn(),
+      createStorage() as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),
     );
     const controller = new AbortController();
     const input = { scope: "chat" as const, prompt: "Recall Alpha gateway diagnostics and release evidence." };
@@ -137,13 +160,18 @@ describe("MemoryContextService", () => {
       held.release();
       await second;
       expect(generateEmbedding).toHaveBeenCalledTimes(1);
-    } finally { held.release(); }
+    } finally {
+      held.release();
+    }
   });
 
   it("aborts the provider after its last waiter leaves and admits a fresh retrieval", async () => {
     const held = holdEmbeddingCalls(1);
     const service = new MemoryContextService(
-      createStorage() as never, createLlmService() as never, createConfig(await createWorkspaceRoot()) as never, vi.fn(),
+      createStorage() as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),
     );
     const controller = new AbortController();
     const input = { scope: "chat" as const, prompt: "Recall Alpha gateway diagnostics and release evidence." };
@@ -156,7 +184,9 @@ describe("MemoryContextService", () => {
       expect(held.signals[0]?.aborted).toBe(true);
       await service.compose(input);
       expect(generateEmbedding).toHaveBeenCalledTimes(2);
-    } finally { held.release(); }
+    } finally {
+      held.release();
+    }
   });
 
   it("reuses query embeddings while observing source deletion and explicit refresh", async () => {
@@ -166,9 +196,16 @@ describe("MemoryContextService", () => {
     const memoryFile = path.join(memoryDir, "note.md");
     await fs.writeFile(memoryFile, "Alpha gateway diagnostics require current release evidence.");
     const service = new MemoryContextService(
-      createStorage() as never, createLlmService() as never, createConfig(rootDir) as never, vi.fn(),
+      createStorage() as never,
+      createLlmService() as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
     );
-    const input = { scope: "chat" as const, sessionId: "session-1", prompt: "Recall Alpha gateway diagnostics and current release evidence." };
+    const input = {
+      scope: "chat" as const,
+      sessionId: "session-1",
+      prompt: "Recall Alpha gateway diagnostics and current release evidence.",
+    };
     const first = await service.compose(input);
     await service.compose(input);
     expect(generateEmbedding).toHaveBeenCalledTimes(1);
@@ -186,9 +223,16 @@ describe("MemoryContextService", () => {
     const rootDir = await createWorkspaceRoot();
     const sessionKinds: Record<string, "dm" | "group" | "thread"> = { "session-1": "dm" };
     const service = new MemoryContextService(
-      createStorage({ sessionKinds }) as never, createLlmService() as never, createConfig(rootDir) as never, vi.fn(),
+      createStorage({ sessionKinds }) as never,
+      createLlmService() as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
     );
-    const input = { scope: "chat" as const, sessionId: "session-1", prompt: "Recall Alpha gateway diagnostics and current release evidence." };
+    const input = {
+      scope: "chat" as const,
+      sessionId: "session-1",
+      prompt: "Recall Alpha gateway diagnostics and current release evidence.",
+    };
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     try {
       await service.compose(input);
@@ -212,8 +256,10 @@ describe("MemoryContextService", () => {
     embeddingMock.provider = "remote";
     embeddingMock.generatedProvider = "pseudo";
     const service = new MemoryContextService(
-      createStorage() as never, createLlmService() as never,
-      createConfig(await createWorkspaceRoot()) as never, vi.fn(),
+      createStorage() as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),
     );
     const input = { scope: "chat" as const, prompt: "Recall Alpha gateway diagnostics and current release evidence." };
     await service.compose(input);
@@ -311,6 +357,76 @@ describe("MemoryContextService", () => {
         reason: "qmd_disabled_or_prompt_too_short",
       }),
     );
+  });
+
+  it("does not start a Claude Code CLI process to distill memory before the first token (#493)", async () => {
+    // Live: with memory on, every plain turn first ran this distiller on the CLI, which delayed the
+    // first text by 7-12 s and spent the operator's subscription on an invisible call.
+    const rootDir = await createWorkspaceRoot();
+    await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "workspace", "memory", "alpha.md"),
+      "Alpha diagnostics mention gateway readiness, test evidence, and release risk.",
+      "utf8",
+    );
+    const llmService = createLlmService({
+      activeProviderId: "claude-code-cli",
+      activeModel: "claude-sonnet-5-5",
+      apiStyle: "claude-code-cli",
+    });
+    const service = new MemoryContextService(
+      createStorage() as never,
+      llmService as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+
+    const pack = await service.compose({
+      scope: "chat",
+      prompt: "Explain Alpha gateway diagnostics release evidence.",
+      sessionId: "session-cli",
+      workspace: "memory",
+      maxContextTokens: 360,
+    });
+
+    expect(llmService.chatCompletions).not.toHaveBeenCalled();
+    expect(pack.quality).toMatchObject({ status: "fallback", reason: MEMORY_DISTILLER_SKIPPED_PER_CALL_CLI_REASON });
+    expect(pack.contextText).toContain("Alpha diagnostics");
+  });
+
+  it("still distills on the Claude Code CLI when the operator configured it as the distiller", async () => {
+    const rootDir = await createWorkspaceRoot();
+    await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "workspace", "memory", "alpha.md"),
+      "Alpha diagnostics mention gateway readiness, test evidence, and release risk.",
+      "utf8",
+    );
+    const chatCompletions = vi.fn(async () => {
+      throw new Error("distiller unavailable in this fixture");
+    });
+    const llmService = createLlmService({
+      chatCompletions,
+      activeProviderId: "claude-code-cli",
+      activeModel: "claude-sonnet-5-5",
+      apiStyle: "claude-code-cli",
+    });
+    const service = new MemoryContextService(
+      createStorage() as never,
+      llmService as never,
+      createConfig(rootDir, { distillerProviderId: "claude-code-cli" }) as never,
+      vi.fn(),
+    );
+
+    await service.compose({
+      scope: "chat",
+      prompt: "Explain Alpha gateway diagnostics release evidence.",
+      sessionId: "session-cli-explicit",
+      workspace: "memory",
+      maxContextTokens: 360,
+    });
+
+    expect(chatCompletions).toHaveBeenCalledTimes(1);
   });
 
   it("distills workspace and transcript candidates, annotates provenance, and reuses fresh cache hits", async () => {
@@ -1074,16 +1190,24 @@ describe("MemoryContextService", () => {
       vi.fn(),
     );
 
-    const pack = await service.compose({
-      scope: "chat",
-      prompt: "How should browser sessions be governed?",
-      sessionId: "session-1",
-      workspace: "memory",
-      workspaceId: "workspace-a",
-      forceRefresh: true,
-      queryEmbedding: [0.1, 0.2, 0.3],
-    }, { parentOperationId: "worker-answer", workerId: "worker-a", turnId: "turn-a", durableRunId: "run-a",
-      contextIntentHash: "worker-context-hash" });
+    const pack = await service.compose(
+      {
+        scope: "chat",
+        prompt: "How should browser sessions be governed?",
+        sessionId: "session-1",
+        workspace: "memory",
+        workspaceId: "workspace-a",
+        forceRefresh: true,
+        queryEmbedding: [0.1, 0.2, 0.3],
+      },
+      {
+        parentOperationId: "worker-answer",
+        workerId: "worker-a",
+        turnId: "turn-a",
+        durableRunId: "run-a",
+        contextIntentHash: "worker-context-hash",
+      },
+    );
 
     expect(pack.citations).toEqual([
       expect.objectContaining({
@@ -1120,7 +1244,10 @@ describe("MemoryContextService", () => {
         callKind: "utility",
         utilityKind: "memory_context_distillation",
         workspaceId: "workspace-a",
-        parentOperationId: "worker-answer", workerId: "worker-a", turnId: "turn-a", durableRunId: "run-a",
+        parentOperationId: "worker-answer",
+        workerId: "worker-a",
+        turnId: "turn-a",
+        durableRunId: "run-a",
         contextIntentHash: "worker-context-hash",
       }),
     );
@@ -1779,7 +1906,9 @@ describe("MemoryContextService", () => {
 function holdEmbeddingCalls(count: number) {
   const original = vi.mocked(generateEmbedding).getMockImplementation()!;
   let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const signals: Array<AbortSignal | undefined> = [];
   for (let index = 0; index < count; index += 1) {
     vi.mocked(generateEmbedding).mockImplementationOnce(async (...args) => {
@@ -1800,7 +1929,12 @@ async function createWorkspaceRoot(): Promise<string> {
 
 function createConfig(
   rootDir: string,
-  options: { memoryEnabled?: boolean; qmdEnabled?: boolean; distillerTimeoutMs?: number } = {},
+  options: {
+    memoryEnabled?: boolean;
+    qmdEnabled?: boolean;
+    distillerTimeoutMs?: number;
+    distillerProviderId?: string;
+  } = {},
 ): Record<string, unknown> {
   return {
     rootDir,
@@ -1818,6 +1952,7 @@ function createConfig(
           maxBytesPerFile: 8_000,
           allowedExtensions: [".md", ".txt"],
           distiller: {
+            ...(options.distillerProviderId ? { providerId: options.distillerProviderId } : {}),
             fallbackCheapModel: "gpt-cheap",
             timeoutMs: options.distillerTimeoutMs ?? 1_000,
           },
@@ -1835,12 +1970,21 @@ function createConfig(
 function createLlmService(
   overrides: {
     chatCompletions?: ReturnType<typeof vi.fn>;
+    activeProviderId?: string;
+    activeModel?: string;
+    apiStyle?: string;
   } = {},
 ) {
   return {
     getRuntimeConfig: vi.fn(() => ({
-      activeProviderId: "openai",
-      activeModel: "gpt-test",
+      activeProviderId: overrides.activeProviderId ?? "openai",
+      activeModel: overrides.activeModel ?? "gpt-test",
+      providers: [
+        {
+          providerId: overrides.activeProviderId ?? "openai",
+          apiStyle: overrides.apiStyle ?? "openai-chat-completions",
+        },
+      ],
     })),
     chatCompletions: overrides.chatCompletions ?? vi.fn(),
   };
