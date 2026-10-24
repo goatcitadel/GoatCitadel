@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { assertIntegrationDialogBounds } from "./cockpit-integration-connections-proof.mjs";
 
@@ -25,6 +25,60 @@ export function assertFirstRunPreserved({ before, after, writes, forwarded }) {
     { method: "POST", path: "/api/v1/onboarding/complete", body: { completedBy: "operator" } },
   ]);
   assert.equal(forwarded, 0, "A negative completion request reached the Gateway.");
+}
+
+const ONBOARDING_STATE_PATH = "/api/v1/onboarding/state";
+/** Mirrors STARTUP_READ_BATCH_PATH in packages/contracts/src/gateway-startup-reads.ts. */
+const STARTUP_READ_BATCH_PATH = "/api/v1/startup-reads";
+
+/**
+ * Diagnostic only: the onboarding-state bodies one browser response carried, whether read directly or
+ * inside a startup-read batch (the Cockpit batches startup reads for about 10 s after load).
+ */
+export function onboardingStateReadsFromResponse(url, body) {
+  const parsed = new URL(url);
+  if (parsed.pathname === ONBOARDING_STATE_PATH) return [{ transport: "direct", body }];
+  if (parsed.pathname !== STARTUP_READ_BATCH_PATH) return [];
+  let reads;
+  try {
+    reads = JSON.parse(parsed.searchParams.get("reads") ?? "[]");
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(reads)) return [];
+  return reads.flatMap((read, index) => {
+    const item = body?.items?.[index];
+    if (typeof read?.path !== "string" || new URL(read.path, parsed.origin).pathname !== ONBOARDING_STATE_PATH) return [];
+    if (!item || item.status !== 200 || typeof item.bodyText !== "string") return [{ transport: "batched", unanswered: true }];
+    try {
+      return [{ transport: "batched", body: JSON.parse(item.bodyText) }];
+    } catch {
+      return [{ transport: "batched", unanswered: true }];
+    }
+  });
+}
+
+/**
+ * Diagnostic only: JSON paths that differ between two onboarding states within the fields the
+ * Cockpit's completion binding hashes (`settings` and the provider readiness item).
+ */
+export function onboardingBindingDifferences(left, right) {
+  const project = (state) => ({
+    settings: state?.settings ?? null,
+    provider: state?.setupReadiness?.items?.find((item) => item.id === "provider") ?? null,
+  });
+  const differences = [];
+  const walk = (a, b, at) => {
+    if (Object.is(a, b)) return;
+    const objects = a && b && typeof a === "object" && typeof b === "object" && Array.isArray(a) === Array.isArray(b);
+    if (!objects) {
+      differences.push(at);
+      return;
+    }
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) walk(a[key], b[key], `${at}.${key}`);
+  };
+  walk(project(left), project(right), "$");
+  return differences;
 }
 
 /** Real incomplete owner reads; stale-read and lost-response fixtures never change the owner. */
@@ -64,10 +118,30 @@ export async function runCockpitFirstRunGuardProof({ context, stack, requestJson
             intercepted = 0,
             navigations = 0;
           const writes = [],
-            screenshots = [];
+            screenshots = [],
+            diagnostics = [],
+            onboardingReads = [];
           try {
             await browserContext.addInitScript(() => window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit"));
             page = await browserContext.newPage();
+            // Diagnostic only (operator-proof flake, "Setup changed" after Keep current rule): keep every
+            // onboarding-state body the page received so a failure can name the field that moved.
+            page.on("response", (response) => {
+              const pathname = new URL(response.url()).pathname;
+              if (response.request().method() !== "GET" || response.status() !== 200) return;
+              if (pathname !== ONBOARDING_STATE_PATH && pathname !== STARTUP_READ_BATCH_PATH) return;
+              const at = new Date().toISOString();
+              const injectedStaleReadsSoFar = staleReads;
+              response
+                .json()
+                .then((body) => {
+                  for (const read of onboardingStateReadsFromResponse(response.url(), body))
+                    onboardingReads.push({ at, injectedStaleReadsSoFar, ...read });
+                })
+                .catch(() => {
+                  /* Diagnostics never change the scenario outcome. */
+                });
+            });
             page.on("request", (request) => {
               if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigations++;
               const pathname = new URL(request.url()).pathname;
@@ -171,10 +245,49 @@ export async function runCockpitFirstRunGuardProof({ context, stack, requestJson
                 /* Preserve the original failure. */
               }
             }
+            try {
+              const setupChangedVisible =
+                Boolean(page && !page.isClosed()) &&
+                (await page
+                  .getByRole("region", { name: "First-run setup", exact: true })
+                  .getByRole("status")
+                  .filter({ hasText: "Setup changed." })
+                  .isVisible()
+                  .catch(() => false));
+              const gatewayNow = await read().catch((readError) => ({ error: String(readError) }));
+              const answered = onboardingReads.filter((entry) => entry.body);
+              const directory = path.join(context.artifactRoot, "diagnostics");
+              await mkdir(directory, { recursive: true });
+              const file = path.join(directory, `install-first-run-${variant}-onboarding-reads.json`);
+              await writeFile(
+                file,
+                JSON.stringify(
+                  {
+                    setupChangedVisible,
+                    injectedStaleReads: staleReads,
+                    differencesFromFirstPageRead: answered
+                      .slice(1)
+                      .map((entry) => ({ at: entry.at, paths: onboardingBindingDifferences(answered[0].body, entry.body) })),
+                    differencesFromScenarioStart: answered.map((entry) => ({
+                      at: entry.at,
+                      paths: onboardingBindingDifferences(before, entry.body),
+                    })),
+                    scenarioStart: before,
+                    pageReads: onboardingReads,
+                    gatewayAtFailure: gatewayNow,
+                  },
+                  null,
+                  2,
+                ),
+              );
+              diagnostics.push(`diagnostics/${path.basename(file)}`);
+            } catch {
+              /* Preserve the original failure. */
+            }
             return {
               status: "failed",
               error: String(error?.stack ?? error),
-              artifacts: { screenshots, diagnostics: [], traces: [], logs: [], perf: [], playwright: [] },
+              artifacts: { screenshots, diagnostics, traces: [], logs: [], perf: [], playwright: [] },
             };
           } finally {
             await browserContext.close();
