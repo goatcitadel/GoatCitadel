@@ -70,7 +70,7 @@ export async function runMemoryPolicyRevisionScenario(context, stack, deps) {
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
       assert.equal(await model.inputValue(), "operator-draft-model");
       await page.getByRole("button", { name: "Refresh memory diagnostics", exact: true }).click();
-      await page.getByText("The policy changed. Your draft remains separate. Review current policy before rebasing.", { exact: false }).waitFor();
+      await page.getByText("The policy changed. Your draft started from an older version. Review the current policy below before saving.", { exact: false }).waitFor();
       await page.getByRole("button", { name: "Use current policy version and keep draft", exact: true }).click();
       assert.equal(await model.inputValue(), "operator-draft-model");
       logCursor = browserLog.mark();
@@ -83,7 +83,7 @@ export async function runMemoryPolicyRevisionScenario(context, stack, deps) {
       assert.equal(savedPolicy.enabled, false);
       assert.notEqual(savedPolicy.revision, concurrentPolicy.revision);
       assert.deepEqual(submittedRevisions, [base.body.revision, concurrentPolicy.revision]);
-      await page.getByText("Memory maintenance policy saved with a new canonical revision.", { exact: false }).waitFor();
+      await page.getByText("Memory maintenance policy saved as a new version.", { exact: false }).waitFor();
       assert.equal(await page.getByRole("button", { name: "Review policy changes", exact: true }).isDisabled(), true);
       assert.deepEqual((await requestJson(stack.gatewayUrl, policyUrl)).body, savedPolicy);
       assert.deepEqual((await requestJson(stack.gatewayUrl, "/api/v1/memory/maintenance/policy?workspaceId=default")).body, defaultPolicy.body);
