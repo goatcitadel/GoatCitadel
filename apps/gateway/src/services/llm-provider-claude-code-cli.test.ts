@@ -1,5 +1,14 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -8,6 +17,7 @@ import type { LlmConfigFile } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopSecretStore } from "../test/llm-fixtures.js";
 import { ClaudeCodeCliReadiness } from "./claude-code-cli-readiness.js";
+import { hostClaudeCliRunDirSweepFs } from "./claude-code-cli-run-dir-sweep.js";
 import { LlmService } from "./llm-service.js";
 
 interface SpawnRecord {
@@ -178,6 +188,50 @@ describe("claude-code-cli provider through LlmService", () => {
       message: { role: "user", content: [{ type: "text", text: "say hello 🐐" }] },
     });
     // The per-run scratch dir (cwd + system prompt file) is removed afterwards.
+    expect(readdirSync(scratchRoot)).toEqual([]);
+  });
+
+  it("sweeps run dirs a hard-killed Gateway left behind once, on the first cold step", async () => {
+    const leftBehind = path.join(scratchRoot, "run-left-behind");
+    mkdirSync(leftBehind);
+    writeFileSync(path.join(leftBehind, "tools.json"), "{}");
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    utimesSync(leftBehind, threeHoursAgo, threeHoursAgo);
+    let listings = 0;
+    const harness = createHarness([]);
+    const service = new LlmService(
+      config,
+      { PATH: "C:\\Windows" },
+      {
+        secretStore: createNoopSecretStore(),
+        enforceNetworkAllowlist: false,
+        claudeCli: {
+          spawn: harness.spawn,
+          killTree: harness.killTree,
+          readiness: harness.readiness,
+          resolveInvocation: () => ({ command: "C:\\Users\\op\\.local\\bin\\claude.exe", prefixArgs: [] }),
+          scratchRoot,
+          runDirSweep: {
+            fs: {
+              listEntries: async (dir) => {
+                listings += 1;
+                return await hostClaudeCliRunDirSweepFs.listEntries(dir);
+              },
+              statNoFollow: (target) => hostClaudeCliRunDirSweepFs.statNoFollow(target),
+            },
+          },
+        },
+      },
+    );
+
+    for (let step = 0; step < 2; step += 1) {
+      const response = await service.chatCompletions({ messages: [{ role: "user", content: "say hello" }] });
+      expect(response.choices[0]?.message.content).toBe("hello world");
+    }
+
+    await vi.waitFor(() => expect(existsSync(leftBehind)).toBe(false));
+    expect(listings).toBe(1);
+    // Both steps' own run dirs were removed by their normal cleanup, not lost to the sweep mid-run.
     expect(readdirSync(scratchRoot)).toEqual([]);
   });
 

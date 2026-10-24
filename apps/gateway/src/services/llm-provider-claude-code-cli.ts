@@ -17,6 +17,7 @@ import type {
 } from "./llm-provider-adapter.js";
 import { claudeCodeHarnessExecutableNames, listExecutableCandidates } from "./agentic-harness-availability.js";
 import { ClaudeCliWarmRegistry } from "./claude-code-cli-warm-registry.js";
+import { sweepStaleClaudeCliRunDirs, type ClaudeCliRunDirSweepFs } from "./claude-code-cli-run-dir-sweep.js";
 import {
   ClaudeCliError,
   buildClaudeCliArgs,
@@ -81,6 +82,8 @@ export interface ClaudeCodeCliRuntimeOptions {
   scratchRoot?: string;
   /** Tool-bridge overrides; by default the stub is found next to this module and run by this Node binary. */
   toolBridge?: { stubPath?: () => string | undefined; nodePath?: string };
+  /** Clock and filesystem for the one-time sweep of run dirs a hard-killed Gateway left behind. */
+  runDirSweep?: { now?: () => number; fs?: ClaudeCliRunDirSweepFs };
 }
 
 /** Where one bridged step runs the MCP stub from; `stubPath` is undefined when the stub cannot be found. */
@@ -104,6 +107,8 @@ export interface ClaudeCodeCliRuntime {
   /** Parked `claude -p` processes awaiting their tool results. */
   readonly warm: ClaudeCliWarmRegistry;
   resolveInvocation(): ClaudeCliInvocation;
+  /** Starts, once per runtime and in the background, the sweep of stale `run-*` dirs under `scratchRoot`. */
+  sweepStaleRunDirsOnce(): void;
 }
 
 export function createClaudeCodeCliRuntime(
@@ -136,9 +141,18 @@ export function createClaudeCodeCliRuntime(
   const warmContinuationEnabled = () => toolBridgeEnabled() && warmEnabled?.() === true;
   const bridgeNodePath = options.toolBridge?.nodePath ?? process.execPath;
   const resolveBridgeStubPath = options.toolBridge?.stubPath ?? (() => resolveClaudeCliStubPath(existsSync));
+  const scratchRoot = options.scratchRoot ?? path.join(os.tmpdir(), "goatcitadel-claude-cli");
+  let swept = false;
   const runtime: ClaudeCodeCliRuntime = {
     env: childEnv,
-    scratchRoot: options.scratchRoot ?? path.join(os.tmpdir(), "goatcitadel-claude-cli"),
+    scratchRoot,
+    sweepStaleRunDirsOnce: () => {
+      if (swept) return;
+      swept = true;
+      void sweepStaleClaudeCliRunDirs({ scratchRoot, removeDir: removeRunDir, ...options.runDirSweep }).catch(
+        logRunDirSweepFailure,
+      );
+    },
     spawn: options.spawn,
     killTree: options.killTree,
     resolveInvocation,
@@ -317,7 +331,9 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
     }
 
     // Prepare local state before the usage intent exists, so a scratch-dir failure
-    // cannot leave an accepted intent unsettled.
+    // cannot leave an accepted intent unsettled. The first cold step also clears aged run dirs
+    // that a hard-killed Gateway left behind (its normal cleanup never ran).
+    runtime.sweepStaleRunDirsOnce();
     const runDir = await mkdtempSafe(runtime.scratchRoot);
     let parked = false;
     yield* runAccounted({
@@ -576,6 +592,11 @@ async function removeRunDir(runDir: string): Promise<void> {
       code: typeof code === "string" ? code.slice(0, 32) : "unknown",
     });
   }
+}
+
+/** The sweep never rejects by contract; this only records the unexpected and keeps the promise owned. */
+function logRunDirSweepFailure(error: unknown): void {
+  log.warn("Claude Code CLI run dir sweep failed", { error: error instanceof Error ? error.name : "unknown" });
 }
 
 async function mkdtempSafe(root: string): Promise<string> {
