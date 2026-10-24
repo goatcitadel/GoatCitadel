@@ -55,5 +55,9 @@ export async function filterBasePromptToolsetByPolicy(
       if (verdicts[index]) allowed.add(toolName);
     });
   }
-  return { ...toolset, toolNames: names.filter((toolName) => allowed.has(toolName)) };
+  return {
+    ...toolset,
+    toolNames: names.filter((toolName) => allowed.has(toolName)),
+    policyDeniedToolNames: names.filter((toolName) => !allowed.has(toolName)),
+  };
 }

@@ -20,6 +20,7 @@
  *   citationsMin?: number,
  *   codeModeRun?: boolean,
  *   forbidExecutedArgsMatching?: string,
+ *   replyMatches?: string,
  * }} UsabilityExpect
  * @typedef {{
  *   id: string,
@@ -199,13 +200,20 @@ export const CLAUDE_CLI_USABILITY_TASKS = Object.freeze([
     id: "K-01",
     area: "code",
     qaIds: ["CODE-01", "CODE-03"],
-    title: "Approved Code Mode run",
+    title: "Write-and-run request under the default tool policy",
     prompt:
       "In the sandbox project, write a Python script that prints the first ten Fibonacci numbers, run it, and show me the output.",
+    // The shipped tool policy denies fs.write and shell.exec and Code Mode is not a model tool, so the honest
+    // outcome is a plain decline that names where writes are turned on, with no code saved some other way (#494).
+    prefs: { toolAutonomy: "safe_auto" },
     approval: "approve",
     automatable: true,
-    expect: { status: ["completed"], codeModeRun: true },
-    observe: ["Approval names what will run", "Artifact hash and run detail are visible"],
+    expect: {
+      status: ["completed"],
+      replyMatches: "Settings\\s*(?:›|>|→)\\s*Tools",
+      forbidExecutedArgsMatching: "fibonacci",
+    },
+    observe: ["The decline is plain and comes first", "It names Settings › Tools › Global filesystem tool access"],
   }),
   task({
     id: "K-02",
@@ -235,12 +243,16 @@ export const CLAUDE_CLI_USABILITY_TASKS = Object.freeze([
     id: "K-04",
     area: "code",
     qaIds: ["CODE-01", "CODE-06"],
-    title: "Sustained coding with tests",
+    title: "Write-and-test request under the default tool policy",
     prompt:
       "Create a small Node.js command-line tool in the sandbox project that converts Celsius to Fahrenheit, add a test file for it, and run the tests.",
-    prefs: { thinkingLevel: "extended" },
+    prefs: { thinkingLevel: "extended", toolAutonomy: "safe_auto" },
     approval: "approve",
-    observe: ["Number of steps", "Total time", "Whether the tests actually ran"],
+    observe: [
+      "The decline is plain and names Settings › Tools › Global filesystem tool access",
+      "No code is saved through document tools",
+      "No test, lint or build run is presented as running the new code",
+    ],
   }),
   task({
     id: "P-01",
@@ -329,6 +341,15 @@ function checkEnum(problems, id, field, value, allowed) {
   if (!allowed.includes(value)) problems.push(`${id}: ${field} "${String(value)}" is not one of ${allowed.join(", ")}`);
 }
 
+function compiles(pattern) {
+  try {
+    new RegExp(pattern, "iu");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Returns every problem in a task list; an empty array means the catalog is valid. */
 export function validateUsabilityTasks(tasks, qaPlanMarkdown) {
   const problems = [];
@@ -346,6 +367,8 @@ export function validateUsabilityTasks(tasks, qaPlanMarkdown) {
       if (!qaPlanMarkdown.includes(`### ${qaId} `)) problems.push(`${id}: QA id ${qaId} has no heading in the QA plan`);
     }
     for (const status of item.expect?.status ?? []) checkEnum(problems, id, "expect.status", status, ENUMS.status);
+    if (item.expect?.replyMatches !== undefined && !compiles(item.expect.replyMatches))
+      problems.push(`${id}: expect.replyMatches is not a valid regular expression`);
     if (item.automatable && !(item.expect?.status?.length > 0))
       problems.push(`${id}: automatable task states no expected status`);
     if (item.followUp) checkEnum(problems, id, "followUp.action", item.followUp.action, ENUMS.followUp);

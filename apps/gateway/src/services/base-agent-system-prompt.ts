@@ -53,6 +53,8 @@ export interface BaseAgentPromptToolset {
   toolNames: readonly string[];
   /** Callable skills index. Capped + sorted defensively here regardless of caller. */
   skills?: readonly BaseAgentPromptSkill[];
+  /** Catalog tools this turn's policy denies; they are never offered, so the prompt says what is off instead. */
+  policyDeniedToolNames?: readonly string[];
 }
 
 export interface BuildBaseAgentSystemPromptInput {
@@ -96,6 +98,37 @@ const TOOLS_UNAVAILABLE_GUIDANCE: Record<BaseAgentToolsUnavailableReason, { caus
     remedy: "binding a project to this conversation would let you run it",
   },
 };
+
+/**
+ * When the tool policy denies file writes or shell commands (the shipped default), a "write and run"
+ * request cannot succeed. Without this the model saved code through document tools, treated a test
+ * or build run as running it, or called a tool it was never offered (#494).
+ */
+function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string | undefined {
+  const denied = new Set(toolset.policyDeniedToolNames ?? []);
+  const writesDenied = denied.has("fs.write");
+  const shellDenied = denied.has("shell.exec");
+  if (!writesDenied && !shellDenied) return undefined;
+  const off = [writesDenied ? "writing files (fs.write)" : "", shellDenied ? "running shell commands (shell.exec)" : ""]
+    .filter(Boolean)
+    .join(" and ");
+  const lines = [
+    "## Writing and running code",
+    `This workspace's tool policy turns off ${off}, so you cannot create or change code files or run scripts in this turn. If the user asks for that, say so plainly first. Do not save code through document tools, and do not treat a test, lint or build tool as running their code: those only run the project's own package scripts.`,
+  ];
+  if (writesDenied) {
+    const proposal = toolset.toolNames.includes("change.request")
+      ? " You can also offer to propose that change with change.request, which they then confirm."
+      : "";
+    lines.push(
+      `To allow file writes, an operator sets fs.write to Available in Settings › Tools › Global filesystem tool access; that is a danger-risk change because it applies in every write root.${proposal}`,
+    );
+  }
+  if (shellDenied) {
+    lines.push("Shell commands can only be turned on by editing the tool policy file; there is no setting for them.");
+  }
+  return lines.join("\n");
+}
 
 function buildToolsUnavailableSection(reason: BaseAgentToolsUnavailableReason, webMode?: ChatWebMode): string {
   const { cause, remedy } = TOOLS_UNAVAILABLE_GUIDANCE[reason];
@@ -291,6 +324,8 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
     const suffix = overflow > 0 ? `, and ${overflow} more` : "";
     tailSections.push(`## Tool catalog (current policy still applies)\n${toolNames.join(", ")}${suffix}`);
   }
+  const writeAndRunSection = toolsCallable ? buildWriteAndRunPolicySection(toolset) : undefined;
+  if (writeAndRunSection) tailSections.push(writeAndRunSection);
 
   // Skills are read through a tool, so a turn without callable tools cannot draw on them either.
   const skills = toolsCallable

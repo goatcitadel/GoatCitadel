@@ -81,7 +81,6 @@ export const PROMPT_PACK_GATED_EXPLICIT_TOOL_NAME_LIST = [
   "presentations.create",
   "shell.exec",
   "shell.exec_background",
-  "git.exec",
   "http.post",
   "browser.interact",
   "browser.cookies.get",

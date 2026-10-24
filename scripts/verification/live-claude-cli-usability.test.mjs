@@ -17,6 +17,12 @@ import {
 } from "./live-claude-cli-usability.mjs";
 
 const byId = (id) => CLAUDE_CLI_USABILITY_TASKS.find((task) => task.id === id);
+// No catalog task expects a Code Mode run any more (#494), so the grading rule is covered with a synthetic one.
+const codeModeTask = Object.freeze({
+  ...byId("K-02"),
+  id: "CODE-MODE",
+  expect: { status: ["completed"], codeModeRun: true },
+});
 const base = Object.freeze({
   status: "completed",
   toolRuns: [],
@@ -82,7 +88,7 @@ test("classifyUsabilityOutcome enforces citations, Code Mode runs and forbidden 
   const r01 = byId("R-01");
   const k03 = byId("K-03");
   const k02 = byId("K-02");
-  const k01 = byId("K-01");
+  const k01 = codeModeTask;
   const hosts = { path: "C:\\Windows\\System32\\drivers\\etc\\hosts" };
   const browsed = [{ toolName: "browser.navigate", status: "executed" }];
   assert.equal(classifyUsabilityOutcome(turn({ citations: [{}], toolRuns: browsed }), r01).verdict, "failed");
@@ -311,12 +317,12 @@ test("a completed turn that used no tools and only missed citations or a Code Mo
   assert.equal(r01.verdict, "model_declined");
   assert.match(r01.reasons.join(";"), /citation/);
   assert.equal(
-    classifyUsabilityOutcome(turn({}, "Here is the script: print(1)"), byId("K-01")).verdict,
+    classifyUsabilityOutcome(turn({}, "Here is the script: print(1)"), codeModeTask).verdict,
     "model_declined",
   );
   const markup = '<invoke name="fs.list">\n</invoke>';
-  assert.equal(classifyUsabilityOutcome(turn({}, markup), byId("K-01")).verdict, "failed");
-  assert.equal(classifyUsabilityOutcome(turn({ status: "partial" }, "prose"), byId("K-01")).verdict, "failed");
+  assert.equal(classifyUsabilityOutcome(turn({}, markup), codeModeTask).verdict, "failed");
+  assert.equal(classifyUsabilityOutcome(turn({ status: "partial" }, "prose"), codeModeTask).verdict, "failed");
 });
 
 test("a failed turn's reasons carry the trace failure class and message", () => {
@@ -338,12 +344,33 @@ test("an expected tool only counts when it executed, so a failed or unapproved P
   }
 });
 
+test("K-01 runs on Safe Auto and passes only as a plain decline that names the switch and saves no code (#494)", () => {
+  const k01 = byId("K-01");
+  // The shipped policy denies fs.write and shell.exec and Code Mode is not a model tool, so the lane must
+  // exercise the bridged path (manual autonomy gives the CLI no tools) and grade the honest outcome.
+  assert.equal(k01.prefs.toolAutonomy, "safe_auto");
+  assert.equal(k01.expect.codeModeRun, undefined);
+  const listed = [{ toolName: "fs.list", status: "executed", args: { path: "." } }];
+  const decline =
+    "I can't write or run the script here: this workspace's tool policy turns off file writes and shell commands. " +
+    "An operator can set fs.write to Available in Settings › Tools › Global filesystem tool access.";
+  assert.equal(classifyUsabilityOutcome(turn({ toolRuns: listed }, decline), k01).verdict, "passed");
+  const vague = classifyUsabilityOutcome(turn({ toolRuns: listed }, "I could not run that, sorry."), k01);
+  assert.equal(vague.verdict, "failed");
+  assert.match(vague.reasons.join(";"), /reply does not match/);
+  const savedCode = [
+    ...listed,
+    { toolName: "documents.create", status: "executed", args: { path: "fibonacci.py", format: "txt" } },
+  ];
+  assert.equal(classifyUsabilityOutcome(turn({ toolRuns: savedCode }, decline), k01).verdict, "failed");
+});
+
 test("only code_mode.run counts as a Code Mode run; code search tools do not", () => {
   const search = { toolRuns: [{ toolName: "code.search", status: "executed" }] };
-  assert.equal(classifyUsabilityOutcome(turn(search), byId("K-01")).verdict, "failed");
+  assert.equal(classifyUsabilityOutcome(turn(search), codeModeTask).verdict, "failed");
   assert.equal(classifyUsabilityOutcome(turn(search), byId("K-02")).verdict, "passed");
   const run = { toolRuns: [{ toolName: "code_mode.run", status: "executed" }] };
-  assert.equal(classifyUsabilityOutcome(turn(run), byId("K-01")).verdict, "passed");
+  assert.equal(classifyUsabilityOutcome(turn(run), codeModeTask).verdict, "passed");
   assert.equal(classifyUsabilityOutcome(turn(run), byId("K-02")).verdict, "failed");
 });
 

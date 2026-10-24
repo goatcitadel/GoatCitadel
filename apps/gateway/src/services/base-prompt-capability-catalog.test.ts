@@ -29,6 +29,8 @@ describe("filterBasePromptToolsetByPolicy", () => {
     );
     // An approval-gated tool is still callable, so it stays listed.
     expect(filtered.toolNames).toEqual(["fs.list", "documents.create"]);
+    // The denied names let the prompt say what is turned off and where to change it.
+    expect(filtered.policyDeniedToolNames).toEqual(["fs.write", "shell.exec"]);
     expect(filtered.skills).toEqual([{ name: "Deep research" }]);
   });
 
