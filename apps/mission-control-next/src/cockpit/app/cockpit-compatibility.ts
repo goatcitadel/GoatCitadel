@@ -82,7 +82,8 @@ export function isCockpitConversationLocation(input: string): boolean {
   return route.area === "chat" && route.rest.length === 0;
 }
 
-function validApprovalRecordId(value: string): boolean {
+/** A record id a native path may carry: no surrounding whitespace and no control characters. */
+export function validApprovalRecordId(value: string): boolean {
   if (!value || value.trim() !== value) return false;
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
