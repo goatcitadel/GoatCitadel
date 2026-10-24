@@ -29,10 +29,11 @@ export function resolveUtilityModelOverride(input: {
   if (!providerId) {
     return undefined;
   }
-  if (!input.provider || input.provider.providerId !== providerId || !input.provider.hasApiKey) {
+  const provider = input.provider;
+  if (!provider || provider.providerId !== providerId || !provider.hasApiKey) {
     return undefined;
   }
-  const model = input.utilityModel?.trim() || input.provider.defaultModel?.trim();
+  const model = input.utilityModel?.trim() || provider.defaultModel?.trim();
   if (!model) {
     return undefined;
   }
@@ -86,11 +87,12 @@ export function resolveBackgroundJobModelDefaults(runtime: ModelRoutingRuntime):
 
 export interface BackgroundJobModelResolverDeps {
   getUtilityModelOverride(): Promise<UtilityModelOverride | undefined>;
-  /** Runs any probe-backed readiness check (the Claude Code CLI login) so "not checked yet" is not read as "not ready". */
+  /**
+   * Runs any probe-backed readiness check (the Claude Code CLI login) so "not checked yet" is not read as
+   * "not ready". The implementation records bounded evidence for a check that throws; the job is skipped either way.
+   */
   ensureActiveProviderReadiness(): Promise<void>;
   getRuntimeConfig(): ModelRoutingRuntime;
-  /** Bounded evidence for a readiness check that threw; the job is skipped either way. */
-  onReadinessProbeError?(error: unknown): void;
 }
 
 /**
@@ -107,10 +109,9 @@ export async function resolveBackgroundJobModel(
   }
   try {
     await deps.ensureActiveProviderReadiness();
-  } catch (error) {
+  } catch {
     // Fail closed: the provider summary could still project an earlier "ready"
     // result, so a check that just failed must not be overridden by it.
-    deps.onReadinessProbeError?.(error);
     return undefined;
   }
   return resolveBackgroundJobModelDefaults(deps.getRuntimeConfig());

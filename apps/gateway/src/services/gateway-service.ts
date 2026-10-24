@@ -6446,18 +6446,24 @@ export class GatewayService {
   private async getBackgroundJobModelDefaults(): Promise<{ providerId: string; model: string } | undefined> {
     return await resolveBackgroundJobModel({
       getUtilityModelOverride: () => this.getUtilityModelOverride(),
-      ensureActiveProviderReadiness: () =>
-        this.llmService.ensureProviderReadiness(this.llmService.getRuntimeConfig({ useCache: true }).activeProviderId),
+      ensureActiveProviderReadiness: async () => {
+        try {
+          await this.llmService.ensureProviderReadiness(
+            this.llmService.getRuntimeConfig({ useCache: true }).activeProviderId,
+          );
+        } catch (error) {
+          this.recordDevDiagnostic({
+            level: "warn",
+            category: "model",
+            event: "background_job.readiness_check_failed",
+            message: "Skipped a background job because the active provider's readiness check failed.",
+            context: { errorName: error instanceof Error ? error.name : "unknown" },
+          });
+          throw error;
+        }
+      },
       getRuntimeConfig: () =>
         this.llmService.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true }),
-      onReadinessProbeError: (error) =>
-        this.recordDevDiagnostic({
-          level: "warn",
-          category: "model",
-          event: "background_job.readiness_check_failed",
-          message: "Skipped a background job because the active provider's readiness check failed.",
-          context: { errorName: error instanceof Error ? error.name : "unknown" },
-        }),
     });
   }
 

@@ -61,7 +61,9 @@ function invokeTurnTool(
   request: ToolInvokeRequest,
 ): Promise<ToolInvokeResult> {
   const options = buildTurnExecutionOptions(turnInput);
-  return options ? deps.invokeTool(request, options) : deps.invokeTool(request);
+  // Already a detached function: the runner copies it out of its own deps.
+  const invokeTool = deps.invokeTool;
+  return options ? invokeTool(request, options) : invokeTool(request);
 }
 
 function invokeTurnMcpTool(

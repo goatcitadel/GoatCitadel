@@ -70,6 +70,14 @@ reads each entry names. `GatewayService` does not grow. Every original
 baseline-owner limit remains unchanged; this does not permit future growth above
 these caps.
 
+Additional operator clarification, October 23: resolve the architecture regressions
+introduced by #463, #464, #466/#480, #477 and #514 by consolidating the existing
+owners they touched. Record the dependency/host caps of **24/0** for
+`web-search-credential-service.ts` and **2/0** for `web-search-credential-change.ts`,
+the Web & Search owners added in #464, as explicit C0 gate-reconciliation scope
+exceptions. Every original baseline-owner limit remains unchanged; this does not
+permit future growth above these caps.
+
 ### 2. Simplify onboarding through the first useful response
 
 Use the existing guided setup and Change Plans to provide one continuous flow:
