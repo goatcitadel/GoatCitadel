@@ -812,6 +812,17 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(guidance).toContain("pdf-generator: Create PDF documents");
   });
 
+  it("asks for the catalog in this turn's session, workspace and mode, so policy-denied tools are left out", async () => {
+    const harness = createHost("chat", { toolAutonomy: "safe_auto" });
+    const resolve = withCapabilityCatalog(harness.host, { toolNames: ["fs.list"] });
+
+    await prepareAgentChatTurn(harness.host, "session-1", { content: "hello" });
+
+    expect(resolve).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-1", mode: "chat" }));
+    const [scope] = (resolve as unknown as { mock: { calls: Array<[{ workspaceId?: string }]> } }).mock.calls[0]!;
+    expect(typeof scope.workspaceId).toBe("string");
+  });
+
   it("leaves the tool catalog out and says tools are off when manual autonomy removes every tool", async () => {
     // Manual autonomy sends the provider no tools at all, so listing the catalog invites text tool calls.
     const harness = createHost("cowork", { toolAutonomy: "manual" });

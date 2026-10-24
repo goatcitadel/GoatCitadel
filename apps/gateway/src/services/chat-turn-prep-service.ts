@@ -75,6 +75,7 @@ import {
   type BaseAgentPromptToolset,
   type BaseAgentToolsUnavailableReason,
 } from "./base-agent-system-prompt.js";
+import type { BasePromptCatalogScope } from "./base-prompt-capability-catalog.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
 import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
 import type {
@@ -303,12 +304,13 @@ export interface ChatTurnPrepHost {
    * Callable tool/skill catalog for the base prompt's "what you can do" index
    * (P0-#2). Previously the base prompt was built with an empty toolset, so the
    * model was never told which tools or skills it had — a major cause of thin,
-   * generic responses. Optional + best-effort: the prompt is advisory grounding,
-   * so this lists the callable catalog cheaply (in-memory) and does NOT run
-   * per-tool policy evaluation — real deny-wins enforcement stays inline at call
-   * time. Returns empty names when unavailable; never throws on the prep path.
+   * generic responses. Optional + best-effort: the prompt is advisory grounding.
+   * With a scope, tools this turn's policy denies are left out, because the
+   * runner never offers them and naming them invites calls to tools the step
+   * cannot take (#494); real deny-wins enforcement stays inline at call time.
+   * Returns empty names when unavailable; never throws on the prep path.
    */
-  resolveBasePromptCapabilityCatalog?(): Promise<BaseAgentPromptToolset>;
+  resolveBasePromptCapabilityCatalog?(scope?: BasePromptCatalogScope): Promise<BaseAgentPromptToolset>;
   resolveChatTurnEffectiveRoute?(
     sessionId: string,
     input: ChatSendMessageRequest,
@@ -1104,13 +1106,17 @@ export async function prepareAgentChatTurn(
         memoryDigest = undefined;
       }
     }
-    // Tell the model what it can actually do (P0-#2). Best-effort + cheap
-    // (in-memory callable catalog, no per-tool policy eval). Quick-web turns use
-    // a stub prefix that ignores the toolset, so skip the lookup for them.
+    // Tell the model what it can actually do (P0-#2). Best-effort; the scope
+    // lets the host leave out tools this turn's policy denies. Quick-web turns
+    // use a stub prefix that ignores the toolset, so skip the lookup for them.
     let promptCapabilityCatalog: BaseAgentPromptToolset = { toolNames: [] };
     if (!quickWebTurn && host.resolveBasePromptCapabilityCatalog) {
       try {
-        promptCapabilityCatalog = await host.resolveBasePromptCapabilityCatalog();
+        promptCapabilityCatalog = await host.resolveBasePromptCapabilityCatalog({
+          sessionId,
+          workspaceId,
+          mode: effectiveMode,
+        });
       } catch {
         promptCapabilityCatalog = { toolNames: [] };
       }
