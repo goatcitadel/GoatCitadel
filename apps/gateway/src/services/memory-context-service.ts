@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   ConflictError,
@@ -23,7 +22,6 @@ import {
   rankMemoryCandidates,
   selectMemoryCandidatesForDistillation,
   validateCitations,
-  type MemoryFileSource,
   type MemoryItemSource,
   type MemorySourceInput,
 } from "@goatcitadel/memory-core";
@@ -38,6 +36,12 @@ import {
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { LlmService } from "./llm-service.js";
+import {
+  isImplicitPerCallCliDistiller,
+  MEMORY_DISTILLER_SKIPPED_PER_CALL_CLI_REASON,
+  MemoryDistillerSkippedError,
+} from "./memory-distiller-route.js";
+import { walkMemoryFiles } from "./memory-file-walk.js";
 import {
   enrichMemoryCitations,
   enrichMemoryPack,
@@ -74,7 +78,10 @@ const DEFAULT_MEMORY_WORKSPACE_ID = "default";
 
 export type { MemoryContextCompositionDiagnostics } from "@goatcitadel/contracts";
 
-interface QueryEmbeddingResult { embedding?: number[]; providerIsReal: boolean }
+interface QueryEmbeddingResult {
+  embedding?: number[];
+  providerIsReal: boolean;
+}
 interface PendingQueryEmbedding {
   controller: AbortController;
   promise: Promise<QueryEmbeddingResult>;
@@ -108,9 +115,19 @@ export class MemoryContextService {
   ): Promise<MemoryContextPack> {
     const startedAt = performance.now();
     const diagnostics: MemoryContextCompositionDiagnostics = {
-      outcome: "failed", embeddingCacheStatus: "skipped", embeddingProviderIsReal: false,
+      outcome: "failed",
+      embeddingCacheStatus: "skipped",
+      embeddingProviderIsReal: false,
       contextCacheStatus: "not_checked",
-      timings: { totalMs: 0, accessMs: 0, embeddingMs: 0, sourceReadMs: 0, rankingMs: 0, contextCacheMs: 0, distillationMs: 0 },
+      timings: {
+        totalMs: 0,
+        accessMs: 0,
+        embeddingMs: 0,
+        sourceReadMs: 0,
+        rankingMs: 0,
+        contextCacheMs: 0,
+        distillationMs: 0,
+      },
     };
     try {
       const pack = await this.composeInternal(input, usageLineage, diagnostics);
@@ -152,8 +169,9 @@ export class MemoryContextService {
     const maxContextTokens = reserveMemoryContextBudget(input.maxContextTokens ?? qmd.maxContextTokens);
     const prompt = input.prompt.trim();
     const accessStarted = performance.now();
-    const accessReceipt = await resolveMemoryContextAccessReceipt(this.storage, input.sessionId)
-      .finally(() => { diagnostics.timings.accessMs = elapsedMs(accessStarted); });
+    const accessReceipt = await resolveMemoryContextAccessReceipt(this.storage, input.sessionId).finally(() => {
+      diagnostics.timings.accessMs = elapsedMs(accessStarted);
+    });
     const relationScope = accessReceipt.mode === "session_only" ? "self" : resolveMemoryRelationScope(input);
     const shouldShortCircuit = !memoryConfig.enabled || !qmd.enabled || prompt.length < qmd.minPromptChars;
     // Generate a query embedding for the prompt when the caller did not supply one,
@@ -165,8 +183,11 @@ export class MemoryContextService {
           embedding: input.queryEmbedding,
           providerIsReal: currentEmbeddingProfile().provider !== "pseudo",
         }
-      : await this.resolveQueryEmbedding(input, prompt, accessReceipt.fingerprint, usageLineage, diagnostics)
-        .finally(() => { diagnostics.timings.embeddingMs = elapsedMs(embeddingStarted); });
+      : await this.resolveQueryEmbedding(input, prompt, accessReceipt.fingerprint, usageLineage, diagnostics).finally(
+          () => {
+            diagnostics.timings.embeddingMs = elapsedMs(embeddingStarted);
+          },
+        );
     diagnostics.timings.embeddingMs = elapsedMs(embeddingStarted);
     diagnostics.embeddingProviderIsReal = resolvedQueryEmbedding.providerIsReal;
     const queryEmbedding = resolvedQueryEmbedding.embedding;
@@ -230,8 +251,9 @@ export class MemoryContextService {
     }
 
     const sourceStarted = performance.now();
-    const sources = await this.collectSources(input, accessReceipt)
-      .finally(() => { diagnostics.timings.sourceReadMs = elapsedMs(sourceStarted); });
+    const sources = await this.collectSources(input, accessReceipt).finally(() => {
+      diagnostics.timings.sourceReadMs = elapsedMs(sourceStarted);
+    });
     throwIfMemoryContextAborted(input.signal);
     const rankingStarted = performance.now();
     const availableCandidates = rankMemoryCandidates(
@@ -273,9 +295,20 @@ export class MemoryContextService {
       queryEmbedding,
     });
 
+    const runtime = this.llmService.getRuntimeConfig();
+    const providerId = qmd.distiller.providerId ?? runtime.activeProviderId;
+    const model =
+      qmd.distiller.model ??
+      (providerId === runtime.activeProviderId ? runtime.activeModel : qmd.distiller.fallbackCheapModel);
+    const skipPerCallCliDistiller = isImplicitPerCallCliDistiller(
+      qmd.distiller.providerId,
+      providerId,
+      runtime.providers,
+    );
+
     if (!input.forceRefresh) {
       const cacheStarted = performance.now();
-      const cached = await this.storage.memoryContexts.findFreshByCacheKey({
+      const found = await this.storage.memoryContexts.findFreshByCacheKey({
         cacheKey,
         scope: input.scope,
         sessionId: input.sessionId,
@@ -284,7 +317,11 @@ export class MemoryContextService {
         phaseId: input.phaseId,
       });
       diagnostics.timings.contextCacheMs = elapsedMs(cacheStarted);
-      diagnostics.contextCacheStatus = cached ? "hit" : "miss";
+      // A context cached because the distiller was skipped must not outlive the route that skipped it.
+      const staleSkippedDistill =
+        found?.quality.reason === MEMORY_DISTILLER_SKIPPED_PER_CALL_CLI_REASON && !skipPerCallCliDistiller;
+      const cached = staleSkippedDistill ? undefined : found;
+      diagnostics.contextCacheStatus = cached ? "hit" : staleSkippedDistill ? "refresh" : "miss";
       if (cached) {
         const enrichedCached = refreshMemoryPackAssembly(enrichMemoryPack(cached, relationScope, new Map()), assembly);
         await this.storage.memoryQmdRuns.append({
@@ -364,12 +401,8 @@ export class MemoryContextService {
       return enrichedFallback;
     }
 
-    const runtime = this.llmService.getRuntimeConfig();
-    const providerId = qmd.distiller.providerId ?? runtime.activeProviderId;
-    const model =
-      qmd.distiller.model ??
-      (providerId === runtime.activeProviderId ? runtime.activeModel : qmd.distiller.fallbackCheapModel);
     try {
+      if (skipPerCallCliDistiller) throw new MemoryDistillerSkippedError();
       const attribution = createUtilityModelUsageAttribution({
         operationId: `memory-context:${encodeURIComponent(cacheKey)}:distill`,
         utilityKind: "memory_context_distillation",
@@ -417,7 +450,9 @@ export class MemoryContextService {
             },
             attribution,
           ),
-      }).finally(() => { diagnostics.timings.distillationMs = elapsedMs(distillationStarted); });
+      }).finally(() => {
+        diagnostics.timings.distillationMs = elapsedMs(distillationStarted);
+      });
       throwIfMemoryContextAborted(input.signal);
 
       const parsed = parseDistillerResponse(response);
@@ -681,9 +716,14 @@ export class MemoryContextService {
     // A shared network attempt must have one exact accounting lineage. Cache
     // reuse itself is free, but an in-flight call cannot borrow another turn's
     // provider reservation or dispatch attribution.
-    const pendingKey = createHash("sha256").update(JSON.stringify({
-      cacheKey, lineage: Object.entries(usageLineage ?? {}).sort(([left], [right]) => left.localeCompare(right)),
-    })).digest("hex");
+    const pendingKey = createHash("sha256")
+      .update(
+        JSON.stringify({
+          cacheKey,
+          lineage: Object.entries(usageLineage ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+        }),
+      )
+      .digest("hex");
     const existing = input.forceRefresh ? undefined : this.pendingQueryEmbeddings.get(pendingKey);
     if (existing && !existing.controller.signal.aborted) {
       if (diagnostics) diagnostics.embeddingCacheStatus = "shared";
@@ -696,12 +736,19 @@ export class MemoryContextService {
     }
     const controller = new AbortController();
     const pending: PendingQueryEmbedding = {
-      controller, waiters: 0, settled: false,
-      promise: this.generateQueryEmbedding({ ...input, signal: controller.signal }, prompt, profile, cacheKey, usageLineage)
-        .finally(() => {
-          pending.settled = true;
-          if (this.pendingQueryEmbeddings.get(pendingKey) === pending) this.pendingQueryEmbeddings.delete(pendingKey);
-        }),
+      controller,
+      waiters: 0,
+      settled: false,
+      promise: this.generateQueryEmbedding(
+        { ...input, signal: controller.signal },
+        prompt,
+        profile,
+        cacheKey,
+        usageLineage,
+      ).finally(() => {
+        pending.settled = true;
+        if (this.pendingQueryEmbeddings.get(pendingKey) === pending) this.pendingQueryEmbeddings.delete(pendingKey);
+      }),
     };
     this.pendingQueryEmbeddings.set(pendingKey, pending);
     return this.waitForQueryEmbedding(pendingKey, pending, input.signal);
@@ -728,14 +775,20 @@ export class MemoryContextService {
       };
       const onAbort = () => {
         if (!release()) return;
-        try { throwIfMemoryContextAborted(signal); } catch (error) { reject(error); }
+        try {
+          throwIfMemoryContextAborted(signal);
+        } catch (error) {
+          reject(error);
+        }
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       pending.promise.then(
         (result) => {
           if (release()) resolve({ ...result, ...(result.embedding ? { embedding: [...result.embedding] } : {}) });
         },
-        (error) => { if (release()) reject(error); },
+        (error) => {
+          if (release()) reject(error);
+        },
       );
       if (signal?.aborted) onAbort();
     });
@@ -958,7 +1011,6 @@ export class MemoryContextService {
   }
 }
 
-
 function elapsedMs(startedAt: number): number {
   return Math.max(0, Math.round((performance.now() - startedAt) * 1000) / 1000);
 }
@@ -991,81 +1043,5 @@ async function readTranscriptOrEmpty(storage: Storage, sessionId: string) {
       return [];
     }
     throw error;
-  }
-}
-
-interface WalkOptions {
-  maxFiles: number;
-  maxBytesPerFile: number;
-  allowedExtensions: string[];
-}
-
-async function walkMemoryFiles(
-  baseDir: string,
-  workspaceRoot: string,
-  options: WalkOptions,
-): Promise<MemoryFileSource[]> {
-  const out: MemoryFileSource[] = [];
-  await walkRecursive(baseDir, workspaceRoot, out, options);
-  return out;
-}
-
-async function walkRecursive(
-  currentDir: string,
-  workspaceRoot: string,
-  out: MemoryFileSource[],
-  options: WalkOptions,
-): Promise<void> {
-  if (out.length >= options.maxFiles) {
-    return;
-  }
-  let entries: Array<{ isDirectory: () => boolean; isFile: () => boolean; name: string }>;
-  try {
-    entries = await fs.readdir(currentDir, { withFileTypes: true, encoding: "utf8" });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    if (out.length >= options.maxFiles) {
-      return;
-    }
-    const fullPath = path.join(currentDir, entry.name);
-    if (entry.isDirectory()) {
-      await walkRecursive(fullPath, workspaceRoot, out, options);
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    const ext = path.extname(entry.name).toLowerCase();
-    if (!options.allowedExtensions.includes(ext)) {
-      continue;
-    }
-
-    let stat: Awaited<ReturnType<typeof fs.stat>>;
-    try {
-      stat = await fs.stat(fullPath);
-    } catch {
-      continue;
-    }
-    if (stat.size > options.maxBytesPerFile) {
-      continue;
-    }
-
-    let content: string;
-    try {
-      content = await fs.readFile(fullPath, "utf8");
-    } catch {
-      continue;
-    }
-
-    const relativePath = path.relative(workspaceRoot, fullPath).replaceAll("\\", "/");
-    out.push({
-      type: "file",
-      relativePath,
-      content,
-      modifiedAt: stat.mtime.toISOString(),
-    });
   }
 }
