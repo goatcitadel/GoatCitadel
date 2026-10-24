@@ -26,6 +26,7 @@ import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
 import { ChatRunCard } from "./ChatRunCard";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
+import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatTurnDetails } from "./ChatTurnDetails";
 import { TurnReceipt } from "./ChatTurnReceipt";
 
@@ -310,7 +311,7 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
               />
               <div className="min-w-0">
                 <strong className="font-medium text-fg">{critical ? "Critical: " : "Warning: "}</strong>
-                {notice.content}
+                <ChatNoticeText content={notice.content} />
                 <ChatNoticeTechnicalDetails key={`${props.selectedSessionId}:${notice.id}`} notice={notice} />
               </div>
             </div>
@@ -322,7 +323,7 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
             className="rounded-md border border-line-subtle bg-raised p-2 text-sm text-fg-secondary"
             aria-label="Latest conversation update"
           >
-            {latestRoutine.content}
+            <ChatNoticeText content={latestRoutine.content} />
             <ChatNoticeTechnicalDetails key={`${props.selectedSessionId}:${latestRoutine.id}`} notice={latestRoutine} />
           </div>
         ) : null}
