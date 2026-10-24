@@ -122,9 +122,33 @@ export async function assertArtifactRedactionGate(rootDir) {
   }
   if (findings.length > 0) {
     const ruleIds = [...new Set(findings.map((item) => item.ruleId))].sort();
-    throw new Error(`artifact redaction found ${findings.length} issue(s); rules=${ruleIds.join(",")}`);
+    throw new Error(
+      `artifact redaction found ${findings.length} issue(s); rules=${ruleIds.join(",")}; files=${describeFindingFiles(findings)}`,
+    );
   }
   return { artifactRoot: resolvedRoot, findings: 0 };
+}
+
+const MAX_NAMED_FINDING_FILES = 10;
+const MAX_NAMED_FILE_LENGTH = 160;
+
+/**
+ * Names the offending files so a failed run can be traced without its (unuploaded) artifacts. Only the path relative
+ * to the scanned root and the rule id are shown: never the matched text, never an absolute path, and never a zip entry
+ * name (an archive is named as a whole).
+ */
+export function describeFindingFiles(findings) {
+  const named = findings.slice(0, MAX_NAMED_FINDING_FILES).map(({ file, ruleId }) => {
+    const safe = Array.from(String(file), (character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code < 0x20 || code === 0x7f ? "?" : character;
+    })
+      .join("")
+      .slice(0, MAX_NAMED_FILE_LENGTH);
+    return `${safe} (${ruleId})`;
+  });
+  const more = findings.length - named.length;
+  return named.join(", ") + (more > 0 ? `, and ${more} more` : "");
 }
 
 export async function scanArtifactFile(filePath) {

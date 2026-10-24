@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { deflateRawSync } from "node:zlib";
 import {
   assertArtifactRedactionGate,
+  describeFindingFiles,
   findArtifactRedactionFindings,
   scanArtifactFile,
 } from "./verify-artifact-redaction.mjs";
@@ -51,7 +52,15 @@ test("fast CI scans failed verification evidence without requiring an unproduced
     const findings = await findArtifactRedactionFindings(root);
     assert.ok(findings.some((finding) => finding.file === "coverage/coverage-summary.json"));
     assert.ok(findings.some((finding) => finding.file === "verification/merged/request.log"));
-    await assert.rejects(assertArtifactRedactionGate(root), /artifact redaction found/u);
+    await assert.rejects(assertArtifactRedactionGate(root), (error) => {
+      assert.match(error.message, /artifact redaction found/u);
+      // The failure names each offending file (relative to the root) and its rule, never the secret or the root.
+      assert.match(error.message, /coverage\/coverage-summary\.json \(provider-secret-json\)/u);
+      assert.match(error.message, /verification\/merged\/request\.log \(/u);
+      assert.doesNotMatch(error.message, /sk-verification-secret-value|provider-coverage-secret-value/u);
+      assert.ok(!error.message.includes(root));
+      return true;
+    });
   } finally {
     await fs.rm(workspace, { recursive: true, force: true });
   }
@@ -267,3 +276,12 @@ function createDeflatedZip(nameValue, data) {
   endRecord.writeUInt32LE(centralOffset, 16);
   return Buffer.concat([localHeader, name, compressed, centralDirectory, endRecord]);
 }
+
+test("names at most ten offending files, strips control characters, and counts the rest", () => {
+  const findings = Array.from({ length: 12 }, (_, index) => ({ file: `run/file-${index}.log`, ruleId: "openai-style-key" }));
+  findings[0] = { file: "run/odd\nname.log", ruleId: "openai-style-key" };
+  const described = describeFindingFiles(findings);
+  assert.match(described, /^run\/odd\?name\.log \(openai-style-key\)/u);
+  assert.match(described, /run\/file-9\.log \(openai-style-key\), and 2 more$/u);
+  assert.doesNotMatch(described, /file-10/u);
+});
