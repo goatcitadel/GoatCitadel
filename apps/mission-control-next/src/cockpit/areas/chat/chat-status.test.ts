@@ -39,10 +39,10 @@ it("reads the active leaf turn, not an earlier one", () => {
   });
 });
 
-it("does not ask for a decision the thread still shows once Chat holds no open request", () => {
+it("does not ask for a decision again, nor claim the run resumed, while the thread still shows it waiting", () => {
   expect(projectChatStatus(live({ thread: thread("waiting_for_approval") }))).toEqual({
-    label: "Continuing after your decision",
-    tone: "running",
+    label: "Decided · resume unconfirmed",
+    tone: "waiting",
   });
 });
 

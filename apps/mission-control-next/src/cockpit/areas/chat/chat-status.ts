@@ -29,10 +29,11 @@ export function projectChatStatus(live: LiveChat | null | undefined, session?: C
     case "running":
     case "waiting_for_tool":
       return { label: "Working", tone: "running" };
-    // The thread still says waiting, but Chat holds no open request: the decision is in and the work is resuming.
+    // The thread still says waiting, but Chat holds no open request. A decision alone does not prove the run resumed
+    // (it may have expired, been denied, or need checkpoint recovery), so stay waiting until the thread moves on.
     case "waiting_for_approval":
     case "waiting_for_user_input":
-      return { label: "Continuing after your decision", tone: "running" };
+      return { label: "Decided · resume unconfirmed", tone: "waiting" };
     case "completed":
       return { label: "Last response completed", tone: "done" };
     case "partial":
