@@ -2608,6 +2608,22 @@
       "maxDependencyMemberAccesses": 6,
       "reason": "Reviewed new owner for the claude-code-cli LLM provider adapter (Claude-subscription switch PR 2, design approved by the operator 2026-10-19): runs the operator's local Claude Code CLI as a text-only model. It reads two adapter-host members (the CLI runtime accessor and beginTrackedDispatch, so the ward, usage intent and dispatch guard admit the process before it starts) and its own runtime's readiness, keeping process and readiness logic out of LlmService.",
       "evidence": "2026-10-19: llm-provider-claude-code-cli.test.ts drives LlmService with a faked CLI (streaming, argv/env isolation, required-tool refusal, logged-out before spawn, tool_use and abort cleanup, pinned egress origin, readiness before profile freeze); repository counters measure 2 host callbacks and 6 dependency accesses."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/web-search-credential-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 24,
+      "reason": "Reviewed new owner for Settings Web & Search keys (#464, operator clarification 2026-10-23): checks, stores and clears Firecrawl, Brave and Parallel keys in the OS keychain, holds Change Plan temporary keys apart from the active key, and reports secret-free status. It reads only its own options bag (secret store, Firecrawl config, network allowlist, official probe, audit and the shared runtime-configuration change fence), keeping keychain and probe logic out of RuntimeConfigurationService and GatewayService.",
+      "evidence": "2026-10-23: web-search-credential-service.test.ts covers live checks before storing, rejected keys, allowlist refusals, the shared Chat owner fence, audit failure after a committed change, clearing to the environment and temporary custody; repository counters measure 0 host callbacks and 24 dependency accesses (9 are secret-store calls)."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/web-search-credential-change.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 2,
+      "reason": "Reviewed new owner for the Web & Search phases of the runtime-configuration Change Plan adapter (#464, operator clarification 2026-10-23): prepares, applies, resumes and observes engine-order and keychain credential changes. It reads only the evolution context's get and resumeOwnerInput, so the adapter delegates instead of growing.",
+      "evidence": "2026-10-23: web-search-credential-change.test.ts covers engine-order apply and verify, secure-input prepare/confirm/store/verify, stale secure-input actions and key removal; repository counters measure 0 host callbacks and 2 dependency accesses."
     }
   ]
 }

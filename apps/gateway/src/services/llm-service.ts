@@ -660,8 +660,9 @@ export class LlmService {
     this.modelCatalogRefreshAttemptAt.clear();
     this.modelDiscoveryInFlight.clear();
     this.modelDiscoveryAuthTokens.clear();
-    if (input.defaultThinkingLevel !== undefined) {
-      this.defaultThinkingLevel = input.defaultThinkingLevel;
+    const defaultThinkingLevel = input.defaultThinkingLevel;
+    if (defaultThinkingLevel !== undefined) {
+      this.defaultThinkingLevel = defaultThinkingLevel;
     }
     if (input.upsertProvider) {
       const existing = this.providers.get(input.upsertProvider.providerId);
