@@ -739,7 +739,7 @@ it("routes the legacy sessions bookmark to its exact native session owner after 
     await vi.waitFor(() => expect(container.textContent).toContain("Canonical session control"));
     expect(selectedSession.control).toHaveBeenCalledWith({ sessionId: "session-linked", workspaceId: "w" });
     expect(container.querySelector('[aria-label="Linked scope review"]')).toBeNull();
-    expect(container.textContent).toContain("Session evidence");
+    expect(container.textContent).toContain("Recent sessions");
     expect(container.textContent).not.toContain("Chat content");
     expect(container.textContent).not.toContain("Health owner unavailable");
     expect(container.textContent).not.toContain("This view is available in Classic");

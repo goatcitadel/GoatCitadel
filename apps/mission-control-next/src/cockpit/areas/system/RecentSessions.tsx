@@ -1,26 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import type { SessionMeta } from "@goatcitadel/contracts";
 import { fetchSessions } from "@goatcitadel/mission-control-shared/api/sessions";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Button } from "../../ui/Button";
-import { StatusBadge } from "../../ui/StatusBadge";
-import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { TimeText } from "../../ui/TimeText";
-import { SystemOwnerLink } from "./SystemOwnerLink";
 import { Section } from "../../ui/Section";
-import { presentChannel, SESSION_BUDGET, SESSION_HEALTH, SESSION_KIND } from "./system-vocabulary";
-
-const when = (value: string) => (Number.isFinite(Date.parse(value)) ? <TimeText value={value} /> : "Not reported");
-
-function title(item: SessionMeta) {
-  const explicit = item.displayName?.trim();
-  return explicit && !/^sess[_-]/i.test(explicit) ? explicit : `${presentChannel(item.channel)} conversation`;
-}
+import { SessionRow } from "./SessionRow";
 
 /**
- * Recent sessions across every channel (the Classic Ops "Session evidence"), each with its channel, health and budget
- * state and a native Chat link. Identifiers and usage stay in technical details; nothing here acts on a session.
+ * Recent sessions across every channel, each with its channel, health and budget state and a native Chat link.
+ * Identifiers and usage stay in technical details; nothing here acts on a session.
  */
 export function RecentSessions() {
   const sessions = useQuery({ queryKey: ["system", "recent-sessions"], queryFn: fetchSessions });
@@ -52,33 +39,7 @@ export function RecentSessions() {
       {items.length ? (
         <ul aria-label="Recent sessions" className="divide-y divide-line-subtle">
           {items.map((item) => (
-            <li key={item.sessionId} className="space-y-1 py-3">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <h3 className="min-w-0 break-words font-semibold text-fg">{title(item)}</h3>
-                <StatusBadge status={SESSION_HEALTH[item.health] ?? { label: "Health unknown", tone: "neutral" }} />
-              </div>
-              <p className="text-fg-secondary">
-                {presentChannel(item.channel)} · {SESSION_KIND[item.kind] ?? "Conversation"} · Last activity{" "}
-                {when(item.lastActivityAt)}
-              </p>
-              <p className="text-fg-secondary">Budget: {SESSION_BUDGET[item.budgetState] ?? "not reported"}</p>
-              <details>
-                <summary className="min-h-11 cursor-pointer font-medium text-fg">Session details</summary>
-                <ul className="space-y-1 break-words text-fg-secondary">
-                  <li>Account: {item.account}</li>
-                  <li>
-                    Usage: {plural(item.tokenTotal, "token")} ({item.tokenInput.toLocaleString()} in,{" "}
-                    {item.tokenOutput.toLocaleString()} out)
-                  </li>
-                </ul>
-                <TechnicalDetails>
-                  Session ID: <code className="wrap-anywhere">{item.sessionId}</code>
-                </TechnicalDetails>
-              </details>
-              <SystemOwnerLink href={`/chat?sessionId=${encodeURIComponent(item.sessionId)}`} scope={item.sessionId}>
-                Open in Chat
-              </SystemOwnerLink>
-            </li>
+            <SessionRow key={item.sessionId} item={item} />
           ))}
         </ul>
       ) : null}
