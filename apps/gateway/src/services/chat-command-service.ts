@@ -493,6 +493,28 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
   ];
 }
 
+/** `/research` and `/run research` share one path: the session's web mode picks quick or deep research. */
+async function runResearchCommand(
+  deps: ChatCommandDependencies,
+  sessionId: string,
+  query: string,
+  options: ChatCommandOptions | undefined,
+) {
+  const prefs = await deps.getChatSessionPrefs(sessionId);
+  return await deps.runChatResearch(sessionId, {
+    query,
+    mode: resolveResearchMode(prefs),
+    policyRunId: options?.policyRunId,
+    policyTaskId: options?.policyTaskId,
+    operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,
+    authActorId: options?.authActorId,
+    authActorSource: options?.authActorSource,
+    permissionProfileId: options?.permissionProfileId,
+    localOperatorOverrideId: options?.localOperatorOverrideId,
+    surface: options?.surface ?? "chat",
+  });
+}
+
 export async function parseChatCommand(
   deps: ChatCommandDependencies,
   sessionId: string,
@@ -957,19 +979,7 @@ export async function parseChatCommand(
     if (!query) {
       return { ok: false, command, args, message: "Usage: /research <query>" };
     }
-    const researchPrefs = await deps.getChatSessionPrefs(sessionId);
-    const research = await deps.runChatResearch(sessionId, {
-      query,
-      mode: resolveResearchMode(researchPrefs),
-      policyRunId: options?.policyRunId,
-      policyTaskId: options?.policyTaskId,
-      operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,
-      authActorId: options?.authActorId,
-      authActorSource: options?.authActorSource,
-      permissionProfileId: options?.permissionProfileId,
-      localOperatorOverrideId: options?.localOperatorOverrideId,
-      surface: options?.surface ?? "chat",
-    });
+    const research = await runResearchCommand(deps, sessionId, query, options);
     return {
       ok: true,
       command,
@@ -1417,19 +1427,7 @@ export async function parseChatCommand(
     if (!query) {
       return { ok: false, command, args, message: "Usage: /run research <query>" };
     }
-    const runPrefs = await deps.getChatSessionPrefs(sessionId);
-    const research = await deps.runChatResearch(sessionId, {
-      query,
-      mode: resolveResearchMode(runPrefs),
-      policyRunId: options?.policyRunId,
-      policyTaskId: options?.policyTaskId,
-      operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,
-      authActorId: options?.authActorId,
-      authActorSource: options?.authActorSource,
-      permissionProfileId: options?.permissionProfileId,
-      localOperatorOverrideId: options?.localOperatorOverrideId,
-      surface: options?.surface ?? "chat",
-    });
+    const research = await runResearchCommand(deps, sessionId, query, options);
     return {
       ok: true,
       command,

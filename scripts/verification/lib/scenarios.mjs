@@ -3844,7 +3844,13 @@ export async function runMemoryTruthLane(context, _options = {}) {
             NEXT_UI_PACKAGE,
           );
           await setBrowserCorrelation(page, correlationId, seeded.body.sessionId);
-          await page.getByRole("combobox", { name: "Memory status", exact: true }).selectOption("all");
+          // The seeded record is expired, so the default active list is empty and the page shows its empty
+          // state instead of the filters (#383); "Show all statuses" is that state's path to the filters.
+          const showAllStatuses = page.getByRole("button", { name: "Show all statuses", exact: true });
+          const memoryStatus = page.getByRole("combobox", { name: "Memory status", exact: true });
+          await showAllStatuses.or(memoryStatus).first().waitFor({ timeout: 15000 });
+          if (await showAllStatuses.isVisible()) await showAllStatuses.click();
+          await memoryStatus.selectOption("all");
           await page.getByRole("textbox", { name: "Search memory", exact: true }).fill(memoryTitle);
           await page.getByRole("button", { name: "Apply memory filter", exact: true }).click();
           await page.getByRole("button", { name: `Open ${memoryTitle}`, exact: true }).click();
@@ -3853,7 +3859,7 @@ export async function runMemoryTruthLane(context, _options = {}) {
             throw new Error(`memory-truth Library exposed foreign workspace item ${foreignTitle}`);
           }
           await page.getByRole("button", { name: `Open ${memoryTitle}`, exact: true }).waitFor({ timeout: 15000 });
-          await page.getByText("expired · memory-truth", { exact: false }).first().waitFor({ timeout: 15000 });
+          await page.getByText("Expired · Memory truth", { exact: false }).first().waitFor({ timeout: 15000 });
           const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
           const artifacts = await captureBrowserArtifacts(context, {
             slug: "memory-truth-ttl-lifecycle-visibility",
@@ -3912,6 +3918,10 @@ export async function runMemoryTruthLane(context, _options = {}) {
   }
 }
 
+// These scenarios prove the Classic Activity feed and System status realtime pills. Cockpit (the default
+// shell) maps /ops/activity to /system/activity with different controls, so pin Classic explicitly.
+const REALTIME_CLASSIC_ACTIVITY_HREF = "/ops/activity?shell=classic";
+
 export async function runRealtimeTruthLane(context, _options = {}) {
   let stack;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
@@ -3960,7 +3970,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
           const browserLog = attachBrowserLogging(page);
           const browserLogCursor = browserLog.mark();
 
-          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/ops/activity"), {
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, REALTIME_CLASSIC_ACTIVITY_HREF), {
             waitUntil: "domcontentloaded",
           });
           await waitForVerificationRouteReady(
@@ -3968,6 +3978,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             {
               expectedArea: "ops",
               expectedSection: "activity",
+              shell: "classic",
               readyText: "Activity feed",
             },
             NEXT_UI_PACKAGE,
@@ -4023,7 +4034,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             },
             String(seeded.body?.staleCursor ?? ""),
           );
-          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/ops/activity"), {
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, REALTIME_CLASSIC_ACTIVITY_HREF), {
             waitUntil: "domcontentloaded",
           });
           await waitForVerificationRouteReady(
@@ -4031,6 +4042,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             {
               expectedArea: "ops",
               expectedSection: "activity",
+              shell: "classic",
               readyText: "Activity feed",
             },
             NEXT_UI_PACKAGE,
@@ -4104,7 +4116,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
           const page = await browserContext.newPage();
           const browserLog = attachBrowserLogging(page);
 
-          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/ops/activity"), {
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, REALTIME_CLASSIC_ACTIVITY_HREF), {
             waitUntil: "domcontentloaded",
           });
           await waitForVerificationRouteReady(
@@ -4112,6 +4124,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             {
               expectedArea: "ops",
               expectedSection: "activity",
+              shell: "classic",
               readyText: "Activity feed",
             },
             NEXT_UI_PACKAGE,

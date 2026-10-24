@@ -442,7 +442,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
             } finally {
               threadResponse.dispose();
             }
-            const thread = await response.json();
+            const thread = await threadResponse.readThread(response);
             if (!thread.turns?.some(turn => turn.trace?.durable?.runId === durableTruth.durableRunId && turn.trace.status === "completed")) {
               throw new Error("Default Cockpit did not load the exact recovered completed Chat run.");
             }
@@ -551,14 +551,24 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
 /** Capture before navigation without spending the response wait during hydration.
  * Retain only the first exact successful GET; identity/body assertions remain
  * with the canonical lane. The caller must dispose on readiness success/failure. */
+/**
+ * Cockpit Chat reads the thread inside `core-state` (#335); `/thread` stays the direct owner. Either
+ * response carries the recovered run identity, so accept both and unwrap the core-state envelope.
+ */
 export function observeRecoveredThreadResponse(page, sessionId) {
-  const pathname = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`;
-  const matches = response => new URL(response.url()).pathname === pathname &&
+  const sessionPath = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`;
+  const carriesThread = url => url.pathname === `${sessionPath}/thread` ||
+    (url.pathname === `${sessionPath}/core-state` && url.searchParams.get("includeThread") !== "false");
+  const matches = response => carriesThread(new URL(response.url())) &&
     response.status() === 200 && response.request().method() === "GET";
   let retained;
   const observe = response => { if (!retained && matches(response)) retained = response; };
   page.on("response", observe);
-  return { matches, read: () => retained, dispose: () => page.off("response", observe) };
+  const readThread = async response => {
+    const body = await response.json();
+    return new URL(response.url()).pathname.endsWith("/core-state") ? body?.thread : body;
+  };
+  return { matches, read: () => retained, readThread, dispose: () => page.off("response", observe) };
 }
 
 const VERIFICATION_STUB_LLM_KEY = "verification-stub-key";

@@ -1,6 +1,6 @@
 # Claude Code CLI tool bridge: warm continuation
 
-Status: approved by the operator on 2026-10-22, with all four **Operator decisions** settled (listed at the end). Merged in #485 behind the off-by-default `claudeCliWarmContinuationEnabled` flag, with a Settings › Models switch. The live proof ran on 2026-10-23 (see **Live proof results** below). It found two bugs, both fixed by the follow-up change that records these results. The default can change once that fix merges. The plan is `docs/superpowers/plans/2026-10-22-claude-code-cli-warm-continuation.md`. The probe facts below were measured on 2026-10-22.
+Status: approved by the operator on 2026-10-22, with all four **Operator decisions** settled (listed at the end). Merged in #485 behind the `claudeCliWarmContinuationEnabled` flag, with a Settings › Models switch. The live proof ran on 2026-10-23 (see **Live proof results** below). It found two bugs, both fixed in #507, and the flag is now on by default. An explicit `false` from config, the env var, or a saved setting (the Settings › Models switch) still turns it off, and it stays inert while `claudeCliToolBridgeEnabled` is off. The plan is `docs/superpowers/plans/2026-10-22-claude-code-cli-warm-continuation.md`. The probe facts below were measured on 2026-10-22.
 
 Builds on the step-mode tool bridge (`docs/superpowers/specs/2026-10-20-claude-code-cli-tool-bridge-design.md`, PRs #457–#460). Everything that spec decided still holds unless this one says otherwise.
 
@@ -239,7 +239,7 @@ The first step of a turn is cold either way (2.3–3.2 s). Utility side calls, s
 
 ## Operator decisions (decided 2026-10-22)
 
-1. **Flag and default:** a separate `claudeCliWarmContinuationEnabled` flag, off until the live proof passes, the same path the bridge flag took. It only applies while `claudeCliToolBridgeEnabled` is on.
+1. **Flag and default:** a separate `claudeCliWarmContinuationEnabled` flag, off until the live proof passes, the same path the bridge flag took. It only applies while `claudeCliToolBridgeEnabled` is on. The proof passed on 2026-10-23 once #507 fixed what it found, and a follow-up PR turned the flag on by default.
 2. **Park deadline:** 10 minutes, capped by the turn deadline. Longer tools then run cold on the next step, which is correct but slower. (Plan finding: the adapter cannot see the turn deadline, so the cap is the turn's abort signal instead; see **Timeouts**.)
 3. **Registry cap:** 3 parked processes per Gateway. Each parked `claude` process holds memory but makes no calls.
 4. **Result size gate:** 40,000 characters, the largest size measured as safe. Anything bigger runs cold.

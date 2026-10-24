@@ -62,14 +62,19 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
   public readonly version = 2;
   public readonly kinds = ["runtime_configuration"] as const;
 
-  public constructor(private readonly deps: RuntimeConfigurationChangePlanAdapterDependencies) {}
+  /** Every Web & Search phase delegates to this one keychain owner, read once at construction. */
+  private readonly webSearchCredentials: WebSearchCredentialChangeOwner | undefined;
+
+  public constructor(private readonly deps: RuntimeConfigurationChangePlanAdapterDependencies) {
+    this.webSearchCredentials = deps.webSearchCredentials;
+  }
 
   public async prepare(context: EvolutionControlPlaneAdapterContext, request: ChangePlanRuntimeConfigurationRequest) {
     assertNotRetiredToolProfileChange(request);
     const settings = await this.deps.getSettings();
     await this.validateOwnerSelection(request, settings, context.origin.workspaceId);
     if (isWebSearchCredentialChange(request)) {
-      return prepareWebSearchCredential(context, request.change, settings, this.deps.webSearchCredentials);
+      return prepareWebSearchCredential(context, request.change, settings, this.webSearchCredentials);
     }
     if (request.change.operation === "gateway_auth_configuration") {
       const change = request.change;
@@ -182,7 +187,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       return await applyLlamaSetup(this.deps, plan, current);
     }
     if (isWebSearchCredentialChange(plan.request)) {
-      return await applyWebSearchCredential(plan, plan.request.change, this.deps.webSearchCredentials);
+      return await applyWebSearchCredential(plan, plan.request.change, this.webSearchCredentials);
     }
     const updated = await updateSettings({
       expectedRevision: current.revision,
@@ -240,7 +245,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     receipt: EvolutionControlPlaneOwnerInputReceipt,
   ): Promise<EvolutionControlPlaneAdapterOutcome> {
     if (plan.request.kind === "runtime_configuration" && isWebSearchCredentialChange(plan.request)) {
-      return resumeWebSearchCredential(context, plan, plan.request.change, receipt, this.deps.webSearchCredentials);
+      return resumeWebSearchCredential(context, plan, plan.request.change, receipt, this.webSearchCredentials);
     }
     if (
       plan.request.kind !== "runtime_configuration" ||
@@ -273,7 +278,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       await this.deps.discardTemporaryAuthCredential(plan.planId);
     }
     if (plan.request.kind === "runtime_configuration" && isWebSearchCredentialChange(plan.request)) {
-      this.deps.webSearchCredentials?.discardTemporary(plan.planId);
+      this.webSearchCredentials?.discardTemporary(plan.planId);
     }
     discardLlamaSetup(this.deps, plan);
   }
@@ -288,7 +293,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     }
     assertNotRetiredToolProfileChange(plan.request);
     if (isWebSearchCredentialChange(plan.request)) {
-      return observeWebSearchCredential(plan.request.change, this.deps.webSearchCredentials);
+      return observeWebSearchCredential(plan.request.change, this.webSearchCredentials);
     }
     const current = await this.deps.getSettings();
     const applied = matches(plan.request, current);

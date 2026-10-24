@@ -1567,13 +1567,11 @@ export class ChatTurnAgentRunner {
     turnId: string,
     patch: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
   ): Promise<ChatTurnTraceRecord> {
+    const storage = this.deps.storage;
     return await this.runCanonicalWrite(
       input,
       async () =>
-        await this.deps.storage.chatTurnTraces.patch(
-          turnId,
-          await preserveRoutedContextTraceBinding(this.deps.storage, turnId, patch),
-        ),
+        await storage.chatTurnTraces.patch(turnId, await preserveRoutedContextTraceBinding(storage, turnId, patch)),
     );
   }
 
@@ -9744,7 +9742,8 @@ export class ChatTurnAgentRunner {
     logicalCall: string,
     callKind: NonNullable<ModelUsageAttributionContext["callKind"]>,
   ): Promise<ModelUsageAttributionContext> {
-    const workerUsageAttribution = await resolveDelegatedWorkerUsageAttribution(this.deps.storage, input);
+    const storage = this.deps.storage;
+    const workerUsageAttribution = await resolveDelegatedWorkerUsageAttribution(storage, input);
     return {
       operationId: `chat-turn:${input.turnId}:${logicalCall}`,
       callKind:
@@ -9752,7 +9751,7 @@ export class ChatTurnAgentRunner {
           ? "delegation_worker"
           : callKind,
       ...buildChatTurnContextUsageAttribution(input),
-      workspaceId: (await this.deps.storage.chatSessionMeta?.get(input.sessionId))?.workspaceId,
+      workspaceId: (await storage.chatSessionMeta?.get(input.sessionId))?.workspaceId,
       sessionId: input.sessionId,
       turnId: input.turnId,
       durableRunId: input.canonicalDurableRunId ?? input.policyRunId ?? workerUsageAttribution?.delegationRunId,

@@ -21,7 +21,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 }));
 
 const COPY =
-  "Faster Claude Code tool steps. When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one; any other step still starts a new one. Tools still run in GoatCitadel. Experimental and off by default.";
+  "Faster Claude Code tool steps. When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one; any other step still starts a new one. Tools still run in GoatCitadel. Experimental and on by default. Turn it off to start a new Claude Code process for every tool step.";
 
 const settingsAt = (revision: number, flags: { bridge?: boolean; warm?: boolean }) => ({
   revision,
@@ -72,12 +72,14 @@ afterEach(() => {
 });
 
 describe("cockpit Claude Code CLI warm continuation setting", () => {
-  it("the control shows the exact copy and is off by default", async () => {
+  it("the control shows the exact copy and an explicitly saved Off", async () => {
     api.fetchSettings.mockResolvedValue(settingsAt(2, { bridge: true, warm: false }));
     const { container, unmount } = await mount();
     try {
       await vi.waitFor(() => expect(container.textContent).toContain("Current: Off"));
       expect(container.textContent).toContain(COPY);
+      expect(container.textContent).toContain("Experimental and on by default.");
+      expect(container.textContent).toContain("Turn it off to start a new Claude Code process for every tool step.");
       expect(checkbox(container).checked).toBe(false);
       expect(checkbox(container).disabled).toBe(false);
       expect(container.textContent).not.toContain("Unsaved draft");

@@ -82,7 +82,7 @@ Why this is the recommendation:
 
 Costs:
 
-- **Latency:** step mode starts one CLI process per tool-loop step. Warm continuation (`2026-10-22-claude-code-cli-warm-continuation-design.md`, off by default behind `claudeCliWarmContinuationEnabled`) lets tool steps reuse one CLI process within a turn when they can, and a step starts a new one otherwise. The plan measures it.
+- **Latency:** step mode starts one CLI process per tool-loop step. Warm continuation (`2026-10-22-claude-code-cli-warm-continuation-design.md`, on by default behind `claudeCliWarmContinuationEnabled`) lets tool steps reuse one CLI process within a turn when they can, and a step starts a new one otherwise. The plan measures it.
 - **Subscription usage:** a cold step re-sends the transcript. Claude Code applies prompt caching (the probe showed 1-hour cache writes), and the plan renders each prior message as its own content block so the cached prefix can be reused.
 - **Transcript fidelity:** prior tool calls and results reach the model as labelled text, not structured blocks. The model might imitate that text instead of calling a tool. The system addendum (below) and a live check cover this.
 
@@ -276,7 +276,7 @@ New reason codes: `claude_cli_bridge_unavailable` and `claude_cli_bridge_mismatc
 ## Docs and public truth
 
 - Update the provider spec's follow-up line, the Settings/wizard copy that says this provider "can't create files", and any `docs/1_0_CONTRACT.md` statement about it.
-- Say plainly that tools run in GoatCitadel, not in Claude Code, and that tool steps reuse one CLI process within a turn when they can (warm continuation, off by default) and start a new one otherwise.
+- Say plainly that tools run in GoatCitadel, not in Claude Code, and that tool steps reuse one CLI process within a turn when they can (warm continuation, on by default) and start a new one otherwise.
 - Claim no sandboxing.
 
 ## Left to the builder
@@ -290,7 +290,7 @@ New reason codes: `claude_cli_bridge_unavailable` and `claude_cli_bridge_mismatc
 1. **Loop location:** step mode for v1. CLI loop mode is not built.
 2. **Default for `claudeCliToolBridgeEnabled`:** `false` until the live proof passes. The proof passed on 2026-10-21, and a follow-up PR turned it on by default.
 3. **`--safe-mode`:** dropped on tool-bearing steps, with the replacement layers and the init tripwire. Unbridged steps keep it.
-4. **Cost:** accepted. A tool step that cannot continue warm costs one CLI process start and one transcript re-send, counted against the subscription limits. Steps that continue warm in the same process avoid both (warm continuation, off by default). That includes sustained-coding turns (up to 120 tool runs), which are bridged like every other Chat mode.
+4. **Cost:** accepted. A tool step that cannot continue warm costs one CLI process start and one transcript re-send, counted against the subscription limits. Steps that continue warm in the same process avoid both (warm continuation, on by default). That includes sustained-coding turns (up to 120 tool runs), which are bridged like every other Chat mode.
 
 ## My calls, for checking while reading
 

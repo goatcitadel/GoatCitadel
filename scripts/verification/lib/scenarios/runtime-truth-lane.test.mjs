@@ -27,6 +27,27 @@ test("recovered-thread observation retains the actual response before readiness 
   assert.equal(page.listenerCount("response"), 0);
 });
 
+test("recovered-thread observation accepts the Cockpit core-state read and unwraps its thread", async () => {
+  const page = new EventEmitter();
+  const observe = observeRecoveredThreadResponse(page, "session");
+  const thread = { sessionId: "session", turns: [{ trace: { status: "completed", durable: { runId: "run-one" } } }] };
+  const response = (suffix, body) => ({
+    url: () => `http://127.0.0.1:43210/api/v1/chat/sessions/session/${suffix}`,
+    status: () => 200,
+    request: () => ({ method: () => "GET" }),
+    json: async () => body,
+  });
+  page.emit("response", response("core-state?includeThread=false", { sessionId: "session" }));
+  page.emit("response", response("control", thread));
+  assert.equal(observe.read(), undefined, "a thread-less core-state read or another session read is not identity");
+  const coreState = response("core-state", { sessionId: "session", thread, binding: null, prefs: {} });
+  page.emit("response", coreState);
+  assert.equal(observe.read(), coreState);
+  assert.deepEqual(await observe.readThread(coreState), thread);
+  assert.deepEqual(await observe.readThread(response("thread", thread)), thread);
+  observe.dispose();
+});
+
 test("recovered-thread observation does not invent a response or survive failed navigation cleanup", () => {
   const page = new EventEmitter();
   const observe = observeRecoveredThreadResponse(page, "session");

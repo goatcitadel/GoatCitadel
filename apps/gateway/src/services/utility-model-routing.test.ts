@@ -285,7 +285,6 @@ describe("resolveBackgroundJobModel", () => {
       providers: notReadyCli.providers.map((item) => ({ ...item, hasApiKey: true })),
     };
     const probeError = new Error("claude auth status timed out");
-    const onReadinessProbeError = vi.fn();
     const getRuntimeConfig = vi.fn(() => staleReady);
 
     await expect(
@@ -295,10 +294,8 @@ describe("resolveBackgroundJobModel", () => {
           throw probeError;
         },
         getRuntimeConfig,
-        onReadinessProbeError,
       }),
     ).resolves.toBeUndefined();
     expect(getRuntimeConfig).not.toHaveBeenCalled();
-    expect(onReadinessProbeError).toHaveBeenCalledWith(probeError);
   });
 });

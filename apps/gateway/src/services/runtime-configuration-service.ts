@@ -284,14 +284,14 @@ export class RuntimeConfigurationService {
   ): Promise<T> {
     const target = requireTarget(targetId);
     // Checked before queueing too: a pending settlement keeps the lock until Chat settles.
-    await this.assertNoChatConfigurationInFlight(target);
+    await this.assertNoChatConfigurationInFlight(target.targetId, target.targetLabel);
     const releaseTarget = await this.acquireTargetLock(target.targetId);
     try {
       this.assertConfigurationAvailable(target.targetId, {
         chatOnlyGates: false,
         networkAllowlist: options.action !== "remove",
       });
-      await this.assertNoChatConfigurationInFlight(target);
+      await this.assertNoChatConfigurationInFlight(target.targetId, target.targetLabel);
       return await work();
     } finally {
       releaseTarget();
@@ -714,14 +714,17 @@ export class RuntimeConfigurationService {
     }
   }
 
-  private async assertNoChatConfigurationInFlight(target: RuntimeConfigurationTarget): Promise<void> {
+  private async assertNoChatConfigurationInFlight(
+    targetId: RuntimeConfigurationTargetId,
+    targetLabel: string,
+  ): Promise<void> {
     if (
-      this.preparingTargets.has(target.targetId) ||
-      [...this.pendingSettlement.values()].some((pending) => pending.target.targetId === target.targetId) ||
-      (await this.hasBlockingDurableReservation(target.targetId))
+      this.preparingTargets.has(targetId) ||
+      [...this.pendingSettlement.values()].some((pending) => pending.target.targetId === targetId) ||
+      (await this.hasBlockingDurableReservation(targetId))
     ) {
       throw new ConflictError({
-        message: `${target.targetLabel} is being configured from Chat. Finish or cancel that request, then try again.`,
+        message: `${targetLabel} is being configured from Chat. Finish or cancel that request, then try again.`,
       });
     }
   }

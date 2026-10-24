@@ -40,9 +40,21 @@ describe("claudeCliToolBridgeEnabled feature flag", () => {
 describe("claudeCliWarmContinuationEnabled feature flag", () => {
   const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
 
-  it("warm continuation defaults off", () => {
-    expect(defaults.claudeCliWarmContinuationEnabled).toBe(false);
-    expect(buildUpdatedFeatureFlags(defaults, {}).claudeCliWarmContinuationEnabled).toBe(false);
+  it("warm continuation defaults on once its live proof passed, and still supports revocation", () => {
+    expect(defaults.claudeCliWarmContinuationEnabled).toBe(true);
+    expect(buildUpdatedFeatureFlags(defaults, {}).claudeCliWarmContinuationEnabled).toBe(true);
+    expect(
+      buildUpdatedFeatureFlags(defaults, { claudeCliWarmContinuationEnabled: false }).claudeCliWarmContinuationEnabled,
+    ).toBe(false);
+  });
+
+  it("warm continuation keeps an explicit off from configuration or a stored setting", () => {
+    const configuredOff = { ...defaults, claudeCliWarmContinuationEnabled: false };
+    expect(resolveGatewayFeatureFlags(undefined, configuredOff).claudeCliWarmContinuationEnabled).toBe(false);
+    expect(
+      resolveGatewayFeatureFlags({ claudeCliWarmContinuationEnabled: false }, defaults)
+        .claudeCliWarmContinuationEnabled,
+    ).toBe(false);
   });
 
   it("warm continuation follows a stored true", () => {
