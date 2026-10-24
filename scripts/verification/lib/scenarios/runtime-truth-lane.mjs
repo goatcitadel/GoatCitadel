@@ -430,7 +430,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           let shellStage = "cockpit-navigation";
           try {
             const threadResponse = observeRecoveredThreadResponse(page, durableTruth.sessionId);
-            let response;
+            let thread;
             try {
               await page.goto(buildVerificationUiUrl(ui.uiUrl, `/chat?sessionId=${encodeURIComponent(durableTruth.sessionId)}`), { waitUntil: "domcontentloaded" });
               shellStage = "cockpit-readiness";
@@ -438,11 +438,10 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
                 href: "/chat", readySelector: 'section[aria-label="Chat"] [aria-label="Messages"]',
               }, NEXT_UI_PACKAGE);
               shellStage = "recovered-thread-identity";
-              response = threadResponse.read() ?? await page.waitForResponse(threadResponse.matches);
+              thread = await threadResponse.resolveThread();
             } finally {
               threadResponse.dispose();
             }
-            const thread = await threadResponse.readThread(response);
             if (!thread.turns?.some(turn => turn.trace?.durable?.runId === durableTruth.durableRunId && turn.trace.status === "completed")) {
               throw new Error("Default Cockpit did not load the exact recovered completed Chat run.");
             }
@@ -548,27 +547,65 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
   }
 }
 
-/** Capture before navigation without spending the response wait during hydration.
- * Retain only the first exact successful GET; identity/body assertions remain
- * with the canonical lane. The caller must dispose on readiness success/failure. */
+/** Mirrors STARTUP_READ_BATCH_PATH in packages/contracts/src/gateway-startup-reads.ts. */
+const STARTUP_READ_BATCH_PATH = "/api/v1/startup-reads";
+
 /**
- * Cockpit Chat reads the thread inside `core-state` (#335); `/thread` stays the direct owner. Either
- * response carries the recovered run identity, so accept both and unwrap the core-state envelope.
+ * Capture before navigation without spending the response wait during hydration. Cockpit Chat reads
+ * the thread inside `core-state` (#335); `/thread` stays the direct owner. For about 10 s after load
+ * the client batches startup reads (including core-state) into one `GET /api/v1/startup-reads`,
+ * so a batch whose `reads` carry the thread counts too. Candidates are kept in arrival order:
+ * a batch entry that asks for a direct read is skipped and the direct response that follows is used.
+ * The caller must dispose on readiness success/failure.
  */
 export function observeRecoveredThreadResponse(page, sessionId) {
   const sessionPath = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`;
   const carriesThread = url => url.pathname === `${sessionPath}/thread` ||
     (url.pathname === `${sessionPath}/core-state` && url.searchParams.get("includeThread") !== "false");
-  const matches = response => carriesThread(new URL(response.url())) &&
-    response.status() === 200 && response.request().method() === "GET";
-  let retained;
-  const observe = response => { if (!retained && matches(response)) retained = response; };
-  page.on("response", observe);
-  const readThread = async response => {
-    const body = await response.json();
-    return new URL(response.url()).pathname.endsWith("/core-state") ? body?.thread : body;
+  const batchedThreadIndex = url => {
+    if (url.pathname !== STARTUP_READ_BATCH_PATH) return -1;
+    try {
+      const reads = JSON.parse(url.searchParams.get("reads") ?? "[]");
+      return Array.isArray(reads)
+        ? reads.findIndex(item => typeof item?.path === "string" && carriesThread(new URL(item.path, url.origin)))
+        : -1;
+    } catch {
+      return -1;
+    }
   };
-  return { matches, read: () => retained, readThread, dispose: () => page.off("response", observe) };
+  const matches = response => {
+    if (response.status() !== 200 || response.request().method() !== "GET") return false;
+    const url = new URL(response.url());
+    return carriesThread(url) || batchedThreadIndex(url) >= 0;
+  };
+  const candidates = [];
+  const observe = response => { if (matches(response)) candidates.push(response); };
+  page.on("response", observe);
+  const unwrap = (url, body) => (url.pathname.endsWith("/core-state") ? body?.thread : body);
+  /** The recovered thread a candidate carries, or undefined when a batch entry did not answer it. */
+  const readThread = async response => {
+    const url = new URL(response.url());
+    const index = batchedThreadIndex(url);
+    if (index < 0) return unwrap(url, await response.json());
+    const item = (await response.json())?.items?.[index];
+    if (!item || item.directReadRequired || item.status !== 200 || typeof item.bodyText !== "string") return undefined;
+    const reads = JSON.parse(url.searchParams.get("reads"));
+    return unwrap(new URL(reads[index].path, url.origin), JSON.parse(item.bodyText));
+  };
+  /** First candidate (direct or batched) that carries the thread, waiting for more until the deadline. */
+  const resolveThread = async (timeoutMs = 30000) => {
+    const deadline = Date.now() + timeoutMs;
+    for (let index = 0; ; index += 1) {
+      while (index >= candidates.length) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error("No direct or batched recovered-thread read carried the thread before the deadline.");
+        await page.waitForResponse(matches, { timeout: remaining });
+      }
+      const thread = await readThread(candidates[index]);
+      if (thread) return thread;
+    }
+  };
+  return { matches, read: () => candidates[0], readThread, resolveThread, dispose: () => page.off("response", observe) };
 }
 
 const VERIFICATION_STUB_LLM_KEY = "verification-stub-key";
