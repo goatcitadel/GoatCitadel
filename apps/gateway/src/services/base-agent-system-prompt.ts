@@ -104,21 +104,20 @@ const TOOLS_UNAVAILABLE_GUIDANCE: Record<BaseAgentToolsUnavailableReason, { caus
 /**
  * Which callable tools ask the operator first, from the same policy probe that filters the catalog (#502).
  * Without it the model could only guess "based on risk, not confirmed policy". Omitted when no probe ran.
+ * Describes only the tools the catalog shows, so it never names one folded into "and N more".
  */
 function buildApprovalLine(toolset: BaseAgentPromptToolset): string | undefined {
-  const asksFirst = toolset.approvalRequiredToolNames;
-  if (!asksFirst) return undefined;
+  const approvalRequired = toolset.approvalRequiredToolNames;
+  if (!approvalRequired) return undefined;
+  const shown = toolset.toolNames.slice(0, MAX_BASE_PROMPT_TOOL_NAMES);
+  const asksFirst = shown.filter((name) => approvalRequired.includes(name));
   const caveat =
     "This is the current policy for typical arguments; a specific call can still be blocked or need approval because of its arguments, and the approval prompt the operator sees is the final word.";
   if (asksFirst.length === 0) return `Approval: none of the listed tools asks for approval before it runs. ${caveat}`;
-  if (toolset.toolNames.every((name) => asksFirst.includes(name))) {
+  if (asksFirst.length === shown.length) {
     return `Approval: every tool listed here asks the operator for approval before it runs. ${caveat}`;
   }
-  const listed = new Set(toolset.toolNames);
-  const names = asksFirst
-    .filter((name) => listed.has(name))
-    .slice(0, MAX_BASE_PROMPT_TOOL_NAMES)
-    .map((name) => sanitizePromptCatalogText(name, 80));
+  const names = asksFirst.map((name) => sanitizePromptCatalogText(name, 80));
   return `Approval: these ask the operator for approval before they run: ${names.join(", ")}. The other listed tools run without asking. ${caveat}`;
 }
 

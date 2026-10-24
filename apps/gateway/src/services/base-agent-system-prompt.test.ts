@@ -169,6 +169,26 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(tail).toContain("The other listed tools run without asking.");
   });
 
+  it("only describes approval for the tools the catalog shows, not the ones folded into 'and N more'", () => {
+    // Live P-03 (#502): the approval line named tools past the catalog cap that the catalog never listed.
+    const toolNames = Array.from({ length: MAX_BASE_PROMPT_TOOL_NAMES + 2 }, (_, index) => `tool.n${index}`);
+    const hidden = toolNames[MAX_BASE_PROMPT_TOOL_NAMES]!;
+    const some = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames, approvalRequiredToolNames: ["tool.n1", hidden] } }),
+    ).volatileTail;
+    expect(some).toContain(", and 2 more");
+    expect(some).toContain("Approval: these ask the operator for approval before they run: tool.n1.");
+    expect(some).not.toContain(hidden);
+    const onlyHidden = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames, approvalRequiredToolNames: [hidden] } }),
+    ).volatileTail;
+    expect(onlyHidden).toContain("Approval: none of the listed tools asks for approval");
+    const allShown = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames, approvalRequiredToolNames: toolNames.slice(0, MAX_BASE_PROMPT_TOOL_NAMES) } }),
+    ).volatileTail;
+    expect(allShown).toContain("Approval: every tool listed here asks the operator for approval before it runs.");
+  });
+
   it("says none need approval when the probe found none, and says nothing when approval is unknown", () => {
     const none = buildBaseAgentSystemPrompt(
       input({ toolset: { toolNames: ["fs.read", "web.search"], approvalRequiredToolNames: [] } }),
