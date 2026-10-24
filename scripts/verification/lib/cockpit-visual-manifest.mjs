@@ -46,6 +46,21 @@ export const COCKPIT_VISUAL_MANIFEST = [
     readyText,
     readySelector: `nav[aria-label="System views"] a[aria-current="page"][href="${href}"]`,
   })),
+  // These pages print "Loading…" as plain text, not a status region, so wait for a section only loaded data renders.
+  {
+    slug: "cockpit-system-runtime",
+    href: "/system/runtime",
+    shell: "cockpit",
+    readyText: "Runtime",
+    readySelector: "#main-content #runtime-server",
+  },
+  {
+    slug: "cockpit-system-spend-details",
+    href: "/system/spend/details",
+    shell: "cockpit",
+    readyText: "Spend details",
+    readySelector: '#main-content [role="group"][aria-label="Time window"]',
+  },
   ...["General", "Models", "Connections", "Safety", "Citadel", "Access", "Advanced"].map((label) => ({
     slug: `cockpit-settings-${label.toLowerCase()}`,
     href: `/settings/${label.toLowerCase()}`,
