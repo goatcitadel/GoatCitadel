@@ -48,6 +48,82 @@ test("recovered-thread observation accepts the Cockpit core-state read and unwra
   observe.dispose();
 });
 
+const batchedThread = { sessionId: "session", turns: [{ trace: { status: "completed", durable: { runId: "run-one" } } }] };
+function startupReadsPage() {
+  const page = new EventEmitter();
+  page.waitForResponse = (predicate, { timeout }) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { page.off("response", listener); reject(new Error("timeout")); }, timeout);
+    const listener = response => {
+      if (!predicate(response)) return;
+      clearTimeout(timer);
+      page.off("response", listener);
+      resolve(response);
+    };
+    page.on("response", listener);
+  });
+  return page;
+}
+function getResponse(pathAndQuery, body) {
+  return {
+    url: () => `http://127.0.0.1:43210${pathAndQuery}`,
+    status: () => 200,
+    request: () => ({ method: () => "GET" }),
+    json: async () => body,
+  };
+}
+const startupReads = (paths, items) =>
+  getResponse(`/api/v1/startup-reads?${new URLSearchParams({
+    reads: JSON.stringify(paths.map((path, index) => ({ path, correlationId: `c${index}` }))),
+  })}`, { items });
+
+test("recovered-thread observation reads the thread from a batched startup read", async () => {
+  const page = startupReadsPage();
+  const observe = observeRecoveredThreadResponse(page, "session");
+  page.emit("response", startupReads(["/api/v1/settings", "/api/v1/chat/sessions/other/core-state"], []));
+  assert.equal(observe.read(), undefined, "a batch without this session's thread read is not identity");
+  const batch = startupReads(
+    ["/api/v1/settings", "/api/v1/chat/sessions/session/control", "/api/v1/chat/sessions/session/core-state"],
+    [
+      { status: 200, bodyText: "{}", headers: {} },
+      { status: 200, bodyText: "{}", headers: {} },
+      { status: 200, bodyText: JSON.stringify({ sessionId: "session", thread: batchedThread }), headers: {} },
+    ],
+  );
+  page.emit("response", batch);
+  assert.equal(observe.read(), batch);
+  assert.deepEqual(await observe.resolveThread(1000), batchedThread);
+  observe.dispose();
+  assert.equal(page.listenerCount("response"), 0);
+});
+
+test("recovered-thread observation follows a batch entry's direct-read fallback", async () => {
+  const page = startupReadsPage();
+  const observe = observeRecoveredThreadResponse(page, "session");
+  page.emit("response", startupReads(
+    ["/api/v1/chat/sessions/session/core-state"],
+    [{ status: 409, bodyText: "", headers: {}, directReadRequired: true }],
+  ));
+  page.emit("response", startupReads(["/api/v1/chat/sessions/session/core-state?includeThread=false"], [
+    { status: 200, bodyText: JSON.stringify({ sessionId: "session" }), headers: {} },
+  ]));
+  const pending = observe.resolveThread(1000);
+  setTimeout(() => page.emit("response", getResponse("/api/v1/chat/sessions/session/core-state", {
+    sessionId: "session", thread: batchedThread,
+  })), 0);
+  assert.deepEqual(await pending, batchedThread);
+  await assert.rejects(observeRecoveredThreadResponse(startupReadsPage(), "session").resolveThread(20), /deadline|timeout/u);
+  observe.dispose();
+});
+
+test("the startup-read batch path mirrors the contracts owner", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const contracts = await readFile(new URL("../../../../packages/contracts/src/gateway-startup-reads.ts", import.meta.url), "utf8");
+  const lane = await readFile(new URL("./runtime-truth-lane.mjs", import.meta.url), "utf8");
+  const owner = contracts.match(/STARTUP_READ_BATCH_PATH = "([^"]+)"/u)?.[1];
+  assert.ok(owner);
+  assert.match(lane, new RegExp(`const STARTUP_READ_BATCH_PATH = "${owner.replaceAll("/", "\\/")}";`, "u"));
+});
+
 test("recovered-thread observation does not invent a response or survive failed navigation cleanup", () => {
   const page = new EventEmitter();
   const observe = observeRecoveredThreadResponse(page, "session");
