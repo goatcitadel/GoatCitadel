@@ -489,6 +489,28 @@ describe("EvolutionControlPlaneService", () => {
     expect(f.adapter.applyCount).toBe(1);
   });
 
+  it("keeps a 'settings' plan bound to a conversation waiting for its continuation", async () => {
+    // The create route accepts a caller-chosen surface; a plan carrying Chat linkage is not a Settings switch.
+    const linked = {
+      workspaceId: "default",
+      actorId: "operator-1",
+      surface: "settings" as const,
+      sessionId: "session-1",
+    };
+    const f = fixture();
+    const plan = await f.service.create({
+      actor: linked,
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "feature_flag", flag: "claudeCliWarmContinuationEnabled", enabled: false },
+      },
+    });
+    await f.service.confirm(linked, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+    f.approve();
+    expect(await f.service.reconcileApproval("approval-final")).toBe(0);
+    expect(f.adapter.applyCount).toBe(0);
+  });
+
   it("keeps an approved Chat-proposed switch waiting for its Chat continuation", async () => {
     const f = fixture();
     const plan = await f.service.create({

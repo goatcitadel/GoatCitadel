@@ -131,6 +131,9 @@ export function isAutoResumeOnApprovalPlan(plan: ChangePlanRecord): boolean {
   if (isLlamaCppAutoResumePlan(plan)) return true;
   return (
     plan.origin.surface === "settings" &&
+    // The create route accepts a caller-chosen surface, so a plan with Chat linkage is not treated as a Settings switch.
+    !plan.origin.sessionId &&
+    !plan.origin.turnId &&
     plan.result?.failureCode !== "rollback_approval_pending" &&
     plan.request.kind === "runtime_configuration" &&
     (plan.request.change.operation === "feature_flag" || plan.request.change.operation === "feature_flags")

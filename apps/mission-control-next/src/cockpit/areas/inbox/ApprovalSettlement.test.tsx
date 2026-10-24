@@ -297,3 +297,34 @@ it("re-reads the linked change when a change-plan event arrives, so 'not applied
   });
   await vi.waitFor(() => expect(container.textContent).toContain("Applied. The switch is now off."));
 });
+
+it("never says Approved for a refused decision whose plan has not settled yet", async () => {
+  const denied = { ...planApproval, status: "rejected" } as ApprovalRequest;
+  mocks.plan.mockResolvedValue({
+    planId: "plan-a",
+    status: "awaiting_approval",
+    approvalRefs: ["approval-plan"],
+    origin: { workspaceId: "default", surface: "settings" },
+  });
+  mocks.read.mockResolvedValue({ replay: { approval: denied, effects: [], events: [] } });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ApprovalSettlement approval={denied} workspaceId="default" />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("Linked change: The change has not been applied."));
+  expect(container.textContent).not.toContain("Linked change: Approved.");
+});
+
+it("says a rollback is running instead of 'Applying'", async () => {
+  mocks.plan.mockResolvedValue({
+    planId: "plan-a",
+    status: "rolling_back",
+    approvalRefs: ["approval-plan"],
+    origin: { workspaceId: "default", surface: "settings" },
+  });
+  await renderPlanApproval();
+  await vi.waitFor(() => expect(container.textContent).toContain("Linked change: Rolling back the change…"));
+});

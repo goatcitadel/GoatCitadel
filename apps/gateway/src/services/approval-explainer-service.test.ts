@@ -228,6 +228,26 @@ describe("ApprovalExplainerService", () => {
     );
   });
 
+  it("marks a change-plan explanation failed when writing it fails, so it never stays pending", async () => {
+    const ctx = createService();
+    ctx.setExplanation.mockImplementationOnce(() => {
+      throw new Error("approval store unavailable");
+    });
+    await ctx.service.explainApproval({
+      ...defaultApproval,
+      approvalId: "ap-plan",
+      kind: "change_plan_effect",
+      riskLevel: "caution",
+      payload: { planId: "plan-1" },
+      preview: { title: "Turn off a switch", summary: "Turns it off.", impact: "You can turn it on again." },
+    });
+    expect(ctx.setExplanationFailed).toHaveBeenCalledWith("ap-plan", "approval store unavailable");
+    expect(ctx.chatCompletions).not.toHaveBeenCalled();
+    expect(ctx.publishRealtime).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "ap-plan", status: "failed" }),
+    );
+  });
+
   it("skips safe risk approvals by default threshold", async () => {
     const ctx = createService();
     const safeApproval: ApprovalRequest = {

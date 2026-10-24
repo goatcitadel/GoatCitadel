@@ -239,6 +239,14 @@ describe("Inbox change-plan confirmation", () => {
     expect(container.textContent).not.toContain("It may have been applied or cancelled");
   });
 
+  it("says it is checking, not 'may have been applied', while the owner read is still running", async () => {
+    api.fetchOperatorInbox.mockResolvedValue({ ...projection, items: [] });
+    api.fetchChangePlan.mockReturnValue(new Promise(() => {}));
+    await renderDetail();
+    await vi.waitFor(() => expect(container.textContent).toContain("Checking how this change ended…"));
+    expect(container.textContent).not.toContain("It may have been applied or cancelled");
+  });
+
   it("does not report a result for a plan from another conversation once it leaves the Inbox", async () => {
     api.fetchOperatorInbox.mockResolvedValue({ ...projection, items: [] });
     api.fetchChangePlan.mockResolvedValue({
@@ -256,14 +264,16 @@ describe("Inbox change-plan confirmation", () => {
     api.fetchOperatorInbox.mockResolvedValue({ ...projection, workspaceId: "other" });
     await renderDetail();
     expect(api.fetchChangePlan).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("no longer waiting in the selected workspace");
+    await vi.waitFor(() => expect(container.textContent).toContain("no longer waiting in the selected workspace"));
+    // Nor does the settled-plan read reach the owner for a foreign projection.
+    expect(api.fetchChangePlan).not.toHaveBeenCalled();
     expect(container.textContent).not.toContain("Review confirmation");
   });
 
   it("refuses an owner plan with a different session", async () => {
     api.fetchChangePlan.mockResolvedValue({ ...plan, origin: { ...plan.origin, sessionId: "other-session" } });
     await renderDetail();
-    expect(container.textContent).toContain("no longer waiting in the selected workspace");
+    await vi.waitFor(() => expect(container.textContent).toContain("no longer waiting in the selected workspace"));
     expect(container.textContent).not.toContain("Review confirmation");
   });
 

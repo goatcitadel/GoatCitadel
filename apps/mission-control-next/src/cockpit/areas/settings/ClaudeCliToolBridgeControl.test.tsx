@@ -93,7 +93,7 @@ describe("cockpit Claude Code CLI tool setting", () => {
       expect(facts.textContent).toContain("Tools run in GoatCitadel, not inside Claude Code.");
       expect(facts.textContent).toContain("starts a new claude -p run");
       // Process reuse is conditional, matching the warm continuation switch below it.
-      expect(facts.textContent).toContain("unless Faster Claude Code tool steps is on");
+      expect(facts.textContent).toContain("unless Claude Code CLI: reuse one process between tool steps is on");
       expect(facts.textContent).toContain("counts more against your Claude subscription");
       expect(facts.textContent).toContain("not sandboxed");
       expect(facts.textContent).toContain("not an Anthropic feature");

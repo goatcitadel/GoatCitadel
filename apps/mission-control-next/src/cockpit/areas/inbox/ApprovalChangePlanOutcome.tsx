@@ -13,10 +13,15 @@ export function approvalChangePlanId(approval: ApprovalRequest): string | undefi
   return typeof planId === "string" && planId.trim() ? planId : undefined;
 }
 
-export function changePlanOutcomeLine(plan: ChangePlanRecord): string {
+/** How a plan ended; `decision` is the deciding approval's status, when the line sits under an approval. */
+export function changePlanOutcomeLine(plan: ChangePlanRecord, decision?: ApprovalRequest["status"]): string {
   const result = plan.result?.summary?.trim();
   if (plan.status === "completed" || plan.status === "applied") return result ? `Applied. ${result}` : "Applied.";
-  if (plan.status === "awaiting_approval") return "Approved. The change has not been applied yet.";
+  if (plan.status === "awaiting_approval")
+    return decision === "approved"
+      ? "Approved. The change has not been applied yet."
+      : "The change has not been applied.";
+  if (plan.status === "rolling_back") return "Rolling back the change…";
   if (IN_PROGRESS.includes(plan.status)) return "Applying the change…";
   const label = `${presentChangePlanStatus(plan.status).label}.`;
   return result ? `${label} ${result}` : label;
@@ -71,7 +76,7 @@ export function ApprovalChangePlanOutcome({
   if (!query.data) return <p>Linked change outcome is not yet verified.</p>;
   return (
     <p className={FAILED.includes(query.data.status) ? "text-status-failed" : undefined}>
-      Linked change: {changePlanOutcomeLine(query.data)}
+      Linked change: {changePlanOutcomeLine(query.data, approval.status)}
     </p>
   );
 }

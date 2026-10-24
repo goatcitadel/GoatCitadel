@@ -658,7 +658,7 @@ function describeFeatureFlagChange(flag: ChangePlanRuntimeFeatureFlag, enabled: 
       ? `${named.description} This turns it ${state}.`
       : `${enabled ? "Enable" : "Disable"} the registered ${flag} rollout gate.`,
     completedSummary: `${name} is now ${state}.`,
-    impact: `Only this setting (${flag}) changes. You can turn it ${enabled ? "off" : "on"} again the same way.`,
+    impact: `Only ${named ? "this setting" : `this setting (${flag})`} changes. You can turn it ${enabled ? "off" : "on"} again the same way.`,
     risk: flag === "productSourceEvolutionV1Enabled" && enabled ? ("danger" as const) : ("caution" as const),
   };
 }

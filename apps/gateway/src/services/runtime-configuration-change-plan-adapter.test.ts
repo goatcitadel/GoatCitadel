@@ -284,7 +284,10 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
     expect(prepared.title).toBe("Turn on Claude Code CLI: reuse one process between tool steps");
     expect(prepared.summary).toMatch(/keeps that turn's Claude Code process running/);
     expect(prepared.impact).toMatch(/turn it off again the same way/i);
-    expect(`${prepared.title} ${prepared.summary}`).not.toContain("claudeCliWarmContinuationEnabled");
+    // The impact reaches the approval's explanation, so a named switch never shows its key there either.
+    expect(`${prepared.title} ${prepared.summary} ${prepared.impact}`).not.toContain(
+      "claudeCliWarmContinuationEnabled",
+    );
     const applied = await adapter.apply(context, { request, target: prepared.target } as ChangePlanRecord);
     expect(applied.result?.summary).toBe("Claude Code CLI: reuse one process between tool steps is now on.");
   });

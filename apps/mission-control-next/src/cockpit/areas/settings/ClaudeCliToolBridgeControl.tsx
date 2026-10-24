@@ -13,6 +13,8 @@ import {
 
 export const CLAUDE_CLI_TOOL_BRIDGE_ANCHOR = "claude-cli-tool-bridge";
 const FLAG = "claudeCliToolBridgeEnabled";
+// The warm-continuation switch by the name its own Settings card shows (#496).
+const WARM_CONTINUATION_LABEL = CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS.claudeCliWarmContinuationEnabled?.label;
 /**
  * What the switch changes today. Tools run in the Gateway's governed runner, and a tool step starts
  * its own `claude -p` run unless warm continuation reuses the turn's process for an exact
@@ -20,7 +22,7 @@ const FLAG = "claudeCliToolBridgeEnabled";
  */
 const BRIDGE_FACTS = [
   "Tools run in GoatCitadel, not inside Claude Code. Your permissions, tool grants and approvals still decide what may run.",
-  "Each tool step starts a new claude -p run with your own Claude sign-in, unless Faster Claude Code tool steps is on and the step continues the previous one exactly. A turn that uses tools counts more against your Claude subscription.",
+  `Each tool step starts a new claude -p run with your own Claude sign-in, unless ${WARM_CONTINUATION_LABEL} is on and the step continues the previous one exactly. A turn that uses tools counts more against your Claude subscription.`,
   "Tools are not sandboxed by this setting. It is a GoatCitadel option, not an Anthropic feature.",
 ];
 const onOff = (value: boolean) => (value ? "On" : "Off");

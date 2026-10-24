@@ -190,6 +190,7 @@ function SettledChangePlan({
     enabled: readOwner,
     retry: false,
   });
+  if (readOwner && settled.isPending) return <p className="text-fg-muted">Checking how this change ended…</p>;
   if (settled.data)
     return (
       <div className="space-y-1 text-fg-secondary">

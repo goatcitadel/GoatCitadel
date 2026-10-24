@@ -49,13 +49,6 @@ export class ApprovalExplainerService {
     if (!markedPending) {
       return;
     }
-    const planExplanation = changePlanExplanation(approval);
-    if (planExplanation) {
-      await this.recordExplanation(approval.approvalId, planExplanation, { source: "change_plan" });
-      await this.publishRealtime({ approvalId: approval.approvalId, status: "completed" });
-      return;
-    }
-
     await this.storage.approvalEvents.append({
       approvalId: approval.approvalId,
       eventType: "explanation_requested",
@@ -67,6 +60,13 @@ export class ApprovalExplainerService {
     });
 
     try {
+      // Inside the try, so a failed write is recorded as failed instead of staying pending.
+      const planExplanation = changePlanExplanation(approval);
+      if (planExplanation) {
+        await this.recordExplanation(approval.approvalId, planExplanation, { source: "change_plan" });
+        await this.publishRealtime({ approvalId: approval.approvalId, status: "completed" });
+        return;
+      }
       const runtime = this.llmService.getRuntimeConfig();
       const providerId = this.config.providerId ?? runtime.activeProviderId;
       const model = this.config.model ?? runtime.activeModel;
