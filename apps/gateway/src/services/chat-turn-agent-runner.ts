@@ -1376,7 +1376,7 @@ export class ChatTurnAgentRunner {
               agentId: "assistant",
               taskId: input.policyTaskId,
               runId: input.policyRunId,
-              args: buildToolAccessProbeArgs(canonicalName, this.deps.safeWriteFallbackDir),
+              args: this.toolAccessProbeArgs(canonicalName),
               permissionProfileId: input.permissionProfileId,
               localOperatorOverrideId: input.localOperatorOverrideId,
               surface: input.mode,
@@ -1540,6 +1540,11 @@ export class ChatTurnAgentRunner {
     return buildFeatureMeshTurnContext(this.deps, input);
   }
 
+  /** Probe arguments for a policy probe of `toolName`, shared by every probe this runner makes. */
+  private toolAccessProbeArgs(toolName: string): Record<string, unknown> {
+    return buildToolAccessProbeArgs(toolName, this.deps.safeWriteFallbackDir);
+  }
+
   /** One policy probe, as the tool schema builder makes; a missing probe or a failed evaluation reads as not denied. */
   private async isToolDeniedByPolicy(input: ChatTurnAgentRunnerInput, toolName: string): Promise<boolean> {
     if (!this.toolAccessProbe) return false;
@@ -1550,7 +1555,7 @@ export class ChatTurnAgentRunner {
         agentId: "assistant",
         taskId: input.policyTaskId,
         runId: input.policyRunId,
-        args: buildToolAccessProbeArgs(toolName, this.deps.safeWriteFallbackDir),
+        args: this.toolAccessProbeArgs(toolName),
         permissionProfileId: input.permissionProfileId,
         localOperatorOverrideId: input.localOperatorOverrideId,
         surface: input.mode,
@@ -6957,7 +6962,7 @@ export class ChatTurnAgentRunner {
               agentId: "assistant",
               taskId: input.policyTaskId,
               runId: input.policyRunId,
-              args: buildToolAccessProbeArgs(tool.toolName, this.deps.safeWriteFallbackDir),
+              args: this.toolAccessProbeArgs(tool.toolName),
               permissionProfileId: input.permissionProfileId,
               localOperatorOverrideId: input.localOperatorOverrideId,
               surface: input.mode,
