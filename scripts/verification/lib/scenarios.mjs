@@ -3858,6 +3858,12 @@ export async function runMemoryTruthLane(context, _options = {}) {
           if ((await page.getByText(foreignTitle, { exact: false }).count()) > 0) {
             throw new Error(`memory-truth Library exposed foreign workspace item ${foreignTitle}`);
           }
+          // The open item panel is modal and hides the list from role queries, so close it before
+          // proving the expired record is still listed.
+          const memoryItem = page.getByRole("dialog", { name: "Memory item", exact: true });
+          await memoryItem.getByText("Expired · Memory truth", { exact: false }).first().waitFor({ timeout: 15000 });
+          await memoryItem.getByRole("button", { name: "Close memory item", exact: true }).click();
+          await memoryItem.waitFor({ state: "hidden", timeout: 15000 });
           await page.getByRole("button", { name: `Open ${memoryTitle}`, exact: true }).waitFor({ timeout: 15000 });
           await page.getByText("Expired · Memory truth", { exact: false }).first().waitFor({ timeout: 15000 });
           const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
