@@ -8,6 +8,7 @@ const ChatOpenCodeEvidence = lazy(async () => ({
   default: (await import("./ChatOpenCodeEvidence")).ChatOpenCodeEvidence,
 }));
 import { ChatTurnActions } from "./ChatTurnActions";
+import { ChatToolRunSummary } from "./ChatToolRunSummary";
 import { useAutoOpenDisclosure } from "./use-auto-open-disclosure";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
@@ -145,11 +146,13 @@ export function ChatTurnDetails({
                   <span className="text-fg-secondary">{chatToolDisplayName(tool)}</span>
                   <span>{activityLabel(tool)}</span>
                   {diagnostics.summary || tool.error || tool.failureGuidance ? (
-                    <p className="w-full text-fg-secondary">
-                      {tool.failureGuidance ??
+                    <ChatToolRunSummary
+                      text={
+                        tool.failureGuidance ??
                         diagnostics.summary ??
-                        (tool.error ? presentErrorText(tool.error).summary : null)}
-                    </p>
+                        (tool.error ? presentErrorText(tool.error).summary : "")
+                      }
+                    />
                   ) : null}
                   {/* The row shows the summary; the recorded failure stays reachable for technical review. */}
                   {tool.error ? (

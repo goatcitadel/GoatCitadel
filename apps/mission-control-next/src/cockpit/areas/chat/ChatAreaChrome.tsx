@@ -113,9 +113,7 @@ export function ChatSessionHeader({
       <header className="flex min-h-14 min-w-0 items-center gap-2 border-b border-line-subtle px-3 py-1">
         <div className="min-w-0 flex-1">
           {title}
-          <div className="truncate [&>p]:truncate">
-            <SelectedThreadActivity session={session} />
-          </div>
+          <SelectedThreadActivity session={session} active={active} />
         </div>
         {conversations}
         {build}
@@ -126,12 +124,14 @@ export function ChatSessionHeader({
   return (
     <header className="flex min-h-12 items-center justify-between gap-2 border-b border-line-subtle px-3">
       <div className="min-w-0 flex-1">
-        {title}
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="min-w-0">{title}</div>
+          <SelectedThreadActivity session={session} active={active} />
+        </div>
         <ChatHeaderSubtitle active={active} projectName={session?.projectName} loading={rail.loading} />
       </div>
       {/* Projects sits with the conversation list's project filter; a phone keeps it in the actions menu. */}
       {conversations}
-      <SelectedThreadActivity session={session} />
       {newConversation}
       {active ? (
         <IconButton

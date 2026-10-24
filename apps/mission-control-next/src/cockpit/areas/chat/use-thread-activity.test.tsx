@@ -84,13 +84,12 @@ it("shows each conversation's status from the sessions list without a status rea
   expect(mocks.status).not.toHaveBeenCalled();
 });
 
-it("shows the selected conversation's status on narrow screens from the same list", async () => {
-  mocks.width = 800;
-  await act(async () => root.render(<SelectedThreadActivity session={sessions[1]} />));
-  expect(host.querySelector('[aria-label="Selected conversation activity"]')?.textContent).toBe("Waiting on you");
-  mocks.width = 1280;
-  await act(async () => root.render(<SelectedThreadActivity session={sessions[1]} />));
-  expect(host.textContent).toBe("");
+it("shows the selected conversation's status at every width from the same list", async () => {
+  for (const width of [800, 1280]) {
+    mocks.width = width;
+    await act(async () => root.render(<SelectedThreadActivity session={sessions[1]} />));
+    expect(host.querySelector('[aria-label="Selected conversation activity"]')?.textContent).toBe("Waiting on you");
+  }
   expect(mocks.status).not.toHaveBeenCalled();
 });
 
