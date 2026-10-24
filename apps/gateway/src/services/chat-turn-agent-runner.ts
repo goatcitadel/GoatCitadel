@@ -625,6 +625,8 @@ const TOOL_SCHEMA_TOKEN_BUDGET = {
   code: 2800,
 } as const satisfies Record<ChatMode, number>;
 const TOOL_POLICY_PROBE_CONCURRENCY = 8;
+/** Tools that save a file; trying one means the model may claim a file it did not make. */
+const FILE_PRODUCING_TOOL_NAME_PATTERN = /^(?:(?:documents|presentations|artifacts)\.create|fs\.(?:write|patch))$/u;
 
 type PromptLabRunContract = ReturnType<typeof parsePromptLabRunContract>;
 
@@ -1536,6 +1538,28 @@ export class ChatTurnAgentRunner {
 
   private buildTurnMeshContext(input: ChatTurnAgentRunnerInput) {
     return buildFeatureMeshTurnContext(this.deps, input);
+  }
+
+  /** One policy probe, as the tool schema builder makes; a missing probe or a failed evaluation reads as not denied. */
+  private async isToolDeniedByPolicy(input: ChatTurnAgentRunnerInput, toolName: string): Promise<boolean> {
+    if (!this.toolAccessProbe) return false;
+    try {
+      const access = await this.toolAccessProbe({
+        toolName,
+        sessionId: input.sessionId,
+        agentId: "assistant",
+        taskId: input.policyTaskId,
+        runId: input.policyRunId,
+        args: buildToolAccessProbeArgs(toolName, this.deps.safeWriteFallbackDir),
+        permissionProfileId: input.permissionProfileId,
+        localOperatorOverrideId: input.localOperatorOverrideId,
+        surface: input.mode,
+        policyContext: buildTurnToolPolicyContext(input),
+      });
+      return !access.allowed;
+    } catch {
+      return false;
+    }
   }
 
   private async patchTurnTrace(
@@ -6419,7 +6443,14 @@ export class ChatTurnAgentRunner {
             Boolean(run.result?.path || run.result?.artifactId || run.result?.artifact)),
       )
     ) {
-      assistantContent = withMissingArtifactNotice(assistantContent, answeringFileToollessProviderLabel());
+      const writesDeniedWithoutFileAttempt =
+        !toolRuns.some((run) => FILE_PRODUCING_TOOL_NAME_PATTERN.test(run.toolName)) &&
+        (await this.isToolDeniedByPolicy(input, "fs.write"));
+      assistantContent = withMissingArtifactNotice(
+        assistantContent,
+        answeringFileToollessProviderLabel(),
+        writesDeniedWithoutFileAttempt,
+      );
     }
     if (
       delegatedResultContract &&
@@ -10569,8 +10600,20 @@ function buildFileToollessProviderInstruction(): string {
 /**
  * A tool-capable model that made no file may still claim one ("Your PDF is ready"), so its text is
  * dropped. A text-only provider was told to answer inline instead, so its answer stays under the notice.
+ * When the policy denies file writes and the model never tried a file tool, it was told to decline and
+ * name the switch, so its explanation stays under a notice that says why (#494).
  */
-function withMissingArtifactNotice(assistantContent: string, toollessProviderLabel: string | undefined): string {
+function withMissingArtifactNotice(
+  assistantContent: string,
+  toollessProviderLabel: string | undefined,
+  writesDeniedWithoutFileAttempt = false,
+): string {
+  if (!toollessProviderLabel && writesDeniedWithoutFileAttempt) {
+    const notice =
+      "No file was created: this workspace's tool policy turns off file writes (fs.write), so code and other plain files cannot be saved; documents, decks and PDFs still can. To allow file writes, an operator sets fs.write to Available in Settings › Tools › Global filesystem tool access.";
+    const answer = assistantContent.trim();
+    return answer ? `${notice}\n\n${answer}` : notice;
+  }
   if (!toollessProviderLabel) {
     return "The requested file was not created. There is no successful artifact result for this turn.";
   }
