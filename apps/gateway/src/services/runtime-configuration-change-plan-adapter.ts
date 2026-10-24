@@ -1,7 +1,9 @@
 import {
+  CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS,
   ConflictError,
   SemanticValidationError,
   type ChangePlanRecord,
+  type ChangePlanRuntimeFeatureFlag,
   type ChangePlanRuntimeConfigurationRequest,
   type LlmModelRecord,
   type LlmModelPreviewResponse,
@@ -623,19 +625,11 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
       return describeOperatorWriteRootChange(request.change);
     case "tool_global_access":
       return describeGlobalToolAccessChange(request.change, settings);
-    case "feature_flag": {
-      const protectedFlag = request.change.flag === "productSourceEvolutionV1Enabled";
-      return {
-        title: `${request.change.enabled ? "Enable" : "Disable"} ${request.change.flag}`,
-        summary: `${request.change.enabled ? "Enable" : "Disable"} the registered ${request.change.flag} rollout gate.`,
-        completedSummary: `${request.change.flag} is now ${request.change.enabled ? "enabled" : "disabled"}.`,
-        impact: "The server-owned rollout posture changes without exposing arbitrary configuration keys.",
-        risk: protectedFlag && request.change.enabled ? ("danger" as const) : ("caution" as const),
-      };
-    }
+    case "feature_flag":
+      return describeFeatureFlagChange(request.change.flag, request.change.enabled);
     case "feature_flags": {
       const description = Object.entries(request.change.flags)
-        .map(([flag, enabled]) => `${flag}: ${enabled ? "enabled" : "disabled"}`)
+        .map(([flag, enabled]) => `${featureFlagName(flag)}: ${enabled ? "on" : "off"}`)
         .join("; ");
       return {
         title: "Apply reviewed runtime presets",
@@ -647,6 +641,26 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
       };
     }
   }
+}
+
+function featureFlagName(flag: string): string {
+  return CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS[flag as ChangePlanRuntimeFeatureFlag]?.label ?? flag;
+}
+
+/** One switch, named the way Settings names it; a flag without a Settings name keeps its key (#496). */
+function describeFeatureFlagChange(flag: ChangePlanRuntimeFeatureFlag, enabled: boolean) {
+  const named = CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS[flag];
+  const name = named?.label ?? flag;
+  const state = enabled ? "on" : "off";
+  return {
+    title: `Turn ${state} ${name}`,
+    summary: named
+      ? `${named.description} This turns it ${state}.`
+      : `${enabled ? "Enable" : "Disable"} the registered ${flag} rollout gate.`,
+    completedSummary: `${name} is now ${state}.`,
+    impact: `Only this setting (${flag}) changes. You can turn it ${enabled ? "off" : "on"} again the same way.`,
+    risk: flag === "productSourceEvolutionV1Enabled" && enabled ? ("danger" as const) : ("caution" as const),
+  };
 }
 
 function typedConfigurationDescription(label: string, config: object, impact: string, risk: "caution" | "danger") {

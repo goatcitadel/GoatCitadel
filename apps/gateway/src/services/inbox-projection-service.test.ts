@@ -447,6 +447,50 @@ describe("Gateway inbox projection", () => {
     expect(JSON.stringify(projection)).not.toContain("wrong-compatibility-session");
   });
 
+  it("shows a change plan waiting on its approval as the one approval decision, named by the plan (#496)", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
+      items: [
+        {
+          approvalId: "approval-plan",
+          kind: "change_plan_effect",
+          riskLevel: "caution",
+          status: "pending",
+          payload: { planId: "plan-a" },
+          preview: { title: "Turn on Faster tool steps", summary: "Keeps one process.", risk: "caution" },
+          linkage: { workspaceId: "workspace-a", actionType: "change_plan_effect" },
+          createdAt: "2026-09-28T12:00:00.000Z",
+        },
+      ],
+    } as never);
+    vi.mocked(deps.storage.changePlans.list).mockImplementation(async ({ status }) =>
+      status === "awaiting_approval"
+        ? ([
+            {
+              planId: "plan-a",
+              status: "awaiting_approval",
+              revision: 3,
+              title: "Turn on Faster tool steps",
+              summary: "Keeps one process.",
+              origin: { workspaceId: "workspace-a" },
+              requiredAction: { kind: "approval", approvalId: "approval-plan" },
+              risk: "caution",
+              createdAt: "2026-09-28T12:00:00.000Z",
+              updatedAt: "2026-09-28T12:00:01.000Z",
+            },
+          ] as never)
+        : [],
+    );
+
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    expect(projection.items.map((item) => item.id)).toEqual(["approval:approval-plan"]);
+    expect(projection.items[0]).toMatchObject({
+      title: "Turn on Faster tool steps",
+      summary: "Keeps one process.",
+      source: { approvalId: "approval-plan", planId: "plan-a" },
+    });
+  });
+
   it("projects only pending document proposals in the selected workspace without their diff", async () => {
     const deps = dependencies();
     const pending = {

@@ -197,6 +197,37 @@ describe("ApprovalExplainerService", () => {
     });
   });
 
+  it("explains a change-plan approval from the plan's own description instead of asking a model (#496)", async () => {
+    // A model shown only the flag key and hashes guessed ("likely lets…") and said there was no way back.
+    const ctx = createService();
+    await ctx.service.explainApproval({
+      ...defaultApproval,
+      approvalId: "ap-plan",
+      kind: "change_plan_effect",
+      riskLevel: "caution",
+      payload: { planId: "plan-1", intentHash: "abc" },
+      preview: {
+        title: "Turn on Claude Code CLI: reuse one process between tool steps",
+        summary: "Keeps the turn's Claude Code process running between tool steps.",
+        impact: "You can turn it off again the same way in Settings.",
+        risk: "caution",
+      },
+    });
+    expect(ctx.chatCompletions).not.toHaveBeenCalled();
+    expect(ctx.setExplanation).toHaveBeenCalledWith(
+      "ap-plan",
+      expect.objectContaining({
+        summary: "Keeps the turn's Claude Code process running between tool steps.",
+        riskExplanation: "You can turn it off again the same way in Settings.",
+      }),
+    );
+    const [, explanation] = ctx.setExplanation.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(explanation.providerId).toBeUndefined();
+    expect(ctx.publishRealtime).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "ap-plan", status: "completed" }),
+    );
+  });
+
   it("skips safe risk approvals by default threshold", async () => {
     const ctx = createService();
     const safeApproval: ApprovalRequest = {

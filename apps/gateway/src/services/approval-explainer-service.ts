@@ -49,6 +49,12 @@ export class ApprovalExplainerService {
     if (!markedPending) {
       return;
     }
+    const planExplanation = changePlanExplanation(approval);
+    if (planExplanation) {
+      await this.recordExplanation(approval.approvalId, planExplanation, { source: "change_plan" });
+      await this.publishRealtime({ approvalId: approval.approvalId, status: "completed" });
+      return;
+    }
 
     await this.storage.approvalEvents.append({
       approvalId: approval.approvalId,
@@ -123,16 +129,7 @@ export class ApprovalExplainerService {
         model,
       };
 
-      await this.storage.approvals.setExplanation(approval.approvalId, explanation);
-      await this.storage.approvalEvents.append({
-        approvalId: approval.approvalId,
-        eventType: "explanation_generated",
-        actorId: "system",
-        payload: {
-          providerId,
-          model,
-        },
-      });
+      await this.recordExplanation(approval.approvalId, explanation, { providerId, model });
 
       await this.publishRealtime({
         approvalId: approval.approvalId,
@@ -161,6 +158,34 @@ export class ApprovalExplainerService {
       });
     }
   }
+
+  private async recordExplanation(
+    approvalId: string,
+    explanation: ApprovalExplanation,
+    eventPayload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.storage.approvals.setExplanation(approvalId, explanation);
+    await this.storage.approvalEvents.append({
+      approvalId,
+      eventType: "explanation_generated",
+      actorId: "system",
+      payload: eventPayload,
+    });
+  }
+}
+
+/**
+ * A change plan already describes its effect in the owner's words, so its approval explains itself from them. A model
+ * shown only the flag key and hashes guessed at what a switch does and how to undo it (#496).
+ */
+function changePlanExplanation(approval: ApprovalRequest): ApprovalExplanation | undefined {
+  if (approval.kind !== "change_plan_effect") return undefined;
+  const preview = approval.preview ?? {};
+  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+  const summary = text(preview.summary);
+  const impact = text(preview.impact);
+  if (!summary || !impact) return undefined;
+  return { summary, riskExplanation: impact, generatedAt: new Date().toISOString() };
 }
 
 function riskScore(value: ApprovalRequest["riskLevel"] | ApprovalExplainerConfig["minRiskLevel"]): number {

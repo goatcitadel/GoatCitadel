@@ -95,7 +95,7 @@ export async function reconcileChangePlanApproval(
     )
       throw new ConflictError({ message: "The current Change Plan approval binding is inconsistent." });
     if (disposition === "approved") {
-      if (!resumeApproved || !isLlamaCppAutoResumePlan(plan)) continue;
+      if (!resumeApproved || !isAutoResumeOnApprovalPlan(plan)) continue;
       try {
         await resumeApproved(plan, "gateway-approval-resolution", id);
       } catch (error) {
@@ -115,10 +115,25 @@ export async function reconcileChangePlanApproval(
   return settledCount;
 }
 
-export function isLlamaCppAutoResumePlan(plan: ChangePlanRecord): boolean {
+function isLlamaCppAutoResumePlan(plan: ChangePlanRecord): boolean {
   return (
     plan.request.kind === "runtime_configuration" &&
     (plan.request.change.operation === "llama_cpp_configuration" || plan.request.change.operation === "llama_cpp_setup")
+  );
+}
+
+/**
+ * Plans whose approval is the operator's last word, so approving applies them. Besides llama.cpp setup, that is a
+ * switch the operator flipped in Settings: a separate "Continue approved change" step after approving only made the
+ * one decision two (#496). A rollback approval and anything proposed from Chat keep their explicit continuation.
+ */
+export function isAutoResumeOnApprovalPlan(plan: ChangePlanRecord): boolean {
+  if (isLlamaCppAutoResumePlan(plan)) return true;
+  return (
+    plan.origin.surface === "settings" &&
+    plan.result?.failureCode !== "rollback_approval_pending" &&
+    plan.request.kind === "runtime_configuration" &&
+    (plan.request.change.operation === "feature_flag" || plan.request.change.operation === "feature_flags")
   );
 }
 
@@ -139,7 +154,7 @@ export async function reconcileAwaitingChangePlanApproval(
     disposition !== "approved" ||
     !resumeApproved ||
     plan.status !== "awaiting_approval" ||
-    !isLlamaCppAutoResumePlan(plan)
+    !isAutoResumeOnApprovalPlan(plan)
   )
     return plan;
   try {
