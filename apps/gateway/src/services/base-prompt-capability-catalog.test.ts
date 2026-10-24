@@ -31,6 +31,8 @@ describe("filterBasePromptToolsetByPolicy", () => {
     expect(filtered.toolNames).toEqual(["fs.list", "documents.create"]);
     // The denied names let the prompt say what is turned off and where to change it.
     expect(filtered.policyDeniedToolNames).toEqual(["fs.write", "shell.exec"]);
+    // #502: the same probe says which callable tools ask the operator first.
+    expect(filtered.approvalRequiredToolNames).toEqual(["fs.list"]);
     expect(filtered.skills).toEqual([{ name: "Deep research" }]);
   });
 

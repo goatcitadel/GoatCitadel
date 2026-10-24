@@ -147,6 +147,38 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(prompt.volatileTail).not.toContain("No tools can be called in this turn");
   });
 
+  it("says every tool asks for approval first when the policy probe found that (#502)", () => {
+    // The safe profile asks before every action; the model used to guess "based on risk, not confirmed policy".
+    const tail = buildBaseAgentSystemPrompt(
+      input({
+        toolset: { toolNames: ["fs.read", "web.search"], approvalRequiredToolNames: ["fs.read", "web.search"] },
+      }),
+    ).volatileTail;
+    expect(tail).toContain("## Tool catalog (current policy still applies)\nfs.read, web.search");
+    expect(tail).toContain("Approval: every tool listed here asks the operator for approval before it runs.");
+    expect(tail).toMatch(/a specific call can still be blocked or need approval because of its arguments/i);
+  });
+
+  it("names the tools that ask first, and says the rest run without asking, when only some need approval", () => {
+    const tail = buildBaseAgentSystemPrompt(
+      input({
+        toolset: { toolNames: ["fs.read", "web.search", "time.now"], approvalRequiredToolNames: ["web.search"] },
+      }),
+    ).volatileTail;
+    expect(tail).toContain("Approval: these ask the operator for approval before they run: web.search.");
+    expect(tail).toContain("The other listed tools run without asking.");
+  });
+
+  it("says none need approval when the probe found none, and says nothing when approval is unknown", () => {
+    const none = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames: ["fs.read", "web.search"], approvalRequiredToolNames: [] } }),
+    ).volatileTail;
+    expect(none).toContain("Approval: none of the listed tools asks for approval");
+    // A toolset without a policy probe (no turn scope) must not claim anything about approval.
+    const unknown = buildBaseAgentSystemPrompt(input()).volatileTail;
+    expect(unknown).not.toContain("Approval:");
+  });
+
   it("tells the model to decline write-and-run plainly and names the real switch when policy denies writes and shell (#494)", () => {
     const tail = buildBaseAgentSystemPrompt(
       input({
