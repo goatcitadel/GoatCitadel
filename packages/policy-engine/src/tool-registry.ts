@@ -39,6 +39,21 @@ export const RUNTIME_CONFIGURE_TOOL_NAME = "runtime.configure";
 /** Model-callable, plan-creation-only entry to the Evolution Control Plane. */
 export const CHANGE_REQUEST_TOOL_NAME = "change.request";
 
+/** tests.run, lint.run and build.run only ever run a package script; they accept no command. */
+const RESTRICTED_PACKAGE_SCRIPT_ARG_SCHEMA = {
+  type: "object",
+  properties: {
+    manager: { type: "string", enum: ["pnpm", "npm"], description: "Package manager. Defaults to pnpm." },
+    filter: {
+      type: "string",
+      pattern: "^[a-zA-Z0-9@/_\\-.]+$",
+      description: "pnpm workspace filter, such as a package name.",
+    },
+    cwd: { type: "string", description: "Project folder inside the workspace. Defaults to the workspace." },
+  },
+  additionalProperties: false,
+} as const;
+
 export const RUNTIME_CONFIGURATION_TARGET_IDS = ["search.brave", "search.parallel"] as const;
 
 export type RuntimeConfigurationTargetId = (typeof RUNTIME_CONFIGURATION_TARGET_IDS)[number];
@@ -1366,14 +1381,6 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     ],
   },
   {
-    name: "git.exec",
-    category: "git",
-    riskLevel: "danger",
-    requiresApproval: true,
-    description: "Run low-level git command with approval gates.",
-    pack: "core",
-  },
-  {
     name: "git.status",
     category: "git",
     riskLevel: "safe",
@@ -1442,7 +1449,9 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "ops",
     riskLevel: "caution",
     requiresApproval: false,
-    description: "Run restricted test commands.",
+    description:
+      "Run the project's `test` package script (`pnpm run test` or `npm run test`) in the workspace or `cwd`. Takes no command: it cannot run a file or arbitrary script, and fails when the project has no `test` script.",
+    argSchema: RESTRICTED_PACKAGE_SCRIPT_ARG_SCHEMA,
     pack: "devops",
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["verify_change", "run_tests"],
@@ -1453,7 +1462,9 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "ops",
     riskLevel: "caution",
     requiresApproval: false,
-    description: "Run restricted lint commands.",
+    description:
+      "Run the project's `lint` package script (`pnpm run lint` or `npm run lint`) in the workspace or `cwd`. Takes no command: it cannot run a file or arbitrary script, and fails when the project has no `lint` script.",
+    argSchema: RESTRICTED_PACKAGE_SCRIPT_ARG_SCHEMA,
     pack: "devops",
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["verify_change", "lint"],
@@ -1464,7 +1475,9 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "ops",
     riskLevel: "caution",
     requiresApproval: false,
-    description: "Run restricted build commands.",
+    description:
+      "Run the project's `build` package script (`pnpm run build` or `npm run build`) in the workspace or `cwd`. Takes no command: it cannot run a file or arbitrary script, and fails when the project has no `build` script.",
+    argSchema: RESTRICTED_PACKAGE_SCRIPT_ARG_SCHEMA,
     pack: "devops",
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["verify_change", "build"],

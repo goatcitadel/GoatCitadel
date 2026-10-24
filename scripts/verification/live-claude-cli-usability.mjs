@@ -127,6 +127,9 @@ export function classifyUsabilityOutcome(turn, task) {
   if (typeof expect.reply === "string" && content.trim() !== expect.reply) {
     reasons.push(`reply was not exactly ${expect.reply}`);
   }
+  if (typeof expect.replyMatches === "string" && !new RegExp(expect.replyMatches, "iu").test(content)) {
+    reasons.push(`reply does not match /${expect.replyMatches}/`);
+  }
   // A tool call the provider never executed can come back as plain text; that is a wrong answer, not a pass.
   if (RAW_TOOL_MARKUP.test(content)) {
     reasons.push("the reply is raw tool-call markup instead of an answer");

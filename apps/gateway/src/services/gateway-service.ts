@@ -863,6 +863,7 @@ import { resolveMeshChatToolSchemas } from "./gateway/mesh-chat-catalog.js";
 import { MeshCapabilityInvocationService } from "./mesh-capability-invocation-service.js";
 import { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
+import { filterBasePromptToolsetByPolicy, type BasePromptCatalogScope } from "./base-prompt-capability-catalog.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import { ReviewReadinessService } from "./review-readiness-service.js";
@@ -3674,7 +3675,7 @@ export class GatewayService {
       buildLlmMessagesFromBranchPath: async (sessionId, pathTurnIds, currentUserMessage, options, state) =>
         await this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
       composeFrozenOperatorProfileDigest: (workspaceId) => this.composeFrozenOperatorProfileDigest(workspaceId),
-      resolveBasePromptCapabilityCatalog: () => this.resolveBasePromptCapabilityCatalog(),
+      resolveBasePromptCapabilityCatalog: (scope) => this.resolveBasePromptCapabilityCatalog(scope),
       closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
       collectCapabilityUpgradeSuggestions: async (input) => await this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
@@ -10499,12 +10500,12 @@ export class GatewayService {
 
   /**
    * Callable tool/skill catalog for the base agent system prompt's
-   * "what you can do" index (P0-#2). Cheap, in-memory read of the callable
-   * capability catalog — NO per-tool policy evaluation (the prompt is advisory
-   * grounding; deny-wins enforcement stays inline at tool-call time). Best-effort:
+   * "what you can do" index (P0-#2). With a turn scope, tools that turn's policy
+   * denies are left out, since the runner never offers them (#494); deny-wins
+   * enforcement still stays inline at tool-call time. Best-effort:
    * returns an empty toolset rather than throwing on the turn-prep critical path.
    */
-  public async resolveBasePromptCapabilityCatalog(): Promise<BaseAgentPromptToolset> {
+  public async resolveBasePromptCapabilityCatalog(scope?: BasePromptCatalogScope): Promise<BaseAgentPromptToolset> {
     try {
       const catalog = await this.capabilitySystemService.listCatalog("callable");
       const toolNames: string[] = [];
@@ -10521,7 +10522,11 @@ export class GatewayService {
           skills.push(summary ? { name: entry.title, summary } : { name: entry.title });
         }
       }
-      return { toolNames, skills };
+      const safeWriteDir = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out");
+      const probe = (request: ToolAccessEvaluateRequest) => this.inspectToolAccess(request);
+      return scope
+        ? await filterBasePromptToolsetByPolicy({ toolNames, skills }, scope, probe, safeWriteDir)
+        : { toolNames, skills };
     } catch (error) {
       log.warn("resolveBasePromptCapabilityCatalog failed", {
         error: error instanceof Error ? error.message : String(error),

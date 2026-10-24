@@ -11,6 +11,36 @@ describe("tool registry", () => {
     }
   });
 
+  it("describes the restricted runners as package-script runs that take no command (#494)", () => {
+    // The model saw an empty schema and "Run restricted test commands", passed
+    // command: "python fibonacci.txt", and the runner silently ran `pnpm run test`.
+    const catalog = createDefaultToolRegistry().toCatalog();
+    for (const [name, script] of [
+      ["tests.run", "test"],
+      ["lint.run", "lint"],
+      ["build.run", "build"],
+    ] as const) {
+      const tool = catalog.find((item) => item.toolName === name);
+      expect(tool?.description, name).toContain(`run ${script}`);
+      expect(tool?.description, name).toMatch(/takes no command/i);
+      expect(tool?.argSchema, name).toMatchObject({
+        type: "object",
+        properties: {
+          manager: { enum: ["pnpm", "npm"] },
+          filter: { type: "string" },
+          cwd: { type: "string" },
+        },
+        additionalProperties: false,
+      });
+      expect(Object.keys((tool?.argSchema as { properties: object }).properties), name).not.toContain("command");
+    }
+  });
+
+  it("does not register git.exec, which has no executor and only ever failed after approval", () => {
+    const catalog = createDefaultToolRegistry().toCatalog();
+    expect(catalog.some((item) => item.toolName === "git.exec")).toBe(false);
+  });
+
   it("registers agent.fanout as a governed, non-read-only spawn tool (R3-8)", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     const tool = catalog.find((item) => item.toolName === "agent.fanout");

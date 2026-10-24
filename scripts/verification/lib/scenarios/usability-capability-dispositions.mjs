@@ -138,7 +138,6 @@ const NAMED_TOOL_PROOFS = new Map([
   ["fs.delete", ["route.library-files.file-list-upload-download"]],
   ["shell.exec", ["route.chat.code-mode-artifacts"]],
   ["shell.exec_background", ["route.chat.code-mode-artifacts"]],
-  ["git.exec", ["route.chat.code-mode-artifacts"]],
   ["git.status", ["route.chat.code-mode-artifacts"]],
   ["git.diff", ["route.chat.code-mode-artifacts"]],
   ["git.add", ["route.chat.code-mode-artifacts"]],

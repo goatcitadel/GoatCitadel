@@ -92,6 +92,52 @@ describe("ChatTurnAgentRunner file requests on a text-only provider", () => {
     );
   });
 
+  it("names the write policy and the switch, and keeps the model's explanation, when writes are denied and no file tool was tried (#494)", async () => {
+    // Live K-04: the model plainly declined, but this guard replaced its answer with a reason-free notice.
+    const decline = "I can't create or run the tool here because file writes and shell commands are turned off.";
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValue(completion(decline));
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["documents.create", "fs.write"]),
+      createChatCompletion,
+      invokeTool: vi.fn<() => Promise<ToolInvokeResult>>(),
+      evaluateToolAccess: async (request) =>
+        request.toolName === "fs.write"
+          ? {
+              toolName: "fs.write",
+              allowed: false,
+              requiresApproval: false,
+              reasonCodes: ["policy_deny"],
+              riskLevel: "danger",
+            }
+          : {
+              toolName: request.toolName,
+              allowed: true,
+              requiresApproval: false,
+              reasonCodes: ["allowed"],
+              riskLevel: "safe",
+            },
+      describeProviderToolSupport: () => ({ label: "Claude Code CLI", toolCalling: true }),
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        content:
+          "Create a small Node.js command-line tool that converts Celsius to Fahrenheit, add a test file for it, and run the tests.",
+      }),
+    );
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.assistantContent).toContain(
+      "No file was created: this workspace's tool policy turns off file writes (fs.write)",
+    );
+    expect(result.assistantContent).toContain("Settings › Tools › Global filesystem tool access");
+    expect(result.assistantContent).toContain(decline);
+    expect(result.assistantContent).not.toContain("There is no successful artifact result");
+  });
+
   it("follows the provider that answered when a tool-capable primary falls back to a text-only one", async () => {
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()

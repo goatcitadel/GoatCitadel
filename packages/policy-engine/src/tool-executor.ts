@@ -1126,6 +1126,13 @@ async function runRestricted(
   runtimeHooks: ToolExecutorRuntimeHooks,
 ) {
   const args = request.args;
+  const toolName = `${kind === "test" ? "tests" : kind}.run` as ToolProcessSpawnName;
+  // A command used to be ignored silently, so `pnpm run <kind>` ran in place of the asked-for script.
+  if (args.command !== undefined) {
+    throw new Error(
+      `${toolName} runs the project's \`${kind}\` package script and takes no command; it cannot run a file or arbitrary script.`,
+    );
+  }
   const manager = asString(args.manager) ?? "pnpm";
   const filter = asString(args.filter);
   const cwd = await resolveOptionalCwd(args.cwd, request, config, storage);
@@ -1137,7 +1144,6 @@ async function runRestricted(
   }
   const cmdArgs = manager === "pnpm" ? [...(filter ? ["--filter", filter] : []), "run", kind] : ["run", kind];
   const command = resolveRestrictedCommand(manager, cmdArgs);
-  const toolName = `${kind === "test" ? "tests" : kind}.run` as ToolProcessSpawnName;
   await assertBeforeProcessSpawn(runtimeHooks, request, toolName, cwd);
   const { stdout, stderr } = await execFileAsync(command.file, command.args, {
     timeout: 120000,

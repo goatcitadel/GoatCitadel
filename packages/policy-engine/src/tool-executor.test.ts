@@ -7601,6 +7601,12 @@ describe("executeTool", () => {
     await expect(executeTool(toolRequest("lint.run", { manager: "yarn" }), policyConfig, storageStub)).rejects.toThrow(
       /Only pnpm\/npm are allowed/i,
     );
+    // #494: a command used to be silently ignored, so `pnpm run test` ran instead of the asked-for script.
+    for (const toolName of ["tests.run", "lint.run", "build.run"]) {
+      await expect(
+        executeTool(toolRequest(toolName, { command: "python fibonacci.py" }), policyConfig, storageStub),
+      ).rejects.toThrow(/takes no command/i);
+    }
 
     const shellFailure = await executeTool(
       toolRequest("shell.exec", {

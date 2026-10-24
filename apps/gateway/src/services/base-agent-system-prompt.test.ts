@@ -147,6 +147,47 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(prompt.volatileTail).not.toContain("No tools can be called in this turn");
   });
 
+  it("tells the model to decline write-and-run plainly and names the real switch when policy denies writes and shell (#494)", () => {
+    const tail = buildBaseAgentSystemPrompt(
+      input({
+        toolset: {
+          toolNames: ["fs.read", "documents.create", "tests.run", "change.request"],
+          policyDeniedToolNames: ["fs.write", "fs.patch", "shell.exec"],
+        },
+      }),
+    ).volatileTail;
+    expect(tail).toContain("## Writing and running code");
+    expect(tail).toContain("cannot create or change code files or run scripts");
+    expect(tail).toContain("Settings › Tools › Global filesystem tool access");
+    expect(tail).toContain("change.request");
+    expect(tail).toContain("tool policy file");
+    expect(tail).toMatch(/do not save code through document tools/i);
+    expect(tail).toMatch(/test, lint or build tool/i);
+  });
+
+  it("only offers change.request when it is callable, and only names the shell switch when shell is denied", () => {
+    const tail = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames: ["fs.read"], policyDeniedToolNames: ["fs.write"] } }),
+    ).volatileTail;
+    expect(tail).toContain("Settings › Tools › Global filesystem tool access");
+    expect(tail).not.toContain("change.request");
+    expect(tail).not.toContain("tool policy file");
+  });
+
+  it("leaves the write-and-run note out when writes and shell are allowed, or when no tools can be called", () => {
+    const allowed = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames: ["fs.write", "shell.exec"], policyDeniedToolNames: ["browser.cookies.get"] } }),
+    ).volatileTail;
+    expect(allowed).not.toContain("## Writing and running code");
+    const manual = buildBaseAgentSystemPrompt(
+      input({
+        toolsUnavailableReason: "manual_autonomy",
+        toolset: { toolNames: [], policyDeniedToolNames: ["fs.write", "shell.exec"] },
+      }),
+    ).volatileTail;
+    expect(manual).not.toContain("## Writing and running code");
+  });
+
   it("names what actually turns tools off, and only suggests Safe Auto when that is the fix", () => {
     const tail = (toolsUnavailableReason: BuildBaseAgentSystemPromptInput["toolsUnavailableReason"]) =>
       buildBaseAgentSystemPrompt(input({ toolsUnavailableReason })).volatileTail;
