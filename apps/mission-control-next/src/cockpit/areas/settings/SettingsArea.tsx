@@ -52,6 +52,7 @@ import {
   preloadSettingsSection,
 } from "./settings-controls";
 import { RulesPrecedenceLink } from "./RulesPrecedence";
+import { ClaudeCliBackgroundJobsNotice } from "./ClaudeCliBackgroundJobsNotice";
 import { LLAMA_SETUP_HREF, MANAGED_RUNTIME_HREF, SettingsOwnerPointer } from "./SettingsOwnerPointer";
 
 const PAGES = buildSettingsIndex();
@@ -166,6 +167,7 @@ export function SettingsArea() {
             <ModelsSettings />
             <ClaudeCliToolBridgeControl />
             <ClaudeCliWarmContinuationControl />
+            <ClaudeCliBackgroundJobsNotice />
           </>
         );
       case "local-ai":

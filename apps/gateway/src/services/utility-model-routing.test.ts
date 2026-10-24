@@ -216,17 +216,38 @@ describe("resolveBackgroundJobModelDefaults", () => {
 });
 
 describe("resolveBackgroundJobModel", () => {
-  const notReadyCli = {
-    activeProviderId: "claude-code-cli",
-    activeModel: "claude-opus-5-5",
+  // A probe-backed API provider whose readiness is unknown until its check runs.
+  const notReadyProbed = {
+    activeProviderId: "probe-backed",
+    activeModel: "probe-model",
     providers: [
       {
         providerId: "openai-codex",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         hasApiKey: true,
         defaultModel: "gpt-6-sol",
+        apiStyle: "openai-codex-responses" as const,
       },
-      { providerId: "claude-code-cli", baseUrl: "", hasApiKey: false, defaultModel: "claude-sonnet-5-5" },
+      {
+        providerId: "probe-backed",
+        baseUrl: "https://api.example.invalid/v1",
+        hasApiKey: false,
+        defaultModel: "probe-model",
+        apiStyle: "openai-chat-completions" as const,
+      },
+    ],
+  };
+  const signedInCli = {
+    activeProviderId: "claude-code-cli",
+    activeModel: "claude-opus-5-5",
+    providers: [
+      {
+        providerId: "claude-code-cli",
+        baseUrl: "",
+        hasApiKey: true,
+        defaultModel: "claude-sonnet-5-5",
+        apiStyle: "claude-code-cli" as const,
+      },
     ],
   };
 
@@ -236,13 +257,44 @@ describe("resolveBackgroundJobModel", () => {
       resolveBackgroundJobModel({
         getUtilityModelOverride: async () => ({ providerId: "openai-codex", model: "gpt-6-mini" }),
         ensureActiveProviderReadiness,
-        getRuntimeConfig: () => notReadyCli,
+        getRuntimeConfig: () => signedInCli,
       }),
     ).resolves.toEqual({ providerId: "openai-codex", model: "gpt-6-mini" });
     expect(ensureActiveProviderReadiness).not.toHaveBeenCalled();
   });
 
-  it("probes the active provider before deciding, so a not-yet-checked CLI login is used", async () => {
+  it("skips background jobs on the Claude Code CLI without probing it, because each call starts a CLI process (#493)", async () => {
+    // Live: every plain turn ran the follow-up classifier, and every fifth turn two background-review
+    // calls, each as its own CLI process on the operator's subscription.
+    const ensureActiveProviderReadiness = vi.fn(async () => undefined);
+    await expect(
+      resolveBackgroundJobModel({
+        getUtilityModelOverride: async () => undefined,
+        ensureActiveProviderReadiness,
+        getRuntimeConfig: () => signedInCli,
+      }),
+    ).resolves.toBeUndefined();
+    expect(ensureActiveProviderReadiness).not.toHaveBeenCalled();
+  });
+
+  it("still skips when the active provider becomes the Claude Code CLI while the readiness probe runs", async () => {
+    let probed = false;
+    const readyProbed = {
+      ...notReadyProbed,
+      providers: notReadyProbed.providers.map((item) => ({ ...item, hasApiKey: true })),
+    };
+    await expect(
+      resolveBackgroundJobModel({
+        getUtilityModelOverride: async () => undefined,
+        ensureActiveProviderReadiness: async () => {
+          probed = true;
+        },
+        getRuntimeConfig: () => (probed ? signedInCli : readyProbed),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("probes the active provider before deciding, so a not-yet-checked provider is used once it is ready", async () => {
     let probed = false;
     const result = await resolveBackgroundJobModel({
       getUtilityModelOverride: async () => undefined,
@@ -251,10 +303,13 @@ describe("resolveBackgroundJobModel", () => {
       },
       getRuntimeConfig: () =>
         probed
-          ? { ...notReadyCli, providers: notReadyCli.providers.map((item) => ({ ...item, hasApiKey: true })) }
-          : notReadyCli,
+          ? {
+              ...notReadyProbed,
+              providers: notReadyProbed.providers.map((item) => ({ ...item, hasApiKey: true })),
+            }
+          : notReadyProbed,
     });
-    expect(result).toEqual({ providerId: "claude-code-cli", model: "claude-opus-5-5" });
+    expect(result).toEqual({ providerId: "probe-backed", model: "probe-model" });
   });
 
   it("skips when the active provider is still not ready after the probe", async () => {
@@ -262,7 +317,7 @@ describe("resolveBackgroundJobModel", () => {
       resolveBackgroundJobModel({
         getUtilityModelOverride: async () => undefined,
         ensureActiveProviderReadiness: async () => undefined,
-        getRuntimeConfig: () => notReadyCli,
+        getRuntimeConfig: () => notReadyProbed,
       }),
     ).resolves.toBeUndefined();
   });
@@ -272,30 +327,26 @@ describe("resolveBackgroundJobModel", () => {
       resolveBackgroundJobModel({
         getUtilityModelOverride: async () => undefined,
         ensureActiveProviderReadiness: async () => {
-          throw new Error("spawn claude ENOENT");
+          throw new Error("probe failed");
         },
-        getRuntimeConfig: () => notReadyCli,
+        getRuntimeConfig: () => notReadyProbed,
       }),
     ).resolves.toBeUndefined();
   });
 
   it("fails closed when the probe throws even though an earlier probe still projects ready", async () => {
     const staleReady = {
-      ...notReadyCli,
-      providers: notReadyCli.providers.map((item) => ({ ...item, hasApiKey: true })),
+      ...notReadyProbed,
+      providers: notReadyProbed.providers.map((item) => ({ ...item, hasApiKey: true })),
     };
-    const probeError = new Error("claude auth status timed out");
-    const getRuntimeConfig = vi.fn(() => staleReady);
-
     await expect(
       resolveBackgroundJobModel({
         getUtilityModelOverride: async () => undefined,
         ensureActiveProviderReadiness: async () => {
-          throw probeError;
+          throw new Error("probe timed out");
         },
-        getRuntimeConfig,
+        getRuntimeConfig: () => staleReady,
       }),
     ).resolves.toBeUndefined();
-    expect(getRuntimeConfig).not.toHaveBeenCalled();
   });
 });

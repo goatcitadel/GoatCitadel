@@ -496,6 +496,9 @@ export interface RuntimeSettingsResponse {
   llm: {
     activeProviderId: string;
     activeModel: string;
+    /** Background-job utility model; applies only while `features.utilityModelRoutingV1Enabled` is on. */
+    utilityProviderId?: string;
+    utilityModel?: string;
     /** Installation effort inherited only by Chats created after the setting changes. */
     defaultThinkingLevel?: import("@goatcitadel/contracts").ChatThinkingLevel;
     providers: Array<{
