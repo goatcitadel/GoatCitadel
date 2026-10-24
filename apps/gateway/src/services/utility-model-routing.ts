@@ -56,8 +56,21 @@ const JUDGE_FALLBACK_PROVIDERS: ReadonlyArray<{ providerId: string; fallbackMode
 ];
 
 type ModelRoutingRuntime = Pick<LlmRuntimeConfig, "activeProviderId" | "activeModel"> & {
-  providers: ReadonlyArray<Pick<LlmProviderSummary, "providerId" | "baseUrl" | "hasApiKey" | "defaultModel">>;
+  providers: ReadonlyArray<
+    Pick<LlmProviderSummary, "providerId" | "baseUrl" | "hasApiKey" | "defaultModel"> &
+      Partial<Pick<LlmProviderSummary, "apiStyle" | "resolvedApiStyle">>
+  >;
 };
+
+/**
+ * Background jobs never run on the Claude Code CLI: each call starts its own CLI process, and live a plain
+ * turn ran the follow-up classifier (plus background review every fifth turn) as extra processes on the
+ * operator's subscription (#493). An explicit utility-model override still wins.
+ */
+function isActiveProviderPerCallCli(runtime: ModelRoutingRuntime): boolean {
+  const active = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
+  return (active?.resolvedApiStyle ?? active?.apiStyle) === "claude-code-cli";
+}
 
 /**
  * The operator's active provider and model when that provider is ready, else
@@ -88,8 +101,8 @@ export function resolveBackgroundJobModelDefaults(runtime: ModelRoutingRuntime):
 export interface BackgroundJobModelResolverDeps {
   getUtilityModelOverride(): Promise<UtilityModelOverride | undefined>;
   /**
-   * Runs any probe-backed readiness check (the Claude Code CLI login) so "not checked yet" is not read as
-   * "not ready". The implementation records bounded evidence for a check that throws; the job is skipped either way.
+   * Runs any probe-backed readiness check so "not checked yet" is not read as "not ready". It never runs
+   * for the Claude Code CLI, which background jobs skip before probing. The implementation records bounded evidence for a check that throws; the job is skipped either way.
    */
   ensureActiveProviderReadiness(): Promise<void>;
   getRuntimeConfig(): ModelRoutingRuntime;
@@ -97,8 +110,9 @@ export interface BackgroundJobModelResolverDeps {
 
 /**
  * Resolves the background-job model: an explicit utility-model override wins;
- * otherwise the active provider's readiness is checked first, then
- * `resolveBackgroundJobModelDefaults` decides. `undefined` means skip the job.
+ * otherwise jobs are skipped on the Claude Code CLI, then the active provider's
+ * readiness is checked and `resolveBackgroundJobModelDefaults` decides.
+ * `undefined` means skip the job.
  */
 export async function resolveBackgroundJobModel(
   deps: BackgroundJobModelResolverDeps,
@@ -107,6 +121,12 @@ export async function resolveBackgroundJobModel(
   if (override) {
     return override;
   }
+  // Read twice on purpose: the provider's style before the probe, its readiness only after it.
+  const readRuntime = () => deps.getRuntimeConfig();
+  // Decided before the readiness probe, which on the CLI would itself start a process.
+  if (isActiveProviderPerCallCli(readRuntime())) {
+    return undefined;
+  }
   try {
     await deps.ensureActiveProviderReadiness();
   } catch {
@@ -114,7 +134,7 @@ export async function resolveBackgroundJobModel(
     // result, so a check that just failed must not be overridden by it.
     return undefined;
   }
-  return resolveBackgroundJobModelDefaults(deps.getRuntimeConfig());
+  return resolveBackgroundJobModelDefaults(readRuntime());
 }
 
 /**
