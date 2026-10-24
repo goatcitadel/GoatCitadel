@@ -118,7 +118,6 @@ import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
 import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
-import { resolveCallableSkillSelection } from "./callable-skill-activation.js";
 import { ChatCapabilityDiscoveryService } from "./chat-capability-discovery-service.js";
 import {
   resolveChatFeatureAdmission,
@@ -539,7 +538,6 @@ import {
   type ChatAutonomousTurnDeps,
   enqueueAutonomousChatTurn,
   isHeartbeatEligibleSession,
-  isNewAutonomousChatTurnAdmissionPaused,
   runCommitmentSweep,
   runCronAgentTurn,
   runHeartbeatSweep,
@@ -697,7 +695,6 @@ import {
 } from "./governed-skill-instruction-service.js";
 import { createWorkspaceSkillContextDocReader } from "./workspace-skill-context-docs.js";
 import { resolveWorkspaceDesignBrand } from "./workspace-design-brand.js";
-import { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "./chat-artifact-intent.js";
 import { prepareApprovedPresentationVisuals } from "./presentation-visual-executor.js";
 import { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
@@ -801,7 +798,6 @@ import {
   readAuthActorSource,
   readPermissionSurfaceValue,
   toToolInvokeRequest,
-  toolInvokeResultRecord,
 } from "./gateway/external-runtime-approval-adapter.js";
 import {
   canMutatePermissionProfile,

@@ -242,7 +242,8 @@ for (const mutation of [
   "delete path.resolve;",
   "unknownMutator(path);",
   "new UnknownMutator(path);",
-  "unknownTag`${path}`;",
+  // Split so the fixture is not read as a mis-quoted template literal (js/template-syntax-in-string-literal).
+  "unknownTag`$" + "{path}`;",
   'Object.assign(path,{resolve:()=>"/packages/contracts/src"});',
   'const other=path;other.resolve=()=>"/packages/contracts/src";',
   'const box={path};box.path.resolve=()=>"/packages/contracts/src";',
