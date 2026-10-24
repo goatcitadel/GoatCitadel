@@ -8,7 +8,7 @@ const channelAttachmentSchema = z.object({
   title: z.string().optional(),
   mimeType: z.string().optional(),
   dataBase64: z.string().min(1).optional(),
-  attachmentId: z.string().uuid().optional(),
+  attachmentId: z.guid().optional(),
 });
 
 const channelInteractiveActionsSchema = z.object({
@@ -21,11 +21,11 @@ const channelInteractiveActionsSchema = z.object({
 });
 
 const channelSendBaseSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
   target: z.string().min(1),
   message: z.string().default(""),
   attachments: z.array(channelAttachmentSchema).optional(),
-  attachmentIds: z.array(z.string().uuid()).optional(),
+  attachmentIds: z.array(z.guid()).optional(),
   interactiveActions: channelInteractiveActionsSchema.optional(),
   replyToMessageId: z.string().min(1).optional(),
   replyToPartIndex: z.number().int().min(0).optional(),
@@ -58,7 +58,7 @@ function validateChannelSendLike(
 const channelSendSchema = channelSendBaseSchema.superRefine(validateChannelSendLike);
 
 const channelReactSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
   messageId: z.string().min(1),
   reaction: z.string().min(1),
   target: z.string().min(1).optional(),
@@ -76,7 +76,7 @@ const channelReplySchema = channelSendBaseSchema
   .superRefine(validateChannelSendLike);
 
 const channelUnsendSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
   messageId: z.string().min(1),
   target: z.string().min(1).optional(),
   partIndex: z.number().int().min(0).optional(),
@@ -86,7 +86,7 @@ const channelUnsendSchema = z.object({
 });
 
 const channelTypingSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
   target: z.string().min(1),
   threadId: z.string().min(1).optional(),
   messageId: z.string().min(1).optional(),
@@ -97,7 +97,7 @@ const channelTypingSchema = z.object({
 });
 
 const channelActivitySchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
   target: z.string().min(1),
   messageId: z.string().min(1),
   phase: z.enum(["seen", "thinking", "tooling", "waiting_approval", "failed", "clear"]),
@@ -111,16 +111,16 @@ const channelActivitySchema = z.object({
 });
 
 const connectionParamsSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
 });
 
 const deliveriesQuerySchema = z.object({
-  connectionId: z.string().uuid().optional(),
+  connectionId: z.guid().optional(),
   limit: z.coerce.number().int().positive().max(200).default(50),
 });
 
 const gmailReadSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
   query: z.string().optional(),
   maxResults: z.number().int().positive().max(100).optional(),
   sessionId: z.string().min(1).optional(),
@@ -129,7 +129,7 @@ const gmailReadSchema = z.object({
 });
 
 const gmailSendSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
   to: z.array(z.string().email()).min(1),
   cc: z.array(z.string().email()).optional(),
   bcc: z.array(z.string().email()).optional(),
@@ -143,7 +143,7 @@ const gmailSendSchema = z.object({
 });
 
 const calendarListSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
   calendarId: z.string().optional(),
   fromIso: z.string().datetime().optional(),
   toIso: z.string().datetime().optional(),
@@ -154,7 +154,7 @@ const calendarListSchema = z.object({
 });
 
 const calendarCreateSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
   calendarId: z.string().optional(),
   title: z.string().min(1),
   description: z.string().optional(),

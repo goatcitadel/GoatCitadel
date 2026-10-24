@@ -14,11 +14,11 @@ const createDeviceRequestSchema = z.object({
 });
 
 const deviceRequestParamsSchema = z.object({
-  requestId: z.string().uuid(),
+  requestId: z.guid(),
 });
 
 const deviceGrantParamsSchema = z.object({
-  grantId: z.string().uuid(),
+  grantId: z.guid(),
 });
 
 const deviceGrantListQuerySchema = z.object({
@@ -46,18 +46,18 @@ const companionSessionRefreshSchema = z.object({
 });
 
 const companionSessionParamsSchema = z.object({
-  sessionId: z.string().uuid(),
+  sessionId: z.guid(),
 });
 
 const companionSessionListQuerySchema = z.object({
   view: z.enum(["active", "all"]).default("active"),
-  grantId: z.string().uuid().optional(),
+  grantId: z.guid().optional(),
   limit: z.coerce.number().int().positive().max(200).default(50),
 });
 
 const companionAuditQuerySchema = z.object({
-  sessionId: z.string().uuid().optional(),
-  grantId: z.string().uuid().optional(),
+  sessionId: z.guid().optional(),
+  grantId: z.guid().optional(),
   limit: z.coerce.number().int().positive().max(200).default(50),
 });
 
@@ -124,7 +124,10 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     "/api/v1/auth/current",
     withRouteAccess(fastify, "authenticated-read", { config: { rateLimit: { max: RATE_LIMIT_READ_MAX } } }),
     async (request, reply) => {
-      const result = projectGatewayCurrentAccess(request, hasOperatorControlPlaneAccess(fastify, request.authActorSource));
+      const result = projectGatewayCurrentAccess(
+        request,
+        hasOperatorControlPlaneAccess(fastify, request.authActorSource),
+      );
       return reply.header("Cache-Control", "no-store").send(result);
     },
   );

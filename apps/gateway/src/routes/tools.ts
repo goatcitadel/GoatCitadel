@@ -16,7 +16,7 @@ const accessEvaluateSchema = z.object({
   workspaceId: z.string().min(1).optional(),
   taskId: z.string().min(1).optional(),
   runId: z.string().min(1).optional(),
-  args: z.record(z.unknown()).optional(),
+  args: z.record(z.string(), z.unknown()).optional(),
   trustLevel: z.enum(["trusted_operator", "trusted_workspace", "mixed_untrusted", "untrusted_external"]).optional(),
   sourceAttribution: z
     .array(
@@ -148,7 +148,7 @@ const createGrantSchema = z
   });
 
 const revokeParamsSchema = z.object({
-  grantId: z.string().uuid(),
+  grantId: z.guid(),
 });
 
 const profileParamsSchema = z.object({

@@ -262,7 +262,7 @@ const requestSchema = z.discriminatedUnion("kind", [
         z
           .object({
             operation: z.literal("feature_flags"),
-            flags: z.record(z.enum(CHANGE_PLAN_RUNTIME_FEATURE_FLAGS), z.boolean()),
+            flags: z.partialRecord(z.enum(CHANGE_PLAN_RUNTIME_FEATURE_FLAGS), z.boolean()),
           })
           .strict(),
         z
@@ -773,8 +773,8 @@ function actorFor(
 
 function badPair(
   reply: Parameters<typeof sendRouteError>[0],
-  params: z.SafeParseReturnType<unknown, unknown>,
-  body: z.SafeParseReturnType<unknown, unknown>,
+  params: z.ZodSafeParseResult<unknown>,
+  body: z.ZodSafeParseResult<unknown>,
 ) {
   return reply.code(400).send({
     error: {

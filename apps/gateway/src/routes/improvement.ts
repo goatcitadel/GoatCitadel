@@ -1,6 +1,10 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { SemanticValidationError, ServiceUnavailableError, type ImprovementCandidateReviewInput } from "@goatcitadel/contracts";
+import {
+  SemanticValidationError,
+  ServiceUnavailableError,
+  type ImprovementCandidateReviewInput,
+} from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { ImprovementCandidateDecisionPostCommitError } from "../services/improvement-review-precondition.js";
@@ -61,13 +65,27 @@ const candidateLifecycleBodySchema = z.object({
 });
 
 const candidateReviewBodySchema = candidateLifecycleBodySchema.extend({
-  reviewPrecondition: z.object({
-    workspaceId: z.string().trim().min(1).max(256),
-    expectedStatus: z.enum(["proposed", "evaluating", "ready_for_approval", "approval_pending", "approved", "rejected", "superseded"]),
-    expectedRevisionId: z.string().trim().min(1).max(256).nullable(),
-    expectedChangeHash: z.string().trim().min(1).max(256).nullable(),
-  }).strict().refine((review) => (review.expectedRevisionId === null) === (review.expectedChangeHash === null),
-    "Revision and change hash must both be supplied or both be null.").optional(),
+  reviewPrecondition: z
+    .object({
+      workspaceId: z.string().trim().min(1).max(256),
+      expectedStatus: z.enum([
+        "proposed",
+        "evaluating",
+        "ready_for_approval",
+        "approval_pending",
+        "approved",
+        "rejected",
+        "superseded",
+      ]),
+      expectedRevisionId: z.string().trim().min(1).max(256).nullable(),
+      expectedChangeHash: z.string().trim().min(1).max(256).nullable(),
+    })
+    .strict()
+    .refine(
+      (review) => (review.expectedRevisionId === null) === (review.expectedChangeHash === null),
+      "Revision and change hash must both be supplied or both be null.",
+    )
+    .optional(),
 });
 
 const activationParamsSchema = z.object({
@@ -94,7 +112,7 @@ const manualReplayBodySchema = z.object({
 const replayOverrideStepSchema = z.object({
   stepKey: z.string().min(1),
   overrideKind: z.enum(["tool_output", "prompt_patch", "policy_decision"]),
-  override: z.record(z.unknown()).default({}),
+  override: z.record(z.string(), z.unknown()).default({}),
 });
 
 const replayDraftBodySchema = z.object({
@@ -108,10 +126,12 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       await markMutationCommittedFromError(request, error);
       if (request.mutationCommitted) {
         const response = projectPublicErrorValue({
-          error: "The candidate decision was saved, but its review or audit delivery failed. Refresh its current state before taking another action.",
+          error:
+            "The candidate decision was saved, but its review or audit delivery failed. Refresh its current state before taking another action.",
           code: "mutation_committed",
           retryable: false,
-          canonicalResult: error instanceof ImprovementCandidateDecisionPostCommitError ? error.canonicalResult : undefined,
+          canonicalResult:
+            error instanceof ImprovementCandidateDecisionPostCommitError ? error.canonicalResult : undefined,
         });
         reply.log.error(response, "improvement candidate decision failed after commit");
         return reply.code(500).send(response);
@@ -311,16 +331,22 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   fastify.post("/api/v1/improvement/candidates/:candidateId/approve", async (request, reply) =>
-    handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
-      improvement.approveImprovementCandidate(candidateId, body),
+    handleCandidateLifecycleAction(
+      request.params,
+      request.body,
+      reply,
+      (candidateId, body) => improvement.approveImprovementCandidate(candidateId, body),
       candidateReviewBodySchema,
       request,
     ),
   );
 
   fastify.post("/api/v1/improvement/candidates/:candidateId/reject", async (request, reply) =>
-    handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
-      improvement.rejectImprovementCandidate(candidateId, body),
+    handleCandidateLifecycleAction(
+      request.params,
+      request.body,
+      reply,
+      (candidateId, body) => improvement.rejectImprovementCandidate(candidateId, body),
       candidateReviewBodySchema,
       request,
     ),

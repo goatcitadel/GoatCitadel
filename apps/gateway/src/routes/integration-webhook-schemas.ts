@@ -3,7 +3,7 @@ import { z } from "zod";
 const CHANNEL_INBOUND_MAX_CONTENT_CHARS = 20_000;
 
 export const connectionParamsSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
 });
 
 export const channelParamsSchema = z.object({
@@ -11,7 +11,7 @@ export const channelParamsSchema = z.object({
 });
 
 export const channelConnectionInboundParamsSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
   channel: z.string().min(1),
 });
 
@@ -32,5 +32,5 @@ export const channelInboundSchema = z.object({
       costUsd: z.number().nonnegative().optional(),
     })
     .optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });

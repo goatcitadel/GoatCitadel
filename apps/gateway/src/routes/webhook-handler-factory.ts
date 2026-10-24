@@ -38,7 +38,7 @@ class WebhookPayloadTooLargeError extends Error {
 }
 
 const connectionParamsSchema = z.object({
-  connectionId: z.string().uuid(),
+  connectionId: z.guid(),
 });
 
 export type WebhookRawBodyRequest = {

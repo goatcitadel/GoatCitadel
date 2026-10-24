@@ -2,17 +2,37 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ChannelOAuthActor } from "../services/channel-oauth-staging-service.js";
 import type { ChannelOAuthAttempt, IntegrationConnection } from "@goatcitadel/contracts";
-import { buildSlackOAuthStart, redactSlackOAuthConnection, summarizeSlackOAuthInstall } from "../services/slack-oauth-service.js";
+import {
+  buildSlackOAuthStart,
+  redactSlackOAuthConnection,
+  summarizeSlackOAuthInstall,
+} from "../services/slack-oauth-service.js";
 import { slackOAuthDisconnectSchema } from "./integrations-shared.js";
 import { sendRouteError } from "./_error-handler.js";
-import { markMutationCommitted, markMutationCommittedFromError, commitMutationIdempotencyAlongsideCanonicalWrite } from "../plugins/idempotency.js";
+import {
+  markMutationCommitted,
+  markMutationCommittedFromError,
+  commitMutationIdempotencyAlongsideCanonicalWrite,
+} from "../plugins/idempotency.js";
 
 const routeOptions = { logLevel: "silent", config: { rateLimit: { max: 60 } } } as const;
-const startSchema = z.object({ workspaceId: z.string().trim().min(1).max(160), draftId: z.string().uuid(), expectedRevision: z.number().int().positive() }).strict();
-const statusSchema = z.object({ workspaceId: z.string().trim().min(1).max(160), attemptId: z.string().uuid() }).strict();
-const adoptSchema = startSchema.extend({ attemptId: z.string().uuid() }).strict();
+const startSchema = z
+  .object({
+    workspaceId: z.string().trim().min(1).max(160),
+    draftId: z.guid(),
+    expectedRevision: z.number().int().positive(),
+  })
+  .strict();
+const statusSchema = z.object({ workspaceId: z.string().trim().min(1).max(160), attemptId: z.guid() }).strict();
+const adoptSchema = startSchema.extend({ attemptId: z.guid() }).strict();
 const cancelSchema = statusSchema.extend({ expectedRevision: z.number().int().positive() }).strict();
-const callbackSchema = z.object({ state: z.string().min(1).max(4096), code: z.string().min(1).max(4096).optional(), error: z.string().max(128).optional() }).strict()
+const callbackSchema = z
+  .object({
+    state: z.string().min(1).max(4096),
+    code: z.string().min(1).max(4096).optional(),
+    error: z.string().max(128).optional(),
+  })
+  .strict()
   .refine((input) => Boolean(input.code) !== Boolean(input.error));
 
 export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): void {
@@ -33,68 +53,113 @@ export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): v
     });
   }, 60_000);
   cleanupTimer.unref();
-  fastify.addHook("onClose", async () => { clearInterval(cleanupTimer); });
+  fastify.addHook("onClose", async () => {
+    clearInterval(cleanupTimer);
+  });
 
   fastify.get("/api/v1/integrations/slack/oauth/status", routeOptions, async (request, reply) => {
     const query = request.query as Record<string, unknown>;
     if (!query || Object.keys(query).length === 0) {
       const { configured, mode, scopes, missing } = buildSlackOAuthStart(readSlackOAuthConfig());
       try {
-        const allConnections: IntegrationConnection[] = await fastify.services.integrations.listIntegrationConnections("channel", 300);
+        const allConnections: IntegrationConnection[] = await fastify.services.integrations.listIntegrationConnections(
+          "channel",
+          300,
+        );
         const connections = allConnections
           .filter((connection) => connection.catalogId === "channel.slack" && connection.config.authMode === "oauth")
-          .map((connection) => ({ connection: redactSlackOAuthConnection(connection), install: summarizeSlackOAuthInstall(connection) }));
+          .map((connection) => ({
+            connection: redactSlackOAuthConnection(connection),
+            install: summarizeSlackOAuthInstall(connection),
+          }));
         return reply.send({ configured, mode, scopes, missing, connections });
-      } catch (error) { return sendRouteError(reply, error, request.log); }
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
     }
     const parsed = statusSchema.safeParse(query);
     if (!parsed.success) return reply.code(400).send({ error: "An exact workspace and OAuth attempt are required." });
     try {
-      return reply.send(await fastify.services.channelSetup.getChannelOAuthAttempt(actorFor(request, parsed.data.workspaceId), parsed.data));
-    } catch (error) { await markMutationCommittedFromError(request, error); return sendRouteError(reply, error, request.log); }
+      return reply.send(
+        await fastify.services.channelSetup.getChannelOAuthAttempt(
+          actorFor(request, parsed.data.workspaceId),
+          parsed.data,
+        ),
+      );
+    } catch (error) {
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
+    }
   });
   fastify.post("/api/v1/integrations/slack/oauth/start", routeOptions, async (request, reply) => {
     const parsed = startSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: "A workspace, Slack draft, and current draft revision are required." });
+    if (!parsed.success)
+      return reply.code(400).send({ error: "A workspace, Slack draft, and current draft revision are required." });
     try {
       const result = await fastify.services.channelSetup.startSlackOAuthAttempt(
-        actorFor(request, parsed.data.workspaceId), parsed.data, { ...readSlackOAuthConfig(), origin: allowedRequestOrigin(request) },
+        actorFor(request, parsed.data.workspaceId),
+        parsed.data,
+        { ...readSlackOAuthConfig(), origin: allowedRequestOrigin(request) },
       );
-      if (!result.configured) return reply.code(400).send({ error: "Slack OAuth is not configured.", missing: result.missing });
+      if (!result.configured)
+        return reply.code(400).send({ error: "Slack OAuth is not configured.", missing: result.missing });
       await markMutationCommitted(request);
       return reply.send(result);
-    } catch (error) { await markMutationCommittedFromError(request, error); return sendRouteError(reply, error, request.log); }
+    } catch (error) {
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
+    }
   });
   fastify.get("/api/v1/integrations/slack/oauth/callback", routeOptions, async (request, reply) => {
     const parsed = callbackSchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: "A valid Slack OAuth state and result are required." });
     try {
       const attempt: ChannelOAuthAttempt = await fastify.services.channelSetup.completeSlackOAuthAttempt(
-        parsed.data.state, readSlackOAuthConfig(), parsed.data.code, Boolean(parsed.data.error),
+        parsed.data.state,
+        readSlackOAuthConfig(),
+        parsed.data.code,
+        Boolean(parsed.data.error),
       );
       if (request.headers.accept?.includes("text/html")) {
         return reply.type("text/html").send(renderSlackOAuthResultPage(attempt));
       }
       return reply.send(attempt);
-    } catch (error) { await markMutationCommittedFromError(request, error); return sendRouteError(reply, error, request.log); }
+    } catch (error) {
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
+    }
   });
   fastify.post("/api/v1/integrations/slack/oauth/adopt", routeOptions, async (request, reply) => {
     const parsed = adoptSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: "An exact OAuth attempt and current draft revision are required." });
+    if (!parsed.success)
+      return reply.code(400).send({ error: "An exact OAuth attempt and current draft revision are required." });
     try {
-      const result = await fastify.services.channelSetup.adoptSlackOAuthAttempt(actorFor(request, parsed.data.workspaceId), parsed.data, () => commitMutationIdempotencyAlongsideCanonicalWrite(request));
+      const result = await fastify.services.channelSetup.adoptSlackOAuthAttempt(
+        actorFor(request, parsed.data.workspaceId),
+        parsed.data,
+        () => commitMutationIdempotencyAlongsideCanonicalWrite(request),
+      );
       await markMutationCommitted(request);
       return reply.send(result);
-    } catch (error) { await markMutationCommittedFromError(request, error); return sendRouteError(reply, error, request.log); }
+    } catch (error) {
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
+    }
   });
   fastify.post("/api/v1/integrations/slack/oauth/cancel", routeOptions, async (request, reply) => {
     const parsed = cancelSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "An exact OAuth attempt and revision are required." });
     try {
-      const result = await fastify.services.channelSetup.cancelChannelOAuthAttempt(actorFor(request, parsed.data.workspaceId), parsed.data);
+      const result = await fastify.services.channelSetup.cancelChannelOAuthAttempt(
+        actorFor(request, parsed.data.workspaceId),
+        parsed.data,
+      );
       await markMutationCommitted(request);
       return reply.send(result);
-    } catch (error) { await markMutationCommittedFromError(request, error); return sendRouteError(reply, error, request.log); }
+    } catch (error) {
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
+    }
   });
   fastify.post("/api/v1/integrations/slack/oauth/disconnect", routeOptions, async (request, reply) => {
     const parsed = slackOAuthDisconnectSchema.safeParse(request.body);
@@ -105,11 +170,17 @@ export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): v
         return reply.code(400).send({ error: "Connection is not a Slack OAuth install." });
       }
       const connection = await fastify.services.integrations.updateIntegrationConnection(current.connectionId, {
-        expectedRevision: current.revision, enabled: false, status: "disconnected", lastError: undefined,
+        expectedRevision: current.revision,
+        enabled: false,
+        status: "disconnected",
+        lastError: undefined,
       });
       await markMutationCommitted(request);
       return reply.send({ connection: redactSlackOAuthConnection(connection) });
-    } catch (error) { await markMutationCommittedFromError(request, error); return sendRouteError(reply, error, request.log); }
+    } catch (error) {
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
+    }
   });
 }
 function actorFor(request: FastifyRequest, workspaceId: string): ChannelOAuthActor {
@@ -117,9 +188,12 @@ function actorFor(request: FastifyRequest, workspaceId: string): ChannelOAuthAct
 }
 function readSlackOAuthConfig() {
   return {
-    clientId: process.env.GOATCITADEL_SLACK_OAUTH_CLIENT_ID, clientSecret: process.env.GOATCITADEL_SLACK_OAUTH_CLIENT_SECRET,
-    redirectUri: process.env.GOATCITADEL_SLACK_OAUTH_REDIRECT_URI, stateSecret: process.env.GOATCITADEL_SLACK_OAUTH_STATE_SECRET,
-    scopes: process.env.GOATCITADEL_SLACK_OAUTH_SCOPES, brokerAuthorizeUrl: process.env.GOATCITADEL_SLACK_OAUTH_BROKER_AUTHORIZE_URL,
+    clientId: process.env.GOATCITADEL_SLACK_OAUTH_CLIENT_ID,
+    clientSecret: process.env.GOATCITADEL_SLACK_OAUTH_CLIENT_SECRET,
+    redirectUri: process.env.GOATCITADEL_SLACK_OAUTH_REDIRECT_URI,
+    stateSecret: process.env.GOATCITADEL_SLACK_OAUTH_STATE_SECRET,
+    scopes: process.env.GOATCITADEL_SLACK_OAUTH_SCOPES,
+    brokerAuthorizeUrl: process.env.GOATCITADEL_SLACK_OAUTH_BROKER_AUTHORIZE_URL,
   };
 }
 function allowedRequestOrigin(request: FastifyRequest): string | undefined {
@@ -127,11 +201,16 @@ function allowedRequestOrigin(request: FastifyRequest): string | undefined {
   if (typeof raw !== "string") return undefined;
   try {
     const origin = new URL(raw).origin;
-    const allowed = (process.env.GOATCITADEL_ALLOWED_ORIGINS ??
-      "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://127.0.0.1:8787")
-      .split(",").map((value) => value.trim());
+    const allowed = (
+      process.env.GOATCITADEL_ALLOWED_ORIGINS ??
+      "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://127.0.0.1:8787"
+    )
+      .split(",")
+      .map((value) => value.trim());
     return allowed.includes(origin) ? origin : undefined;
-  } catch { return undefined; }
+  } catch {
+    return undefined;
+  }
 }
 function renderSlackOAuthResultPage(attempt: ChannelOAuthAttempt): string {
   const ready = attempt.status === "ready";
@@ -142,5 +221,10 @@ function renderSlackOAuthResultPage(attempt: ChannelOAuthAttempt): string {
 </head><body><main><h1>${title}</h1><p>${ready ? `${name} was authorized. Return to GoatCitadel to review and adopt this installation, choose targets, and apply its Change Plan.` : "Return to GoatCitadel to review this attempt and start again if needed."}</p></main></body></html>`;
 }
 function escapeHtml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }

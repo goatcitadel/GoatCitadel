@@ -5,7 +5,7 @@ const createMediaJobSchema = z.object({
   type: z.enum(["ocr", "vision", "audio_transcribe", "video_transcribe", "analyze"]),
   sessionId: z.string().optional(),
   attachmentId: z.string().optional(),
-  input: z.record(z.unknown()).optional(),
+  input: z.record(z.string(), z.unknown()).optional(),
 });
 
 const mediaJobParamsSchema = z.object({

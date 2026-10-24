@@ -48,7 +48,7 @@ const memoryItemSeedSchema = z.object({
   namespace: z.string().trim().min(1),
   title: z.string().trim().min(1),
   content: z.string().trim().min(1),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   pinned: z.boolean().optional(),
 });
 

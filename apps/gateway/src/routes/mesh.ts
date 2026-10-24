@@ -43,7 +43,7 @@ const claimSchema = z.object({
 const replicationSchema = z.object({
   sourceNodeId: z.string().min(1),
   eventType: z.string().min(1),
-  payload: z.record(z.unknown()),
+  payload: z.record(z.string(), z.unknown()),
   idempotencyKey: z.string().min(1),
 });
 

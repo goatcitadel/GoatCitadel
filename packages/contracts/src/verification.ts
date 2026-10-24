@@ -56,7 +56,7 @@ export const VerificationScenarioResultSchema = z.object({
   modelId: z.string().min(1).optional(),
   notes: z.array(z.string()).default([]),
   error: z.string().optional(),
-  metrics: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
+  metrics: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
   artifacts: VerificationArtifactPointersSchema.default({
     diagnostics: [],
     screenshots: [],
@@ -94,7 +94,7 @@ export const VerificationRunManifestSchema = z.object({
       degraded: 0,
       notConfigured: 0,
     }),
-  metadata: z.record(z.unknown()).default({}),
+  metadata: z.record(z.string(), z.unknown()).default({}),
 });
 
 export type VerificationRunManifest = z.infer<typeof VerificationRunManifestSchema>;

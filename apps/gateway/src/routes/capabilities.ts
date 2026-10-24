@@ -71,7 +71,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     proposalKind: z.enum(["skill", "tool"]),
     title: z.string().trim().min(1),
     summary: z.string().trim().min(1),
-    payload: z.record(z.unknown()).default({}),
+    payload: z.record(z.string(), z.unknown()).default({}),
     candidateId: z.string().trim().min(1).optional(),
     activationTargetId: z.string().trim().min(1).optional(),
   });
@@ -136,7 +136,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     source: z.string().min(1),
     executionBackendId: z.string().trim().min(1).optional(),
     originSurface: chatOnlyModeSchema.optional(),
-    input: z.record(z.unknown()).optional(),
+    input: z.record(z.string(), z.unknown()).optional(),
     requestedOutputIntent: z.string().trim().min(1).optional(),
     saveCandidateOnSuccess: z.boolean().optional(),
     workspaceId: z.string().trim().min(1).optional(),
