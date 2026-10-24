@@ -136,8 +136,9 @@ export function InboxApprovalDetail({
         </p>
       ) : null}
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
-      {decisionNotice ? (
-        // Not a live region: the page announcer (or focus, for a linked approval) reads it once.
+      {decisionNotice && !settled ? (
+        // Not a live region: the page announcer (or focus, for a linked approval) reads it once. Once the decided
+        // record loads, its settlement line says the decision instead, so it is not said twice (#496).
         <p ref={noticeRef} tabIndex={-1} data-inbox-decision-notice className="text-fg-secondary">
           {decisionNotice}
         </p>
@@ -154,7 +155,13 @@ export function InboxApprovalDetail({
         </NativeOwnerLink>
       ) : null}
       {settled?.kind === "code_mode.run" ? <ApprovalCodeOutcome approval={settled} workspaceId={workspaceId} /> : null}
-      {settled ? <ApprovalSettlement approval={settled} workspaceId={workspaceId} /> : null}
+      {settled ? (
+        <ApprovalSettlement
+          approval={settled}
+          workspaceId={workspaceId}
+          focusDecision={Boolean(decisionNotice) && !pageOwnsFocus}
+        />
+      ) : null}
       {settled ? (
         <section aria-label="Decided request" className="space-y-2 border-t border-line-subtle pt-3">
           <div className="flex flex-wrap gap-2">

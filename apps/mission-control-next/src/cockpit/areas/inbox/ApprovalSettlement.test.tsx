@@ -6,8 +6,9 @@ import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ApprovalSettlement } from "./ApprovalSettlement";
 
-const mocks = vi.hoisted(() => ({ read: vi.fn(), accessIdentity: "access-a" }));
+const mocks = vi.hoisted(() => ({ read: vi.fn(), plan: vi.fn(), accessIdentity: "access-a" }));
 vi.mock("./approval-follow-on", () => ({ readApprovalFollowOn: mocks.read }));
+vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({ fetchChangePlan: mocks.plan }));
 vi.mock("../../../features/native-routes/projects/use-project-access", () => ({
   useProjectAccess: () => ({ identity: mocks.accessIdentity, current: () => true }),
 }));
@@ -196,4 +197,52 @@ it("keeps settlement inspection in native history while preserving scoped conver
   } finally {
     window.history.replaceState(priorState, "", prior);
   }
+});
+
+const planApproval = {
+  approvalId: "approval-plan",
+  status: "approved",
+  kind: "change_plan_effect",
+  payload: { planId: "plan-a" },
+  linkage: { workspaceId: "default", actionType: "change_plan_effect" },
+} as unknown as ApprovalRequest;
+
+async function renderPlanApproval() {
+  mocks.read.mockResolvedValue({ replay: { approval: planApproval, effects: [], events: [] } });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ApprovalSettlement approval={planApproval} workspaceId="default" />
+      </QueryClientProvider>,
+    ),
+  );
+}
+
+it("reports the linked change's result for a change-plan approval instead of a missing run (#496)", async () => {
+  mocks.plan.mockResolvedValue({
+    planId: "plan-a",
+    status: "completed",
+    approvalRefs: ["approval-plan"],
+    origin: { workspaceId: "default", surface: "settings" },
+    result: { summary: "Claude Code CLI: reuse one process between tool steps is now off." },
+  });
+  await renderPlanApproval();
+  await vi.waitFor(() => expect(container.textContent).toContain("Applied."));
+  expect(container.textContent).toContain("Claude Code CLI: reuse one process between tool steps is now off.");
+  expect(container.textContent).not.toContain("No original run was found");
+  expect(mocks.plan).toHaveBeenCalledWith("plan-a", { workspaceId: "default" });
+});
+
+it("does not report a change that is not bound to this approval", async () => {
+  mocks.plan.mockResolvedValue({
+    planId: "plan-a",
+    status: "completed",
+    approvalRefs: ["another-approval"],
+    origin: { workspaceId: "default", surface: "settings" },
+    result: { summary: "Something else is now on." },
+  });
+  await renderPlanApproval();
+  await vi.waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/linked change/i));
+  expect(container.textContent).not.toContain("Something else is now on.");
+  expect(container.textContent).not.toContain("Applied.");
 });

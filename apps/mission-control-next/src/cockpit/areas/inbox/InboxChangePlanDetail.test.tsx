@@ -225,6 +225,33 @@ describe("Inbox change-plan confirmation", () => {
     expect(container.textContent).toContain("changed or is no longer waiting");
   });
 
+  it("shows the applied result once a plan leaves this workspace's Inbox, instead of 'may have been applied' (#496)", async () => {
+    api.fetchOperatorInbox.mockResolvedValue({ ...projection, items: [] });
+    api.fetchChangePlan.mockResolvedValue({
+      ...plan,
+      status: "completed",
+      revision: 5,
+      requiredAction: undefined,
+      result: { summary: "The Chat model is now reviewed-model." },
+    });
+    await renderDetail();
+    await vi.waitFor(() => expect(container.textContent).toContain("Applied. The Chat model is now reviewed-model."));
+    expect(container.textContent).not.toContain("It may have been applied or cancelled");
+  });
+
+  it("does not report a result for a plan from another conversation once it leaves the Inbox", async () => {
+    api.fetchOperatorInbox.mockResolvedValue({ ...projection, items: [] });
+    api.fetchChangePlan.mockResolvedValue({
+      ...plan,
+      status: "completed",
+      origin: { ...plan.origin, sessionId: "other-session" },
+      result: { summary: "Another conversation's model changed." },
+    });
+    await renderDetail();
+    await vi.waitFor(() => expect(container.textContent).toContain("no longer waiting in the selected workspace"));
+    expect(container.textContent).not.toContain("Another conversation's model changed.");
+  });
+
   it("never reads a plan from a foreign Inbox projection", async () => {
     api.fetchOperatorInbox.mockResolvedValue({ ...projection, workspaceId: "other" });
     await renderDetail();

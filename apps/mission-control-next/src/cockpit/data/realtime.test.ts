@@ -16,7 +16,12 @@ describe("inboxToastDuration", () => {
   it("error toasts expire after 10 seconds", () => {
     expect(inboxToastDuration("error")).toBe(10_000);
     expect(Number.isFinite(inboxToastDuration("error"))).toBe(true);
-    for (const tone of ["warning", "info", "success"]) expect(inboxToastDuration(tone)).toBe(6_000);
+    for (const tone of ["info", "success"]) expect(inboxToastDuration(tone)).toBe(6_000);
+  });
+
+  it("gives a decision long enough to reach its Open Inbox item action, without staying up forever (#496)", () => {
+    expect(inboxToastDuration("warning")).toBe(15_000);
+    expect(Number.isFinite(inboxToastDuration("warning"))).toBe(true);
   });
 });
 

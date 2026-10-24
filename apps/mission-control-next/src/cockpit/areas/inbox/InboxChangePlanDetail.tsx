@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import type { ChangePlanRecord, OperatorInboxItem } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import {
@@ -11,6 +12,8 @@ import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { changePlanOutcomeLine } from "./ApprovalChangePlanOutcome";
+import { readSettledInboxPlan } from "./inbox-change-plan-actions";
 import { canConfirmInboxChangePlan } from "./inbox-change-plan-guard";
 import { useInboxChangePlan } from "./use-inbox-change-plan";
 import { InboxSettingsContinuation } from "./InboxSettingsContinuation";
@@ -57,9 +60,7 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
       ) : null}
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {recordAnswered(view) && !plan ? (
-        <p className="text-fg-muted">
-          This change plan is no longer waiting in the selected workspace. It may have been applied or cancelled.
-        </p>
+        <SettledChangePlan item={item} workspaceId={workspaceId} readOwner={!scopeChanged} />
       ) : null}
       {scopeChanged ? (
         <p role="alert" className="text-fg-secondary">
@@ -173,6 +174,36 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
 }
 
 /** A Settings-started plan whose continuation (with its own approval link) renders in this detail. */
+/** A plan no longer in this Inbox: how it ended, when its owner says so, else that it is no longer waiting (#496). */
+function SettledChangePlan({
+  item,
+  workspaceId,
+  readOwner,
+}: {
+  item: OperatorInboxItem;
+  workspaceId: string;
+  readOwner: boolean;
+}) {
+  const settled = useQuery({
+    queryKey: ["inbox-settled-change-plan", workspaceId, item.id],
+    queryFn: () => readSettledInboxPlan(item, workspaceId),
+    enabled: readOwner,
+    retry: false,
+  });
+  if (settled.data)
+    return (
+      <div role="status" className="space-y-1 text-fg-secondary">
+        <p className="font-medium text-fg">{settled.data.title}</p>
+        <p>{changePlanOutcomeLine(settled.data)}</p>
+      </div>
+    );
+  return (
+    <p className="text-fg-muted">
+      This change plan is no longer waiting in the selected workspace. It may have been applied or cancelled.
+    </p>
+  );
+}
+
 function continuesInSettings(plan: ChangePlanRecord): boolean {
   return plan.origin.surface === "settings" && !plan.origin.sessionId && !plan.origin.turnId;
 }

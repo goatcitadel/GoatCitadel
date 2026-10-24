@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ChangePlanRecord } from "@goatcitadel/contracts";
+import { CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS, type ChangePlanRecord } from "@goatcitadel/contracts";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { Button } from "../../ui/Button";
@@ -71,7 +71,7 @@ export function ClaudeCliToolBridgeControl() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 id="claude-cli-tool-bridge-title" className="text-md font-semibold text-fg">
-            Claude Code CLI: let it use GoatCitadel tools
+            {CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS[FLAG]?.label}
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
             Experimental and on by default. When on, Chat turns on the Claude Code CLI provider can ask for GoatCitadel

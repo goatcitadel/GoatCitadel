@@ -362,6 +362,19 @@ describe("Inbox approval detail states (IN-05, IN-07, IN-16)", () => {
     }
   });
 
+  it("says the decision once: the settled record's line replaces the click notice and takes its focus (#496)", async () => {
+    api.fetchApproval.mockResolvedValue(approval);
+    await render();
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    api.fetchApproval.mockResolvedValue({ ...approval, status: "approved", linkage: { workspaceId: "default" } });
+    const trigger = [...container.querySelectorAll("button")].find((b) => b.textContent === "Record decision")!;
+    await act(async () => trigger.click());
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision recorded: Approved")));
+    expect(container.querySelector("[data-inbox-decision-notice]")).toBeNull();
+    expect(container.textContent?.match(/decision recorded/gi)).toHaveLength(1);
+    expect(document.activeElement?.textContent).toContain("Decision recorded: Approved");
+  });
+
   it("shows an Expired badge once a pending record's expiry passes", async () => {
     api.fetchApproval.mockResolvedValue({ ...approval, expiresAt: "2020-01-01T00:00:00Z" });
     await render();
