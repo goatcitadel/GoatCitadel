@@ -80,8 +80,8 @@ test("worker package rejects schema dependency, version and peer drift", () => {
   assert.ok(Object.isFrozen(pins));
   const ajvRequire = createRequire(require.resolve("ajv/package.json"));
   const uri = ajvRequire("fast-uri/package.json");
-  assert.equal(uri.version, "3.1.7");
-  for (const version of ["3.1.5", "3.1.6"]) {
+  assert.equal(uri.version, "3.1.9");
+  for (const version of ["3.1.7", "3.1.8"]) {
     assert.throws(() => resolveWorkerDependencyPins({ ...uri, version }), /reviewed graph/);
   }
 });
