@@ -248,6 +248,25 @@ describe("ApprovalExplainerService", () => {
     );
   });
 
+  it("keeps a saved change-plan explanation completed when a later event fails, and reports that failure", async () => {
+    const ctx = createService();
+    ctx.appendEvent.mockImplementation((event: { eventType: string }) => {
+      if (event.eventType === "explanation_generated") throw new Error("event log unavailable");
+    });
+    await expect(
+      ctx.service.explainApproval({
+        ...defaultApproval,
+        approvalId: "ap-plan",
+        kind: "change_plan_effect",
+        riskLevel: "caution",
+        payload: { planId: "plan-1" },
+        preview: { title: "Turn off a switch", summary: "Turns it off.", impact: "You can turn it on again." },
+      }),
+    ).rejects.toThrow("event log unavailable");
+    expect(ctx.setExplanation).toHaveBeenCalledTimes(1);
+    expect(ctx.setExplanationFailed).not.toHaveBeenCalled();
+  });
+
   it("skips safe risk approvals by default threshold", async () => {
     const ctx = createService();
     const safeApproval: ApprovalRequest = {

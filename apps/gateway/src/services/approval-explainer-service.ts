@@ -59,11 +59,13 @@ export class ApprovalExplainerService {
       },
     });
 
+    // Set once the explanation is stored: a later event or realtime failure must not mark it failed.
+    const saved = { done: false };
     try {
       // Inside the try, so a failed write is recorded as failed instead of staying pending.
       const planExplanation = changePlanExplanation(approval);
       if (planExplanation) {
-        await this.recordExplanation(approval.approvalId, planExplanation, { source: "change_plan" });
+        await this.recordExplanation(approval.approvalId, planExplanation, { source: "change_plan" }, saved);
         await this.publishRealtime({ approvalId: approval.approvalId, status: "completed" });
         return;
       }
@@ -129,7 +131,7 @@ export class ApprovalExplainerService {
         model,
       };
 
-      await this.recordExplanation(approval.approvalId, explanation, { providerId, model });
+      await this.recordExplanation(approval.approvalId, explanation, { providerId, model }, saved);
 
       await this.publishRealtime({
         approvalId: approval.approvalId,
@@ -138,7 +140,8 @@ export class ApprovalExplainerService {
         model,
       });
     } catch (error) {
-      if (isAuthoritativeModelUsageAccountingError(error)) {
+      // A stored explanation stays completed; the caller reports the later failure.
+      if (saved.done || isAuthoritativeModelUsageAccountingError(error)) {
         throw error;
       }
       const message = truncate((error as Error).message, 500);
@@ -163,8 +166,10 @@ export class ApprovalExplainerService {
     approvalId: string,
     explanation: ApprovalExplanation,
     eventPayload: Record<string, unknown>,
+    saved: { done: boolean },
   ): Promise<void> {
     await this.storage.approvals.setExplanation(approvalId, explanation);
+    saved.done = true;
     await this.storage.approvalEvents.append({
       approvalId,
       eventType: "explanation_generated",
