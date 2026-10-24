@@ -10046,7 +10046,7 @@ function buildEssentialToolSet(input: {
   return [...tools];
 }
 
-function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: string): Record<string, unknown> {
+export function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: string): Record<string, unknown> {
   if (toolName === "user_input.request")
     return { title: "Clarification", question: "Which preference applies to this task?" };
   if (toolName === "presentations.create") {

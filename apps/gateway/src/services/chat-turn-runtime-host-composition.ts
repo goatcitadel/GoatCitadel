@@ -113,7 +113,7 @@ function composeSessionPreparation(
     prepareAgentChatTurn: (sessionId, input, options) => source.prepareAgentChatTurn(sessionId, input, options),
     recordRuntimeDecision: source.recordRuntimeDecision ? (input) => source.recordRuntimeDecision!(input) : undefined,
     resolveBasePromptCapabilityCatalog: source.resolveBasePromptCapabilityCatalog
-      ? () => source.resolveBasePromptCapabilityCatalog!()
+      ? (scope) => source.resolveBasePromptCapabilityCatalog!(scope)
       : undefined,
     resolveChatRoutedContextSources: (input) => source.resolveChatRoutedContextSources(input),
     resolveRuntimeGuidance: (workspaceId) => source.resolveRuntimeGuidance(workspaceId),
