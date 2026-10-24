@@ -119,7 +119,7 @@ export interface FeatureFlagsConfig {
   chatRequesterMcpV1Enabled?: boolean;
   chatStaticMcpV1Enabled?: boolean;
   claudeCliToolBridgeEnabled?: boolean;
-  /** Lets a bridged Claude Code CLI tool step park its process and resume it. Off by default; inert while the bridge is off. */
+  /** Lets a bridged Claude Code CLI tool step park its process and resume it. On by default since its live proof; inert while the bridge is off. */
   claudeCliWarmContinuationEnabled?: boolean;
   /** Gateway-owned governed Change Plan authority. Default-on after foundation proof, with an explicit kill switch. */
   evolutionControlPlaneV1Enabled?: boolean;
@@ -1510,7 +1510,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       chatRequesterMcpV1Enabled: featuresInput.chatRequesterMcpV1Enabled ?? false,
       chatStaticMcpV1Enabled: featuresInput.chatStaticMcpV1Enabled ?? false,
       claudeCliToolBridgeEnabled: featuresInput.claudeCliToolBridgeEnabled ?? true,
-      claudeCliWarmContinuationEnabled: featuresInput.claudeCliWarmContinuationEnabled ?? false,
+      claudeCliWarmContinuationEnabled: featuresInput.claudeCliWarmContinuationEnabled ?? true,
       evolutionControlPlaneV1Enabled: featuresInput.evolutionControlPlaneV1Enabled ?? true,
       improvementLocalObservationV1Enabled: featuresInput.improvementLocalObservationV1Enabled ?? true,
       improvementModelEvaluationV1Enabled: featuresInput.improvementModelEvaluationV1Enabled ?? false,

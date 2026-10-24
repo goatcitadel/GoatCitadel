@@ -17,7 +17,7 @@
 
 ## Global Constraints
 
-- **Flag:** `claudeCliWarmContinuationEnabled`, env `GOATCITADEL_FEATURE_CLAUDE_CLI_WARM_CONTINUATION_ENABLED`, default `false` (`?? false`) in every place the bridge flag defaults. It applies only to bridged steps, so it is inert while `claudeCliToolBridgeEnabled` is off. Read per step, never cached.
+- **Flag:** `claudeCliWarmContinuationEnabled`, env `GOATCITADEL_FEATURE_CLAUDE_CLI_WARM_CONTINUATION_ENABLED`, default `false` (`?? false`) in every place the bridge flag defaults (turned on by default by the follow-up PR after the 2026-10-23 live proof). It applies only to bridged steps, so it is inert while `claudeCliToolBridgeEnabled` is off. Read per step, never cached.
 - **Constants** (one exported `const` each, in `claude-code-cli-warm-registry.ts`):
   - `CLAUDE_CLI_WARM_PARK_DEADLINE_MS = 600_000`
   - `CLAUDE_CLI_WARM_MAX_PARKED = 3`
@@ -352,7 +352,7 @@
 - Produces:
   - anchor `CLAUDE_CLI_WARM_CONTINUATION_ANCHOR = "claude-cli-warm-continuation"`;
   - the control is disabled, with a note, while the bridge flag is off.
-- **Copy (exact):** "Faster Claude Code tool steps. When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one; any other step still starts a new one. Tools still run in GoatCitadel. Experimental and off by default." (Amended after PR review so it agrees with the tool-bridge switch, whose cost line now says a step starts a new `claude -p` run unless this switch reuses the process for an exact continuation.)
+- **Copy (exact):** "Faster Claude Code tool steps. When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one; any other step still starts a new one. Tools still run in GoatCitadel. Experimental and off by default." (Now "…Experimental and on by default. Turn it off to start a new Claude Code process for every tool step." since the default-on follow-up after the 2026-10-23 live proof.) (Amended after PR review so it agrees with the tool-bridge switch, whose cost line now says a step starts a new `claude -p` run unless this switch reuses the process for an exact continuation.)
 
 - [ ] **Step 1: Write the failing tests:**
   - "the control shows the exact copy and is off by default";
