@@ -55,6 +55,7 @@ export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["system", "settings-budget-mode"],
   ["system", "settings-claude-cli-tool-bridge"],
   ["system", "settings-claude-cli-warm-continuation"],
+  ["system", "settings-claude-cli-background-jobs"],
   ["system", "settings-web-search"],
   ["system", "settings-approval-mode"],
   ["system", "settings-filesystem-write-access"],
