@@ -291,6 +291,17 @@ describe("renderClaudeCliPrompt", () => {
     expect(CLAUDE_CLI_TOOL_BRIDGE_ADDENDUM).not.toMatch(/You are Claude Code/i);
   });
 
+  it("tells a bridged step that the CLI's reported working directory is a private scratch folder, not the project", () => {
+    // The CLI's own environment block names its spawn directory (the per-step run dir) as the
+    // primary working directory, even with a replaced system prompt; #494 saw the model treat it as the project.
+    const { system } = renderClaudeCliPrompt([{ role: "user", content: "list the project files" }], { bridged: true });
+    expect(system).toMatch(/working directory/i);
+    expect(system).toMatch(/not the user's project/i);
+    expect(system).toMatch(/never read, list, write or mention it/i);
+    expect(system).toMatch(/relative paths/i);
+    expect(system).not.toMatch(/[A-Za-z]:\\|\/tmp\/|goatcitadel-claude-cli/);
+  });
+
   it("userText equals userBlocks joined, so the two forms never diverge", () => {
     const rendered = renderClaudeCliPrompt([
       { role: "user", content: "make a doc" },
