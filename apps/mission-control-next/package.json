@@ -70,7 +70,7 @@
     "@types/react-dom": "19.2.3",
     "@types/react-test-renderer": "19.1.0",
     "@vitejs/plugin-react": "4.7.0",
-    "happy-dom": "20.9.0",
+    "happy-dom": "21.0.4",
     "react-test-renderer": "19.2.5",
     "terser": "5.51.2",
     "vite": "6.4.4"
