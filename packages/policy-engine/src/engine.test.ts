@@ -433,6 +433,28 @@ describe("ToolPolicyEngine permission profile upper bound", () => {
     });
   });
 
+  it("fails closed when the supplied permission profile is archived", async () => {
+    const storage = createStorageStub();
+    const profile = {
+      ...createPermissionProfile({ approvalMode: "bypass", toolPatterns: ["*"] }),
+      status: "archived" as const,
+    };
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, tools: { ...policyConfig.tools, allow: ["*"] } },
+      storage,
+      createHeartbeatBoundaryRegistry(),
+    );
+    await expect(
+      engine.evaluateAccess({
+        toolName: "ordinary.safe",
+        args: {},
+        agentId: "ordinary",
+        sessionId: "session-archived",
+        policyContext: { permissionProfileId: profile.profileId, permissionProfile: profile },
+      }),
+    ).resolves.toMatchObject({ allowed: false, reasonCodes: ["permission_profile_upper_bound"] });
+  });
+
   it("preserves additive global and scoped-grant semantics when no permission profile is active", async () => {
     const storage = createStorageStub();
     const allowGrant = {

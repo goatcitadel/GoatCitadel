@@ -1214,10 +1214,13 @@ export class ToolPolicyEngine {
     // this surface; none may widen it. Global deny remains the earlier,
     // absolute deny-wins gate. Requests without a permission profile rely on
     // explicit global/agent allows rather than retired named presets.
-    const activePermissionProfile =
-      request.policyContext?.permissionProfile?.status === "active"
-        ? request.policyContext.permissionProfile
-        : undefined;
+    const requestedPermissionProfile = request.policyContext?.permissionProfile;
+    if (requestedPermissionProfile && requestedPermissionProfile.status !== "active") {
+      // A non-active (archived) profile is neither a ceiling nor a source of
+      // posture; fail closed instead of silently dropping the ceiling.
+      return withPolicy(deny(riskLevel, "permission_profile_upper_bound", "permission profile is not active"));
+    }
+    const activePermissionProfile = requestedPermissionProfile;
     if (
       activePermissionProfile &&
       !toolNames.some((name) => matchesAnyToolPattern(new Set(activePermissionProfile.toolPatterns), name))

@@ -86,6 +86,9 @@ const ToolPolicyToolsShape = {
 
 // Per-agent override: same field shapes as the base tools block but fully
 // optional (no defaults injected) and `allow`/`deny` accept only string arrays.
+// `resolveEffectivePolicy` merges only `allow`, `deny` and `approvalMode` (the
+// latter can only tighten, never loosen); `profile` and `loopDetection` are
+// accepted for forward compatibility but are not honoured per agent.
 // `.passthrough()` preserves any forward-compatible keys without dropping them.
 const PerAgentToolPolicyToolsSchema = z
   .object({

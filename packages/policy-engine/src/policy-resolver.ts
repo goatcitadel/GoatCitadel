@@ -2,16 +2,28 @@ import type {
   EffectiveToolPolicy,
   LocalOperatorOverrideRecord,
   PermissionProfileRecord,
+  ToolApprovalMode,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { matchesToolPattern } from "./tool-patterns.js";
 
+const APPROVAL_MODE_STRICTNESS: Record<ToolApprovalMode, number> = { bypass: 0, approve_risky: 1, approve_all: 2 };
+
+/** A per-agent approval mode can only tighten the posture, never loosen it. */
+function stricterApprovalMode(base: ToolApprovalMode, override: ToolApprovalMode | undefined): ToolApprovalMode {
+  if (!override) return base;
+  return APPROVAL_MODE_STRICTNESS[override] > APPROVAL_MODE_STRICTNESS[base] ? override : base;
+}
+
 export function resolveEffectivePolicy(
   config: ToolPolicyConfig,
   agentId = "",
-  permissionProfile?: PermissionProfileRecord,
+  requestedPermissionProfile?: PermissionProfileRecord,
   localOperatorOverride?: LocalOperatorOverrideRecord,
 ): EffectiveToolPolicy {
+  // Only an active profile contributes tools, allows, denies or posture; an
+  // archived profile must never keep widening policy (fail closed).
+  const permissionProfile = requestedPermissionProfile?.status === "active" ? requestedPermissionProfile : undefined;
   const activeLocalOperatorOverride = isActiveLocalOperatorOverride(localOperatorOverride)
     ? localOperatorOverride
     : undefined;
@@ -20,9 +32,12 @@ export function resolveEffectivePolicy(
     : permissionProfile
       ? new Set(permissionProfile.toolPatterns)
       : new Set<string>();
-  const approvalMode = activeLocalOperatorOverride
+  const approvalMode: ToolApprovalMode = activeLocalOperatorOverride
     ? "bypass"
-    : (permissionProfile?.approvalMode ?? config.tools.approvalMode ?? "approve_risky");
+    : stricterApprovalMode(
+        permissionProfile?.approvalMode ?? config.tools.approvalMode ?? "approve_risky",
+        config.agents[agentId]?.tools?.approvalMode,
+      );
 
   const allowSet = new Set<string>([
     ...config.tools.allow,
