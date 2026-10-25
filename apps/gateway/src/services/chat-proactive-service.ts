@@ -362,6 +362,7 @@ interface ProactiveActionRow {
  */
 export class ChatProactiveService {
   private scheduler?: ReturnType<typeof setInterval>;
+  private schedulerTickInFlight = false;
 
   constructor(
     private readonly ctx: ChatProactiveServiceContext,
@@ -396,21 +397,31 @@ export class ChatProactiveService {
       return;
     }
     this.scheduler = setInterval(() => {
+      // Non-overlapping like startBackgroundInterval: skip a tick while the previous one is
+      // still running so slow ticks cannot start duplicate proactive.tick runs.
+      if (this.schedulerTickInFlight) {
+        return;
+      }
+      this.schedulerTickInFlight = true;
       const task = (
         this.callbacks.runSchedulerWork
           ? this.callbacks.runSchedulerWork((signal) => this.runSchedulerTick(signal))
           : this.runSchedulerTick()
-      ).catch(async (error) => {
-        log.error("scheduler tick failed", { error: error instanceof Error ? error.message : String(error) });
-        await this.publishRealtimeSafely("system", "chat", {
-          type: "proactive_scheduler_error",
-          message: (error as Error).message,
+      )
+        .catch(async (error) => {
+          log.error("scheduler tick failed", { error: error instanceof Error ? error.message : String(error) });
+          await this.publishRealtimeSafely("system", "chat", {
+            type: "proactive_scheduler_error",
+            message: (error as Error).message,
+          });
+        })
+        .finally(() => {
+          this.schedulerTickInFlight = false;
         });
-      });
       trackBackgroundTask(this.callbacks.backgroundTasks, task);
     }, PROACTIVE_SCHEDULER_INTERVAL_MS);
     // Don't let the scheduler timer keep the process/test-runner alive in paths that
-    // don't call stopScheduler() (matches the shared background-scheduler helper).
+    // don't call stopScheduler().
     this.scheduler?.unref();
   }
 
