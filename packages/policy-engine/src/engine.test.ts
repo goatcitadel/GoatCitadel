@@ -1649,6 +1649,43 @@ describe("ToolPolicyEngine invocation coverage", () => {
       15 * 60_000,
     );
   });
+
+  it("marks an approval preview when the read lands outside every trusted root", async () => {
+    // Usability pass: an approved fs.read opened a system file outside the workspace, and its approval looked
+    // the same as any in-workspace read, so the operator could not tell what they were approving.
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: { ...policyConfig.tools, approvalMode: "approve_all" },
+        sandbox: { ...policyConfig.sandbox, readAccessMode: "approval_required" },
+      },
+      storage,
+    );
+    const outsidePath = path.join(path.parse(process.cwd()).root, "goatcitadel-outside-root", "notes.txt");
+
+    await engine.invoke({
+      toolName: "fs.read",
+      args: { path: outsidePath },
+      agentId: "agent",
+      sessionId: "session",
+      taskId: "task-outside",
+    });
+    await engine.invoke({
+      toolName: "fs.read",
+      args: { path: "./workspace/notes.txt" },
+      agentId: "agent",
+      sessionId: "session",
+      taskId: "task-inside",
+    });
+
+    const previews = vi
+      .mocked(storage.approvals.createWithTtlDuration)
+      .mock.calls.map(([input]) => input.preview as Record<string, unknown>);
+    expect(previews).toHaveLength(2);
+    expect(previews[0]).toMatchObject({ toolName: "fs.read", path: outsidePath, outsideRootRead: true });
+    expect(previews[1]).not.toHaveProperty("outsideRootRead");
+  });
 });
 
 describe("ToolPolicyEngine approval bypass safety", () => {

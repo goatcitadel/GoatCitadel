@@ -915,7 +915,7 @@ Steps:
 Expected:
 
 - Allowed files open.
-- Out-of-root paths are blocked.
+- Out-of-root paths are blocked when the read mode is `roots_only`. Under `approval_required` (the shipped example config) an absolute path outside the workspace asks for approval first, and the approval says it reads outside the workspace; a denied or unanswered approval reads nothing.
 - Error copy explains the boundary without exposing secrets.
 
 Result:

@@ -327,7 +327,7 @@ Validation output is bounded and readable.",,,,,,,,,,
 CODE-02,Chat-Hosted Code Capability,File Path Jail,,,"Attempt to open a file inside the allowed workspace.
 Attempt a traversal-like path outside the allowed workspace.
 Attempt symlink or junction edge cases if safe.","Action/prompt in Chat: Open README.md inside the workspace, then attempt to open ../.env or C:\Windows\win.ini and verify the path jail blocks it.","Allowed files open.
-Out-of-root paths are blocked.
+Out-of-root paths are blocked when the read mode is roots_only. Under approval_required (the shipped example config) an absolute path outside the workspace asks for approval first, and the approval says it reads outside the workspace; a denied or unanswered approval reads nothing.
 Error copy explains the boundary without exposing secrets.",,,,,,,,,,
 CODE-03,Chat-Hosted Code Capability,Code Mode Approval Gate,,,"Start a simple trusted-code Code Mode run from Chat.
 Inspect pending approval.

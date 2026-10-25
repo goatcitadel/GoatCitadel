@@ -51,6 +51,12 @@ export function ApprovalReviewSummary({
           <strong>{target.label}:</strong> {target.value}
         </p>
       ))}
+      {approval.preview?.outsideRootRead === true ? (
+        <p>
+          <strong>Outside the workspace:</strong> this reads a file outside the workspace and project folders. Approve
+          only if you meant to share it.
+        </p>
+      ) : null}
       {evidence?.commands.map((command) => (
         <pre
           key={command}

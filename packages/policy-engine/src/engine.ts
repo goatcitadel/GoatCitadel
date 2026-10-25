@@ -697,6 +697,11 @@ export class ToolPolicyEngine {
           preview: {
             ...this.buildApprovalPreview(request),
             ...(evaluation.outsideRootWrite ? { outsideRootWrite: evaluation.outsideRootWrite } : {}),
+            // Display only: tells the operator this read leaves every trusted root, so it is not mistaken
+            // for an ordinary workspace read.
+            ...(evaluation.reasonCodes.includes("outside_roots_read_requires_approval")
+              ? { outsideRootRead: true }
+              : {}),
           },
           linkage: buildToolApprovalLinkage(request, evaluation),
         },
