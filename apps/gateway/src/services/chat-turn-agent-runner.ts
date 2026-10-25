@@ -613,8 +613,8 @@ const TOOL_REQUIRED_ARGS: Record<string, string[]> = {
   "code.search": ["path", "query"],
   "code.search_files": ["path", "query"],
   "memory.search": ["query"],
-  "memory.write": ["namespace", "title", "content"],
-  "memory.upsert": ["namespace", "title", "content"],
+  "memory.write": ["content"],
+  "memory.upsert": ["content"],
   "embeddings.query": ["query"],
 };
 const LOCAL_BUSINESS_RESEARCH_TOOL_NAME = "local_business.research";

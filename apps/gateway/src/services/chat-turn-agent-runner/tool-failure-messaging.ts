@@ -142,6 +142,10 @@ function isPathBridgeBlock(run: ChatToolRunRecord): boolean {
   return run.status === "blocked" && Boolean(readPathBridgeBlock(run.result, run.error));
 }
 
+function isFailedMemoryWrite(run: ChatToolRunRecord): boolean {
+  return run.status === "failed" && (run.toolName === "memory.write" || run.toolName === "memory.upsert");
+}
+
 function isMemoryConsentBlock(input: { status: ChatToolRunRecord["status"]; error?: string }): boolean {
   return input.status === "blocked" && (input.error ?? "").includes(MEMORY_CONSENT_BLOCKED_REASON);
 }
@@ -192,6 +196,18 @@ export function buildPolicyBlockedRecoveryText(failedOrBlocked: readonly ChatToo
     return [
       "I didn't save that to memory. Long-term memory is saved only when your message uses one of the accepted consent phrasings, and this one didn't match any of them, so I stopped instead of retrying.",
       `To save it, use one of those phrasings, for example ${MEMORY_CONSENT_EXAMPLES}.`,
+    ].join("\n\n");
+  }
+  if (failedOrBlocked.every(isFailedMemoryWrite)) {
+    // The generic "try a narrower input" template hid a failed write (#566). The write is not atomic (the
+    // document is stored before its chunks), so the reply must not promise that nothing was kept.
+    const reason = failedOrBlocked
+      .at(-1)
+      ?.error?.replace(/^execution error:\s*/i, "")
+      .trim();
+    return [
+      `The memory write failed${reason ? ` (${reason})` : ""}, so I can't confirm that this was saved, and part of it may have been stored.`,
+      "Check Library > Memory before asking me to remember it again, so you don't end up with a duplicate. If it keeps failing, the error above is what to report.",
     ].join("\n\n");
   }
   const lastBlock = failedOrBlocked.at(-1);

@@ -233,6 +233,29 @@ describe("buildPolicyBlockedRecoveryText", () => {
     expect(text).not.toContain("sandbox policy blocked");
   });
 
+  it("says plainly that a memory write failed, without promising nothing was stored (#566)", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({ toolName: "memory.write", status: "failed", error: "execution error: namespace is required" }),
+    ]);
+
+    expect(text).toContain("The memory write failed");
+    expect(text).toContain("namespace is required");
+    // Review on #570: the write is not atomic (document first, then chunks), so part of it may remain.
+    expect(text).toContain("part of it may have been stored");
+    expect(text).toContain("Library > Memory");
+    expect(text).not.toMatch(/nothing was saved/i);
+    expect(text).not.toMatch(/sticking point|narrower|specific URL|keep going/i);
+  });
+
+  it("leaves a memory write failure mixed with other tool failures to the general message", () => {
+    expect(
+      buildPolicyBlockedRecoveryText([
+        toolRun({ toolName: "memory.write", status: "failed", error: "execution error: namespace is required" }),
+        toolRun({ toolRunId: "run-2", toolName: "browser.search", status: "failed", error: "timeout" }),
+      ]),
+    ).toBeUndefined();
+  });
+
   it("keeps setting-specific governance guidance for the last block", () => {
     const text = buildPolicyBlockedRecoveryText([toolRun({ toolName: "fs.delete", error: "tool denied by policy" })]);
 

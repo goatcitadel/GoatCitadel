@@ -12,6 +12,7 @@ import { Buffer } from "node:buffer";
 import { mapWithConcurrency } from "../async-utils.js";
 import { ingestDocumentViaBackend, resolveIngestionTrustLevel, searchIngestedContext } from "../ingestion-backends.js";
 import { parseIngestionSourceType } from "../ingestion-source-type.js";
+import { DEFAULT_MEMORY_NAMESPACE } from "../tool-registry.js";
 import { sanitizeForModel } from "../tool-security.js";
 import {
   currentEmbeddingProfile,
@@ -114,9 +115,10 @@ async function memoryWrite(
   deps: KnowledgeExecutorDeps,
 ) {
   const args = request.args;
-  const namespace = required(args.namespace, "namespace");
-  const title = required(args.title, "title");
+  // A Chat "remember this" call often sends only the content (#566), so the namespace and title have defaults.
   const content = required(args.content, "content");
+  const namespace = asString(args.namespace) ?? DEFAULT_MEMORY_NAMESPACE;
+  const title = asString(args.title) ?? memoryTitleFromContent(content);
   const inputMetadata = record(args.metadata);
   const sourceAttribution = normalizeSourceAttributionForStorage(request.sourceAttribution);
   const carriedTrustLevel = resolveMostRestrictiveSourceTrustLevel(sourceAttribution);
@@ -858,6 +860,17 @@ function asString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+const MEMORY_TITLE_MAX_CHARS = 120;
+
+function memoryTitleFromContent(content: string): string {
+  const firstLine =
+    content
+      .split(/\r?\n/)
+      .find((line) => line.trim())
+      ?.trim() ?? content;
+  return firstLine.length > MEMORY_TITLE_MAX_CHARS ? `${firstLine.slice(0, MEMORY_TITLE_MAX_CHARS - 1)}…` : firstLine;
 }
 
 function required(value: unknown, field: string): string {
