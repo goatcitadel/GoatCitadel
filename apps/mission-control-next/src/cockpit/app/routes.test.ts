@@ -12,7 +12,17 @@ describe("cockpit routes", () => {
 
   it("lists primary areas with non-conflicting sequence keys", () => {
     expect(COCKPIT_AREAS.map((entry) => [entry.label, entry.shortcut])).toEqual([
-      ["Chat", "c"], ["Inbox", "i"], ["Work", "w"], ["Library", "l"], ["System", "s"],
+      ["Chat", "c"],
+      ["Inbox", "i"],
+      ["Work", "w"],
+      ["Capabilities", "a"],
+      ["Library", "l"],
+      ["System", "s"],
     ]);
+  });
+
+  it("maps the Capabilities area and its tab sub-routes", () => {
+    expect(parseCockpitLocation("/capabilities")).toEqual({ area: "capabilities", rest: [] });
+    expect(parseCockpitLocation("/capabilities/connectors")).toEqual({ area: "capabilities", rest: ["connectors"] });
   });
 });

@@ -97,7 +97,7 @@ Start from the cockpit primitives in `apps/mission-control-next/src/cockpit/ui` 
 
 ## Page anatomy
 
-Every page in Work, Inbox, Library, System and Settings has the same shape, in one centred column (`AREA_COLUMN`, `max-w-5xl`):
+Every page in Inbox, Work, Capabilities, Library, System and Settings has the same shape, in one centred column (`AREA_COLUMN`, `max-w-5xl`):
 
 1. `AreaHeader`: the h1 (the view's name), at most one line of description, and the page's actions on the right (the primary action, then Refresh). The area's tabs follow in one row directly under it, supplied by the area through `AreaTabsProvider`. There is no eyebrow above the title, no second navigation row and no full-bleed panel.
 2. The body: flat `Section` regions separated by hairlines. The page is the only card; a section never sits in a bordered box inside another bordered box. Rows inside a section are hairline-separated, not cards in a list.

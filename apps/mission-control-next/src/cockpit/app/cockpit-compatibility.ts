@@ -23,6 +23,8 @@ const systemViews = new Set([
   "improvement",
   "runtime",
 ]);
+// Phase 1 ships the Connectors tab only; the other Capabilities tabs resolve missing until they exist.
+const capabilitiesViews = new Set(["connectors"]);
 const libraryViews = new Set([
   "capabilities",
   "memory",
@@ -217,6 +219,8 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     )
       return native();
   }
+  if (area === "capabilities" && (parts.length === 1 || (parts.length === 2 && capabilitiesViews.has(section!))))
+    return native();
   if (
     area === "settings" &&
     (parts.length === 1 ||

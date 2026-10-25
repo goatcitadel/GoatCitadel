@@ -41,6 +41,9 @@ vi.mock("../areas/library/LibraryArea", () => ({
     return <p>Library content</p>;
   },
 }));
+vi.mock("../areas/capabilities/CapabilitiesArea", () => ({
+  CapabilitiesArea: () => <p>Capabilities content</p>,
+}));
 // No other test here visits Chat, so a stub keeps the failure test off the network.
 const chatArea = vi.hoisted(() => ({ failure: null as Error | null, effects: 0 }));
 vi.mock("../areas/chat/ChatArea", () => ({
@@ -187,7 +190,7 @@ describe("CockpitShell", () => {
       client.clear();
     },
   );
-  it("renders five areas, preserves the current route, and switches with Ctrl+number", async () => {
+  it("renders six areas, preserves the current route, and switches with Ctrl+number", async () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={new QueryClient()}>
@@ -201,6 +204,7 @@ describe("CockpitShell", () => {
       "Chat",
       "Inbox",
       "Work",
+      "Capabilities",
       "Library",
       "System",
     ]);
@@ -213,6 +217,24 @@ describe("CockpitShell", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "l" }));
     });
     expect(window.location.pathname).toBe("/library");
+  });
+  it("opens Capabilities from its link and from g then a", async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <CockpitShell />
+        </QueryClientProvider>,
+      );
+    });
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "g" }));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+    });
+    expect(window.location.pathname).toBe("/capabilities");
+    await vi.waitFor(() => expect(container.textContent).toContain("Capabilities content"));
+    const nav = container.querySelector('nav[aria-label="Areas"]')!;
+    expect(nav.querySelector('[aria-current="page"]')?.getAttribute("aria-label")).toBe("Capabilities");
+    expect(document.title).toBe("GoatCitadel Capabilities");
   });
   it("sidebar search: accessible name starts with the visible text", async () => {
     await act(async () => {

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
+  Blocks,
   Inbox,
   LayoutGrid,
   Library,
@@ -36,7 +37,14 @@ import { useHealthDigestStatus } from "./use-health-digest";
 import { HEALTH_TONE_ICON, presentCockpitStream } from "./stream-status";
 import { Tooltip } from "../ui/Tooltip";
 
-const AREA_ICONS = { chat: MessageSquare, inbox: Inbox, work: LayoutGrid, library: Library, system: Activity } as const;
+const AREA_ICONS = {
+  chat: MessageSquare,
+  inbox: Inbox,
+  work: LayoutGrid,
+  capabilities: Blocks,
+  library: Library,
+  system: Activity,
+} as const;
 
 export function Sidebar({
   onOpenPalette,
