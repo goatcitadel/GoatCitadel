@@ -40,8 +40,30 @@ export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDock
     }
     void perform(() => dock.onPrefPatch({ subagentPolicy: policy }));
   };
+  const changeToolAutonomy = (toolAutonomy: "safe_auto" | "manual") => {
+    if (busy || toolAutonomy === dock.prefs?.toolAutonomy) return;
+    void perform(() => dock.onPrefPatch({ toolAutonomy }));
+  };
   return (
     <div role="group" className="cockpit-chat-feature-settings space-y-3" aria-label="Conversation execution settings">
+      {/* The control Manual-autonomy replies point to (#501); it only saves this conversation's preference. */}
+      <label className="mc-next-context-field">
+        <span>Tool autonomy</span>
+        <select
+          aria-label="Tool autonomy"
+          value={dock.prefs?.toolAutonomy ?? "safe_auto"}
+          disabled={busy || !dock.prefs}
+          onChange={(event) => changeToolAutonomy(event.target.value as "safe_auto" | "manual")}
+        >
+          <option value="safe_auto">Safe Auto: tools run, approvals still apply</option>
+          <option value="manual">Manual: no tools in this conversation</option>
+        </select>
+      </label>
+      <p>
+        {dock.prefs?.planningMode === "advisory"
+          ? "Advisory planning keeps tools off while it is on, whatever this is set to."
+          : "Applies to this conversation only. Tool policy and approvals still decide each call."}
+      </p>
       <fieldset disabled={busy} className="min-w-0 border-0 p-0">
         <ChatProviderFallbackSettings {...dock} sending={busy} />
       </fieldset>

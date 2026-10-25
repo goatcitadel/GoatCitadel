@@ -7369,6 +7369,8 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(createChatCompletion).not.toHaveBeenCalled();
     expect(invokeTool).not.toHaveBeenCalled();
     expect(result.assistantContent).toContain("tool autonomy is set to Manual");
+    // #501: point at the control that exists in Chat.
+    expect(result.assistantContent).toContain("Inspect > Conversation > Tool autonomy");
     expect(result.assistantContent).toContain("Safe Auto");
   });
 

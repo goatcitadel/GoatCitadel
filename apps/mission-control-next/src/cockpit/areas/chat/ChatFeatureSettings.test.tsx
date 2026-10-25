@@ -66,6 +66,36 @@ describe("Cockpit execution settings", () => {
     expect(tree.root.findAllByProps({ "data-confirm-auto": true })).toHaveLength(0);
     expect(dock.onPrefPatch).toHaveBeenCalledTimes(1);
   });
+  it("switches this conversation's tool autonomy through the saved-preference patch (#501)", async () => {
+    const dock = fixture();
+    dock.prefs = { ...dock.prefs!, toolAutonomy: "manual", planningMode: "off" };
+    await render(dock);
+    const select = tree.root.findByProps({ "aria-label": "Tool autonomy" });
+    expect(select.props.value).toBe("manual");
+    expect(select.props.disabled).toBe(false);
+    const optionText = select.findAllByType("option").map((option) => option.children.join(""));
+    expect(optionText).toEqual([
+      "Safe Auto: tools run, approvals still apply",
+      "Manual: no tools in this conversation",
+    ]);
+    await act(async () => select.props.onChange({ target: { value: "safe_auto" } }));
+    expect(dock.onPrefPatch).toHaveBeenCalledWith({ toolAutonomy: "safe_auto" });
+    dock.sending = true;
+    await act(async () => tree.update(<ChatFeatureSettings dock={dock} />));
+    expect(tree.root.findByProps({ "aria-label": "Tool autonomy" }).props.disabled).toBe(true);
+  });
+  it("says advisory planning keeps tools off whatever tool autonomy is saved", async () => {
+    const dock = fixture();
+    dock.prefs = { ...dock.prefs!, toolAutonomy: "safe_auto", planningMode: "advisory" };
+    await render(dock);
+    expect(tree.root.findByProps({ "aria-label": "Tool autonomy" }).props.value).toBe("safe_auto");
+    const text = tree.root
+      .findAllByType("p")
+      .map((paragraph) => paragraph.children.join(""))
+      .join(" ");
+    expect(text).toContain("Advisory planning keeps tools off");
+    expect(dock.onPrefPatch).not.toHaveBeenCalled();
+  });
   it("uses the existing governed suggestion, approval, and coding controllers", async () => {
     const dock = fixture();
     dock.supervisedDelegationAvailable = true;

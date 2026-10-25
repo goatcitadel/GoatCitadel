@@ -85,7 +85,9 @@ export type BaseAgentToolsUnavailableReason =
 const TOOLS_UNAVAILABLE_GUIDANCE: Record<BaseAgentToolsUnavailableReason, { cause: string; remedy: string }> = {
   manual_autonomy: {
     cause: "tool autonomy is Manual for this conversation",
-    remedy: "switching tool autonomy to Safe Auto would let you run it",
+    // Name the Chat control that exists (#501); an unnamed "switch tool autonomy" was a dead end.
+    remedy:
+      "the operator can let you run it by setting Inspect > Conversation > Tool autonomy to Safe Auto in this chat; approvals still apply",
   },
   advisory_planning: {
     cause: "this conversation uses advisory planning, which plans without running tools",
