@@ -35,7 +35,14 @@ export function normalizeMcpPolicy(policy?: Partial<McpServerPolicy>): McpServer
 }
 
 export function wildcardMatch(value: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  // Glob semantics: `*` = any run, `?` = exactly one character; everything else is literal.
+  // `?` must be translated before regex compilation, otherwise `delete_?` makes the `_` optional
+  // (a block pattern would fail open) and a leading `?` throws.
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*+/g, "*")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
   const regex = new RegExp(`^${escaped}$`, "i");
   return regex.test(value);
 }

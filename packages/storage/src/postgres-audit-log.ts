@@ -94,6 +94,15 @@ export class PostgresAuditLog {
       return [row.payload];
     });
   }
+
+  /** Newest `limit` matching records in stream order (parity with AuditLog.listRecent). */
+  public async listRecent(
+    stream: AuditStream,
+    limit: number,
+    predicate: (record: Record<string, unknown>) => boolean = () => true,
+  ): Promise<Record<string, unknown>[]> {
+    return (await this.list(stream)).filter(predicate).slice(-limit);
+  }
 }
 
 function sanitizeJsonValueForJsonb(value: unknown): unknown {

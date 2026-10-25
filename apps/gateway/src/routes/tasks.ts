@@ -3,6 +3,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { AGENTIC_DIAGNOSTIC_CODES, ValidationError, type AgenticSubagentMetadata } from "@goatcitadel/contracts";
 import process from "node:process";
 import { z } from "zod";
+import { queryBoolean } from "./query-boolean.js";
 import { buildAgenticRuntimeAvailability } from "../services/agentic-capability-availability.js";
 import { probeAgenticHarnessAvailability } from "../services/agentic-harness-availability.js";
 import { projectA2AExternalValue } from "../services/a2a-public-projection.js";
@@ -93,7 +94,7 @@ const listQuerySchema = z.object({
   workspaceId: z.string().min(1).optional(),
   status: statusSchema.optional(),
   view: z.enum(["active", "trash", "all"]).optional(),
-  includeDeleted: z.coerce.boolean().optional(),
+  includeDeleted: queryBoolean.optional(),
 });
 
 const createTaskSchema = z.object({

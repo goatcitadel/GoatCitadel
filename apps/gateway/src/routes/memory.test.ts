@@ -429,19 +429,7 @@ describe("memory routes", () => {
 
   it("validates memory context route params", async () => {
     const getMemoryContext = vi.fn(async () => ({ contextId: "ctx-1", scope: "chat" }));
-    app = Fastify();
-    app.decorate("gatewayConfig", {
-      assistant: {
-        auth: {
-          mode: "none",
-        },
-      },
-    } as never);
-    app.decorate("services", {
-      memory: {
-        getContext: getMemoryContext,
-      },
-    } as never);
+    app = buildApp({ getContext: getMemoryContext }).app;
     await app.register(memoryRoutes);
 
     const response = await app.inject({
@@ -502,6 +490,27 @@ describe("memory routes", () => {
       },
     });
     expect(invalid.statusCode).toBe(400);
+  });
+
+  it("gates compose, context read, recall, qmd stats and retrieval status behind operator auth", async () => {
+    const requireOperatorAuth = vi.fn(async (_request: unknown, reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
+      reply.code(403).send({ error: "operator only" }),
+    );
+    const built = buildApp({}, requireOperatorAuth as never);
+    app = built.app;
+    await app.register(memoryRoutes);
+    const probes: Array<[string, string]> = [
+      ["POST", "/api/v1/memory/context/compose"],
+      ["GET", "/api/v1/memory/context/ctx-1"],
+      ["POST", "/api/v1/memory/recall"],
+      ["GET", "/api/v1/memory/qmd/stats"],
+      ["GET", "/api/v1/memory/retrieval/status"],
+    ];
+    for (const [method, url] of probes) {
+      const response = await app.inject({ method: method as "GET" | "POST", url, payload: method === "POST" ? {} : undefined });
+      expect(response.statusCode, url).toBe(403);
+    }
+    expect(requireOperatorAuth).toHaveBeenCalledTimes(probes.length);
   });
 
   it("returns additive memory retrieval status truth", async () => {

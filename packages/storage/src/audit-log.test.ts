@@ -134,6 +134,42 @@ describe("AuditLog", () => {
     });
   });
 
+  it("dedupes repeated delivery ids from memory and from the file tail without rereading old history", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
+    createdDirs.push(root);
+    const log = new AuditLog(root);
+    await log.append("approvals", { event: "a" }, { deliveryId: "d-1" });
+    await log.append("approvals", { event: "a" }, { deliveryId: "d-1" });
+    // A second instance (another process) has no memory, so it must find d-1 in the file tail.
+    await new AuditLog(root).append("approvals", { event: "a" }, { deliveryId: "d-1" });
+    await log.append("approvals", { event: "b" }, { deliveryId: "d-2" });
+    assert.equal((await log.list("approvals")).length, 2);
+  });
+
+  it("listRecent returns only the newest matching records without parsing the whole stream", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
+    createdDirs.push(root);
+    const log = new AuditLog(root);
+    assert.deepEqual(await log.listRecent("approvals", 3), []);
+    const filler = "x".repeat(2000);
+    for (let index = 0; index < 120; index += 1) {
+      await log.append("approvals", { event: index % 10 === 0 ? "keep" : "skip", index, filler });
+    }
+    const recent = await log.listRecent("approvals", 3);
+    assert.deepEqual(
+      recent.map((record) => record.index),
+      [117, 118, 119],
+    );
+    // Matches are older than the first 64 KiB window, forcing the window to grow.
+    const kept = await log.listRecent("approvals", 5, (record) => record.event === "keep");
+    assert.deepEqual(
+      kept.map((record) => record.index),
+      [70, 80, 90, 100, 110],
+    );
+    const all = await log.listRecent("approvals", 1000, (record) => record.event === "keep");
+    assert.equal(all.length, 12);
+  });
+
   it("waits for a cross-process audit lock before appending", async () => {
     const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
     createdDirs.push(root);

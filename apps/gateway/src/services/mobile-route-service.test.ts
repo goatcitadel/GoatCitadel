@@ -40,7 +40,9 @@ describe("mobile-route-service", () => {
       append: vi.fn(async (_stream: string, payload: Record<string, unknown>) => {
         records.push(payload);
       }),
-      list: vi.fn(async () => records),
+      listRecent: vi.fn(async (_stream: string, limit: number, predicate: (r: Record<string, unknown>) => boolean) =>
+        records.filter(predicate).slice(-limit),
+      ),
     };
     const publishRealtime = vi.fn();
     const service = createMobileRoutePort({
@@ -146,7 +148,15 @@ describe("mobile-route-service", () => {
       },
     ];
     const service = createMobileRoutePort({
-      storage: { audit: { append: vi.fn(), list: vi.fn(async () => records) } } as never,
+      storage: {
+        audit: {
+          append: vi.fn(),
+          listRecent: vi.fn(
+            async (_stream: string, limit: number, predicate: (r: Record<string, unknown>) => boolean) =>
+              records.filter(predicate).slice(-limit),
+          ),
+        },
+      } as never,
       mobilePush: createMobilePushMock(),
       mobileApprovalKeys: createMobileApprovalKeysMock(),
       publishRealtime: vi.fn(),
@@ -169,7 +179,15 @@ describe("mobile-route-service", () => {
       { eventType: "mobile.push_registration", capabilityId: "location_context", eventId: "newest" },
     ];
     const service = createMobileRoutePort({
-      storage: { audit: { append: vi.fn(), list: vi.fn(async () => records) } } as never,
+      storage: {
+        audit: {
+          append: vi.fn(),
+          listRecent: vi.fn(
+            async (_stream: string, limit: number, predicate: (r: Record<string, unknown>) => boolean) =>
+              records.filter(predicate).slice(-limit),
+          ),
+        },
+      } as never,
       mobilePush: createMobilePushMock(),
       mobileApprovalKeys: createMobileApprovalKeysMock(),
       publishRealtime: vi.fn(),

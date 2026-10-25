@@ -60,6 +60,7 @@ interface MobileAuditListInput {
 }
 
 const MAX_AUDIT_ITEMS = 200;
+const MAX_CAPABILITY_HEARTBEAT_WINDOW = 1000;
 const MAX_CONTEXTS_PER_REQUEST = 12;
 const SENSITIVE_STRUCTURED_FIELD_KEY_PATTERN =
   /(?:lat|latitude|lon|lng|longitude|coord|coordinate|token|secret|path|uri|url|body|text|content|message|phone|number)/i;
@@ -98,7 +99,12 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
   return {
     listMobileCapabilities: async (input?: { limit?: number }): Promise<MobileCapabilityListResponse> => {
       const limit = Math.max(1, Math.min(input?.limit ?? 100, MAX_AUDIT_ITEMS));
-      const records = await deps.storage.audit.list("approvals");
+      // Heartbeats repeat, so the newest window carries every active capability; this avoids parsing the whole stream.
+      const records = await deps.storage.audit.listRecent(
+        "approvals",
+        MAX_CAPABILITY_HEARTBEAT_WINDOW,
+        (record) => record.eventType === "mobile.capability_heartbeat",
+      );
       const latest = new Map<MobileNativeCapabilityId, MobileNativeCapabilityRecord>();
       for (const record of records) {
         if (record.eventType !== "mobile.capability_heartbeat") {
@@ -119,21 +125,15 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
     },
     listMobileAudit: async (input?: MobileAuditListInput): Promise<MobileAuditListResponse> => {
       const limit = Math.max(1, Math.min(input?.limit ?? 100, MAX_AUDIT_ITEMS));
-      const records = await deps.storage.audit.list("approvals");
-      const items: MobileAuditListResponse["items"] = [];
-      for (let index = records.length - 1; index >= 0 && items.length < limit; index -= 1) {
-        const record = records[index];
-        if (!record) {
-          continue;
-        }
-        if (typeof record.eventType !== "string" || !record.eventType.startsWith("mobile.")) {
-          continue;
-        }
-        if (input?.capabilityId && record.capabilityId !== input.capabilityId) {
-          continue;
-        }
-        items.push(record);
-      }
+      const matching = await deps.storage.audit.listRecent(
+        "approvals",
+        limit,
+        (record) =>
+          typeof record.eventType === "string" &&
+          record.eventType.startsWith("mobile.") &&
+          (!input?.capabilityId || record.capabilityId === input.capabilityId),
+      );
+      const items: MobileAuditListResponse["items"] = matching.reverse();
       return { items };
     },
     recordMobileCapabilityHeartbeat: async (

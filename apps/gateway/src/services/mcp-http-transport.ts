@@ -172,6 +172,11 @@ export async function readHttpJsonRpcEnvelope(
   }
 }
 
+// A reply has an id and no method; a server-initiated request that reuses our id must not settle our call.
+export function isReplyFor(message: JsonRpcEnvelope, expectedId: number | undefined): boolean {
+  return expectedId === undefined || (message.id === expectedId && message.method === undefined);
+}
+
 async function readSseJsonRpcEnvelope(
   response: Response,
   expectedId: number | undefined,
@@ -180,7 +185,7 @@ async function readSseJsonRpcEnvelope(
   if (!response.body) {
     const body = await readHttpResponseText(response, MCP_HTTP_RESPONSE_BODY_MAX_BYTES, timeoutMs);
     const messages = parseSseJsonRpcMessages(body);
-    const matched = messages.find((message) => expectedId === undefined || message.id === expectedId);
+    const matched = messages.find((message) => isReplyFor(message, expectedId));
     if (!matched) {
       throw new Error("MCP HTTP event stream did not include the expected JSON-RPC response.");
     }
@@ -206,7 +211,7 @@ async function readSseJsonRpcEnvelope(
     }
     try {
       const message = JSON.parse(raw) as JsonRpcEnvelope;
-      return expectedId === undefined || message.id === expectedId ? message : undefined;
+      return isReplyFor(message, expectedId) ? message : undefined;
     } catch {
       return undefined;
     }

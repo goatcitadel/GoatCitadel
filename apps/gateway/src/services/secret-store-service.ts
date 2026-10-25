@@ -8,6 +8,8 @@ import { WINDOWS_CREDENTIAL_RECEIPT_SCRIPT } from "./windows-credential-write-re
 
 const SECRET_SERVICE = "goatcitadel";
 const DISABLE_SECRET_STORE_ENV = "GOATCITADEL_DISABLE_SECRET_STORE";
+// A hung PowerShell must not freeze the gateway event loop (these helpers run via spawnSync).
+const WINDOWS_CREDENTIAL_TIMEOUT_MS = 10000;
 
 export type SecretSource = "none" | "keychain";
 
@@ -242,7 +244,7 @@ Write-Output "ok"
         GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE,
         GOATCITADEL_SECRET_ACCOUNT: account,
       },
-      { stdin: secret },
+      { stdin: secret, timeoutMs: WINDOWS_CREDENTIAL_TIMEOUT_MS },
     );
   }
 
@@ -265,7 +267,7 @@ try {
         GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE,
         GOATCITADEL_SECRET_ACCOUNT: account,
       },
-      { allowExitCodes: [3] },
+      { allowExitCodes: [3], timeoutMs: WINDOWS_CREDENTIAL_TIMEOUT_MS },
     );
     if (result.status === 3) {
       return undefined;
@@ -373,7 +375,23 @@ function assertSecretAccount(account: string): void {
   }
 }
 
+const commandAvailability = new Map<string, boolean>();
+
+/** Test hook: command availability is memoized for the process lifetime. */
+export function resetCommandAvailabilityCache(): void {
+  commandAvailability.clear();
+}
+
 function hasCommand(command: string): boolean {
+  const cacheKey = `${process.platform}:${command}`;
+  const cached = commandAvailability.get(cacheKey);
+  if (cached !== undefined) return cached;
+  const available = probeCommand(command);
+  commandAvailability.set(cacheKey, available);
+  return available;
+}
+
+function probeCommand(command: string): boolean {
   const whichCommand = process.platform === "win32" ? "where" : "which";
   const result = spawnSync(whichCommand, [command], {
     stdio: "ignore",

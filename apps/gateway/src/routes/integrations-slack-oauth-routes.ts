@@ -9,7 +9,7 @@ import {
 } from "../services/slack-oauth-service.js";
 import { slackOAuthDisconnectSchema } from "./integrations-shared.js";
 import { sendRouteError } from "./_error-handler.js";
-import { allowedRequestOrigin } from "./allowed-request-origin.js";
+import { allowedRequestOrigin, rejectDisallowedRequestOrigin } from "./allowed-request-origin.js";
 import {
   markMutationCommitted,
   markMutationCommittedFromError,
@@ -96,6 +96,7 @@ export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): v
     const parsed = startSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: "A workspace, Slack draft, and current draft revision are required." });
+    if (rejectDisallowedRequestOrigin(request, reply)) return reply;
     try {
       const result = await fastify.services.channelSetup.startSlackOAuthAttempt(
         actorFor(request, parsed.data.workspaceId),
