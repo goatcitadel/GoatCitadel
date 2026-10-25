@@ -20,6 +20,7 @@ import {
   redactUrlForError,
 } from "./sandbox/network-guard.js";
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
+import { pinFirecrawlEndpoint, type FirecrawlOperatorEndpoint } from "./firecrawl-endpoint.js";
 import { generateEmbedding, type EmbeddingRuntimeOptions } from "./local-embeddings.js";
 import { parseNativeFileDocument } from "./native-document-parser.js";
 import { mapWithConcurrency } from "./async-utils.js";
@@ -62,6 +63,8 @@ export async function ingestDocumentViaBackend(input: {
   sourceAllowlist?: string[];
   /** Keychain-held Firecrawl key; the configured environment variable stays the fallback. */
   resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
+  /** The operator's Firecrawl endpoint; when present, tool arguments cannot name another one. */
+  resolveFirecrawlEndpoint?: () => FirecrawlOperatorEndpoint;
 }): Promise<{
   backend: IngestionBackend;
   fetchResult: FetchResult;
@@ -125,6 +128,7 @@ export async function ingestDocumentViaBackend(input: {
     networkAllowlist: input.networkAllowlist ?? [],
     sourceAllowlist: input.sourceAllowlist ?? [],
     resolveFirecrawlCredential: input.resolveFirecrawlCredential,
+    resolveFirecrawlEndpoint: input.resolveFirecrawlEndpoint,
   });
   const title =
     optionalString(args.title) ??
@@ -284,6 +288,7 @@ async function fetchDocument(input: {
   networkAllowlist: string[];
   sourceAllowlist: string[];
   resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
+  resolveFirecrawlEndpoint?: () => FirecrawlOperatorEndpoint;
 }): Promise<FetchResult> {
   const args = input.request.args;
   const sourceType = parseIngestionSourceType(args.sourceType);
@@ -328,11 +333,18 @@ async function fetchDocument(input: {
     //       cannot exfiltrate unrelated local secrets,
     //   (d) use `fetchAllowlisted`, which does manual redirect handling
     //       and re-validates each hop plus resolved socket address against
-    //       the private-host guard for the Firecrawl API request.
+    //       the private-host guard for the Firecrawl API request,
+    //   (e) take the base URL and key variable from the operator endpoint
+    //       when the host supplies one, refusing a different one in args.
+    const pinned = pinFirecrawlEndpoint(args, input.resolveFirecrawlEndpoint?.());
     const firecrawlBaseUrl =
-      optionalString(args.firecrawlBaseUrl) ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002";
+      pinned?.baseUrl ??
+      optionalString(args.firecrawlBaseUrl) ??
+      process.env.FIRECRAWL_BASE_URL ??
+      "http://127.0.0.1:3002";
     const firecrawlTimeoutMs = positiveInt(args.firecrawlTimeoutMs) ?? 20_000;
     const firecrawlApiKeyEnv =
+      pinned?.apiKeyEnv ??
       normalizeFirecrawlApiKeyEnvName(optionalString(args.firecrawlApiKeyEnv)) ??
       normalizeFirecrawlApiKeyEnvName(process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV) ??
       "FIRECRAWL_API_KEY";

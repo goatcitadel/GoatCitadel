@@ -21,6 +21,7 @@ export {
 } from "./browser-tools.js";
 export * from "./tool-patterns.js";
 export * from "./safe-env-name.js";
+export type { FirecrawlOperatorEndpoint } from "./firecrawl-endpoint.js";
 export * from "./ingestion-backends.js";
 export * from "./local-embeddings.js";
 export * from "./research-search-official-providers.js";

@@ -37,6 +37,7 @@ import {
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 import { scanBrowserContentGuard } from "./browser-content-guard.js";
 import type { ResolveOfficialSearchCredential } from "./research-search-official-providers.js";
+import type { FirecrawlOperatorEndpoint } from "./firecrawl-endpoint.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import {
@@ -154,6 +155,8 @@ export interface ToolExecutorRuntimeHooks {
   resolveCredential?: ResolveOfficialSearchCredential;
   /** Resolve the keychain-held Firecrawl key at execution time, before environment fallback. */
   resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
+  /** The operator's Firecrawl endpoint; when present, tool arguments cannot name another one. */
+  resolveFirecrawlEndpoint?: () => FirecrawlOperatorEndpoint;
   /** Resolve a protected approval action bearer only inside the native comms provider adapter. */
   resolveApprovalActionTokenSecret?: (secretRef: string) => string;
   /** Remove a protected approval action bearer after a terminal provider outcome. */
@@ -294,6 +297,9 @@ const executeKnowledgeFamily = (
     ...(runtimeHooks.resolveFirecrawlCredential
       ? { resolveFirecrawlCredential: runtimeHooks.resolveFirecrawlCredential }
       : {}),
+    ...(runtimeHooks.resolveFirecrawlEndpoint
+      ? { resolveFirecrawlEndpoint: runtimeHooks.resolveFirecrawlEndpoint }
+      : {}),
     assertReadPathAllowedForRequest,
     fetchAllowlisted,
     resolveExecutionGrantAllowedHosts,
@@ -338,6 +344,7 @@ export async function executeTool(
       assertBrowserSessionAccess: runtimeHooks.assertBrowserSessionAccess,
       resolveCredential: runtimeHooks.resolveCredential,
       resolveFirecrawlCredential: runtimeHooks.resolveFirecrawlCredential,
+      resolveFirecrawlEndpoint: runtimeHooks.resolveFirecrawlEndpoint,
     });
     return finalizeToolResult(rawResult);
   }
