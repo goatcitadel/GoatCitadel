@@ -68,6 +68,7 @@ import {
   ExternalServiceError,
   findProviderTemplate,
   inferProviderForModelId,
+  isSubscriptionAuthMode,
   providerAllowsForeignModelIds,
   providerRecognizesModelId,
   SECRET_REDACTION_MARKER,
@@ -1701,9 +1702,7 @@ export class LlmService {
     credentialConfigFingerprint: string;
   } {
     const provider = resolved.provider;
-    const authMode = resolveProviderAuthMode(provider);
-    const subscriptionAuth =
-      authMode === "codex-oauth" || authMode === "claude-code-oauth" || authMode === "claude-code-cli-login";
+    const subscriptionAuth = isSubscriptionAuthMode(resolveProviderAuthMode(provider));
     const local = isLocalBillingProvider(provider.providerId);
     const requestAuth = provider.request?.auth;
     const requestAuthSource = resolveRequestAuthSource(requestAuth);

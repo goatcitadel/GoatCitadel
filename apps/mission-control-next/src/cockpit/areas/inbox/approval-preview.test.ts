@@ -4,6 +4,7 @@ import {
   approvalExpiryLabel,
   approvalExplanationLine,
   approvalPreview,
+  splitApprovalExplanation,
   splitApprovalSupport,
 } from "./approval-preview";
 
@@ -85,5 +86,29 @@ describe("approval card and preview presentation", () => {
       visible: ["Content size before redaction: 41 B"],
       technical: [],
     });
+  });
+});
+
+describe("splitApprovalExplanation (#499)", () => {
+  const explanation = (fields: Record<string, unknown> = {}) => ({
+    summary: "Summary",
+    riskExplanation: "Risk",
+    generatedAt: "2026-10-24T17:30:31.000Z",
+    ...fields,
+  });
+  const withExplanation = (kind: string, fields: Record<string, unknown> = {}) =>
+    ({ kind, explanation: explanation(fields) }) as unknown as ApprovalRequest;
+
+  it("takes a change plan's own impact, which records no model, as owner-written", () => {
+    expect(splitApprovalExplanation(withExplanation("change_plan_effect")).owner?.riskExplanation).toBe("Risk");
+  });
+
+  it("treats every other explanation as model-written, even when its provider and model are missing or empty", () => {
+    for (const fields of [{}, { providerId: "", model: "" }, { providerId: "claude-code-cli", model: "m" }]) {
+      const split = splitApprovalExplanation(withExplanation("tool_invoke", fields));
+      expect(split.owner).toBeUndefined();
+      expect(split.model?.riskExplanation).toBe("Risk");
+    }
+    expect(splitApprovalExplanation(withExplanation("change_plan_effect", { model: "m" })).model).toBeDefined();
   });
 });

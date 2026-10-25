@@ -230,3 +230,30 @@ describe("ChatTurnDetails approval decision (#499)", () => {
     );
   });
 });
+
+describe("ChatTurnDetails tool name (#499)", () => {
+  const documentRun = {
+    ...toolRun({ path: "Sandbox_Test_Brief.pdf" }),
+    toolName: "documents.create",
+  } as ChatToolRunRecord;
+
+  it("names the tool for the operator and keeps the raw tool name in technical details", () => {
+    preferences.showTechnicalDetails = true;
+    try {
+      render(turnWith([documentRun]));
+      const row = container.querySelector('[data-tool-run-id="tool-run-1"]')!;
+      expect(row.firstElementChild?.textContent).toBe("Create document");
+      const details = [...row.querySelectorAll("details")].find((node) =>
+        node.querySelector("summary")?.textContent?.includes("Technical details"),
+      );
+      expect(details?.textContent).toContain("documents.create");
+    } finally {
+      preferences.showTechnicalDetails = false;
+    }
+  });
+
+  it("does not show the raw tool name on the row when technical details are off", () => {
+    render(turnWith([documentRun]));
+    expect(container.textContent).not.toContain("documents.create");
+  });
+});

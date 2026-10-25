@@ -21,6 +21,7 @@ import { hasExpired, useMinuteClock } from "./use-minute-clock";
 import { canResolveInboxApproval, matchesInboxApprovalDecision } from "./inbox-approval-guard";
 import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { ApprovalReviewSummary } from "./ApprovalReviewSummary";
+import { splitApprovalExplanation } from "./approval-preview";
 import { approvalDecisionMessage, approvalResolutionLine } from "./approval-settlement";
 import { nullWhenMissing } from "./inbox-record-read";
 import {
@@ -315,7 +316,8 @@ function ApprovalDecisionReview({
                 kind: approval.kind,
                 riskLevel: approval.riskLevel,
                 toolName: approval.linkage?.toolName,
-                reason: approval.explanation?.riskExplanation,
+                // A model-written explanation is advisory; the review summary labels it instead (#499).
+                reason: splitApprovalExplanation(approval).owner?.riskExplanation,
                 expiresAt: approval.expiresAt,
               }}
               reviewedApproval={approval}

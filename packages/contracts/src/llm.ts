@@ -38,6 +38,11 @@ export const LLM_PROVIDER_AUTH_MODES: readonly LlmProviderAuthMode[] = [
   "aws-bedrock-api-key",
 ];
 
+/** Sign-in modes that bill against the account's subscription, not per call (the "subscription" usage pool). */
+export function isSubscriptionAuthMode(authMode: string | undefined): boolean {
+  return authMode === "codex-oauth" || authMode === "claude-code-oauth" || authMode === "claude-code-cli-login";
+}
+
 export type ChatCompletionReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export interface LlmProviderOAuthStatus {

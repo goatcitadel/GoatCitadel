@@ -6,8 +6,11 @@ import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { ChatInspectorTurnPanel } from "./ChatInspectorTurnPanel";
 
 // Catalog labels read the query cache; the model id stands in for its name here.
+// Sign-in modes come from the same LLM config read as the provider labels.
+const authModes = vi.hoisted((): Record<string, string | undefined> => ({}));
 vi.mock("../../data/use-model-label", () => ({
   useModelLabel: (_providerId?: string, modelId?: string) => modelId ?? "Unknown model",
+  useProviderAuthMode: (providerId?: string) => (providerId ? authModes[providerId] : undefined),
 }));
 
 let root: Root;
@@ -64,5 +67,35 @@ describe("ChatInspectorTurnPanel timing (#499)", () => {
   it("says a finished turn's total is not recorded when its finish time is missing", () => {
     act(() => root.render(<ChatInspectorTurnPanel selectedTurn={turnWith({ status: "completed" })} />));
     expect(row("Total time")).toBe("Not recorded");
+  });
+});
+
+describe("ChatInspectorTurnPanel cost (#499)", () => {
+  afterEach(() => {
+    for (const key of Object.keys(authModes)) delete authModes[key];
+  });
+  const cliTurn = () =>
+    turnWith({
+      status: "completed",
+      routing: { effectiveProviderId: "claude-code-cli", effectiveModel: "claude-sonnet-5-5" },
+      completion: { status: "complete", repaired: false, usage: { inputTokens: 1200, outputTokens: 300 } },
+    });
+
+  it("says a subscription sign-in's turn is included in the subscription instead of Unknown", () => {
+    authModes["claude-code-cli"] = "claude-code-cli-login";
+    act(() => root.render(<ChatInspectorTurnPanel selectedTurn={cliTurn()} />));
+    expect(row("Cost")).toBe("Included in Claude subscription");
+  });
+
+  it("does not infer subscription billing from the provider id alone", () => {
+    // No sign-in mode was read for the provider, so its billing is not established.
+    act(() => root.render(<ChatInspectorTurnPanel selectedTurn={cliTurn()} />));
+    expect(row("Cost")).toBe("Unknown");
+  });
+
+  it("keeps Unknown for an API-key provider that recorded no cost", () => {
+    authModes["claude-code-cli"] = "api-key";
+    act(() => root.render(<ChatInspectorTurnPanel selectedTurn={cliTurn()} />));
+    expect(row("Cost")).toBe("Unknown");
   });
 });

@@ -6,7 +6,8 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { DetailRow, FallbackDetailRow, ModelDetailRow, ModelTechnicalDetails } from "./chat-inspector-evidence";
 import { presentToolRunStatus } from "./chat-vocabulary";
-import { recordedCostLabel } from "./recorded-cost";
+import { recordedCostLabel, subscriptionCostLabel } from "./recorded-cost";
+import { useProviderAuthMode } from "../../data/use-model-label";
 import { presentErrorText } from "../../lib/present-error";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 import { recordedTurnTime } from "./chat-turn-timing";
@@ -20,6 +21,8 @@ function totalTimeLabel(turn: ChatThreadTurnRecord): string {
 
 /** The inspector Message tab: status, model, fallback, counts, total and model time, cost and tool calls for one turn. */
 export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThreadTurnRecord | undefined }) {
+  // The effective provider's sign-in mode says whether a turn with no recorded price billed a subscription.
+  const authMode = useProviderAuthMode(selectedTurn?.trace.routing?.effectiveProviderId);
   if (!selectedTurn) return <p className="text-sm text-fg-muted">No message is available yet.</p>;
   return (
     <div className="space-y-3">
@@ -47,6 +50,7 @@ export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThr
           value={recordedCostLabel(
             selectedTurn.trace.completion?.usage?.costUsd,
             selectedTurn.trace.completion?.usage?.costSource,
+            subscriptionCostLabel(authMode),
           )}
         />
       </dl>
