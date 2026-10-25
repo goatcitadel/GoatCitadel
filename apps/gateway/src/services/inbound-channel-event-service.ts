@@ -4,6 +4,7 @@ import {
   redactSecretText,
   CHANNEL_INGRESS_ACCEPTED_REVISION_KEY,
   type ChannelActivityInput,
+  type ChatChannelConversation,
   type ChatSendMessageResponse,
   type InboundChannelEventClaim,
   type InboundChannelEventClaimToken,
@@ -20,6 +21,7 @@ import {
 import type { BotLoopGuardDecision } from "./channel-bot-loop-guard.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
 import { withChannelProgressHeartbeat } from "./channel-progress-heartbeat.js";
+import { readChannelConversation } from "./channel-conversation.js";
 
 const CLAIM_LEASE_MS = 30_000;
 const CLAIM_HEARTBEAT_MS = 10_000;
@@ -89,6 +91,7 @@ export interface InboundChannelEventServiceDeps {
     connectionId: string;
     target?: string;
     displayName?: string;
+    conversation?: ChatChannelConversation;
   }) => Promise<{ sessionId: string; sessionKey: string }>;
   hasRunningTurn: (sessionId: string) => Promise<boolean>;
   respondToExistingChatMessage: (
@@ -121,6 +124,7 @@ export interface InboundChannelEventServiceDeps {
 interface StoredInboundPayload {
   eventType: string;
   bindingTarget?: string;
+  conversation?: ChatChannelConversation;
   message: IngestChannelMessageInput;
   responseOptions?: {
     deliveryReplyToMessageId?: string;
@@ -478,6 +482,7 @@ export class InboundChannelEventService {
       connectionId: claim.event.connectionId,
       target: payload.bindingTarget,
       displayName: payload.message.displayName,
+      conversation: payload.conversation,
     });
     assertCurrent();
     const ingestResult = await this.deps.ingestChannelMessage(claim.event.channelKey, claim.event.eventId, {
@@ -860,6 +865,7 @@ function buildStoredPayload(input: DurableInboundChannelAcceptInput): Record<str
     message,
   };
   assignDefined(payload, "bindingTarget", normalizeOptionalString(input.bindingTarget));
+  assignDefined(payload, "conversation", readChannelConversation(input.conversation));
   if (input.responseOptions) {
     const responseOptions: NonNullable<StoredInboundPayload["responseOptions"]> = {};
     assignDefined(
@@ -906,6 +912,7 @@ function parseStoredPayload(event: InboundChannelEventRecord): StoredInboundPayl
   const payload: StoredInboundPayload = {
     eventType: readRequiredString(value.eventType, "eventType"),
     bindingTarget: readOptionalString(value.bindingTarget),
+    conversation: readChannelConversation(value.conversation),
     message: {
       eventId: readRequiredString(message.eventId, "message.eventId"),
       account: readRequiredString(message.account, "message.account"),

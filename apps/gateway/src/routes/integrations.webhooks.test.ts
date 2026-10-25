@@ -278,6 +278,83 @@ describe("integration provider webhook routes", () => {
     expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
   });
 
+  it("records whether a Slack conversation is a direct message or a channel", async () => {
+    const connectionId = "11111111-1111-1111-1111-111111111111";
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId,
+        key: "slack",
+        config: {
+          botToken: "xoxb-slack-token",
+          signingSecret: "slack-signing-secret",
+          slackTeamId: "T111",
+          slackAppId: "A111",
+        },
+      })),
+      acceptInboundChannelEvent,
+      recordDevDiagnostic: vi.fn(),
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const buildPayload = (eventId: string, channel: string, channelType: string, ts: string) =>
+      JSON.stringify({
+        type: "event_callback",
+        event_id: eventId,
+        team_id: "T111",
+        api_app_id: "A111",
+        event: {
+          type: "message",
+          user: "U111",
+          text: "please help",
+          channel,
+          channel_type: channelType,
+          ts,
+        },
+      });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    for (const payload of [
+      buildPayload("EvDirect", "D111", "im", "1712109984.000100"),
+      buildPayload("EvChannel", "C111", "channel", "1712109984.000200"),
+      buildPayload("EvPrivateChannel", "G111", "group", "1712109984.000300"),
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/integrations/connections/${connectionId}/slack/webhook`,
+        headers: {
+          "content-type": "application/json",
+          "x-slack-request-timestamp": timestamp,
+          "x-slack-signature": buildSlackSignature(timestamp, payload, "slack-signing-secret"),
+        },
+        payload,
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    const accepted = acceptInboundChannelEvent.mock.calls.map(
+      ([input]) => input as { bindingTarget?: string; conversation?: Record<string, unknown> },
+    );
+    expect(accepted.map((input) => [input.bindingTarget, input.conversation])).toEqual([
+      ["D111", { kind: "direct", counterpartActorId: "U111" }],
+      ["C111", { kind: "group" }],
+      ["G111", { kind: "group" }],
+    ]);
+  });
+
   it("accepts Telegram webhooks without standard auth or idempotency headers", async () => {
     const getIntegrationConnection = vi.fn(() => ({
       connectionId: "11111111-1111-1111-1111-111111111111",
@@ -575,6 +652,102 @@ describe("integration provider webhook routes", () => {
       ["command", "telegram-channel-command", "Family group"],
       ["command", "telegram-approval-callback", "Family group"],
       ["command", "telegram-channel-command", "Sam Lee"],
+    ]);
+  });
+
+  it("records whether a Telegram conversation is direct or a group on every dispatch kind", async () => {
+    const connectionId = "11111111-1111-1111-1111-111111111111";
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    const group = { id: -1001234567893, type: "supergroup", title: "Family group" };
+    const sam = { id: 777, is_bot: false, first_name: "Sam", last_name: "Lee" };
+    const updates = [
+      { update_id: 9301, message: { message_id: 701, from: sam, chat: { id: 777, type: "private" }, text: "hi" } },
+      { update_id: 9302, message: { message_id: 702, from: sam, chat: group, text: "hi team" } },
+      { update_id: 9303, message: { message_id: 703, from: sam, chat: group, text: "/sethome" } },
+      {
+        update_id: 9304,
+        callback_query: {
+          id: "callback-3",
+          from: sam,
+          message: { message_id: 704, chat: group, text: "Approval requested" },
+          data: "gca:grat_secret:a",
+        },
+      },
+      {
+        update_id: 9305,
+        message: { message_id: 705, from: sam, chat: { id: 777, type: "private" }, text: "/sethome" },
+      },
+    ];
+
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId,
+        catalogId: "channel.telegram",
+        kind: "channel",
+        key: "telegram",
+        label: "Telegram",
+        enabled: true,
+        status: "connected",
+        config: {
+          botToken: "telegram-bot-token",
+          webhookSecret: "telegram-webhook-secret",
+          telegramOperatorActors: ["777"],
+          telegramPairing: {
+            approved: [{ actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Sam Lee" }],
+            pending: [],
+          },
+        },
+        createdAt: "2026-05-02T12:00:00.000Z",
+        updatedAt: "2026-05-02T12:00:00.000Z",
+      })),
+      updateIntegrationConnection: vi.fn(),
+      findRemoteActionTokenId: vi.fn(() => "approval-action-1"),
+      acceptInboundChannelEvent,
+      awaitInboundChannelCommandResult: vi.fn(async () => ({
+        status: "completed" as const,
+        resultText: "Done.",
+      })),
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    for (const update of updates) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/integrations/connections/${connectionId}/telegram/webhook`,
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "telegram-webhook-secret",
+        },
+        payload: JSON.stringify(update),
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    const accepted = acceptInboundChannelEvent.mock.calls.map(
+      ([input]) => input as { dispatchKind: string; eventType: string; conversation?: Record<string, unknown> },
+    );
+    const direct = { kind: "direct", counterpartActorId: "777", title: "Sam Lee" };
+    const family = { kind: "group", title: "Family group" };
+    expect(accepted.map((input) => [input.dispatchKind, input.eventType, input.conversation])).toEqual([
+      ["agent_turn", "message", direct],
+      ["agent_turn", "message", family],
+      ["command", "telegram-channel-command", family],
+      ["command", "telegram-approval-callback", family],
+      ["command", "telegram-channel-command", direct],
     ]);
   });
 
@@ -1545,6 +1718,83 @@ describe("integration provider webhook routes", () => {
     });
     expect(mismatchedResponse.statusCode).toBe(403);
     expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a WhatsApp conversation as direct with the sender's number and profile name", async () => {
+    const connectionId = "11111111-1111-1111-1111-111111111111";
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    const payload = JSON.stringify({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: { phone_number_id: "123456789012345", display_phone_number: "+15551234567" },
+                contacts: [{ wa_id: "15558675309", profile: { name: "Ada Lovelace" } }],
+                messages: [
+                  {
+                    from: "15558675309",
+                    id: "wamid.CONVERSATION",
+                    timestamp: "1712182068",
+                    type: "text",
+                    text: { body: "Need an operator check-in" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId,
+        key: "whatsapp",
+        config: {
+          accessToken: "whatsapp-access-token",
+          appSecret: "whatsapp-app-secret",
+          webhookVerifyToken: "whatsapp-verify-token",
+          phoneNumberId: "123456789012345",
+        },
+      })),
+      acceptInboundChannelEvent,
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/integrations/connections/${connectionId}/whatsapp/webhook`,
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": buildWhatsAppWebhookSignature(payload, "whatsapp-app-secret"),
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bindingTarget: "15558675309",
+        conversation: { kind: "direct", counterpartActorId: "15558675309", title: "Ada Lovelace" },
+      }),
+    );
   });
 
   it("rejects unsigned WhatsApp webhooks", async () => {

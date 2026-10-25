@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { buildChannelConversation } from "../services/channel-conversation.js";
 import {
   deriveWhatsAppWebhookEventIdempotencyKey,
   normalizeWhatsAppWebhookPayloads,
@@ -151,6 +152,12 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
             idempotencyKey: deriveWhatsAppWebhookEventIdempotencyKey(connectionId, event),
             eventType: event.eventType,
             bindingTarget: event.peer,
+            // Inbound WhatsApp events are always one-to-one with the sender.
+            conversation: buildChannelConversation({
+              kind: "direct",
+              counterpartActorId: event.actorId,
+              title: event.displayName,
+            }),
             inboundAccessConfig: connection.config,
             acceptedConnectionRevision: connection.revision,
             message: {

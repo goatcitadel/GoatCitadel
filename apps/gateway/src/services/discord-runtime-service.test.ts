@@ -586,6 +586,114 @@ describe("DiscordRuntimeService", () => {
     );
   });
 
+  it("tells the inbound owner whether a Discord message is a direct message or a server channel", async () => {
+    const onInboundMessage = vi.fn(async () => undefined);
+    const service = createService({
+      findApprovedPairing: (_connectionId: string, userId: string) =>
+        userId === "user_1" ? createPairingRecord({ status: "approved" }) : undefined,
+      touchPairing: vi.fn(),
+      onInboundMessage,
+    });
+    const author = { id: "user_1", username: "goat-user", displayName: "Goat User", globalName: "Goat Person" };
+    const buildGuildMessage = (id: string, channelName?: string) =>
+      ({
+        inGuild: () => true,
+        channel: { isDMBased: () => false, isThread: () => false, sendTyping: vi.fn(), name: channelName },
+        channelId: "channel_1",
+        guildId: "guild_1",
+        author: { ...author, bot: false },
+        content: "hello server",
+        mentions: { users: { has: vi.fn().mockReturnValue(true) } },
+        id,
+        react: vi.fn().mockResolvedValue(undefined),
+      }) as any;
+    const guildConnection = createConnection({
+      guilds: { guild_1: { channels: ["channel_1"], requireMention: false } },
+    });
+
+    // An approved DM and an open DM are both a conversation with the author.
+    await (service as any).handleDirectMessage({} as any, createConnection(), {
+      channel: { isDMBased: () => true, sendTyping: vi.fn(), send: vi.fn() },
+      channelId: "dm_1",
+      author,
+      content: "hello dm",
+      id: "msg_dm_approved",
+      react: vi.fn().mockResolvedValue(undefined),
+    } as any);
+    await (service as any).handleDirectMessage({} as any, createConnection({ inboundDmPolicy: "open" }), {
+      channel: { isDMBased: () => true, sendTyping: vi.fn() },
+      channelId: "dm_2",
+      author: { id: "user_2", username: "open-user" },
+      content: "hello open dm",
+      id: "msg_dm_open",
+      react: vi.fn().mockResolvedValue(undefined),
+    } as any);
+    // A server channel is a group, titled after the channel when Discord names it.
+    await (service as any).tryHandleMessageForConnection(
+      {} as any,
+      guildConnection,
+      buildGuildMessage("msg_g1", "general"),
+    );
+    await (service as any).tryHandleMessageForConnection({} as any, guildConnection, buildGuildMessage("msg_g2"));
+
+    expect(
+      onInboundMessage.mock.calls.map(([input]) => [(input as any).sourceMessageId, (input as any).conversation]),
+    ).toEqual([
+      ["msg_dm_approved", { kind: "direct", counterpartActorId: "user_1", title: "Goat Person" }],
+      ["msg_dm_open", { kind: "direct", counterpartActorId: "user_2", title: "open-user" }],
+      ["msg_g1", { kind: "group", title: "#general" }],
+      ["msg_g2", { kind: "group" }],
+    ]);
+  });
+
+  it("tells the durable command owner whether a Discord slash command came from a DM or a server channel", async () => {
+    const acceptSlashCommand = vi.fn(async () => ({ inboundEventId: "inbound-interaction-1" }));
+    const service = createService({
+      findApprovedPairing: () => createPairingRecord({ status: "approved" }),
+      touchPairing: vi.fn(),
+      acceptSlashCommand,
+      awaitSlashCommandResult: vi.fn(async () => "ok"),
+    });
+    const user = { id: "user_1", username: "goat-user", displayName: "Goat User", globalName: "Goat Person" };
+    const buildInteraction = (id: string, channel: Record<string, unknown>, guildId?: string) =>
+      ({
+        inGuild: () => Boolean(guildId),
+        guildId,
+        channelId: guildId ? "channel_1" : "dm_1",
+        channel,
+        user,
+        commandName: "status",
+        id,
+        options: { getString: vi.fn(() => null), getSubcommand: vi.fn(() => null) },
+        deferReply: vi.fn(async () => undefined),
+        editReply: vi.fn(async () => undefined),
+        deferred: false,
+        replied: false,
+      }) as any;
+
+    await (service as any).handleDirectCommand(
+      {} as any,
+      createConnection(),
+      buildInteraction("interaction_dm", { isDMBased: () => true }),
+    );
+    await (service as any).tryHandleInteractionForConnection(
+      {} as any,
+      createConnection({ guilds: { guild_1: { channels: ["channel_1"] } } }),
+      buildInteraction(
+        "interaction_guild",
+        { isDMBased: () => false, isThread: () => false, name: "general" },
+        "guild_1",
+      ),
+    );
+
+    expect(
+      acceptSlashCommand.mock.calls.map(([input]) => [(input as any).sourceCommandId, (input as any).conversation]),
+    ).toEqual([
+      ["interaction_dm", { kind: "direct", counterpartActorId: "user_1", title: "Goat Person" }],
+      ["interaction_guild", { kind: "group", title: "#general" }],
+    ]);
+  });
+
   it("ignores Discord DMs when inbound DM policy is disabled", async () => {
     const onInboundMessage = vi.fn(async () => undefined);
     const ensurePendingPairing = vi.fn();

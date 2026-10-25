@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import type { PersonalityCatalogResponse } from "@goatcitadel/contracts";
+import type { ChatChannelConversation, PersonalityCatalogResponse } from "@goatcitadel/contracts";
+import { buildChannelConversation } from "../services/channel-conversation.js";
 import { listPersonalityPresets } from "../services/channel-personalities.js";
 import { normalizeChannelCommandInput } from "../services/channel-command-contract.js";
 import { buildChannelPersonalitySystemOverlay } from "../services/telegram-channel-commands.js";
@@ -80,6 +81,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
       },
       dispatch: async ({ connectionId, connection, request, rawBody, parsed }) => {
         const target = parsed.room ?? parsed.peer;
+        const conversation = resolveTelegramConversation(parsed.actorId, parsed.metadata);
         if (parsed.kind === "callback") {
           const approval = parseTelegramApprovalCallback(parsed.content);
           if (!approval) {
@@ -124,6 +126,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
             idempotencyKey: callbackIdempotencyKey,
             eventType: TELEGRAM_APPROVAL_CALLBACK_EVENT_TYPE,
             bindingTarget: target,
+            conversation,
             inboundAccessConfig: connection.config,
             acceptedConnectionRevision: connection.revision,
             message: {
@@ -200,6 +203,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
             idempotencyKey: deriveTelegramWebhookIdempotencyKey(connectionId, request.body, rawBody),
             eventType: TELEGRAM_CHANNEL_COMMAND_EVENT_TYPE,
             bindingTarget: commandEligible,
+            conversation,
             inboundAccessConfig: connection.config,
             acceptedConnectionRevision: connection.revision,
             message: {
@@ -237,6 +241,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           idempotencyKey: deriveTelegramWebhookIdempotencyKey(connectionId, request.body, rawBody),
           eventType: parsed.eventType,
           bindingTarget: target,
+          conversation,
           inboundAccessConfig: connection.config,
           acceptedConnectionRevision: connection.revision,
           message: {
@@ -310,6 +315,18 @@ function resolveTelegramConversationName(metadata: Record<string, unknown>): str
     return actorDisplayName;
   }
   return readTelegramMetadataString(metadata, "chatTitle") ?? actorDisplayName;
+}
+
+// A private chat is a direct conversation with the sender; anything else is a group or channel.
+function resolveTelegramConversation(actorId: string, metadata: Record<string, unknown>): ChatChannelConversation {
+  if (readTelegramMetadataString(metadata, "chatType") === "private") {
+    return buildChannelConversation({
+      kind: "direct",
+      counterpartActorId: actorId,
+      title: readTelegramMetadataString(metadata, "actorDisplayName"),
+    });
+  }
+  return buildChannelConversation({ kind: "group", title: readTelegramMetadataString(metadata, "chatTitle") });
 }
 
 function withoutTelegramEphemeralCallbackMetadata(metadata: Record<string, unknown>): Record<string, unknown> {

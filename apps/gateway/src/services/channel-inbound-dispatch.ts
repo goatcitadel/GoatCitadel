@@ -2,6 +2,7 @@ import {
   evaluateChannelInboundAccess,
   type ChannelActivityInput,
   type ChannelActivityResult,
+  type ChatChannelConversation,
 } from "@goatcitadel/contracts";
 import type { ChatCommandOptions } from "./chat-command-service.js";
 import type { ChannelVoiceInboundRequest, ChannelVoiceTranscriptionResult } from "./channel-voice-inbound-service.js";
@@ -185,6 +186,8 @@ export type InboundWebhookDispatchOptions = {
   idempotencyKey: string;
   eventType: string;
   bindingTarget?: string;
+  /** Direct or group details the session binding keeps; refreshed on every event that carries them. */
+  conversation?: ChatChannelConversation;
   /**
    * Per-connection inbound trust config. New connections should set
    * inboundAccessMode: "allowlist"; old configs without the field stay

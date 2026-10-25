@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventIngestService, resolveSessionRoute } from "@goatcitadel/gateway-core";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { CHANNEL_INGRESS_ACCEPTED_REVISION_KEY } from "@goatcitadel/contracts";
-import type { ChatMessageRecord, ChatSendMessageResponse } from "@goatcitadel/contracts";
+import type { ChatChannelConversation, ChatMessageRecord, ChatSendMessageResponse } from "@goatcitadel/contracts";
 import {
   InboundChannelEventService,
   InboundChannelTurnTerminalError,
@@ -271,6 +271,91 @@ describe("InboundChannelEventService", () => {
     expect(bindingWorkspace?.workspace_id).toBe("workspace-a");
     expect(respondToExistingChatMessage).toHaveBeenCalledTimes(1);
     expect(runtimeGrants).toHaveBeenCalledTimes(1);
+  });
+
+  it("stores conversation details on the session binding", async () => {
+    // The harness owns the storage, so the session dependencies are built right after it exists.
+    const harness = await createHarness({
+      ensureInboundChatSession: async (input) => await ensureInboundIntegrationChatSession(chatDeps, input),
+      ingestChannelMessage: vi.fn(async (channel, _idempotencyKey, message) => ({
+        deduped: false,
+        session: resolveSessionRoute({
+          channel,
+          account: message.account,
+          peer: message.peer,
+          room: message.room,
+          threadId: message.threadId,
+        }),
+      })),
+      respondToExistingChatMessage: vi.fn(async (sessionId, _messageId, options) =>
+        buildResponse(options.inboundDurableIdentity, sessionId),
+      ),
+    });
+    const connection = harness.storage.integrationConnections.create({
+      catalogId: "channel.telegram",
+      kind: "channel",
+      key: "telegram",
+      label: "Telegram",
+      enabled: true,
+      status: "connected",
+      workspaceId: "workspace-a",
+      config: {},
+    });
+    const chatDeps: ChatSessionDependencies = {
+      storage: createSqliteAsyncStorage(harness.storage),
+      operatorSummaryCache: { invalidate: vi.fn() },
+      normalizeWorkspaceId: (workspaceId) => workspaceId?.trim() || "default",
+      ensureChatSessionRuntimeGrants: vi.fn(async () => undefined),
+      requireChatSession: async () => {
+        throw new Error("not used by inbound binding initialization");
+      },
+      getSession: async (sessionId) => harness.storage.sessions.getBySessionId(sessionId),
+      publishRealtime: vi.fn(async () => undefined),
+      clearChatTurnWriteLease: vi.fn(),
+      removeChatSessionStoredFile: vi.fn(async () => undefined),
+      copyChatSessionStoredFile: vi.fn(async (storageRelPath) => storageRelPath),
+      ensureChatSessionModelDefaults: (_sessionId, prefs) => prefs,
+      hydrateChatPrefsWithAutonomy: async (_sessionId, prefs) => prefs,
+      patchSessionAutonomyPrefs: vi.fn(async () => undefined),
+    };
+
+    const acceptAndSettle = async (n: number, conversation?: ChatChannelConversation) => {
+      const accepted = await harness.service.accept(
+        buildInput({
+          channel: "telegram",
+          connectionId: connection.connectionId,
+          idempotencyKey: `telegram:conversation-${n}`,
+          bindingTarget: "42",
+          conversation,
+          message: {
+            eventId: `provider-message-${n}`,
+            account: connection.connectionId,
+            peer: "42",
+            actorId: "42",
+            actorType: "user",
+            content: `hello ${n}`,
+          },
+        }),
+      );
+      await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
+      const sessionId = harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.sessionId;
+      return harness.storage.chatSessionBindings.get(sessionId ?? "missing");
+    };
+
+    // The first event creates the session and records who the conversation is with.
+    const direct: ChatChannelConversation = { kind: "direct", counterpartActorId: "42", title: "Sam Lee" };
+    const first = await acceptAndSettle(1, direct);
+    expect(first).toMatchObject({ transport: "integration", target: "42" });
+    expect(first?.conversation).toEqual(direct);
+
+    // The session already exists, so the refresh has to happen on later events too.
+    const renamed: ChatChannelConversation = { kind: "direct", counterpartActorId: "42", title: "Samuel Lee" };
+    expect((await acceptAndSettle(2, renamed))?.conversation).toEqual(renamed);
+
+    // An event that carries no details leaves the stored ones alone.
+    const unchanged = await acceptAndSettle(3);
+    expect(unchanged?.conversation).toEqual(renamed);
+    expect(unchanged?.target).toBe("42");
   });
 
   it("does not recover or claim inbound work after shared-host admission closes", async () => {

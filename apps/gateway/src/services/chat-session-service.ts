@@ -18,6 +18,7 @@ import {
   ConflictError,
   CHAT_SESSION_FORK_MANIFEST_VERSION,
   isChatTurnTerminalStatus,
+  type ChatChannelConversation,
   type ChatSessionBindingRecord,
   type ChatSessionBulkArchiveInput,
   type ChatSessionBulkArchiveResult,
@@ -86,10 +87,18 @@ export async function listChatSessions(
   const scope = query.scope ?? "all";
   const view = query.view ?? "active";
   const includeHidden = query.includeHidden ?? false;
-  if (query.sessionIds !== undefined && (!query.sessionIds.length || query.sessionIds.length > 100 || query.sessionId !== undefined || query.cursor !== undefined)) {
+  if (
+    query.sessionIds !== undefined &&
+    (!query.sessionIds.length ||
+      query.sessionIds.length > 100 ||
+      query.sessionId !== undefined ||
+      query.cursor !== undefined)
+  ) {
     throw new Error("Session membership requires 1 to 100 IDs and no sessionId or cursor");
   }
-  const limit = query.sessionIds?.length ?? (query.sessionId !== undefined ? 1 : Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200))));
+  const limit =
+    query.sessionIds?.length ??
+    (query.sessionId !== undefined ? 1 : Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200))));
   const candidates = await storage.chatSessionLists.listCandidates({
     workspaceId,
     sessionId: query.sessionId,
@@ -1198,6 +1207,8 @@ export async function ensureInboundIntegrationChatSession(
     connectionId: string;
     target?: string;
     displayName?: string;
+    /** Written on every call, not only when the session is created, so renamed groups stay current. */
+    conversation?: ChatChannelConversation;
   },
 ): Promise<{ sessionId: string; sessionKey: string }> {
   const connectionId = input.connectionId.trim();
@@ -1239,6 +1250,7 @@ export async function ensureInboundIntegrationChatSession(
         transport: "integration",
         connectionId,
         target,
+        conversation: input.conversation,
         writable: true,
       },
       now,
