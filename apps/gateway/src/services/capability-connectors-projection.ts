@@ -1,0 +1,325 @@
+import {
+  CAPABILITY_CONNECTOR_GROUP_ORDER,
+  GOOGLE_WORKSPACE_CATALOG_ID,
+  hasMcpOAuthEndpointSource,
+  type CapabilityConnectorAuth,
+  type CapabilityConnectorGroup,
+  type CapabilityConnectorItem,
+  type CapabilityConnectorReason,
+  type CapabilityConnectorState,
+  type GoogleWorkspaceOAuthStatus,
+  type IntegrationCatalogEntry,
+  type IntegrationConnection,
+  type McpServerRecord,
+  type McpServerTemplateRecord,
+  type WebSearchCredentialStatus,
+  type WebSearchCredentialTargetId,
+} from "@goatcitadel/contracts";
+import { isListedIntegration } from "./capability-connectors-integrations.js";
+
+/** Templates that are internal to GoatCitadel or duplicate a built-in tool, so they are not apps to list. */
+export const EXCLUDED_CONNECTOR_TEMPLATE_IDS: ReadonlySet<string> = new Set([
+  "approval-inbox",
+  "durable-tasks",
+  "filesystem",
+  "fetch",
+]);
+
+export interface CapabilityConnectorsProjectionInput {
+  /** Already filtered by `isVisibleMcpTemplateRecord`. */
+  templates: readonly McpServerTemplateRecord[];
+  /** Gateway-owned servers (`GATEWAY_OWNED_MCP_SERVER_IDS`) already removed. */
+  servers: readonly McpServerRecord[];
+  integrationCatalog: readonly IntegrationCatalogEntry[];
+  connections: readonly IntegrationConnection[];
+  googleStatusByConnectionId: ReadonlyMap<string, GoogleWorkspaceOAuthStatus>;
+  webSearch: readonly WebSearchCredentialStatus[];
+  firecrawlEnabled: boolean;
+  hiddenServerIds: ReadonlySet<string>;
+  hiddenConnectionIds: ReadonlySet<string>;
+  chat: { staticMcp: boolean; durableExecution: boolean };
+}
+
+interface Verdict {
+  state: CapabilityConnectorState;
+  reason: CapabilityConnectorReason;
+}
+
+/** Everything an item carries except what the shared finishing step derives from the state and the hidden sets. */
+type ItemParts = Omit<CapabilityConnectorItem, "group" | "hiddenInWorkspace">;
+
+const WEB_SEARCH_ROWS: Readonly<Record<WebSearchCredentialTargetId, { name: string; description: string }>> = {
+  "search.firecrawl": { name: "Firecrawl", description: "Search the web and read pages with your Firecrawl key." },
+  "search.brave": { name: "Brave Search", description: "Search the web with your Brave Search key." },
+  "search.parallel": { name: "Parallel", description: "Search the web with your Parallel key." },
+};
+
+/** Lower ranks come first inside a group: things that need attention, then the rest. */
+const STATE_RANK: Readonly<Record<CapabilityConnectorState, number>> = {
+  broken: 0,
+  sign_in_expired: 1,
+  needs_sign_in: 2,
+  connected: 3,
+  available: 3,
+  turned_off: 3,
+};
+
+/** Merges MCP templates and servers, listed integrations and web search keys into one connector list. Pure: no I/O. */
+export function buildCapabilityConnectors(input: CapabilityConnectorsProjectionInput): CapabilityConnectorItem[] {
+  const templates = input.templates.filter((template) => !EXCLUDED_CONNECTOR_TEMPLATE_IDS.has(template.templateId));
+  const templatesByLabel = new Map<string, McpServerTemplateRecord>();
+  for (const template of templates) {
+    const key = labelKey(template.label);
+    if (!templatesByLabel.has(key)) {
+      templatesByLabel.set(key, template);
+    }
+  }
+  const savedLabels = new Set(input.servers.map((server) => labelKey(server.label)));
+
+  const parts: ItemParts[] = [
+    ...templates
+      .filter((template) => !savedLabels.has(labelKey(template.label)))
+      .map((template) => templateParts(template, input)),
+    ...input.servers.map((server) => serverParts(server, templatesByLabel.get(labelKey(server.label)), input)),
+    ...integrationParts(input),
+    ...input.webSearch.map((status) => webSearchParts(status, input)),
+  ];
+
+  return parts.map((item) => finish(item, input)).sort(compareItems);
+}
+
+function labelKey(label: string): string {
+  return label.toLowerCase();
+}
+
+function templateParts(template: McpServerTemplateRecord, input: CapabilityConnectorsProjectionInput): ItemParts {
+  const verdict = templateVerdict(template);
+  const command = stdioCommand(template);
+  return {
+    id: `mcp-template:${template.templateId}`,
+    name: template.label,
+    description: template.description,
+    kind: "mcp",
+    source: "mcp_template",
+    category: template.category,
+    ...verdict,
+    auth: mcpAuth(template.authType),
+    runsOnThisDevice: template.transport === "stdio",
+    ...(command ? { command } : {}),
+    networkHosts: [...(template.networkHosts ?? [])],
+    templateId: template.templateId,
+    chat: mcpChat(input.chat),
+  };
+}
+
+function serverParts(
+  server: McpServerRecord,
+  template: McpServerTemplateRecord | undefined,
+  input: CapabilityConnectorsProjectionInput,
+): ItemParts {
+  const verdict = serverVerdict(server);
+  const command = stdioCommand(server);
+  return {
+    id: `mcp-server:${server.serverId}`,
+    name: template?.label ?? server.label,
+    description: template?.description ?? "",
+    kind: "mcp",
+    source: "mcp_server",
+    category: template?.category ?? server.category,
+    ...verdict,
+    auth: mcpAuth(server.authType),
+    runsOnThisDevice: server.transport === "stdio",
+    ...(command ? { command } : {}),
+    networkHosts: [...(template?.networkHosts ?? [])],
+    ...(template ? { templateId: template.templateId } : {}),
+    serverId: server.serverId,
+    ...(server.revision !== undefined ? { serverRevision: server.revision } : {}),
+    ...(server.connectionRevision !== undefined ? { serverConnectionRevision: server.connectionRevision } : {}),
+    chat: mcpChat(input.chat),
+    ...(server.lastError ? { lastError: server.lastError } : {}),
+  };
+}
+
+function integrationParts(input: CapabilityConnectorsProjectionInput): ItemParts[] {
+  return input.integrationCatalog.filter(isListedIntegration).flatMap((entry) => {
+    const connections = input.connections.filter((connection) => connection.catalogId === entry.catalogId);
+    if (connections.length === 0) {
+      return [integrationEntryParts(entry)];
+    }
+    return connections.map((connection) =>
+      integrationConnectionParts(entry, connection, input.googleStatusByConnectionId.get(connection.connectionId)),
+    );
+  });
+}
+
+function integrationEntryParts(entry: IntegrationCatalogEntry): ItemParts {
+  return {
+    ...integrationBaseParts(entry),
+    id: `integration:${entry.catalogId}`,
+    state: "available",
+    reason: "not_installed",
+  };
+}
+
+function integrationConnectionParts(
+  entry: IntegrationCatalogEntry,
+  connection: IntegrationConnection,
+  google: GoogleWorkspaceOAuthStatus | undefined,
+): ItemParts {
+  return {
+    ...integrationBaseParts(entry),
+    id: `integration:${connection.connectionId}`,
+    ...connectionVerdict(connection, entry.catalogId === GOOGLE_WORKSPACE_CATALOG_ID ? google : undefined),
+    connectionId: connection.connectionId,
+    ...(connection.lastError ? { lastError: connection.lastError } : {}),
+  };
+}
+
+/** What a catalog row and a connection row share. The caller sets the id, state and reason. */
+function integrationBaseParts(entry: IntegrationCatalogEntry): Omit<ItemParts, "id" | "state" | "reason"> {
+  const isChannel = entry.kind === "channel";
+  return {
+    name: entry.label,
+    description: entry.description,
+    kind: isChannel ? "channel" : "built_in",
+    source: "integration",
+    category: isChannel ? "messaging" : "automation",
+    auth: integrationAuth(entry),
+    runsOnThisDevice: false,
+    networkHosts: [],
+    catalogId: entry.catalogId,
+    chat: { available: true },
+  };
+}
+
+function webSearchParts(status: WebSearchCredentialStatus, input: CapabilityConnectorsProjectionInput): ItemParts {
+  const row = WEB_SEARCH_ROWS[status.targetId];
+  return {
+    id: `web-search:${status.targetId}`,
+    name: row.name,
+    description: row.description,
+    kind: "built_in",
+    source: "web_search",
+    category: "search",
+    ...webSearchVerdict(status, input.firecrawlEnabled),
+    auth: "api_key",
+    runsOnThisDevice: false,
+    networkHosts: status.endpointHost ? [status.endpointHost] : [],
+    chat: { available: true },
+  };
+}
+
+function templateVerdict(template: McpServerTemplateRecord): Verdict {
+  if (template.authType === "token") {
+    return { state: "available", reason: "needs_api_key" };
+  }
+  if (template.authType === "oauth2" && !hasMcpOAuthEndpointSource(template.oauth)) {
+    return { state: "available", reason: "missing_sign_in_setup" };
+  }
+  return { state: "available", reason: "not_installed" };
+}
+
+function serverVerdict(server: McpServerRecord): Verdict {
+  if (!server.enabled) {
+    return { state: "turned_off", reason: "turned_off" };
+  }
+  const readiness = server.authState?.readiness;
+  if (readiness === "needs_auth") {
+    return { state: "needs_sign_in", reason: "sign_in_needed" };
+  }
+  if (readiness === "expired") {
+    return { state: "sign_in_expired", reason: "sign_in_expired" };
+  }
+  if (server.status === "error") {
+    return { state: "broken", reason: "error" };
+  }
+  return { state: "connected", reason: "ready" };
+}
+
+/**
+ * A connection the operator turned off or paused stays turned off, whatever its sign-in says. A Google connection
+ * then reports its own sign-in before the generic connection status, because Google keeps that outside the row.
+ */
+function connectionVerdict(connection: IntegrationConnection, google: GoogleWorkspaceOAuthStatus | undefined): Verdict {
+  if (!connection.enabled || connection.status === "paused") {
+    return { state: "turned_off", reason: "turned_off" };
+  }
+  if (google?.requiresReauth) {
+    return { state: "sign_in_expired", reason: "sign_in_expired" };
+  }
+  if (google && !google.connected) {
+    return { state: "needs_sign_in", reason: "sign_in_needed" };
+  }
+  if (connection.status === "error") {
+    return { state: "broken", reason: "error" };
+  }
+  if (connection.status === "disconnected") {
+    return { state: "needs_sign_in", reason: "not_connected" };
+  }
+  return { state: "connected", reason: "ready" };
+}
+
+function webSearchVerdict(status: WebSearchCredentialStatus, firecrawlEnabled: boolean): Verdict {
+  const hasKey = status.activeSource !== "none";
+  const usable =
+    status.targetId === "search.firecrawl" ? hasKey && firecrawlEnabled && status.endpointAllowlisted : hasKey;
+  return usable ? { state: "connected", reason: "ready" } : { state: "available", reason: "needs_api_key" };
+}
+
+function stdioCommand(definition: Pick<McpServerRecord, "transport" | "command" | "args">): string | undefined {
+  if (definition.transport !== "stdio" || !definition.command) {
+    return undefined;
+  }
+  return [definition.command, ...(definition.args ?? [])].join(" ");
+}
+
+function mcpAuth(authType: McpServerRecord["authType"]): CapabilityConnectorAuth {
+  if (authType === "token") {
+    return "api_key";
+  }
+  return authType === "oauth2" ? "oauth" : "none";
+}
+
+function integrationAuth(entry: IntegrationCatalogEntry): CapabilityConnectorAuth {
+  if (entry.catalogId === GOOGLE_WORKSPACE_CATALOG_ID) {
+    return "google";
+  }
+  // Channels connect with a bot token or webhook secret; IMAP/SMTP and webhooks keep a saved secret too.
+  return entry.kind === "channel" ? "bot_token" : "api_key";
+}
+
+function mcpChat(chat: CapabilityConnectorsProjectionInput["chat"]): CapabilityConnectorItem["chat"] {
+  if (chat.staticMcp) {
+    return { available: true };
+  }
+  return { available: false, blockedBy: chat.durableExecution ? "mcp_in_chat_off" : "background_runs_off" };
+}
+
+function finish(parts: ItemParts, input: CapabilityConnectorsProjectionInput): CapabilityConnectorItem {
+  const hiddenServer = parts.serverId !== undefined && input.hiddenServerIds.has(parts.serverId);
+  const hiddenConnection = parts.connectionId !== undefined && input.hiddenConnectionIds.has(parts.connectionId);
+  return {
+    ...parts,
+    group: groupFor(parts.state, parts.runsOnThisDevice),
+    hiddenInWorkspace: hiddenServer || hiddenConnection,
+  };
+}
+
+function groupFor(state: CapabilityConnectorState, runsOnThisDevice: boolean): CapabilityConnectorGroup {
+  if (state === "turned_off") {
+    return "turned_off";
+  }
+  if (state === "available") {
+    return runsOnThisDevice ? "on_this_device" : "available";
+  }
+  return "connected";
+}
+
+function compareItems(left: CapabilityConnectorItem, right: CapabilityConnectorItem): number {
+  return (
+    CAPABILITY_CONNECTOR_GROUP_ORDER.indexOf(left.group) - CAPABILITY_CONNECTOR_GROUP_ORDER.indexOf(right.group) ||
+    STATE_RANK[left.state] - STATE_RANK[right.state] ||
+    left.name.localeCompare(right.name, "en", { sensitivity: "base" }) ||
+    left.id.localeCompare(right.id, "en")
+  );
+}
