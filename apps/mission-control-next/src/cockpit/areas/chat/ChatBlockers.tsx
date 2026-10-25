@@ -11,6 +11,7 @@ import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { ChatPendingQuestion } from "./ChatPendingQuestion";
 import { presentApprovalAction } from "./chat-vocabulary";
+import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 
 type Blockers = Pick<
@@ -76,7 +77,10 @@ export function ChatBlockers({ props }: { props: Blockers }) {
         }
       : pendingApproval;
   const input = props.pendingUserInput;
-  const expiry = approvalExpiryLabel(approval?.expiresAt);
+  // The persisted record outranks the retained prompt: once it is decided, the card reports the decision
+  // instead of asking for one while Chat waits for the queue to clear it.
+  const decided = reviewedApproval && reviewedApproval.status !== "pending" ? reviewedApproval : undefined;
+  const expiry = decided ? null : approvalExpiryLabel(approval?.expiresAt);
   function continuationHref(destination: "/inbox", selectedApprovalId?: string) {
     const parameters = new URLSearchParams(search);
     parameters.set("workspaceId", workspaceId);
@@ -99,12 +103,14 @@ export function ChatBlockers({ props }: { props: Blockers }) {
     >
       {approval ? (
         <section
-          aria-label="Pending approval"
-          className="mt-3 rounded-md border border-status-waiting bg-raised p-3 text-sm"
+          aria-label={decided ? "Decided approval" : "Pending approval"}
+          className={`mt-3 rounded-md border bg-raised p-3 text-sm ${decided ? "border-line-subtle" : "border-status-waiting"}`}
         >
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <h3 className="font-semibold text-fg">Approval needed</h3>
+              <h3 className="font-semibold text-fg">
+                {decided ? `Approval decided: ${presentApprovalStatus(decided.status).label}` : "Approval needed"}
+              </h3>
               <p className="mt-1 text-fg-secondary">{presentApprovalAction(approval.toolName, approval.kind)}</p>
             </div>
             {approval.riskLevel ? <RiskBadge risk={approval.riskLevel} /> : null}
@@ -159,6 +165,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
               void recordQuery.refetch();
               props.onRefreshThread();
             }}
+            onFollowOnChange={props.onRefreshThread}
           />
           <NativeOwnerLink
             href={continuationHref("/inbox", approval.approvalId)}

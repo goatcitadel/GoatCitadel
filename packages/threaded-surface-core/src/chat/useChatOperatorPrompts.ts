@@ -54,18 +54,25 @@ export function useChatOperatorPrompts({
   const [pendingUserInput, setPendingUserInput] = useState<PendingUserInputRecord | null>(null);
   const [userInputPending, setUserInputPending] = useState(false);
   const approvalRefreshTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  // Approvals the persisted queue reported as stale (decided, expired, or superseded). A thread
+  // snapshot that still shows the turn waiting must not reopen one of these and block the composer.
+  const settledApprovalIdsRef = useRef<Set<string>>(new Set());
   const threadRef = useRef(thread);
   threadRef.current = thread;
   const scopeRef = useRef({ sessionId: selectedSessionId, active: true });
-  if (scopeRef.current.sessionId !== selectedSessionId) scopeRef.current = { sessionId: selectedSessionId, active: true };
+  if (scopeRef.current.sessionId !== selectedSessionId)
+    scopeRef.current = { sessionId: selectedSessionId, active: true };
   const scope = scopeRef.current;
   useEffect(() => {
     scope.active = true;
-    return () => { scope.active = false; };
+    return () => {
+      scope.active = false;
+    };
   }, [scope]);
 
   const refreshPendingApprovalQueue = useCallback(async (sessionId: string, isCancelled?: () => boolean) => {
     const response = await fetchChatPendingApprovals(sessionId);
+    for (const item of response.items) if (item.stale) settledApprovalIdsRef.current.add(item.approvalId);
     const activeItems = response.items.filter(
       (item) => !item.stale && !isApprovalForCancelledTurn(threadRef.current, item.approvalId),
     );
@@ -180,7 +187,7 @@ export function useChatOperatorPrompts({
       setPendingUserInput(null);
       return;
     }
-    if (threadApproval) {
+    if (threadApproval && !settledApprovalIdsRef.current.has(threadApproval.approvalId)) {
       setPendingApproval((current) => {
         const merged = mergePendingApproval(current, threadApproval);
         if (
@@ -208,6 +215,7 @@ export function useChatOperatorPrompts({
           return null;
         }
         if (isApprovalForCancelledTurn(thread, current.approvalId)) return null;
+        if (settledApprovalIdsRef.current.has(current.approvalId)) return null;
         // The persisted approval queue is authoritative. A repaired or briefly
         // stale thread snapshot can say `completed` while the approval remains
         // pending, so do not hide an actionable prompt from the same session.

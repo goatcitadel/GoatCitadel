@@ -33,6 +33,8 @@ type ChatApprovalRendererProps = Omit<DecisionProps, "approval"> & {
   recordPending: boolean;
   /** Recovery while the record is missing or failed to load; see `ApprovalRecordRecovery`. */
   recovery?: RecordRecovery;
+  /** Called when the settled decision's follow-on work changes, so Chat re-reads its thread and queue. */
+  onFollowOnChange?: () => void;
 };
 
 type RecordRecovery = {
@@ -94,6 +96,7 @@ export function ChatApprovalRenderer({
   approval,
   recordPending,
   recovery,
+  onFollowOnChange,
   ...decisionProps
 }: ChatApprovalRendererProps) {
   const callerRevision = useSyncExternalStore(
@@ -233,7 +236,12 @@ export function ChatApprovalRenderer({
               ) : null}
             </>
           ) : (
-            <code.ApprovalSettlement key={scope} approval={record} workspaceId={decisionProps.workspaceId} />
+            <code.ApprovalSettlement
+              key={scope}
+              approval={record}
+              workspaceId={decisionProps.workspaceId}
+              onFollowOnChange={onFollowOnChange}
+            />
           )}
         </>
       )}
