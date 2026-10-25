@@ -288,7 +288,12 @@ export function ChatInspector({
               />
               <DetailRow
                 label="Tool autonomy"
-                value={dock?.effectiveToolAutonomy ? presentToolAutonomy(dock.effectiveToolAutonomy) : "Not available"}
+                value={
+                  // The saved setting, like Planning and Web; the last message's own value stays in its run detail.
+                  dock?.prefs
+                    ? presentToolAutonomy(dock.prefs.planningMode === "advisory" ? "manual" : dock.prefs.toolAutonomy)
+                    : "Not available"
+                }
               />
               <DetailRow label="Web" value={dock?.prefs ? presentWebMode(dock.prefs.webMode) : "Not available"} />
             </dl>
