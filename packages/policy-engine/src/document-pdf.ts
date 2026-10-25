@@ -4,6 +4,7 @@ import {
   PdfPage,
   countWinAnsiLoss,
   measureWinAnsi,
+  missingGlyphWarning,
   mixPdfColors,
   pdfColor,
   pdfColorLuminance,
@@ -31,6 +32,10 @@ const TABLE_HEADER_MAX_LINES = 3;
 const ELLIPSIS = String.fromCharCode(0x85);
 const BULLET_INDENT = 18;
 const SUMMARY_HEADING = /^(summary|overview|executive summary|introduction|at a glance)$/iu;
+const PLAIN_MARGIN = 72;
+const PLAIN_SIZE = 12;
+const PLAIN_LEADING = 16;
+const PLAIN_LINES_PER_PAGE = 44;
 
 export interface DocumentPdfSection {
   heading: string;
@@ -72,7 +77,7 @@ interface ReportTheme {
 /**
  * Renders a designed portrait report: a colored cover band, a summary callout, accented section
  * headings, marked bullets, and a paginated table for `rows`, all in the plan's design tokens.
- * Text uses the standard Helvetica faces, so no fonts or images are embedded.
+ * Text uses the standard Helvetica faces; only glyphs Helvetica lacks are embedded from bundled fonts.
  */
 export function createDocumentPdf(input: DocumentPdfInput): DocumentPdfResult {
   const theme = resolveReportTheme(input.design);
@@ -93,32 +98,78 @@ export function createDocumentPdf(input: DocumentPdfInput): DocumentPdfResult {
   for (const section of sections) drawSection(flow, section);
   const shortenedCells = table ? drawTable(flow, table) : 0;
   const warnings = [
-    ...latinWarnings(input, table),
+    ...missingGlyphWarnings(input, table),
     ...(shortenedCells > 0
       ? [`${shortenedCells} table cell(s) were too long to fit on one page and were shortened with an ellipsis.`]
       : []),
   ];
 
+  flow.pages.forEach((page, index) => {
+    if (index > 0) drawPageFooter(page, theme, input.title, index + 1);
+  });
+  return {
+    buffer: serializePages(flow.pages, input.title),
+    layouts: [...flow.layouts],
+    pageCount: flow.pages.length,
+    warnings,
+  };
+}
+
+/**
+ * Unstyled text pages (12 pt Helvetica on white) for plain and minimal designs. Characters
+ * Helvetica lacks use the same embedded fallback fonts and disclosure as designed reports.
+ */
+export function createPlainDocumentPdf(
+  title: string,
+  lines: readonly string[],
+): { buffer: Buffer; warnings: string[] } {
+  const wrapped = lines.flatMap((line) => wrapPlainLine(toWinAnsiBytes(line)));
+  const body = wrapped.some(Boolean) ? wrapped : ["No content provided."];
+  const black = pdfColor("000000");
+  const pages: PdfPage[] = [];
+  for (let start = 0; start < body.length; start += PLAIN_LINES_PER_PAGE) {
+    const page = new PdfPage(PAGE_W, PAGE_H);
+    body.slice(start, start + PLAIN_LINES_PER_PAGE).forEach((line, index) => {
+      page.text(PLAIN_MARGIN, PLAIN_MARGIN - 20 + index * PLAIN_LEADING, line, {
+        font: "regular",
+        size: PLAIN_SIZE,
+        color: black,
+      });
+    });
+    pages.push(page);
+  }
+  const { lost } = countWinAnsiLoss(lines.join("\n"));
+  return { buffer: serializePages(pages, title), warnings: lost > 0 ? [missingGlyphWarning(lost)] : [] };
+}
+
+/**
+ * A line that fits keeps its spacing (indented code, space-aligned columns); a longer one wraps at
+ * spaces and repeats its leading indent on every wrapped line.
+ */
+function wrapPlainLine(bytes: string): string[] {
+  const width = PAGE_W - PLAIN_MARGIN * 2;
+  if (!bytes.trim()) return [""];
+  if (measureWinAnsi(bytes, "regular", PLAIN_SIZE) <= width) return [bytes.trimEnd()];
+  const leading = /^ */u.exec(bytes)?.[0] ?? "";
+  // An indent wider than half the line is dropped so the wrapped text still fits.
+  const indent = measureWinAnsi(leading, "regular", PLAIN_SIZE) <= width / 2 ? leading : "";
+  const indentWidth = measureWinAnsi(indent, "regular", PLAIN_SIZE);
+  return wrapWinAnsi(bytes, "regular", PLAIN_SIZE, width - indentWidth).map((line) => `${indent}${line}`);
+}
+
+function serializePages(pages: readonly PdfPage[], title: string): Buffer {
   const writer = new PdfDocumentWriter();
   const catalogId = writer.reserve();
   const pagesId = writer.reserve();
   const fonts = writer.addStandardFonts();
-  const pageIds = flow.pages.map((page, index) => {
-    if (index > 0) drawPageFooter(page, theme, input.title, index + 1);
-    return writer.addPage(page, pagesId, fonts);
-  });
+  const pageIds = pages.map((page) => writer.addPage(page, pagesId, fonts));
   writer.set(catalogId, `<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
   writer.set(
     pagesId,
     `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`,
   );
-  const infoId = writer.add(writer.infoDictionary(input.title));
-  return {
-    buffer: writer.serialize(catalogId, infoId),
-    layouts: [...flow.layouts],
-    pageCount: flow.pages.length,
-    warnings,
-  };
+  const infoId = writer.add(writer.infoDictionary(title));
+  return writer.serialize(catalogId, infoId);
 }
 
 class ReportFlow {
@@ -402,7 +453,7 @@ function contrastRatio(left: PdfColor, right: PdfColor): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-function latinWarnings(input: DocumentPdfInput, table: ReportTable | undefined): string[] {
+function missingGlyphWarnings(input: DocumentPdfInput, table: ReportTable | undefined): string[] {
   const text = [
     input.title,
     input.body ?? "",
@@ -411,11 +462,7 @@ function latinWarnings(input: DocumentPdfInput, table: ReportTable | undefined):
     ...(table ? [...table.headers, ...table.rows.flat()] : []),
   ].join("\n");
   const { lost } = countWinAnsiLoss(text);
-  return lost > 0
-    ? [
-        `${lost} character(s) outside the PDF's Latin character set (such as emoji or non-Latin script) were replaced or dropped.`,
-      ]
-    : [];
+  return lost > 0 ? [missingGlyphWarning(lost)] : [];
 }
 
 function cellText(value: unknown): string {
