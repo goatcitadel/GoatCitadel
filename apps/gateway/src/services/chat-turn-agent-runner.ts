@@ -228,8 +228,11 @@ import {
 } from "./chat-turn-agent-runner/artifact-write-helpers.js";
 import { groundResearchPresentationArgs } from "./chat-turn-agent-runner/presentation-research-evidence.js";
 import {
+  MEMORY_CONSENT_BLOCKED_REASON,
   buildGovernanceBlockGuidance,
+  buildMemoryConsentBlockGuidance,
   buildPathBridgeFailureGuidance,
+  buildPolicyBlockedRecoveryText,
   buildToolFailureAppendixText,
 } from "./chat-turn-agent-runner/tool-failure-messaging.js";
 import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
@@ -9252,7 +9255,7 @@ export class ChatTurnAgentRunner {
       return {
         toolName: effectiveToolName,
         args,
-        blockedReason: "memory persistence requires explicit user consent; ask before saving long-term memory",
+        blockedReason: MEMORY_CONSENT_BLOCKED_REASON,
       };
     }
 
@@ -10432,6 +10435,12 @@ function buildToolFailureGuidance(input: {
   const governanceGuidance = buildGovernanceBlockGuidance(input);
   if (governanceGuidance) {
     return governanceGuidance;
+  }
+  // The consent check reads the user's message, so a narrower tool input
+  // cannot pass it and the strict template's approval ask cannot lift it.
+  const memoryConsentGuidance = buildMemoryConsentBlockGuidance(input);
+  if (memoryConsentGuidance) {
+    return memoryConsentGuidance;
   }
   const normalizedError = (input.error ?? "").toLowerCase();
   const host = readBlockedSourceHost(input.result ?? {}, input.args);
@@ -15934,7 +15943,12 @@ function buildToolFailureFallbackMessage(userPrompt: string, toolRuns: ChatToolR
       .join("\n");
   }
 
-  const lastFailure = toolRuns.filter((item) => item.status === "failed" || item.status === "blocked").at(-1);
+  const failedOrBlocked = toolRuns.filter((item) => item.status === "failed" || item.status === "blocked");
+  const policyBlockedText = blockedSource ? undefined : buildPolicyBlockedRecoveryText(failedOrBlocked);
+  if (policyBlockedText) {
+    return policyBlockedText;
+  }
+  const lastFailure = failedOrBlocked.at(-1);
   const evidence = toolRuns
     .filter((item) => item.status === "executed" && item.result)
     .slice(-2)

@@ -2,6 +2,9 @@ import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 
 const PATH_BRIDGE_POLICY_REASON = "workspace path was not freshly verified for execution";
 const WEB_TOOL_PREFIXES = ["browser.", "http."];
+export const MEMORY_CONSENT_BLOCKED_REASON =
+  "memory persistence requires explicit user consent; ask before saving long-term memory";
+const MEMORY_CONSENT_EXAMPLES = '"Remember that …" or "Add this to memory: …"';
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -111,6 +114,82 @@ export function buildGovernanceBlockGuidance(input: {
     return `${tool} is denied by a Citadel Ward. ${OPERATOR_BOUNDARY_NEXT_STEP} The operator must change that Ward before ${tool} can run.`;
   }
   return undefined;
+}
+
+/**
+ * True for a non-web run stopped by a tool-policy decision: the policy
+ * engine's `blocked: <reason>` outcome, a runner policy or capability-profile
+ * revalidation, a path-bridge block, or an operator governance block. Runner
+ * guards that are not policy (the memory-consent check, "execution skipped"
+ * input repairs, content gates) are excluded, because their fix may be a
+ * different request.
+ */
+function isToolPolicyBlock(run: ChatToolRunRecord): boolean {
+  if (run.status !== "blocked" || isWebTool(run.toolName)) {
+    return false;
+  }
+  const error = (run.error ?? "").trim().toLowerCase();
+  return (
+    error.startsWith("blocked:") ||
+    /\bpolicy\b/.test(error) ||
+    /\bcapability profile\b.*\bdoes not authorize\b/.test(error) ||
+    Boolean(readPathBridgeBlock(run.result, run.error)) ||
+    Boolean(buildGovernanceBlockGuidance(run))
+  );
+}
+
+function isMemoryConsentBlock(input: { status: ChatToolRunRecord["status"]; error?: string }): boolean {
+  return input.status === "blocked" && (input.error ?? "").includes(MEMORY_CONSENT_BLOCKED_REASON);
+}
+
+/**
+ * Guidance for a memory write stopped by the runner's consent check. The check
+ * reads the user's own message, so a narrower tool input or a repeat call
+ * cannot pass it; only a message that asks for the save in so many words can.
+ */
+export function buildMemoryConsentBlockGuidance(input: {
+  status: ChatToolRunRecord["status"];
+  error?: string;
+}): string | undefined {
+  if (!isMemoryConsentBlock(input)) {
+    return undefined;
+  }
+  return `Long-term memory is saved only when the user's own message explicitly asks for it, for example ${MEMORY_CONSENT_EXAMPLES}. This is a consent check on the user's message, not on the tool input, so do not retry the write with different input. Ask the user to say it in those words; a bare "yes" does not pass the check.`;
+}
+
+/**
+ * Recovery answer for a turn whose every failed attempt was blocked by tool
+ * policy or by the memory-consent check. Neither block is caused by the tool
+ * input, so the answer says what stopped the tool and what lifts it, and never
+ * invites a narrower retry or echoes the raw reason. Returns undefined when any
+ * attempt failed or was blocked for another reason, which keeps the generic
+ * recovery text.
+ */
+export function buildPolicyBlockedRecoveryText(failedOrBlocked: readonly ChatToolRunRecord[]): string | undefined {
+  if (failedOrBlocked.length === 0) {
+    return undefined;
+  }
+  if (failedOrBlocked.every(isMemoryConsentBlock)) {
+    return [
+      "I didn't save that to memory. Long-term memory is saved only when your message explicitly asks for it, and this one didn't pass that check, so I stopped instead of retrying.",
+      `To save it, ask in those words, for example ${MEMORY_CONSENT_EXAMPLES}.`,
+    ].join("\n\n");
+  }
+  if (!failedOrBlocked.every(isToolPolicyBlock)) {
+    return undefined;
+  }
+  const tools = [...new Set(failedOrBlocked.map((run) => run.toolName))].join(", ");
+  const lastBlock = failedOrBlocked.at(-1);
+  const guidance = lastBlock
+    ? (buildPathBridgeFailureGuidance(lastBlock) ?? buildGovernanceBlockGuidance(lastBlock))
+    : undefined;
+  return [
+    `I couldn't do that: this workspace's tool policy blocked ${tools}. A policy block is not caused by the input, so I stopped instead of retrying it with a different one.`,
+    guidance ? `Why: ${guidance}` : undefined,
+    "The operator can review what this workspace's tools may do in Settings > Tools. Once the policy allows it, ask again and I'll retry.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 /**

@@ -58,6 +58,88 @@ describe("ChatTurnAgentRunner governance block messaging", () => {
   });
 });
 
+describe("ChatTurnAgentRunner policy-block recovery answer", () => {
+  it("says the tool policy blocked the tool instead of suggesting a narrower retry", async () => {
+    const { result, invokeTool } = await runRepeatedlyBlockedMemoryWriteTurn(
+      "blocked: sandbox posture denies memory.write",
+    );
+
+    expect(invokeTool).toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns.every((run) => run.status === "blocked")).toBe(true);
+    expect(result.assistantContent).toContain("tool policy blocked memory.write");
+    expect(result.assistantContent).toContain("Settings > Tools");
+    expect(result.assistantContent).not.toMatch(
+      /narrower|exhausted the current tool approaches|sticking point|specific URL|Suggested retry/i,
+    );
+    expect(result.assistantContent).not.toContain("sandbox posture denies");
+  });
+
+  it("explains the memory-consent check instead of blaming policy or the input", async () => {
+    const { result, invokeTool } = await runRepeatedlyBlockedMemoryWriteTurn(
+      "blocked: unused",
+      "Save a note to memory that my favourite colour is teal.",
+    );
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    const blockedRun = result.turnTrace.toolRuns[0];
+    expect(blockedRun?.status).toBe("blocked");
+    expect(blockedRun?.failureGuidance).toContain("user's own message explicitly asks for it");
+    expect(blockedRun?.failureGuidance).not.toMatch(/narrower, more explicit input/);
+    expect(result.assistantContent).toContain("I didn't save that to memory.");
+    expect(result.assistantContent).toContain('"Remember that …"');
+    expect(result.assistantContent).not.toMatch(
+      /tool policy|narrower|exhausted the current tool approaches|sticking point|Suggested retry/i,
+    );
+  });
+
+  it("keeps the governance guidance that names the setting to change", async () => {
+    const { result } = await runRepeatedlyBlockedMemoryWriteTurn("blocked: tool denied by policy");
+
+    expect(result.assistantContent).toContain("tool policy blocked memory.write");
+    expect(result.assistantContent).toContain("tools.deny");
+    expect(result.assistantContent).not.toMatch(/narrower|exhausted the current tool approaches/i);
+  });
+});
+
+async function runRepeatedlyBlockedMemoryWriteTurn(
+  policyReason: string,
+  content = "Remember that my favourite colour is teal.",
+) {
+  const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValue(
+    namedToolCallCompletion("memory.write", {
+      namespace: "preferences",
+      title: "Favourite colour",
+      content: "Teal.",
+    }),
+  );
+  const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+    outcome: "blocked",
+    policyReason,
+    auditEventId: "audit-memory-write-blocked",
+  });
+  const runner = new ChatTurnAgentRunner({
+    storage: createMockStorage() as never,
+    listToolCatalog: () => createToolCatalog(["memory.write"]),
+    createChatCompletion,
+    invokeTool,
+  });
+  const result = await runner.run({
+    sessionId: "sess-policy-block-recovery",
+    turnId: randomUUID(),
+    userMessageId: "sess-policy-block-recovery-message",
+    content,
+    mode: "chat",
+    providerId: "openai",
+    model: "gpt-5.4",
+    webMode: "off",
+    memoryMode: "off",
+    thinkingLevel: "standard",
+    toolAutonomy: "safe_auto",
+    historyMessages: [{ role: "user", content }],
+  });
+  return { result, invokeTool };
+}
+
 async function runPolicyDeniedTurn(options: { blockerStrictness?: number } = {}) {
   const createChatCompletion = vi
     .fn<() => Promise<ChatCompletionResponse>>()
