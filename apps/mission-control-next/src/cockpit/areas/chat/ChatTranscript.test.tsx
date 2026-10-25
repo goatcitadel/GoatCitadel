@@ -789,6 +789,67 @@ describe("ChatTranscript", () => {
     expect(container.textContent).toContain("Queued a code helper run for this snippet.");
   });
 
+  it("lists the /help command catalog one command per line (#498)", async () => {
+    const props = {
+      ...sessionProps([turn("visible", true)]),
+      notices: [
+        {
+          id: "notice-help",
+          tone: "success" as const,
+          content: [
+            "Command completed: /new [title] - Start a fresh session.",
+            "/research <query> - Run research for the current task.",
+            "/mcp - List configured MCP servers and connection state.",
+            "/help - Show command catalog.",
+          ].join("\n"),
+          timestamp: "2026-10-24T00:00:00.000Z",
+        },
+      ],
+    };
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={props} />
+        </InspectorProvider>,
+      ),
+    );
+    const note = container.querySelector('[aria-label="Latest conversation update"]');
+    expect(note?.textContent).toContain("Command completed");
+    const items = [...(note?.querySelectorAll("ul > li") ?? [])];
+    expect(items.map((item) => item.querySelector("code")?.textContent)).toEqual([
+      "/new [title]",
+      "/research <query>",
+      "/mcp",
+      "/help",
+    ]);
+    expect(items[1]?.textContent).toContain("Run research for the current task.");
+  });
+
+  it("keeps the line breaks of a multi-line notice that is not a command list (#498)", async () => {
+    const props = {
+      ...sessionProps([turn("visible", true)]),
+      notices: [
+        {
+          id: "notice-lines",
+          tone: "success" as const,
+          content: "Command completed: Research finished.\nSources: 3",
+          timestamp: "2026-10-24T00:00:00.000Z",
+        },
+      ],
+    };
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={props} />
+        </InspectorProvider>,
+      ),
+    );
+    const note = container.querySelector('[aria-label="Latest conversation update"]');
+    expect(note?.querySelector("ul")).toBeNull();
+    expect(note?.querySelectorAll("br")).toHaveLength(1);
+    expect(note?.textContent).toContain("Sources: 3");
+  });
+
   it("shows only the selected branch and opens recorded turn details", async () => {
     const onInspectTurn = vi.fn();
     await act(async () =>
@@ -827,6 +888,25 @@ describe("ChatTranscript", () => {
       const headings = [...article.querySelectorAll("h2")];
       expect(headings.map((heading) => heading.textContent)).toEqual(["You said", "Assistant reply"]);
       expect(headings.every((heading) => heading.classList.contains("sr-only"))).toBe(true);
+    }
+  });
+
+  it("keeps the turns' sr-only headings positioned inside the scroller (#497)", async () => {
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={sessionProps([turn("one", true), turn("two", true)])} />
+        </InspectorProvider>,
+      ),
+    );
+    const scroller = container.querySelector("[data-transcript-scroller]");
+    const headings = [...container.querySelectorAll("article[data-turn-id] .sr-only")];
+    expect(scroller).not.toBeNull();
+    expect(headings.length).toBeGreaterThan(0);
+    // An absolute sr-only element overflows its containing block, so that block must be clipped by the scroller.
+    for (const heading of headings) {
+      const containingBlock = heading.parentElement?.closest(".relative, .absolute, .fixed, .sticky");
+      expect(containingBlock && scroller?.contains(containingBlock)).toBe(true);
     }
   });
 

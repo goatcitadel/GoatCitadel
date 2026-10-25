@@ -116,6 +116,14 @@ describe("ThreadList status for searched conversations", () => {
     expect(rows[2]).toContain("Last response failed");
     expect(rows[3]).not.toContain("Last response completed");
     expect(rows[4]).not.toContain("Last response cancelled");
+    // #500: each row's explicit name keeps the status it shows.
+    const names = [...container.querySelectorAll('nav[aria-label="Conversations"] li > div > button')].map((row) =>
+      row.getAttribute("aria-label"),
+    );
+    expect(names[0]).toMatch(/^Chat \S+, .+, Working\b/);
+    expect(names[0]).toContain(rows[0]?.slice(rows[0].indexOf("Working")) ?? "missing status");
+    expect(names[2]).toContain("Last response failed");
+    expect(names[3]).not.toContain("Last response completed");
     const text = container.textContent ?? "";
     expect(text).not.toContain("Status unavailable");
     expect(text).not.toContain("No messages yet");
