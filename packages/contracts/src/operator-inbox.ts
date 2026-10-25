@@ -41,6 +41,8 @@ export interface OperatorInboxItem {
     runId?: string;
     deadLetterId?: string;
     approvalId?: string;
+    /** Server-authored tool id of a tool approval, so the Inbox can name the action in plain words. */
+    toolName?: string;
     planId?: string;
     planRevision?: number;
     planStatus?: ChangePlanStatus;

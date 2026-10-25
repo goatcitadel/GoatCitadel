@@ -202,6 +202,50 @@ describe("Gateway inbox projection", () => {
     });
   });
 
+  it("names a tool approval's tool and target so the Inbox can say what will happen (#562)", async () => {
+    // Usability re-run: a documents.create approval read "Review documents create" with a generic summary.
+    const deps = dependencies();
+    const base = {
+      status: "pending",
+      riskLevel: "caution",
+      payload: {},
+      linkage: { workspaceId: "workspace-a" },
+      createdAt: "2026-09-28T12:00:00.000Z",
+    };
+    vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
+      items: [
+        {
+          ...base,
+          approvalId: "doc",
+          kind: "documents.create",
+          linkage: { ...base.linkage, toolName: "documents.create" },
+          preview: { toolName: "documents.create", path: "notes/launch-plan.md" },
+        },
+        {
+          ...base,
+          approvalId: "fetch",
+          kind: "custom.fetch",
+          linkage: { ...base.linkage, toolName: "custom.fetch" },
+          preview: {
+            toolName: "custom.fetch",
+            target: "https://agent:pw-do-not-project@example.invalid/bot123:do-not-project/send?token=do-not-project",
+            command: "do-not-project",
+          },
+        },
+        { ...base, approvalId: "memory", kind: "memory.write", preview: {} },
+      ],
+    } as never);
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    const item = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`);
+    expect(item("doc")?.source.toolName).toBe("documents.create");
+    expect(item("doc")?.summary).toBe("Path: notes/launch-plan.md");
+    expect(item("fetch")?.source.toolName).toBe("custom.fetch");
+    // Review on #565: URL userinfo, path and query can carry credentials, so the Inbox names only the host.
+    expect(item("fetch")?.summary).toBe("Target: https://example.invalid");
+    expect(item("memory")?.source).not.toHaveProperty("toolName");
+    expect(JSON.stringify(projection)).not.toContain("do-not-project");
+  });
+
   it("keeps canonical ownership, risk, and workspace scope while omitting approval payloads", async () => {
     const deps = dependencies();
     vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
