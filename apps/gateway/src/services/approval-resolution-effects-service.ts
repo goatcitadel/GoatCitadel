@@ -149,6 +149,7 @@ import {
   reconstructAdmittedChatTurnRequest,
 } from "./session-control-service.js";
 import { isCodeModePendingActionType } from "./code-mode-pending-action-types.js";
+import { buildPlainApprovedToolFailureText } from "./user-facing-failure-text.js";
 import { readToolDomainExecutionFailure, type ToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
 import type { SharedHostLifecycleAdmissionPort, SharedHostWorkReservation } from "./shared-host-lifecycle-service.js";
 import {
@@ -3672,7 +3673,7 @@ export class ApprovalEffectsService {
           cause: error,
         });
       }
-      const outputText = buildFailedApprovedToolActionOutput(toolName, toolResult, failure);
+      const outputText = buildFailedApprovedToolActionOutput(toolName, failure);
       const childMaterialized = await this.failChatTurnFromApprovedAction({
         trace: childTrace,
         outputText,
@@ -3800,19 +3801,24 @@ export class ApprovalEffectsService {
           toolName: input.toolName,
           auditEventId: input.actionRecord?.auditEventId,
         });
+        // Only a planning-time "none" frozen on the run (trusted built-in safe read)
+        // may keep a failed read free of the "may have changed state" marking.
+        const effectPotential = toolRun.effectPotential === "none" ? "none" : "unknown";
         const settlement = buildToolEffectEvidence({
-          potential: "unknown",
+          potential: effectPotential,
           phase: beforeDispatch ? "pre_dispatch_blocked" : "dispatch_failed",
         });
         await this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
           status: "failed",
-          effectPotential: "unknown",
+          effectPotential,
           effectDisposition: settlement.disposition,
           effectOutcomeKind: settlement.outcomeKind,
           effectEvidence: settlement.evidence,
           failureGuidance: beforeDispatch
             ? "Approved execution was blocked before dispatch. Resolve the reported restriction before requesting a new invocation."
-            : "Approved execution may have changed state. Inspect external or runtime state before retry; automatic replay is suppressed.",
+            : settlement.outcomeKind === "none"
+              ? "This read-only action failed and changed nothing. You can try again."
+              : "Approved execution may have changed state. Inspect external or runtime state before retry; automatic replay is suppressed.",
           result: {
             ...input.toolResult,
             approvalOutcome: "approved",
@@ -4979,27 +4985,10 @@ function buildApprovedToolActionOutput(toolName: string, result: Record<string, 
   return lines.join("\n");
 }
 
-function buildFailedApprovedToolActionOutput(
-  toolName: string,
-  result: Record<string, unknown>,
-  failure: ToolDomainExecutionFailure,
-): string {
-  const lines =
-    failure.kind === "manual_reconciliation"
-      ? [
-          `Approved tool action requires manual reconciliation: \`${toolName}\`.`,
-          "The external outcome is unknown. Verify the target system before retrying this action.",
-        ]
-      : [`Approved tool action failed: \`${toolName}\`.`];
-  lines.push("", `Failure: ${failure.message}`);
-  const details = Object.entries(result)
-    .filter(([, value]) => typeof value === "string" || typeof value === "number" || typeof value === "boolean")
-    .slice(0, 6)
-    .map(([key, value]) => `${key}: ${String(value)}`);
-  if (details.length > 0) {
-    lines.push("", "Recorded result:", ...details.map((detail) => `- ${detail}`));
-  }
-  return lines.join("\n");
+function buildFailedApprovedToolActionOutput(toolName: string, failure: ToolDomainExecutionFailure): string {
+  // The raw failure and recorded result stay in the tool run `error`, the durable
+  // run `lastError`, and the trace failure; this is operator-facing prose.
+  return buildPlainApprovedToolFailureText(toolName, failure);
 }
 
 function readApprovedActionExecutionFailure(

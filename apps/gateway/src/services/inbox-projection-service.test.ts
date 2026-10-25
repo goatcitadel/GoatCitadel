@@ -283,6 +283,7 @@ describe("Gateway inbox projection", () => {
       items: [
         {
           runId: "run-a",
+          lastError: "ENOENT: scandir '/home/alice/workspace'",
           status: "failed",
           payload: { workspaceId: "workspace-a" },
           metadata: {},
@@ -325,6 +326,7 @@ describe("Gateway inbox projection", () => {
       riskLevel: "nuclear",
       source: { approvalId: "approval-a", sessionId: "session-a" },
     });
+    expect(projection.items[2]?.summary).toBe("ENOENT: scandir '~/workspace'");
     expect(JSON.stringify(projection)).not.toContain("do-not-project");
     expect(JSON.stringify(projection)).not.toContain("Foreign workspace");
     expect(projection.counts.needs_decision).toEqual({ known: 2, complete: true });

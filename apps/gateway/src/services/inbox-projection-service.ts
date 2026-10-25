@@ -9,6 +9,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { redactUrlForError } from "@goatcitadel/policy-engine";
+import { redactLocalHomePaths } from "./user-facing-failure-text.js";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { BackupRetentionService } from "./backup-retention-service.js";
 import type { DaemonRouteService } from "./daemon-route-service.js";
@@ -479,7 +480,11 @@ export class InboxProjectionService {
             kind: "failed_run",
             group: "needs_attention",
             title: "Recover failed run",
-            summary: bounded(run.recoverySummary || run.lastError || "The run failed. Review the run before retrying."),
+            summary: bounded(
+              redactLocalHomePaths(
+                run.recoverySummary || run.lastError || "The run failed. Review the run before retrying.",
+              ),
+            ),
             createdAt: run.createdAt,
             updatedAt: run.updatedAt,
             source: { workspaceId, runId: run.runId },
