@@ -88,6 +88,7 @@ export function useScrollToBottom<
   const scrollRef = useRef<ScrollElement | null>(null);
   const threadEndRef = useRef<SentinelElement | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
+  const schedulePinRef = useRef<(() => void) | null>(null);
   const lastBottomStateRef = useRef<boolean | null>(null);
   const followingRef = useRef(followOutput);
   followingRef.current = followOutput;
@@ -275,6 +276,7 @@ export function useScrollToBottom<
       // Synchronous frame implementations must not leave a completed frame queued.
       if (!completed) scrollFrameRef.current = frame;
     };
+    schedulePinRef.current = schedulePin;
     schedulePin();
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(schedulePin) : null;
     // The viewport can resize too; descendants expose deferred content growth.
@@ -282,6 +284,7 @@ export function useScrollToBottom<
     for (const child of Array.from(scrollElement.children)) observer?.observe(child);
     return () => {
       active = false;
+      schedulePinRef.current = null;
       observer?.disconnect();
       if (scrollFrameRef.current !== null && typeof cancelAnimationFrame === "function") {
         cancelAnimationFrame(scrollFrameRef.current);
@@ -299,9 +302,14 @@ export function useScrollToBottom<
     queuedCount,
     streamError,
     streamStatus,
-    streamingPreviewSignal,
     threadTurnCount,
   ]);
+
+  // The streaming preview signal changes on every RAF flush. It only requests a pin;
+  // it must not tear down and rebuild the ResizeObserver above.
+  useLayoutEffect(() => {
+    schedulePinRef.current?.();
+  }, [streamingPreviewSignal]);
 
   // READ: when not following, re-sync the near-bottom flag from the live scroll
   // position after content changes so the jump-to-latest affordance stays

@@ -42,6 +42,10 @@ export function ChatTranscript({
 }) {
   const preview = useChatStreamingPreviewSnapshot(props.selectedSessionId);
   const turns = props.thread?.turns;
+  const scopeKey = useMemo(
+    () => JSON.stringify([props.workspaceId, props.selectedSessionId]),
+    [props.workspaceId, props.selectedSessionId],
+  );
   const visibleTurns = useMemo(() => turns?.filter((turn) => turn.branch.isSelectedPath) ?? [], [turns]);
   const pendingTurnId = preview?.turnId ?? props.activeStreamingTurnId;
   const hasPreviewTurn = visibleTurns.some((turn) => turn.turnId === pendingTurnId);
@@ -106,6 +110,7 @@ export function ChatTranscript({
       streamError: props.streamError ?? null,
     },
   });
+  const turnKeys = useMemo(() => visibleTurns.map((turn) => turn.turnId), [visibleTurns]);
   const {
     Virtuoso,
     virtualized,
@@ -117,8 +122,8 @@ export function ChatTranscript({
     needed: visibleTurns.length > 100,
     host: scrollRef,
     attribute: "data-turn-id",
-    keys: visibleTurns.map((turn) => turn.turnId),
-    scopeKey: JSON.stringify([props.workspaceId, props.selectedSessionId]),
+    keys: turnKeys,
+    scopeKey,
   });
   const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
   const lastScroll = useRef<{ top: number; height: number } | null>(null);
@@ -298,7 +303,7 @@ export function ChatTranscript({
         </button>
       ) : null}
       <div
-        key={JSON.stringify([props.workspaceId, props.selectedSessionId])}
+        key={scopeKey}
         ref={bindScroller}
         data-transcript-scroller
         data-follow-output="false"
