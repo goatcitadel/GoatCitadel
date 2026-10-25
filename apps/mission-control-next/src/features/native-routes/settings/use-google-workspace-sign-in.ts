@@ -99,6 +99,8 @@ export function useGoogleWorkspaceSignIn(connectionId: string, onChanged: () => 
   }, [pendingState, complete]);
 
   const disconnect = useCallback(async () => {
+    // A Google page still open from an earlier Connect must not sign back in after Disconnect.
+    setFlow(undefined);
     setBusy("disconnect");
     setOutcome(undefined);
     try {

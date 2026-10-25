@@ -54,7 +54,7 @@ interface GoogleFake {
   tokenBodies: URLSearchParams[];
   revokeBodies: URLSearchParams[];
   /** What the token endpoint answers next. */
-  nextToken: (body: URLSearchParams) => Response;
+  nextToken: (body: URLSearchParams) => Response | Promise<Response>;
   revokeStatus: number;
 }
 
@@ -71,7 +71,7 @@ function googleFake(): GoogleFake {
     if (url === "https://oauth2.googleapis.com/token") {
       const body = new URLSearchParams(String(init?.body));
       fake.tokenBodies.push(body);
-      return fake.nextToken(body);
+      return await fake.nextToken(body);
     }
     if (url === "https://oauth2.googleapis.com/revoke") {
       fake.revokeBodies.push(new URLSearchParams(String(init?.body)));
@@ -379,5 +379,77 @@ describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
     await expect(ctx.service.resolveAccessToken(connection.connectionId, "gmail.read")).rejects.toThrow(
       /^blocked: The OS keychain/,
     );
+  });
+
+  it("does not let a Connect that was pending or already talking to Google undo a Disconnect", async () => {
+    const ctx = setup();
+    const connection = await googleConnection();
+    const oauthAccount = `integration:google-workspace:${connection.connectionId}:oauth`;
+
+    // Pending: the Google page is still open when the operator disconnects.
+    const pending = await ctx.service.start(connection.connectionId, {
+      capabilities: ["gmail.read"],
+      clientSecret: "GOCSPX-desktop-secret",
+    });
+    await ctx.service.disconnect(connection.connectionId);
+    await expect(
+      ctx.service.complete(connection.connectionId, { state: pending.state, code: "late-code" }),
+    ).rejects.toBeInstanceOf(ConflictError);
+    expect(ctx.google.tokenBodies).toHaveLength(0);
+
+    // In flight: Disconnect lands while Google is answering the code exchange.
+    const inFlight = await ctx.service.start(connection.connectionId, { capabilities: ["gmail.read"] });
+    ctx.google.nextToken = async () => {
+      await ctx.service.disconnect(connection.connectionId);
+      return Response.json({
+        access_token: "access-late",
+        refresh_token: "refresh-late",
+        expires_in: 3600,
+        scope: GMAIL_READONLY,
+      });
+    };
+    await expect(
+      ctx.service.complete(connection.connectionId, { state: inFlight.state, code: "auth-code-2" }),
+    ).rejects.toThrow(/disconnected before this sign-in finished, so nothing was saved and Google ended the new grant/);
+    expect(ctx.secrets.secrets.has(oauthAccount)).toBe(false);
+    expect(ctx.google.revokeBodies.map((body) => body.get("token"))).toEqual(["refresh-late"]);
+    expect(await storage.integrationConnections.get(connection.connectionId)).toMatchObject({ status: "disconnected" });
+  });
+
+  it("re-checks the caller's capability when a reconnect replaces the sign-in during a refresh", async () => {
+    const ctx = setup();
+    const connection = await googleConnection({ gmailRead: false, calendarRead: true });
+    const oauthAccount = `integration:google-workspace:${connection.connectionId}:oauth`;
+    await connect(ctx, connection.connectionId, ["calendar.read"], { scope: CALENDAR_READONLY, expiresIn: 1 });
+    const calendarEvents = "https://www.googleapis.com/auth/calendar.events";
+    ctx.google.nextToken = async () => {
+      // While the refresh is out, the operator reconnects with Create Calendar events only.
+      const replaced = JSON.parse(ctx.secrets.secrets.get(oauthAccount)!);
+      ctx.secrets.secrets.set(
+        oauthAccount,
+        JSON.stringify({
+          ...replaced,
+          accessToken: "access-reconnected",
+          refreshToken: "refresh-reconnected",
+          grantedScopes: [calendarEvents],
+          expiresAt: Date.now() + 3_600_000,
+        }),
+      );
+      const current = await storage.integrationConnections.get(connection.connectionId);
+      await storage.integrationConnections.update(connection.connectionId, {
+        config: { ...current.config, calendarRead: false, calendarWrite: true },
+      });
+      return Response.json({ access_token: "access-stale-refresh", expires_in: 3600, scope: CALENDAR_READONLY });
+    };
+
+    // calendar.events would permit listing, but Read Calendar events is now switched off.
+    await expect(ctx.service.resolveAccessToken(connection.connectionId, "calendar.read")).rejects.toThrow(
+      /^blocked: Read Calendar events is turned off/,
+    );
+    // The replacement sign-in still serves what it does allow, and the stale refresh was not saved over it.
+    await expect(ctx.service.resolveAccessToken(connection.connectionId, "calendar.write")).resolves.toBe(
+      "access-reconnected",
+    );
+    expect(JSON.parse(ctx.secrets.secrets.get(oauthAccount)!).refreshToken).toBe("refresh-reconnected");
   });
 });

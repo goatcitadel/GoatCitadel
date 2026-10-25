@@ -39,6 +39,8 @@ const MAX_CLIENT_SECRET_CHARS = 512;
 const CONNECTION_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,160}$/;
 const REAUTH_ERRORS = new Set(["invalid_grant", "invalid_client", "unauthorized_client"]);
 const SETTINGS_PATH = "Settings › Connections › Integrations";
+// Google sends `expires_in`; when it does not, assume its documented one-hour lifetime.
+const DEFAULT_ACCESS_TOKEN_LIFETIME_MS = 60 * 60_000;
 
 /** What the OS keychain holds for one connection. Only this service reads or writes it. */
 interface GoogleWorkspaceCredential {
@@ -98,7 +100,9 @@ export class GoogleWorkspaceOAuthService {
   private readonly defaultRedirectUri: string;
   private readonly pkce: McpOAuthPkceStore;
   private readonly flows = new Map<string, PendingGoogleFlow>();
-  private readonly refreshes = new Map<string, Promise<string>>();
+  private readonly refreshes = new Map<string, Promise<void>>();
+  /** Bumped by Disconnect: a completion that started earlier can no longer save its grant. */
+  private readonly signOuts = new Map<string, number>();
 
   public constructor(options: GoogleWorkspaceOAuthServiceOptions) {
     const { secretStore, storage, fetchFn, now, defaultRedirectUri } = options;
@@ -213,8 +217,8 @@ export class GoogleWorkspaceOAuthService {
       throw new ConflictError({ message: "This Google sign-in is no longer pending. Start Connect Google again." });
     }
     // One use only: a replayed or late code can never reach Google twice.
-    this.flows.delete(connectionId);
-    this.pkce.discard(connectionId);
+    this.dropPendingFlow(connectionId);
+    const signOut = this.signOuts.get(connectionId) ?? 0;
     if (readClientId(connection.config) !== flow.clientId) {
       throw new ConflictError({ message: "The OAuth client ID changed during sign-in. Start Connect Google again." });
     }
@@ -241,12 +245,19 @@ export class GoogleWorkspaceOAuthService {
     const accountLabel = isGoogleWorkspaceCapabilityGranted("gmail.read", grantedScopes)
       ? await this.client.readGmailAddress(tokens.accessToken)
       : undefined;
+    if ((this.signOuts.get(connectionId) ?? 0) !== signOut) {
+      // Disconnect won while Google answered: keep nothing and end the grant Google just issued.
+      const { revoked } = await this.revokeGrant(connectionId, tokens.refreshToken);
+      throw new ConflictError({
+        message: `Google was disconnected before this sign-in finished, so nothing was saved${revoked ? " and Google ended the new grant" : ""}. Connect Google again if needed.`,
+      });
+    }
     this.saveCredential(connectionId, {
       version: 1,
       clientId: flow.clientId,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      ...(tokens.expiresAt(now) ? { expiresAt: tokens.expiresAt(now) } : {}),
+      expiresAt: tokens.expiresAt(now) ?? now + DEFAULT_ACCESS_TOKEN_LIFETIME_MS,
       grantedScopes,
       ...(accountLabel ? { accountLabel } : {}),
       updatedAt: now,
@@ -272,6 +283,7 @@ export class GoogleWorkspaceOAuthService {
   public async disconnect(connectionId: string): Promise<GoogleWorkspaceOAuthDisconnectResult> {
     await this.requireConnection(connectionId);
     this.assertKeychainAvailable();
+    this.signOut(connectionId);
     const { revoked, message } = await this.revokeAndForget(connectionId);
     await this.updateConnection(connectionId, () => ({ status: "disconnected", lastError: null }));
     return { status: await this.getStatus(connectionId), revoked, message };
@@ -280,6 +292,7 @@ export class GoogleWorkspaceOAuthService {
   /** Cleanup after the connection itself was deleted: revoke when possible and remove every keychain entry. */
   public async forgetConnection(connectionId: string): Promise<void> {
     if (!CONNECTION_ID_PATTERN.test(connectionId) || !this.keychainAvailable()) return;
+    this.signOut(connectionId);
     await this.revokeAndForget(connectionId);
     this.removeSecret(clientSecretAccount(connectionId));
   }
@@ -333,6 +346,14 @@ export class GoogleWorkspaceOAuthService {
    * records it before any provider request.
    */
   public async resolveAccessToken(connectionId: string, capability: GoogleWorkspaceCapability): Promise<string> {
+    return await this.resolveCheckedAccessToken(connectionId, capability, false);
+  }
+
+  private async resolveCheckedAccessToken(
+    connectionId: string,
+    capability: GoogleWorkspaceCapability,
+    renewed: boolean,
+  ): Promise<string> {
     const connection = await this.readConnection(connectionId);
     if (connection.catalogId !== GOOGLE_WORKSPACE_CATALOG_ID) {
       throw new Error("blocked: This connection is not a Google Workspace (Gmail and Calendar) connection.");
@@ -361,11 +382,19 @@ export class GoogleWorkspaceOAuthService {
     if (credential.expiresAt && credential.expiresAt > this.now() + REFRESH_SKEW_MS) {
       return credential.accessToken;
     }
-    return await this.refreshOnce(connection, credential);
+    if (renewed) {
+      throw new Error(
+        `blocked: Google sign-in changed while it was renewed. Try again, or reconnect Google in ${SETTINGS_PATH}.`,
+      );
+    }
+    await this.refreshOnce(connection, credential);
+    // Re-check this caller's capability, client and grant against whatever is stored now: a reconnect
+    // during the refresh may have replaced the sign-in with different switches or scopes.
+    return await this.resolveCheckedAccessToken(connectionId, capability, true);
   }
 
   /** Single flight per connection: concurrent tool calls share one refresh request. */
-  private refreshOnce(connection: IntegrationConnection, credential: GoogleWorkspaceCredential): Promise<string> {
+  private refreshOnce(connection: IntegrationConnection, credential: GoogleWorkspaceCredential): Promise<void> {
     const inflight = this.refreshes.get(connection.connectionId);
     if (inflight) return inflight;
     const pending = this.refresh(connection, credential).finally(() => this.refreshes.delete(connection.connectionId));
@@ -373,7 +402,8 @@ export class GoogleWorkspaceOAuthService {
     return pending;
   }
 
-  private async refresh(connection: IntegrationConnection, credential: GoogleWorkspaceCredential): Promise<string> {
+  /** Saves the renewed token when the sign-in it renewed is still the stored one; callers re-check afterwards. */
+  private async refresh(connection: IntegrationConnection, credential: GoogleWorkspaceCredential): Promise<void> {
     const connectionId = connection.connectionId;
     const clientSecret = this.resolveClientSecret(connection);
     if (!clientSecret) {
@@ -396,30 +426,18 @@ export class GoogleWorkspaceOAuthService {
     }
     const tokens = readTokenResponse(response);
     if (!tokens.accessToken) throw new Error("Google token refresh returned no access token. Try again shortly.");
-    if (!this.isStillStored(connectionId, credential)) {
-      // A reconnect or disconnect replaced the sign-in mid-refresh; the newer state wins.
-      return await this.resolveAccessTokenAfterRace(connectionId);
-    }
+    // A reconnect or disconnect replaced the sign-in mid-refresh: the newer state wins.
+    if (!this.isStillStored(connectionId, credential)) return;
     const now = this.now();
-    const expiresAt = tokens.expiresAt(now);
     this.saveCredential(connectionId, {
       ...credential,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken ?? credential.refreshToken,
       grantedScopes: tokens.scopes ?? credential.grantedScopes,
-      ...(expiresAt ? { expiresAt } : {}),
+      expiresAt: tokens.expiresAt(now) ?? now + DEFAULT_ACCESS_TOKEN_LIFETIME_MS,
       updatedAt: now,
       lastRefreshedAt: now,
     });
-    return tokens.accessToken;
-  }
-
-  private async resolveAccessTokenAfterRace(connectionId: string): Promise<string> {
-    const current = this.readCredential(connectionId);
-    if (!current || current.requiresReauth) {
-      throw new Error(`blocked: Google sign-in changed while it was renewed. Reconnect Google in ${SETTINGS_PATH}.`);
-    }
-    return current.accessToken;
   }
 
   private async revokeAndForget(connectionId: string): Promise<{ revoked: boolean; message: string }> {
@@ -427,12 +445,10 @@ export class GoogleWorkspaceOAuthService {
     if (!credential) return { revoked: false, message: "No Google sign-in was stored for this connection." };
     let outcome: { revoked: boolean; message: string };
     try {
-      const response = await this.client.revoke(connectionId, credential.refreshToken);
-      // 400 invalid_token means Google already ended this grant.
-      outcome =
-        response.ok || response.body.error === "invalid_token"
-          ? { revoked: true, message: "Google ended GoatCitadel's access for this account." }
-          : { revoked: false, message: revokeFallbackMessage(describeGoogleOAuthError(response)) };
+      const { revoked, reason } = await this.revokeGrant(connectionId, credential.refreshToken);
+      outcome = revoked
+        ? { revoked: true, message: "Google ended GoatCitadel's access for this account." }
+        : { revoked: false, message: revokeFallbackMessage(reason) };
     } catch (error) {
       outcome = {
         revoked: false,
@@ -442,6 +458,26 @@ export class GoogleWorkspaceOAuthService {
     // The local sign-in goes regardless: the operator asked to disconnect.
     this.removeSecret(credentialAccount(connectionId));
     return outcome;
+  }
+
+  /** RFC 7009 revocation. A transport failure propagates; Google's refusal is returned as its reason. */
+  private async revokeGrant(connectionId: string, token: string): Promise<{ revoked: boolean; reason: string }> {
+    const response = await this.client.revoke(connectionId, token);
+    // 400 invalid_token means Google already ended this grant.
+    return response.ok || response.body.error === "invalid_token"
+      ? { revoked: true, reason: "" }
+      : { revoked: false, reason: describeGoogleOAuthError(response) };
+  }
+
+  /** Forgets any pending Connect for this connection and fences completions that already started. */
+  private signOut(connectionId: string): void {
+    this.dropPendingFlow(connectionId);
+    this.signOuts.set(connectionId, (this.signOuts.get(connectionId) ?? 0) + 1);
+  }
+
+  private dropPendingFlow(connectionId: string): void {
+    this.flows.delete(connectionId);
+    this.pkce.discard(connectionId);
   }
 
   private async requireConnection(connectionId: string): Promise<IntegrationConnection> {

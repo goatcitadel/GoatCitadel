@@ -255,6 +255,40 @@ describe("Connect Google", () => {
     expect(container!.querySelector('[role="alert"]')?.textContent).toMatch(/did not confirm the revocation/);
   });
 
+  it("drops a pending Connect on Disconnect, so a Google page left open cannot sign back in", async () => {
+    api.fetchGoogleWorkspaceOAuthStatus.mockResolvedValue(
+      status({ connected: true, accountLabel: "operator@example.com", clientSecretSource: "keychain" }),
+    );
+    api.startGoogleWorkspaceOAuth.mockResolvedValue({
+      connectionId: CONNECTION_ID,
+      state: STATE,
+      authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+      redirectUri: "http://127.0.0.1:8787/api/v1/integrations/google/oauth/callback",
+      capabilities: ["gmail.read"],
+      scopes: [],
+      expiresAt: "2026-10-25T00:10:00.000Z",
+    });
+    api.disconnectGoogleWorkspaceOAuth.mockResolvedValue({
+      revoked: true,
+      message: "Google ended GoatCitadel's access for this account.",
+      status: status({ clientSecretSource: "keychain" }),
+    });
+    await render();
+    await click(button("Reconnect Google", container!));
+    await click(button("Continue to Google", document.querySelector('[role="dialog"]')!));
+    expect(container!.textContent).toContain("Open Google sign-in");
+
+    await click(button("Disconnect Google", container!));
+    await click(button("Disconnect Google", document.querySelector('[role="dialog"]')!));
+    expect(api.disconnectGoogleWorkspaceOAuth).toHaveBeenCalledWith(CONNECTION_ID);
+    expect(container!.textContent).not.toContain("Open Google sign-in");
+
+    window.history.replaceState(null, "", `/settings/connections#google-oauth-return&state=${STATE}&code=late`);
+    await act(async () => void consumeGoogleOAuthReturnFragment());
+    await settle();
+    expect(api.completeGoogleWorkspaceOAuth).not.toHaveBeenCalled();
+  });
+
   it("keeps Connect unavailable until a client ID is saved, and flags a leftover pasted token", async () => {
     api.fetchGoogleWorkspaceOAuthStatus.mockResolvedValue(
       status({ clientIdConfigured: false, legacyAccessTokenConfigured: true }),
