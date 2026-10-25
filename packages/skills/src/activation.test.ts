@@ -83,23 +83,6 @@ describe("resolveSkillActivation", () => {
     expect(backend.selected).toEqual([]);
   });
 
-  it("no longer routes design prompts to design-intelligence by keyword", () => {
-    const retired = {
-      ...skill("design-intelligence"),
-      skillId: "bundled:design-intelligence",
-      routingHints: GENERATED_SKILL_ROUTING_HINTS["design-intelligence"],
-    };
-
-    const result = resolveSkillActivation(
-      { text: "Create a real PowerPoint slide deck and a PDF brief with good document design." },
-      [retired],
-    );
-    expect(result.selected).toEqual([]);
-
-    const explicit = resolveSkillActivation({ text: "@skill design-intelligence review this form" }, [retired]);
-    expect(explicit.selected.map((item) => item.name)).toEqual(["design-intelligence"]);
-  });
-
   it("treats a $skillId mention as an explicit activation", () => {
     const impeccable = { ...skill("impeccable"), skillId: "bundled:impeccable" };
 

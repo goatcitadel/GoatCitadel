@@ -17,16 +17,6 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not use for pure product strategy or documentation-only work."],
     confidenceBoost: 0.1,
   },
-  // Retired from keyword routing: impeccable owns design work. The skill stays loadable by explicit
-  // mention only until its files are removed (plan Phase 6); its files are not edited before then.
-  "design-intelligence": {
-    phrases: [],
-    keywords: [],
-    surfaces: ["chat", "code", "cowork"],
-    whenToUse: ["Explicit mention only; impeccable is the design skill for UI, HTML, deck, and document work."],
-    whenNotToUse: ["Do not route design prompts here; the impeccable skill replaces it."],
-    confidenceBoost: 0,
-  },
   impeccable: {
     phrases: [
       "design review",

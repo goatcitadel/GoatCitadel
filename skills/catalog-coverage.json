@@ -19,14 +19,6 @@
       "catalogExposure": "suggestable"
     },
     {
-      "skillId": "bundled:design-intelligence",
-      "owner": "mission-control-next",
-      "source": "bundled",
-      "riskTier": "medium",
-      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
-      "catalogExposure": "suggestable"
-    },
-    {
       "skillId": "bundled:documentation",
       "owner": "docs",
       "source": "bundled",
