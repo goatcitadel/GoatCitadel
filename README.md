@@ -144,7 +144,7 @@ A fresh install opens a focused setup: **choose a model**, **set your safety pos
 ### Getting around
 
 - `Ctrl/Cmd+K` opens the command palette: start a new chat, choose the default model, jump to any area, search conversations, Inbox items, and Library records, or change theme and density.
-- Press `g` then `c`, `i`, `w`, `l`, `s`, or `t` to jump to Chat, Inbox, Work, Library, System, or Settings. `Ctrl/Cmd+B` toggles the sidebar and `?` lists every shortcut.
+- Press `g` then `c`, `i`, `w`, `a`, `l`, `s`, or `t` to jump to Chat, Inbox, Work, Capabilities, Library, System, or Settings. `Ctrl/Cmd+B` toggles the sidebar and `?` lists every shortcut.
 - On phones, a bottom tab bar carries Chat, Inbox, Work, and Library, with System, Settings, search, and scope under More.
 - Prefer the previous layout? Choose **Switch to classic Mission Control** from the gear menu or palette, or open `?shell=classic`; `?shell=cockpit` switches back, and either choice is saved in the browser. A few detailed views still open in Classic and are labeled when they do. See [cockpit implementation status](./docs/MISSION_CONTROL_COCKPIT_PROGRESS.md) for remaining verification boundaries.
 
@@ -208,7 +208,7 @@ The complete change record is [CHANGELOG.md](./CHANGELOG.md).
 | Cockpit default | The operator authorized the Cockpit default on October 2, 2026. That change does not certify the remaining parity, approved visual, installed-profile, or complete release gates; some detailed views still hand off to Classic and are labeled when they do. |
 | Retired shell | `apps/mission-control` source is archived from disk. Generated build/runtime residue may still exist locally, but it is not a shipped compatibility source. |
 | Runtime owner | [apps/gateway](./apps/gateway) is the Fastify control plane for runtime APIs, orchestration, approvals, memory, integrations, audit, policy, realtime events, and persistence coordination. |
-| Visible IA | Cockpit navigation is `Chat / Inbox / Work / Library / System / Settings`: conversation, planning, and implementation share the single Chat surface, and Work projects operational tasks and runs. Classic keeps `Work / Projects / Library / Ops / Settings`, with Work representing Chat. Legacy `cowork` and `code` routes normalize to Chat or Ops Kanban. |
+| Visible IA | Cockpit navigation is `Chat / Inbox / Work / Capabilities / Library / System / Settings`: conversation, planning, and implementation share the single Chat surface, and Work projects operational tasks and runs. Classic keeps `Work / Projects / Library / Ops / Settings`, with Work representing Chat. Legacy `cowork` and `code` routes normalize to Chat or Ops Kanban. |
 | Unified surface routing | The gateway normalizes conversation mode to Chat. Planning, research, approvals, and Code Mode context run as Chat capabilities rather than separate primary surfaces. |
 | Route scope | The current visible route surface is 50 routes: 44 `ship`, 0 `needs_release_polish`, and 6 `experimental`. See [docs/1_0_RELEASE_SURFACE_SCOPE.md](./docs/1_0_RELEASE_SURFACE_SCOPE.md). |
 | Citadels | Six Citadel routes ship (Overview, Mason, Wards, Council, Blueprint, Vault). Gatehouse Ward `deny`, `require_approval`, and `redact` effects are enforced at the policy gate on every tool invocation and every matched ward is audited; for integration actions and A2A outbound/push, `require_approval` opens an operator approval that executes the exact approved request once on approve and re-checks the ward at execution (deny still wins); `require_dry_run` is enforced for integration actions and A2A outbound/push callers through the shared side-effect runner; `route_local` is enforced for Chat model routing: the turn keeps or switches to a model on a loopback host, fails closed with `citadel_ward_route_local_unavailable` when none is available, and every model dispatch that carries Chat content re-checks it (turns and their tool loops, repairs and fallbacks, delegation workers, assembly calls, and utility calls with a session or turn lineage); a `deny` ward on `model.chat.*` blocks those dispatches, and utility calls without a session or turn lineage, embedding and image-generation calls, and `model.tool.*` actions are not ward-gated yet. Vault secrets are sealed per Citadel behind the OS keychain and fail closed. |
@@ -447,7 +447,7 @@ flowchart LR
 ```
 
 - Gateway runtime is the operational source of truth for runtime APIs, orchestration, approvals, policy, integrations, audit, realtime events, and persistence coordination.
-- Mission Control is an API client for Chat, Inbox, Work, Library, System, and Settings (and the Classic layout). It should not bypass gateway-owned runtime state.
+- Mission Control is an API client for Chat, Inbox, Work, Capabilities, Library, System, and Settings (and the Classic layout). It should not bypass gateway-owned runtime state.
 - Effective Citadel/workspace scope is resolved in the control plane before policy, memory, approvals, tool grants, and durable execution decisions.
 - Durable execution owns resumable mission-session work, approval wait/resume, recovery, retries, cancellation truth, and dead-letter handling.
 - Capability and skills catalogs split inspectable review state from callable runtime state. Inactive candidates and proposals are never callable.
