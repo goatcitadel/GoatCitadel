@@ -1,9 +1,10 @@
-import type { OperatorInboxResponse } from "@goatcitadel/contracts";
+import type { OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
 import {
   inboxCountIsExact,
   inboxCountLabel,
   inboxCountTitle,
+  inboxItemTitle,
   inboxKnownCount,
   inboxMatchesWorkspace,
   inboxNavigationLabel,
@@ -107,5 +108,39 @@ describe("Inbox counts", () => {
         },
       }),
     ).toBeNull();
+  });
+});
+
+describe("inboxItemTitle (#562)", () => {
+  const approval = (
+    source: Partial<OperatorInboxItem["source"]>,
+    title = "Review documents create",
+  ): OperatorInboxItem => ({
+    id: "approval:a",
+    kind: "approval",
+    group: "needs_decision",
+    title,
+    summary: "",
+    createdAt: "",
+    href: "",
+    source: { workspaceId: "w", ...source },
+  });
+
+  it("names a tool approval in the same plain words as the Chat approval card", () => {
+    expect(inboxItemTitle(approval({ approvalId: "a", toolName: "documents.create" }))).toBe("Create document");
+    expect(inboxItemTitle(approval({ approvalId: "a", toolName: "fs.read" }, "Review fs read"))).toBe("Read file");
+  });
+
+  it("humanizes an unknown tool instead of showing its raw id", () => {
+    expect(
+      inboxItemTitle(approval({ approvalId: "a", toolName: "custom.fetch" }, "Review custom fetch")),
+    ).not.toContain(".");
+  });
+
+  it("keeps the server title for approvals without a tool and for other kinds", () => {
+    expect(inboxItemTitle(approval({ approvalId: "a" }, "Review memory write"))).toBe("Review memory write");
+    expect(inboxItemTitle({ ...approval({ toolName: "fs.read" }, "Answer a question"), kind: "user_input" })).toBe(
+      "Answer a question",
+    );
   });
 });

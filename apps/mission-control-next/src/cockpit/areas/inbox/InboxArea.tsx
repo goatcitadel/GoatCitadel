@@ -15,7 +15,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useOperatorInbox } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
-import { inboxCountIsExact, inboxMatchesWorkspace } from "./inbox-presentation";
+import { inboxCountIsExact, inboxItemTitle, inboxMatchesWorkspace } from "./inbox-presentation";
 import {
   compareInboxItems,
   INBOX_VIEW_GROUPS,
@@ -220,7 +220,7 @@ export function InboxArea() {
     (item: OperatorInboxItem, focusAction?: "approve" | "deny", explicitDetails = false) =>
       inspector.open({
         source: `inbox:${item.id}`,
-        title: item.title,
+        title: inboxItemTitle(item),
         body: (
           <InboxInspectorBody
             item={item}

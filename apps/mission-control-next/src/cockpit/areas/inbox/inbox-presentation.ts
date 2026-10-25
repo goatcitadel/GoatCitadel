@@ -1,4 +1,6 @@
 import type { OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
+// Tool names are open strings; the chat presenter names the known ones and humanizes the rest.
+import { presentApprovalAction } from "../chat/chat-vocabulary";
 
 export const INBOX_GROUPS = [
   { id: "needs_decision", label: "Needs decision", description: "Requests waiting for your answer" },
@@ -63,6 +65,11 @@ export function inboxNavigationLabel(count: string | null): string {
 export function inboxCountTitle(count: string): string {
   if (count === UNKNOWN_COUNT) return "Some decision coverage is incomplete";
   return count.endsWith("+") ? "At least this many outstanding decisions" : "Outstanding decisions";
+}
+
+/** A tool approval is named like the Chat approval card ("Create document"); other items keep the server title. */
+export function inboxItemTitle(item: OperatorInboxItem): string {
+  return item.kind === "approval" && item.source.toolName ? presentApprovalAction(item.source.toolName) : item.title;
 }
 
 export function inboxItemKindLabel(kind: OperatorInboxItem["kind"]): string {

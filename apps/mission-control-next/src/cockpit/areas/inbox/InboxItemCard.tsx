@@ -7,7 +7,7 @@ import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
 import { approvalExpiryLabel } from "./approval-preview";
-import { inboxItemKindLabel } from "./inbox-presentation";
+import { inboxItemKindLabel, inboxItemTitle } from "./inbox-presentation";
 import { InboxOwnerLink } from "./InboxOwnerLink";
 import { InboxSourceContext } from "./InboxSourceContext";
 import { hasExpired, useMinuteClock } from "./use-minute-clock";
@@ -41,7 +41,7 @@ export function InboxItemCard({
             {inboxItemKindLabel(item.kind)} · <TimeText value={item.createdAt} />
             {selected ? <span className="font-semibold text-fg"> · Selected</span> : null}
           </p>
-          <h3 className="mt-1 text-md font-semibold text-fg">{item.title}</h3>
+          <h3 className="mt-1 text-md font-semibold text-fg">{inboxItemTitle(item)}</h3>
           <p className="mt-1 text-sm text-fg-secondary">{item.summary}</p>
         </div>
         <div className="flex flex-wrap gap-2">

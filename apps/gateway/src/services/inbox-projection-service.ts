@@ -82,9 +82,13 @@ function approvalTargetSummary(preview: unknown): string {
   if (targets.length)
     return bounded(`Targets: ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? "; more in review" : ""}`);
   const knowledge = knowledgeTargetSummary(record);
-  return knowledge
-    ? bounded(knowledge)
-    : "Review the requested action and its policy reason. Target details are available in the approval record.";
+  if (knowledge) return bounded(knowledge);
+  // A tool approval's preview (policy-engine buildApprovalPreview) names its path or target; commands stay out.
+  if (typeof record.toolName === "string") {
+    if (typeof record.path === "string" && record.path.trim()) return bounded(`Path: ${record.path.trim()}`);
+    if (typeof record.target === "string" && record.target.trim()) return bounded(`Target: ${record.target.trim()}`);
+  }
+  return "Review the requested action and its policy reason. Target details are available in the approval record.";
 }
 
 export interface InboxProjectionDependencies {
@@ -234,6 +238,7 @@ export class InboxProjectionService {
             source: {
               workspaceId,
               approvalId: approval.approvalId,
+              ...(!plan && approval.linkage?.toolName ? { toolName: approval.linkage.toolName } : {}),
               ...(plan?.planId ? { planId: plan.planId } : {}),
               ...(approval.linkage?.sessionId ? { sessionId: approval.linkage.sessionId } : {}),
               ...(approval.linkage?.turnId ? { turnId: approval.linkage.turnId } : {}),
