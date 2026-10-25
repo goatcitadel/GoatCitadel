@@ -332,7 +332,38 @@ export function buildApprovalReviewEvidenceModel(...sources: Array<unknown>): Ap
 export function buildApprovalRequestReviewEvidenceModel(approval: ApprovalRequest): ApprovalEvidenceModel | null {
   if (approval.kind === "external_source.knowledge_snapshot") return externalSourceKnowledgeApprovalEvidence(approval);
   if (approval.kind === "communications.mail.send") return communicationsMailSendApprovalEvidence(approval);
+  if (approval.kind === "change.request") return changeRequestApprovalEvidence(approval);
   return citadelWardApprovalEvidence(approval) ?? buildApprovalReviewEvidenceModel(approval.preview);
+}
+
+/** A well-formed `preview.requestSummary` (non-empty label/value lines), or null when missing or malformed. */
+function readRequestSummaryEntries(approval: ApprovalRequest): ApprovalTargetEntry[] | null {
+  const summary = (approval.preview as Record<string, unknown> | undefined)?.requestSummary;
+  if (!Array.isArray(summary) || summary.length === 0) return null;
+  const entries = summary.filter(
+    (entry): entry is ApprovalTargetEntry =>
+      !!entry && typeof entry.label === "string" && typeof entry.value === "string",
+  );
+  return entries.length === summary.length ? entries : null;
+}
+
+/**
+ * `change.request` approvals carry the policy engine's redacted, display-only `preview.requestSummary` of the
+ * requested intent; it is withheld when the intent can't be listed exactly. The executor re-validates the
+ * approved args. Without a summary there is nothing exact to approve, so no generic fallback applies.
+ */
+export function changeRequestApprovalEvidence(approval: ApprovalRequest): ApprovalEvidenceModel | null {
+  const entries = readRequestSummaryEntries(approval);
+  if (!entries) return null;
+  return {
+    targets: entries.map((entry) => `${entry.label}: ${entry.value}`),
+    targetEntries: entries.map((entry) => ({ label: entry.label, value: entry.value })),
+    commands: [],
+    changes: [],
+    supporting: [],
+    consequence:
+      "Approving lets the assistant request this Change Plan once, so you can inspect it. The request never confirms or applies the change; denying withholds it.",
+  };
 }
 
 const CITADEL_WARD_CONSEQUENCES: Readonly<Record<string, string>> = {
@@ -350,13 +381,8 @@ const CITADEL_WARD_CONSEQUENCES: Readonly<Record<string, string>> = {
  */
 export function citadelWardApprovalEvidence(approval: ApprovalRequest): ApprovalEvidenceModel | null {
   const consequence = CITADEL_WARD_CONSEQUENCES[approval.kind];
-  const summary = (approval.preview as Record<string, unknown> | undefined)?.requestSummary;
-  if (!consequence || !Array.isArray(summary) || summary.length === 0) return null;
-  const entries = summary.filter(
-    (entry): entry is ApprovalTargetEntry =>
-      !!entry && typeof entry.label === "string" && typeof entry.value === "string",
-  );
-  if (entries.length !== summary.length) return null;
+  const entries = consequence ? readRequestSummaryEntries(approval) : null;
+  if (!consequence || !entries) return null;
   const payload = approval.payload as Record<string, unknown> | undefined;
   const citadelId = typeof payload?.citadelId === "string" ? payload.citadelId : undefined;
   const wardAction = typeof payload?.wardAction === "string" ? payload.wardAction : undefined;
