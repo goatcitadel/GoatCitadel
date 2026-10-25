@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SecretStoreService,
   SecretStoreUnavailableError,
   isSecretStoreUnavailableLikeError,
+  resetCommandAvailabilityCache,
   runCommand,
 } from "./secret-store-service.js";
 import { encodeMcpCredentialReceipt } from "./mcp-credential-receipt.js";
@@ -15,6 +16,10 @@ vi.mock("node:child_process", () => ({
 const spawnSyncMock = vi.mocked(spawnSync);
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 const originalDisableSecretStore = process.env.GOATCITADEL_DISABLE_SECRET_STORE;
+
+beforeEach(() => {
+  resetCommandAvailabilityCache();
+});
 
 afterEach(() => {
   spawnSyncMock.mockReset();
@@ -39,8 +44,8 @@ describe("SecretStoreService", () => {
     expect(options?.input).toBe(encodeMcpCredentialReceipt(secret, id));
     expect(JSON.stringify(args)).not.toContain(secret);
     expect(JSON.stringify(options?.env)).not.toContain(secret);
-    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never)
-      .mockReturnValueOnce({ status: 0, stdout: encodeMcpCredentialReceipt(secret, id), stderr: "" } as never);
+    // The where/which availability probe is memoized, so only the credential read reaches spawnSync.
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: encodeMcpCredentialReceipt(secret, id), stderr: "" } as never);
     expect(service.getSecret(account)).toBe(secret);
     spawnSyncMock.mockClear();
     expect(() => service.setSecret(account, secret)).toThrow("staged custody writer");
@@ -90,11 +95,10 @@ describe("SecretStoreService", () => {
     const service = new SecretStoreService();
     spawnSyncMock.mockReturnValueOnce({ status: 0 } as never)
       .mockReturnValueOnce({ status: 0, stdout: custodyId + "\n", stderr: "" } as never)
-      .mockReturnValueOnce({ status: 0 } as never)
       .mockReturnValueOnce({ status: 0, stdout: "ok\n", stderr: "" } as never);
     expect(service.getCredentialCustodyId()).toBe(custodyId);
     service.setSecretForCustody("mcp:fixture:environment:version", secret, custodyId);
-    const [, args, options] = spawnSyncMock.mock.calls[3]!;
+    const [, args, options] = spawnSyncMock.mock.calls[2]!;
     expect(JSON.stringify(args)).not.toContain(secret);
     expect(JSON.stringify(options?.env)).not.toContain(secret);
     expect(options).toEqual(expect.objectContaining({ input: secret, timeout: 10000, maxBuffer: 64 * 1024, windowsHide: true,
@@ -173,9 +177,7 @@ describe("SecretStoreService", () => {
     spawnSyncMock
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never)
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never)
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never)
       .mockReturnValueOnce({ status: 0, stdout: "sk-test\n", stderr: "" } as never)
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never)
       .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" } as never);
 
     service.setProviderApiKey(" OpenAI ", "sk-test");
@@ -189,13 +191,13 @@ describe("SecretStoreService", () => {
       expect.objectContaining({ input: "sk-test" }),
     );
     expect(spawnSyncMock).toHaveBeenNthCalledWith(
-      4,
+      3,
       "secret-tool",
       ["lookup", "service", "goatcitadel", "account", "provider:openai"],
       expect.any(Object),
     );
     expect(spawnSyncMock).toHaveBeenNthCalledWith(
-      6,
+      4,
       "secret-tool",
       ["clear", "service", "goatcitadel", "account", "provider:openai"],
       expect.any(Object),
@@ -229,9 +231,7 @@ describe("SecretStoreService", () => {
     spawnSyncMock
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never)
       .mockReturnValueOnce({ status: 0, stdout: "ok\n", stderr: "" } as never)
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never)
       .mockReturnValueOnce({ status: 3, stdout: "", stderr: "" } as never)
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never)
       .mockReturnValueOnce({ status: 0, stdout: "ok\n", stderr: "" } as never);
 
     service.setSecret("provider:moonshot", "sk-win");
@@ -361,3 +361,27 @@ function setPlatform(platform: NodeJS.Platform): void {
     value: platform,
   });
 }
+
+describe("SecretStoreService availability and Windows timeouts", () => {
+  it("probes where/which once per process, not on every call", () => {
+    setPlatform("linux");
+    spawnSyncMock.mockReturnValue({ status: 0, stdout: "", stderr: "" } as never);
+    const service = new SecretStoreService();
+    expect(service.isAvailable()).toBe(true);
+    expect(service.isAvailable()).toBe(true);
+    expect(spawnSyncMock.mock.calls.filter(([command]) => command === "which")).toHaveLength(1);
+  });
+
+  it("bounds the legacy Windows get and set with the 10 s helper timeout", () => {
+    setPlatform("win32");
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0 } as never)
+      .mockReturnValueOnce({ status: 0, stdout: "ok\n", stderr: "" } as never)
+      .mockReturnValueOnce({ status: 0, stdout: "value\n", stderr: "" } as never);
+    const service = new SecretStoreService();
+    service.setSecret("provider:openai", "sk");
+    service.getSecret("provider:openai");
+    expect(spawnSyncMock.mock.calls[1]?.[2]).toMatchObject({ timeout: 10000 });
+    expect(spawnSyncMock.mock.calls[2]?.[2]).toMatchObject({ timeout: 10000 });
+  });
+});
