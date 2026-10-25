@@ -163,6 +163,7 @@ describe("visible Chat session", () => {
     const onSelectSession = vi.fn();
     Object.assign(surface.sessionRail, {
       historyView: "active",
+      search: "",
       onHistoryViewChange,
       onSelectSession,
       availableFolders: [],
@@ -234,6 +235,7 @@ describe("visible Chat session", () => {
       onSelectSession = vi.fn();
     Object.assign(surface.sessionRail, {
       historyView: "active",
+      search: "",
       availableFolders: [],
       hasMoreSessions: true,
       loadingMoreSessions: false,

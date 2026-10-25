@@ -58,10 +58,13 @@ export function ConversationListPanel({
   onDone?: () => void;
   messaging?: ConversationListMessaging;
 }) {
-  // Conversations held through a channel connection are listed once, under Messaging.
+  // Messaging lists the active channel conversations, so the list leaves them out while Messaging is shown and the
+  // view is Recent with no search. Messaging reads neither the Archived view nor the search, so there the list stays
+  // the only way to reach a channel conversation (to find it, or to restore it).
+  const listedElsewhere = Boolean(messaging) && rail.historyView === "active" && !rail.search.trim();
   const sessions = [
     ...rail.missionSessions,
-    ...(rail.externalSessions ?? []).filter((session) => !session.channelConnectionId),
+    ...(rail.externalSessions ?? []).filter((session) => !(listedElsewhere && session.channelConnectionId)),
   ];
   // Status comes with the sessions list, so the rail makes no request of its own.
   const activity = useThreadActivity(sessions);

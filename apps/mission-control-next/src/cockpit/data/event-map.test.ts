@@ -64,21 +64,45 @@ describe("resolveRealtimeEvent", () => {
     });
   });
 
-  it("refreshes the Messaging overview when a channel changes or a conversation updates", () => {
-    expect(queryKeys.chatMessaging("default")).toEqual(["chat", "messaging", "default"]);
-    const refreshesMessaging = (source: string, eventType: string) => {
-      const result = resolveRealtimeEvent(event(eventType, source));
-      const key = queryKeys.chatMessaging("default");
+  describe("Messaging overview", () => {
+    const messagingKey = queryKeys.chatMessaging("default");
+    const refreshesMessaging = (candidate: RealtimeEvent) => {
+      const result = resolveRealtimeEvent(candidate);
       return (
         result.kind === "mapped" &&
-        result.effect.keys.some((prefix) => prefix.length <= key.length && prefix.every((part, i) => part === key[i]))
+        result.effect.keys.some(
+          (prefix) => prefix.length <= messagingKey.length && prefix.every((part, i) => part === messagingKey[i]),
+        )
       );
     };
-    // A connection turning on, off or failing changes its status badge.
-    expect(refreshesMessaging("channels", "channel_connection_updated")).toBe(true);
-    // A message arriving in a conversation changes its time and new-message count.
-    expect(refreshesMessaging("chat", "chat_thread_updated")).toBe(true);
-    expect(refreshesMessaging("memory", "system")).toBe(false);
+
+    it("is keyed by workspace under the chat topic", () => {
+      expect(messagingKey).toEqual(["chat", "messaging", "default"]);
+    });
+
+    // The Gateway publishes a connection change as a "system" event from the integrations source and names the
+    // real signal in payload.type, as in integration-channel-service.ts.
+    it.each(["integration_connection_created", "integration_connection_updated", "integration_connection_deleted"])(
+      "refreshes when a connection changes (%s), so a channel's status and the channel list follow Settings",
+      (type) => {
+        expect(refreshesMessaging(event("system", "integrations", { payload: { type } }))).toBe(true);
+      },
+    );
+
+    it("refreshes when a message arrives from a channel, which changes a conversation's time and new-message count", () => {
+      expect(refreshesMessaging(event("system", "channels", { payload: { type: "channel_message_ingested" } }))).toBe(
+        true,
+      );
+    });
+
+    it("refreshes when a conversation updates", () => {
+      expect(refreshesMessaging(event("chat_thread_updated", "chat"))).toBe(true);
+    });
+
+    it("leaves other owners alone", () => {
+      expect(refreshesMessaging(event("system", "memory", { payload: { type: "memory_item_lifecycle" } }))).toBe(false);
+      expect(refreshesMessaging(event("system", "hooks", { payload: { type: "hook_updated" } }))).toBe(false);
+    });
   });
 
   it("signals Chat for an approval tied to a conversation, so the rail status follows it", () => {

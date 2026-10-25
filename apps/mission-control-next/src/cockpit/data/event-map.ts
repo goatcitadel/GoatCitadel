@@ -70,6 +70,8 @@ const MCP_KEYS: readonly QueryKey[] = [
   ["settings", "mcp-requests"],
 ];
 const INTEGRATION_KEYS: readonly QueryKey[] = [["settings", "integration-connections"], queryKeys.healthAll()];
+/** Connections and inbound channel messages also change Chat's Messaging overview (channels, status, counts). */
+const MESSAGING_INTEGRATION_KEYS: readonly QueryKey[] = [...INTEGRATION_KEYS, queryKeys.chatMessagingAll()];
 const CAPABILITY_KEYS: readonly QueryKey[] = [queryKeys.capabilities(), ["capability"], queryKeys.inboxAll()];
 
 const SYSTEM_SOURCE_TYPES = new Map<string, EventEffect | "ignore">([
@@ -136,10 +138,13 @@ const SOURCE_RULES = new Map<string, Rule>([
         ["files"],
       ),
   ],
-  ["integrations", () => effect(INTEGRATION_KEYS, ["integrations"])],
-  // A channel turning on, off or failing also changes its status in Chat's Messaging area. Conversation updates
-  // arrive as `chat` events, whose ["chat"] prefix already covers the Messaging overview.
-  ["channels", () => effect([...INTEGRATION_KEYS, queryKeys.chatMessagingAll()], ["integrations"])],
+  // A connection created, updated or deleted in Settings is published here (payload.type integration_connection_*).
+  // It changes a channel's status and the channel list in Chat's Messaging area.
+  ["integrations", () => effect(MESSAGING_INTEGRATION_KEYS, ["integrations"])],
+  // The channels source carries inbound messages (channel_message_ingested), which change a conversation's time and
+  // new-message count in Messaging. Other conversation updates arrive as `chat` events, whose ["chat"] prefix
+  // already covers the Messaging overview.
+  ["channels", () => effect(MESSAGING_INTEGRATION_KEYS, ["integrations"])],
   ["hooks", () => effect([["settings", "integration-connections"]], ["integrations"])],
   ["mesh", () => effect([queryKeys.capabilities()], ["system"])],
   ["voice", () => effect([["settings", "voice-runtime"]], ["system"])],
