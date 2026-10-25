@@ -69,7 +69,11 @@ export function CategoryFilter({
     onChange(next.length === options.length ? [] : next);
   };
   const pickHidden = (id: string) => {
-    // The picked option now shows in the row, and focus goes there (see the effect below).
+    // The picked option now shows in the row, and focus goes there (see the effect below). Nothing here stops the
+    // panel's usual step of returning focus to "+N" on close. That step is skipped only because the effect below runs
+    // while the panel's dismissable layer is still mounted: its focus-outside listener sees the focus move and Radix
+    // then leaves focus alone. This depends on the pinned radix-ui version's internals, which is why the focus tests
+    // wait for the close step to run before checking where focus ended up.
     setOpen(false);
     toggle(id);
   };

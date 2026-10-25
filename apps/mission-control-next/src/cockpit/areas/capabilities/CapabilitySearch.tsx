@@ -5,7 +5,7 @@ import { cockpitInputClass } from "../../ui/input-class";
 
 /**
  * The search box every Capabilities tab shares. The current tab's name sits in the box as a small badge and is the
- * box's label (read as "Search <tab>"), and the tab's own buttons, such as "Add your own", sit to its right. The
+ * box's label (read as "<tab> search"), and the tab's own buttons, such as "Add your own", sit to its right. The
  * placeholder comes from the tab, so it can suggest a real term from the operator's own data.
  */
 export function CapabilitySearch({
@@ -48,8 +48,9 @@ export function CapabilitySearch({
           htmlFor={id}
           className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full border border-line px-2 py-0.5 text-xs text-fg-secondary"
         >
-          <span className="sr-only">Search </span>
           {tabLabel}
+          {/* After the visible text, so the accessible name starts with what is on screen. */}
+          <span className="sr-only"> search</span>
         </label>
       </div>
       {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}

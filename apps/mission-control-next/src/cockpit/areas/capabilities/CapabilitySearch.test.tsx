@@ -28,9 +28,15 @@ describe("CapabilitySearch", () => {
       ),
     );
     const label = container.querySelector<HTMLLabelElement>(`label[for="${input().id}"]`);
-    // The visible badge is the label, so the accessible name contains the text on screen.
-    expect(label?.textContent).toBe("Search Connectors");
-    expect(label?.querySelector(".sr-only")?.textContent).toBe("Search ");
+    // The visible badge is the label, and the accessible name starts with the text on screen (DESIGN.md › Copy).
+    const hidden = label?.querySelector(".sr-only");
+    const visibleText = [...(label?.childNodes ?? [])]
+      .filter((node) => node !== hidden)
+      .map((node) => node.textContent)
+      .join("");
+    expect(visibleText).toBe("Connectors");
+    expect(label?.textContent).toBe("Connectors search");
+    expect(label?.textContent?.startsWith(visibleText)).toBe(true);
     expect(input().placeholder).toBe('Try "automation"');
     expect(container.querySelector('[role="search"]')).not.toBeNull();
   });
