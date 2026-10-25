@@ -132,3 +132,68 @@ it("names the current workspace and shows expiry as a readable time, not an ISO 
   expect(text).not.toContain("2026-01-02T10:30:00.000Z");
   expect(host.querySelector("time")?.getAttribute("dateTime")).toBe("2026-01-02T10:30:00.000Z");
 });
+
+it("keeps the owner-written consequence when a model explanation arrives, and labels the model's text (#499)", () => {
+  const base: ApprovalRequest = {
+    approvalId: "a",
+    kind: "tool_invoke",
+    status: "pending",
+    riskLevel: "caution",
+    explanationStatus: "pending",
+    payload: {},
+    createdAt: "2026-10-24T17:30:25.275Z",
+    linkage: { workspaceId: "fallback", toolName: "documents.create" },
+    preview: { targets: ["Path: Sandbox_Test_Brief.pdf"] },
+  };
+  const render = (approval: ApprovalRequest) => {
+    const host = document.createElement("div");
+    host.innerHTML = markup(<ApprovalReviewSummary approval={approval} workspaceId="fallback" />);
+    return host.querySelector('section[aria-label="Approval scope and consequences"]')!;
+  };
+  const consequence = (review: Element) =>
+    [...review.querySelectorAll("p")].find((node) => node.textContent?.startsWith("Consequence:"))?.textContent;
+  const before = consequence(render(base));
+  const modelText = "This writes a new PDF into your workspace.";
+  const after = render({
+    ...base,
+    explanationStatus: "completed",
+    explanation: {
+      summary: "Create a PDF",
+      riskExplanation: modelText,
+      generatedAt: "2026-10-24T17:30:31.000Z",
+      providerId: "claude-code-cli",
+      model: "claude-sonnet-5-5",
+    },
+  });
+  expect(consequence(after)).toBe(before);
+  expect(consequence(after)).not.toContain(modelText);
+  const labelled = [...after.querySelectorAll("p")].find((node) => node.textContent?.includes(modelText));
+  expect(labelled?.textContent).toMatch(/^Model explanation/);
+});
+
+it("uses an explanation GoatCitadel wrote itself, with no model, as the consequence (#543)", () => {
+  const review = document.createElement("div");
+  review.innerHTML = markup(
+    <ApprovalReviewSummary
+      workspaceId="fallback"
+      approval={{
+        approvalId: "a",
+        kind: "change_plan_effect",
+        status: "pending",
+        riskLevel: "caution",
+        explanationStatus: "completed",
+        payload: {},
+        createdAt: "2026-10-24T17:30:25.275Z",
+        preview: {},
+        explanation: {
+          summary: "Turn off Claude Code CLI: reuse one process between tool steps",
+          riskExplanation: "Turn it back on in Settings to undo.",
+          generatedAt: "2026-10-24T17:30:25.275Z",
+        },
+      }}
+    />,
+  );
+  const consequence = [...review.querySelectorAll("p")].find((node) => node.textContent?.startsWith("Consequence:"));
+  expect(consequence?.textContent).toBe("Consequence: Turn it back on in Settings to undo.");
+  expect(review.textContent).not.toContain("Model explanation");
+});

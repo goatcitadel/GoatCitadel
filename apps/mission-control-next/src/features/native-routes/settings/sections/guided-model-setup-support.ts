@@ -1,6 +1,7 @@
 import {
   describeClaudeCodeCliLoginGuidance,
   findProviderTemplate,
+  isSubscriptionAuthMode,
   type ChangePlanProviderConnectionRequest,
   type ChangePlanRecord,
   type ChatCompletionReasoningEffort,
@@ -330,9 +331,6 @@ const GUIDED_PROVIDER_GROUP_LABELS: Readonly<Record<GuidedProviderGroupId, strin
   local: "Run locally",
 };
 
-// Sign-in or account based providers; everything not local and not here takes an API key.
-const SUBSCRIPTION_AUTH_MODES = new Set(["codex-oauth", "claude-code-oauth", "claude-code-cli-login"]);
-
 // Cloud credentials that are not an API key: Google ADC or service accounts, and AWS SigV4.
 const CLOUD_ACCOUNT_AUTH_MODES = new Set(["google-adc", "google-service-account", "aws-sigv4"]);
 
@@ -355,7 +353,8 @@ export function guidedProviderOptionLabel(
 
 function guidedProviderGroupId(provider: GuidedProviderOption): GuidedProviderGroupId {
   if (resolveGuidedProviderReadiness(provider).state === "ready") return "ready";
-  if (provider.authMode && SUBSCRIPTION_AUTH_MODES.has(provider.authMode)) return "subscription";
+  // Sign-in or account based providers; everything not local and not cloud-account based takes an API key.
+  if (isSubscriptionAuthMode(provider.authMode)) return "subscription";
   if (provider.localCostPosture === "zero_cost_local_runtime") return "local";
   if (provider.authMode && CLOUD_ACCOUNT_AUTH_MODES.has(provider.authMode)) return "cloud_account";
   return "api_key";

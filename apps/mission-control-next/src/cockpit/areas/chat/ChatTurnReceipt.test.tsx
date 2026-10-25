@@ -68,4 +68,26 @@ describe("TurnReceipt", () => {
     expect(container.querySelector("button")).toBeNull();
     expect(container.textContent).toContain("model-a");
   });
+
+  // #499: a turn that waited 12 s on an approval recorded 4 s of model time; the receipt read "1 tool · 4 s".
+  it("reports the whole turn's recorded time, not only the time spent in model calls", async () => {
+    const approvedTurn = {
+      ...turn,
+      trace: {
+        ...turn.trace,
+        startedAt: "2026-10-25T00:30:20.697Z",
+        finishedAt: "2026-10-25T00:30:41.811Z",
+        completion: { latencyMs: 4154 },
+      },
+      toolRuns: [{ toolRunId: "tool-1" }],
+    } as unknown as ChatThreadTurnRecord;
+    await act(async () => root.render(<TurnReceipt turn={approvedTurn} />));
+    expect(container.textContent).toBe("model-a · 1 tool · 21 s total");
+  });
+
+  it("names model time as model time when the turn's finish was not recorded", async () => {
+    await act(async () => root.render(<TurnReceipt turn={turn} />));
+    expect(container.textContent).toContain("1 s model time");
+    expect(container.textContent).not.toContain("total");
+  });
 });

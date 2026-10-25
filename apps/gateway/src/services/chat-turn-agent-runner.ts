@@ -227,9 +227,14 @@ import {
   normalizePathForComparison,
 } from "./chat-turn-agent-runner/artifact-write-helpers.js";
 import { groundResearchPresentationArgs } from "./chat-turn-agent-runner/presentation-research-evidence.js";
+import { buildManualAutonomyClarification } from "./chat-turn-agent-runner/manual-autonomy-clarification.js";
 import {
+  MEMORY_CONSENT_BLOCKED_REASON,
+  answerCoversMemoryConsentBlocks,
   buildGovernanceBlockGuidance,
+  buildMemoryConsentBlockGuidance,
   buildPathBridgeFailureGuidance,
+  buildPolicyBlockedRecoveryText,
   buildToolFailureAppendixText,
 } from "./chat-turn-agent-runner/tool-failure-messaging.js";
 import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
@@ -2682,6 +2687,8 @@ export class ChatTurnAgentRunner {
     if (codingState) await persistCodingProgress(codingState.nextAction);
     let finalStatus: ChatTurnTraceRecord["status"] = "completed";
     let finalFailure: ChatTurnFailureRecord | undefined;
+    // The "a repair pass is required" record, so a repair that completes the answer can clear exactly it.
+    let incompleteAnswerFailure: ChatTurnFailureRecord | undefined;
     let completionState: NonNullable<ChatTurnTraceRecord["completion"]> = {
       status: "complete",
       repaired: false,
@@ -3071,6 +3078,7 @@ export class ChatTurnAgentRunner {
         timeIntent: intents.time,
         localFileIntent,
         userPrompt: input.content,
+        historyMessages: input.historyMessages,
         webMode: input.webMode,
         toolAutonomy: input.toolAutonomy,
       });
@@ -5005,11 +5013,14 @@ export class ChatTurnAgentRunner {
                   ...completionState,
                   status: completionOutcome.status,
                 };
-                finalFailure ??= buildChatTurnFailureRecord(
-                  "unknown",
-                  "The provider stopped before the answer finished, so a repair pass is required.",
-                  "continue_from_partial",
-                );
+                if (!finalFailure) {
+                  finalFailure = buildChatTurnFailureRecord(
+                    "unknown",
+                    "The provider stopped before the answer finished, so a repair pass is required.",
+                    "continue_from_partial",
+                  );
+                  incompleteAnswerFailure = finalFailure;
+                }
               }
             } else if (completionState.status !== "complete") {
               completionState = {
@@ -6116,6 +6127,12 @@ export class ChatTurnAgentRunner {
         markCompletionRepair("incomplete_truncated_completion", "orchestrator", preRepairContent, assistantContent);
         if (!looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           markAnswerRecoveredByModel();
+        }
+        // A repair that answered in full means the turn no longer needs one, so a completed turn must not keep
+        // a retryable "a repair pass is required" failure (the inspector showed it). A repair that was itself
+        // cut off at the length limit has not finished the answer, so the failure stays.
+        if (repairedCompletion.finishReason !== "length" && finalFailure && finalFailure === incompleteAnswerFailure) {
+          finalFailure = undefined;
         }
         if (finalStatus === "failed" && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           finalStatus = "completed";
@@ -9252,7 +9269,7 @@ export class ChatTurnAgentRunner {
       return {
         toolName: effectiveToolName,
         args,
-        blockedReason: "memory persistence requires explicit user consent; ask before saving long-term memory",
+        blockedReason: MEMORY_CONSENT_BLOCKED_REASON,
       };
     }
 
@@ -9654,6 +9671,8 @@ export class ChatTurnAgentRunner {
     providerCalls: number;
     modelUsageEventIds?: string[];
     authorityRejected?: boolean;
+    /** The repair call's own finish reason; "length" means the repaired answer may still be cut off. */
+    finishReason?: string;
   }> {
     if (remainingFinalPassTimeoutMs(input.turnBudgetDeadline) <= 0) {
       return { content: "", usage: null, providerCalls: 0 };
@@ -9747,6 +9766,9 @@ export class ChatTurnAgentRunner {
         usage,
         providerCalls,
         modelUsageEventIds: completion.modelUsageEventIds,
+        ...(typeof completion.choices?.[0]?.finish_reason === "string"
+          ? { finishReason: completion.choices[0].finish_reason }
+          : {}),
       };
     } catch (error) {
       if (isAuthoritativeModelUsageAccountingError(error)) throw error;
@@ -10433,6 +10455,12 @@ function buildToolFailureGuidance(input: {
   if (governanceGuidance) {
     return governanceGuidance;
   }
+  // The consent check reads the user's message, so a narrower tool input
+  // cannot pass it and the strict template's approval ask cannot lift it.
+  const memoryConsentGuidance = buildMemoryConsentBlockGuidance(input);
+  if (memoryConsentGuidance) {
+    return memoryConsentGuidance;
+  }
   const normalizedError = (input.error ?? "").toLowerCase();
   const host = readBlockedSourceHost(input.result ?? {}, input.args);
   const browserFailureClass =
@@ -11075,6 +11103,7 @@ function buildLiveDataSettingsConflictMessage(input: {
   timeIntent: boolean;
   localFileIntent: boolean;
   userPrompt: string;
+  historyMessages: ChatCompletionRequest["messages"];
   webMode: ChatWebMode;
   toolAutonomy: ChatTurnAgentRunnerInput["toolAutonomy"];
 }): string | undefined {
@@ -11126,9 +11155,13 @@ function buildLiveDataSettingsConflictMessage(input: {
     ].join(" ");
   }
   if (input.toolAutonomy === "manual") {
+    const clarification = buildManualAutonomyClarification(input.userPrompt, input.historyMessages);
+    if (clarification) {
+      return clarification;
+    }
     return [
       "I can't fetch web-backed information for that because tool autonomy is set to Manual for this chat, so I can't run the browser tools needed to verify it.",
-      "Switch tool autonomy to Safe Auto and resend, or ask a non-web question instead.",
+      "To turn tools on, set Inspect > Conversation > Tool autonomy to Safe Auto and resend, or ask a non-web question instead.",
     ].join(" ");
   }
   return undefined;
@@ -13953,6 +13986,9 @@ function appendToolFailureConstraints(content: string, toolRuns: ChatToolRunReco
   if (onlyBlockedWebSearch && concreteFileEvidenceCount > 0) {
     return trimmed;
   }
+  if (answerCoversMemoryConsentBlocks(trimmed, failedOrBlocked)) {
+    return trimmed;
+  }
   if (mentionsToolFailureConstraints(trimmed, failedOrBlocked)) {
     return trimmed;
   }
@@ -14064,6 +14100,19 @@ function looksLikeSerializedToolCallMarkupContent(content: string): boolean {
   return hits.length >= 2;
 }
 
+/**
+ * Whether a "the … below" / "the … above" reference can point at this answer's own text: there is enough of the
+ * answer after a "below" (or before an "above"/"earlier"/"previous") to hold what it names. A long answer that says
+ * "the checklist below" and then gives the checklist is complete (live P-01), not a fragment.
+ */
+function pointsWithinAnswer(content: string, match: RegExpMatchArray): boolean {
+  const SELF_REFERENCE_MIN_CHARS = 120;
+  const start = match.index ?? 0;
+  const before = content.slice(0, start).trim().length;
+  const after = content.slice(start + match[0].length).trim().length;
+  return match[0].endsWith("below") ? after >= SELF_REFERENCE_MIN_CHARS : before >= SELF_REFERENCE_MIN_CHARS;
+}
+
 function looksLikeFragmentaryStandaloneAnswer(input: {
   content: string;
   originalRequest: string;
@@ -14079,11 +14128,17 @@ function looksLikeFragmentaryStandaloneAnswer(input: {
     Array.isArray(input.priorMessages) && input.priorMessages.some((message) => message?.role === "assistant");
 
   if (!priorAssistantContext && !/\b(above|below|earlier|previous)\b/.test(normalizedRequest)) {
-    if (
-      /\b(the|those|these|all)\s+[a-z0-9 -]{0,40}\b(above|below|earlier|previous)\b/.test(normalized) ||
-      /\bas noted above\b/.test(normalized) ||
-      /\bas covered earlier\b/.test(normalized)
-    ) {
+    // A reference to the assistant's own earlier message points at text the reader of this answer does not have.
+    // "Your last message" or "the previous message" can mean the user's visible request, so only "my" counts.
+    if (/\bmy\s+(earlier|previous|last|prior)\s+(message|reply|response|answer)\b/.test(normalized)) {
+      return true;
+    }
+    const references = [
+      // Lazy, so each match ends at its first direction word and a later word cannot flip its direction.
+      ...normalized.matchAll(/\b(?:the|those|these|all)\s+[a-z0-9 -]{0,40}?\b(above|below|earlier|previous)\b/g),
+      ...normalized.matchAll(/\bas (?:noted above|covered earlier)\b/g),
+    ];
+    if (references.some((match) => !pointsWithinAnswer(normalized, match))) {
       return true;
     }
   }
@@ -15934,7 +15989,12 @@ function buildToolFailureFallbackMessage(userPrompt: string, toolRuns: ChatToolR
       .join("\n");
   }
 
-  const lastFailure = toolRuns.filter((item) => item.status === "failed" || item.status === "blocked").at(-1);
+  const failedOrBlocked = toolRuns.filter((item) => item.status === "failed" || item.status === "blocked");
+  const policyBlockedText = blockedSource ? undefined : buildPolicyBlockedRecoveryText(failedOrBlocked);
+  if (policyBlockedText) {
+    return policyBlockedText;
+  }
+  const lastFailure = failedOrBlocked.at(-1);
   const evidence = toolRuns
     .filter((item) => item.status === "executed" && item.result)
     .slice(-2)

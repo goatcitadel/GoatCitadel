@@ -71,8 +71,9 @@ const webModes: Record<ChatWebMode, string> = {
 };
 const planningModes: Record<ChatPlanningMode, string> = { off: "Off", advisory: "Advisory" };
 const toolAutonomy: Record<"safe_auto" | "manual", string> = {
-  safe_auto: "Safe tools run automatically",
-  manual: "Ask before every tool",
+  // Manual sends the model no tools at all; it never asks before each one.
+  safe_auto: "Safe Auto (approvals still apply)",
+  manual: "Manual (tools off)",
 };
 const thinkingLevels: Record<ChatThinkingLevel, string> = {
   off: "Off",

@@ -26,6 +26,7 @@ import { ThreadedContextConflictNotices } from "../../../features/threaded-surfa
 import { ChatBackgroundTasks } from "./ChatBackgroundTasks";
 import { SessionControlManager } from "./SessionControlManager";
 import { ChatInspectorTurnPanel } from "./ChatInspectorTurnPanel";
+import { ChatTurnApprovalHistory } from "./ChatTurnApprovalHistory";
 import { ChatOrganizationForm } from "./ChatOrganizationForm";
 
 export function ChatInspector({
@@ -132,7 +133,12 @@ export function ChatInspector({
         role="tabpanel"
         className="min-w-0"
       >
-        {tab === "run" ? renderInspectorRunEvidence(run, selectedTurn) : null}
+        {tab === "run" ? (
+          <>
+            {renderInspectorRunEvidence(run, selectedTurn)}
+            <ChatTurnApprovalHistory turn={selectedTurn} />
+          </>
+        ) : null}
 
         {tab === "turn" ? <ChatInspectorTurnPanel selectedTurn={selectedTurn} /> : null}
 
@@ -288,7 +294,12 @@ export function ChatInspector({
               />
               <DetailRow
                 label="Tool autonomy"
-                value={dock?.effectiveToolAutonomy ? presentToolAutonomy(dock.effectiveToolAutonomy) : "Not available"}
+                value={
+                  // The saved setting, like Planning and Web; the last message's own value stays in its run detail.
+                  dock?.prefs
+                    ? presentToolAutonomy(dock.prefs.planningMode === "advisory" ? "manual" : dock.prefs.toolAutonomy)
+                    : "Not available"
+                }
               />
               <DetailRow label="Web" value={dock?.prefs ? presentWebMode(dock.prefs.webMode) : "Not available"} />
             </dl>

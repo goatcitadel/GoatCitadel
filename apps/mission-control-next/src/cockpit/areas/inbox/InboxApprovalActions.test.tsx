@@ -206,15 +206,57 @@ describe("Inbox approval decisions", () => {
       expect(api.resolveApproval).not.toHaveBeenCalled();
     },
   );
-  it("keeps missing or contradictory Knowledge preview unavailable", () => {
+  it("keeps missing or contradictory Knowledge preview unapprovable but deniable", () => {
     const record = knowledgeApproval();
+    const buttonLabels = () => [...container.querySelectorAll("button")].map((entry) => entry.textContent);
     renderActions({ ...record, preview: {} });
     expect(container.textContent).toContain("exact action preview is unavailable");
-    expect(container.querySelector("button")).toBeNull();
+    expect(buttonLabels()).toEqual(["Deny"]);
     renderActions({ ...record, preview: { ...record.preview, itemId: "foreign" } });
     expect(container.textContent).toContain("exact action preview is unavailable");
-    expect(container.querySelector("button")).toBeNull();
+    expect(buttonLabels()).toEqual(["Deny"]);
     expect(api.resolveApproval).not.toHaveBeenCalled();
+  });
+  it("denies an approval whose exact action preview is unavailable", async () => {
+    const record: ApprovalRequest = {
+      ...approval,
+      kind: "change.request",
+      riskLevel: "safe",
+      payload: { intent: { kind: "provider_connection", providerId: "google" } },
+      preview: { toolName: "change.request" },
+    };
+    api.fetchApproval.mockResolvedValue(record);
+    api.resolveApproval.mockResolvedValue({ approval: { ...record, status: "rejected" }, effects: [] });
+    const { onResolved } = renderActions(record);
+    expect(container.textContent).toContain("You can still deny it");
+    expect(container.textContent).not.toContain("Approve once");
+    await act(async () => button("Deny").click());
+    expect(api.resolveApproval).toHaveBeenCalledWith("approval-a", "reject");
+    expect(onResolved).toHaveBeenCalled();
+  });
+  it("approves a change.request from its requested-intent summary", async () => {
+    const record: ApprovalRequest = {
+      ...approval,
+      kind: "change.request",
+      riskLevel: "safe",
+      payload: { intent: { kind: "provider_connection", providerId: "google" } },
+      preview: {
+        reviewKind: "change.request",
+        toolName: "change.request",
+        requestSummary: [
+          { label: "Kind", value: "provider_connection" },
+          { label: "Provider id", value: "google" },
+        ],
+      },
+    };
+    api.fetchApproval.mockResolvedValue(record);
+    api.resolveApproval.mockResolvedValue({ approval: { ...record, status: "approved" }, effects: [] });
+    renderActions(record);
+    expect(container.textContent).not.toContain("exact action preview is unavailable");
+    expect(container.textContent).toContain("Provider id: google");
+    expect(container.textContent).toContain("never confirms or applies the change");
+    await act(async () => button("Approve once").click());
+    expect(api.resolveApproval).toHaveBeenCalledWith("approval-a", "approve");
   });
   it("explains request changes and unavailable project grants without adding decision authority", async () => {
     renderActions(approval);

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 import {
+  MEMORY_CONSENT_BLOCKED_REASON,
+  answerCoversMemoryConsentBlocks,
   buildGovernanceBlockGuidance,
+  buildMemoryConsentBlockGuidance,
   buildPathBridgeFailureGuidance,
+  buildPolicyBlockedRecoveryText,
   buildToolFailureAppendixText,
 } from "./tool-failure-messaging.js";
 
@@ -213,5 +217,167 @@ describe("buildGovernanceBlockGuidance", () => {
       buildGovernanceBlockGuidance({ toolName: "fs.read", status: "blocked", error: "ENOENT: no such file" }),
     ).toBeUndefined();
     expect(buildGovernanceBlockGuidance({ toolName: "fs.read", status: "blocked" })).toBeUndefined();
+  });
+});
+
+describe("buildPolicyBlockedRecoveryText", () => {
+  it("names the blocked tool and Settings > Tools without inviting a retry or echoing the raw reason", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({ toolName: "memory.write", error: "sandbox policy blocked memory.write" }),
+      toolRun({ toolRunId: "run-2", toolName: "memory.write", error: "sandbox policy blocked memory.write" }),
+    ]);
+
+    expect(text).toContain("tool policy blocked memory.write.");
+    expect(text).toContain("Settings > Tools");
+    expect(text).not.toMatch(/narrower|specific URL|keep going/i);
+    expect(text).not.toContain("sandbox policy blocked");
+  });
+
+  it("keeps setting-specific governance guidance for the last block", () => {
+    const text = buildPolicyBlockedRecoveryText([toolRun({ toolName: "fs.delete", error: "tool denied by policy" })]);
+
+    expect(text).toContain("Why: fs.delete is denied by the operator's tool policy.");
+    expect(text).toContain("tools.deny");
+  });
+
+  it("explains a memory-consent block as a consent check, not tool policy or a bad input", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({ toolName: "memory.write", error: MEMORY_CONSENT_BLOCKED_REASON }),
+      toolRun({ toolRunId: "run-2", toolName: "memory.write", error: MEMORY_CONSENT_BLOCKED_REASON }),
+    ]);
+
+    expect(text).toContain("I didn't save that to memory.");
+    expect(text).toContain('"Remember that …"');
+    expect(text).not.toMatch(/tool policy|Settings > Tools|narrower|specific URL/i);
+  });
+
+  it("leaves mixed consent and policy blocks, and other runner guards, to the generic recovery text", () => {
+    expect(
+      buildPolicyBlockedRecoveryText([
+        toolRun({ toolName: "memory.write", error: MEMORY_CONSENT_BLOCKED_REASON }),
+        toolRun({ toolRunId: "run-2", toolName: "memory.write", error: "blocked: tool denied by policy" }),
+      ]),
+    ).toBeUndefined();
+    expect(
+      buildPolicyBlockedRecoveryText([
+        toolRun({
+          toolName: "fs.search",
+          error: "execution skipped: fs.search requires query; unable to infer a safe query from the prompt",
+        }),
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("leaves mixed failures, web tool blocks, and empty lists to the generic recovery text", () => {
+    expect(
+      buildPolicyBlockedRecoveryText([
+        toolRun({ toolName: "memory.write", error: "blocked: tool denied by policy" }),
+        toolRun({ toolRunId: "run-2", toolName: "fs.read", status: "failed", error: "ENOENT" }),
+      ]),
+    ).toBeUndefined();
+    expect(
+      buildPolicyBlockedRecoveryText([
+        toolRun({ toolName: "browser.navigate", error: "blocked: host not allowlisted" }),
+      ]),
+    ).toBeUndefined();
+    expect(buildPolicyBlockedRecoveryText([])).toBeUndefined();
+  });
+});
+
+describe("buildMemoryConsentBlockGuidance", () => {
+  it("tells the model the check reads the user's message, so a different input will not pass it", () => {
+    const guidance = buildMemoryConsentBlockGuidance({ status: "blocked", error: MEMORY_CONSENT_BLOCKED_REASON });
+
+    expect(guidance).toContain("user's own message uses an accepted consent phrasing");
+    expect(guidance).toContain('a bare "yes" does not pass the check');
+    expect(guidance).not.toMatch(/narrower, more explicit input/);
+  });
+
+  it("ignores other blocks and failed runs", () => {
+    expect(
+      buildMemoryConsentBlockGuidance({ status: "blocked", error: "blocked: tool denied by policy" }),
+    ).toBeUndefined();
+    expect(buildMemoryConsentBlockGuidance({ status: "failed", error: MEMORY_CONSENT_BLOCKED_REASON })).toBeUndefined();
+  });
+});
+
+describe("buildPolicyBlockedRecoveryText path-bridge blocks", () => {
+  function pathBridgeRun(reasonCode: string, overrides: Partial<ChatToolRunRecord> = {}): ChatToolRunRecord {
+    return toolRun({
+      toolName: "shell.exec",
+      args: { command: "git status", cwd: "/work/repo" },
+      error: PATH_BRIDGE_REASON,
+      result: { workspacePathBridge: { status: "blocked", reasonCode, snapshotId: "snap-1" } },
+      ...overrides,
+    });
+  }
+
+  it("keeps the repair guidance for a repairable reason instead of blaming tool policy", () => {
+    const text = buildPolicyBlockedRecoveryText([pathBridgeRun("invalid_path")]);
+
+    expect(text).toContain("I stopped instead of retrying shell.exec.");
+    expect(text).toContain("Retry with an absolute folder path inside the workspace.");
+    expect(text).not.toMatch(/tool policy|Settings > Tools|not caused by the input/i);
+  });
+
+  it("names missing Git as the thing to repair", () => {
+    const text = buildPolicyBlockedRecoveryText([pathBridgeRun("git_unavailable")]);
+
+    expect(text).toContain("Install or repair Git on the Gateway host");
+    expect(text).not.toMatch(/tool policy|Settings > Tools/i);
+  });
+
+  it("explains a jail boundary as fixed", () => {
+    const text = buildPolicyBlockedRecoveryText([pathBridgeRun("outside_jail")]);
+
+    expect(text).toContain("outside the workspace folders");
+    expect(text).not.toMatch(/Settings > Tools/i);
+  });
+
+  it("leaves path-bridge blocks mixed with policy blocks to the generic recovery text", () => {
+    expect(
+      buildPolicyBlockedRecoveryText([
+        pathBridgeRun("invalid_path"),
+        toolRun({ toolRunId: "run-2", toolName: "fs.delete", error: "blocked: tool denied by policy" }),
+      ]),
+    ).toBeUndefined();
+  });
+});
+
+describe("memory-consent appendix", () => {
+  const consentRun = toolRun({ toolName: "memory.write", error: MEMORY_CONSENT_BLOCKED_REASON });
+
+  it("gives a consent note instead of the policy appendix", () => {
+    const text = buildToolFailureAppendixText([consentRun]);
+
+    expect(text).toContain("Note: nothing was saved to memory.");
+    expect(text).toContain('"Remember that …"');
+    expect(text).not.toMatch(/blocked by policy|keep going|narrower/i);
+  });
+
+  it("treats an answer that already talks about memory as covering consent-only blocks", () => {
+    expect(answerCoversMemoryConsentBlocks("I didn't save that to memory.", [consentRun])).toBe(true);
+    expect(answerCoversMemoryConsentBlocks("Your favourite colour is teal.", [consentRun])).toBe(false);
+    expect(
+      answerCoversMemoryConsentBlocks("I didn't save that to memory.", [
+        consentRun,
+        toolRun({ toolRunId: "run-2", toolName: "fs.delete", error: "blocked: tool denied by policy" }),
+      ]),
+    ).toBe(false);
+  });
+});
+
+describe("buildPolicyBlockedRecoveryText guidance for several blocks", () => {
+  it("keeps the guidance for every distinct governance block", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({ toolName: "fs.delete", error: "blocked: tool denied by policy" }),
+      toolRun({ toolRunId: "run-2", toolName: "memory.write", error: "blocked: denied by a Citadel Ward" }),
+      toolRun({ toolRunId: "run-3", toolName: "fs.delete", error: "blocked: tool denied by policy" }),
+    ]);
+
+    expect(text).toContain("tool policy blocked fs.delete, memory.write.");
+    expect(text).toContain("Why: fs.delete is denied by the operator's tool policy.");
+    expect(text).toContain("Why: memory.write is denied by a Citadel Ward.");
+    expect(text?.match(/Why: fs\.delete/g)).toHaveLength(1);
   });
 });

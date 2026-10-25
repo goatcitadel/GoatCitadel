@@ -9,11 +9,14 @@ const ChatOpenCodeEvidence = lazy(async () => ({
 }));
 import { ChatTurnActions } from "./ChatTurnActions";
 import { ChatToolRunSummary } from "./ChatToolRunSummary";
+import { ChatToolApprovalLine } from "./ChatToolApprovalLine";
 import { useAutoOpenDisclosure } from "./use-auto-open-disclosure";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { presentErrorText } from "../../lib/present-error";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 
 /** How long a copy confirmation stays before the button returns to its label. */
 const COPIED_MS = 2000;
@@ -68,6 +71,7 @@ export function ChatTurnDetails({
   readOnly: boolean;
   actions: TurnActions;
 }) {
+  const { showTechnicalDetails } = useUiPreferences();
   const [copy, setCopy] = useState<{ status: string; copied: boolean }>({ status: "", copied: false });
   // CH-31: success is temporary; the confirmation clears after a moment. Failures stay until the next try.
   useEffect(() => {
@@ -145,6 +149,7 @@ export function ChatTurnDetails({
                 >
                   <span className="text-fg-secondary">{chatToolDisplayName(tool)}</span>
                   <span>{activityLabel(tool)}</span>
+                  {tool.approvalId ? <ChatToolApprovalLine tool={tool} /> : null}
                   {diagnostics.summary || tool.error || tool.failureGuidance ? (
                     <ChatToolRunSummary
                       text={
@@ -161,6 +166,14 @@ export function ChatTurnDetails({
                     </div>
                   ) : null}
                   {effect ? <p className="w-full">{effect.plainSummary}</p> : null}
+                  {/* The row names the tool; its registry name stays reachable for technical review. */}
+                  {showTechnicalDetails ? (
+                    <div className="w-full">
+                      <TechnicalDetails>
+                        <p className="break-all font-mono text-xs">Tool {tool.toolName}</p>
+                      </TechnicalDetails>
+                    </div>
+                  ) : null}
                   {advisories.length ? (
                     <div className="w-full">
                       <p className="text-fg-secondary">Design advisories ({advisories.length}) · informational</p>

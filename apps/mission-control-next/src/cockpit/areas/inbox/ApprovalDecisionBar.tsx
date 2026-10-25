@@ -21,6 +21,7 @@ import { hasExpired, useMinuteClock } from "./use-minute-clock";
 import { canResolveInboxApproval, matchesInboxApprovalDecision } from "./inbox-approval-guard";
 import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { ApprovalReviewSummary } from "./ApprovalReviewSummary";
+import { splitApprovalExplanation } from "./approval-preview";
 import { approvalDecisionMessage, approvalResolutionLine } from "./approval-settlement";
 import { nullWhenMissing } from "./inbox-record-read";
 import {
@@ -293,34 +294,43 @@ function ApprovalDecisionReview({
       // The surrounding detail or card shows the Expired badge; the bar says only what it means (IN-R04).
       <p className="text-fg-muted">This approval has expired and can no longer be decided.</p>
     );
-  if (!hasPreview && !specializedReview)
-    return <p role="alert">The exact action preview is unavailable, so this approval can&apos;t be decided yet.</p>;
+  // Without the exact action preview nothing can be approved, but denying withholds the action, so Deny stays.
+  const canApprove = hasPreview || specializedReview;
 
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">
-      <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
+      {canApprove ? (
+        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
+      ) : (
+        <p role="alert">
+          The exact action preview is unavailable, so this approval can&apos;t be approved. You can still deny it.
+        </p>
+      )}
       <div role="group" aria-label="Approval decisions" className="flex flex-wrap gap-2">
-        <span ref={approveRef} className="inline-flex">
-          <RiskApprovalAction
-            workspaceId={workspaceId}
-            approval={{
-              approvalId: approval.approvalId,
-              kind: approval.kind,
-              riskLevel: approval.riskLevel,
-              toolName: approval.linkage?.toolName,
-              reason: approval.explanation?.riskExplanation,
-              expiresAt: approval.expiresAt,
-            }}
-            reviewedApproval={approval}
-            specialistReview={
-              specialistReady && specialistEvidence ? (
-                <SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
-              ) : undefined
-            }
-            pending={Boolean(attempt) || (specializedReview && !specialistReady)}
-            onApprove={() => void decide("approve")}
-          />
-        </span>
+        {canApprove ? (
+          <span ref={approveRef} className="inline-flex">
+            <RiskApprovalAction
+              workspaceId={workspaceId}
+              approval={{
+                approvalId: approval.approvalId,
+                kind: approval.kind,
+                riskLevel: approval.riskLevel,
+                toolName: approval.linkage?.toolName,
+                // A model-written explanation is advisory; the review summary labels it instead (#499).
+                reason: splitApprovalExplanation(approval).owner?.riskExplanation,
+                expiresAt: approval.expiresAt,
+              }}
+              reviewedApproval={approval}
+              specialistReview={
+                specialistReady && specialistEvidence ? (
+                  <SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
+                ) : undefined
+              }
+              pending={Boolean(attempt) || (specializedReview && !specialistReady)}
+              onApprove={() => void decide("approve")}
+            />
+          </span>
+        ) : null}
         <Button ref={denyRef} type="button" size="sm" disabled={Boolean(attempt)} onClick={() => void decide("reject")}>
           Deny
         </Button>

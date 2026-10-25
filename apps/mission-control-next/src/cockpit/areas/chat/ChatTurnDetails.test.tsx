@@ -2,10 +2,16 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatThreadTurnRecord, ChatToolRunRecord } from "@goatcitadel/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { APPROVAL_EXPIRY_ACTOR_ID, type ChatThreadTurnRecord, type ChatToolRunRecord } from "@goatcitadel/contracts";
+import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { ChatTurnDetails } from "./ChatTurnDetails";
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  fetchApproval: vi.fn(),
+}));
 const preferences = vi.hoisted(() => ({ showTechnicalDetails: false }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -155,5 +161,99 @@ describe("ChatTurnDetails copy feedback (CH-31)", () => {
     expect(tools().open).toBe(true);
     render(turnWith([executed]));
     expect(tools().open).toBe(true);
+  });
+});
+
+describe("ChatTurnDetails approval decision (#499)", () => {
+  const decidedAt = "2026-10-24T17:30:36.965Z";
+  const gated = (status: ChatToolRunRecord["status"]) =>
+    ({
+      ...toolRun({ path: "Sandbox_Test_Brief.pdf" }),
+      toolName: "documents.create",
+      status,
+      approvalId: "approval-1",
+    }) as ChatToolRunRecord;
+  const record = (overrides: Record<string, unknown>) => ({
+    approvalId: "approval-1",
+    kind: "tool_invoke",
+    status: "approved",
+    riskLevel: "caution",
+    createdAt: "2026-10-24T17:30:25.275Z",
+    resolvedAt: decidedAt,
+    resolvedBy: "auth:operator",
+    explanationStatus: "not_requested",
+    ...overrides,
+  });
+  async function renderWithQuery(turn: ChatThreadTurnRecord) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatTurnDetails turn={turn} streaming={false} readOnly={false} actions={actions} />
+        </QueryClientProvider>,
+      ),
+    );
+  }
+  const row = () => container.querySelector('[data-tool-run-id="tool-run-1"]')!;
+  afterEach(() => vi.mocked(fetchApproval).mockReset());
+
+  it("keeps who approved and when on the tool row after the approval card clears", async () => {
+    vi.mocked(fetchApproval).mockResolvedValue(record({}) as never);
+    await renderWithQuery(turnWith([gated("executed")]));
+    await vi.waitFor(() => expect(row().textContent).toContain("Approved by an operator"));
+    expect(fetchApproval).toHaveBeenCalledWith("approval-1", expect.objectContaining({ workspaceId: "default" }));
+    expect(row().querySelector("time")?.getAttribute("dateTime")).toBe(decidedAt);
+    // The decision line states the decision only; the row's own status still reports what the tool did.
+    expect(row().textContent).toContain("Done");
+  });
+
+  it("says a decision expired without an operator instead of crediting one", async () => {
+    vi.mocked(fetchApproval).mockResolvedValue(
+      record({ status: "rejected", resolvedBy: APPROVAL_EXPIRY_ACTOR_ID }) as never,
+    );
+    await renderWithQuery(turnWith([gated("blocked")]));
+    await vi.waitFor(() => expect(row().textContent).toContain("Expired without an operator decision"));
+    expect(row().textContent).not.toContain("by an operator");
+  });
+
+  it("does not read the record while the decision is still waiting in the approval card", async () => {
+    await renderWithQuery(turnWith([gated("approval_required")]));
+    expect(fetchApproval).not.toHaveBeenCalled();
+    expect(row().textContent).not.toMatch(/Approved|Needed approval/);
+  });
+
+  it("says the tool needed approval when its decision record cannot be read", async () => {
+    vi.mocked(fetchApproval).mockRejectedValue(new Error("offline"));
+    await renderWithQuery(turnWith([gated("executed")]));
+    await vi.waitFor(() =>
+      expect(row().textContent).toContain("Needed approval. The decision record could not be loaded."),
+    );
+  });
+});
+
+describe("ChatTurnDetails tool name (#499)", () => {
+  const documentRun = {
+    ...toolRun({ path: "Sandbox_Test_Brief.pdf" }),
+    toolName: "documents.create",
+  } as ChatToolRunRecord;
+
+  it("names the tool for the operator and keeps the raw tool name in technical details", () => {
+    preferences.showTechnicalDetails = true;
+    try {
+      render(turnWith([documentRun]));
+      const row = container.querySelector('[data-tool-run-id="tool-run-1"]')!;
+      expect(row.firstElementChild?.textContent).toBe("Create document");
+      const details = [...row.querySelectorAll("details")].find((node) =>
+        node.querySelector("summary")?.textContent?.includes("Technical details"),
+      );
+      expect(details?.textContent).toContain("documents.create");
+    } finally {
+      preferences.showTechnicalDetails = false;
+    }
+  });
+
+  it("does not show the raw tool name on the row when technical details are off", () => {
+    render(turnWith([documentRun]));
+    expect(container.textContent).not.toContain("documents.create");
   });
 });

@@ -2,6 +2,10 @@ import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 
 const PATH_BRIDGE_POLICY_REASON = "workspace path was not freshly verified for execution";
 const WEB_TOOL_PREFIXES = ["browser.", "http."];
+export const MEMORY_CONSENT_BLOCKED_REASON =
+  "memory persistence requires explicit user consent; ask before saving long-term memory";
+const MEMORY_CONSENT_EXAMPLES = '"Remember that …" or "Add this to memory: …"';
+const MAX_POLICY_GUIDANCE_LINES = 3;
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -114,6 +118,106 @@ export function buildGovernanceBlockGuidance(input: {
 }
 
 /**
+ * True for a non-web run stopped by a tool-policy decision: the policy
+ * engine's `blocked: <reason>` outcome, a runner policy or capability-profile
+ * revalidation, or an operator governance block. Path-bridge blocks have their
+ * own reason-specific recovery, and runner guards that are not policy (the
+ * memory-consent check, "execution skipped" input repairs, content gates) are
+ * excluded, because their fix may be a different request or a repair.
+ */
+function isToolPolicyBlock(run: ChatToolRunRecord): boolean {
+  if (run.status !== "blocked" || isWebTool(run.toolName) || isPathBridgeBlock(run)) {
+    return false;
+  }
+  const error = (run.error ?? "").trim().toLowerCase();
+  return (
+    error.startsWith("blocked:") ||
+    /\bpolicy\b/.test(error) ||
+    /\bcapability profile\b.*\bdoes not authorize\b/.test(error) ||
+    Boolean(buildGovernanceBlockGuidance(run))
+  );
+}
+
+function isPathBridgeBlock(run: ChatToolRunRecord): boolean {
+  return run.status === "blocked" && Boolean(readPathBridgeBlock(run.result, run.error));
+}
+
+function isMemoryConsentBlock(input: { status: ChatToolRunRecord["status"]; error?: string }): boolean {
+  return input.status === "blocked" && (input.error ?? "").includes(MEMORY_CONSENT_BLOCKED_REASON);
+}
+
+/**
+ * Guidance for a memory write stopped by the runner's consent check. The check
+ * matches accepted phrasings in the user's own message, so a narrower tool
+ * input or a repeat call cannot pass it; only a message using one of those
+ * phrasings can.
+ */
+export function buildMemoryConsentBlockGuidance(input: {
+  status: ChatToolRunRecord["status"];
+  error?: string;
+}): string | undefined {
+  if (!isMemoryConsentBlock(input)) {
+    return undefined;
+  }
+  return `Long-term memory is saved only when the user's own message uses an accepted consent phrasing, for example ${MEMORY_CONSENT_EXAMPLES}. This is a phrase check on the user's message, not on the tool input, so do not retry the write with different input. Ask the user to use one of those phrasings; a bare "yes" does not pass the check.`;
+}
+
+/**
+ * True when every failed attempt was a memory-consent block and the answer
+ * already talks about memory, so the generic "blocked by policy" appendix
+ * would only contradict it.
+ */
+export function answerCoversMemoryConsentBlocks(
+  content: string,
+  failedOrBlocked: readonly ChatToolRunRecord[],
+): boolean {
+  return failedOrBlocked.length > 0 && failedOrBlocked.every(isMemoryConsentBlock) && /\bmemory\b/i.test(content);
+}
+
+/**
+ * Recovery answer for a turn whose every failed attempt was blocked by tool
+ * policy, the memory-consent check, or the workspace path bridge. The answer
+ * says what stopped the tool and what lifts it, and never invites a narrower
+ * retry or echoes the raw reason. A path-bridge answer carries only its
+ * reason-specific guidance, because most of those reasons (an invalid path,
+ * missing Git or WSL) are repaired, not lifted by policy. Returns undefined when
+ * any attempt failed or was blocked for another reason, or the blocks are of
+ * mixed kinds, which keeps the generic recovery text.
+ */
+export function buildPolicyBlockedRecoveryText(failedOrBlocked: readonly ChatToolRunRecord[]): string | undefined {
+  if (failedOrBlocked.length === 0) {
+    return undefined;
+  }
+  if (failedOrBlocked.every(isMemoryConsentBlock)) {
+    return [
+      "I didn't save that to memory. Long-term memory is saved only when your message uses one of the accepted consent phrasings, and this one didn't match any of them, so I stopped instead of retrying.",
+      `To save it, use one of those phrasings, for example ${MEMORY_CONSENT_EXAMPLES}.`,
+    ].join("\n\n");
+  }
+  const lastBlock = failedOrBlocked.at(-1);
+  if (lastBlock && failedOrBlocked.every(isPathBridgeBlock)) {
+    const pathBridgeGuidance = buildPathBridgeFailureGuidance(lastBlock);
+    return pathBridgeGuidance
+      ? `I stopped instead of retrying ${lastBlock.toolName}. ${pathBridgeGuidance}`
+      : undefined;
+  }
+  if (!failedOrBlocked.every(isToolPolicyBlock)) {
+    return undefined;
+  }
+  const tools = [...new Set(failedOrBlocked.map((run) => run.toolName))].join(", ");
+  const guidance = [
+    ...new Set(failedOrBlocked.map((run) => buildGovernanceBlockGuidance(run)).filter((line) => line !== undefined)),
+  ].slice(0, MAX_POLICY_GUIDANCE_LINES);
+  return [
+    `I couldn't do that: this workspace's tool policy blocked ${tools}. A policy block is not caused by the input, so I stopped instead of retrying it with a different one.`,
+    ...guidance.map((line) => `Why: ${line}`),
+    "The operator can review what this workspace's tools may do in Settings > Tools. Once the policy allows it, ask again and I'll retry.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
  * User-facing appendix for failed or blocked tool runs. Only failures and web
  * tool blocks get the URL/query hint; a policy block on another tool is not
  * fixed by a different URL or a narrower query.
@@ -121,6 +225,9 @@ export function buildGovernanceBlockGuidance(input: {
 export function buildToolFailureAppendixText(failedOrBlocked: readonly ChatToolRunRecord[]): string | undefined {
   if (failedOrBlocked.length === 0) {
     return undefined;
+  }
+  if (failedOrBlocked.every(isMemoryConsentBlock)) {
+    return `Note: nothing was saved to memory. Long-term memory is saved only when your message uses an accepted consent phrasing, for example ${MEMORY_CONSENT_EXAMPLES}.`;
   }
   const policyBlocksOnly = failedOrBlocked.every((run) => run.status === "blocked" && !isWebTool(run.toolName));
   const uniqueTools = [...new Set(failedOrBlocked.map((run) => formatToolLabel(run.toolName)))];
