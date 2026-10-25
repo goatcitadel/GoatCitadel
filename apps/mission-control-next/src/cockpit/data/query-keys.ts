@@ -11,6 +11,7 @@ export const queryKeys = {
   workspaces: (citadelId?: string): TopicKey => ["system", "directory", "workspaces", citadelId ?? "all"],
   citadels: (): TopicKey => ["system", "directory", "citadels"],
   capabilities: (): TopicKey => ["skills", "capabilities"],
+  capabilityConnectors: (workspaceId: string): TopicKey => ["mcp", "capability-connectors", workspaceId],
   pendingApprovals: (): TopicKey => ["approvals", "pending"],
   inboxAll: (): TopicKey => ["approvals", "operator-inbox"],
   inbox: (workspaceId: string): TopicKey => [

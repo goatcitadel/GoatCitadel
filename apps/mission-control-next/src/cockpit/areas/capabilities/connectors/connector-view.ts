@@ -1,0 +1,176 @@
+import {
+  CAPABILITY_CONNECTOR_GROUP_ORDER,
+  type CapabilityConnectorCategory,
+  type CapabilityConnectorGroup,
+  type CapabilityConnectorItem,
+  type CapabilityConnectorKind,
+  type CapabilityConnectorReason,
+  type CapabilityConnectorState,
+} from "@goatcitadel/contracts";
+import type { StatusPresentation, StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import type { CategoryOption } from "../CategoryFilter";
+
+// Wording and ordering for the list the Gateway already built. Nothing here decides what a row is.
+
+const GROUP_LABELS: Readonly<Record<CapabilityConnectorGroup, string>> = {
+  connected: "Connected",
+  on_this_device: "On this device",
+  available: "Available",
+  turned_off: "Turned off",
+};
+
+const KIND_LABELS: Readonly<Record<CapabilityConnectorKind, string>> = {
+  built_in: "Built in",
+  mcp: "MCP",
+  channel: "Channel",
+};
+
+const CATEGORY_LABELS: Readonly<Record<CapabilityConnectorCategory, string>> = {
+  development: "Development",
+  browser: "Browser",
+  automation: "Automation",
+  research: "Research",
+  data: "Data",
+  creative: "Creative",
+  messaging: "Messaging",
+  search: "Search",
+  orchestration: "Orchestration",
+  other: "Other",
+};
+
+/** The order of the category buttons. Only categories that have rows are shown. */
+const CATEGORY_ORDER: readonly CapabilityConnectorCategory[] = [
+  "development",
+  "browser",
+  "automation",
+  "research",
+  "data",
+  "creative",
+  "messaging",
+  "search",
+  "orchestration",
+  "other",
+];
+
+const STATE_LABELS: Readonly<Record<CapabilityConnectorState, string>> = {
+  connected: "Connected",
+  needs_sign_in: "Needs sign-in",
+  sign_in_expired: "Sign-in expired",
+  broken: "Not working",
+  available: "Available",
+  turned_off: "Turned off",
+};
+
+const STATE_TONES: Readonly<Record<CapabilityConnectorState, StatusTone>> = {
+  connected: "done",
+  needs_sign_in: "waiting",
+  sign_in_expired: "waiting",
+  broken: "failed",
+  available: "neutral",
+  turned_off: "neutral",
+};
+
+const REASON_LINES: Readonly<Record<CapabilityConnectorReason, string>> = {
+  ready: "Ready to use",
+  not_connected: "Not connected yet",
+  sign_in_needed: "Sign in to finish setup",
+  sign_in_expired: "Sign in again to keep using it",
+  error: "Stopped working; open it to see why",
+  turned_off: "Switched off",
+  not_installed: "Not installed",
+  needs_api_key: "Needs an API key",
+  missing_sign_in_setup: "Sign-in isn't set up for this app yet",
+};
+
+export function connectorKindLabel(kind: CapabilityConnectorKind): string {
+  return KIND_LABELS[kind];
+}
+
+export function connectorCategoryLabel(category: CapabilityConnectorCategory): string {
+  return CATEGORY_LABELS[category];
+}
+
+/** The category buttons for the rows loaded, in a fixed order. */
+export function connectorCategoryOptions(items: readonly CapabilityConnectorItem[]): CategoryOption[] {
+  const present = new Set<string>(items.map((entry) => entry.category));
+  return CATEGORY_ORDER.filter((category) => present.has(category)).map((category) => ({
+    id: category,
+    label: CATEGORY_LABELS[category],
+  }));
+}
+
+/**
+ * Keeps the rows that match the search text (name, description, category and kind as they are shown, ignoring case)
+ * and, when any category is chosen, one of the chosen categories.
+ */
+export function filterConnectors(
+  items: readonly CapabilityConnectorItem[],
+  filters: { query: string; categories: readonly string[] },
+): CapabilityConnectorItem[] {
+  const needle = filters.query.trim().toLowerCase();
+  return items.filter((entry) => {
+    if (filters.categories.length > 0 && !filters.categories.includes(entry.category)) return false;
+    if (!needle) return true;
+    const haystack = [entry.name, entry.description, CATEGORY_LABELS[entry.category], KIND_LABELS[entry.kind]]
+      .join("\n")
+      .toLowerCase();
+    return haystack.includes(needle);
+  });
+}
+
+/** The groups in their fixed order, without the empty ones. Rows keep the order the Gateway sent them in. */
+export function groupConnectors(
+  items: readonly CapabilityConnectorItem[],
+): { group: CapabilityConnectorGroup; label: string; items: CapabilityConnectorItem[] }[] {
+  return CAPABILITY_CONNECTOR_GROUP_ORDER.map((group) => ({
+    group,
+    label: GROUP_LABELS[group],
+    items: items.filter((entry) => entry.group === group),
+  })).filter((entry) => entry.items.length > 0);
+}
+
+/**
+ * The state badge and the reason line under it. A row never reads as plainly usable when the AI can't use it: a
+ * connected MCP row that Chat can't reach says so, and a row hidden in this workspace says that instead of its state.
+ */
+export function presentConnectorState(item: CapabilityConnectorItem): StatusPresentation & { reason: string } {
+  const chatBlocked = item.state === "connected" && !item.chat.available;
+  const label = item.hiddenInWorkspace ? "Hidden in this workspace" : STATE_LABELS[item.state];
+  // Green says "usable". A connection Chat can't use yet asks for a look, and a hidden row is neither good nor bad.
+  const tone: StatusTone = item.hiddenInWorkspace ? "neutral" : chatBlocked ? "waiting" : STATE_TONES[item.state];
+  const reason = chatBlocked ? "Connected · not available in Chat" : REASON_LINES[item.reason];
+  return { label, tone, reason };
+}
+
+export type ConnectorActionKind = "install" | "set_up" | "reconnect" | "try_again" | "turn_back_on" | "manage";
+
+/**
+ * The one button on a row. Every action opens the row's panel; "install" is in the union for the install flow, which
+ * does not return it yet. A row that still needs its sign-in is set up the same way a new one is, because the reason
+ * line beside the button already says "Sign in to finish setup".
+ */
+export function connectorAction(item: CapabilityConnectorItem): { kind: ConnectorActionKind; label: string } {
+  switch (item.state) {
+    case "connected":
+      return { kind: "manage", label: "Manage" };
+    case "broken":
+      return { kind: "try_again", label: "Try again" };
+    case "sign_in_expired":
+      return { kind: "reconnect", label: "Reconnect" };
+    case "turned_off":
+      return { kind: "turn_back_on", label: "Turn back on" };
+    case "needs_sign_in":
+    case "available":
+      return { kind: "set_up", label: "Set up" };
+  }
+}
+
+/** How many looks the letter icon has. `LetterIcon` holds the classes for each. */
+export const LETTER_ICON_TONE_COUNT = 4;
+
+/** A stable pick from the icon looks for a name, so an app keeps its colour from one visit to the next. */
+export function letterIconTone(name: string): number {
+  let hash = 5381;
+  for (const char of name.trim().toLowerCase()) hash = (Math.imul(hash, 33) + (char.codePointAt(0) ?? 0)) >>> 0;
+  return hash % LETTER_ICON_TONE_COUNT;
+}

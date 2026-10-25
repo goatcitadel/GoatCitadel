@@ -7,6 +7,8 @@ import { CAPABILITIES_TABS, readCapabilitiesTab } from "./capabilities-tabs";
 
 const route = vi.hoisted(() => ({ rest: [] as string[], navigate: vi.fn() }));
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => route }));
+// The tab has its own tests; this file covers the page around it, which mounts without a query client.
+vi.mock("./connectors/ConnectorsTab", () => ({ ConnectorsTab: () => <div data-testid="connectors-tab" /> }));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -41,6 +43,7 @@ describe("Capabilities page", () => {
     expect(connectors?.getAttribute("aria-current")).toBe("page");
     expect(connectors?.getAttribute("href")).toBe("/capabilities/connectors");
     expect(container.querySelector("nav")?.getAttribute("aria-label")).toBe("Capabilities sections");
+    expect(container.querySelector('[data-testid="connectors-tab"]')).not.toBeNull();
   });
 
   it("opens Connectors for /capabilities/connectors and for an unknown tab", async () => {

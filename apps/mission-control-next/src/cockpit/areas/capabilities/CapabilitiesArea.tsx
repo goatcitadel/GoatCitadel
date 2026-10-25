@@ -2,6 +2,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { AreaHeader, AreaTabsProvider } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { CAPABILITIES_TABS, readCapabilitiesTab } from "./capabilities-tabs";
+import { ConnectorsTab } from "./connectors/ConnectorsTab";
 
 /** The Capabilities area: one page with a tab for each kind of thing GoatCitadel's AI can use. */
 export function CapabilitiesArea() {
@@ -16,7 +17,8 @@ export function CapabilitiesArea() {
     >
       <section className={`${AREA_PAGE} min-h-full`}>
         <AreaHeader title="Capabilities" description="Everything GoatCitadel's AI can use, in one place." />
-        {/* The current tab's content renders here. */}
+        {/* Each row's button has nothing to open until the connector panel lands. */}
+        {tab === "connectors" ? <ConnectorsTab onOpen={() => undefined} /> : null}
       </section>
     </AreaTabsProvider>
   );
