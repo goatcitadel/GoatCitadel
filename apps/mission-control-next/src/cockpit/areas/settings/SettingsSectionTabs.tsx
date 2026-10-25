@@ -101,7 +101,7 @@ export function SettingsSectionTabs({
         aria-label={`${page.label} sections`}
         data-overflow-start={edges.start || undefined}
         data-overflow-end={edges.end || undefined}
-        className="cockpit-area-tabs cockpit-overflow-fade mt-3 max-w-full overflow-x-auto pb-px"
+        className="cockpit-area-tabs cockpit-overflow-fade mt-3 max-w-full gap-0.5 overflow-x-auto rounded-lg border-b-0 bg-sunken p-0.5 sm:w-fit"
       >
         {page.entries
           .filter((entry) => entry.discoverable)
@@ -109,7 +109,7 @@ export function SettingsSectionTabs({
             <TabsTrigger
               key={entry.section}
               value={entry.section}
-              className="min-h-11 shrink-0 whitespace-nowrap"
+              className="min-h-8 shrink-0 whitespace-nowrap rounded-md border-b-0 px-3 py-1 text-xs data-[state=active]:bg-raised data-[state=active]:shadow-sm"
               onPointerEnter={() => preloadSettingsSection(entry.section)}
               onFocus={() => preloadSettingsSection(entry.section)}
               onPointerDown={() => preloadSettingsSection(entry.section)}

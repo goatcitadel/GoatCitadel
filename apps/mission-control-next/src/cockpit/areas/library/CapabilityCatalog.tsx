@@ -1,7 +1,6 @@
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Virtuoso } from "react-virtuoso";
 import {
   BookOpen,
   Code,
@@ -162,7 +161,7 @@ function CatalogDetail({
 }
 
 /** `footer` is page content under the catalog (the Mesh publications disclosure on the Skills and tools tab). */
-export function CapabilityCatalog({ footer }: { footer?: ReactNode } = {}) {
+export function CapabilityCatalog({ footer }: { footer?: ReactNode | ((search: string) => ReactNode) } = {}) {
   const route = useCockpitRoute();
   const location = readCatalogLocation(route.rest, route.search);
   const { search, kind, status, trust } = location.filters;
@@ -216,8 +215,8 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode } = {}) {
   const workspacePolicyState = workspacePolicyQuery.isPending ? "loading" : workspacePolicy ? "ready" : "unavailable";
 
   return (
-    // The page fills the area's height so the catalog list, not the page, scrolls (LB-06).
-    <section className={`${AREA_COLUMN} flex min-h-0 flex-1 flex-col gap-3 p-4 sm:p-6`}>
+    // The list uses the page's height (one scroll, whole rows); the detail pane stays in view beside it.
+    <section className={`${AREA_COLUMN} flex flex-col gap-3 p-4 sm:p-6`}>
       <AreaHeader
         title={LIBRARY_SECTION_LABELS.capabilities}
         description="Inspect skills, tools, and other capabilities available in GoatCitadel."
@@ -283,52 +282,48 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode } = {}) {
             />
           ) : null}
           {filtered.length ? (
-            <div className="flex min-h-80 flex-1 gap-4">
-              <div className="min-h-0 min-w-0 flex-1 overflow-hidden border-t border-line-subtle">
-                <Virtuoso
-                  data={filtered}
-                  className="h-full w-full"
-                  itemContent={(_index, item) => {
-                    const presented = callableKnown
-                      ? presentCapabilityStatus(item)
-                      : { label: "Callability unknown", tone: "neutral" as const };
-                    const usage = capabilityUsage(item, view);
-                    const KindIcon = kindIcon(item.kind);
-                    return (
-                      <button
-                        type="button"
-                        key={item.capabilityId}
-                        onClick={() => route.navigate(catalogHref(location.filters, item))}
-                        aria-current={selected?.capabilityId === item.capabilityId ? "true" : undefined}
-                        className="flex w-full items-center gap-3 border-b border-line-subtle p-3 text-left hover:bg-sunken aria-[current=true]:bg-sunken"
-                      >
-                        <KindIcon aria-hidden="true" className="size-4 shrink-0 text-fg-muted" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium text-fg">
-                            {presentCapabilityTitle(item)}
-                          </span>
+            <div className="flex items-start gap-4">
+              <div className="min-w-0 flex-1 border-t border-line-subtle">
+                {filtered.map((item) => {
+                  const presented = callableKnown
+                    ? presentCapabilityStatus(item)
+                    : { label: "Callability unknown", tone: "neutral" as const };
+                  const usage = capabilityUsage(item, view);
+                  const KindIcon = kindIcon(item.kind);
+                  return (
+                    <button
+                      type="button"
+                      key={item.capabilityId}
+                      onClick={() => route.navigate(catalogHref(location.filters, item))}
+                      aria-current={selected?.capabilityId === item.capabilityId ? "true" : undefined}
+                      className="flex w-full items-center gap-3 border-b border-line-subtle p-3 text-left hover:bg-sunken aria-[current=true]:bg-sunken"
+                    >
+                      <KindIcon aria-hidden="true" className="size-4 shrink-0 text-fg-muted" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-fg">
+                          {presentCapabilityTitle(item)}
+                        </span>
+                        <span className="block truncate text-xs text-fg-muted">
+                          {presentCapabilityDescription(item)}
+                        </span>
+                        {usage.status === "recorded" ? (
                           <span className="block truncate text-xs text-fg-muted">
-                            {presentCapabilityDescription(item)}
+                            <CapabilityLastUsed usage={usage} />
                           </span>
-                          {usage.status === "recorded" ? (
-                            <span className="block truncate text-xs text-fg-muted">
-                              <CapabilityLastUsed usage={usage} />
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
-                          {item.trustLabel ? <span className={PILL}>{freeText(item.trustLabel)}</span> : null}
-                          <StatusBadge status={presented} />
-                        </span>
-                      </button>
-                    );
-                  }}
-                />
+                        ) : null}
+                      </span>
+                      <span className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
+                        {item.trustLabel ? <span className={PILL}>{freeText(item.trustLabel)}</span> : null}
+                        <StatusBadge status={presented} />
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
               {!isPhone && selected ? (
                 <aside
                   aria-label="Capability details"
-                  className="hidden w-80 shrink-0 overflow-y-auto border-l border-line-subtle pl-4 sm:block xl:w-96"
+                  className="sticky top-4 hidden max-h-[calc(100dvh-2rem)] w-80 shrink-0 self-start overflow-y-auto border-l border-line-subtle pl-4 sm:block xl:w-96"
                 >
                   <h2 className="mb-2 text-base font-semibold text-fg">{presentCapabilityTitle(selected)}</h2>
                   <CatalogDetail
@@ -373,7 +368,7 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode } = {}) {
           ) : null}
         </>
       ) : null}
-      {footer}
+      {typeof footer === "function" ? footer(search) : footer}
     </section>
   );
 }

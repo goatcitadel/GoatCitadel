@@ -14,11 +14,11 @@ const { areaHeader } = vi.hoisted(() => ({
 vi.mock("./CapabilityCatalog", async () => {
   const AreaHeader = await areaHeader();
   return {
-    CapabilityCatalog: ({ footer }: { footer?: ReactNode }) => (
+    CapabilityCatalog: ({ footer }: { footer?: ReactNode | ((search: string) => ReactNode) }) => (
       <div>
         <AreaHeader title="Skills and tools" />
         Capability directory
-        {footer}
+        {typeof footer === "function" ? footer("") : footer}
       </div>
     ),
   };

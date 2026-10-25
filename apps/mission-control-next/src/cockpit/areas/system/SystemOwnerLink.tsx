@@ -24,7 +24,9 @@ export function SystemOwnerLink({
     <NativeOwnerLink
       href={owner.href}
       scope={scope}
-      className={className ?? "mt-2 inline-block text-sm font-medium text-accent hover:underline"}
+      className={
+        className ?? "-mx-1 mt-1 inline-flex min-h-8 items-center px-1 text-sm font-medium text-accent hover:underline"
+      }
     >
       {children}
     </NativeOwnerLink>

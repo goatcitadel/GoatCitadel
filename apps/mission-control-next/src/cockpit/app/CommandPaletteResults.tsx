@@ -4,8 +4,7 @@ import { LibraryResourceDetail } from "../areas/library/LibraryResourceDetail";
 import type { LibraryResource } from "../areas/library/library-resources";
 import type { PaletteObject, PaletteScope, PaletteSearchGroup } from "./command-palette-search";
 
-export const PALETTE_ITEM_CLASS =
-  "cursor-pointer rounded-sm px-3 py-2 text-sm text-fg data-[selected=true]:bg-sunken data-[disabled=true]:opacity-60";
+export const PALETTE_ITEM_CLASS = "cursor-pointer rounded-sm px-3 py-2 text-sm text-fg data-[disabled=true]:opacity-60";
 
 export function CommandPaletteResults({
   groups,

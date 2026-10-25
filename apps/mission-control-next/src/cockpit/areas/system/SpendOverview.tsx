@@ -89,15 +89,20 @@ export function SpendOverview() {
                 { term: "Recorded tokens", value: projection.tokenLabel },
               ]}
             />
-            {missingTokenDays > 0 ? (
-              <p className="text-xs text-fg-muted">
-                {`Token counts are missing or partial for ${plural(missingTokenDays, "day")}, so the token total is a lower bound.`}
-              </p>
-            ) : null}
-            <p className="text-xs text-fg-muted">
-              Accounted cost may combine provider-reported amounts and GoatCitadel pricing estimates. Complete coverage
-              means all costs were accounted; it does not make an estimate a measured bill.
-            </p>
+            <details className="text-xs text-fg-muted">
+              <summary className="min-h-6 cursor-pointer font-medium text-fg-secondary">How this is counted</summary>
+              <div className="mt-1 space-y-1">
+                {missingTokenDays > 0 ? (
+                  <p className="text-xs text-fg-muted">
+                    {`Token counts are missing or partial for ${plural(missingTokenDays, "day")}, so the token total is a lower bound.`}
+                  </p>
+                ) : null}
+                <p className="text-xs text-fg-muted">
+                  Accounted cost may combine provider-reported amounts and GoatCitadel pricing estimates. Complete
+                  coverage means all costs were accounted; it does not make an estimate a measured bill.
+                </p>
+              </div>
+            </details>
           </div>
 
           <Section

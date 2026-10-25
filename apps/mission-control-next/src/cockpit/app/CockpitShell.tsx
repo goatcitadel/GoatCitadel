@@ -1,4 +1,5 @@
 import { EmbeddedPageHeaderProvider } from "../../features/native-routes/embedded-page-header";
+import { Skeleton } from "../ui/Skeleton";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { ClassicOwnerLink } from "../ui/ClassicOwnerLink";
 import { Activity, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -201,9 +202,15 @@ function CockpitShellContent({
                   <Suspense
                     key={area}
                     fallback={
-                      <p role="status" className="p-4 text-sm text-fg-muted">
-                        Loading {areaLabel}…
-                      </p>
+                      <div className="mx-auto w-full max-w-5xl space-y-4 p-4 sm:p-6">
+                        <p role="status" className="text-sm text-fg-muted">
+                          Loading {areaLabel}…
+                        </p>
+                        <Skeleton className="h-8 w-48" />
+                        <Skeleton className="h-4 w-80 max-w-full" />
+                        <Skeleton className="h-10 w-full" />
+                        <Skeleton className="h-40 w-full" />
+                      </div>
                     }
                   >
                     {area === "gallery" ? (

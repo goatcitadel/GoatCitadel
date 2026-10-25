@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CapabilityCatalogEntry, SkillListItem } from "@goatcitadel/contracts";
 import { fetchCapabilityCatalog } from "@goatcitadel/mission-control-shared/api/capabilities";
 import { fetchSkills } from "@goatcitadel/mission-control-shared/api/skills";
-import { capabilityUsage, filterCapabilities, loadCapabilityCatalog } from "./capability-catalog";
+import { capabilityUsage, filterCapabilities, matchesSearchWords, loadCapabilityCatalog } from "./capability-catalog";
 
 vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({ fetchCapabilityCatalog: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/skills", () => ({ fetchSkills: vi.fn() }));
@@ -72,5 +72,14 @@ describe("cockpit capability catalog", () => {
     expect(filterCapabilities([entry], { search: "code change", kind: "skill", status: "configured", trust: "reviewed" })).toEqual([entry]);
     expect(filterCapabilities([entry], { search: "code change", kind: "skill", status: "unavailable", trust: "reviewed" })).toEqual([]);
     expect(filterCapabilities([entry], { search: "missing", kind: "all", status: "all", trust: "all" })).toEqual([]);
+  });
+
+  it("matches multi-word queries by word, ignoring order and _ . - separators (U-06)", () => {
+    const cookies: CapabilityCatalogEntry = { ...entry, capabilityId: "tool:browser_cookies_clear", kind: "tool", title: "browser_cookies_clear", summary: "Clear cookies." };
+    const all = { kind: "all", status: "all" as const, trust: "all" };
+    for (const search of ["Browser cookies clear", "browser.cookies-clear", "clear  browser", "BROWSER_COOKIES"])
+      expect(filterCapabilities([entry, cookies], { search, ...all })).toEqual([cookies]);
+    expect(filterCapabilities([entry, cookies], { search: "browser nothing", ...all })).toEqual([]);
+    expect(matchesSearchWords("Email over IMAP/SMTP", "imap email")).toBe(true);
   });
 });

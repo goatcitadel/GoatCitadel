@@ -9,6 +9,16 @@
     height: auto;
     min-height: 2em;
   }
+  /* The label is the click target for a checkbox or radio: at least 24px tall, and the box itself 16px. */
+  html[data-shell="cockpit"] label:has(> :is(input[type="checkbox"], input[type="radio"])) {
+    min-height: 1.5rem;
+    cursor: pointer;
+  }
+  html[data-shell="cockpit"] :is(input[type="checkbox"], input[type="radio"]) {
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
+  }
 }
 /* Deferred recovery controls retain their targets above the shared unlayered minimum. */
 html[data-shell="cockpit"] .cockpit-deferred-recovery-control {
