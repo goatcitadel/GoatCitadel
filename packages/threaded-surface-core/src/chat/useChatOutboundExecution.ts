@@ -759,10 +759,30 @@ export function useChatOutboundExecution(
           ? "queued"
           : "idle";
 
+  // Cleanup also runs when the surface is hidden while its state is kept (navigating to another area).
+  // That drops the live stream, so a Send that was still in flight can never settle itself: when the
+  // surface comes back, release it and re-read the turn's recorded status instead of showing "Sending".
+  const droppedWhileSendingRef = useRef<string | null | false>(false);
+  const loadSessionCoreStateRef = useRef(loadSessionCoreState);
+  loadSessionCoreStateRef.current = loadSessionCoreState;
   useEffect(() => {
     outboundMountedRef.current = true;
+    if (droppedWhileSendingRef.current !== false) {
+      const sessionId = droppedWhileSendingRef.current;
+      droppedWhileSendingRef.current = false;
+      pendingOutboundCodeRef.current = null;
+      sendingRef.current = false;
+      setSending(false);
+      setOptimisticUserMessage(null);
+      if (sessionId && selectedSessionIdRef.current === sessionId) {
+        void loadSessionCoreStateRef
+          .current(sessionId, { background: true, includeThread: true })
+          .catch(() => undefined);
+      }
+    }
     return () => {
       outboundMountedRef.current = false;
+      if (sendingRef.current) droppedWhileSendingRef.current = selectedSessionIdRef.current;
       pendingOutboundCodeRef.current?.controller.abort();
       abortActiveChatStream(activeStreamRef.current);
       activeStreamRef.current = null;
@@ -772,7 +792,7 @@ export function useChatOutboundExecution(
       }
       disposeStreamingPreview();
     };
-  }, [activeStreamRef, disposeStreamingPreview]);
+  }, [activeStreamRef, disposeStreamingPreview, setSending]);
 
   return {
     activeStreamRef,

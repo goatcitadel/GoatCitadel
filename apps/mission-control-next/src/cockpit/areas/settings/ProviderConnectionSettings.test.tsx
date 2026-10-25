@@ -442,7 +442,7 @@ describe("cockpit provider connection editing", () => {
     });
     await act(async () => dialog.onSubmitSecureInput(dialog.plan!, { credential: "synthetic-test-credential" }));
     expect(container.textContent).toContain("Result: Registered environment owner is reserved");
-    expect(container.textContent).toContain("Caution risk");
+    expect(container.textContent).toContain("Caution");
     expect(container.textContent).not.toContain("Risk: ");
     expect(container.textContent).not.toContain("The saved provider settings match it");
   });

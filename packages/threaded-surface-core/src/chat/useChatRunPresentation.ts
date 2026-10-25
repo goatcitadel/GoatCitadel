@@ -189,8 +189,8 @@ export function useChatRunPresentation({
     if (activeTrace?.status === "waiting_for_approval") {
       notices.push({
         id: `lifecycle-approval-${activeWorkflowTurn?.turnId ?? "active"}`,
-        tone: "warning",
-        content: "Run is paused for approval. Respond to the blocker to let durable execution resume.",
+        tone: "neutral",
+        content: "Waiting for your approval below.",
         timestamp,
       });
     }
