@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { ChatTurnExecutionRegistry, ChatTurnStreamRegistrationMismatchError } from "./chat-turn-execution-registry.js";
 
 describe("ChatTurnExecutionRegistry", () => {
+  it("does not let a stale holder of the same operation release a newer write lease", () => {
+    const registry = new ChatTurnExecutionRegistry();
+    const staleToken = registry.acquireWriteLease("session-1", "agent-send");
+    registry.clearSessionWriteLease("session-1");
+    const currentToken = registry.acquireWriteLease("session-1", "agent-send");
+
+    registry.releaseWriteLease("session-1", staleToken);
+    expect(() => registry.acquireWriteLease("session-1", "agent-send")).toThrow(/already in progress/);
+
+    registry.releaseWriteLease("session-1", currentToken);
+    expect(() => registry.acquireWriteLease("session-1", "agent-send")).not.toThrow();
+  });
+
   it("serializes chat turn writes by session and clears stale session leases", async () => {
     const registry = new ChatTurnExecutionRegistry();
 
