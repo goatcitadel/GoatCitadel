@@ -52,6 +52,7 @@ import {
 } from "./capability-catalog";
 import { catalogHref, readCatalogLocation } from "./capability-catalog-route";
 import { AREA_COLUMN } from "../../ui/area-layout";
+import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
@@ -159,6 +160,9 @@ function CatalogDetail({
     </div>
   );
 }
+
+/** Above this many capabilities the list windows instead of rendering every row. */
+const CATALOG_WINDOW_THRESHOLD = 200;
 
 /** `footer` is page content under the catalog (the Mesh publications disclosure on the Skills and tools tab). */
 export function CapabilityCatalog({ footer }: { footer?: ReactNode | ((search: string) => ReactNode) } = {}) {
@@ -283,47 +287,57 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode | ((search: s
           ) : null}
           {filtered.length ? (
             <div className="flex items-start gap-4">
+              {/* Typical catalogs render in page height (one scroll, whole rows); very large ones window
+                  inside a viewport-tall list so rendering stays bounded. */}
               <div className="min-w-0 flex-1 border-t border-line-subtle">
-                {filtered.map((item) => {
-                  const presented = callableKnown
-                    ? presentCapabilityStatus(item)
-                    : { label: "Callability unknown", tone: "neutral" as const };
-                  const usage = capabilityUsage(item, view);
-                  const KindIcon = kindIcon(item.kind);
-                  return (
-                    <button
-                      type="button"
-                      key={item.capabilityId}
-                      onClick={() => route.navigate(catalogHref(location.filters, item))}
-                      aria-current={selected?.capabilityId === item.capabilityId ? "true" : undefined}
-                      className="flex w-full items-center gap-3 border-b border-line-subtle p-3 text-left hover:bg-sunken aria-[current=true]:bg-sunken"
-                    >
-                      <KindIcon aria-hidden="true" className="size-4 shrink-0 text-fg-muted" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-fg">
-                          {presentCapabilityTitle(item)}
-                        </span>
-                        <span className="block truncate text-xs text-fg-muted">
-                          {presentCapabilityDescription(item)}
-                        </span>
-                        {usage.status === "recorded" ? (
-                          <span className="block truncate text-xs text-fg-muted">
-                            <CapabilityLastUsed usage={usage} />
+                <WindowedRecordList
+                  items={filtered}
+                  itemKey={(item) => item.capabilityId}
+                  label="Capabilities"
+                  threshold={CATALOG_WINDOW_THRESHOLD}
+                  className="h-dvh min-h-48"
+                >
+                  {(item) => {
+                    const presented = callableKnown
+                      ? presentCapabilityStatus(item)
+                      : { label: "Callability unknown", tone: "neutral" as const };
+                    const usage = capabilityUsage(item, view);
+                    const KindIcon = kindIcon(item.kind);
+                    return (
+                      <button
+                        type="button"
+                        key={item.capabilityId}
+                        onClick={() => route.navigate(catalogHref(location.filters, item))}
+                        aria-current={selected?.capabilityId === item.capabilityId ? "true" : undefined}
+                        className="flex w-full items-center gap-3 border-b border-line-subtle p-3 text-left hover:bg-sunken aria-[current=true]:bg-sunken"
+                      >
+                        <KindIcon aria-hidden="true" className="size-4 shrink-0 text-fg-muted" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-fg">
+                            {presentCapabilityTitle(item)}
                           </span>
-                        ) : null}
-                      </span>
-                      <span className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
-                        {item.trustLabel ? <span className={PILL}>{freeText(item.trustLabel)}</span> : null}
-                        <StatusBadge status={presented} />
-                      </span>
-                    </button>
-                  );
-                })}
+                          <span className="block truncate text-xs text-fg-muted">
+                            {presentCapabilityDescription(item)}
+                          </span>
+                          {usage.status === "recorded" ? (
+                            <span className="block truncate text-xs text-fg-muted">
+                              <CapabilityLastUsed usage={usage} />
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
+                          {item.trustLabel ? <span className={PILL}>{freeText(item.trustLabel)}</span> : null}
+                          <StatusBadge status={presented} />
+                        </span>
+                      </button>
+                    );
+                  }}
+                </WindowedRecordList>
               </div>
               {!isPhone && selected ? (
                 <aside
                   aria-label="Capability details"
-                  className="sticky top-4 hidden max-h-[calc(100dvh-2rem)] w-80 shrink-0 self-start overflow-y-auto border-l border-line-subtle pl-4 sm:block xl:w-96"
+                  className="sticky top-4 hidden max-h-dvh w-80 shrink-0 self-start overflow-y-auto border-l border-line-subtle pl-4 sm:block xl:w-96"
                 >
                   <h2 className="mb-2 text-base font-semibold text-fg">{presentCapabilityTitle(selected)}</h2>
                   <CatalogDetail

@@ -20,8 +20,13 @@ import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 import { presentErrorText } from "../../lib/present-error";
 import { presentApprovalEffectKind, presentApprovalEffectStatus, presentApprovalEvent } from "./inbox-vocabulary";
 
-/** What a decision with no waiting run means, in plain words. Copy only; the approval's effect is unchanged. */
-export function noRunLine(approval: ApprovalRequest): string {
+/**
+ * What a decision with no linked original run means, in plain words. A missing run says nothing about the
+ * approval's own follow-on effects (standalone approvals such as memory changes run through them), so only an
+ * approval with no recorded effects is described as having changed nothing.
+ */
+export function noRunLine(approval: ApprovalRequest, effectCount: number): string {
+  if (effectCount > 0) return "No original run is linked. The follow-on steps above show what this decision did.";
   const decided = approval.status === "approved" || approval.status === "edited";
   const memory = /memory/u.test(`${approval.kind} ${approval.linkage?.toolName ?? ""}`);
   if (!decided) return "Nothing was waiting on this decision.";
@@ -149,7 +154,7 @@ export function ApprovalSettlement({
           <RecordedErrorDetails error={run.lastError} />
         </>
       ) : state ? (
-        <p>{noRunLine(settled)}</p>
+        <p>{noRunLine(settled, state.replay.effects.length)}</p>
       ) : (
         <p>Original linked work outcome is not yet verified.</p>
       )}

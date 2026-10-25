@@ -81,7 +81,7 @@ export function ChatComposerPalette({
         role="listbox"
         aria-label="Composer suggestions"
         // Rows are 3rem tall with a 2px gap, so five rows fit exactly and a scrolled list rests on a whole row.
-        className="mt-1 grid max-h-[calc(5*3rem+4*2px)] snap-y snap-mandatory gap-0.5 overflow-y-auto"
+        className="mt-1 grid max-h-62 snap-y snap-mandatory gap-0.5 overflow-y-auto"
       >
         {props.commandSuggestions.map((item, index) => (
           <button
