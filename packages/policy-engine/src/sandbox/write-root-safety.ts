@@ -323,3 +323,71 @@ function isWin32(ctx: WriteRootSafetyContext): boolean {
 function pathApi(ctx: WriteRootSafetyContext): path.PlatformPath {
   return isWin32(ctx) ? path.win32 : path.posix;
 }
+
+export type WindowsLexicalRefusal =
+  | "device_namespace"
+  | "network_path"
+  | "reserved_device_name"
+  | "alternate_data_stream"
+  | "trailing_dot_or_space"
+  | "short_name_segment";
+
+const WINDOWS_RESERVED_DEVICE_NAMES = new Set([
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
+  "CONIN$",
+  "CONOUT$",
+  "COM1",
+  "COM2",
+  "COM3",
+  "COM4",
+  "COM5",
+  "COM6",
+  "COM7",
+  "COM8",
+  "COM9",
+  "LPT1",
+  "LPT2",
+  "LPT3",
+  "LPT4",
+  "LPT5",
+  "LPT6",
+  "LPT7",
+  "LPT8",
+  "LPT9",
+]);
+
+/** True for a UNC network path (not the `\\?\` or `\\.\` device namespaces). */
+export function isNetworkPath(value: string): boolean {
+  return /^[\\/]{2}[^\\/?.]/u.test(value);
+}
+
+/**
+ * Win32 lexical tricks that make a path name a different file than its text
+ * suggests: device namespaces, UNC paths, alternate data streams, reserved
+ * device names, and segments with a trailing dot or space (Win32 strips them,
+ * so `index.db.` opens `index.db`). Pure string rules, so they run on any host.
+ */
+export function classifyWindowsLexicalTarget(value: string): WindowsLexicalRefusal | undefined {
+  if (/^[\\/]{2}[?.][\\/]/u.test(value)) return "device_namespace";
+  if (isNetworkPath(value)) return "network_path";
+  const absolute = path.win32.resolve(value);
+  const segments = absolute
+    .slice(path.win32.parse(absolute).root.length)
+    .split(/[\\/]+/u)
+    .filter(Boolean);
+  for (const segment of segments) {
+    if (segment.includes(":")) return "alternate_data_stream";
+    if (/[. ]$/u.test(segment)) return "trailing_dot_or_space";
+    const baseName = segment.split(".")[0]?.trimEnd().toUpperCase() ?? "";
+    if (WINDOWS_RESERVED_DEVICE_NAMES.has(baseName)) return "reserved_device_name";
+  }
+  return undefined;
+}
+
+/** True when any not-yet-existing path segment looks like an unexpanded 8.3 short name (`PROGRA~1`). */
+export function hasWindowsShortNameSegment(missingSegments: readonly string[]): boolean {
+  return missingSegments.some((segment) => /~\d/u.test(segment));
+}

@@ -59,4 +59,14 @@ describe("classifyArgumentRisk", () => {
   it("ignores patterns when the argument value is absent", () => {
     expect(classifyArgumentRisk("shell.exec", { other: "value" }, IAC_PATTERNS).risky).toBe(false);
   });
+
+  it("honours mid-string wildcards in the tool-name pattern", () => {
+    const patterns: ToolRiskyArgumentPattern[] = [
+      { toolNamePattern: "*.delete", argumentPath: "target", valuePatterns: ["prod"] },
+      { toolNamePattern: "mcp.*.delete", argumentPath: "target", valuePatterns: ["prod"] },
+    ];
+    expect(classifyArgumentRisk("fs.delete", { target: "prod" }, patterns).risky).toBe(true);
+    expect(classifyArgumentRisk("mcp.github.delete", { target: "prod" }, patterns).risky).toBe(true);
+    expect(classifyArgumentRisk("fs.read", { target: "prod" }, patterns).risky).toBe(false);
+  });
 });

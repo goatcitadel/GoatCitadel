@@ -78,6 +78,43 @@ describe("resolveEffectivePolicy", () => {
     expect(policy.approvalMode).toBe("approve_risky");
   });
 
+  it("lets a per-agent approvalMode only tighten the posture", () => {
+    const withAgentMode = (
+      global: "approve_all" | "approve_risky" | "bypass",
+      agent: "approve_all" | "approve_risky" | "bypass",
+    ) =>
+      resolveEffectivePolicy(
+        {
+          ...config,
+          tools: { ...config.tools, approvalMode: global },
+          agents: { agentA: { tools: { approvalMode: agent } } },
+        } as ToolPolicyConfig,
+        "agentA",
+      ).approvalMode;
+    expect(withAgentMode("approve_risky", "approve_all")).toBe("approve_all");
+    expect(withAgentMode("bypass", "approve_risky")).toBe("approve_risky");
+    expect(withAgentMode("approve_all", "bypass")).toBe("approve_all");
+    expect(withAgentMode("approve_risky", "bypass")).toBe("approve_risky");
+  });
+
+  it("treats a non-active permission profile as absent", () => {
+    const archived = {
+      ...createProfile({
+        profileId: "old",
+        label: "Old",
+        approvalMode: "bypass",
+        toolPatterns: ["*"],
+        allow: ["docs.search"],
+      }),
+      status: "archived" as const,
+    };
+    const policy = resolveEffectivePolicy(config, "agentA", archived);
+    expect(policy.permissionProfileId).toBeUndefined();
+    expect(policy.approvalMode).toBe("approve_risky");
+    expect(isToolAllowed(policy, "docs.search")).toBe(false);
+    expect(isToolAllowed(policy, "browser.search")).toBe(false);
+  });
+
   it("applies permission profiles independently of retired named profiles", () => {
     const safeProfile = createProfile({
       profileId: "safe",

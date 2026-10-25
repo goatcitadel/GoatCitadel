@@ -1214,10 +1214,13 @@ export class ToolPolicyEngine {
     // this surface; none may widen it. Global deny remains the earlier,
     // absolute deny-wins gate. Requests without a permission profile rely on
     // explicit global/agent allows rather than retired named presets.
-    const activePermissionProfile =
-      request.policyContext?.permissionProfile?.status === "active"
-        ? request.policyContext.permissionProfile
-        : undefined;
+    const requestedPermissionProfile = request.policyContext?.permissionProfile;
+    if (requestedPermissionProfile && requestedPermissionProfile.status !== "active") {
+      // A non-active (archived) profile is neither a ceiling nor a source of
+      // posture; fail closed instead of silently dropping the ceiling.
+      return withPolicy(deny(riskLevel, "permission_profile_upper_bound", "permission profile is not active"));
+    }
+    const activePermissionProfile = requestedPermissionProfile;
     if (
       activePermissionProfile &&
       !toolNames.some((name) => matchesAnyToolPattern(new Set(activePermissionProfile.toolPatterns), name))
@@ -1789,7 +1792,9 @@ export class ToolPolicyEngine {
       );
       if (
         candidates.length === 0 &&
-        (requiresExplicitPathForGrantConstraints(request.toolName) || request.toolName === "docs.ingest")
+        (requiresExplicitPathForGrantConstraints(request.toolName) ||
+          request.toolName === "docs.ingest" ||
+          hasRequiredPathArgument(toolDef))
       ) {
         return "grant path constraints require an explicit output path";
       }
@@ -2974,7 +2979,7 @@ function extractPathCandidates(args?: Record<string, unknown>): string[] {
     return [];
   }
   const listed = Array.isArray(args.paths) ? args.paths : [];
-  return [args.path, args.from, args.to, args.relativePath, args.outputPath, ...listed]
+  return [args.path, args.from, args.to, args.relativePath, args.outputPath, args.cwd, ...listed]
     .map((value) => (typeof value === "string" ? value.trim() : ""))
     .filter(Boolean);
 }
@@ -3053,6 +3058,18 @@ function requiresExplicitWritePath(toolName: string): boolean {
   return toolName === "fs.delete";
 }
 
+const PATH_ARGUMENT_NAMES = ["path", "from", "to", "relativePath", "outputPath", "cwd"] as const;
+
+/**
+ * True when the tool's own schema marks a filesystem path argument as required.
+ * With an allowedPaths grant, such a call that yields no path candidate must be
+ * refused rather than skipping the constraint (fail closed).
+ */
+function hasRequiredPathArgument(toolDef?: ToolDefinition): boolean {
+  const required = toolDef?.argSchema?.required;
+  return Array.isArray(required) && required.some((name) => PATH_ARGUMENT_NAMES.some((arg) => arg === name));
+}
+
 function requiresExplicitPathForGrantConstraints(toolName: string): boolean {
   return toolName === "browser.screenshot" || toolName === "git.add";
 }
@@ -3093,9 +3110,10 @@ function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {
       if (root.trim() === "*") {
         return true;
       }
-      const rootVariants = normalizePathVariantsForMatch(root);
+      // Compare with a separator boundary ("/data2" is not inside "/data"), folding case for
+      // Windows paths like the write jail does. String-based so it behaves the same on every host.
       if (
-        rootVariants.some(
+        normalizePathVariantsForMatch(root).some(
           (resolvedRoot) => resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}/`),
         )
       ) {
@@ -3109,13 +3127,20 @@ function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {
 }
 
 function normalizePathForMatch(value: string): string {
-  return path.normalize(path.resolve(value)).replaceAll("\\", "/").replace(/\/+$/, "");
+  return foldWindowsPathCase(path.normalize(path.resolve(value)).replaceAll("\\", "/").replace(/\/+$/, ""));
+}
+
+/** Windows paths are case-insensitive: fold on a win32 host or for a drive-letter path. */
+function foldWindowsPathCase(value: string): string {
+  return process.platform === "win32" || /^[A-Za-z]:\//.test(value) ? value.toLowerCase() : value;
 }
 
 function normalizePathVariantsForMatch(value: string): string[] {
   const resolvedValue = normalizePathForMatch(value);
   try {
-    const realValue = fs.realpathSync(path.resolve(value)).replaceAll("\\", "/").replace(/\/+$/, "");
+    const realValue = foldWindowsPathCase(
+      fs.realpathSync.native(path.resolve(value)).replaceAll("\\", "/").replace(/\/+$/, ""),
+    );
     return realValue === resolvedValue ? [resolvedValue] : [resolvedValue, realValue];
   } catch {
     return [resolvedValue];
