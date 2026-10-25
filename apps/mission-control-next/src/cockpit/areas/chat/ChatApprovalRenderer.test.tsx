@@ -273,11 +273,17 @@ it("starts code with the signal while the canonical GET is held, preserves facts
   expect(canonicalReview.textContent).toContain(" · one linked conversation.");
   expect(canonicalReview.textContent).not.toContain("Scope: workspace workspace-a");
   expect(canonicalReview.textContent).toContain("Consequence:");
+  // Hold the settled card's follow-on read. Chat refreshes once for the decision, then once more when the
+  // follow-on outcome lands (#542); counting before that read settled made this test flaky.
+  const followOn = deferred<{ approval: ApprovalRequest; effects: never[]; events: never[] }>();
+  api.fetchApprovalReplay.mockImplementation(() => followOn.promise);
   await act(async () => button("Approve once").click());
   expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
   expect(api.fetchApproval).toHaveBeenCalledWith("approval-a", { workspaceId: "workspace-a" });
   expect(resolved).toHaveBeenCalledTimes(1);
   expect(host.textContent).not.toContain("Work completed");
+  await act(async () => followOn.resolve({ approval: record, effects: [], events: [] }));
+  await vi.waitFor(() => expect(resolved).toHaveBeenCalledTimes(2));
 });
 it.each([404, 401, 403, "foreign"] as const)(
   "keeps canonical %s records unavailable after code finishes",
