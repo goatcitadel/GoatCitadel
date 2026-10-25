@@ -123,6 +123,30 @@ describe("ChatSessionStatusService", () => {
     expect(status.usage).toMatchObject({ availability: "available", value: { attemptCount: 0 } });
   });
 
+  it("keeps this session's pending approval visible behind many newer approvals of other sessions", async () => {
+    const { storage, service } = harness();
+    storage.approvals.create({
+      kind: "tool.invoke",
+      riskLevel: "caution",
+      payload: {},
+      preview: {},
+      linkage: { sessionId: "session-1", turnId: "turn-1", workspaceId: "workspace-1" },
+    });
+    for (let index = 0; index < 520; index += 1) {
+      storage.approvals.create({
+        kind: "tool.invoke",
+        riskLevel: "caution",
+        payload: {},
+        preview: {},
+        linkage: { sessionId: `busy-${index}`, turnId: "turn-x", workspaceId: "workspace-1" },
+      });
+    }
+
+    const status = await service.getOperatorStatus("session-1");
+
+    expect(status.attention.availability === "available" && status.attention.value.pendingApprovals).toHaveLength(1);
+  });
+
   it("returns a smaller model-safe projection without workspace or attention identifiers", async () => {
     const { service } = harness();
     const projection = await service.getModelProjection("session-1");

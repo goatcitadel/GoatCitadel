@@ -353,7 +353,7 @@ describe("approval lifecycle service", () => {
       },
     });
     const approval = host.storage.approvals.get("approval-1");
-    host.storage.approvals.listPage.mockReturnValue({ items: [approval], nextCursor: undefined } as never);
+    host.storage.approvals.listPendingBySession.mockReturnValue([approval] as never);
     await host.storage.runImmediateTransaction(() =>
       rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop"),
     );
@@ -376,10 +376,7 @@ describe("approval lifecycle service", () => {
 
   it("leaves another turn's approval untouched during cancellation", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-other" } });
-    host.storage.approvals.listPage.mockReturnValue({
-      items: [host.storage.approvals.get("approval-1")],
-      nextCursor: undefined,
-    } as never);
+    host.storage.approvals.listPendingBySession.mockReturnValue([host.storage.approvals.get("approval-1")] as never);
     await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
@@ -387,13 +384,10 @@ describe("approval lifecycle service", () => {
   it("skips a foreign approval with invalid lineage and still withdraws the cancelled turn's approval", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
     const approval = host.storage.approvals.get("approval-1");
-    host.storage.approvals.listPage.mockReturnValue({
-      items: [
-        { ...approval, approvalId: "approval-bad", linkage: { sessionId: "session-x", turnId: "turn-bad" } },
-        approval,
-      ],
-      nextCursor: undefined,
-    } as never);
+    host.storage.approvals.listPendingBySession.mockReturnValue([
+      { ...approval, approvalId: "approval-bad", linkage: { sessionId: "session-x", turnId: "turn-bad" } },
+      approval,
+    ] as never);
     host.storage.chatTurnTraces.get.mockImplementation((turnId: string) => {
       if (turnId === "turn-bad") return { turnId: "turn-bad", sessionId: "session-elsewhere" };
       throw new NotFoundError({ message: "missing" });
@@ -422,14 +416,11 @@ describe("approval lifecycle service", () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
     const approval = host.storage.approvals.get("approval-1");
     const badLinkage = { sessionId: "session-x", turnId: "turn-bad" };
-    host.storage.approvals.listPage.mockReturnValue({
-      items: [
-        { ...approval, approvalId: "approval-bad-1", linkage: badLinkage },
-        { ...approval, approvalId: "approval-bad-2", linkage: badLinkage },
-        approval,
-      ],
-      nextCursor: undefined,
-    } as never);
+    host.storage.approvals.listPendingBySession.mockReturnValue([
+      { ...approval, approvalId: "approval-bad-1", linkage: badLinkage },
+      { ...approval, approvalId: "approval-bad-2", linkage: badLinkage },
+      approval,
+    ] as never);
     host.storage.chatTurnTraces.get.mockImplementation((turnId: string) => {
       if (turnId === "turn-bad") return { turnId: "turn-bad", sessionId: "session-elsewhere" };
       throw new NotFoundError({ message: "missing" });
@@ -445,13 +436,48 @@ describe("approval lifecycle service", () => {
     expect(skippedIds).toEqual(["approval-bad-1", "approval-bad-2"]);
   });
 
+  it("does not re-append the lineage-skipped event on a repeated cancellation", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
+    const approval = host.storage.approvals.get("approval-1");
+    host.storage.approvals.listPendingBySession.mockReturnValue([
+      { ...approval, approvalId: "approval-bad", linkage: { sessionId: "session-x", turnId: "turn-bad" } },
+    ] as never);
+    host.storage.chatTurnTraces.get.mockImplementation((turnId: string) => {
+      if (turnId === "turn-bad") return { turnId: "turn-bad", sessionId: "session-elsewhere" };
+      throw new NotFoundError({ message: "missing" });
+    });
+    host.storage.approvalEvents.listByApprovalId.mockReturnValue([
+      { eventType: "cancellation_lineage_skipped" },
+    ] as never);
+    await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
+    expect(host.storage.approvalEvents.append).not.toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: "cancellation_lineage_skipped" }),
+    );
+  });
+
+  it("scans the cancelled session and its delegated child sessions with session-scoped queries", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
+    host.storage.chatDelegationRuns.listBySession.mockImplementation(((sessionId: string) =>
+      sessionId === "session-1" ? [{ runId: "run-1" }] : []) as never);
+    host.storage.chatDelegationSteps.listByRun.mockReturnValue([{ childSessionId: "child-session" }] as never);
+    await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
+    expect(host.storage.approvals.listPage).not.toHaveBeenCalled();
+    expect(host.storage.approvals.listPendingBySession.mock.calls.map(([id]) => id)).toEqual([
+      "session-1",
+      "child-session",
+    ]);
+    expect(host.storage.approvals.listPendingBySession).toHaveBeenCalledWith("session-1", undefined, 500, {
+      includeExpired: true,
+    });
+  });
+
   it("resolves each foreign turn owner once per cancellation", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-2", turnId: "turn-2" } });
     const approval = host.storage.approvals.get("approval-1");
-    host.storage.approvals.listPage.mockReturnValue({
-      items: [approval, { ...approval, approvalId: "approval-2" }],
-      nextCursor: undefined,
-    } as never);
+    host.storage.approvals.listPendingBySession.mockReturnValue([
+      approval,
+      { ...approval, approvalId: "approval-2" },
+    ] as never);
     host.storage.chatTurnTraces.get.mockImplementation(() => {
       throw new NotFoundError({ message: "missing" });
     });
@@ -471,10 +497,7 @@ describe("approval lifecycle service", () => {
 
   it("still propagates non-conflict errors from a foreign approval's lineage", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-2", turnId: "turn-2" } });
-    host.storage.approvals.listPage.mockReturnValue({
-      items: [host.storage.approvals.get("approval-1")],
-      nextCursor: undefined,
-    } as never);
+    host.storage.approvals.listPendingBySession.mockReturnValue([host.storage.approvals.get("approval-1")] as never);
     host.storage.chatTurnTraces.get.mockImplementation(() => {
       throw new Error("storage offline");
     });
@@ -532,10 +555,7 @@ describe("approval lifecycle service", () => {
 
   it("rolls back the rejection if its effect ledger cannot commit", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
-    host.storage.approvals.listPage.mockReturnValue({
-      items: [host.storage.approvals.get("approval-1")],
-      nextCursor: undefined,
-    } as never);
+    host.storage.approvals.listPendingBySession.mockReturnValue([host.storage.approvals.get("approval-1")] as never);
     host.enqueueApprovalResolutionEffects.mockRejectedValueOnce(new Error("effect commit failed") as never);
     await expect(
       host.storage.runImmediateTransaction(() =>
@@ -2857,7 +2877,7 @@ describe("approval lifecycle service", () => {
           upsert: vi.fn(),
         },
         chatToolRuns: {
-          listBySession: vi.fn(() => []),
+          findByApprovalId: vi.fn(() => undefined),
         },
         chatSessionMeta: {
           get: vi.fn(() => ({ workspaceId: "workspace-1" })),
@@ -2967,7 +2987,7 @@ describe("approval lifecycle service", () => {
           upsert: vi.fn(),
         },
         chatToolRuns: {
-          listBySession: vi.fn(() => []),
+          findByApprovalId: vi.fn(() => undefined),
         },
         chatSessionMeta: {
           get: vi.fn(() => ({ workspaceId: "workspace-1" })),
@@ -3080,7 +3100,7 @@ describe("approval lifecycle service", () => {
           ),
         },
         chatToolRuns: {
-          listBySession: vi.fn(() => []),
+          findByApprovalId: vi.fn(() => undefined),
         },
       },
       policyEngine: {
@@ -3173,7 +3193,7 @@ describe("approval lifecycle service", () => {
           upsert: vi.fn(),
         },
         chatToolRuns: {
-          listBySession: vi.fn(() => []),
+          findByApprovalId: vi.fn(() => undefined),
         },
         chatSessionMeta: {
           get: vi.fn(() => ({ workspaceId: "workspace-1" })),
@@ -3230,14 +3250,12 @@ describe("approval lifecycle service", () => {
       updatedAt: "2026-04-11T00:00:00.000Z",
       details: {},
     }));
-    host.storage.chatToolRuns.listBySession = vi.fn(() => [
-      {
-        toolRunId: "tool-run-code",
-        turnId: "turn-1",
-        approvalId: "approval-1",
-        toolName: "code_mode.run",
-      },
-    ]) as never;
+    host.storage.chatToolRuns.findByApprovalId = vi.fn(() => ({
+      toolRunId: "tool-run-code",
+      turnId: "turn-1",
+      approvalId: "approval-1",
+      toolName: "code_mode.run",
+    })) as never;
     host.resolveApproval = vi.fn((approvalId, input, context) => resolveApproval(host, approvalId, input, context));
 
     await expect(
@@ -3338,15 +3356,13 @@ describe("approval lifecycle service", () => {
     }));
     const chatToolRunsPatch = vi.fn();
     host.storage.chatToolRuns = {
-      listBySession: vi.fn(() => [
-        {
-          toolRunId: "tool-run-1",
-          turnId: "turn-1",
-          approvalId: "approval-1",
-          toolName: "shell.exec",
-          status: "approval_required",
-        },
-      ]),
+      findByApprovalId: vi.fn(() => ({
+        toolRunId: "tool-run-1",
+        turnId: "turn-1",
+        approvalId: "approval-1",
+        toolName: "shell.exec",
+        status: "approval_required",
+      })),
       listByTurn: vi.fn(() => [
         {
           toolRunId: "tool-run-1",
@@ -3857,6 +3873,7 @@ function createApprovalHarness(input?: {
     }),
     list: vi.fn(() => []),
     listPage: vi.fn(() => ({ items: [], nextCursor: undefined })),
+    listPendingBySession: vi.fn(() => []),
     listByRunLinkage: vi.fn(() => ({ items: [], nextCursor: undefined })),
     listExpiredPending: vi.fn(() => []),
     isExpiredPendingAtDatabaseNow: vi.fn(isExpiredPendingAtDatabaseNow),
@@ -3918,6 +3935,8 @@ function createApprovalHarness(input?: {
       approvalInbox: {
         findByApprovalAndToken: vi.fn(() => undefined),
       },
+      chatDelegationRuns: { listBySession: vi.fn(() => []) },
+      chatDelegationSteps: { listByRun: vi.fn(() => []) },
       chatInlineApprovals: {
         get: vi.fn(() => undefined),
         listByTurn: vi.fn(() => []),
@@ -3952,10 +3971,10 @@ function createApprovalHarness(input?: {
       chatToolRuns: {
         listByTurn: vi.fn(() => []),
         patch: vi.fn(),
-        listBySession: vi.fn(() =>
+        findByApprovalId: vi.fn(() =>
           input?.chatToolName
-            ? ([{ approvalId: "approval-1", turnId: "turn-1", toolName: input.chatToolName }] as never)
-            : [],
+            ? ({ approvalId: "approval-1", turnId: "turn-1", toolName: input.chatToolName } as never)
+            : undefined,
         ),
       },
       codeModeRuns: {

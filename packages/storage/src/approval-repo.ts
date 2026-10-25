@@ -417,6 +417,38 @@ export class ApprovalRepository {
     return mapped.filter((approval) => approval.linkage?.workspaceId === scopedWorkspaceId).slice(0, limit);
   }
 
+  /**
+   * Pending approvals naming one Chat session in their linkage (unexpired unless
+   * `includeExpired`). A dialect-neutral LIKE narrows the scan in SQL and every row is
+   * re-checked on its parsed linkage; the limit applies after the session filter.
+   */
+  public listPendingBySession(
+    sessionId: string,
+    workspaceId?: string,
+    limit = 200,
+    options: { includeExpired?: boolean } = {},
+  ): ApprovalRequest[] {
+    const session = sessionId?.trim();
+    if (!session) throw new ValidationError({ message: "Session is required for a pending approval lookup" });
+    const workspace = workspaceId?.trim();
+    const bounded = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 500)) : 200;
+    const pg = this.db.dialect === "postgres";
+    const expiresAt = pg ? "expires_at_ts" : "julianday(expires_at)";
+    const dbNow = pg ? "statement_timestamp()" : "julianday('now')";
+    const activeOnly = options.includeExpired
+      ? ""
+      : `AND (expires_at IS NULL OR (${expiresAt} IS NOT NULL AND ${expiresAt} > ${dbNow}))`;
+    const pattern = `%${escapeLikePattern(JSON.stringify({ sessionId: session }).slice(1, -1))}%`;
+    const like = (column: string) => `${column} LIKE @pattern ESCAPE '\\'`;
+    const sql = `SELECT * FROM approvals WHERE status = 'pending' ${activeOnly}
+      AND (${like("linkage_json")} OR ${like("payload_json")} OR ${like("preview_json")})
+      ORDER BY created_at DESC LIMIT @limit`;
+    return toApprovalRows(this.db.prepare(sql).all({ pattern, limit: bounded * 4 }))
+      .map(mapRow)
+      .filter((a) => a.linkage?.sessionId === session && (!workspace || a.linkage?.workspaceId === workspace))
+      .slice(0, bounded);
+  }
+
   public listExpiredPending(now = new Date().toISOString(), limit = 100, excludedKind?: string): ApprovalRequest[] {
     // Keep the legacy `now` argument for API compatibility, but never let a
     // caller clock decide whether an approval has expired.

@@ -1091,3 +1091,32 @@ describe("ApprovalRepository.listByKindAndPayloadString", () => {
     assert.throws(() => repo.listByKindAndPayloadString("communications.mail.send", "draftId", ""), /required/u);
   });
 });
+
+describe("ApprovalRepository.listPendingBySession", () => {
+  const chatApproval = (sessionId: string, workspaceId = "ws-a") => ({
+    kind: "tool.invoke",
+    riskLevel: "caution" as const,
+    payload: { toolName: "x" },
+    preview: { title: "t" },
+    linkage: { workspaceId, sessionId, turnId: "turn-1" },
+  });
+
+  it("returns this session's pending approvals even when newer foreign approvals exceed any limit", () => {
+    const repo = createRepo();
+    const mine = repo.create(chatApproval("session-mine"));
+    for (let index = 0; index < 40; index += 1) repo.create(chatApproval(`session-other-${index}`));
+    repo.create(chatApproval("session-mine", "ws-b"));
+    const resolved = repo.create(chatApproval("session-mine"));
+    repo.resolve(resolved.approvalId, { decision: "approve", resolvedBy: "tester" });
+
+    const found = repo.listPendingBySession("session-mine", "ws-a", 5);
+
+    assert.deepEqual(
+      found.map((approval) => approval.approvalId),
+      [mine.approvalId],
+    );
+    assert.equal(repo.listPendingBySession("session-mine", undefined, 5).length, 2);
+    assert.deepEqual(repo.listPendingBySession("session-none", "ws-a"), []);
+    assert.throws(() => repo.listPendingBySession("  "), /required/u);
+  });
+});

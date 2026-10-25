@@ -88,8 +88,9 @@ export class ChatSessionStatusService {
         totalSteps: steps.length,
       };
     });
-    const fanoutInvocations = (await this.dependencies.storage.chatFanoutInvocations.listActive(100)).filter(
-      (invocation) => invocation.sessionId === sessionId,
+    const fanoutInvocations = await this.dependencies.storage.chatFanoutInvocations.listActiveBySession(
+      sessionId,
+      100,
     );
     const durableRunIds = [
       ...traces.map((trace) => trace.durable?.runId),
@@ -345,8 +346,7 @@ export class ChatSessionStatusService {
   }
 
   private async resolvePendingApprovals(sessionId: string, workspaceId: string) {
-    const canonical = (await this.dependencies.storage.approvals.list("pending", 500, workspaceId))
-      .filter((approval) => approval.linkage?.sessionId === sessionId)
+    const canonical = (await this.dependencies.storage.approvals.listPendingBySession(sessionId, workspaceId, 500))
       .map((approval) => ({
         approvalId: approval.approvalId,
         ...(approval.linkage?.turnId ? { turnId: approval.linkage.turnId } : {}),
