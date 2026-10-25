@@ -196,7 +196,11 @@ export function composeIntegrationChannelRouteDependencies(
         (error) => reportGoogleSignInCleanupFailure(gateway, connectionId, error),
       ),
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
-    ...googleSignIn.routeMethods(),
+    // Resolved per call, like every other dependency here, so a narrow test port need not carry it.
+    getGoogleWorkspaceOAuthStatus: (connectionId) => googleSignIn.getStatus(connectionId),
+    startGoogleWorkspaceOAuth: (connectionId, input) => googleSignIn.start(connectionId, input),
+    completeGoogleWorkspaceOAuth: (connectionId, input) => googleSignIn.complete(connectionId, input),
+    disconnectGoogleWorkspaceOAuth: (connectionId) => googleSignIn.disconnect(connectionId),
     ...createIntegrationFormGuidancePort(integrationChannel),
     getExternalConnectorAction: (sourceId, serviceId, actionId, workspaceId) =>
       externalConnectorCatalog.getAction(sourceId, serviceId, actionId, workspaceId),

@@ -297,18 +297,6 @@ export class GoogleWorkspaceOAuthService {
     this.removeSecret(clientSecretAccount(connectionId));
   }
 
-  /** The integrations route methods, bound to this owner. */
-  public routeMethods() {
-    return {
-      getGoogleWorkspaceOAuthStatus: (connectionId: string) => this.getStatus(connectionId),
-      startGoogleWorkspaceOAuth: (connectionId: string, input: GoogleWorkspaceOAuthStartInput) =>
-        this.start(connectionId, input),
-      completeGoogleWorkspaceOAuth: (connectionId: string, input: GoogleWorkspaceOAuthCompleteInput) =>
-        this.complete(connectionId, input),
-      disconnectGoogleWorkspaceOAuth: (connectionId: string) => this.disconnect(connectionId),
-    };
-  }
-
   /**
    * Deletes a connection through `remove`, then revokes and forgets its Google sign-in when it was a
    * Google connection. A cleanup failure is reported and never undoes or fails the delete.
