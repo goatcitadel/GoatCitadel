@@ -12,3 +12,10 @@ it("opens the MCP section when a provider sign-in lands on Connections, so its r
   expect(selectedSettingsSection(connections, undefined, "")).toBe("integrations");
   expect(selectedSettingsSection(connections, undefined, "mcp-oauth-return")).toBe("integrations");
 });
+
+it("opens Integrations when Google sign-in lands on Connections, even from another saved section", () => {
+  expect(selectedSettingsSection(connections, "mcp", "google-oauth-return&state=s-1&code=abc")).toBe("integrations");
+  expect(selectedSettingsSection(connections, "mcp", "google-oauth-return&state=s-1&error=access_denied")).toBe(
+    "integrations",
+  );
+});

@@ -1627,6 +1627,7 @@ function buildReplayGapRealtimeEvent(rawPayload: string): RealtimeEvent {
 }
 
 export * from "./channel-oauth.js";
+export * from "./google-workspace-oauth.js";
 
 export * from "./channel-setup-operations.js";
 

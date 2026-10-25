@@ -2173,9 +2173,7 @@ describe("executeTool", () => {
         get: vi.fn(() => ({
           connectionId: "conn-gmail",
           key: "gmail",
-          config: {
-            accessToken: "gmail-token",
-          },
+          config: {},
         })),
       },
       commsDeliveries: {
@@ -2215,6 +2213,7 @@ describe("executeTool", () => {
         },
       },
       commsStorage,
+      { resolveGoogleWorkspaceAccessToken: async () => "google-token" },
     );
 
     expect(fetchMock).not.toHaveBeenCalled();

@@ -15,8 +15,8 @@ export interface ShippedSkillPack {
   license: string;
 }
 
-// Google CLI/OAuth skills (OpenClaw `gog`) are held back: Skill Hub admission routes Google OAuth to the
-// native integration (`google_cli_oauth` overlap), so a shipped pack would always be rejected.
+// Google CLI/OAuth skills (OpenClaw `gog`) are not shipped: native Google sign-in covers Google Workspace,
+// and no CLI skill ships for a natively integrated service. The `google_cli_oauth` admission rule stays.
 export const SHIPPED_SKILL_PACKS: readonly ShippedSkillPack[] = [
   {
     packId: "himalaya",

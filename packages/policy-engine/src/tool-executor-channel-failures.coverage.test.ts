@@ -2557,13 +2557,14 @@ describe("tool executor channel failure coverage", () => {
           config: { accessTokenEnv: "MISSING_GMAIL_TOKEN" },
         }),
       ),
-      /Missing Gmail access token/i,
+      /requires Google sign-in/i,
     );
     await expectFailed(
       executeTool(
         request("gmail.read", { connectionId: "gmail-read-fail" }),
         commsConfig,
-        commsStorage({ connectionId: "gmail-read-fail", key: "gmail", config: { accessToken: "gmail-token" } }),
+        commsStorage({ connectionId: "gmail-read-fail", key: "gmail", config: {} }),
+        googleSignIn(),
       ),
       /gmail\.read failed \(500\)/i,
     );
@@ -2573,7 +2574,7 @@ describe("tool executor channel failure coverage", () => {
         commsConfig,
         commsStorage({ connectionId: "gmail-send-missing-token", key: "gmail", config: {} }),
       ),
-      /Missing Gmail access token/i,
+      /requires Google sign-in/i,
     );
     await expectFailed(
       executeTool(
@@ -2582,8 +2583,9 @@ describe("tool executor channel failure coverage", () => {
         commsStorage({
           connectionId: "gmail-send-missing-to",
           key: "gmail",
-          config: { accessToken: "gmail-token" },
+          config: {},
         }),
+        googleSignIn(),
       ),
       /gmail\.send requires args\.to/i,
     );
@@ -2596,7 +2598,8 @@ describe("tool executor channel failure coverage", () => {
           bodyText: "Body",
         }),
         commsConfig,
-        commsStorage({ connectionId: "gmail-send-fail", key: "gmail", config: { accessToken: "gmail-token" } }),
+        commsStorage({ connectionId: "gmail-send-fail", key: "gmail", config: {} }),
+        googleSignIn(),
       ),
       /gmail\.send failed \(500\)/i,
     );
@@ -2607,7 +2610,7 @@ describe("tool executor channel failure coverage", () => {
         commsConfig,
         commsStorage({ connectionId: "calendar-missing-token", key: "calendar", config: {} }),
       ),
-      /Missing Calendar access token/i,
+      /requires Google sign-in/i,
     );
     await expectFailed(
       executeTool(
@@ -2616,8 +2619,9 @@ describe("tool executor channel failure coverage", () => {
         commsStorage({
           connectionId: "calendar-list-fail",
           key: "calendar",
-          config: { accessToken: "calendar-token" },
+          config: {},
         }),
+        googleSignIn(),
       ),
       /calendar\.list failed \(500\)/i,
     );
@@ -2632,7 +2636,7 @@ describe("tool executor channel failure coverage", () => {
         commsConfig,
         commsStorage({ connectionId: "calendar-create-missing-token", key: "calendar", config: {} }),
       ),
-      /Missing Calendar access token/i,
+      /requires Google sign-in/i,
     );
     await expectFailed(
       executeTool(
@@ -2646,8 +2650,9 @@ describe("tool executor channel failure coverage", () => {
         commsStorage({
           connectionId: "calendar-create-fail",
           key: "calendar",
-          config: { accessToken: "calendar-token" },
+          config: {},
         }),
+        googleSignIn(),
       ),
       /calendar\.create_event failed \(500\)/i,
     );
@@ -3382,8 +3387,9 @@ describe("tool executor channel failure coverage", () => {
       commsStorage({
         connectionId: "gmail-fallback-id",
         key: "gmail",
-        config: { accessToken: "gmail-token" },
+        config: {},
       }),
+      googleSignIn(),
     );
     expect(gmailFallback).toMatchObject({ status: "sent" });
     expect(String(gmailFallback.providerMessageId)).toMatch(/^gmail-/);
@@ -3399,13 +3405,19 @@ describe("tool executor channel failure coverage", () => {
       commsStorage({
         connectionId: "calendar-fallback-id",
         key: "calendar",
-        config: { accessToken: "calendar-token" },
+        config: {},
       }),
+      googleSignIn(),
     );
     expect(calendarFallback).toMatchObject({ status: "sent" });
     expect(String(calendarFallback.providerMessageId)).toMatch(/^calendar-/);
   });
 });
+
+/** The Gateway-owned Google sign-in hook; tests never put a token in connection config. */
+function googleSignIn(token = "google-token") {
+  return { resolveGoogleWorkspaceAccessToken: vi.fn(async () => token) };
+}
 
 function createConfig(): ToolPolicyConfig {
   return {

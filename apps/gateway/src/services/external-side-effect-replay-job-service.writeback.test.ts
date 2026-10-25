@@ -132,6 +132,11 @@ async function createHarness(
     resolveConnectionSecret: (config, directKey) =>
       typeof config[directKey] === "string" ? (config[directKey] as string) : undefined,
     publishRealtime: vi.fn(async () => undefined),
+    // Stands in for the Google sign-in: a token only while Send Gmail is switched on.
+    resolveGoogleWorkspaceAccessToken: async () => {
+      if (liveConnection.config.gmailSend !== true) throw new Error("blocked: Send Gmail is turned off.");
+      return "gmail-test-token";
+    },
     mutationStore: options.failFirstDispatch ? failFirstDispatch(mutationStore) : mutationStore,
     sideEffectRunStore: asyncStorage.externalSideEffectRuns,
     replayRecords: createExternalSideEffectReplayRecords({
@@ -190,7 +195,7 @@ function createFakeGmail(options: { timeoutFirstSend?: boolean } = {}) {
   return { fetchImpl, messages, sendCount: () => sends };
 }
 
-const gmailConnection = () => connectionFor("automation.gmail", { accessToken: "gmail-test-token" });
+const gmailConnection = () => connectionFor("automation.gmail", { gmailSend: true });
 const gmailRequest = {
   idempotencyKey: "idem-gmail-1",
   input: { to: "ops@example.test", subject: "Replay proof", bodyText: "Sent exactly once." },

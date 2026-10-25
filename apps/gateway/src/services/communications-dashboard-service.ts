@@ -619,16 +619,7 @@ function resolveSyncStatus(connection: IntegrationConnection): MailAccountRecord
 }
 
 function readSecretRef(config: Record<string, unknown>): string | undefined {
-  return readString(
-    config,
-    "secretRef",
-    "refreshTokenHandle",
-    "accessTokenEnv",
-    "tokenEnv",
-    "clientIdEnv",
-    "clientSecretEnv",
-    "apiKeyEnv",
-  );
+  return readString(config, "secretRef", "accessTokenEnv", "tokenEnv", "clientIdEnv", "clientSecretEnv", "apiKeyEnv");
 }
 
 function readString(config: Record<string, unknown>, ...keys: string[]): string | undefined {
@@ -646,7 +637,8 @@ function normalizeMailMessages(
   accountId: string,
 ): MailMessageSummary[] {
   const envelope = unwrapResponse(response);
-  const items = readArray(envelope, "messages", "items");
+  // `records` is what the gmail.read tool returns: bounded metadata, never message bodies.
+  const items = readArray(envelope, "records", "messages", "items");
   return items.flatMap((item, index) => {
     if (!isRecord(item)) {
       return [];
@@ -658,7 +650,7 @@ function normalizeMailMessages(
         accountId,
         threadId: readString(item, "threadId"),
         from: readString(item, "from", "sender"),
-        to: readStringArray(item, "to", "recipients"),
+        to: readRecipients(item),
         subject: readString(item, "subject"),
         snippet: readString(item, "snippet", "preview"),
         receivedAt: readString(item, "receivedAt", "date", "internalDate"),
@@ -668,13 +660,20 @@ function normalizeMailMessages(
   });
 }
 
+/** The tool returns a header string; older adapters return an array. */
+function readRecipients(item: Record<string, unknown>): string[] {
+  const list = readStringArray(item, "to", "recipients");
+  const header = list.length ? undefined : readString(item, "to");
+  return header ? [header] : list;
+}
+
 function normalizeCalendarEvents(
   response: ToolInvokeResult | Record<string, unknown>,
   accountId: string,
   fallbackIso: string,
 ): CalendarEventRecord[] {
   const envelope = unwrapResponse(response);
-  const items = readArray(envelope, "events", "items");
+  const items = readArray(envelope, "records", "events", "items");
   return items.flatMap((item, index) => {
     if (!isRecord(item)) {
       return [];

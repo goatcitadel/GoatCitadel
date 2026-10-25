@@ -478,6 +478,7 @@ import {
   type RuntimeConfigurationAuthorizationInput,
 } from "./runtime-configuration-service.js";
 import { WebSearchCredentialService } from "./web-search-credential-service.js";
+import { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
 import { applyRuntimeBrowserBackendDefaults } from "./runtime-browser-backend-defaults.js";
 import { submitEvolutionWebSearchCredential } from "./web-search-credential-change.js";
 import { assertRuntimeConfigurationApprovalBinding } from "./runtime-configuration-approval-binding.js";
@@ -1041,6 +1042,7 @@ export class GatewayService {
   private readonly providerSecretStaging: ProviderSecretStaging;
   public readonly runtimeConfigurationService: RuntimeConfigurationService;
   public readonly webSearchCredentials: WebSearchCredentialService;
+  public readonly googleWorkspaceOAuth: GoogleWorkspaceOAuthService;
   public readonly approvalRemoteTokenSecrets: ApprovalRemoteTokenSecretService;
   private readonly skillsService: SkillsService;
   private readonly capabilityScopeResolver: CapabilityScopeResolver;
@@ -1441,6 +1443,7 @@ export class GatewayService {
           context: { auditEvent: event, targetId, errorName: error instanceof Error ? error.name : "unknown" },
         }),
     });
+    this.googleWorkspaceOAuth = new GoogleWorkspaceOAuthService({ secretStore, storage: this.storage });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       // Tool-policy approval creation must enter the canonical lifecycle. A
       // direct policy-engine storage write would omit the durable wait run and
@@ -1455,6 +1458,7 @@ export class GatewayService {
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
       isApprovalActionConnectorReady: (connectionId) =>
         isTelegramApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
+      resolveGoogleWorkspaceAccessToken: (input) => this.googleWorkspaceOAuth.resolveToolAccessToken(input),
       acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
       prepareEmbeddingUsageDispatch: (input) => this.llmService.prepareScopedModelUsageDispatch(input),
       requestChangePlan: async (request, intent) => await this.requestChangePlanFromTool(request, intent),

@@ -33,6 +33,7 @@ import type { DiscordRuntimeService } from "./discord-runtime-service.js";
 import type { DurableOperatorService } from "./durable-operator-service.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import type { GuidanceService } from "./guidance-service.js";
+import type { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
 import type { HooksService } from "./hooks-service.js";
 import type { ImprovementService } from "./improvement-service.js";
 import type { AutonomyControlService } from "./autonomy-control-service.js";
@@ -109,6 +110,7 @@ export interface GatewayRouteCompositionPort {
   readonly durableOperatorService: DurableOperatorService;
   readonly evidenceEnvelopeService: EvidenceEnvelopeService;
   readonly guidanceService: GuidanceService;
+  readonly googleWorkspaceOAuth: GoogleWorkspaceOAuthService;
   readonly hooksService: HooksService;
   readonly improvementService: ImprovementService;
   readonly autonomyControlService: AutonomyControlService;
@@ -354,6 +356,7 @@ export function createGatewayRouteCompositionPort(
     },
     cronAutomationService: gateway.cronAutomationService,
     discordRuntimeService: gateway.discordRuntimeService,
+    googleWorkspaceOAuth: gateway.googleWorkspaceOAuth,
     hooksService: gateway.hooksService,
     llamaCppRuntime: gateway.llamaCppRuntime,
     get llamaCppSetupService() {

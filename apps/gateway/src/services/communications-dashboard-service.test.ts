@@ -30,7 +30,7 @@ function createConnection(overrides: Partial<IntegrationConnection> = {}): Integ
     status: "connected",
     config: {
       address: "operator@example.test",
-      refreshTokenHandle: "gmail-primary",
+      clientSecretEnv: "GMAIL_CLIENT_SECRET",
       accessToken: "raw-token-that-must-not-leak",
     },
     createdAt: "2026-06-01T00:00:00.000Z",
@@ -86,7 +86,7 @@ describe("communications dashboard service", () => {
         workspaceId: "workspace-1",
         provider: "gmail",
         connectionId: "11111111-1111-4111-8111-111111111111",
-        secretRef: "gmail-primary",
+        secretRef: "GMAIL_CLIENT_SECRET",
         syncStatus: "ready",
       }),
     ]);
@@ -125,7 +125,7 @@ describe("communications dashboard service", () => {
             accessToken: "raw-access-token",
             token: "raw-token",
             clientSecret: "raw-client-secret",
-            refreshTokenHandle: "gmail-primary",
+            clientSecretEnv: "GMAIL_CLIENT_SECRET",
           },
         }),
       ],
@@ -136,11 +136,48 @@ describe("communications dashboard service", () => {
 
     expect(dashboard.mailAccounts[0]).toMatchObject({
       connectionId: "11111111-1111-4111-8111-111111111111",
-      secretRef: "gmail-primary",
+      secretRef: "GMAIL_CLIENT_SECRET",
     });
     expect(serialized).not.toContain("raw-access-token");
     expect(serialized).not.toContain("raw-token");
     expect(serialized).not.toContain("raw-client-secret");
+  });
+
+  it("reads the bounded metadata records that the gmail.read tool returns", async () => {
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      listIntegrationConnections: () => [createConnection()],
+      commsGmailRead: vi.fn(async () => ({
+        status: "sent",
+        contentTrust: "untrusted_external",
+        records: [
+          {
+            id: "msg-2",
+            threadId: "thread-2",
+            from: "Ops <ops@example.test>",
+            to: "operator@example.test, team@example.test",
+            subject: "Rollout",
+            receivedAt: "2026-06-06T09:00:00.000Z",
+            snippet: "Starts at ten",
+            labelIds: ["INBOX"],
+          },
+        ],
+      })),
+      commsCalendarList: vi.fn(async () => ({ records: [] })),
+    });
+
+    const dashboard = await service.getDashboard({ workspaceId: "workspace-1" });
+
+    expect(dashboard.messages).toEqual([
+      expect.objectContaining({
+        messageId: "msg-2",
+        from: "Ops <ops@example.test>",
+        to: ["operator@example.test, team@example.test"],
+        subject: "Rollout",
+        receivedAt: "2026-06-06T09:00:00.000Z",
+        labels: ["INBOX"],
+      }),
+    ]);
   });
 
   it("fetches inbox messages and calendar events concurrently", async () => {

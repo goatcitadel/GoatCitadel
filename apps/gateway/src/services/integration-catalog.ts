@@ -703,25 +703,33 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   },
   "automation.gmail": {
     catalogId: "automation.gmail",
-    title: "Gmail Connection",
-    description: "Configure Gmail integration using OAuth token handles or env references.",
-    allowAdvancedJson: true,
+    title: "Gmail and Google Calendar Connection",
+    description:
+      "Sign in with Google for the Gmail and Calendar tools. Create an OAuth client of type Desktop app in your Google Cloud project and enable the Gmail API and Google Calendar API. Save, then choose Connect Google: each capability turned on below adds one Google scope, and tokens stay in the OS keychain.",
+    allowAdvancedJson: false,
     fields: [
-      text("label", "Connection Label", { defaultValue: "Gmail" }),
-      select("authMode", "Auth Mode", ["oauth", "env"], "oauth"),
-      text("clientIdEnv", "Client ID ENV Var", {
-        placeholder: "GMAIL_CLIENT_ID",
-        secretRef: true,
-        advanced: true,
+      text("label", "Connection Label", { defaultValue: "Google" }),
+      text("clientId", "OAuth Client ID", {
+        placeholder: "1234567890-abc.apps.googleusercontent.com",
+        required: true,
+        description: "From Google Cloud › APIs & Services › Credentials, client type Desktop app.",
       }),
+      bool("gmailRead", "Read Gmail", true),
+      bool("gmailSend", "Send Gmail (asks for approval every time)", false),
+      bool("calendarRead", "Read Calendar events", false),
+      bool("calendarWrite", "Create Calendar events (asks for approval every time)", false),
       text("clientSecretEnv", "Client Secret ENV Var", {
         placeholder: "GMAIL_CLIENT_SECRET",
         secretRef: true,
         advanced: true,
+        description:
+          "Optional. Name of an environment variable that holds the client secret. Otherwise enter the secret when you connect; it is kept in the OS keychain.",
       }),
-      text("refreshTokenHandle", "Refresh Token Handle", {
-        placeholder: "gmail-primary",
-        required: true,
+      url("redirectUri", "Redirect URI Override", {
+        placeholder: "http://127.0.0.1:8787/api/v1/integrations/google/oauth/callback",
+        advanced: true,
+        description:
+          "Only when GoatCitadel is reached on another loopback port. It must be http on 127.0.0.1 or localhost and end in /api/v1/integrations/google/oauth/callback.",
       }),
       bool("enabled", "Enabled", true),
     ],
@@ -1367,7 +1375,15 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     ["local"],
     ["voice"],
   ),
-  entry("automation", "gmail", "Gmail", "Gmail read/send integration.", "beta", ["oauth"], ["read", "write"]),
+  entry(
+    "automation",
+    "gmail",
+    "Gmail and Google Calendar",
+    "Google sign-in for Gmail read and send, and Calendar list and create. Sends and new events always ask for approval.",
+    "beta",
+    ["oauth"],
+    ["read", "write", "calendar"],
+  ),
   entry(
     "automation",
     "imap-smtp",

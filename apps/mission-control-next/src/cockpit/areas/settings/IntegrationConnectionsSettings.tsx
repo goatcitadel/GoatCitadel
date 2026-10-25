@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { fetchIntegrationConnections } from "@goatcitadel/mission-control-shared/api/client";
@@ -19,6 +19,8 @@ import { useDraftLeave } from "../../../features/native-routes/library/DraftLeav
 import { McpDraftLeave } from "./McpDraftLeave";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { INTEGRATION_CONNECTION_STATUS_LABELS } from "./settings-vocabulary";
+import { consumeGoogleOAuthReturnFragment } from "../../../features/native-routes/settings/google-oauth-return";
+import { Callout } from "../../ui/Callout";
 
 const PAGE_SIZE = 20;
 export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: string }) {
@@ -30,6 +32,17 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
   const [search, setSearch] = useState("");
   const [managementOpen, setManagementOpen] = useState(false);
   const [selection, setSelection] = useState<IntegrationManagementSelection | null>(null);
+  const [googleReturn, setGoogleReturn] = useState<string>();
+  useEffect(() => {
+    // Google's sign-in redirect lands here in a new tab; hand it to the tab that started Connect Google.
+    const result = consumeGoogleOAuthReturnFragment();
+    if (result)
+      setGoogleReturn(
+        result.code
+          ? "Google sign-in finished. The GoatCitadel tab where you chose Connect Google completes the connection, so you can close this tab. If that tab is closed, start Connect Google again."
+          : `Google did not grant access (${result.error}). Nothing changed. Start Connect Google again if needed.`,
+      );
+  }, []);
   const manage = (connectionId: string) => {
     setManagementOpen(true);
     setSelection((current) => ({ connectionId, nonce: (current?.nonce ?? 0) + 1 }));
@@ -63,6 +76,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
           availability still apply.
         </p>
       </header>
+      {googleReturn ? <Callout announce={false}>{googleReturn}</Callout> : null}
       <Button
         aria-expanded={managementOpen}
         onClick={() => (managementOpen ? leave.request(() => setManagementOpen(false)) : setManagementOpen(true))}

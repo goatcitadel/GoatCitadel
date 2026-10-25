@@ -119,6 +119,7 @@ export * from "./tool-effect-truth.js";
 export * from "./internal-tooling.js";
 export * from "./ingestion.js";
 export * from "./comms.js";
+export * from "./google-workspace.js";
 export * from "./curator.js";
 export * from "./knowledge.js";
 export * from "./ui-forms.js";

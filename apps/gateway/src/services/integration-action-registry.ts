@@ -273,17 +273,17 @@ const OPERATOR_ACTIONS_BY_CATALOG_ID: Record<string, IntegrationOperatorAction[]
     action(
       "read",
       "Read Messages",
-      "Fetch a small sample of messages from the configured Gmail connection.",
+      "Fetch sender, subject, date and snippet for up to 10 messages through the Google sign-in. Needs Read Gmail.",
       "read",
       formSchema("action:automation.gmail.read", "Read Gmail messages", [
         text("query", "Query", { placeholder: "label:inbox newer_than:7d", advanced: true }),
-        text("maxResults", "Max Results", { placeholder: "10", defaultValue: "10", advanced: true }),
+        text("maxResults", "Max Results (1 to 10)", { placeholder: "10", defaultValue: "10", advanced: true }),
       ]),
     ),
     action(
       "write",
       "Send Test Email",
-      "Send a lightweight operator test message through the configured Gmail connection.",
+      "Send one operator test message through the Google sign-in. Needs Send Gmail.",
       "write",
       formSchema("action:automation.gmail.write", "Send Gmail message", [
         text("to", "Recipient", { placeholder: "ops@example.com", required: true }),

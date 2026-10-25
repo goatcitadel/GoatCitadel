@@ -63,6 +63,8 @@ function createHost(
       return typeof envValue === "string" && envValue.length > 0 ? envValue : undefined;
     }),
     publishRealtime: vi.fn(),
+    // The Google sign-in owner: Gmail actions get their token here, never from connection config.
+    resolveGoogleWorkspaceAccessToken: vi.fn(async () => "gmail-token"),
     mutationStore: {
       claim: vi.fn((input) => ({
         outcome: "claimed" as const,
@@ -928,7 +930,7 @@ describe("integration-action-service", () => {
         kind: "automation",
         label: "Gmail",
         config: {
-          accessToken: "gmail-token",
+          gmailSend: true,
         },
       }),
       input: {
@@ -1713,7 +1715,7 @@ describe("integration-action-service", () => {
       kind: "automation",
       label: "Gmail",
       config: {
-        accessToken: "gmail-token",
+        gmailSend: true,
       },
     });
     const fetchMock = vi
@@ -1723,6 +1725,22 @@ describe("integration-action-service", () => {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "msg-1",
+            threadId: "thread-1",
+            snippet: "Quarterly numbers",
+            payload: {
+              headers: [
+                { name: "Subject", value: "Q3" },
+                { name: "From", value: "cfo@example.com" },
+              ],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
       )
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ id: "sent-1" }), {
@@ -1746,9 +1764,54 @@ describe("integration-action-service", () => {
     });
 
     expect(readResult.status).toBe("executed");
-    expect(readResult.output?.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: "msg-1" })]));
+    expect(readResult.output).toMatchObject({
+      contentTrust: "untrusted_external",
+      items: [
+        { id: "msg-1", threadId: "thread-1", subject: "Q3", from: "cfo@example.com", snippet: "Quarterly numbers" },
+      ],
+    });
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("format=metadata");
     expect(writeResult.status).toBe("executed");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(host.resolveGoogleWorkspaceAccessToken).toHaveBeenNthCalledWith(1, connection.connectionId, "gmail.read");
+    expect(host.resolveGoogleWorkspaceAccessToken).toHaveBeenNthCalledWith(2, connection.connectionId, "gmail.send");
+    for (const [, init] of fetchMock.mock.calls) {
+      expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer gmail-token" });
+    }
+  });
+
+  it("blocks Gmail actions before any request when the Google sign-in refuses the capability", async () => {
+    const connection = createConnection({
+      catalogId: "automation.gmail",
+      key: "gmail",
+      kind: "automation",
+      label: "Gmail",
+      config: { accessToken: "ya29.pasted-and-ignored" },
+    });
+    const fetchMock = vi.fn();
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: fetchMock,
+      resolveGoogleWorkspaceAccessToken: vi.fn(async () => {
+        throw new Error("blocked: Send Gmail is turned off for this Google connection.");
+      }),
+    });
+    await expect(
+      invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+        input: { to: "ops@example.com", subject: "Hi", bodyText: "Body" },
+      }),
+    ).resolves.toMatchObject({
+      status: "blocked",
+      blockedReason: "gmail_auth_missing",
+      message: "Send Gmail is turned off for this Google connection.",
+    });
+    await expect(
+      invokeIntegrationConnectionAction(
+        createHost(connection, { resolveGoogleWorkspaceAccessToken: undefined }),
+        connection.connectionId,
+        "read",
+      ),
+    ).resolves.toMatchObject({ status: "blocked", blockedReason: "gmail_auth_missing" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("blocks incomplete Gmail writes and surfaces provider read failures", async () => {
@@ -1758,7 +1821,7 @@ describe("integration-action-service", () => {
       kind: "automation",
       label: "Gmail",
       config: {
-        accessToken: "gmail-token",
+        gmailSend: true,
       },
     });
     const host = createHost(connection, {
@@ -1809,7 +1872,7 @@ describe("integration-action-service", () => {
         kind: "automation",
         label: "Gmail",
         workspaceId: "ws-guarded",
-        config: { accessToken: "gmail-token" },
+        config: { gmailSend: true },
       });
       const host = wardHost(connection, [
         { actionPattern: "integration.automation.gmail.*", effect: "require_dry_run" },
@@ -2135,7 +2198,7 @@ describe("integration-action-service", () => {
           kind: "automation",
           label: "Gmail",
           workspaceId: "ws-guarded",
-          config: { accessToken: "gmail-token" },
+          config: { gmailSend: true },
         });
       }
 
