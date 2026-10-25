@@ -582,6 +582,18 @@ describe("gateway service host guard", () => {
       /new CapabilitySystemService\(\{[\s\S]{0,800}resolveApproval: async \(approvalId, input\) => await this\.resolveApproval\(approvalId, input\)/,
     );
   }, 15_000);
+
+  it("gives the policy engine the live operator Firecrawl endpoint", async () => {
+    const files = await readServiceSources();
+    const gatewayService = normalizeSourceForGuard(
+      files.find(({ relativePath }) => relativePath === "gateway-service.ts")?.source ?? "",
+    );
+
+    // Without this hook the engine falls back to tool arguments, so a model could pick the endpoint.
+    expect(gatewayService).toMatch(
+      /new ToolPolicyEngine\(config\.toolPolicy, this\.storage, undefined, \{[\s\S]{0,1500}resolveFirecrawlEndpoint: \(\) => this\.config\.assistant\.web\.firecrawl,/,
+    );
+  }, 15_000);
 });
 
 function normalizeTypeAlias(source: string): string {

@@ -27,6 +27,7 @@ import {
   loadPlaywright,
 } from "./playwright-runtime.js";
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
+import { pinFirecrawlEndpoint, type FirecrawlOperatorEndpoint } from "./firecrawl-endpoint.js";
 import {
   executeOfficialResearchSearch,
   isInternalInfrastructureSearchQuery,
@@ -61,6 +62,8 @@ export interface BrowserExecutionContext {
   resolveCredential?: ResolveOfficialSearchCredential;
   /** Keychain-held Firecrawl key; the configured environment variable stays the fallback. */
   resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
+  /** The operator's Firecrawl endpoint; when present, tool arguments cannot name another one. */
+  resolveFirecrawlEndpoint?: () => FirecrawlOperatorEndpoint;
 }
 
 interface BrowserStepInput {
@@ -2399,14 +2402,23 @@ function resolveOllamaSearchEndpoint(args: Record<string, unknown>): string {
   return base.endsWith("/api/generate") ? base : `${base}/api/generate`;
 }
 
-function resolveFirecrawlRuntimeConfig(args: Record<string, unknown>): {
+function resolveFirecrawlRuntimeConfig(
+  args: Record<string, unknown>,
+  executionContext?: BrowserExecutionContext,
+): {
   baseUrl: string;
   timeoutMs: number;
   apiKey?: string;
 } {
-  const baseUrl = asString(args.firecrawlBaseUrl) ?? process.env.FIRECRAWL_BASE_URL?.trim() ?? "http://127.0.0.1:3002";
+  const pinned = pinFirecrawlEndpoint(args, executionContext?.resolveFirecrawlEndpoint?.());
+  const baseUrl =
+    pinned?.baseUrl ??
+    asString(args.firecrawlBaseUrl) ??
+    process.env.FIRECRAWL_BASE_URL?.trim() ??
+    "http://127.0.0.1:3002";
   const timeoutMs = clampInt(args.firecrawlTimeoutMs, 20_000, 1_000, 120_000);
   const apiKeyEnv =
+    pinned?.apiKeyEnv ??
     normalizeFirecrawlApiKeyEnvName(asString(args.firecrawlApiKeyEnv)) ??
     normalizeFirecrawlApiKeyEnvName(process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV) ??
     "FIRECRAWL_API_KEY";
@@ -2494,7 +2506,10 @@ async function executeBrowserSearchViaFirecrawl(
   config: ToolPolicyConfig,
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
-  const firecrawl = await withFirecrawlKeychainCredential(resolveFirecrawlRuntimeConfig(args), executionContext);
+  const firecrawl = await withFirecrawlKeychainCredential(
+    resolveFirecrawlRuntimeConfig(args, executionContext),
+    executionContext,
+  );
   assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
   const response = await fetchFirecrawlEndpoint(
     firecrawl,
@@ -2641,7 +2656,10 @@ async function executeFirecrawlScrape(
   markdown: string;
   html: string;
 }> {
-  const firecrawl = await withFirecrawlKeychainCredential(resolveFirecrawlRuntimeConfig(args), executionContext);
+  const firecrawl = await withFirecrawlKeychainCredential(
+    resolveFirecrawlRuntimeConfig(args, executionContext),
+    executionContext,
+  );
   assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
   assertAllowedHttpUrl(url);
   assertHostAllowedForConfig(url, config, executionContext);

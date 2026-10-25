@@ -63,6 +63,7 @@ import {
 } from "./ingestion-source-type.js";
 import { resolveEffectivePolicy } from "./policy-resolver.js";
 import { parseBrowserInteractionSteps } from "./browser-tools.js";
+import { pinFirecrawlEndpoint, type FirecrawlOperatorEndpoint } from "./firecrawl-endpoint.js";
 import {
   isOfficialResearchSearchInvocation,
   resolveOfficialSearchProviders,
@@ -233,8 +234,17 @@ function isCanonicalLocalFirecrawlBaseUrl(parsed: URL): boolean {
   return (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") && parsed.port === "3002";
 }
 
-function readFirecrawlBaseUrl(args: Record<string, unknown> | undefined): string {
-  return String(args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002");
+/** The Firecrawl URL a request reaches: the operator endpoint whenever the host supplies one. */
+function readFirecrawlBaseUrl(args: Record<string, unknown> | undefined, operator?: FirecrawlOperatorEndpoint): string {
+  return (
+    operator?.baseUrl.trim() ??
+    String(args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002")
+  );
+}
+
+/** Matches the browser executor, which trims and lowercases `backend` before choosing Firecrawl. */
+function isFirecrawlBrowserBackend(args: Record<string, unknown> | undefined): boolean {
+  return typeof args?.backend === "string" && args.backend.trim().toLowerCase() === "firecrawl";
 }
 
 const BROWSER_SEARCH_ENGINE_URLS = {
@@ -1750,7 +1760,11 @@ export class ToolPolicyEngine {
       if (request.toolName === "docs.ingest" && docsIngestSourceType !== "url") {
         return "grant host constraints require a URL docs.ingest source";
       }
-      const { hosts: candidates, blockedReason } = await extractGrantHostCandidates(request, this.storage);
+      const { hosts: candidates, blockedReason } = await extractGrantHostCandidates(
+        request,
+        this.storage,
+        this.runtimeHooks.resolveFirecrawlEndpoint?.(),
+      );
       if (blockedReason) return blockedReason;
       if (candidates.length === 0 && request.toolName === "browser.search") {
         return HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE;
@@ -1879,10 +1893,7 @@ export class ToolPolicyEngine {
           assertHostAllowedForRequest(source, request, this.config);
         }
         if (docsIngestBackend === "firecrawl") {
-          const firecrawlBaseUrl = String(
-            request.args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002",
-          );
-          assertFirecrawlBaseUrlAllowedForConfig(firecrawlBaseUrl, this.config);
+          this.assertFirecrawlEndpointAllowed(request.args);
         }
       }
 
@@ -1891,8 +1902,8 @@ export class ToolPolicyEngine {
         if (target) {
           assertHostAllowedForRequest(target, request, this.config);
         }
-        if (request.args?.backend === "firecrawl") {
-          assertFirecrawlBaseUrlAllowedForConfig(readFirecrawlBaseUrl(request.args), this.config);
+        if (isFirecrawlBrowserBackend(request.args)) {
+          this.assertFirecrawlEndpointAllowed(request.args);
         }
         if (request.toolName === "browser.search") {
           validateBrowserSearchHosts(request, this.config);
@@ -1906,6 +1917,12 @@ export class ToolPolicyEngine {
     }
 
     return undefined;
+  }
+
+  /** Refuses a Firecrawl endpoint or key variable other than the operator's, then checks the endpoint's host. */
+  private assertFirecrawlEndpointAllowed(args: Record<string, unknown> | undefined): void {
+    const pinned = pinFirecrawlEndpoint(args, this.runtimeHooks.resolveFirecrawlEndpoint?.());
+    assertFirecrawlBaseUrlAllowedForConfig(pinned?.baseUrl ?? readFirecrawlBaseUrl(args), this.config);
   }
 
   private async validateReadPaths(
@@ -2550,7 +2567,10 @@ export class ToolPolicyEngine {
     if (request.dryRun === true || accessEvaluation.approvalMode !== "bypass" || accessEvaluation.requiresApproval) {
       return;
     }
-    const bypassedTargets = extractOutboundHostCandidates(request).flatMap((target) => {
+    const bypassedTargets = extractOutboundHostCandidates(
+      request,
+      this.runtimeHooks.resolveFirecrawlEndpoint?.(),
+    ).flatMap((target) => {
       const decision = evaluateDangerousHostBypass(target, this.config.sandbox.networkAllowlist);
       return decision.shouldAudit
         ? [
@@ -2586,7 +2606,10 @@ export class ToolPolicyEngine {
     if (request.dryRun === true || !accessEvaluation.allowed || accessEvaluation.requiresApproval) {
       return;
     }
-    const publicTargets = extractOutboundHostCandidates(request).flatMap((target) => {
+    const publicTargets = extractOutboundHostCandidates(
+      request,
+      this.runtimeHooks.resolveFirecrawlEndpoint?.(),
+    ).flatMap((target) => {
       const decision = evaluateDangerousHostBypass(target, this.config.sandbox.networkAllowlist);
       return decision.shouldAudit
         ? [
@@ -2724,14 +2747,17 @@ function withExecutionGrantContext(request: ToolInvokeRequest, evaluation?: Acce
   };
 }
 
-function extractOutboundHostCandidates(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): string[] {
+function extractOutboundHostCandidates(
+  request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">,
+  firecrawl?: FirecrawlOperatorEndpoint,
+): string[] {
   if (request.toolName.startsWith("http.") || request.toolName === "webhook.send") {
     return stringTargets(request.args?.url, request.args?.host);
   }
   if (readDocsIngestSourceTypeIfValid(request) === "url") {
     const targets = stringTargets(request.args?.source);
     if (readDocsIngestBackendIfValid(request) === "firecrawl") {
-      targets.push(String(request.args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002"));
+      targets.push(readFirecrawlBaseUrl(request.args, firecrawl));
     }
     return targets;
   }
@@ -2744,8 +2770,8 @@ function extractOutboundHostCandidates(request: Pick<ToolAccessEvaluateRequest, 
         ),
       );
     }
-    if (request.args?.backend === "firecrawl") {
-      targets.push(readFirecrawlBaseUrl(request.args));
+    if (isFirecrawlBrowserBackend(request.args)) {
+      targets.push(readFirecrawlBaseUrl(request.args, firecrawl));
     }
     return targets;
   }
@@ -2860,6 +2886,7 @@ export const extractHostCandidatesForTests = extractHostCandidates;
 async function extractGrantHostCandidates(
   request: Pick<ToolAccessEvaluateRequest, "toolName" | "args" | "workspaceId">,
   storage?: AsyncStorage,
+  firecrawl?: FirecrawlOperatorEndpoint,
 ): Promise<{ hosts: string[]; blockedReason?: string }> {
   const connection = await resolveGrantIntegrationConnection(request, storage);
   const args = request.args;
@@ -2917,7 +2944,7 @@ async function extractGrantHostCandidates(
   }
   if (request.toolName === "browser.search") {
     candidates.push(
-      ...extractOutboundHostCandidates(request).flatMap((target) => extractHostCandidates({ url: target })),
+      ...extractOutboundHostCandidates(request, firecrawl).flatMap((target) => extractHostCandidates({ url: target })),
     );
   }
   if (readDocsIngestSourceTypeIfValid(request) === "url" && typeof args?.source === "string") {

@@ -20,6 +20,10 @@ const BROWSER_READ_TOOLS = new Set(["browser.search", "browser.navigate", "brows
  * direct config edit, which skip the Settings guard) would make the policy engine block every
  * read. When the operator allows native fallback, reads use native instead. With fallback off,
  * Firecrawl stays selected so the block and its allowlist reason stay visible.
+ *
+ * A caller-supplied `firecrawlBaseUrl` or `firecrawlApiKeyEnv` is left in place only so the
+ * policy engine can refuse it: the engine reads the endpoint from these settings through its
+ * `resolveFirecrawlEndpoint` hook and blocks a call that names a different one.
  */
 export function applyRuntimeBrowserBackendDefaults<TRequest extends ToolInvokeRequest | ToolAccessEvaluateRequest>(
   request: TRequest,

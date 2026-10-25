@@ -10,6 +10,7 @@ import { clampInt } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { Buffer } from "node:buffer";
 import { mapWithConcurrency } from "../async-utils.js";
+import type { FirecrawlOperatorEndpoint } from "../firecrawl-endpoint.js";
 import { ingestDocumentViaBackend, resolveIngestionTrustLevel, searchIngestedContext } from "../ingestion-backends.js";
 import { parseIngestionSourceType } from "../ingestion-source-type.js";
 import { sanitizeForModel } from "../tool-security.js";
@@ -67,6 +68,8 @@ export interface KnowledgeExecutorDeps {
   resolveNetworkAllowlist(request: ToolInvokeRequest, config: ToolPolicyConfig): string[];
   /** Keychain-held Firecrawl key for docs.ingest; the environment variable stays the fallback. */
   resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
+  /** The operator's Firecrawl endpoint for docs.ingest; tool arguments cannot name another one. */
+  resolveFirecrawlEndpoint?: () => FirecrawlOperatorEndpoint;
 }
 
 export function isKnowledgeToolName(toolName: string): boolean {
@@ -575,6 +578,7 @@ async function docsIngest(
     networkAllowlist: deps.resolveNetworkAllowlist(request, config),
     sourceAllowlist: await deps.resolveExecutionGrantAllowedHosts(request, storage),
     resolveFirecrawlCredential: deps.resolveFirecrawlCredential,
+    resolveFirecrawlEndpoint: deps.resolveFirecrawlEndpoint,
     fetchUrl: async (url) => {
       const res = await deps.fetchAllowlisted(
         url,
