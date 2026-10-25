@@ -46,17 +46,6 @@ const ENV: Record<string, string> = {
   GOATCITADEL_RATE_LIMIT_ENABLED: "false",
 };
 
-/**
- * Pre-existing reads that reject outside their handler for a missing id (found by this sweep on
- * 2026-10-05, reported for a separate fix). They publish nothing; they are listed so a new one fails.
- */
-const KNOWN_UNHANDLED_READS: string[] = [
-  // listChatThreadKnowledgeAttachments does not await its session existence check.
-  "/api/v1/chat/sessions/:sessionId/knowledge-attachments:",
-  // The route does not await findOverlaps (nor get on the sibling read), so its 404 path never runs.
-  "/api/v1/engineering-learnings/:learningId/overlaps:",
-];
-
 function concreteUrl(url: string): string {
   return url.replace(/:[A-Za-z0-9_]+(\([^)]*\))?/g, MISSING_PARAM).replace(/\*/g, MISSING_PARAM);
 }
@@ -151,8 +140,6 @@ describe("GET routes never publish realtime events", { timeout: 600_000 }, () =>
 
     // A read that has not answered within the timeout may publish later; name those reads too.
     expect(published, `reads that did not answer within 5 s: ${timedOut.join(", ") || "none"}`).toEqual([]);
-    expect(
-      [...unhandledReads].filter((entry) => !KNOWN_UNHANDLED_READS.some((known) => entry.startsWith(known))),
-    ).toEqual([]);
+    expect([...unhandledReads]).toEqual([]);
   });
 });
