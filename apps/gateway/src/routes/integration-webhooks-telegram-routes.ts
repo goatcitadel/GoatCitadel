@@ -137,7 +137,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
               actorId: parsed.actorId,
               actorType: parsed.actorType,
               content: `/${approval.decision}`,
-              displayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
+              displayName: resolveTelegramConversationName(parsed.metadata),
               metadata: {
                 ...withoutTelegramEphemeralCallbackMetadata(parsed.metadata),
                 approvalActionId,
@@ -211,7 +211,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
               actorId: parsed.actorId,
               actorType: parsed.actorType,
               content: approvalCommand ? `/${normalizedCommand.name}` : parsed.content,
-              displayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
+              displayName: resolveTelegramConversationName(parsed.metadata),
               metadata: {
                 ...withoutTelegramEphemeralCallbackMetadata(parsed.metadata),
                 approvalActionId,

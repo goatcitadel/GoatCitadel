@@ -473,6 +473,111 @@ describe("integration provider webhook routes", () => {
     expect(groupAccepted?.message.displayName).toBe("Family group");
   });
 
+  it("names a group after its title even when its first event is a command or an approval tap", async () => {
+    const connectionId = "11111111-1111-1111-1111-111111111111";
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    const updates = [
+      {
+        update_id: 9201,
+        message: {
+          message_id: 601,
+          from: { id: 777, is_bot: false, first_name: "Alex" },
+          chat: { id: -1001234567892, type: "supergroup", title: "Family group" },
+          text: "/sethome",
+        },
+      },
+      {
+        update_id: 9202,
+        callback_query: {
+          id: "callback-2",
+          from: { id: 777, is_bot: false, first_name: "Alex" },
+          message: {
+            message_id: 602,
+            chat: { id: -1001234567892, type: "supergroup", title: "Family group" },
+            text: "Approval requested",
+          },
+          data: "gca:grat_secret:a",
+        },
+      },
+      {
+        update_id: 9203,
+        message: {
+          message_id: 603,
+          from: { id: 777, is_bot: false, first_name: "Sam", last_name: "Lee" },
+          chat: { id: 777, type: "private", first_name: "Sam", last_name: "Lee" },
+          text: "/sethome",
+        },
+      },
+    ];
+
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId,
+        catalogId: "channel.telegram",
+        kind: "channel",
+        key: "telegram",
+        label: "Telegram",
+        enabled: true,
+        status: "connected",
+        config: {
+          botToken: "telegram-bot-token",
+          webhookSecret: "telegram-webhook-secret",
+          telegramOperatorActors: ["777"],
+          telegramPairing: {
+            approved: [{ actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Alex" }],
+            pending: [],
+          },
+        },
+        createdAt: "2026-05-02T12:00:00.000Z",
+        updatedAt: "2026-05-02T12:00:00.000Z",
+      })),
+      updateIntegrationConnection: vi.fn(),
+      findRemoteActionTokenId: vi.fn(() => "approval-action-1"),
+      acceptInboundChannelEvent,
+      awaitInboundChannelCommandResult: vi.fn(async () => ({
+        status: "completed" as const,
+        resultText: "Done.",
+      })),
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    for (const update of updates) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/integrations/connections/${connectionId}/telegram/webhook`,
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "telegram-webhook-secret",
+        },
+        payload: JSON.stringify(update),
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    const accepted = acceptInboundChannelEvent.mock.calls.map(
+      ([input]) => input as { dispatchKind: string; eventType: string; message: { displayName?: string } },
+    );
+    expect(accepted.map((input) => [input.dispatchKind, input.eventType, input.message.displayName])).toEqual([
+      ["command", "telegram-channel-command", "Family group"],
+      ["command", "telegram-approval-callback", "Family group"],
+      ["command", "telegram-channel-command", "Sam Lee"],
+    ]);
+  });
+
   it("handles Telegram /sethome before normal chat dispatch", async () => {
     const getIntegrationConnection = vi.fn(() => ({
       connectionId: "11111111-1111-1111-1111-111111111111",
