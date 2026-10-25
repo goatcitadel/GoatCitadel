@@ -96,7 +96,7 @@ function tokenize(input: string): string[] {
           tokens.push(segment);
         } else {
           for (let index = 0; index < chars.length - 1; index += 1) {
-            tokens.push(chars[index] + chars[index + 1]);
+            tokens.push(`${chars[index] ?? ""}${chars[index + 1] ?? ""}`);
           }
         }
       } else if (segment.length >= (LATIN_OR_DIGITS.test(segment) ? 3 : 2)) {

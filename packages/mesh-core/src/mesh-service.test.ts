@@ -290,7 +290,7 @@ describe("MeshService readiness diagnostics", () => {
 
   it("does not claim lifecycle checks pass without evidence in storage", async () => {
     const storage = createMeshStorage();
-    storage.mesh.listNodes.mockReturnValue([{ nodeId: "node-local" }]);
+    storage.mesh.listNodes.mockReturnValue([{ nodeId: "node-local" }] as never);
     const service = new MeshService(storage as never, baseOptions);
 
     const diagnostics = await service.readinessDiagnostics();
@@ -304,10 +304,10 @@ describe("MeshService readiness diagnostics", () => {
 
   it("passes lifecycle checks only when records exist", async () => {
     const storage = createMeshStorage();
-    storage.mesh.listNodes.mockReturnValue([{ nodeId: "node-local" }]);
-    storage.mesh.listLeases.mockReturnValue([{ leaseKey: "a" }]);
-    storage.mesh.listSessionOwners.mockReturnValue([{ sessionId: "s" }]);
-    storage.mesh.listReplicationEvents.mockReturnValue([{ replicationId: "r" }]);
+    storage.mesh.listNodes.mockReturnValue([{ nodeId: "node-local" }] as never);
+    storage.mesh.listLeases.mockReturnValue([{ leaseKey: "a" }] as never);
+    storage.mesh.listSessionOwners.mockReturnValue([{ sessionId: "s" }] as never);
+    storage.mesh.listReplicationEvents.mockReturnValue([{ replicationId: "r" }] as never);
     const service = new MeshService(storage as never, baseOptions);
 
     const { checks } = await service.readinessDiagnostics();
@@ -319,7 +319,7 @@ describe("MeshService readiness diagnostics", () => {
 
   it("warns when the mesh has neither a tailnet nor required mTLS", async () => {
     const storage = createMeshStorage();
-    storage.mesh.listNodes.mockReturnValue([{ nodeId: "node-local" }]);
+    storage.mesh.listNodes.mockReturnValue([{ nodeId: "node-local" }] as never);
     const insecure = new MeshService(storage as never, { ...baseOptions, mode: "lan" as never, requireMtls: false });
     const secure = new MeshService(storage as never, { ...baseOptions, mode: "lan" as never, requireMtls: true });
 
