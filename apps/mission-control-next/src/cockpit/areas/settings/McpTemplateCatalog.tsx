@@ -135,14 +135,14 @@ export function McpTemplateCatalog({
           )}
         </Field>
       </div>
-      <p role="status" className="text-xs text-fg-muted">
+      <p className="text-xs text-fg-muted">
         Showing {Math.min(limit, filtered.length)} of {filtered.length} servers
       </p>
       {allowMessage ? (
         <Callout tone={allowMessage.tone === "error" ? "error" : "info"}>{allowMessage.text}</Callout>
       ) : null}
       {settings.isError ? (
-        <p role="alert">Network allowlist unavailable: {describeApiError(settings.error).summary}</p>
+        <p className="text-status-failed">Network allowlist unavailable: {describeApiError(settings.error).summary}</p>
       ) : null}
       {filtered.length === 0 ? <p>No servers match this search.</p> : null}
       <ul className="divide-y divide-line-subtle">
@@ -159,13 +159,13 @@ export function McpTemplateCatalog({
                 </p>
               </div>
               <p className="break-words">{template.description.slice(0, 1200)}</p>
-              <dl className="grid gap-x-3 gap-y-1 text-xs sm:grid-cols-[max-content_1fr]">
+              <dl className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs sm:grid-cols-4">
                 <dt className="font-medium text-fg-secondary">Sign-in</dt>
-                <dd>{describeMcpTemplateSignIn(template)}</dd>
+                <dd className="sm:col-span-3">{describeMcpTemplateSignIn(template)}</dd>
                 {hosts.length ? (
                   <>
                     <dt className="font-medium text-fg-secondary">Network access</dt>
-                    <dd className="break-all">
+                    <dd className="break-all sm:col-span-3">
                       {hosts.join(", ")}
                       {allowlist ? (blocked.length ? " (not allowed yet)" : " (allowed)") : ""}
                     </dd>
@@ -174,7 +174,7 @@ export function McpTemplateCatalog({
                 {template.provenance ? (
                   <>
                     <dt className="font-medium text-fg-secondary">Source</dt>
-                    <dd>
+                    <dd className="sm:col-span-3">
                       Reviewed in the {template.provenance.catalog} catalog ({template.provenance.catalogLicense})
                       {template.provenance.documentationUrl ? (
                         <>
@@ -200,7 +200,7 @@ export function McpTemplateCatalog({
               ) : null}
               {blocked.length ? (
                 <p className="text-xs">
-                  The Gateway cannot reach {blocked.join(", ")} until you allow it. The sign-in provider may use another
+                  GoatCitadel cannot reach {blocked.join(", ")} until you allow it. The sign-in provider may use another
                   host; connecting names it if it is blocked.
                 </p>
               ) : null}

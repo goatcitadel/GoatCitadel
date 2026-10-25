@@ -117,8 +117,10 @@ export function LibrarySkillPacks({ workspaceId }: { workspaceId: string }) {
         </p>
       </header>
       {notice ? <Callout tone={notice.tone === "error" ? "error" : "info"}>{notice.text}</Callout> : null}
-      {hub.isError ? <p role="alert">Skill Hub unavailable: {describeApiError(hub.error).summary}</p> : null}
-      {hub.isPending ? <p role="status">Reading Skill Hub…</p> : null}
+      {hub.isError ? (
+        <p className="text-status-failed">Skill Hub unavailable: {describeApiError(hub.error).summary}</p>
+      ) : null}
+      {hub.isPending ? <p>Reading Skill Hub…</p> : null}
       <ul className="divide-y divide-line-subtle">
         {SHIPPED_SKILL_PACKS.map((pack) => {
           const item = hub.isSuccess ? findSkillPackItem(pack, items) : undefined;
@@ -136,7 +138,7 @@ export function LibrarySkillPacks({ workspaceId }: { workspaceId: string }) {
                 <a href={pack.setupUrl} target="_blank" rel="noopener noreferrer" className="text-accent underline">
                   {pack.requiresCli}
                 </a>{" "}
-                CLI on the Gateway host · From {pack.upstream} ({pack.license})
+                CLI on the computer running GoatCitadel · From {pack.upstream} ({pack.license})
               </p>
               {step.kind === "waiting" ? (
                 <a href="/inbox" className="text-sm text-accent underline">

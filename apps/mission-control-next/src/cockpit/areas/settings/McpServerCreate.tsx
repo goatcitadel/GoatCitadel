@@ -95,7 +95,7 @@ export function McpServerCreate({
             <>
               <details open>
                 <summary>Use an advertised template</summary>
-                {templates.isFetching ? <p role="status">Reading templates…</p> : null}
+                {templates.isFetching ? <p>Reading templates…</p> : null}
                 {templates.isError ? (
                   <p role="alert">Templates unavailable: {describeApiError(templates.error).summary}</p>
                 ) : null}

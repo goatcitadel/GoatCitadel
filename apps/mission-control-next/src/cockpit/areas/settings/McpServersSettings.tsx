@@ -97,13 +97,9 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
           Inspect MCP installation previews
         </Button>
       </div>
-      {query.isPending ? (
-        <p role="status" className="text-sm text-fg-muted">
-          Loading MCP servers…
-        </p>
-      ) : null}
+      {query.isPending ? <p className="text-sm text-fg-muted">Loading MCP servers…</p> : null}
       {query.isFetching && items ? (
-        <p role="status" className="text-sm text-fg-muted">
+        <p className="text-sm text-fg-muted">
           Refreshing server records. Connection states below are from the last read.
         </p>
       ) : null}
