@@ -1,4 +1,5 @@
 import type { ToolRiskyArgumentPattern } from "@goatcitadel/contracts";
+import { matchesToolPattern } from "../tool-patterns.js";
 import { compileBoundedRiskPattern, normalizeRiskText } from "./pattern-utils.js";
 
 export interface ArgumentRiskDecision {
@@ -44,15 +45,11 @@ export function classifyArgumentRisk(
 }
 
 function matchesToolName(toolName: string, namePattern: string): boolean {
-  const normalizedTool = toolName.trim();
   const normalizedPattern = namePattern.trim();
-  if (!normalizedPattern || normalizedPattern === "*") {
+  if (!normalizedPattern) {
     return true;
   }
-  if (normalizedPattern.endsWith("*")) {
-    return normalizedTool.startsWith(normalizedPattern.slice(0, -1));
-  }
-  return normalizedTool === normalizedPattern;
+  return matchesToolPattern(normalizedPattern, toolName);
 }
 
 function resolveArgumentValue(args: Record<string, unknown> | undefined, argumentPath: string | undefined): string {
