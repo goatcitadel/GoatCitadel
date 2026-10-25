@@ -163,6 +163,7 @@ export function buildSafePostgresSearchQuery(rawQuery: string): string | null {
 export class ChatMessageRepository {
   private readonly upsertStmt;
   private readonly countStmt;
+  private readonly countChannelMessagesAfterStmt;
   private readonly listLatestStmt;
   private readonly listAtOrBeforeSeqStmt;
   private readonly listAtOrBeforeSeqOffsetStmt;
@@ -222,6 +223,14 @@ export class ChatMessageRepository {
       SELECT COUNT(1) AS count
       FROM chat_messages
       WHERE session_id = ?
+    `);
+    this.countChannelMessagesAfterStmt = db.prepare(`
+      SELECT COUNT(1) AS count
+      FROM chat_messages
+      WHERE session_id = ?
+        AND role = 'user'
+        AND source_authority = 'external_channel'
+        AND timestamp > ?
     `);
     this.listLatestStmt = db.prepare(`
       SELECT *
@@ -607,6 +616,16 @@ export class ChatMessageRepository {
     return Number(row?.count ?? 0);
   }
 
+  /**
+   * Counts the messages a person sent through a channel after `after` (an ISO timestamp): role
+   * `user` with source authority `external_channel`. Replies, operator messages and system
+   * notes never count, so the number matches "new messages waiting" in a channel conversation.
+   */
+  public countAfter(sessionId: string, after: string): number {
+    const row = toCountRow(this.countChannelMessagesAfterStmt.get(sessionId, after));
+    return Number(row?.count ?? 0);
+  }
+
   public get(messageId: string): ChatMessageRecord | undefined {
     const row = toChatMessageRow(this.getStmt.get(messageId));
     return row ? this.mapRow(row) : undefined;
@@ -618,13 +637,17 @@ export class ChatMessageRepository {
     const result = new Map<string, string>();
     for (let offset = 0; offset < ids.length; offset += 400) {
       const batch = ids.slice(offset, offset + 400);
-      const rows = this.db.prepare(`
+      const rows = this.db
+        .prepare(
+          `
         SELECT session_id, content FROM (
           SELECT session_id, content, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY seq DESC) AS position
           FROM chat_messages WHERE session_id IN (${batch.map(() => "?").join(", ")})
             AND role IN ('user', 'assistant') AND TRIM(content) <> ''
         ) visible WHERE position = 1
-      `).all(...batch) as Array<{ session_id: string; content: string }>;
+      `,
+        )
+        .all(...batch) as Array<{ session_id: string; content: string }>;
       for (const row of rows) result.set(row.session_id, row.content);
     }
     return result;

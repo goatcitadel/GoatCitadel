@@ -43,6 +43,7 @@ import {
   buildChatSessionActivity,
   buildChatSessionUpdatedPayload,
   deriveChatSessionTitleFromContent,
+  resolveChannelConnectionId,
   splitChatPrefsPatch,
   toChatSessionRecord,
 } from "./chat-session-utils.js";
@@ -135,6 +136,7 @@ export async function listChatSessions(
     sessionIds,
     workspaceId,
   );
+  const bindingsBySessionId = await storage.chatSessionBindings.listBySessionIds(sessionIds);
 
   let records = sessionIds.flatMap((sessionId) => {
     const session = sessionsById.get(sessionId);
@@ -161,6 +163,7 @@ export async function listChatSessions(
           .slice(0, 6)
           .map(buildGeneratedArtifactReference),
         forkRelationships: forkRelationshipsBySessionId.get(session.sessionId),
+        channelConnectionId: resolveChannelConnectionId(bindingsBySessionId.get(session.sessionId)),
       },
     );
   });

@@ -4,6 +4,7 @@ import {
   evaluateChannelInboundAccess,
   isSenderAllowed,
   resolveAllowedSenders,
+  resolveChannelOwnerActorIds,
 } from "./channel-access.js";
 
 describe("ChannelInboundAccessConfigSchema", () => {
@@ -48,6 +49,22 @@ describe("resolveAllowedSenders", () => {
     expect(resolveAllowedSenders({ allowedSenders: ["  U1 ", "u1", "U2", "", "   ", 5 as unknown as string] })).toEqual(
       ["u1", "u2"],
     );
+  });
+});
+
+describe("resolveChannelOwnerActorIds", () => {
+  it("returns an empty list for unset or non-array config", () => {
+    expect(resolveChannelOwnerActorIds(undefined)).toEqual([]);
+    expect(resolveChannelOwnerActorIds({})).toEqual([]);
+    expect(resolveChannelOwnerActorIds({ ownerActorIds: "42" })).toEqual([]);
+    // The sender allowlist is a different list and never stands in for the owner's accounts.
+    expect(resolveChannelOwnerActorIds({ allowedSenders: ["42"] })).toEqual([]);
+  });
+
+  it("trims, lowercases, drops blanks and non-strings, and de-duplicates", () => {
+    expect(
+      resolveChannelOwnerActorIds({ ownerActorIds: ["  U1 ", "u1", "U2", "", "   ", 5 as unknown as string] }),
+    ).toEqual(["u1", "u2"]);
   });
 });
 

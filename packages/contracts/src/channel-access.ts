@@ -90,6 +90,30 @@ export function resolveAllowedSenders(config: Record<string, unknown> | undefine
 }
 
 /**
+ * Normalize the operator's own accounts on a channel connection (`config.ownerActorIds`) into a clean,
+ * comparable list: trims each entry, lowercases it, drops blanks, and de-duplicates. Anything that is not
+ * an array of strings yields an empty list, meaning no conversation is recognised as the operator's own.
+ * Matching is the same forgiving trim-and-lowercase comparison the sender allowlist uses.
+ */
+export function resolveChannelOwnerActorIds(config: Record<string, unknown> | undefined): string[] {
+  const raw = config?.ownerActorIds;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const normalized = new Set<string>();
+  for (const entry of raw) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const cleaned = entry.trim().toLowerCase();
+    if (cleaned.length > 0) {
+      normalized.add(cleaned);
+    }
+  }
+  return [...normalized];
+}
+
+/**
  * Decide whether an inbound sender is permitted by the resolved allowlist.
  *
  * Default-allow: an empty/unset allowlist permits everyone. When the allowlist

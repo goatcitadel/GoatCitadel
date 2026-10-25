@@ -124,6 +124,68 @@ describe("ChatSessionBindingRepository", () => {
     assert.equal(leftChannel.target, undefined);
   });
 
+  it("drops the stored conversation when a later upsert points the binding at a different connection or target", () => {
+    const { repo } = createStore();
+    const direct = { kind: "direct" as const, counterpartActorId: "42", title: "Sam Lee" };
+    const seed = (): void => {
+      repo.upsert({
+        sessionId: "session-a",
+        transport: "integration",
+        connectionId: "connection-a",
+        target: "telegram:42",
+        conversation: direct,
+      });
+    };
+
+    seed();
+    const sameBinding = repo.upsert({
+      sessionId: "session-a",
+      transport: "integration",
+      connectionId: "connection-a",
+      target: "telegram:42",
+    });
+    assert.deepEqual(sameBinding.conversation, direct);
+
+    const otherTarget = repo.upsert({
+      sessionId: "session-a",
+      transport: "integration",
+      connectionId: "connection-a",
+      target: "telegram:77",
+    });
+    assert.equal(otherTarget.conversation, undefined);
+    assert.equal(otherTarget.target, "telegram:77");
+    assert.equal(repo.get("session-a")?.conversation, undefined);
+
+    seed();
+    const otherConnection = repo.upsert({
+      sessionId: "session-a",
+      transport: "integration",
+      connectionId: "connection-b",
+      target: "telegram:42",
+    });
+    assert.equal(otherConnection.conversation, undefined);
+
+    seed();
+    const targetCleared = repo.upsert({
+      sessionId: "session-a",
+      transport: "integration",
+      connectionId: "connection-a",
+    });
+    assert.equal(targetCleared.conversation, undefined);
+
+    // A caller that re-points the binding and supplies fresh details still gets them stored.
+    seed();
+    const group = { kind: "group" as const, title: "Family group" };
+    const repointedWithDetails = repo.upsert({
+      sessionId: "session-a",
+      transport: "integration",
+      connectionId: "connection-b",
+      target: "telegram:-100",
+      conversation: group,
+    });
+    assert.deepEqual(repointedWithDetails.conversation, group);
+  });
+
   it("normalizes conversation details and ignores stored ones that are malformed", () => {
     const { db, repo } = createStore();
     repo.upsert({ sessionId: "session-a", transport: "integration", target: "telegram:42" });

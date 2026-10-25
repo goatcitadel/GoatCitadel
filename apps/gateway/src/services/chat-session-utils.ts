@@ -1,4 +1,7 @@
-import { readAuthorizedChatProviderFallback, requiresChatProviderFallbackAuthorization } from "./chat-provider-fallback-authority.js";
+import {
+  readAuthorizedChatProviderFallback,
+  requiresChatProviderFallbackAuthorization,
+} from "./chat-provider-fallback-authority.js";
 import { CHAT_SESSION_ACTIVITY_COUNT_KEYS } from "@goatcitadel/contracts";
 import type {
   ChatMode,
@@ -9,10 +12,18 @@ import type {
   ChatCompletionRequest,
   ChatSessionActivitySummary,
   ChatSessionLifecycleStatus,
+  ChatSessionBindingRecord,
   ChatSessionPrefsPatch,
   ChatSessionRecord,
   SessionMeta,
 } from "@goatcitadel/contracts";
+
+/** The channel connection a session is bound to; only an integration binding names one. */
+export function resolveChannelConnectionId(
+  binding: Pick<ChatSessionBindingRecord, "transport" | "connectionId"> | undefined,
+): string | undefined {
+  return binding?.transport === "integration" && binding.connectionId ? binding.connectionId : undefined;
+}
 
 /** A session's turn activity in the session status route's shape: every bucket present, latest or null. */
 export function buildChatSessionActivity(
@@ -126,7 +137,12 @@ export function toChatSessionRecord(
   extras?: Partial<
     Pick<
       ChatSessionRecord,
-      "searchHits" | "lastHandoff" | "delegationParent" | "generatedArtifacts" | "forkRelationships"
+      | "searchHits"
+      | "lastHandoff"
+      | "delegationParent"
+      | "generatedArtifacts"
+      | "forkRelationships"
+      | "channelConnectionId"
     >
   >,
 ): ChatSessionRecord {
@@ -155,6 +171,7 @@ export function toChatSessionRecord(
     forkRelationships: extras?.forkRelationships,
     channel: session.channel,
     account: session.account,
+    ...(extras?.channelConnectionId ? { channelConnectionId: extras.channelConnectionId } : {}),
     updatedAt: session.updatedAt,
     lastActivityAt: session.lastActivityAt,
     tokenTotal: session.tokenTotal,

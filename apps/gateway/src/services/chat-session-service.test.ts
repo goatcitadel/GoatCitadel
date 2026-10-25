@@ -99,14 +99,26 @@ describe("chat session service", () => {
       const requested = await createChatSession(deps, { workspaceId: "default", title: "Exact older record" });
       await createChatSession(deps, { workspaceId: "default", title: "Another record" });
       const candidates = vi.spyOn(storage.chatSessionLists, "listCandidates");
-      const items = await listChatSessions(deps, { workspaceId: "default", sessionId: requested.sessionId, limit: 1000 });
+      const items = await listChatSessions(deps, {
+        workspaceId: "default",
+        sessionId: requested.sessionId,
+        limit: 1000,
+      });
       expect(items).toHaveLength(1);
-      expect(items[0]).toMatchObject({ sessionId: requested.sessionId, workspaceId: "default", title: "Exact older record" });
-      expect(candidates).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: requested.sessionId, workspaceId: "default", limit: 2 }));
+      expect(items[0]).toMatchObject({
+        sessionId: requested.sessionId,
+        workspaceId: "default",
+        title: "Exact older record",
+      });
+      expect(candidates).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sessionId: requested.sessionId, workspaceId: "default", limit: 2 }),
+      );
       expect(await listChatSessions(deps, { workspaceId: "foreign", sessionId: requested.sessionId })).toEqual([]);
       storage.chatSessionMeta.patch(requested.sessionId, { includeInHistory: false });
       expect(await listChatSessions(deps, { workspaceId: "default", sessionId: requested.sessionId })).toEqual([]);
-    } finally { cleanup(); }
+    } finally {
+      cleanup();
+    }
   });
 
   it("emits metadata-only durable lifecycle observers when a session starts and ends", async () => {
@@ -426,6 +438,57 @@ describe("chat session service", () => {
       ).toMatchObject({ workspace_id: "workspace-a" });
       expect(deps.ensureChatSessionRuntimeGrants).toHaveBeenCalledTimes(2);
       expect(deps.publishRealtime).toHaveBeenCalledTimes(2);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("projects the channel connection on integration-bound sessions", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const connection = storage.integrationConnections.create({
+        catalogId: "channel.telegram",
+        kind: "channel",
+        key: "telegram",
+        label: "Telegram",
+        enabled: true,
+        status: "connected",
+        workspaceId: "default",
+        config: {},
+      });
+      const inbound = await ensureInboundIntegrationChatSession(deps, {
+        route: { channel: "telegram", account: connection.connectionId, peer: "42" },
+        connectionId: connection.connectionId,
+        target: "telegram:42",
+      });
+      const plain = await createChatSession(deps, { workspaceId: "default", title: "Plain mission chat" });
+      const rebound = await createChatSession(deps, { workspaceId: "default", title: "Mission chat on a channel" });
+      await setChatSessionBinding(deps, {
+        sessionId: rebound.sessionId,
+        transport: "integration",
+        connectionId: connection.connectionId,
+        target: "telegram:42",
+      });
+
+      const items = await listChatSessions(deps, { workspaceId: "default", scope: "all", limit: 50 });
+      const byId = new Map(items.map((item) => [item.sessionId, item]));
+
+      expect(byId.get(inbound.sessionId)).toMatchObject({
+        scope: "external",
+        channelConnectionId: connection.connectionId,
+      });
+      // The projection follows the binding, not the session scope.
+      expect(byId.get(rebound.sessionId)).toMatchObject({
+        scope: "mission",
+        channelConnectionId: connection.connectionId,
+      });
+      expect(byId.get(plain.sessionId)).not.toHaveProperty("channelConnectionId");
+
+      // An LLM binding, or a binding that left the channel, carries no connection.
+      await setChatSessionBinding(deps, { sessionId: rebound.sessionId, transport: "llm" });
+      const after = await listChatSessions(deps, { workspaceId: "default", sessionId: rebound.sessionId });
+      expect(after[0]).not.toHaveProperty("channelConnectionId");
     } finally {
       cleanup();
     }

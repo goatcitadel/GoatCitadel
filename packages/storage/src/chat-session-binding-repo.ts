@@ -22,8 +22,10 @@ export interface ChatSessionBindingUpsertInput {
   target?: string;
   /**
    * Direct-or-group details for an integration binding. Omitting it keeps the
-   * stored details; they are cleared only when the binding stops being an
-   * integration binding.
+   * stored details only while the connection and target are unchanged; they are
+   * cleared when the binding stops being an integration binding or is re-pointed
+   * at another connection or target, so details never outlive the conversation
+   * they described.
    */
   conversation?: ChatChannelConversation;
   writable?: boolean;
@@ -59,8 +61,11 @@ export class ChatSessionBindingRepository {
   public upsert(input: ChatSessionBindingUpsertInput, now = new Date().toISOString()): ChatSessionBindingRecord {
     const existingRow = toChatSessionBindingRow(this.getStmt.get(input.sessionId));
     const existing = existingRow ? mapRow(existingRow) : undefined;
+    const sameConversation = existing?.connectionId === input.connectionId && existing?.target === input.target;
     const conversation =
-      input.transport === "integration" ? (parseConversation(input.conversation) ?? existing?.conversation) : undefined;
+      input.transport === "integration"
+        ? (parseConversation(input.conversation) ?? (sameConversation ? existing?.conversation : undefined))
+        : undefined;
     this.upsertStmt.run({
       sessionId: input.sessionId,
       workspaceId: input.workspaceId

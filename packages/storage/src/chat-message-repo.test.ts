@@ -715,6 +715,49 @@ describe("ChatMessageRepository", () => {
     assert.match(execLog[2] ?? "", /^RELEASE SAVEPOINT chat_messages_upsert_many_/);
   });
 
+  it("counts only channel messages newer than a timestamp", () => {
+    const repo = createRepo();
+    const at = (second: number) => `2026-03-05T01:00:${String(second).padStart(2, "0")}.000Z`;
+    repo.upsertMany([
+      message({ messageId: "c-old", sessionId: "sess-ch", sourceAuthority: "external_channel", timestamp: at(1) }),
+      message({ messageId: "c-edge", sessionId: "sess-ch", sourceAuthority: "external_channel", timestamp: at(5) }),
+      message({ messageId: "c-new-1", sessionId: "sess-ch", sourceAuthority: "external_channel", timestamp: at(6) }),
+      message({ messageId: "c-new-2", sessionId: "sess-ch", sourceAuthority: "external_channel", timestamp: at(9) }),
+      // Not channel messages: the operator's own, the assistant's reply and system notes never count.
+      message({ messageId: "o-new", sessionId: "sess-ch", sourceAuthority: "operator", timestamp: at(7) }),
+      message({
+        messageId: "a-new",
+        sessionId: "sess-ch",
+        role: "assistant",
+        actorType: "agent",
+        actorId: "agent",
+        sourceAuthority: "trusted_lifecycle",
+        timestamp: at(8),
+      }),
+      message({
+        messageId: "a-spoof",
+        sessionId: "sess-ch",
+        role: "assistant",
+        actorType: "agent",
+        actorId: "agent",
+        sourceAuthority: "external_channel",
+        timestamp: at(8),
+      }),
+      // Another session never leaks in.
+      message({
+        messageId: "other-new",
+        sessionId: "sess-other",
+        sourceAuthority: "external_channel",
+        timestamp: at(9),
+      }),
+    ]);
+
+    assert.equal(repo.countAfter("sess-ch", at(5)), 2);
+    assert.equal(repo.countAfter("sess-ch", at(0)), 4);
+    assert.equal(repo.countAfter("sess-ch", at(9)), 0);
+    assert.equal(repo.countAfter("sess-missing", at(0)), 0);
+  });
+
   it("falls back on malformed count, cursor, and list rows", () => {
     assert.equal(createGuardRepo({ countRow: "not a row" }).countBySession("sess-1"), 0);
     assert.equal(createGuardRepo({ countRow: { count: "bad" } }).countBySession("sess-1"), 0);

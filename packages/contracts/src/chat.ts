@@ -276,6 +276,8 @@ export interface ChatSessionRecord {
   forkRelationships?: import("./chat-fork.js").ChatSessionForkRelationship[];
   channel: string;
   account: string;
+  /** The channel connection carrying this session; set when its binding transport is "integration". */
+  channelConnectionId?: string;
   updatedAt: string;
   lastActivityAt: string;
   tokenTotal: number;
