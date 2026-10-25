@@ -235,6 +235,10 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(result.turnTrace.failure?.message).toBe(
       "The provider stopped before the answer finished, so a repair pass is required.",
     );
+    // #559: the answer is still unfinished, so the turn must not report a completed, complete answer.
+    expect(result.turnTrace.status).toBe("partial");
+    expect(result.turnTrace.completion).toMatchObject({ status: "truncated", repaired: true });
+    expect(result.assistantContent).toBe("The checklist has: tests, docs, packaging and");
   });
 
   it("reads each above/below reference on its own, so a later word cannot flip an earlier one", async () => {
