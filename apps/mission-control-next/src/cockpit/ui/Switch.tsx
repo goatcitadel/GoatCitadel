@@ -11,7 +11,10 @@ export interface SwitchProps {
   /** Visible state word while off. Defaults to "Off". */
   offText?: string;
   disabled?: boolean;
-  /** Disables the switch and sets aria-busy while a change is saving. */
+  /**
+   * A change is saving: sets aria-busy and aria-disabled, dims the switch and ignores toggles. It stays focusable and is
+   * not natively disabled, so a keyboard operator keeps their place. Use `disabled` for a switch that can't be used.
+   */
   pending?: boolean;
   /** Id of the element that describes this switch. */
   describedBy?: string;
@@ -36,6 +39,11 @@ export function Switch({
   describedBy,
 }: SwitchProps) {
   const unavailable = disabled || pending;
+  // A switch that is saving ignores toggles instead of going native-disabled, so focus stays where the operator left it.
+  const handleCheckedChange = (next: boolean) => {
+    if (pending) return;
+    onCheckedChange(next);
+  };
   return (
     <span className="inline-flex items-center gap-2">
       <span
@@ -50,10 +58,12 @@ export function Switch({
       </span>
       <SwitchPrimitive.Root
         checked={checked}
-        onCheckedChange={onCheckedChange}
-        disabled={unavailable}
+        onCheckedChange={handleCheckedChange}
+        // Only `disabled` is native. A saving switch stays focusable (a disabled button drops keyboard focus to <body>).
+        disabled={disabled}
         aria-label={label}
         aria-busy={pending || undefined}
+        aria-disabled={pending || undefined}
         aria-describedby={describedBy}
         className="group/switch inline-flex shrink-0 items-center justify-center rounded-full disabled:cursor-not-allowed aria-busy:cursor-progress"
       >

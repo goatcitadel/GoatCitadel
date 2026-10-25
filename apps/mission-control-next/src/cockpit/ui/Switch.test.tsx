@@ -57,9 +57,35 @@ describe("cockpit Switch", () => {
     const { onCheckedChange } = renderSwitch({ checked: true, pending: true });
     const control = findSwitch();
     expect(control.getAttribute("aria-busy")).toBe("true");
-    expect(control.disabled).toBe(true);
+    expect(control.getAttribute("aria-disabled")).toBe("true");
+    // Not natively disabled: a disabled button drops keyboard focus to <body> mid-save.
+    expect(control.hasAttribute("disabled")).toBe(false);
+    expect(control.disabled).toBe(false);
     act(() => control.click());
     expect(onCheckedChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps keyboard focus when a change starts saving", () => {
+    renderSwitch({ checked: true });
+    const control = findSwitch();
+    control.focus();
+    expect(document.activeElement).toBe(control);
+
+    const { onCheckedChange } = renderSwitch({ checked: true, pending: true });
+    expect(findSwitch()).toBe(control);
+    expect(document.activeElement).toBe(control);
+    act(() => control.click());
+    expect(onCheckedChange).not.toHaveBeenCalled();
+  });
+
+  it("accepts changes again once the save settles", () => {
+    renderSwitch({ checked: true, pending: true });
+    const { onCheckedChange } = renderSwitch({ checked: false, pending: false });
+    const control = findSwitch();
+    expect(control.hasAttribute("aria-busy")).toBe(false);
+    expect(control.hasAttribute("aria-disabled")).toBe(false);
+    act(() => control.click());
+    expect(onCheckedChange).toHaveBeenCalledWith(true);
   });
 
   it("shows Off text when unchecked", () => {
@@ -116,5 +142,25 @@ describe("cockpit Switch", () => {
     const offThumb = findSwitch().querySelector<HTMLElement>("span > span");
     expect(offThumb?.className.split(/\s+/)).toContain("size-4");
     expect(offThumb?.className.split(/\s+/)).not.toContain("translate-x-4");
+  });
+
+  it("pairs the thumb with a contrasting token in each state", () => {
+    // R16: the cockpit has no white token. On uses the accent's ink; off uses a muted ink that shows on the raised track.
+    renderSwitch({ checked: true });
+    const onThumb = findSwitch().querySelector<HTMLElement>("span > span")?.className.split(/\s+/);
+    expect(onThumb).toContain("bg-accent-ink");
+    expect(onThumb).not.toContain("bg-fg-muted");
+
+    renderSwitch({ checked: false });
+    const offThumb = findSwitch().querySelector<HTMLElement>("span > span")?.className.split(/\s+/);
+    expect(offThumb).toContain("bg-fg-muted");
+    expect(offThumb).not.toContain("bg-accent-ink");
+  });
+
+  it("dims the track and the state word while pending", () => {
+    renderSwitch({ checked: true, pending: true });
+    const track = findSwitch().firstElementChild as HTMLElement;
+    expect(track.className.split(/\s+/)).toContain("opacity-50");
+    expect(container.querySelector('span[aria-hidden="true"]')?.className.split(/\s+/)).toContain("opacity-50");
   });
 });
