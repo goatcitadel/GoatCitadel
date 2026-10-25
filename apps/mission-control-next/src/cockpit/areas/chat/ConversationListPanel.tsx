@@ -129,15 +129,13 @@ export function ConversationListPanel({
                   aria-current={session.sessionId === rail.selectedSessionId ? "page" : undefined}
                   className="flex w-full items-start rounded-md p-2 text-left hover:bg-sunken aria-[current=page]:bg-sunken"
                 >
-                  {/* Two lines: the title and when; then a running, waiting or failed status, the project, and the preview. */}
+                  {/* The title has its own line so it is not cut short by the time; the second line carries when, a running, waiting or failed status, the project, and the preview. */}
                   <span className="min-w-0 flex-1">
-                    <span className="flex min-w-0 items-baseline gap-2">
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
-                        {rail.renderSessionLabel(session.sessionId)}
-                      </span>
-                      <TimeText value={session.lastActivityAt} className="shrink-0 text-xs text-fg-muted" />
+                    <span className="block min-w-0 truncate text-sm font-medium text-fg">
+                      {rail.renderSessionLabel(session.sessionId)}
                     </span>
                     <span className="flex min-w-0 items-center gap-1 text-xs text-fg-muted">
+                      <TimeText value={session.lastActivityAt} className="shrink-0 text-xs text-fg-muted" />
                       {isNotableThreadActivity(activity[session.sessionId]) ? (
                         <ThreadRowStatus record={activity[session.sessionId]} />
                       ) : null}
@@ -169,6 +167,17 @@ export function ConversationListPanel({
           <p role="status" className="p-2 text-xs text-fg-muted">
             Loading conversations…
           </p>
+        ) : rail.search.trim() ? (
+          <div className="p-2 text-xs text-fg-muted">
+            <p>No conversations match “{rail.search.trim()}”.</p>
+            <button
+              type="button"
+              onClick={() => rail.onSearchChange("")}
+              className={`mt-1 font-medium text-accent hover:underline ${touch}`}
+            >
+              Clear search
+            </button>
+          </div>
         ) : (
           <p className="p-2 text-xs text-fg-muted">No conversations in this view.</p>
         )}

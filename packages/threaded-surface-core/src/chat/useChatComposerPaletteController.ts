@@ -4,7 +4,12 @@ import {
   getGatewayCallerScopeRevision,
   getGatewayAccessRevision,
 } from "@goatcitadel/mission-control-shared/api/access-scope";
-import type { ComposerPaletteItem, ComposerPaletteSourceFailure, ComposerPaletteMode } from "./composer-palette.js";
+import {
+  rankComposerPaletteItems,
+  type ComposerPaletteItem,
+  type ComposerPaletteSourceFailure,
+  type ComposerPaletteMode,
+} from "./composer-palette.js";
 import type { BuildSourcesInput } from "./composer-palette-source-types.js";
 export { buildChatComposerPaletteSources } from "./composer-palette-source-builders.js";
 const PALETTE_SEARCH_DEBOUNCE_MS = 140;
@@ -193,5 +198,10 @@ export function useChatComposerPaletteController(
     searchIdentity,
   ]);
 
-  return state;
+  // While a new search runs, keep showing the previous results, narrowed to the typed text right away.
+  const { mode, query } = input;
+  return useMemo(
+    () => (state.loading ? { ...state, items: rankComposerPaletteItems(state.items, mode, query) } : state),
+    [mode, query, state],
+  );
 }

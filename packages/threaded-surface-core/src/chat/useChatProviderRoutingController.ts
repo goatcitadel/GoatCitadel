@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/client";
 import { buildModelCommandSuggestions, type CommandSuggestionItem } from "../chat-command-suggestions";
+import { nameMatchScore } from "./composer-palette-search-code.js";
 import { dedupeStrings } from "./chat-page-derivations";
 import { isLikelyLocalProviderUrl, resolveProviderModelSelection } from "./chat-page-helpers";
 import type { WorkTrustTone } from "./work-trust";
@@ -350,9 +351,14 @@ export function useChatProviderRoutingController(input: {
         applyValue: item.command,
       }));
     }
-    return input.commandCatalog
-      .filter((item) => `${item.command} ${item.usage} ${item.description}`.toLowerCase().includes(query))
-      .map((item) => ({
+    const matches = input.commandCatalog.filter((item) =>
+      `${item.command} ${item.usage} ${item.description}`.toLowerCase().includes(query),
+    );
+    // Name matches (starts with, then contains) come before commands that only mention the text.
+    return matches
+      .map((item, index) => ({ item, index, score: nameMatchScore(item.command, query) }))
+      .sort((left, right) => right.score - left.score || left.index - right.index)
+      .map(({ item }) => ({
         key: item.usage,
         command: item.command,
         description: item.description,

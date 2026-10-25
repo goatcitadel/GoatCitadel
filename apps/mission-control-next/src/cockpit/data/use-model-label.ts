@@ -56,7 +56,12 @@ export function useModelLabelLookup(
  * "Claude Sonnet · Anthropic" from catalog labels. Falls back to the model id (the name operators pick from) and a
  * plain "Unknown model" when there is none; provider and model ids belong in technical details.
  */
-export function useModelLabel(providerId: string | undefined, modelId: string | undefined, enabled = true): string {
+export function useModelLabel(
+  providerId: string | undefined,
+  modelId: string | undefined,
+  enabled = true,
+  options: { showIdWhenUnnamed?: boolean } = {},
+): string {
   const providerLabel = useProviderLabelLookup(enabled && Boolean(providerId))(providerId);
   const models = useQuery({
     queryKey: ["system", "llm-model-labels", providerId],
@@ -65,7 +70,9 @@ export function useModelLabel(providerId: string | undefined, modelId: string | 
     staleTime: LABEL_STALE_MS,
     retry: false,
   });
-  const modelLabel = models.data?.items.find((model) => model.id === modelId)?.label || modelId;
+  // A compact header can pass showIdWhenUnnamed: false so a raw id never sits beside the provider's display name.
+  const named = models.data?.items.find((model) => model.id === modelId)?.label;
+  const modelLabel = named || (options.showIdWhenUnnamed === false && providerLabel ? undefined : modelId);
   if (!modelLabel) return providerLabel ?? "Unknown model";
   return providerLabel ? `${modelLabel} · ${providerLabel}` : modelLabel;
 }
