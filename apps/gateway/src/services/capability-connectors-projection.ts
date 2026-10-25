@@ -54,6 +54,8 @@ const WEB_SEARCH_ROWS: Readonly<Record<WebSearchCredentialTargetId, { name: stri
   "search.parallel": { name: "Parallel", description: "Search the web with your Parallel key." },
 };
 
+const FIRECRAWL_NOT_ALLOWLISTED_MESSAGE = "Firecrawl's address isn't on the allowed list";
+
 /** Lower ranks come first inside a group: things that need attention, then the rest. */
 const STATE_RANK: Readonly<Record<CapabilityConnectorState, number>> = {
   broken: 0,
@@ -146,10 +148,22 @@ function integrationParts(input: CapabilityConnectorsProjectionInput): ItemParts
     if (connections.length === 0) {
       return [integrationEntryParts(entry)];
     }
+    const tellApart = connections.length > 1;
     return connections.map((connection) =>
-      integrationConnectionParts(entry, connection, input.googleStatusByConnectionId.get(connection.connectionId)),
+      integrationConnectionParts(
+        entry,
+        connection,
+        input.googleStatusByConnectionId.get(connection.connectionId),
+        tellApart,
+      ),
     );
   });
+}
+
+/** Rows of one catalog entry share its name, so several connections are told apart by their own label. */
+function connectionRowName(entry: IntegrationCatalogEntry, connection: IntegrationConnection): string {
+  const label = connection.label.trim() || connection.connectionId.slice(-6);
+  return `${entry.label} · ${label}`;
 }
 
 function integrationEntryParts(entry: IntegrationCatalogEntry): ItemParts {
@@ -165,9 +179,11 @@ function integrationConnectionParts(
   entry: IntegrationCatalogEntry,
   connection: IntegrationConnection,
   google: GoogleWorkspaceOAuthStatus | undefined,
+  tellApart: boolean,
 ): ItemParts {
   return {
     ...integrationBaseParts(entry),
+    ...(tellApart ? { name: connectionRowName(entry, connection) } : {}),
     id: `integration:${connection.connectionId}`,
     ...connectionVerdict(connection, entry.catalogId === GOOGLE_WORKSPACE_CATALOG_ID ? google : undefined),
     connectionId: connection.connectionId,
@@ -230,6 +246,10 @@ function serverVerdict(server: McpServerRecord): Verdict {
   if (readiness === "expired") {
     return { state: "sign_in_expired", reason: "sign_in_expired" };
   }
+  // The saved server has no way to sign in at all, so it can never work until its sign-in setup is fixed.
+  if (readiness === "missing_oauth_config") {
+    return { state: "broken", reason: "missing_sign_in_setup" };
+  }
   if (server.status === "error") {
     return { state: "broken", reason: "error" };
   }
@@ -259,11 +279,26 @@ function connectionVerdict(connection: IntegrationConnection, google: GoogleWork
   return { state: "connected", reason: "ready" };
 }
 
-function webSearchVerdict(status: WebSearchCredentialStatus, firecrawlEnabled: boolean): Verdict {
-  const hasKey = status.activeSource !== "none";
-  const usable =
-    status.targetId === "search.firecrawl" ? hasKey && firecrawlEnabled && status.endpointAllowlisted : hasKey;
-  return usable ? { state: "connected", reason: "ready" } : { state: "available", reason: "needs_api_key" };
+/**
+ * A key makes a search engine ready. Firecrawl also has an on/off switch and a configurable address, so a saved key
+ * can sit behind a switch that is off (turned off) or an address the network allowlist does not cover (broken).
+ */
+function webSearchVerdict(
+  status: WebSearchCredentialStatus,
+  firecrawlEnabled: boolean,
+): Verdict & { lastError?: string } {
+  if (status.activeSource === "none") {
+    return { state: "available", reason: "needs_api_key" };
+  }
+  if (status.targetId === "search.firecrawl") {
+    if (!firecrawlEnabled) {
+      return { state: "turned_off", reason: "turned_off" };
+    }
+    if (!status.endpointAllowlisted) {
+      return { state: "broken", reason: "error", lastError: FIRECRAWL_NOT_ALLOWLISTED_MESSAGE };
+    }
+  }
+  return { state: "connected", reason: "ready" };
 }
 
 function stdioCommand(definition: Pick<McpServerRecord, "transport" | "command" | "args">): string | undefined {

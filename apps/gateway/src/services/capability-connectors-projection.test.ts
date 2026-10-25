@@ -356,6 +356,65 @@ describe("buildCapabilityConnectors", () => {
     expect(items.map((item) => item.id).sort()).toEqual(["integration:slack-a", "integration:slack-b"]);
   });
 
+  it("tells apart two connections of one catalog entry by their own labels", () => {
+    const items = buildCapabilityConnectors(
+      input({
+        integrationCatalog: [catalogEntry("channel.slack")],
+        connections: [
+          connection("channel.slack", { connectionId: "slack-work", label: "Work" }),
+          connection("channel.slack", { connectionId: "slack-home", label: "Home" }),
+        ],
+      }),
+    );
+
+    expect(items.map((item) => [item.id, item.name])).toEqual([
+      ["integration:slack-home", "Slack · Home"],
+      ["integration:slack-work", "Slack · Work"],
+    ]);
+  });
+
+  it("falls back to the last 6 characters of the connection id when a label is blank", () => {
+    const items = buildCapabilityConnectors(
+      input({
+        integrationCatalog: [catalogEntry("channel.slack")],
+        connections: [
+          connection("channel.slack", { connectionId: "conn-0123456789", label: "  " }),
+          connection("channel.slack", { connectionId: "conn-abcdefghij", label: "" }),
+        ],
+      }),
+    );
+
+    expect(items.map((item) => item.name).sort()).toEqual(["Slack · 456789", "Slack · efghij"]);
+  });
+
+  it("keeps the catalog name when an entry has one connection", () => {
+    const items = buildCapabilityConnectors(
+      input({
+        integrationCatalog: [catalogEntry("channel.slack"), catalogEntry("channel.discord")],
+        connections: [
+          connection("channel.slack", { connectionId: "slack-1", label: "Work" }),
+          connection("channel.discord", { connectionId: "discord-1", label: "Work" }),
+        ],
+      }),
+    );
+
+    expect(items.map((item) => item.name).sort()).toEqual(["Discord", "Slack"]);
+  });
+
+  it("keeps catalog names for entries with no connection beside an entry with several", () => {
+    const items = buildCapabilityConnectors(
+      input({
+        integrationCatalog: [catalogEntry("channel.slack"), catalogEntry("channel.discord")],
+        connections: [
+          connection("channel.slack", { connectionId: "slack-a", label: "Work" }),
+          connection("channel.slack", { connectionId: "slack-b", label: "Home" }),
+        ],
+      }),
+    );
+
+    expect(items.map((item) => item.name).sort()).toEqual(["Discord", "Slack · Home", "Slack · Work"]);
+  });
+
   it("gives non-channel integrations the automation category and built-in kind", () => {
     const items = buildCapabilityConnectors(
       input({ integrationCatalog: [catalogEntry("automation.imap-smtp"), catalogEntry("automation.webhooks")] }),
@@ -400,6 +459,53 @@ describe("buildCapabilityConnectors", () => {
     );
 
     expect(item.networkHosts).toEqual(["api.search.brave.com"]);
+  });
+
+  it("says why Firecrawl is broken when its address is not on the allowed list", () => {
+    const item = only(
+      buildCapabilityConnectors(
+        input({
+          webSearch: [searchStatus("search.firecrawl", { endpointAllowlisted: false })],
+          firecrawlEnabled: true,
+        }),
+      ),
+    );
+
+    expect(item.state).toBe("broken");
+    expect(item.group).toBe("connected");
+    expect(item.lastError).toBe("Firecrawl's address isn't on the allowed list");
+  });
+
+  it("puts Firecrawl switched off in the turned-off group with no error text", () => {
+    const item = only(
+      buildCapabilityConnectors(
+        input({
+          webSearch: [searchStatus("search.firecrawl", { endpointAllowlisted: false })],
+          firecrawlEnabled: false,
+        }),
+      ),
+    );
+
+    expect(item.state).toBe("turned_off");
+    expect(item.group).toBe("turned_off");
+    expect(item.lastError).toBeUndefined();
+  });
+
+  it("shows no error text for web search that is ready or has no key", () => {
+    const items = buildCapabilityConnectors(
+      input({
+        webSearch: [
+          searchStatus("search.firecrawl"),
+          searchStatus("search.brave", { activeSource: "none" }),
+          searchStatus("search.parallel"),
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(3);
+    for (const item of items) {
+      expect(item.lastError).toBeUndefined();
+    }
   });
 
   it("marks a server hidden in the workspace", () => {
@@ -613,11 +719,73 @@ describe("buildCapabilityConnectors", () => {
         build: () => input({ servers: [server({ status: "error" })] }),
       },
       {
+        condition: "saved server with no sign-in setup",
+        expected: "broken / missing_sign_in_setup",
+        state: "broken",
+        reason: "missing_sign_in_setup",
+        build: () =>
+          input({ servers: [server({ authState: { authType: "oauth2", readiness: "missing_oauth_config" } })] }),
+      },
+      {
+        condition: "saved server with no sign-in setup that reads as connected",
+        expected: "broken / missing_sign_in_setup",
+        state: "broken",
+        reason: "missing_sign_in_setup",
+        build: () =>
+          input({
+            servers: [
+              server({ status: "connected", authState: { authType: "oauth2", readiness: "missing_oauth_config" } }),
+            ],
+          }),
+      },
+      {
+        condition: "saved server with no sign-in setup and an error",
+        expected: "broken / missing_sign_in_setup",
+        state: "broken",
+        reason: "missing_sign_in_setup",
+        build: () =>
+          input({
+            servers: [
+              server({ status: "error", authState: { authType: "oauth2", readiness: "missing_oauth_config" } }),
+            ],
+          }),
+      },
+      {
+        condition: "saved server with no sign-in setup that is turned off",
+        expected: "turned_off / turned_off",
+        state: "turned_off",
+        reason: "turned_off",
+        build: () =>
+          input({
+            servers: [server({ enabled: false, authState: { authType: "oauth2", readiness: "missing_oauth_config" } })],
+          }),
+      },
+      {
         condition: "saved server that is ready",
         expected: "connected / ready",
         state: "connected",
         reason: "ready",
         build: () => input({ servers: [server({ authState: { authType: "oauth2", readiness: "ready" } })] }),
+      },
+      {
+        condition: "saved server that is disconnected with ready sign-in",
+        expected: "connected / ready",
+        state: "connected",
+        reason: "ready",
+        build: () =>
+          input({
+            servers: [server({ status: "disconnected", authState: { authType: "oauth2", readiness: "ready" } })],
+          }),
+      },
+      {
+        condition: "saved server that is connecting with ready sign-in",
+        expected: "connected / ready",
+        state: "connected",
+        reason: "ready",
+        build: () =>
+          input({
+            servers: [server({ status: "connecting", authState: { authType: "oauth2", readiness: "ready" } })],
+          }),
       },
       {
         condition: "saved server that is idle with no problem",
@@ -770,22 +938,63 @@ describe("buildCapabilityConnectors", () => {
         build: () => input({ webSearch: [searchStatus("search.firecrawl")], firecrawlEnabled: true }),
       },
       {
-        condition: "Firecrawl with a key but turned off",
-        expected: "available / needs_api_key",
-        state: "available",
-        reason: "needs_api_key",
+        condition: "Firecrawl with a key but switched off",
+        expected: "turned_off / turned_off",
+        state: "turned_off",
+        reason: "turned_off",
         build: () => input({ webSearch: [searchStatus("search.firecrawl")], firecrawlEnabled: false }),
       },
       {
-        condition: "Firecrawl with a key but its host not allowed",
-        expected: "available / needs_api_key",
-        state: "available",
-        reason: "needs_api_key",
+        condition: "Firecrawl with a key, switched on, but its address not allowed",
+        expected: "broken / error",
+        state: "broken",
+        reason: "error",
         build: () =>
           input({
             webSearch: [searchStatus("search.firecrawl", { endpointAllowlisted: false })],
             firecrawlEnabled: true,
           }),
+      },
+      {
+        condition: "Firecrawl with no key, switched on",
+        expected: "available / needs_api_key",
+        state: "available",
+        reason: "needs_api_key",
+        build: () =>
+          input({ webSearch: [searchStatus("search.firecrawl", { activeSource: "none" })], firecrawlEnabled: true }),
+      },
+      {
+        condition: "Firecrawl with no key, switched off",
+        expected: "available / needs_api_key",
+        state: "available",
+        reason: "needs_api_key",
+        build: () =>
+          input({ webSearch: [searchStatus("search.firecrawl", { activeSource: "none" })], firecrawlEnabled: false }),
+      },
+      {
+        condition: "Firecrawl with no key and its address not allowed",
+        expected: "available / needs_api_key",
+        state: "available",
+        reason: "needs_api_key",
+        build: () =>
+          input({
+            webSearch: [searchStatus("search.firecrawl", { activeSource: "none", endpointAllowlisted: false })],
+            firecrawlEnabled: true,
+          }),
+      },
+      {
+        condition: "Brave Search with a key while Firecrawl is switched off",
+        expected: "connected / ready",
+        state: "connected",
+        reason: "ready",
+        build: () => input({ webSearch: [searchStatus("search.brave")], firecrawlEnabled: false }),
+      },
+      {
+        condition: "Brave Search with a key and its address not allowed",
+        expected: "connected / ready",
+        state: "connected",
+        reason: "ready",
+        build: () => input({ webSearch: [searchStatus("search.brave", { endpointAllowlisted: false })] }),
       },
     ];
 
