@@ -308,6 +308,9 @@ function buildAuthHarness(options: { storage?: Storage; rootDir?: string } = {})
           });
         }),
         list: vi.fn(async () => [...auditRecords]),
+        listRecent: vi.fn(async (_stream: string, limit: number, predicate: (r: Record<string, unknown>) => boolean) =>
+          auditRecords.filter(predicate).slice(-limit),
+        ),
       },
     } as never,
     createApproval: vi.fn(async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitHook) => {

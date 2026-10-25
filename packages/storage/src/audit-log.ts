@@ -11,6 +11,15 @@ const AUDIT_FILE_LOCK_SUFFIX = ".lock";
 const AUDIT_FILE_LOCK_RETRY_MS = 25;
 const AUDIT_FILE_LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
 const AUDIT_FILE_LOCK_STALE_MS = 60_000;
+/**
+ * Delivery-id dedupe window: an id is recognised as already written if it is among the last
+ * AUDIT_RECENT_DELIVERY_ID_LIMIT ids this process appended, or appears in the last
+ * AUDIT_DELIVERY_TAIL_BYTES of the stream file (which also covers other processes appending to it).
+ * A redelivery older than both is recorded again; it no longer costs a full-file read per batch.
+ */
+const AUDIT_RECENT_DELIVERY_ID_LIMIT = 10_000;
+const AUDIT_DELIVERY_TAIL_BYTES = 512 * 1024;
+const AUDIT_TAIL_START_BYTES = 64 * 1024;
 
 export type AuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
 
@@ -33,6 +42,7 @@ export class AuditLog {
   private readonly pendingAppends = new Map<AuditStream, PendingAuditAppend[]>();
   private readonly scheduledFlushes = new Set<AuditStream>();
   private readonly lastPrunedAt = new Map<AuditStream, number>();
+  private readonly recentDeliveryIds = new Map<AuditStream, Set<string>>();
 
   public constructor(private readonly auditDir: string) {}
 
@@ -89,7 +99,13 @@ export class AuditLog {
     await this.runWithStreamLock(filePath, async () => {
       await this.pruneAuditStreamIfDue(stream, filePath);
       const requestedDeliveryIds = serialized.flatMap((entry) => (entry.deliveryId ? [entry.deliveryId] : []));
-      const knownDeliveryIds = await readKnownAuditDeliveryIds(filePath, requestedDeliveryIds);
+      const recent = this.recentDeliveryIds.get(stream) ?? new Set<string>();
+      this.recentDeliveryIds.set(stream, recent);
+      const knownDeliveryIds = new Set(requestedDeliveryIds.filter((deliveryId) => recent.has(deliveryId)));
+      const unseenDeliveryIds = requestedDeliveryIds.filter((deliveryId) => !knownDeliveryIds.has(deliveryId));
+      for (const deliveryId of await readKnownAuditDeliveryIds(filePath, unseenDeliveryIds)) {
+        knownDeliveryIds.add(deliveryId);
+      }
       const lines: string[] = [];
       for (const entry of serialized) {
         if (entry.deliveryId && knownDeliveryIds.has(entry.deliveryId)) {
@@ -104,7 +120,49 @@ export class AuditLog {
         return;
       }
       await fs.appendFile(filePath, lines.join(""), { encoding: "utf8" });
+      for (const entry of serialized) {
+        if (entry.deliveryId) rememberRecentDeliveryId(recent, entry.deliveryId);
+      }
     });
+  }
+
+  /**
+   * The most recent `limit` records (file order) that satisfy `predicate`, read from the end of the
+   * stream instead of parsing the whole file. Use this wherever only the newest N records matter.
+   */
+  public async listRecent(
+    stream: AuditStream,
+    limit: number,
+    predicate: (record: Record<string, unknown>) => boolean = () => true,
+  ): Promise<Record<string, unknown>[]> {
+    const filePath = path.join(this.auditDir, `${stream}.jsonl`);
+    let handle: fs.FileHandle;
+    try {
+      handle = await fs.open(filePath, "r");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    }
+    try {
+      const { size } = await handle.stat();
+      let window = AUDIT_TAIL_START_BYTES;
+      while (true) {
+        const start = Math.max(0, size - window);
+        const text = await readFileRange(handle, start, size);
+        // A window that begins mid-file starts inside a line; drop that partial first line.
+        const lines = text.split(/\r?\n/);
+        const usable = start > 0 ? lines.slice(1) : lines;
+        const matches = parseAuditLines(usable).filter(predicate);
+        if (matches.length >= limit || start === 0) {
+          return matches.slice(-limit);
+        }
+        window *= 4;
+      }
+    } finally {
+      await handle.close();
+    }
   }
 
   public async list(stream: AuditStream): Promise<Record<string, unknown>[]> {
@@ -119,20 +177,7 @@ export class AuditLog {
       throw error;
     }
 
-    return content
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .flatMap((line) => {
-        try {
-          const parsed = JSON.parse(line);
-          return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-            ? [parsed as Record<string, unknown>]
-            : [];
-        } catch {
-          return [];
-        }
-      });
+    return parseAuditLines(content.split(/\r?\n/));
   }
 
   private async runWithStreamLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
@@ -219,6 +264,43 @@ function serializeAuditRecord(
   }
 }
 
+function parseAuditLines(lines: readonly string[]): Record<string, unknown>[] {
+  return lines
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .flatMap((line) => {
+      try {
+        const parsed = JSON.parse(line);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? [parsed as Record<string, unknown>]
+          : [];
+      } catch {
+        return [];
+      }
+    });
+}
+
+async function readFileRange(handle: fs.FileHandle, start: number, end: number): Promise<string> {
+  const buffer = Buffer.alloc(end - start);
+  let offset = 0;
+  while (offset < buffer.length) {
+    const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, start + offset);
+    if (bytesRead === 0) break;
+    offset += bytesRead;
+  }
+  return buffer.toString("utf8", 0, offset);
+}
+
+function rememberRecentDeliveryId(recent: Set<string>, deliveryId: string): void {
+  recent.delete(deliveryId);
+  recent.add(deliveryId);
+  while (recent.size > AUDIT_RECENT_DELIVERY_ID_LIMIT) {
+    const oldest = recent.values().next().value;
+    if (oldest === undefined) break;
+    recent.delete(oldest);
+  }
+}
+
 async function readKnownAuditDeliveryIds(filePath: string, deliveryIds: readonly string[]): Promise<Set<string>> {
   const requested = new Set(deliveryIds);
   const deliveryIdHints = [...requested];
@@ -228,7 +310,16 @@ async function readKnownAuditDeliveryIds(filePath: string, deliveryIds: readonly
   }
   let content: string;
   try {
-    content = await fs.readFile(filePath, "utf8");
+    const handle = await fs.open(filePath, "r");
+    try {
+      const { size } = await handle.stat();
+      const start = Math.max(0, size - AUDIT_DELIVERY_TAIL_BYTES);
+      const text = await readFileRange(handle, start, size);
+      // Drop the partial first line of a mid-file window.
+      content = start > 0 ? text.slice(text.indexOf("\n") + 1) : text;
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return found;
