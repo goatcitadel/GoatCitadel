@@ -84,6 +84,16 @@ describe("ChatTurnApprovalHistory (#499)", () => {
     const item = history()!.querySelector("li")!;
     expect(item.textContent).toContain("Create document");
     expect(item.querySelector("time")?.getAttribute("dateTime")).toBe(decidedAt);
+    // The cockpit's one time presenter: the full date and time stay on the title.
+    expect(item.querySelector("time")?.getAttribute("title")).toBeTruthy();
+  });
+
+  it("names the requested tool when the approval record carries no tool linkage", async () => {
+    vi.mocked(fetchApproval).mockImplementation(async (approvalId) => record(approvalId, { linkage: {} }) as never);
+    await render(turnWith([tool("run-1", { approvalId: "approval-1" })]));
+    await vi.waitFor(() => expect(history()?.textContent).toContain("Approved by an operator"));
+    expect(history()!.querySelector("li")!.textContent).toContain("Create document");
+    expect(history()!.textContent).not.toContain("Tool invoke");
   });
 
   it("reads one record per approval even when two tool runs share it", async () => {

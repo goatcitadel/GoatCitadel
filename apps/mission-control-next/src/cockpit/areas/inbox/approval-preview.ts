@@ -14,16 +14,19 @@ export function approvalExplanationLine(
 }
 
 /**
- * Who wrote an approval's explanation. A model-written one records its provider or model and arrives after the card,
- * so it is advisory and never stands in for the owner-written consequence (#499); one GoatCitadel wrote from the
- * request itself (a change plan's impact, #543) records neither.
+ * Who wrote an approval's explanation. The explainer writes one itself only for a change plan, from the plan's own
+ * impact and with no model (#543); every other explanation is model-written, even when its provider or model was
+ * saved empty. A model-written one arrives after the card, so it is advisory and never stands in for the
+ * owner-written consequence (#499).
  */
-export function splitApprovalExplanation(explanation: ApprovalRequest["explanation"]): {
+export function splitApprovalExplanation(approval: Pick<ApprovalRequest, "kind" | "explanation">): {
   owner?: NonNullable<ApprovalRequest["explanation"]>;
   model?: NonNullable<ApprovalRequest["explanation"]>;
 } {
+  const explanation = approval.explanation;
   if (!explanation) return {};
-  return explanation.providerId || explanation.model ? { model: explanation } : { owner: explanation };
+  const ownerWritten = approval.kind === "change_plan_effect" && !explanation.providerId && !explanation.model;
+  return ownerWritten ? { owner: explanation } : { model: explanation };
 }
 import { formatBytes, plural } from "@goatcitadel/mission-control-shared/content/format";
 // Approval kinds are open strings (tool ids, "code_mode.run"), so they have no typed presenter.

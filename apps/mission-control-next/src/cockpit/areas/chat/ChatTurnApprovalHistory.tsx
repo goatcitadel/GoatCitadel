@@ -1,14 +1,17 @@
 import type { ChatThreadTurnRecord, ChatToolRunRecord } from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
-import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { approvalDecisionText, useApprovalRecord } from "./ChatToolApprovalLine";
 import { presentApprovalAction } from "./chat-vocabulary";
+import { TimeText } from "../../ui/TimeText";
 
 /** One approval the turn asked for, as its persisted record states it: what, the decision, who and when. */
 function ApprovalHistoryItem({ approvalId, tool }: { approvalId: string; tool: ChatToolRunRecord }) {
   const { record, unavailable } = useApprovalRecord(approvalId, true);
-  const action = record ? presentApprovalAction(record.linkage?.toolName, record.kind) : chatToolDisplayName(tool);
+  // A record without tool linkage still names the tool that asked, not its generic kind ("Use a tool").
+  const action = record
+    ? presentApprovalAction(record.linkage?.toolName ?? tool.toolName, record.kind)
+    : chatToolDisplayName(tool);
   return (
     <li className="py-2 text-sm">
       <p className="font-medium text-fg">{action}</p>
@@ -22,7 +25,7 @@ function ApprovalHistoryItem({ approvalId, tool }: { approvalId: string; tool: C
               {record.resolvedAt ? (
                 <>
                   {" · "}
-                  <time dateTime={record.resolvedAt}>{formatAbsoluteTime(record.resolvedAt)}</time>
+                  <TimeText value={record.resolvedAt} />
                 </>
               ) : null}
             </>

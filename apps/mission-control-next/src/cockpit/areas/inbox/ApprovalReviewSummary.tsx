@@ -26,7 +26,7 @@ export function ApprovalReviewSummary({
     workspaceName(scopeWorkspaceId) ?? (scopeWorkspaceId === workspaceId ? "This workspace" : "Another workspace");
   const support = splitApprovalSupport(evidence?.supporting ?? []);
   const scope = evidence?.scopeSummary ?? `${workspaceLabel}${sessionId ? " · one linked conversation" : ""}.`;
-  const { owner: ownerExplanation, model: modelExplanation } = splitApprovalExplanation(approval.explanation);
+  const { owner: ownerExplanation, model: modelExplanation } = splitApprovalExplanation(approval);
   return (
     <section
       aria-label="Approval scope and consequences"

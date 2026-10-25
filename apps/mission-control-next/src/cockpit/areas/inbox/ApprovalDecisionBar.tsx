@@ -317,7 +317,7 @@ function ApprovalDecisionReview({
                 riskLevel: approval.riskLevel,
                 toolName: approval.linkage?.toolName,
                 // A model-written explanation is advisory; the review summary labels it instead (#499).
-                reason: splitApprovalExplanation(approval.explanation).owner?.riskExplanation,
+                reason: splitApprovalExplanation(approval).owner?.riskExplanation,
                 expiresAt: approval.expiresAt,
               }}
               reviewedApproval={approval}
