@@ -7,8 +7,15 @@ import type { MissionThreadedSessionRailData } from "@goatcitadel/threaded-surfa
 import { TIME_UNAVAILABLE, presentTime } from "@goatcitadel/mission-control-shared/content/format";
 import { TimeText } from "../../ui/TimeText";
 import { ChatConversationFilters, type ChatProjectFilterOption } from "./ChatConversationFilters";
+import { MessagingSection } from "./MessagingSection";
 
 type RailSession = MissionThreadedSessionRailData["missionSessions"][number];
+
+/** Where the Messaging section reads from and where a channel row leads. Without it the list shows no Messaging. */
+export interface ConversationListMessaging {
+  workspaceId: string;
+  onOpenChannel: (connectionId: string) => void;
+}
 
 /** The project, or "Archived"; an active conversation outside a project is the default and says nothing. */
 function rowContext(session: RailSession): string | null {
@@ -41,6 +48,7 @@ export function ConversationListPanel({
   inSheet = false,
   onDone,
   onOpenProjects,
+  messaging,
 }: {
   rail: MissionThreadedSessionRailData;
   projectOptions?: readonly ChatProjectFilterOption[];
@@ -48,8 +56,13 @@ export function ConversationListPanel({
   onOpenProjects?: () => void;
   /** Called after a conversation is chosen or created, so the sheet can close. */
   onDone?: () => void;
+  messaging?: ConversationListMessaging;
 }) {
-  const sessions = [...rail.missionSessions, ...(rail.externalSessions ?? [])];
+  // Conversations held through a channel connection are listed once, under Messaging.
+  const sessions = [
+    ...rail.missionSessions,
+    ...(rail.externalSessions ?? []).filter((session) => !session.channelConnectionId),
+  ];
   // Status comes with the sessions list, so the rail makes no request of its own.
   const activity = useThreadActivity(sessions);
   const select: MissionThreadedSessionRailData["onSelectSession"] = (sessionId, options) => {
@@ -194,6 +207,21 @@ export function ConversationListPanel({
           </button>
         ) : null}
       </div>
+      {messaging ? (
+        <div
+          className={`border-t border-line-subtle ${inSheet ? "mt-2 pt-2" : "max-h-64 shrink-0 overflow-y-auto p-1"}`}
+        >
+          <MessagingSection
+            workspaceId={messaging.workspaceId}
+            selectedSessionId={rail.selectedSessionId ?? undefined}
+            onSelectSession={(sessionId) => select(sessionId)}
+            onOpenChannel={(connectionId) => {
+              messaging.onOpenChannel(connectionId);
+              onDone?.();
+            }}
+          />
+        </div>
+      ) : null}
     </>
   );
 }

@@ -11,6 +11,8 @@ import { buildEditorTurnId, ChatAreaView } from "./ChatArea";
 import { InspectorProvider } from "../../app/inspector";
 
 vi.mock("./ThreadList", () => ({ ThreadList: () => null }));
+// The Conversations sheet mounts Messaging, which reads its own overview; this suite is not about it.
+vi.mock("./MessagingSection", () => ({ MessagingSection: () => null }));
 vi.mock("./ChatBuildEditor", () => ({ ChatBuildEditor: () => <p>Build editor body</p> }));
 vi.mock("../../ui/Sheet", () => ({
   Sheet: ({ open, title, children }: { open: boolean; title: string; children: ReactNode }) =>

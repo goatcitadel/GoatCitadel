@@ -1,7 +1,7 @@
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { Sheet } from "../../ui/Sheet";
 import type { ChatProjectFilterOption } from "./ChatConversationFilters";
-import { ConversationListPanel } from "./ConversationListPanel";
+import { ConversationListPanel, type ConversationListMessaging } from "./ConversationListPanel";
 
 /**
  * Below the desktop rail, the header's Conversations button opens this sheet: the same list, filters and history
@@ -13,12 +13,14 @@ export function ChatConversationsSheet({
   rail,
   projectOptions,
   onOpenProjects,
+  messaging,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   rail: MissionThreadedRenderSurfaceInput["sessionRail"];
   projectOptions?: readonly ChatProjectFilterOption[];
   onOpenProjects?: () => void;
+  messaging?: ConversationListMessaging;
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title="Conversations">
@@ -28,6 +30,7 @@ export function ChatConversationsSheet({
         inSheet
         onDone={() => onOpenChange(false)}
         onOpenProjects={onOpenProjects}
+        messaging={messaging}
       />
     </Sheet>
   );

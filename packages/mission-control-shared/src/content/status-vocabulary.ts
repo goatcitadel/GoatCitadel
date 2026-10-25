@@ -2,6 +2,7 @@ import type {
   ApprovalRequest,
   ApprovalResolutionOutcome,
   ApprovalStatus,
+  ChatMessagingChannelStatus,
   ChatTurnLifecycleStatus,
   ChangePlanStatus,
   DurableRunStatus,
@@ -83,6 +84,13 @@ const riskLevels: Record<ApprovalRequest["riskLevel"], StatusPresentation> = {
   nuclear: status("Nuclear", "failed"),
 };
 
+const channelStatuses: Record<ChatMessagingChannelStatus, StatusPresentation> = {
+  on: status("On", "done"),
+  off: status("Off", "neutral"),
+  needs_attention: status("Needs you", "waiting"),
+  removed: status("Removed", "neutral"),
+};
+
 const taskStatuses: Record<TaskStatus, StatusPresentation> = {
   planning: status("Planning", "neutral"),
   inbox: status("Not started", "neutral"),
@@ -130,6 +138,11 @@ export function presentApprovalOutcome(value: ApprovalResolutionOutcome): Status
 export function presentRiskLevel(value: ApprovalRequest["riskLevel"]): StatusPresentation {
   // A risk level this build doesn't know yet keeps its own name and the most severe tone.
   return riskLevels[value] ?? status(humanizeToken(String(value)), "failed");
+}
+
+export function presentChannelStatus(value: ChatMessagingChannelStatus): StatusPresentation {
+  // A status a newer Gateway sends keeps its own name and a neutral tone rather than rendering blank.
+  return channelStatuses[value] ?? status(humanizeToken(String(value)), "neutral");
 }
 
 export function presentTaskStatus(value: TaskStatus | string): StatusPresentation {

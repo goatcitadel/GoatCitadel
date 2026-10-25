@@ -64,6 +64,23 @@ describe("resolveRealtimeEvent", () => {
     });
   });
 
+  it("refreshes the Messaging overview when a channel changes or a conversation updates", () => {
+    expect(queryKeys.chatMessaging("default")).toEqual(["chat", "messaging", "default"]);
+    const refreshesMessaging = (source: string, eventType: string) => {
+      const result = resolveRealtimeEvent(event(eventType, source));
+      const key = queryKeys.chatMessaging("default");
+      return (
+        result.kind === "mapped" &&
+        result.effect.keys.some((prefix) => prefix.length <= key.length && prefix.every((part, i) => part === key[i]))
+      );
+    };
+    // A connection turning on, off or failing changes its status badge.
+    expect(refreshesMessaging("channels", "channel_connection_updated")).toBe(true);
+    // A message arriving in a conversation changes its time and new-message count.
+    expect(refreshesMessaging("chat", "chat_thread_updated")).toBe(true);
+    expect(refreshesMessaging("memory", "system")).toBe(false);
+  });
+
   it("signals Chat for an approval tied to a conversation, so the rail status follows it", () => {
     expect(
       resolveRealtimeEvent(event("approval_created", "approvals", { links: { sessionId: "s-1", approvalId: "a-1" } })),

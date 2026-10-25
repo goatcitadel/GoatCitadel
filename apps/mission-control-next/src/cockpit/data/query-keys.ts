@@ -36,6 +36,9 @@ export const queryKeys = {
   workTasks: (workspaceId: string): TopicKey => ["tasks", "work-tasks", workspaceId, getGatewayApiBaseUrl()],
   runTrace: (runId: string): TopicKey => ["tasks", "durable-run", runId],
   workSessions: (workspaceId: string): TopicKey => ["chat", "work-history", workspaceId],
+  /** Chat's Messaging area: channel conversations by connection. Every workspace's overview shares the prefix. */
+  chatMessagingAll: (): TopicKey => ["chat", "messaging"],
+  chatMessaging: (workspaceId: string): TopicKey => ["chat", "messaging", workspaceId],
   workActivityAll: (): TopicKey => ["system", "work-activity"],
   workActivity: (workspaceId: string): TopicKey => ["system", "work-activity", workspaceId],
   schedules: (): TopicKey => ["tasks", "schedules"],

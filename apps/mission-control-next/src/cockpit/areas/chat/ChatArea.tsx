@@ -224,6 +224,11 @@ export function ChatAreaView({
     });
   };
   const openProjects = () => navigate("/chat/projects");
+  // Messaging lists this workspace's channels under the conversations; a channel row opens that channel's page.
+  const messaging = {
+    workspaceId: activeWorkspaceId ?? "default",
+    onOpenChannel: (connectionId: string) => navigate(`/chat/messaging/${encodeURIComponent(connectionId)}`),
+  };
   useEffect(() => {
     onVisibleSessionChange?.(selectedSessionId);
   }, [onVisibleSessionChange, selectedSessionId]);
@@ -261,6 +266,7 @@ export function ChatAreaView({
         rail={input.sessionRail}
         projectOptions={input.contextDockProps?.projectOptions}
         onOpenProjects={openProjects}
+        messaging={messaging}
       />
       <ChatConversationsSheet
         open={conversationsOpen}
@@ -268,6 +274,7 @@ export function ChatAreaView({
         rail={input.sessionRail}
         projectOptions={input.contextDockProps?.projectOptions}
         onOpenProjects={openProjects}
+        messaging={messaging}
       />
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <ChatSessionHeader

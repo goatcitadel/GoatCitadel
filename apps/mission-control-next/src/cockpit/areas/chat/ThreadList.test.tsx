@@ -237,3 +237,41 @@ it.each([0, 1, 99, 100, 1000])(
     expect(rail.onSelectSession).toHaveBeenCalledWith("rail-0");
   },
 );
+
+it("does not repeat channel conversations in the conversation list", async () => {
+  const session = (sessionId: string, extra: Record<string, unknown> = {}) => ({
+    sessionId,
+    lifecycleStatus: "active",
+    lastActivityAt: "2026-10-25T00:00:00Z",
+    ...extra,
+  });
+  const rail = {
+    missionSessions: [session("mission-1")],
+    externalSessions: [
+      session("channel-1", { channelConnectionId: "conn-1" }),
+      session("channel-2", { channelConnectionId: "conn-2" }),
+      session("external-1"),
+    ],
+    availableFolders: [],
+    selectedSessionId: null,
+    selectedFolderId: "all",
+    selectedProjectId: "all",
+    search: "",
+    historyView: "active",
+    renderSessionLabel: (id: string) => `Title of ${id}`,
+    onSelectSession: vi.fn(),
+    onSearchChange: vi.fn(),
+    onHistoryViewChange: vi.fn(),
+    onSelectProjectId: vi.fn(),
+    onCreateSession: vi.fn(),
+  } as unknown as MissionThreadedSessionRailData;
+  await act(async () => root.render(<ThreadList rail={rail} />));
+  const titles = [...container.querySelectorAll("nav[aria-label='Conversations'] button")].map((row) =>
+    row.getAttribute("aria-label"),
+  );
+  // Mission sessions and external sessions without a channel stay; channel conversations belong to Messaging.
+  expect(titles.some((name) => name?.startsWith("Title of mission-1"))).toBe(true);
+  expect(titles.some((name) => name?.startsWith("Title of external-1"))).toBe(true);
+  expect(titles.some((name) => name?.startsWith("Title of channel-"))).toBe(false);
+  expect(titles).toHaveLength(2);
+});

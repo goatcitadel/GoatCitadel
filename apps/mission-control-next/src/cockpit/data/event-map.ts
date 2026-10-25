@@ -137,7 +137,9 @@ const SOURCE_RULES = new Map<string, Rule>([
       ),
   ],
   ["integrations", () => effect(INTEGRATION_KEYS, ["integrations"])],
-  ["channels", () => effect(INTEGRATION_KEYS, ["integrations"])],
+  // A channel turning on, off or failing also changes its status in Chat's Messaging area. Conversation updates
+  // arrive as `chat` events, whose ["chat"] prefix already covers the Messaging overview.
+  ["channels", () => effect([...INTEGRATION_KEYS, queryKeys.chatMessagingAll()], ["integrations"])],
   ["hooks", () => effect([["settings", "integration-connections"]], ["integrations"])],
   ["mesh", () => effect([queryKeys.capabilities()], ["system"])],
   ["voice", () => effect([["settings", "voice-runtime"]], ["system"])],
