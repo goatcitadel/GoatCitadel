@@ -165,7 +165,10 @@ test("Windows native installer replaces payload via a marker-guarded delete only
   // The destructive long-path uninstall delete must be gated on the marker.
   assert.match(installerBuilder, /Remove-Item -LiteralPath[\s\S]*?Check: GoatCitadelInstallMarkerExists/);
   assert.match(installerBuilder, /Get-AppxPackage \{#MyIdentityPackageName\} \| Remove-AppxPackage/);
-  assert.match(installerBuilder, /if \(Test-Path -LiteralPath \$package\) \{\{ Add-AppxPackage/);
+  assert.match(
+    installerBuilder,
+    /if \(Test-Path -LiteralPath \$package\) \{ Add-AppxPackage -Path \$package -ExternalLocation \$app \}/,
+  );
 });
 
 test("POSIX launcher keeps macOS mutable state under Application Support", () => {
@@ -328,13 +331,14 @@ test("Windows native installer script escapes PowerShell script blocks for Inno"
     assert.doesNotMatch(iss, /Filename: "\{app\}\\app\\runtime\\node\\node\.exe"; Parameters:/);
     assert.match(
       iss,
-      /Get-AppxPackage \{#MyIdentityPackageName\} \| Remove-AppxPackage -ErrorAction SilentlyContinue; \$package = Join-Path/,
+      /Get-AppxPackage \{#MyIdentityPackageName\} \| Remove-AppxPackage -ErrorAction SilentlyContinue; \$app = ' \+ PowerShellLiteral\(ExpandConstant\('\{app\}'\)\) \+ '; \$package = Join-Path \$app/,
     );
     assert.match(
       iss,
-      /if \(Test-Path -LiteralPath \$package\) \{\{ Add-AppxPackage -Path \$package -ExternalLocation ''\{app\}''/,
+      /if \(Test-Path -LiteralPath \$package\) \{ Add-AppxPackage -Path \$package -ExternalLocation \$app \}"/,
     );
-    assert.match(iss, /Add-AppxPackage -Path \$package -ExternalLocation ''\{app\}'' \}\}"/);
+    // The install path reaches PowerShell only as a quoted literal, never spliced into an ExpandConstant string.
+    assert.doesNotMatch(iss, /-ExternalLocation ''\{app\}''/);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
