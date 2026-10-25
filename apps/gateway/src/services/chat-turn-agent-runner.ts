@@ -6131,7 +6131,12 @@ export class ChatTurnAgentRunner {
         // A repair that answered in full means the turn no longer needs one, so a completed turn must not keep
         // a retryable "a repair pass is required" failure (the inspector showed it). A repair that was itself
         // cut off at the length limit has not finished the answer, so the failure stays.
-        if (repairedCompletion.finishReason !== "length" && finalFailure && finalFailure === incompleteAnswerFailure) {
+        if (repairedCompletion.finishReason === "length") {
+          // The repair stopped at the length limit too, so the answer is still unfinished: keep it truncated and
+          // report the turn as partial rather than completed (#559).
+          completionState = { ...completionState, status: "truncated" };
+          if (finalStatus === "completed") finalStatus = "partial";
+        } else if (finalFailure && finalFailure === incompleteAnswerFailure) {
           finalFailure = undefined;
         }
         if (finalStatus === "failed" && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
