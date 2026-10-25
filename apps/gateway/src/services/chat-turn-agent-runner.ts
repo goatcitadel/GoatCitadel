@@ -6126,9 +6126,12 @@ export class ChatTurnAgentRunner {
         if (!looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           markAnswerRecoveredByModel();
         }
-        // The repair answered in full, so the turn no longer needs one: a completed turn must not
-        // keep a retryable "a repair pass is required" failure (the inspector showed it).
-        if (finalFailure && finalFailure === incompleteAnswerFailure) finalFailure = undefined;
+        // A repair that answered in full means the turn no longer needs one, so a completed turn must not keep
+        // a retryable "a repair pass is required" failure (the inspector showed it). A repair that was itself
+        // cut off at the length limit has not finished the answer, so the failure stays.
+        if (repairedCompletion.finishReason !== "length" && finalFailure && finalFailure === incompleteAnswerFailure) {
+          finalFailure = undefined;
+        }
         if (finalStatus === "failed" && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           finalStatus = "completed";
         }
@@ -9666,6 +9669,8 @@ export class ChatTurnAgentRunner {
     providerCalls: number;
     modelUsageEventIds?: string[];
     authorityRejected?: boolean;
+    /** The repair call's own finish reason; "length" means the repaired answer may still be cut off. */
+    finishReason?: string;
   }> {
     if (remainingFinalPassTimeoutMs(input.turnBudgetDeadline) <= 0) {
       return { content: "", usage: null, providerCalls: 0 };
@@ -9759,6 +9764,9 @@ export class ChatTurnAgentRunner {
         usage,
         providerCalls,
         modelUsageEventIds: completion.modelUsageEventIds,
+        ...(typeof completion.choices?.[0]?.finish_reason === "string"
+          ? { finishReason: completion.choices[0].finish_reason }
+          : {}),
       };
     } catch (error) {
       if (isAuthoritativeModelUsageAccountingError(error)) throw error;
@@ -14119,7 +14127,8 @@ function looksLikeFragmentaryStandaloneAnswer(input: {
       return true;
     }
     const references = [
-      ...normalized.matchAll(/\b(?:the|those|these|all)\s+[a-z0-9 -]{0,40}\b(above|below|earlier|previous)\b/g),
+      // Lazy, so each match ends at its first direction word and a later word cannot flip its direction.
+      ...normalized.matchAll(/\b(?:the|those|these|all)\s+[a-z0-9 -]{0,40}?\b(above|below|earlier|previous)\b/g),
       ...normalized.matchAll(/\bas (?:noted above|covered earlier)\b/g),
     ];
     if (references.some((match) => !pointsWithinAnswer(normalized, match))) {

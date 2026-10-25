@@ -197,6 +197,85 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(result.turnTrace.failure).toBeUndefined();
   });
 
+  it("keeps the 'repair pass is required' failure when the repair itself is cut off", async () => {
+    // Review on #558: a repair that also stopped at the length limit has not completed the answer.
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          { index: 0, finish_reason: "length", message: { role: "assistant", content: "The checklist has: tests," } },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "length",
+            message: { role: "assistant", content: "The checklist has: tests, docs, packaging and" },
+          },
+        ],
+      });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        content: "Summarize the release checklist.",
+        historyMessages: [{ role: "user", content: "Summarize the release checklist." }],
+      }),
+    );
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    expect(result.turnTrace.failure?.message).toBe(
+      "The provider stopped before the answer finished, so a repair pass is required.",
+    );
+  });
+
+  it("reads each above/below reference on its own, so a later word cannot flip an earlier one", async () => {
+    // Review on #558: a greedy match read "the checklist below repeats all points above" as one "above"
+    // reference and checked for text before it instead of after "below".
+    const intro =
+      "I drafted this from general practice and kept it short enough to scan in one sitting before release.";
+    const answer = [
+      `${intro} The checklist below repeats all points above in order.`,
+      "",
+      "## Release",
+      "- Tag a version and write release notes.",
+      "- Publish the package and verify the install command.",
+      "## Docs",
+      "- Add a quick start, usage examples and a troubleshooting section.",
+      "",
+      "Tell me the language and I can tighten this into exact commands.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: answer } }],
+      });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    await orchestrator.run(
+      turnInput({
+        content: "Plan a launch checklist for a small CLI tool.",
+        historyMessages: [{ role: "user", content: "Plan a launch checklist for a small CLI tool." }],
+      }),
+    );
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+  });
+
   it("does not repair an answer that refers to the user's own message", async () => {
     // Review on #558: "your last message" is the user's visible request, not missing assistant output.
     const answer =
