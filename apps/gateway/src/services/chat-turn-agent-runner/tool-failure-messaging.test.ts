@@ -233,18 +233,32 @@ describe("buildPolicyBlockedRecoveryText", () => {
     expect(text).not.toContain("sandbox policy blocked");
   });
 
-  it("says plainly that a memory write failed, without promising nothing was stored (#566)", () => {
+  it("says plainly that nothing was saved when a memory write fails before storing anything (#566, #571)", () => {
+    // memory.write is all-or-nothing since #571, so an error it raises means no part of the note was kept.
     const text = buildPolicyBlockedRecoveryText([
-      toolRun({ toolName: "memory.write", status: "failed", error: "execution error: namespace is required" }),
+      toolRun({ toolName: "memory.write", status: "failed", error: "execution error: content is required" }),
     ]);
 
-    expect(text).toContain("The memory write failed");
-    expect(text).toContain("namespace is required");
-    // Review on #570: the write is not atomic (document first, then chunks), so part of it may remain.
-    expect(text).toContain("part of it may have been stored");
-    expect(text).toContain("Library > Memory");
-    expect(text).not.toMatch(/nothing was saved/i);
-    expect(text).not.toMatch(/sticking point|narrower|specific URL|keep going/i);
+    expect(text).toContain("I didn't save that to memory");
+    expect(text).toContain("content is required");
+    expect(text).toContain("Nothing was saved");
+    expect(text).not.toMatch(/part of it may|sticking point|narrower|specific URL|keep going/i);
+  });
+
+  it("stays cautious unless the error is known to come before any write (#575)", () => {
+    // Review on #575: audit persistence runs after the tool commits, so only a known pre-write error (a missing
+    // required argument) proves nothing was kept; anything else may have failed after the note was stored.
+    for (const error of [
+      "tool timed out after 30000ms",
+      "execution aborted by caller",
+      "execution error: EACCES: permission denied, open audit.log",
+    ]) {
+      const text = buildPolicyBlockedRecoveryText([toolRun({ toolName: "memory.upsert", status: "failed", error })]);
+
+      expect(text, error).toContain("can't confirm");
+      expect(text, error).toContain("Library > Memory");
+      expect(text, error).not.toMatch(/nothing was saved/i);
+    }
   });
 
   it("leaves a memory write failure mixed with other tool failures to the general message", () => {

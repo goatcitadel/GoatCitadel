@@ -129,18 +129,8 @@ async function memoryWrite(
     ...record(inputMetadata.ingestion),
     ...(carriedTrustLevel ? { trustLevel: carriedTrustLevel } : {}),
   };
-  const doc = await storage.knowledge.createDocument({
-    namespace,
-    sourceType: "memory",
-    sourceRef: upsert ? `upsert:${namespace}:${title}` : `memory:${Date.now()}`,
-    title,
-    metadata: {
-      tags: stringArray(args.tags),
-      ...inputMetadata,
-      ...(sourceAttribution.length > 0 ? { sourceAttribution } : {}),
-      ...(Object.keys(ingestionMetadata).length > 0 ? { ingestion: ingestionMetadata } : {}),
-    },
-  });
+  // Embed every chunk before writing anything, then store the document and its chunks in one transaction,
+  // so a cancelled or failed embedding or a failed insert leaves no partial note behind (#571).
   const chunks = chunkText(content, 1200, 180, 400);
   const canonicalUsageEventIds = new Set<string>();
   const embeddedChunks = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (chunk) => {
@@ -160,7 +150,21 @@ async function memoryWrite(
       },
     };
   });
-  await storage.knowledge.appendChunks(doc.docId, embeddedChunks);
+  const { document: doc } = await storage.knowledge.createDocumentWithChunks(
+    {
+      namespace,
+      sourceType: "memory",
+      sourceRef: upsert ? `upsert:${namespace}:${title}` : `memory:${Date.now()}`,
+      title,
+      metadata: {
+        tags: stringArray(args.tags),
+        ...inputMetadata,
+        ...(sourceAttribution.length > 0 ? { sourceAttribution } : {}),
+        ...(Object.keys(ingestionMetadata).length > 0 ? { ingestion: ingestionMetadata } : {}),
+      },
+    },
+    embeddedChunks,
+  );
   const attribution = knowledgeDocumentAttribution(doc);
   return {
     mode: upsert ? "upsert" : "write",

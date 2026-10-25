@@ -84,6 +84,40 @@ describe("embedding runtime hook propagation", () => {
     expect(activeLeases).toBe(0);
   });
 
+  it("writes nothing when the turn is cancelled while a memory note is being embedded (#571)", async () => {
+    // memory.write used to store the document before embedding its chunks, so an embedding that threw
+    // (a cancelled turn) left a document with no chunks behind.
+    configureLlamaCpp();
+    const storage = createKnowledgeStorage();
+
+    for (const toolName of ["memory.write", "memory.upsert"]) {
+      const controller = new AbortController();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          controller.abort();
+          throw new Error("request aborted");
+        }),
+      );
+      await expect(
+        executeTool(
+          request(
+            toolName,
+            { namespace: "project", title: "Unlucky note", content: "x".repeat(3_000) },
+            controller.signal,
+          ),
+          policyConfig,
+          storage,
+          { acquireLocalEmbeddingLease: async () => ({ release: vi.fn() }) },
+        ),
+      ).rejects.toThrow();
+    }
+
+    expect(storage.knowledge.createDocument).not.toHaveBeenCalled();
+    expect(storage.knowledge.appendChunks).not.toHaveBeenCalled();
+    expect(storage.knowledge.listDocuments()).toEqual([]);
+  });
+
   it("uses fixed query, repair, and index purposes for knowledge operations", async () => {
     configureLlamaCpp();
     const storage = createKnowledgeStorage();
@@ -342,6 +376,18 @@ function createKnowledgeStorage(): Storage & AsyncStorage {
         }));
         chunksByDocId.set(docId, [...(chunksByDocId.get(docId) ?? []), ...saved]);
         return saved;
+      }),
+      // Mirrors the repository: one call stores the document and its chunks (#571).
+      createDocumentWithChunks: vi.fn(function (
+        this: {
+          createDocument: (input: Record<string, unknown>) => { docId: string };
+          appendChunks: (docId: string, entries: Array<Record<string, unknown>>) => unknown[];
+        },
+        input: Record<string, unknown>,
+        entries: Array<Record<string, unknown>>,
+      ) {
+        const document = this.createDocument(input);
+        return { document, chunks: this.appendChunks(document.docId, entries) };
       }),
       listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
       listChunksByNamespace: vi.fn((namespace?: string) => {
