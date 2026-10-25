@@ -1338,14 +1338,20 @@ export class ApprovalEffectsService {
       try {
         await this.executeWithLeaseHeartbeat(effect, (signal) => this.executeClaimedEffect(effect.effectId, signal));
       } catch (error) {
-        const current = await this.ctx.storage.approvalEffects.get(effect.effectId);
-        if (current.status === "running" && current.claimedBy === this.workerId) {
-          await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, current.version, {
-            lastError: error instanceof Error ? error.message : "Approval effect execution failed.",
-            result: {
-              error: error instanceof Error ? error.message : "Approval effect execution failed.",
-            },
-          });
+        // Settling a failed effect must never abort the drain: later effects still need their
+        // turn, and an unsettled one is recovered when its lease expires.
+        try {
+          const current = await this.ctx.storage.approvalEffects.get(effect.effectId);
+          if (current.status === "running" && current.claimedBy === this.workerId) {
+            await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, current.version, {
+              lastError: error instanceof Error ? error.message : "Approval effect execution failed.",
+              result: {
+                error: error instanceof Error ? error.message : "Approval effect execution failed.",
+              },
+            });
+          }
+        } catch (settleError) {
+          this.publishWorkerFailure("action", settleError);
         }
       }
     }
