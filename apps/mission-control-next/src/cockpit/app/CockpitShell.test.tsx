@@ -226,15 +226,24 @@ describe("CockpitShell", () => {
         </QueryClientProvider>,
       );
     });
+    const nav = container.querySelector('nav[aria-label="Areas"]')!;
+    const capabilitiesLink = nav.querySelector<HTMLAnchorElement>('a[aria-label="Capabilities"]')!;
+    expect(new URL(capabilitiesLink.href).pathname).toBe("/capabilities");
+    await act(async () => capabilitiesLink.click());
+    expect(window.location.pathname).toBe("/capabilities");
+    await vi.waitFor(() => expect(container.textContent).toContain("Capabilities content"));
+    expect(nav.querySelector('[aria-current="page"]')?.getAttribute("aria-label")).toBe("Capabilities");
+    expect(document.title).toBe("GoatCitadel Capabilities");
+
+    await act(async () => nav.querySelector<HTMLAnchorElement>('a[aria-label^="Inbox"]')!.click());
+    expect(window.location.pathname).toBe("/inbox");
+    expect(container.textContent).not.toContain("Capabilities content");
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "g" }));
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
     });
     expect(window.location.pathname).toBe("/capabilities");
     await vi.waitFor(() => expect(container.textContent).toContain("Capabilities content"));
-    const nav = container.querySelector('nav[aria-label="Areas"]')!;
-    expect(nav.querySelector('[aria-current="page"]')?.getAttribute("aria-label")).toBe("Capabilities");
-    expect(document.title).toBe("GoatCitadel Capabilities");
   });
   it("sidebar search: accessible name starts with the visible text", async () => {
     await act(async () => {
