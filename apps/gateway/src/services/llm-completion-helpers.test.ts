@@ -203,6 +203,9 @@ describe("llm-completion-helpers", () => {
 
     expect(shouldRetryTransientProviderError(new Error("request failed (429 Too Many Requests)"))).toBe(true);
     expect(shouldRetryTransientProviderError(new Error("request failed (503 Service Unavailable)"))).toBe(true);
+    expect(shouldRetryTransientProviderError(new Error("request failed (429)"))).toBe(true);
+    expect(shouldRetryTransientProviderError(new Error("prompt too long (4096 tokens)"))).toBe(false);
+    expect(classifyProviderFailure(new Error("prompt too long (4096 tokens)"))).not.toBe("transient");
     expect(shouldRetryTransientProviderError(new Error("fetch failed: ECONNRESET"))).toBe(true);
     const providerServerError = Object.assign(new Error("responses stream failed: server_error - retry later"), {
       providerFailure: { code: "server_error", message: "retry later" },
