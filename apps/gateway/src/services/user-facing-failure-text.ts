@@ -4,9 +4,10 @@
  * goes through here.
  */
 
-// The profile segment may contain spaces ("Jane Doe") when a path separator follows it.
+// The profile segment may contain spaces ("Jane Doe") when a path separator, a closing quote or the end of the
+// text follows it. Unquoted prose after a spaced name can be over-redacted, which is the safe direction.
 const WINDOWS_HOME_PATTERN =
-  /[A-Za-z]:[\\/]+Users[\\/]+(?:[^\\/:\s'"`<>|]+(?: [^\\/:\s'"`<>|]+)*(?=[\\/])|[^\\/\s'"`<>|]+)/giu;
+  /[A-Za-z]:[\\/]+Users[\\/]+(?:[^\\/:\s'"`<>|]+(?: [^\\/:\s'"`<>|]+)*(?=[\\/'"`<>|]|$)|[^\\/\s'"`<>|]+)/giu;
 const POSIX_HOME_PATTERN = /(?<![\w.])\/(?:home|Users)\/[^/\s'"`<>|]+/gu;
 
 /** Replaces home-directory prefixes (which carry the OS username) with `~`. */
