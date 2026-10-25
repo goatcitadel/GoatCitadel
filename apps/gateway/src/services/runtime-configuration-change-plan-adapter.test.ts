@@ -270,6 +270,28 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
     expect(prepared.risk).toBe("danger");
   });
 
+  it("names a Settings switch in plain words and says how to undo it, not by its flag key (#496)", async () => {
+    const adapter = new RuntimeConfigurationChangePlanAdapter({
+      ...authCredentialDeps,
+      getSettings: vi.fn(async () => settings()),
+      updateSettings: vi.fn(async () => settings({ revision: 8 })),
+    });
+    const request = {
+      kind: "runtime_configuration" as const,
+      change: { operation: "feature_flag" as const, flag: "claudeCliWarmContinuationEnabled" as const, enabled: true },
+    };
+    const prepared = await adapter.prepare(context, request);
+    expect(prepared.title).toBe("Turn on Claude Code CLI: reuse one process between tool steps");
+    expect(prepared.summary).toMatch(/keeps that turn's Claude Code process running/);
+    expect(prepared.impact).toMatch(/turn it off again the same way/i);
+    // The impact reaches the approval's explanation, so a named switch never shows its key there either.
+    expect(`${prepared.title} ${prepared.summary} ${prepared.impact}`).not.toContain(
+      "claudeCliWarmContinuationEnabled",
+    );
+    const applied = await adapter.apply(context, { request, target: prepared.target } as ChangePlanRecord);
+    expect(applied.result?.summary).toBe("Claude Code CLI: reuse one process between tool steps is now on.");
+  });
+
   it("maps a typed memory group without exposing arbitrary setting keys", async () => {
     const current = settings({
       memory: {

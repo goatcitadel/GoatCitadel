@@ -287,7 +287,8 @@ describe("cockpit owner-backed notifications", () => {
     const [title, options] = call;
     expect(title).toBe(item.title);
     expect(options.description).toBe(item.summary);
-    expect(options.duration).toBe(6000);
+    // A decision (warning) toast stays long enough to reach its Open Inbox item action (#496).
+    expect(options.duration).toBe(15_000);
     options.action.onClick();
     expect(mocks.navigate).toHaveBeenCalledWith("/inbox?approvalId=a&workspaceId=w");
   });

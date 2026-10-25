@@ -11,6 +11,7 @@ import {
 import { ChatConversationsSheet } from "./ChatConversationsSheet";
 import { ChatEmptyState, ChatSessionHeader, ChatSetupBanner } from "./ChatAreaChrome";
 import { ChatTranscript } from "./ChatTranscript";
+import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTextComposer } from "./ChatTextComposer";
 import { ChatInspector } from "./ChatInspector";
@@ -308,9 +309,9 @@ export function ChatAreaView({
           />
         ) : null}
         {buildOpen && latestLocalNotice ? (
-          <p role="status" className="border-b border-line-subtle bg-sunken px-3 py-2 text-sm text-fg-secondary">
-            {latestLocalNotice.content}
-          </p>
+          <div role="status" className="border-b border-line-subtle bg-sunken px-3 py-2 text-sm text-fg-secondary">
+            <ChatNoticeText content={latestLocalNotice.content} />
+          </div>
         ) : null}
         {buildOpen && codePanel ? (
           <Suspense

@@ -1,10 +1,15 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { readApprovalFollowOn } from "./approval-follow-on";
+import {
+  ApprovalChangePlanOutcome,
+  approvalChangePlanId,
+  approvalChangePlanQueryKey,
+} from "./ApprovalChangePlanOutcome";
 import { approvalDecisionMessage, approvalResolutionLine } from "./approval-settlement";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
@@ -19,12 +24,16 @@ export function ApprovalSettlement({
   approval,
   workspaceId,
   onFollowOnChange,
+  focusDecision = false,
 }: {
   approval: ApprovalRequest;
   workspaceId: string;
   onFollowOnChange?: () => void;
+  /** Move focus to the decision line, which replaces the parent's click notice (#496). */
+  focusDecision?: boolean;
 }) {
   const access = useProjectAccess(workspaceId);
+  const queryClient = useQueryClient();
   const route = useCockpitRoute();
   const decisionParams = new URLSearchParams(route.search);
   decisionParams.set("approvalId", approval.approvalId);
@@ -71,9 +80,16 @@ export function ApprovalSettlement({
   const run = state?.run;
   const settled = state?.replay.approval ?? approval;
   const resolution = approvalResolutionLine(settled);
+  const planId = approvalChangePlanId(approval);
+  const decisionRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (focusDecision) decisionRef.current?.focus();
+  }, [focusDecision]);
   return (
     <section aria-label="Decision and follow-on work" className="space-y-2 border-t border-line-subtle pt-3">
-      <p role="status">{approvalDecisionMessage(settled, state?.replay.effects)}</p>
+      <p role="status" ref={decisionRef} tabIndex={focusDecision ? -1 : undefined}>
+        {approvalDecisionMessage(settled, state?.replay.effects)}
+      </p>
       {resolution ? <p className="text-fg-secondary">{resolution}</p> : null}
       {state ? (
         <details>
@@ -112,7 +128,9 @@ export function ApprovalSettlement({
           work.
         </p>
       ) : null}
-      {run ? (
+      {planId ? (
+        <ApprovalChangePlanOutcome approval={approval} planId={planId} workspaceId={workspaceId} />
+      ) : run ? (
         <>
           <p role={run.status === "failed" || run.status === "dead_lettered" ? "alert" : "status"}>
             Original linked work: {run.status === "running" ? "Resumed" : presentRunStatus(run.status).label}.{" "}
@@ -125,7 +143,15 @@ export function ApprovalSettlement({
       ) : (
         <p>Original linked work outcome is not yet verified.</p>
       )}
-      <Button size="sm" disabled={query.isFetching} onClick={() => void query.refetch()}>
+      <Button
+        size="sm"
+        disabled={query.isFetching}
+        onClick={() => {
+          void query.refetch();
+          if (planId)
+            void queryClient.invalidateQueries({ queryKey: approvalChangePlanQueryKey(approval, workspaceId) });
+        }}
+      >
         Refresh follow-on work
       </Button>
       <div className="pt-3">

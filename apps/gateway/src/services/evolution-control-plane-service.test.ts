@@ -71,7 +71,7 @@ class TestAdapter implements EvolutionControlPlaneAdapter<ChangePlanRuntimeConfi
       risk:
         this.mode === "review_then_approval"
           ? ("danger" as const)
-          : request.change.operation === "llama_cpp_setup"
+          : request.change.operation === "llama_cpp_setup" || request.change.operation === "feature_flag"
             ? ("caution" as const)
             : ("safe" as const),
       status: "awaiting_confirmation" as const,
@@ -245,7 +245,9 @@ describe("EvolutionControlPlaneService", () => {
     const beforeEvents = f.sync.listEvents(plan.planId);
     const transition = vi.spyOn(f.repository, "transition");
 
-    await expect(f.service.cancel(actor, plan.planId, plan.revision, "stale-action-nonce")).rejects.toThrow("nonce is missing or stale");
+    await expect(f.service.cancel(actor, plan.planId, plan.revision, "stale-action-nonce")).rejects.toThrow(
+      "nonce is missing or stale",
+    );
 
     expect(f.adapter.discardCount).toBe(0);
     expect(f.adapter.applyCount).toBe(0);
@@ -254,19 +256,32 @@ describe("EvolutionControlPlaneService", () => {
     expect(f.sync.listEvents(plan.planId)).toEqual(beforeEvents);
   });
 
-  it.each(["explicit", "omitted"] as const)("preserves cancellation with a current or compatibility %s action nonce", async (mode) => {
-    const f = fixture();
-    const plan = await f.service.create({ actor, request });
-    const transition = vi.spyOn(f.repository, "transition");
+  it.each(["explicit", "omitted"] as const)(
+    "preserves cancellation with a current or compatibility %s action nonce",
+    async (mode) => {
+      const f = fixture();
+      const plan = await f.service.create({ actor, request });
+      const transition = vi.spyOn(f.repository, "transition");
 
-    const cancelled = mode === "omitted" ? await f.service.cancel(actor, plan.planId, plan.revision) : await f.service.cancel(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+      const cancelled =
+        mode === "omitted"
+          ? await f.service.cancel(actor, plan.planId, plan.revision)
+          : await f.service.cancel(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
 
-    expect(cancelled.status).toBe("cancelled");
-    expect(f.adapter.discardCount).toBe(1);
-    expect(f.adapter.applyCount).toBe(0);
-    expect(transition).toHaveBeenCalledExactlyOnceWith(plan.planId, expect.objectContaining({ expectedRevision: plan.revision, status: "cancelled", actionNonce: plan.requiredAction!.actionNonce }));
-    expect(f.sync.listEvents(plan.planId).filter((event) => event.eventType === "cancelled")).toHaveLength(1);
-  });
+      expect(cancelled.status).toBe("cancelled");
+      expect(f.adapter.discardCount).toBe(1);
+      expect(f.adapter.applyCount).toBe(0);
+      expect(transition).toHaveBeenCalledExactlyOnceWith(
+        plan.planId,
+        expect.objectContaining({
+          expectedRevision: plan.revision,
+          status: "cancelled",
+          actionNonce: plan.requiredAction!.actionNonce,
+        }),
+      );
+      expect(f.sync.listEvents(plan.planId).filter((event) => event.eventType === "cancelled")).toHaveLength(1);
+    },
+  );
 
   it("does not invoke the mutation owner before exact confirmation", async () => {
     const { service, adapter } = fixture();
@@ -451,6 +466,65 @@ describe("EvolutionControlPlaneService", () => {
     expect((await restarted.service.reconcileActive())[0]?.status).toBe("completed");
     expect(restarted.adapter.applyCount).toBe(1);
     expect(await restarted.service.reconcileActive()).toEqual([]);
+  });
+
+  it("applies an approved Settings switch once the approval is decided, with no separate Continue step (#496)", async () => {
+    const settingsActor = { workspaceId: "default", actorId: "operator-1", surface: "settings" as const };
+    const flagRequest: ChangePlanRuntimeConfigurationRequest = {
+      kind: "runtime_configuration",
+      change: { operation: "feature_flag", flag: "claudeCliWarmContinuationEnabled", enabled: false },
+    };
+    const f = fixture();
+    const plan = await f.service.create({ actor: settingsActor, request: flagRequest });
+    const waiting = await f.service.confirm(
+      settingsActor,
+      plan.planId,
+      plan.revision,
+      plan.requiredAction!.actionNonce,
+    );
+    expect(waiting.status).toBe("awaiting_approval");
+    f.approve();
+    await f.service.reconcileApproval("approval-final");
+    expect((await f.service.get(settingsActor, plan.planId)).status).toBe("completed");
+    expect(f.adapter.applyCount).toBe(1);
+  });
+
+  it("keeps a 'settings' plan bound to a conversation waiting for its continuation", async () => {
+    // The create route accepts a caller-chosen surface; a plan carrying Chat linkage is not a Settings switch.
+    const linked = {
+      workspaceId: "default",
+      actorId: "operator-1",
+      surface: "settings" as const,
+      sessionId: "session-1",
+    };
+    const f = fixture();
+    const plan = await f.service.create({
+      actor: linked,
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "feature_flag", flag: "claudeCliWarmContinuationEnabled", enabled: false },
+      },
+    });
+    await f.service.confirm(linked, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+    f.approve();
+    expect(await f.service.reconcileApproval("approval-final")).toBe(0);
+    expect(f.adapter.applyCount).toBe(0);
+  });
+
+  it("keeps an approved Chat-proposed switch waiting for its Chat continuation", async () => {
+    const f = fixture();
+    const plan = await f.service.create({
+      actor,
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "feature_flag", flag: "claudeCliWarmContinuationEnabled", enabled: false },
+      },
+    });
+    const waiting = await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+    f.approve();
+    expect(await f.service.reconcileApproval("approval-final")).toBe(0);
+    expect(await f.service.get(actor, plan.planId)).toEqual(waiting);
+    expect(f.adapter.applyCount).toBe(0);
   });
 
   it.each(["denied", "expired"] as const)("never applies a %s llama.cpp setup", async (decision) => {

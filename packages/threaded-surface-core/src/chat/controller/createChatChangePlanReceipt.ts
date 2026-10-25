@@ -29,14 +29,17 @@ export function createChatChangePlanReceipt({ thread, changePlanState, modelPlan
   const { setDismissedChangePlanReceiptKeys } = changePlanState;
   const { setActivityOpenRequest } = changePlanState;
 
-  const activeTranscriptChangePlan = changePlanState.chatChangePlans.find(
+  // Settings changes have no conversation. Activity lists them, but they are not this transcript's
+  // receipt: otherwise one lands in whichever Chat happens to be open (#496).
+  const conversationPlans = changePlanState.chatChangePlans.filter((plan) =>
+    Boolean(plan.origin.sessionId || plan.origin.turnId),
+  );
+  const activeTranscriptChangePlan = conversationPlans.find(
     (plan) => !isTerminalChangePlanStatus(plan.status) && plan.phase !== "terminal",
   );
   // Change-plan history is newest-first. A dismissed terminal receipt must not
   // cascade through older history; Activity remains the place to inspect it.
-  const newestTerminalChangePlan = changePlanState.chatChangePlans.find((plan) =>
-    isTerminalChangePlanStatus(plan.status),
-  );
+  const newestTerminalChangePlan = conversationPlans.find((plan) => isTerminalChangePlanStatus(plan.status));
   const terminalReceiptVisible =
     newestTerminalChangePlan !== undefined &&
     !changePlanState.dismissedChangePlanReceiptKeys.has(changePlanReceiptKey(newestTerminalChangePlan)) &&

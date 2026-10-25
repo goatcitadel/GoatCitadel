@@ -1,8 +1,10 @@
 import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { useThreadActivity } from "./use-thread-activity";
 import { ThreadRowStatus } from "./ThreadRowStatus";
-import { isNotableThreadActivity } from "./thread-activity";
+import { isNotableThreadActivity, threadActivityLabel } from "./thread-activity";
+import type { ThreadActivityRecord } from "./use-thread-activity";
 import type { MissionThreadedSessionRailData } from "@goatcitadel/threaded-surface-core";
+import { TIME_UNAVAILABLE, presentTime } from "@goatcitadel/mission-control-shared/content/format";
 import { TimeText } from "../../ui/TimeText";
 import { ChatConversationFilters, type ChatProjectFilterOption } from "./ChatConversationFilters";
 
@@ -11,6 +13,22 @@ type RailSession = MissionThreadedSessionRailData["missionSessions"][number];
 /** The project, or "Archived"; an active conversation outside a project is the default and says nothing. */
 function rowContext(session: RailSession): string | null {
   return session.projectName ?? (session.lifecycleStatus === "archived" ? "Archived" : null);
+}
+
+/**
+ * #500: the row's name, in the order the row shows it: title, time, notable status, project and preview. It is set
+ * explicitly so every assistive tool reads the title first instead of an unnamed button.
+ */
+function rowName(title: string, session: RailSession, activity: ThreadActivityRecord | undefined): string {
+  return [
+    title,
+    presentTime(session.lastActivityAt)?.text ?? TIME_UNAVAILABLE,
+    isNotableThreadActivity(activity) && activity ? threadActivityLabel(activity) : null,
+    rowContext(session),
+    session.lastMessagePreview,
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 /**
@@ -107,6 +125,7 @@ export function ConversationListPanel({
                 <button
                   type="button"
                   onClick={() => select(session.sessionId)}
+                  aria-label={rowName(rail.renderSessionLabel(session.sessionId), session, activity[session.sessionId])}
                   aria-current={session.sessionId === rail.selectedSessionId ? "page" : undefined}
                   className="flex w-full items-start rounded-md p-2 text-left hover:bg-sunken aria-[current=page]:bg-sunken"
                 >

@@ -123,9 +123,13 @@ it("keeps full titles, server previews and exact search targets on desktop and p
     historyView: "active",
   } as unknown as MissionThreadedSessionRailData;
   await act(async () => root.render(<ThreadList rail={rail} />));
-  // The row is named by its content (title, time, status, preview), not by the title alone.
+  // #500: the row has an explicit name that starts with its title and keeps its time, status and preview, rather
+  // than the title alone or a name only some tools derive from its nested content.
   const row = [...container.querySelectorAll("button")].find((button) => button.textContent?.startsWith(title));
-  expect(row?.hasAttribute("aria-label")).toBe(false);
+  const name = row?.getAttribute("aria-label") ?? "";
+  expect(name.startsWith(`${title}, `)).toBe(true);
+  expect(name).toContain(row?.querySelector("time")?.textContent ?? "missing time");
+  expect(name.endsWith(", Visible server preview")).toBe(true);
   expect(row?.textContent).toContain("Visible server preview");
   expect(container.textContent).toContain("Visible server preview");
   // Each row is two lines: the title with its time, then the preview; the search excerpt still wraps to two lines.

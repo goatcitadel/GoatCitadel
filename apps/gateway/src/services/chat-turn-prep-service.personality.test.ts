@@ -823,6 +823,20 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(typeof scope.workspaceId).toBe("string");
   });
 
+  it("leaves agent.fanout out of the catalog when automatic delegation is not admitted for this turn (#495)", async () => {
+    // The runner offers agent.fanout only on an admitted automatic-delegation turn. Listing it otherwise
+    // told the model it could delegate, and on the Claude Code CLI a call to an unoffered tool fails closed.
+    const harness = createHost("chat", { toolAutonomy: "safe_auto", subagentPolicy: "auto_when_useful" });
+    withCapabilityCatalog(harness.host, { toolNames: ["fs.list", "agent.fanout"] });
+
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", { content: "delegate this" });
+
+    expect(prepared.prefs.subagentPolicy).not.toBe("auto_when_useful");
+    const guidance = harness.readGuidance();
+    expect(guidance).toContain("fs.list");
+    expect(guidance).not.toContain("agent.fanout");
+  });
+
   it("leaves the tool catalog out and says tools are off when manual autonomy removes every tool", async () => {
     // Manual autonomy sends the provider no tools at all, so listing the catalog invites text tool calls.
     const harness = createHost("cowork", { toolAutonomy: "manual" });

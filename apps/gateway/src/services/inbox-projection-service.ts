@@ -60,6 +60,21 @@ function knowledgeTargetSummary(record: Record<string, unknown>): string | undef
   return subject ? `${action} · ${subject}` : undefined;
 }
 
+/** A change plan's approval reads as the plan: its title and summary, linked by plan id (#496). */
+function changePlanApproval(
+  kind: string,
+  payload: Record<string, unknown>,
+  preview: Record<string, unknown>,
+): { title: string; summary: string; planId?: string } | undefined {
+  if (kind !== "change_plan_effect") return undefined;
+  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+  const title = text(preview.title);
+  const summary = text(preview.summary);
+  if (!title || !summary) return undefined;
+  const planId = text(payload.planId);
+  return { title: bounded(title), summary: bounded(summary), ...(planId ? { planId } : {}) };
+}
+
 function approvalTargetSummary(preview: unknown): string {
   const record = preview && typeof preview === "object" ? (preview as Record<string, unknown>) : {};
   const value = record.targets;
@@ -205,26 +220,28 @@ export class InboxProjectionService {
       const page = await this.deps.storage.approvals.listPage({ status: "pending", limit: SOURCE_LIMIT, workspaceId });
       return {
         partial: Boolean(page.nextCursor),
-        items: page.items.map(
-          (approval): OperatorInboxItem => ({
+        items: page.items.map((approval): OperatorInboxItem => {
+          const plan = changePlanApproval(approval.kind, approval.payload, approval.preview);
+          return {
             id: `approval:${approval.approvalId}`,
             kind: "approval",
             group: "needs_decision",
-            title: `Review ${approvalKindWords(approval.linkage?.toolName ?? approval.kind)}`,
-            summary: approvalTargetSummary(approval.preview),
+            title: plan?.title ?? `Review ${approvalKindWords(approval.linkage?.toolName ?? approval.kind)}`,
+            summary: plan?.summary ?? approvalTargetSummary(approval.preview),
             createdAt: approval.createdAt,
             expiresAt: approval.expiresAt,
             riskLevel: approval.riskLevel,
             source: {
               workspaceId,
               approvalId: approval.approvalId,
+              ...(plan?.planId ? { planId: plan.planId } : {}),
               ...(approval.linkage?.sessionId ? { sessionId: approval.linkage.sessionId } : {}),
               ...(approval.linkage?.turnId ? { turnId: approval.linkage.turnId } : {}),
               ...(approval.linkage?.durableRunId ? { runId: approval.linkage.durableRunId } : {}),
             },
             href: `/ops/approvals?approvalId=${encodeURIComponent(approval.approvalId)}`,
-          }),
-        ),
+          };
+        }),
       };
     });
 
@@ -242,38 +259,48 @@ export class InboxProjectionService {
       );
       const records = batches.flat();
       const visible = records.filter((plan) => plan.origin.workspaceId === workspaceId && states.includes(plan.status));
+      // A plan waiting on an approval that is already listed is that one decision, not a second item (#496).
+      const listedApprovals = new Set(
+        items.flatMap((item) => (item.kind === "approval" ? [item.source.approvalId] : [])),
+      );
+      const waitsOnListedApproval = (plan: (typeof visible)[number]) =>
+        plan.status === "awaiting_approval" &&
+        plan.requiredAction?.kind === "approval" &&
+        listedApprovals.has(plan.requiredAction.approvalId);
       return {
         partial: batches.some((batch) => batch.length === SOURCE_LIMIT) || visible.length !== records.length,
         detail:
           visible.length !== records.length
             ? "Change plans without matching workspace and waiting status were omitted."
             : undefined,
-        items: visible.map(
-          (plan): OperatorInboxItem => ({
-            id: `change_plan:${plan.planId}`,
-            kind: "change_plan",
-            group: ["manual_required", "failed", "rollback_failed"].includes(plan.status)
-              ? "needs_attention"
-              : "needs_decision",
-            title: bounded(plan.title || "Review change plan"),
-            summary: bounded(plan.summary || `Change plan ${label(plan.status)}.`),
-            createdAt: plan.createdAt,
-            updatedAt: plan.updatedAt,
-            expiresAt: plan.expiresAt,
-            riskLevel: plan.risk,
-            source: {
-              workspaceId,
-              planId: plan.planId,
-              planRevision: plan.revision,
-              planStatus: plan.status,
-              ...(plan.origin.sessionId ? { sessionId: plan.origin.sessionId } : {}),
-              ...(plan.origin.turnId ? { turnId: plan.origin.turnId } : {}),
-            },
-            href: plan.origin.sessionId
-              ? `/chat?sessionId=${encodeURIComponent(plan.origin.sessionId)}`
-              : "/system/runtime",
-          }),
-        ),
+        items: visible
+          .filter((plan) => !waitsOnListedApproval(plan))
+          .map(
+            (plan): OperatorInboxItem => ({
+              id: `change_plan:${plan.planId}`,
+              kind: "change_plan",
+              group: ["manual_required", "failed", "rollback_failed"].includes(plan.status)
+                ? "needs_attention"
+                : "needs_decision",
+              title: bounded(plan.title || "Review change plan"),
+              summary: bounded(plan.summary || `Change plan ${label(plan.status)}.`),
+              createdAt: plan.createdAt,
+              updatedAt: plan.updatedAt,
+              expiresAt: plan.expiresAt,
+              riskLevel: plan.risk,
+              source: {
+                workspaceId,
+                planId: plan.planId,
+                planRevision: plan.revision,
+                planStatus: plan.status,
+                ...(plan.origin.sessionId ? { sessionId: plan.origin.sessionId } : {}),
+                ...(plan.origin.turnId ? { turnId: plan.origin.turnId } : {}),
+              },
+              href: plan.origin.sessionId
+                ? `/chat?sessionId=${encodeURIComponent(plan.origin.sessionId)}`
+                : "/system/runtime",
+            }),
+          ),
       };
     });
 

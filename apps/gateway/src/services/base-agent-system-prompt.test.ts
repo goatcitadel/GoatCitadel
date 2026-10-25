@@ -244,6 +244,8 @@ describe("buildBaseAgentSystemPrompt", () => {
     const tail = (toolsUnavailableReason: BuildBaseAgentSystemPromptInput["toolsUnavailableReason"]) =>
       buildBaseAgentSystemPrompt(input({ toolsUnavailableReason })).volatileTail;
     expect(tail("manual_autonomy")).toContain("tool autonomy is Manual");
+    // #501: name the control that exists, so the operator is not sent to a setting Chat does not show.
+    expect(tail("manual_autonomy")).toContain("Inspect > Conversation > Tool autonomy");
     for (const [reason, cause] of [
       ["advisory_planning", "advisory planning"],
       ["capability_profile", "capability profile"],

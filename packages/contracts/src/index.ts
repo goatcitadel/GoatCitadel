@@ -123,6 +123,7 @@ export * from "./knowledge.js";
 export * from "./ui-forms.js";
 export * from "./chat.js";
 export * from "./change-plan.js";
+export * from "./change-plan-feature-flag-labels.js";
 export * from "./operator-write-access.js";
 export * from "./outside-root-write.js";
 export * from "./chat-fanout.js";

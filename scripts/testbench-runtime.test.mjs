@@ -265,6 +265,39 @@ test("parseClaudeAuthStatus accepts only a first-party subscription login", () =
   assert.deepEqual(parseClaudeAuthStatus("warning: x"), { ready: false, reason: "unparseable" });
 });
 
+test("writeClaudeCodeCliProviderConfig gives the CLI models their shipped metadata (#495)", async (t) => {
+  // Without a context window the CLI route has no fingerprint, so every route-pinned Chat feature
+  // (automatic delegation, explicit context, provider fallback) failed in the sandbox but not in an install.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "testbench-cli-metadata-"));
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), "testbench-cli-metadata-source-"));
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(source, { recursive: true, force: true });
+  });
+  fs.mkdirSync(path.join(root, "config"));
+  fs.mkdirSync(path.join(source, "config"));
+  fs.writeFileSync(path.join(root, "config", "goatcitadel.json"), JSON.stringify({ llm: {} }));
+  const stub = { contextWindow: 128000, outputTokenLimit: 16000 };
+  fs.writeFileSync(
+    path.join(root, "config", "llm-model-metadata.json"),
+    JSON.stringify({ version: 1, entries: { "verification-stub/verification-stub-chat": stub } }),
+  );
+  const cli = { contextWindow: 200000, outputTokenLimit: 64000 };
+  fs.writeFileSync(
+    path.join(source, "config", "llm-model-metadata.json"),
+    JSON.stringify({
+      version: 1,
+      entries: { [`claude-code-cli/${CLAUDE_CODE_CLI_MODEL}`]: cli, "openai/some-model": { contextWindow: 1 } },
+    }),
+  );
+  await writeClaudeCodeCliProviderConfig(root, CLAUDE_CODE_CLI_MODEL, source);
+  const metadata = JSON.parse(fs.readFileSync(path.join(root, "config", "llm-model-metadata.json"), "utf8"));
+  assert.deepEqual(metadata.entries[`claude-code-cli/${CLAUDE_CODE_CLI_MODEL}`], cli);
+  assert.deepEqual(metadata.entries["verification-stub/verification-stub-chat"], stub);
+  // Only the CLI's own entries come from the shipped file.
+  assert.equal(metadata.entries["openai/some-model"], undefined);
+});
+
 test("writeClaudeCodeCliProviderConfig makes the CLI the only active provider in both config files", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "testbench-cli-config-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

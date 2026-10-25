@@ -759,6 +759,37 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
     expect(createToolGrant).not.toHaveBeenCalledWith(expect.objectContaining({ toolPattern: "session.history" }));
   });
 
+  it("bootstraps tool_artifact.read so reading back the session's own saved tool output asks no approval (#503)", async () => {
+    // browser.navigate ran without approval, but each read of its stored result raised its own approval.
+    // The reader is scoped to the calling session's own artifacts, so a session grant cannot widen access.
+    const { gateway } = createGatewayHarness();
+    const createToolGrant = vi.fn();
+    gateway.createToolGrant = createToolGrant;
+    gateway.storage = { chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) } };
+    gateway.listActiveToolGrants = vi.fn(() => []);
+
+    await GatewayService.prototype.ensureChatSessionRuntimeGrants.call(gateway, "session-1");
+    expect(createToolGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolPattern: "tool_artifact.read",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        createdBy: "system-chat-agent-bootstrap",
+      }),
+    );
+
+    // Deny-wins: an inherited deny still keeps it from being granted.
+    createToolGrant.mockClear();
+    gateway.listActiveToolGrants = vi.fn((scope: string) =>
+      scope === "workspace"
+        ? [{ decision: "deny", toolPattern: "tool_artifact.*", scope: "workspace", scopeRef: "workspace-1" }]
+        : [],
+    );
+    await GatewayService.prototype.ensureChatSessionRuntimeGrants.call(gateway, "session-1");
+    expect(createToolGrant).not.toHaveBeenCalledWith(expect.objectContaining({ toolPattern: "tool_artifact.read" }));
+  });
+
   it("does not resolve local operator overrides in remote hardened deployments", async () => {
     const resolveContext = vi.fn((input: Record<string, unknown>) => ({
       permissionProfile: {
