@@ -137,6 +137,22 @@
       "riskTier": "medium",
       "expectedTests": ["scripts/check-skill-catalog.mjs"],
       "catalogExposure": "inspectable"
+    },
+    {
+      "skillId": "extra:himalaya",
+      "owner": "integrations",
+      "source": "extra",
+      "riskTier": "high",
+      "expectedTests": ["scripts/check-skill-catalog.mjs"],
+      "catalogExposure": "inspectable"
+    },
+    {
+      "skillId": "extra:github-cli",
+      "owner": "integrations",
+      "source": "extra",
+      "riskTier": "high",
+      "expectedTests": ["scripts/check-skill-catalog.mjs"],
+      "catalogExposure": "inspectable"
     }
   ]
 }

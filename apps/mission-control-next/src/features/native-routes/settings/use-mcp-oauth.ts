@@ -54,6 +54,12 @@ export function useMcpOAuth({
     setInput({ ...fields, epoch, [field]: value });
     setView({ epoch });
   }
+  /** Fills both fields from a provider return; the operator still reviews before anything is sent. */
+  function fill(code: string, returnedState: string) {
+    live.current.operation++;
+    setInput({ epoch, code, state: returnedState });
+    setView({ epoch });
+  }
   async function requestReview(action: McpOAuthAction) {
     if (live.current.busy || attempt.locked || mcpOAuthUnavailable(server)) return;
     if (action === "complete" && (!flow || fields.state !== flow.state || !fields.code.trim())) {
@@ -123,6 +129,7 @@ export function useMcpOAuth({
     flow,
     fields,
     edit,
+    fill,
     review: visible?.review,
     message: visible?.message ?? attempt.message,
     attempt,

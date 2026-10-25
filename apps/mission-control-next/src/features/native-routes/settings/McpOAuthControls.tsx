@@ -1,6 +1,12 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { McpServerRecord } from "@goatcitadel/contracts";
-import { mcpOAuthUnavailable } from "./mcp-oauth-binding";
+import {
+  describeAuthorizeHost,
+  describeRequestedScopes,
+  mcpOAuthUnavailable,
+  usesMcpOAuthDiscovery,
+} from "./mcp-oauth-binding";
+import { subscribeMcpOAuthReturn } from "./mcp-oauth-return";
 import { useMcpOAuth } from "./use-mcp-oauth";
 
 /** Both Settings presentations use the same reviewed owner; opening this panel performs no mutation. */
@@ -16,9 +22,23 @@ export function McpOAuthControls({
   button: (label: string, click: () => void, disabled: boolean) => ReactNode;
 }) {
   const state = useMcpOAuth({ server, scope, onSettled });
+  const [returned, setReturned] = useState<string>();
+  const pendingState = state.flow?.state;
+  const { fill } = state;
+  useEffect(() => {
+    if (!pendingState) return undefined;
+    return subscribeMcpOAuthReturn((result) => {
+      if (result.state !== pendingState) return;
+      if (result.code) {
+        fill(result.code, result.state);
+        setReturned("The provider returned a code for this request. Review the completion below to finish signing in.");
+      } else setReturned(`The provider did not grant access (${result.error}). Start authorization again if needed.`);
+    });
+  }, [pendingState, fill]);
   if (server.authType !== "oauth2") return null;
   const reason = mcpOAuthUnavailable(server),
-    review = state.review;
+    review = state.review,
+    discovery = usesMcpOAuthDiscovery(server);
   const disabled = state.checking || state.attempt.locked;
   return (
     <section aria-label="Reviewed MCP OAuth controls" className="space-y-3">
@@ -28,9 +48,17 @@ export function McpOAuthControls({
         grant. Allowed environment credentials may be enrolled. It does not invoke tools.
       </p>
       <p>
-        The Gateway has no automatic MCP OAuth callback here. Use a provider flow that returns a code and state you can
-        submit manually. Authentication does not reconnect this server.
+        After you approve access, the provider returns you to GoatCitadel and the code is filled in here for your
+        review. If that does not happen, paste the code and state from the provider's redirect address. Authentication
+        does not reconnect this server.
       </p>
+      {discovery ? (
+        <p>
+          Sign-in endpoints are discovered from the server URL when you start, using the MCP authorization standard.
+          Every host involved must already be in the network allowlist; a blocked host is named in the error.
+        </p>
+      ) : null}
+      {returned ? <p role="status">{returned}</p> : null}
       {button("Review OAuth authorization", () => void state.requestReview("start"), disabled || Boolean(reason))}
       {reason ? <p>{reason}</p> : null}
       {state.message ? <p role={state.attempt.phase === "uncertain" ? "alert" : "status"}>{state.message}</p> : null}
@@ -40,6 +68,14 @@ export function McpOAuthControls({
             Request acknowledged for this saved server. The provider decides whether this redirect and manual exchange
             are supported.
           </p>
+          <dl className="grid gap-1">
+            <dt>Sign-in page</dt>
+            <dd>
+              <code className="break-all font-mono">{describeAuthorizeHost(state.flow.authorizeUrl)}</code>
+            </dd>
+            <dt>Access requested</dt>
+            <dd>{describeRequestedScopes(state.flow.authorizeUrl)}</dd>
+          </dl>
           <a href={state.flow.authorizeUrl} target="_blank" rel="noopener noreferrer" className="text-accent underline">
             Open authorization page
           </a>
@@ -82,19 +118,37 @@ export function McpOAuthControls({
           <p>
             {review.action === "start"
               ? "Confirm closing the reviewed connection and replacing its grant before opening a new authorization page."
-              : "Confirm sending this transient code to the saved token endpoint and publishing returned authentication. The server stays disconnected."}
+              : "Confirm sending this transient code to the token endpoint and publishing returned authentication. The server stays disconnected."}
           </p>
           <dl className="grid gap-2">
             <dt>Server</dt>
             <dd>{review.server.label}</dd>
-            <dt>Authorization endpoint</dt>
-            <dd>
-              <code className="break-all font-mono">{review.server.oauth?.authorizationUrl}</code>
-            </dd>
-            <dt>Token endpoint</dt>
-            <dd>
-              <code className="break-all font-mono">{review.server.oauth?.tokenUrl}</code>
-            </dd>
+            {usesMcpOAuthDiscovery(review.server) ? (
+              <>
+                <dt>Sign-in endpoints</dt>
+                <dd>
+                  Discovered from <code className="break-all font-mono">{review.server.url}</code>
+                  {review.server.authState?.authorizationIssuer ? (
+                    <>
+                      {" "}
+                      (issuer <code className="break-all font-mono">{review.server.authState.authorizationIssuer}</code>
+                      )
+                    </>
+                  ) : null}
+                </dd>
+              </>
+            ) : (
+              <>
+                <dt>Authorization endpoint</dt>
+                <dd>
+                  <code className="break-all font-mono">{review.server.oauth?.authorizationUrl}</code>
+                </dd>
+                <dt>Token endpoint</dt>
+                <dd>
+                  <code className="break-all font-mono">{review.server.oauth?.tokenUrl}</code>
+                </dd>
+              </>
+            )}
             <dt>Redirect</dt>
             <dd>
               <code className="break-all font-mono">
@@ -102,7 +156,12 @@ export function McpOAuthControls({
               </code>
             </dd>
             <dt>Requested scopes</dt>
-            <dd>{review.server.oauth?.scopes?.join(", ") || "None configured"}</dd>
+            <dd>
+              {review.server.oauth?.scopes?.join(", ") ||
+                (usesMcpOAuthDiscovery(review.server)
+                  ? "Those the server advertises; shown before you open the sign-in page"
+                  : "None configured")}
+            </dd>
             <dt>Allowed environment keys</dt>
             <dd>{review.server.policy.allowedEnvKeys?.join(", ") || "None"}</dd>
             <dt>Current connection</dt>

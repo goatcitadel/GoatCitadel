@@ -40,11 +40,21 @@ const skillHubOperationSchema = z
 const skillHubSourceReviewSchema = z
   .object({
     workspaceId: z.string().min(1).max(256),
-    sourceRef: z.string().min(1).max(2_048),
+    sourceRef: z.string().min(1).max(2_048).optional(),
     sourceType: z.enum(["git_url", "remote_bundle"]).optional(),
+    packId: z
+      .string()
+      .regex(/^[a-z0-9-]{1,64}$/u)
+      .optional(),
     idempotencyKey: z.string().min(1).max(256),
   })
-  .strict();
+  .strict()
+  .refine((input) => (input.sourceRef === undefined) !== (input.packId === undefined), {
+    message: "Provide exactly one of sourceRef or packId.",
+  })
+  .refine((input) => input.packId === undefined || input.sourceType === undefined, {
+    message: "A shipped skill pack has no sourceType.",
+  });
 
 const skillHubRollbackReviewSchema = z
   .object({

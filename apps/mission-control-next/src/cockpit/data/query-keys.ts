@@ -70,4 +70,6 @@ export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["library", "memory-settings"],
   // Device continuity checks read the Gateway settings too.
   ["settings", "continuity", "settings"],
+  // The MCP template catalog reads the network allowlist to show which hosts are allowed.
+  ["settings", "mcp-template-allowlist"],
 ];

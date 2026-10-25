@@ -1,5 +1,6 @@
 import {
   ValidationError,
+  hasMcpOAuthEndpointSource,
   resolveMcpServerConnectionMode,
   type McpServerConnectionReview,
   type McpServerRecord,
@@ -20,9 +21,12 @@ export interface McpOAuthExchangeReview {
 
 /** Validate before admission; these URLs are displayed and later opened or contacted explicitly. */
 export function assertReviewedMcpOAuth(server: McpServerRecord): void {
-  if (server.authType !== "oauth2" || !server.oauth?.authorizationUrl || !server.oauth.tokenUrl)
-    throw new ValidationError({ message: "Reviewed OAuth requires saved authorization and token endpoints." });
-  for (const value of [server.oauth.authorizationUrl, server.oauth.tokenUrl, server.oauth.redirectUri].filter(Boolean)) {
+  if (server.authType !== "oauth2" || !hasMcpOAuthEndpointSource(server.oauth))
+    throw new ValidationError({
+      message: "Reviewed OAuth requires saved authorization and token endpoints, or metadata discovery.",
+    });
+  const oauth = server.oauth!;
+  for (const value of [oauth.authorizationUrl, oauth.tokenUrl, oauth.redirectUri].filter(Boolean)) {
     let url: URL;
     try { url = new URL(value!); } catch { throw new ValidationError({ message: "Reviewed OAuth URLs must be absolute HTTP(S) URLs." }); }
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash)

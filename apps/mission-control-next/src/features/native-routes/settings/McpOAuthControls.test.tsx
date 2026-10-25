@@ -74,6 +74,8 @@ function flow(): McpReviewedOAuthStartResponse {
   url.searchParams.set("response_type", "code");
   url.searchParams.set("redirect_uri", initial.oauth!.redirectUri!);
   url.searchParams.set("scope", "inspect");
+  url.searchParams.set("code_challenge", "pkce-challenge");
+  url.searchParams.set("code_challenge_method", "S256");
   return {
     authorizeUrl: url.toString(),
     state,
@@ -324,6 +326,85 @@ it.each([
       ).status,
     ).toBe("uncertain");
     expect(readMcpServerAttempt(initial.serverId).phase).toBe("uncertain");
+  },
+);
+it("does not claim nothing changed when client registration reached the vendor", async () => {
+  api.startReviewedMcpOAuth.mockRejectedValueOnce(
+    new ApiRequestError("request failed", {
+      kind: "http",
+      status: 400,
+      method: "POST",
+      path: "/api/v1/mcp/servers/fixture/oauth/start-reviewed",
+      body: {
+        error:
+          "Sign-in for Fixture stopped at client registration: The provider may now hold an unused client. GoatCitadel's saved configuration did not change, and the attempt is recorded in the side-effect ledger.",
+        code: "FIELD_INVALID",
+        details: { field: "oauthRegistration" },
+      },
+    }),
+  );
+  const result = await commitMcpOAuth({
+    reviewed: initial,
+    action: "start",
+    isCurrent: () => true,
+    onDispatch: () => undefined,
+  });
+  expect(result.status).toBe("conflict");
+  if (result.status !== "conflict") return;
+  expect(result.message).toContain("may now hold an unused client");
+  expect(result.message).not.toContain("Nothing changed");
+});
+it.each(["discovery", "discovery-committed", "discovery-on-complete"] as const)(
+  "shows a pre-admission sign-in discovery rejection without locking the server (%s)",
+  async (kind) => {
+    const error = new ApiRequestError("request failed", {
+      kind: "http",
+      status: 400,
+      method: "POST",
+      path: `/api/v1/mcp/servers/fixture/oauth/${kind === "discovery-on-complete" ? "complete" : "start"}-reviewed`,
+      body: {
+        error: "Sign-in discovery for Fixture failed: Host is not yet allowlisted: https://mcp.example",
+        code: "FIELD_INVALID",
+        details: { field: "oauth" },
+        ...(kind === "discovery-committed" ? { mutationCommitted: true } : {}),
+      },
+    });
+    if (kind === "discovery-on-complete") {
+      // The Gateway refuses a completion whose PKCE verifier is gone before reserving anything.
+      await begin();
+      api.completeReviewedMcpOAuth.mockRejectedValueOnce(error);
+      expect(
+        (
+          await commitMcpOAuth({
+            reviewed: started,
+            action: "complete",
+            code: "code",
+            state,
+            isCurrent: () => true,
+            onDispatch: () => undefined,
+          })
+        ).status,
+      ).toBe("conflict");
+      expect(readMcpServerAttempt(initial.serverId).phase).not.toBe("uncertain");
+      return;
+    }
+    api.startReviewedMcpOAuth.mockRejectedValueOnce(error);
+    const result = await commitMcpOAuth({
+      reviewed: initial,
+      action: "start",
+      isCurrent: () => true,
+      onDispatch: () => undefined,
+    });
+    if (kind === "discovery-committed") {
+      expect(result.status).toBe("uncertain");
+      return;
+    }
+    expect(result).toEqual({
+      status: "conflict",
+      message:
+        "Sign-in discovery for Fixture failed: Host is not yet allowlisted: https://mcp.example. Nothing changed; fix this, then review authorization again.",
+    });
+    expect(readMcpServerAttempt(initial.serverId).phase).not.toBe("uncertain");
   },
 );
 it.each(["stale", "committed", "old-gateway"])(

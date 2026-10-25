@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import { fetchMcpServers } from "@goatcitadel/mission-control-shared/api/client";
@@ -18,6 +18,7 @@ import { McpServerInspection } from "./McpServerInspection";
 import { McpElicitationRequests } from "./McpElicitationRequests";
 import { McpModeInspection } from "./McpModeInspection";
 import { McpOutcomeCheck } from "../../../features/native-routes/settings/McpOutcomeCheck";
+import { consumeMcpOAuthReturnFragment } from "../../../features/native-routes/settings/mcp-oauth-return";
 
 const PAGE_SIZE = 20;
 const connectionLabel: Record<McpServerRecord["status"], string> = {
@@ -34,6 +35,17 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
   const [creating, setCreating] = useState(false),
     [inspecting, setInspecting] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [returnNotice, setReturnNotice] = useState<string>();
+  useEffect(() => {
+    // A provider sign-in redirect lands here; forward it to the tab that holds the request.
+    const result = consumeMcpOAuthReturnFragment();
+    if (result)
+      setReturnNotice(
+        result.code
+          ? "Sign-in finished at the provider. If the GoatCitadel tab that started it is still open, the code is filled in there for your review, and you can close this tab. Otherwise start authorization again from that server."
+          : `The provider did not grant access (${result.error}). Start authorization again from that server if needed.`,
+      );
+  }, []);
   const items = query.data?.items;
   const ready =
     !query.isError &&
@@ -66,6 +78,7 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
           to call its tools.
         </p>
       </header>
+      {returnNotice ? <p role="status">{returnNotice}</p> : null}
       <div className="flex flex-wrap items-center gap-3">
         <Button size="sm" disabled={query.isFetching || action.checking} onClick={() => void query.refetch()}>
           Refresh MCP servers
@@ -84,13 +97,9 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
           Inspect MCP installation previews
         </Button>
       </div>
-      {query.isPending ? (
-        <p role="status" className="text-sm text-fg-muted">
-          Loading MCP servers…
-        </p>
-      ) : null}
+      {query.isPending ? <p className="text-sm text-fg-muted">Loading MCP servers…</p> : null}
       {query.isFetching && items ? (
-        <p role="status" className="text-sm text-fg-muted">
+        <p className="text-sm text-fg-muted">
           Refreshing server records. Connection states below are from the last read.
         </p>
       ) : null}

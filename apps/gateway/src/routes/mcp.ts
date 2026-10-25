@@ -9,7 +9,7 @@ import type {
   McpServerTemplateRecord,
   McpToolRecord,
 } from "@goatcitadel/contracts";
-import { isGoatError, resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
+import { hasMcpOAuthEndpointSource, isGoatError, resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
   areExperimentalRemoteMcpTransportsEnabled,
@@ -44,6 +44,8 @@ import {
 import { withRouteAccess } from "./route-access.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { sendRouteError } from "./_error-handler.js";
+import { allowedRequestOrigin } from "./allowed-request-origin.js";
+import { registerMcpOAuthCallbackRoute, rememberMcpOAuthReturn } from "./mcp-oauth-callback-routes.js";
 
 import {
   serverParamsSchema,
@@ -82,6 +84,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
   const mcpElicitations = fastify.services.mcp.elicitations;
   const operatorReadRoute = withRouteAccess(fastify, "operator", READ_ROUTE_OPTIONS);
   const operatorMutationRoute = withRouteAccess(fastify, "operator", MUTATION_ROUTE_OPTIONS);
+  registerMcpOAuthCallbackRoute(fastify);
 
   fastify.get("/api/v1/mcp/servers", operatorReadRoute, async (_request, reply) => {
     reply.header("Cache-Control", "no-store");
@@ -430,6 +433,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       );
       await markMutationCommitted(request);
       if (!flow.review) throw new Error("Reviewed OAuth did not return its owner receipt.");
+      rememberMcpOAuthReturn(flow.state, allowedRequestOrigin(request));
       return reply.send({ ...flow, review: { ...flow.review, server: projectMcpPublicValue(flow.review.server) } });
     } catch (error) {
       return sendMcpConfigurationWriteError(
@@ -482,7 +486,9 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.mcp.startMcpOAuth(params.data.serverId));
+      const flow = await fastify.services.mcp.startMcpOAuth(params.data.serverId);
+      rememberMcpOAuthReturn(flow.state, allowedRequestOrigin(request));
+      return reply.send(flow);
     } catch (error) {
       return sendMcpPublicError(reply, 400, error);
     }
@@ -977,7 +983,7 @@ function buildMcpRemotePreviewBlockers(input: {
     blockers.push("MCP OAuth credentials must be connected or refreshed before runtime invocation.");
   }
   if (input.authReadiness === "missing_oauth_config") {
-    blockers.push("MCP OAuth metadata must include authorizationUrl and tokenUrl before runtime invocation.");
+    blockers.push("MCP OAuth needs authorizationUrl and tokenUrl, or metadata discovery, before runtime invocation.");
   }
   if (input.source === "template" && !input.createAllowed) {
     blockers.push("Creating generic remote MCP records is disabled unless experimental remote records are enabled.");
@@ -1015,7 +1021,7 @@ function buildMcpRemotePreviewNextAction(input: {
     return "Connect or reconnect OAuth in Settings before invoking this remote MCP server.";
   }
   if (input.authReadiness === "missing_oauth_config") {
-    return "Add OAuth authorizationUrl and tokenUrl metadata before treating this remote MCP server as invokable.";
+    return "Add OAuth authorizationUrl and tokenUrl, or turn on metadata discovery, before treating this remote MCP server as invokable.";
   }
   if (input.invocationState === "runtime_invokable") {
     return input.transportRuntimeSupported
@@ -1043,7 +1049,7 @@ function resolveRemoteMcpAuthReadiness(
   if (item.authType === "none" || item.authType === "token") {
     return "not_required";
   }
-  if (!item.oauth?.authorizationUrl?.trim() || !item.oauth.tokenUrl?.trim()) {
+  if (!hasMcpOAuthEndpointSource(item.oauth)) {
     return "missing_oauth_config";
   }
   if ("authState" in item && item.authState?.readiness) {

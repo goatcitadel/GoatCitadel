@@ -31,7 +31,9 @@ export function McpCreateReview({ input }: { input: McpCreateInput }) {
           {input.authType === "none"
             ? "None configured"
             : input.authType === "oauth2"
-              ? "OAuth configuration only"
+              ? input.oauth?.metadataDiscovery
+                ? "OAuth, with sign-in endpoints discovered from the server URL when you connect"
+                : "OAuth configuration only"
               : "Token environment references"}
         </dd>
         <dt>First tool approval</dt>

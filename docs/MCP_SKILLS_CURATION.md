@@ -26,6 +26,10 @@ This document captures the curated MCP server and skill strategy for GoatCitadel
 
 Native complement: Obsidian stays a built-in local integration rather than an MCP server, which is the preferred path when the operator already uses a local Obsidian vault.
 
+## Vendor-hosted catalog
+
+61 vendor-hosted remote MCP servers reviewed in Hermes Agent's `optional-mcps` catalog ship as templates (Notion, Linear, Atlassian, Sentry, Figma and others). They sign in through MCP metadata discovery, start `restricted` with first-tool approval and strict redaction, and stay disabled until an operator registers, allowlists and connects them. Money-moving servers carry risk notes. See `docs/MCP_VENDOR_CATALOG_PROGRAM.md`.
+
 ## Optional set (phase 2)
 
 | Server | Category | Cost posture | Default trust | Notes |

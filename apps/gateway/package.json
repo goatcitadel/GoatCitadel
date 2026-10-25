@@ -27,6 +27,7 @@
     "@grpc/grpc-js": "1.14.5",
     "@grpc/proto-loader": "0.8.1",
     "@inquirer/prompts": "7.10.1",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "@sigstore/bundle": "4.0.0",
     "@sigstore/protobuf-specs": "0.5.1",
     "@sigstore/tuf": "4.0.2",

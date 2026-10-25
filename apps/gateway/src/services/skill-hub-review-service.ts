@@ -8,6 +8,7 @@ import {
   ValidationError,
   canonicalJsonString,
   diffSkillPermissionEnvelopes,
+  findShippedSkillPack,
   isGoatError,
   normalizeSkillPermissionEnvelope,
   type GovernanceJourneyEventRecord,
@@ -57,10 +58,15 @@ type ReviewStorage = Pick<
   "skillHubSnapshots" | "skillHubArtifacts" | "governanceJourneyEvents" | "runImmediateTransaction"
 >;
 
+type ReviewedSourceType = "git_url" | "remote_bundle" | "local_path";
+
 export interface SkillHubSourceReviewInput {
   workspaceId: string;
-  sourceRef: string;
+  /** An HTTPS source, or omitted when `packId` names a shipped skill pack. */
+  sourceRef?: string;
   sourceType?: "git_url" | "remote_bundle";
+  /** A skill pack shipped under `skills/import-packs`; the Gateway resolves its directory. */
+  packId?: string;
   idempotencyKey: string;
   actorId: string;
 }
@@ -84,6 +90,8 @@ export interface SkillHubReviewServiceOptions {
   storage: ReviewStorage;
   artifactStore: SkillHubArtifactStore;
   skillImport: Pick<SkillImportService, "withMaterializedValidation">;
+  /** Directory holding shipped skill packs; pack review is unavailable without it. */
+  shippedSkillPackRoot?: string;
   now?: () => string;
   /** Test-only transaction rollback seam after snapshot/artifact writes. */
   beforeJourneyPersistence?: (snapshotId: string) => void;
@@ -115,16 +123,21 @@ interface PersistIdentity {
 
 export class SkillHubReviewService {
   private readonly now: () => string;
+  private readonly shippedSkillPackRoot: string | undefined;
 
   public constructor(private readonly options: SkillHubReviewServiceOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
+    this.shippedSkillPackRoot = options.shippedSkillPackRoot;
   }
 
   public async reviewSource(input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult> {
     const workspaceId = normalizeIdentity(input.workspaceId, "workspace ID", 256);
     const actorId = normalizeIdentity(input.actorId, "actor ID", 256);
     const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
-    const source = normalizeHttpsSource(input.sourceRef, input.sourceType);
+    const source =
+      input.packId !== undefined
+        ? resolveShippedSkillPackSource(input.packId, input.sourceRef, this.shippedSkillPackRoot)
+        : normalizeHttpsSource(input.sourceRef ?? "", input.sourceType);
     const identity = persistIdentity("source-review", workspaceId, idempotencyKey);
     let enteredValidatedCallback = false;
     try {
@@ -137,11 +150,12 @@ export class SkillHubReviewService {
           if (!validatedTree) {
             rejectReview("CONTENT_INTEGRITY_MISSING", "Validated source did not produce an exact content tree.");
           }
-          const published = await this.options.artifactStore.publishFromDirectory({
+          const artifactStore = this.options.artifactStore;
+          const published = await artifactStore.publishFromDirectory({
             sourceDir: context.skillDir,
             expectedTreeSha256: validatedTree,
           });
-          const exactSkillDir = this.options.artifactStore.resolveBundlePath(published.bundleRelPath);
+          const exactSkillDir = artifactStore.resolveBundlePath(published.bundleRelPath);
           const exactValidation = await context.validateExactDirectory(exactSkillDir);
           const prepared = await prepareReview(
             { ...context, skillDir: exactSkillDir, validation: exactValidation },
@@ -409,7 +423,7 @@ export class SkillHubReviewService {
 
 async function prepareReview(
   context: MaterializedSkillReviewContext,
-  source: { sourceRef: string; sourceType: "git_url" | "remote_bundle" },
+  source: { sourceRef: string; sourceType: ReviewedSourceType },
 ): Promise<PreparedReview> {
   const validation = context.validation;
   assertCompleteValidation(validation);
@@ -735,6 +749,28 @@ function hasUnboundNetworkCall(content: string): boolean {
     axiosCalls !== boundAxiosCalls ||
     curlLines.some((line) => extractAbsoluteUrls(line).length === 0)
   );
+}
+
+/** Maps an allowlisted pack id to its shipped directory; no caller-supplied path reaches the filesystem. */
+function resolveShippedSkillPackSource(
+  packId: string,
+  sourceRef: string | undefined,
+  root: string | undefined,
+): { sourceRef: string; sourceType: "local_path" } {
+  if (sourceRef !== undefined) {
+    throw new ValidationError({
+      field: "packId",
+      message: "Review either a shipped skill pack or a source URL, not both.",
+    });
+  }
+  const pack = typeof packId === "string" ? findShippedSkillPack(packId) : undefined;
+  if (!pack || !/^[a-z0-9-]{1,64}$/u.test(pack.packId)) {
+    throw new ValidationError({ field: "packId", message: "Unknown shipped skill pack." });
+  }
+  if (!root) {
+    throw new ValidationError({ field: "packId", message: "Shipped skill packs are not available in this Gateway." });
+  }
+  return { sourceRef: path.join(path.resolve(root), pack.packId), sourceType: "local_path" };
 }
 
 function normalizeHttpsSource(

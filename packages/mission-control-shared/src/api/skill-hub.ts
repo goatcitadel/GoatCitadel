@@ -158,3 +158,16 @@ export async function createSkillHubOperatorApproval(input: {
     body: JSON.stringify(input),
   });
 }
+
+/** Starts Skill Hub review of a skill pack shipped with the Gateway; the Gateway resolves the pack's directory. */
+export async function reviewSkillHubPack(input: {
+  workspaceId: string;
+  packId: string;
+  idempotencyKey: string;
+}): Promise<{ replayed: boolean; snapshot: { snapshotId: string; trustDisposition: string; blockerCodes: string[] } }> {
+  return request("/api/v1/skills/hub/reviews", {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify(input),
+  });
+}

@@ -99,7 +99,7 @@ export const ROOT_BUDGETS = {
     "internal-terms": 304,
     "dead-end-pointer": 1,
     "aria-label-id": 10,
-    "glossary-terms": 1110,
+    "glossary-terms": 1109,
     "plural-template": 39,
   },
   "shared-components": { "internal-terms": 23, "aria-label-id": 11, "glossary-terms": 55, "plural-template": 5 },

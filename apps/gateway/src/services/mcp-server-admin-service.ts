@@ -1,4 +1,7 @@
-import { startMcpOAuth as startMcpOAuthHandshake } from "./mcp-oauth-handshake-service.js";
+import {
+  prepareReviewedMcpOAuthDiscovery,
+  startMcpOAuth as startMcpOAuthHandshake,
+} from "./mcp-oauth-handshake-service.js";
 import { randomUUID } from "node:crypto";
 import type {
   McpToolRecord,
@@ -21,6 +24,11 @@ import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
 import { discoverMcpTools } from "./mcp-runtime.js";
+import {
+  mcpOAuthPkceStore,
+  type DiscoveredMcpAuthorization,
+  type McpAuthorizationServerRecord,
+} from "./mcp-oauth-discovery.js";
 import { createInternalMcpApprovalInboxTools, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
 import { createInternalMcpDurableTasksTools, isInternalMcpDurableTasksServer } from "./mcp-durable-tasks.js";
 import {
@@ -43,6 +51,8 @@ export interface McpAuthStateRecord {
    * server is not reused against another (resource-indicator semantics).
    */
   resourceIndicator?: string;
+  /** Endpoints and public client id found by metadata discovery; never a secret. */
+  authorizationServer?: McpAuthorizationServerRecord;
   updatedAt: string;
   lastRefreshedAt?: string;
   error?: string;
@@ -79,6 +89,10 @@ export interface McpServerAdminHost {
   captureMcpServerSessionCloser?(serverId: string): () => void;
   prepareMcpStaticEnvironment?(server: McpServerRecord, fence?: McpConnectionFence): Promise<McpServerRecord>;
   resolveMcpOAuthClientId?(server: McpServerRecord, fence?: McpConnectionFence): Promise<string | undefined>;
+  discoverMcpOAuthAuthorization?(
+    server: McpServerRecord,
+    input: { redirectUri: string; scopes?: string[]; configuredClientId?: string },
+  ): Promise<DiscoveredMcpAuthorization>;
   patchMcpServerState(serverId: string, patch: Partial<McpServerRecord>, expected: McpServerRecord): Promise<McpServerRecord>;
   completeMcpServerConnection(expected: McpServerRecord, tools: McpToolRecord[]): Promise<McpServerRecord>;
   readMcpTools(): Promise<McpToolRecord[]>;
@@ -268,10 +282,12 @@ export async function disconnectMcpServer(host: McpServerAdminHost, serverId: st
 export async function startMcpOAuth(host: McpServerAdminHost, serverId: string, review?: McpConnectionActionReview) {
   if (!review) return startMcpOAuthHandshake(host, serverId);
   const expected = { expectedRevision: review.expectedRevision, expectedConnectionRevision: review.expectedConnectionRevision };
+  // Metadata discovery reads only, so it runs before the review commits; a blocked host changes nothing.
+  const prepared = await prepareReviewedMcpOAuthDiscovery(host, serverId, expected);
   // Explicit OAuth review closes the captured old connection before replacing its grant.
   const admitted = await disconnectMcpServer(host, serverId, review, assertReviewedMcpOAuth);
   try {
-    return await startMcpOAuthHandshake(host, serverId, { server: admitted, reviewed: expected });
+    return await startMcpOAuthHandshake(host, serverId, { server: admitted, reviewed: expected, prepared });
   } catch (cause) {
     const error = cause instanceof Error ? cause : new Error("Reviewed OAuth initialization requires inspection.");
     Object.assign(error, { mutationCommitted: true }); throw error;
@@ -296,6 +312,13 @@ export async function completeMcpOAuth(
   }
   if (authRow.oauthState !== state) {
     throw new Error("OAuth state mismatch.");
+  }
+  // Without this flow's PKCE verifier the provider rejects the code; fail before any reservation.
+  if (!mcpOAuthPkceStore.read(serverId, state)) {
+    throw new ValidationError({
+      field: "oauth",
+      message: "This sign-in expired or the Gateway restarted since it began. Start authorization again.",
+    });
   }
   const server = await host.requireMcpServer(serverId);
   if (review) { assertReviewedStaticServer(server, review); assertReviewedMcpOAuth(server); }
@@ -358,6 +381,7 @@ function normalizeMcpOAuthConfig(input?: McpOAuthConfig): McpOAuthConfig | undef
   const normalized: McpOAuthConfig = {
     authorizationUrl: input.authorizationUrl?.trim() || undefined,
     tokenUrl: input.tokenUrl?.trim() || undefined,
+    metadataDiscovery: input.metadataDiscovery === true ? true : undefined,
     clientIdEnv: input.clientIdEnv?.trim() || undefined,
     clientSecretEnv: input.clientSecretEnv?.trim() || undefined,
     scopes: input.scopes?.map((item) => item.trim()).filter(Boolean),
