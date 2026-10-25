@@ -421,6 +421,21 @@ describe("integration-catalog", () => {
     }
   });
 
+  it("lists only sign-in methods GoatCitadel implements for channels", () => {
+    expect(byChannelKey("discord").authMethods).toEqual(["bot-token"]);
+    expect(byChannelKey("whatsapp").authMethods).toEqual(["token"]);
+    expect(byChannelKey("google-chat").authMethods).toEqual(["webhook", "service-account"]);
+    expect(byChannelKey("teams").authMethods).toEqual(["webhook"]);
+    expect(byChannelKey("signal").authMethods).toEqual(["bridge"]);
+    expect(byChannelKey("slack").authMethods).toEqual(["oauth"]);
+  });
+
+  it("marks channels that receive messages as inbound-capable", () => {
+    for (const key of ["slack", "telegram", "whatsapp", "line"]) {
+      expect(byChannelKey(key).capabilities).toContain("inbound");
+    }
+  });
+
   it("advertises Notion search first, then read and the two governed writes, behind a token form", () => {
     const entry = requireCatalogEntry("productivity.notion");
     expect(entry.description).toBe(
@@ -487,6 +502,14 @@ function requireCatalogEntry(catalogId: string): IntegrationCatalogEntry {
   const entry = INTEGRATION_CATALOG.find((candidate) => candidate.catalogId === catalogId);
   if (!entry) {
     throw new Error(`Missing integration catalog entry: ${catalogId}`);
+  }
+  return entry;
+}
+
+function byChannelKey(key: string): IntegrationCatalogEntry {
+  const entry = INTEGRATION_CATALOG.find((candidate) => candidate.kind === "channel" && candidate.key === key);
+  if (!entry) {
+    throw new Error(`Missing channel catalog entry: ${key}`);
   }
   return entry;
 }
