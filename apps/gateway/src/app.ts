@@ -62,6 +62,7 @@ import { opsSavedBoardRoutes } from "./routes/ops-boards.js";
 import { knowledgeRoutes } from "./routes/knowledge.js";
 import { authRoutes } from "./routes/auth.js";
 import { secretsRoutes } from "./routes/secrets.js";
+import { capabilityConnectorsRoutes } from "./routes/capability-connectors.js";
 import { webSearchSettingsRoutes } from "./routes/web-search-settings.js";
 import { chatRoutes } from "./routes/chat.js";
 import { registerChangePlanRoutes } from "./routes/change-plans.js";
@@ -395,6 +396,7 @@ export async function buildApp(options: GatewayPluginOptions = {}) {
     await app.register(authRoutes);
     await app.register(secretsRoutes);
     await app.register(webSearchSettingsRoutes);
+    await app.register(capabilityConnectorsRoutes);
     await app.register(gatewayEventsRoute);
     await app.register(sessionsListRoute);
     await app.register(toolsInvokeRoute);

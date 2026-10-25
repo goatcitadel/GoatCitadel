@@ -17,6 +17,7 @@ import {
   type VaultKeyProvider,
 } from "./citadels-route-service.js";
 import { CapabilitiesRouteService, type CapabilitiesRoutePort } from "./capabilities-route-service.js";
+import type { CapabilityConnectorsService } from "./capability-connectors-service.js";
 import { CapabilityScopeRouteService, type CapabilityScopeRouteServiceDeps } from "./capability-scope-route-service.js";
 import {
   createCapabilityPacksRouteService,
@@ -299,6 +300,8 @@ export interface GatewayRouteServices {
   autonomyControl: AutonomyControlRouteService;
   approvals: ApprovalsRouteService;
   capabilityScope: CapabilityScopeRouteService;
+  /** The merged Capabilities app list. Composed by the gateway service over the other owners, so partial hosts omit it. */
+  capabilityConnectors?: Pick<CapabilityConnectorsService, "list">;
   citadels: CitadelsRouteService;
   compliance: ComplianceRouteService;
   capabilities: CapabilitiesRouteService;
