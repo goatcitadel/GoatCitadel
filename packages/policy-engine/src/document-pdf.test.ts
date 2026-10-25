@@ -6,7 +6,7 @@ import { inflateSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { createArtifactDesignPlan } from "./artifact-design.js";
-import { createDocumentPdf, type DocumentPdfSection } from "./document-pdf.js";
+import { createDocumentPdf, createPlainDocumentPdf, type DocumentPdfSection } from "./document-pdf.js";
 import { executeArtifactTool } from "./tool-executor/artifact-executor.js";
 
 const createdRoots: string[] = [];
@@ -190,6 +190,20 @@ describe("createDocumentPdf", () => {
     expect(text).toContain("Party � in ��");
     expect(pdf.warnings).toEqual([expect.stringContaining("3 character(s)")]);
     expect(pdf.warnings[0]).toContain("�");
+  });
+
+  it("keeps indentation and aligned spacing in plain PDFs, and the indent on wrapped lines", () => {
+    const longIndented = `    ${Array.from({ length: 30 }, (_, index) => `step${index}`).join(" ")}`;
+    const pdf = createPlainDocumentPdf("Plain", ["    run step", "name    value", "", longIndented, "Жанна ☐"]);
+    const streams = contentStreams(pdf.buffer).join("\n");
+    const wrappedLines = [...streams.matchAll(/Td \((\s*step[^)]*)\) Tj/gu)].map((match) => match[1] ?? "");
+
+    expect(streams).toContain("(    run step) Tj");
+    expect(streams).toContain("(name    value) Tj");
+    expect(wrappedLines.length).toBeGreaterThan(1);
+    for (const line of wrappedLines) expect(line.startsWith("    step")).toBe(true);
+    expect(wrappedLines.join(" ").replace(/\s+/gu, " ").trim()).toBe(longIndented.trim());
+    expect(pdf.warnings).toEqual([]);
   });
 });
 

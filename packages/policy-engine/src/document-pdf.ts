@@ -123,9 +123,7 @@ export function createPlainDocumentPdf(
   title: string,
   lines: readonly string[],
 ): { buffer: Buffer; warnings: string[] } {
-  const wrapped = lines.flatMap((line) =>
-    line.trim() ? wrapWinAnsi(toWinAnsiBytes(line), "regular", PLAIN_SIZE, PAGE_W - PLAIN_MARGIN * 2) : [""],
-  );
+  const wrapped = lines.flatMap((line) => wrapPlainLine(toWinAnsiBytes(line)));
   const body = wrapped.some(Boolean) ? wrapped : ["No content provided."];
   const black = pdfColor("000000");
   const pages: PdfPage[] = [];
@@ -142,6 +140,21 @@ export function createPlainDocumentPdf(
   }
   const { lost } = countWinAnsiLoss(lines.join("\n"));
   return { buffer: serializePages(pages, title), warnings: lost > 0 ? [missingGlyphWarning(lost)] : [] };
+}
+
+/**
+ * A line that fits keeps its spacing (indented code, space-aligned columns); a longer one wraps at
+ * spaces and repeats its leading indent on every wrapped line.
+ */
+function wrapPlainLine(bytes: string): string[] {
+  const width = PAGE_W - PLAIN_MARGIN * 2;
+  if (!bytes.trim()) return [""];
+  if (measureWinAnsi(bytes, "regular", PLAIN_SIZE) <= width) return [bytes.trimEnd()];
+  const leading = /^ */u.exec(bytes)?.[0] ?? "";
+  // An indent wider than half the line is dropped so the wrapped text still fits.
+  const indent = measureWinAnsi(leading, "regular", PLAIN_SIZE) <= width / 2 ? leading : "";
+  const indentWidth = measureWinAnsi(indent, "regular", PLAIN_SIZE);
+  return wrapWinAnsi(bytes, "regular", PLAIN_SIZE, width - indentWidth).map((line) => `${indent}${line}`);
 }
 
 function serializePages(pages: readonly PdfPage[], title: string): Buffer {
