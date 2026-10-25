@@ -6,7 +6,7 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
-import { splitApprovalSupport } from "./approval-preview";
+import { splitApprovalExplanation, splitApprovalSupport } from "./approval-preview";
 /** `showExpiry={false}` when the surrounding view already states the expiry once (IN-R04). */
 export function ApprovalReviewSummary({
   approval,
@@ -26,6 +26,7 @@ export function ApprovalReviewSummary({
     workspaceName(scopeWorkspaceId) ?? (scopeWorkspaceId === workspaceId ? "This workspace" : "Another workspace");
   const support = splitApprovalSupport(evidence?.supporting ?? []);
   const scope = evidence?.scopeSummary ?? `${workspaceLabel}${sessionId ? " · one linked conversation" : ""}.`;
+  const { owner: ownerExplanation, model: modelExplanation } = splitApprovalExplanation(approval.explanation);
   return (
     <section
       aria-label="Approval scope and consequences"
@@ -91,9 +92,15 @@ export function ApprovalReviewSummary({
       <p>
         <strong>Consequence:</strong>{" "}
         {evidence?.consequence ??
-          approval.explanation?.riskExplanation ??
+          ownerExplanation?.riskExplanation ??
           "After approval, the exact reviewed action may run; denying withholds it. The decision alone does not show the work resumed or completed."}
       </p>
+      {modelExplanation?.riskExplanation ? (
+        <p>
+          <strong>Model explanation:</strong> {modelExplanation.riskExplanation}{" "}
+          <span className="text-fg-muted">Written by a model after the request; advisory only.</span>
+        </p>
+      ) : null}
       <TechnicalDetails label="Scope identifiers">
         <p className="break-all font-mono text-xs">
           Workspace {scopeWorkspaceId}

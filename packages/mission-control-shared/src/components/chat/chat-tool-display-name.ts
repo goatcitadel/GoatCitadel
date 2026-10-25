@@ -19,6 +19,9 @@ export function chatToolDisplayName(run: ChatToolRunRecord): string {
     "browser.navigate": "Open page",
     "memory.search": "Search memory",
     "memory.read": "Read memory",
+    "documents.create": "Create document",
+    "presentations.create": "Create presentation",
+    "artifacts.create": "Create artifact",
   };
   return names[run.toolName] ?? run.toolName;
 }

@@ -26,6 +26,7 @@ import { ThreadedContextConflictNotices } from "../../../features/threaded-surfa
 import { ChatBackgroundTasks } from "./ChatBackgroundTasks";
 import { SessionControlManager } from "./SessionControlManager";
 import { ChatInspectorTurnPanel } from "./ChatInspectorTurnPanel";
+import { ChatTurnApprovalHistory } from "./ChatTurnApprovalHistory";
 import { ChatOrganizationForm } from "./ChatOrganizationForm";
 
 export function ChatInspector({
@@ -132,7 +133,12 @@ export function ChatInspector({
         role="tabpanel"
         className="min-w-0"
       >
-        {tab === "run" ? renderInspectorRunEvidence(run, selectedTurn) : null}
+        {tab === "run" ? (
+          <>
+            {renderInspectorRunEvidence(run, selectedTurn)}
+            <ChatTurnApprovalHistory turn={selectedTurn} />
+          </>
+        ) : null}
 
         {tab === "turn" ? <ChatInspectorTurnPanel selectedTurn={selectedTurn} /> : null}
 

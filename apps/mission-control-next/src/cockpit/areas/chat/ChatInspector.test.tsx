@@ -12,6 +12,7 @@ import { ChatInspector } from "./ChatInspectorBody";
 vi.mock("../../data/use-model-label", () => ({
   useModelLabel: (_providerId?: string, modelId?: string) => modelId ?? "Unknown model",
   useProviderLabelLookup: () => () => undefined,
+  useProviderAuthMode: () => undefined,
 }));
 vi.mock("./use-chat-model-labels", () => ({ useChatModelLabels: () => (modelId: string) => modelId }));
 

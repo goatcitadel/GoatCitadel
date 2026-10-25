@@ -12,6 +12,19 @@ export function approvalExplanationLine(
   if (status === "failed") return "The explanation could not be generated. Inspect the action preview before deciding.";
   return "No explanation was requested. Review the action preview before deciding.";
 }
+
+/**
+ * Who wrote an approval's explanation. A model-written one records its provider or model and arrives after the card,
+ * so it is advisory and never stands in for the owner-written consequence (#499); one GoatCitadel wrote from the
+ * request itself (a change plan's impact, #543) records neither.
+ */
+export function splitApprovalExplanation(explanation: ApprovalRequest["explanation"]): {
+  owner?: NonNullable<ApprovalRequest["explanation"]>;
+  model?: NonNullable<ApprovalRequest["explanation"]>;
+} {
+  if (!explanation) return {};
+  return explanation.providerId || explanation.model ? { model: explanation } : { owner: explanation };
+}
 import { formatBytes, plural } from "@goatcitadel/mission-control-shared/content/format";
 // Approval kinds are open strings (tool ids, "code_mode.run"), so they have no typed presenter.
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";

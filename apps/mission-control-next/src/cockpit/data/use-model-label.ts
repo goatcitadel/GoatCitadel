@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import type { LlmProviderAuthMode } from "@goatcitadel/contracts";
 import { fetchLlmConfig, fetchLlmModels } from "@goatcitadel/mission-control-shared/api/platform";
 
 const LABEL_STALE_MS = 10 * 60_000;
@@ -14,6 +15,19 @@ export function useProviderLabelLookup(enabled = true): (providerId?: string) =>
   const providers = config.data?.providerConfigs ?? [];
   return (providerId) =>
     providerId ? providers.find((provider) => provider.providerId === providerId)?.label || undefined : undefined;
+}
+
+/** A provider's resolved sign-in mode, from the same LLM config read (and query key) as its display name. */
+export function useProviderAuthMode(providerId: string | undefined): LlmProviderAuthMode | undefined {
+  const config = useQuery({
+    queryKey: ["system", "llm-config-labels"],
+    queryFn: fetchLlmConfig,
+    enabled: Boolean(providerId),
+    staleTime: LABEL_STALE_MS,
+  });
+  return providerId
+    ? config.data?.providers.find((provider) => provider.providerId === providerId)?.authMode
+    : undefined;
 }
 
 /**
