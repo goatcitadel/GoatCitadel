@@ -226,7 +226,11 @@ describe("Gateway inbox projection", () => {
           approvalId: "fetch",
           kind: "custom.fetch",
           linkage: { ...base.linkage, toolName: "custom.fetch" },
-          preview: { toolName: "custom.fetch", target: "https://example.invalid/status", command: "do-not-project" },
+          preview: {
+            toolName: "custom.fetch",
+            target: "https://agent:pw-do-not-project@example.invalid/bot123:do-not-project/send?token=do-not-project",
+            command: "do-not-project",
+          },
         },
         { ...base, approvalId: "memory", kind: "memory.write", preview: {} },
       ],
@@ -236,7 +240,8 @@ describe("Gateway inbox projection", () => {
     expect(item("doc")?.source.toolName).toBe("documents.create");
     expect(item("doc")?.summary).toBe("Path: notes/launch-plan.md");
     expect(item("fetch")?.source.toolName).toBe("custom.fetch");
-    expect(item("fetch")?.summary).toBe("Target: https://example.invalid/status");
+    // Review on #565: URL userinfo, path and query can carry credentials, so the Inbox names only the host.
+    expect(item("fetch")?.summary).toBe("Target: https://example.invalid");
     expect(item("memory")?.source).not.toHaveProperty("toolName");
     expect(JSON.stringify(projection)).not.toContain("do-not-project");
   });

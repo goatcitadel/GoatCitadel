@@ -8,6 +8,7 @@ import type {
   OperatorInboxSourceCoverage,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
+import { redactUrlForError } from "@goatcitadel/policy-engine";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { BackupRetentionService } from "./backup-retention-service.js";
 import type { DaemonRouteService } from "./daemon-route-service.js";
@@ -86,7 +87,9 @@ function approvalTargetSummary(preview: unknown): string {
   // A tool approval's preview (policy-engine buildApprovalPreview) names its path or target; commands stay out.
   if (typeof record.toolName === "string") {
     if (typeof record.path === "string" && record.path.trim()) return bounded(`Path: ${record.path.trim()}`);
-    if (typeof record.target === "string" && record.target.trim()) return bounded(`Target: ${record.target.trim()}`);
+    // A URL target can carry credentials in its userinfo, path or query, so only its scheme and host are shown.
+    if (typeof record.target === "string" && record.target.trim())
+      return bounded(`Target: ${redactUrlForError(record.target)}`);
   }
   return "Review the requested action and its policy reason. Target details are available in the approval record.";
 }
