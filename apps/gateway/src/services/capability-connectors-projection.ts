@@ -34,7 +34,8 @@ export interface CapabilityConnectorsProjectionInput {
   connections: readonly IntegrationConnection[];
   googleStatusByConnectionId: ReadonlyMap<string, GoogleWorkspaceOAuthStatus>;
   webSearch: readonly WebSearchCredentialStatus[];
-  firecrawlEnabled: boolean;
+  /** `selfHosted`: the Firecrawl address is the operator's own server, which needs no key. */
+  firecrawl: { enabled: boolean; selfHosted: boolean };
   hiddenServerIds: ReadonlySet<string>;
   hiddenConnectionIds: ReadonlySet<string>;
   chat: { staticMcp: boolean; durableExecution: boolean };
@@ -49,7 +50,7 @@ interface Verdict {
 type ItemParts = Omit<CapabilityConnectorItem, "group" | "hiddenInWorkspace">;
 
 const WEB_SEARCH_ROWS: Readonly<Record<WebSearchCredentialTargetId, { name: string; description: string }>> = {
-  "search.firecrawl": { name: "Firecrawl", description: "Search the web and read pages with your Firecrawl key." },
+  "search.firecrawl": { name: "Firecrawl", description: "Search the web and read pages with Firecrawl." },
   "search.brave": { name: "Brave Search", description: "Search the web with your Brave Search key." },
   "search.parallel": { name: "Parallel", description: "Search the web with your Parallel key." },
 };
@@ -217,7 +218,7 @@ function webSearchParts(status: WebSearchCredentialStatus, input: CapabilityConn
     kind: "built_in",
     source: "web_search",
     category: "search",
-    ...webSearchVerdict(status, input.firecrawlEnabled),
+    ...webSearchVerdict(status, input.firecrawl),
     auth: "api_key",
     runsOnThisDevice: false,
     networkHosts: status.endpointHost ? [status.endpointHost] : [],
@@ -258,7 +259,8 @@ function serverVerdict(server: McpServerRecord): Verdict {
 
 /**
  * A connection the operator turned off or paused stays turned off, whatever its sign-in says. A Google connection
- * then reports its own sign-in before the generic connection status, because Google keeps that outside the row.
+ * then reports its own sign-in before the generic connection status, because Google keeps that outside the row. With
+ * no Google status to read, the generic connection status decides, so a disconnected or failing one is not hidden.
  */
 function connectionVerdict(connection: IntegrationConnection, google: GoogleWorkspaceOAuthStatus | undefined): Verdict {
   if (!connection.enabled || connection.status === "paused") {
@@ -280,23 +282,26 @@ function connectionVerdict(connection: IntegrationConnection, google: GoogleWork
 }
 
 /**
- * A key makes a search engine ready. Firecrawl also has an on/off switch and a configurable address, so a saved key
- * can sit behind a switch that is off (turned off) or an address the network allowlist does not cover (broken).
+ * A key makes a search engine ready. Firecrawl is different: a self-hosted Firecrawl needs no key, and it also has an
+ * on/off switch and a configurable address. Once usable, it reads turned off when the switch is off and broken when the
+ * address is not on the network allowlist.
  */
 function webSearchVerdict(
   status: WebSearchCredentialStatus,
-  firecrawlEnabled: boolean,
+  firecrawl: CapabilityConnectorsProjectionInput["firecrawl"],
 ): Verdict & { lastError?: string } {
-  if (status.activeSource === "none") {
+  const hasKey = status.activeSource !== "none";
+  if (status.targetId !== "search.firecrawl") {
+    return hasKey ? { state: "connected", reason: "ready" } : { state: "available", reason: "needs_api_key" };
+  }
+  if (!hasKey && !firecrawl.selfHosted) {
     return { state: "available", reason: "needs_api_key" };
   }
-  if (status.targetId === "search.firecrawl") {
-    if (!firecrawlEnabled) {
-      return { state: "turned_off", reason: "turned_off" };
-    }
-    if (!status.endpointAllowlisted) {
-      return { state: "broken", reason: "error", lastError: FIRECRAWL_NOT_ALLOWLISTED_MESSAGE };
-    }
+  if (!firecrawl.enabled) {
+    return { state: "turned_off", reason: "turned_off" };
+  }
+  if (!status.endpointAllowlisted) {
+    return { state: "broken", reason: "error", lastError: FIRECRAWL_NOT_ALLOWLISTED_MESSAGE };
   }
   return { state: "connected", reason: "ready" };
 }

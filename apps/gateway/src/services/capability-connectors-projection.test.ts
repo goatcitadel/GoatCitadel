@@ -131,7 +131,7 @@ function input(overrides: Partial<CapabilityConnectorsProjectionInput> = {}): Ca
     connections: [],
     googleStatusByConnectionId: new Map(),
     webSearch: [],
-    firecrawlEnabled: true,
+    firecrawl: { enabled: true, selfHosted: false },
     hiddenServerIds: new Set(),
     hiddenConnectionIds: new Set(),
     chat: { staticMcp: true, durableExecution: true },
@@ -466,7 +466,7 @@ describe("buildCapabilityConnectors", () => {
       buildCapabilityConnectors(
         input({
           webSearch: [searchStatus("search.firecrawl", { endpointAllowlisted: false })],
-          firecrawlEnabled: true,
+          firecrawl: { enabled: true, selfHosted: false },
         }),
       ),
     );
@@ -476,12 +476,26 @@ describe("buildCapabilityConnectors", () => {
     expect(item.lastError).toBe("Firecrawl's address isn't on the allowed list");
   });
 
+  it("says why a self-hosted Firecrawl without a key is broken when its address is not allowed", () => {
+    const item = only(
+      buildCapabilityConnectors(
+        input({
+          webSearch: [searchStatus("search.firecrawl", { activeSource: "none", endpointAllowlisted: false })],
+          firecrawl: { enabled: true, selfHosted: true },
+        }),
+      ),
+    );
+
+    expect(item.state).toBe("broken");
+    expect(item.lastError).toBe("Firecrawl's address isn't on the allowed list");
+  });
+
   it("puts Firecrawl switched off in the turned-off group with no error text", () => {
     const item = only(
       buildCapabilityConnectors(
         input({
           webSearch: [searchStatus("search.firecrawl", { endpointAllowlisted: false })],
-          firecrawlEnabled: false,
+          firecrawl: { enabled: false, selfHosted: false },
         }),
       ),
     );
@@ -899,14 +913,59 @@ describe("buildCapabilityConnectors", () => {
           }),
       },
       {
-        condition: "Google connection with no sign-in status to read",
+        condition: "Google connection with no sign-in status to read, connected",
         expected: "connected / ready",
         state: "connected",
         reason: "ready",
         build: () =>
           input({
             integrationCatalog: [catalogEntry("automation.gmail")],
-            connections: [connection("automation.gmail", { connectionId: "conn-gmail" })],
+            connections: [connection("automation.gmail", { connectionId: "conn-gmail", status: "connected" })],
+          }),
+      },
+      {
+        condition: "Google connection with no sign-in status to read, disconnected",
+        expected: "needs_sign_in / not_connected",
+        state: "needs_sign_in",
+        reason: "not_connected",
+        build: () =>
+          input({
+            integrationCatalog: [catalogEntry("automation.gmail")],
+            connections: [connection("automation.gmail", { connectionId: "conn-gmail", status: "disconnected" })],
+          }),
+      },
+      {
+        condition: "Google connection with no sign-in status to read, in error",
+        expected: "broken / error",
+        state: "broken",
+        reason: "error",
+        build: () =>
+          input({
+            integrationCatalog: [catalogEntry("automation.gmail")],
+            connections: [connection("automation.gmail", { connectionId: "conn-gmail", status: "error" })],
+          }),
+      },
+      {
+        condition: "Google connection with no sign-in status to read, paused",
+        expected: "turned_off / turned_off",
+        state: "turned_off",
+        reason: "turned_off",
+        build: () =>
+          input({
+            integrationCatalog: [catalogEntry("automation.gmail")],
+            connections: [connection("automation.gmail", { connectionId: "conn-gmail", status: "paused" })],
+          }),
+      },
+      {
+        condition: "Google connection whose sign-in status belongs to another connection, disconnected",
+        expected: "needs_sign_in / not_connected",
+        state: "needs_sign_in",
+        reason: "not_connected",
+        build: () =>
+          input({
+            integrationCatalog: [catalogEntry("automation.gmail")],
+            connections: [connection("automation.gmail", { connectionId: "conn-gmail", status: "disconnected" })],
+            googleStatusByConnectionId: new Map([["conn-other", googleStatus({ connectionId: "conn-other" })]]),
           }),
       },
       {
@@ -935,14 +994,16 @@ describe("buildCapabilityConnectors", () => {
         expected: "connected / ready",
         state: "connected",
         reason: "ready",
-        build: () => input({ webSearch: [searchStatus("search.firecrawl")], firecrawlEnabled: true }),
+        build: () =>
+          input({ webSearch: [searchStatus("search.firecrawl")], firecrawl: { enabled: true, selfHosted: false } }),
       },
       {
         condition: "Firecrawl with a key but switched off",
         expected: "turned_off / turned_off",
         state: "turned_off",
         reason: "turned_off",
-        build: () => input({ webSearch: [searchStatus("search.firecrawl")], firecrawlEnabled: false }),
+        build: () =>
+          input({ webSearch: [searchStatus("search.firecrawl")], firecrawl: { enabled: false, selfHosted: false } }),
       },
       {
         condition: "Firecrawl with a key, switched on, but its address not allowed",
@@ -952,7 +1013,7 @@ describe("buildCapabilityConnectors", () => {
         build: () =>
           input({
             webSearch: [searchStatus("search.firecrawl", { endpointAllowlisted: false })],
-            firecrawlEnabled: true,
+            firecrawl: { enabled: true, selfHosted: false },
           }),
       },
       {
@@ -961,7 +1022,10 @@ describe("buildCapabilityConnectors", () => {
         state: "available",
         reason: "needs_api_key",
         build: () =>
-          input({ webSearch: [searchStatus("search.firecrawl", { activeSource: "none" })], firecrawlEnabled: true }),
+          input({
+            webSearch: [searchStatus("search.firecrawl", { activeSource: "none" })],
+            firecrawl: { enabled: true, selfHosted: false },
+          }),
       },
       {
         condition: "Firecrawl with no key, switched off",
@@ -969,7 +1033,10 @@ describe("buildCapabilityConnectors", () => {
         state: "available",
         reason: "needs_api_key",
         build: () =>
-          input({ webSearch: [searchStatus("search.firecrawl", { activeSource: "none" })], firecrawlEnabled: false }),
+          input({
+            webSearch: [searchStatus("search.firecrawl", { activeSource: "none" })],
+            firecrawl: { enabled: false, selfHosted: false },
+          }),
       },
       {
         condition: "Firecrawl with no key and its address not allowed",
@@ -979,7 +1046,70 @@ describe("buildCapabilityConnectors", () => {
         build: () =>
           input({
             webSearch: [searchStatus("search.firecrawl", { activeSource: "none", endpointAllowlisted: false })],
-            firecrawlEnabled: true,
+            firecrawl: { enabled: true, selfHosted: false },
+          }),
+      },
+      {
+        condition: "self-hosted Firecrawl with no key, switched on and allowed",
+        expected: "connected / ready",
+        state: "connected",
+        reason: "ready",
+        build: () =>
+          input({
+            webSearch: [searchStatus("search.firecrawl", { activeSource: "none" })],
+            firecrawl: { enabled: true, selfHosted: true },
+          }),
+      },
+      {
+        condition: "self-hosted Firecrawl with no key, switched off",
+        expected: "turned_off / turned_off",
+        state: "turned_off",
+        reason: "turned_off",
+        build: () =>
+          input({
+            webSearch: [searchStatus("search.firecrawl", { activeSource: "none" })],
+            firecrawl: { enabled: false, selfHosted: true },
+          }),
+      },
+      {
+        condition: "self-hosted Firecrawl with no key, switched on, but its address not allowed",
+        expected: "broken / error",
+        state: "broken",
+        reason: "error",
+        build: () =>
+          input({
+            webSearch: [searchStatus("search.firecrawl", { activeSource: "none", endpointAllowlisted: false })],
+            firecrawl: { enabled: true, selfHosted: true },
+          }),
+      },
+      {
+        condition: "self-hosted Firecrawl with a key, switched on and allowed",
+        expected: "connected / ready",
+        state: "connected",
+        reason: "ready",
+        build: () =>
+          input({ webSearch: [searchStatus("search.firecrawl")], firecrawl: { enabled: true, selfHosted: true } }),
+      },
+      {
+        condition: "Brave Search with no key while Firecrawl is self-hosted",
+        expected: "available / needs_api_key",
+        state: "available",
+        reason: "needs_api_key",
+        build: () =>
+          input({
+            webSearch: [searchStatus("search.brave", { activeSource: "none" })],
+            firecrawl: { enabled: true, selfHosted: true },
+          }),
+      },
+      {
+        condition: "Parallel with no key while Firecrawl is self-hosted and switched off",
+        expected: "available / needs_api_key",
+        state: "available",
+        reason: "needs_api_key",
+        build: () =>
+          input({
+            webSearch: [searchStatus("search.parallel", { activeSource: "none" })],
+            firecrawl: { enabled: false, selfHosted: true },
           }),
       },
       {
@@ -987,7 +1117,8 @@ describe("buildCapabilityConnectors", () => {
         expected: "connected / ready",
         state: "connected",
         reason: "ready",
-        build: () => input({ webSearch: [searchStatus("search.brave")], firecrawlEnabled: false }),
+        build: () =>
+          input({ webSearch: [searchStatus("search.brave")], firecrawl: { enabled: false, selfHosted: false } }),
       },
       {
         condition: "Brave Search with a key and its address not allowed",

@@ -30,31 +30,36 @@ describe("connector integration allowlist", () => {
     }
   });
 
-  it("names exactly the automation entries and the channels the AI can send through", () => {
-    expect([...CONNECTOR_INTEGRATION_CATALOG_IDS].sort()).toEqual(
-      [
-        "automation.gmail",
-        "automation.imap-smtp",
-        "automation.webhooks",
-        "channel.discord",
-        "channel.imessage",
-        "channel.mattermost",
-        "channel.slack",
-        "channel.teams",
-        "channel.telegram",
-        "channel.whatsapp",
-        "channel.zalo",
-        "channel.zalouser",
-      ].sort(),
+  it("lists every channel that has registry tools", () => {
+    const toolNames = createDefaultToolRegistry()
+      .list()
+      .map((tool) => tool.name);
+    const channelsWithTools = INTEGRATION_CATALOG.filter(
+      (entry) => entry.kind === "channel" && toolNames.some((name) => name.startsWith(`${entry.key}.`)),
     );
+
+    expect(channelsWithTools.length, "the registry has channel tools to compare against").toBeGreaterThan(0);
+    for (const entry of channelsWithTools) {
+      expect(
+        CONNECTOR_INTEGRATION_CATALOG_IDS.has(entry.catalogId),
+        `${entry.catalogId} has registry tools but is not listed`,
+      ).toBe(true);
+    }
   });
 
-  it.each(["automation.gmail", "automation.imap-smtp", "automation.webhooks", "channel.discord", "channel.teams"])(
-    "lists %s",
-    (catalogId) => {
-      expect(isListedIntegration(catalogEntry(catalogId))).toBe(true);
-    },
-  );
+  it.each([
+    "automation.gmail",
+    "automation.imap-smtp",
+    "automation.webhooks",
+    "channel.discord",
+    "channel.teams",
+    "channel.signal",
+    "channel.line",
+    "channel.nextcloud-talk",
+    "channel.google-chat",
+  ])("lists %s", (catalogId) => {
+    expect(isListedIntegration(catalogEntry(catalogId))).toBe(true);
+  });
 
   it("skips model providers even when the id is in the set", () => {
     const provider = { ...catalogEntry("model_provider.openai"), catalogId: "automation.gmail" };
