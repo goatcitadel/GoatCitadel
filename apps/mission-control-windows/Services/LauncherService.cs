@@ -136,11 +136,23 @@ public sealed class LauncherService
         var commandArgs = LauncherCommandArgs(launcher, args);
         var startInfo = BuildStartInfo(launcher, commandArgs);
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start GoatCitadel launcher.");
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
-        var stdoutValue = (await stdout).Trim();
-        var stderrValue = (await stderr).Trim();
+        string stdoutValue;
+        string stderrValue;
+        try
+        {
+            var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            stdoutValue = (await stdout).Trim();
+            stderrValue = (await stderr).Trim();
+        }
+        catch
+        {
+            // A cancelled or timed-out call must not leave the launcher (and the bundled node.exe it holds) running.
+            KillProcessTree(process);
+            throw;
+        }
+
         if (process.ExitCode != 0)
         {
             var detail = string.IsNullOrWhiteSpace(stderrValue) ? stdoutValue : stderrValue;
@@ -148,6 +160,18 @@ public sealed class LauncherService
         }
 
         return stdoutValue;
+    }
+
+    private static void KillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+        }
+        catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // The process already exited or cannot be signalled; nothing more to clean up.
+        }
     }
 
     private LauncherInvocation? InvocationUnderInstallRoot(string root)

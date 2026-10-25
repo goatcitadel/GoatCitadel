@@ -115,6 +115,7 @@ public sealed class DesktopUpdateService : IDisposable
             using var document = JsonDocument.Parse(text);
             if (document.RootElement.ValueKind != JsonValueKind.Array) throw new IOException("GitHub returned invalid update metadata.");
             var inspected = 0;
+            IOException? lastVerificationError = null;
             var channelReleases = document.RootElement.EnumerateArray().Where(release =>
                 !release.GetProperty("draft").GetBoolean()
                 && release.GetProperty("prerelease").GetBoolean() == (Status.Channel == "preview"));
@@ -126,7 +127,12 @@ public sealed class DesktopUpdateService : IDisposable
                 JsonElement? manifest;
                 if (Status.Channel == "stable")
                 {
-                    manifest = await _stableVerifier.ReadVerifiedManifestAsync(release, token);
+                    // Releases arrive newest first, but a backported patch can sit above a higher version, so
+                    // skip only the releases whose tag cannot beat the verified candidate instead of stopping.
+                    if (candidate is not null && System.Version.TryParse(tag.TrimStart('v'), out var tagVersion)
+                        && System.Version.TryParse(candidate.Version, out var bestVersion) && tagVersion <= bestVersion) continue;
+                    try { manifest = await _stableVerifier.ReadVerifiedManifestAsync(release, token); }
+                    catch (IOException error) { lastVerificationError = error; continue; }
                 }
                 else
                 {
@@ -143,6 +149,8 @@ public sealed class DesktopUpdateService : IDisposable
                 if (parsedCandidate is not null && DesktopUpdatePolicy.IsPreferred(parsedCandidate, candidate))
                     candidate = parsedCandidate;
             }
+            // One unverifiable release must not hide a good one; only report it when nothing verified.
+            if (candidate is null && lastVerificationError is not null) throw lastVerificationError;
         }
         if (candidate is not null && candidate.Channel == "preview"
             && candidate.BuildSequence < _preferences.HighestPreviewSequence) candidate = null;

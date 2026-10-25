@@ -5,6 +5,9 @@ namespace GoatCitadel.MissionControl.Windows.Services;
 
 public sealed class RuntimeStatusService
 {
+    // Matches the 8 s status deadline the desktop shell uses; a hung launcher is killed by LauncherService.
+    private static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(8);
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -25,7 +28,9 @@ public sealed class RuntimeStatusService
 
     public async Task<DesktopRuntimeStatus> ReadStatusAsync(CancellationToken cancellationToken = default)
     {
-        var output = await _launcherService.RunAsync(new[] { "status", "--json" }, cancellationToken);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(StatusTimeout);
+        var output = await _launcherService.RunAsync(new[] { "status", "--json" }, deadline.Token);
         return ParseStatus(output);
     }
 
