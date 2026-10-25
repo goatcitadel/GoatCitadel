@@ -103,24 +103,40 @@ const TOOLS_UNAVAILABLE_GUIDANCE: Record<BaseAgentToolsUnavailableReason, { caus
   },
 };
 
+const TOOL_APPROVAL_CAVEAT =
+  "This is the current policy for typical arguments; a specific call can still be blocked or need approval because of its arguments, and the approval prompt the operator sees is the final word.";
+
 /**
- * Which callable tools ask the operator first, from the same policy probe that filters the catalog (#502).
- * Without it the model could only guess "based on risk, not confirmed policy". Omitted when no probe ran.
- * Describes only the tools the catalog shows, so it never names one folded into "and N more".
+ * The callable tool catalog. With the policy probe's approval answers (#502), a mixed catalog is listed in two
+ * groups, "asks for approval first" and "runs without asking", so the model can say exactly what needs the
+ * operator, and no name is repeated. Approval is described only for the tools shown, never ones past the cap.
  */
-function buildApprovalLine(toolset: BaseAgentPromptToolset): string | undefined {
+function buildToolCatalogSection(toolset: BaseAgentPromptToolset): string | undefined {
+  const shown = toolset.toolNames
+    .slice(0, MAX_BASE_PROMPT_TOOL_NAMES)
+    .map((name) => ({ name, text: sanitizePromptCatalogText(name, 80) }))
+    .filter((entry) => entry.text.length > 0);
+  if (shown.length === 0) return undefined;
+  const overflow = toolset.toolNames.length - shown.length;
+  const heading = "## Tool catalog (current policy still applies)";
+  const list = (entries: typeof shown) => entries.map((entry) => entry.text).join(", ");
   const approvalRequired = toolset.approvalRequiredToolNames;
-  if (!approvalRequired) return undefined;
-  const shown = toolset.toolNames.slice(0, MAX_BASE_PROMPT_TOOL_NAMES);
-  const asksFirst = shown.filter((name) => approvalRequired.includes(name));
-  const caveat =
-    "This is the current policy for typical arguments; a specific call can still be blocked or need approval because of its arguments, and the approval prompt the operator sees is the final word.";
-  if (asksFirst.length === 0) return `Approval: none of the listed tools asks for approval before it runs. ${caveat}`;
-  if (asksFirst.length === shown.length) {
-    return `Approval: every tool listed here asks the operator for approval before it runs. ${caveat}`;
+  const asksFirst = approvalRequired ? shown.filter((entry) => approvalRequired.includes(entry.name)) : [];
+  if (approvalRequired && asksFirst.length > 0 && asksFirst.length < shown.length) {
+    const runsFreely = shown.filter((entry) => !approvalRequired.includes(entry.name));
+    return [
+      heading,
+      `Asks for approval first: ${list(asksFirst)}`,
+      `Runs without asking: ${list(runsFreely)}`,
+      ...(overflow > 0 ? [`${overflow} more ${overflow === 1 ? "tool is" : "tools are"} not listed here.`] : []),
+      TOOL_APPROVAL_CAVEAT,
+    ].join("\n");
   }
-  const names = asksFirst.map((name) => sanitizePromptCatalogText(name, 80));
-  return `Approval: these ask the operator for approval before they run: ${names.join(", ")}. The other listed tools run without asking. ${caveat}`;
+  const flat = `${heading}\n${list(shown)}${overflow > 0 ? `, and ${overflow} more` : ""}`;
+  if (!approvalRequired) return flat;
+  return asksFirst.length === 0
+    ? `${flat}\nApproval: none of the listed tools asks for approval before it runs. ${TOOL_APPROVAL_CAVEAT}`
+    : `${flat}\nApproval: every tool listed here asks the operator for approval before it runs. ${TOOL_APPROVAL_CAVEAT}`;
 }
 
 /**
@@ -182,9 +198,13 @@ export interface BaseAgentSystemPromptBlock extends Record<string, unknown> {
   text: string;
 }
 
-/** Defensive caps so a large catalog cannot bloat or destabilize the prompt. */
+/**
+ * Defensive caps so a large catalog cannot bloat or destabilize the prompt. The tool cap leaves room for a fresh
+ * install's whole callable catalog (about 90 tools), so the model can name every tool and whether it asks first;
+ * at 60 it hid about a third of them behind "and N more" (#502).
+ */
 export const MAX_BASE_PROMPT_SKILLS = 20;
-export const MAX_BASE_PROMPT_TOOL_NAMES = 60;
+export const MAX_BASE_PROMPT_TOOL_NAMES = 150;
 
 /**
  * Sanitize an operator-authored catalog entry (skill name/summary, tool name)
@@ -335,21 +355,11 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
 
   const toolsUnavailableReason = input.toolsUnavailableReason;
   const toolsCallable = toolsUnavailableReason === undefined;
-  const toolNames = toolsCallable
-    ? toolset.toolNames
-        .slice(0, MAX_BASE_PROMPT_TOOL_NAMES)
-        .map((name) => sanitizePromptCatalogText(name, 80))
-        .filter((name) => name.length > 0)
-    : [];
   if (toolsUnavailableReason) {
     tailSections.push(buildToolsUnavailableSection(toolsUnavailableReason, input.webMode));
-  } else if (toolNames.length > 0) {
-    const overflow = toolset.toolNames.length - toolNames.length;
-    const suffix = overflow > 0 ? `, and ${overflow} more` : "";
-    const approvalLine = buildApprovalLine(toolset);
-    tailSections.push(
-      `## Tool catalog (current policy still applies)\n${toolNames.join(", ")}${suffix}${approvalLine ? `\n${approvalLine}` : ""}`,
-    );
+  } else {
+    const catalogSection = buildToolCatalogSection(toolset);
+    if (catalogSection) tailSections.push(catalogSection);
   }
   const writeAndRunSection = toolsCallable ? buildWriteAndRunPolicySection(toolset) : undefined;
   if (writeAndRunSection) tailSections.push(writeAndRunSection);

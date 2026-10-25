@@ -159,25 +159,46 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(tail).toMatch(/a specific call can still be blocked or need approval because of its arguments/i);
   });
 
-  it("names the tools that ask first, and says the rest run without asking, when only some need approval", () => {
+  it("groups the tools by whether they ask first, when only some need approval", () => {
     const tail = buildBaseAgentSystemPrompt(
       input({
         toolset: { toolNames: ["fs.read", "web.search", "time.now"], approvalRequiredToolNames: ["web.search"] },
       }),
     ).volatileTail;
-    expect(tail).toContain("Approval: these ask the operator for approval before they run: web.search.");
-    expect(tail).toContain("The other listed tools run without asking.");
+    expect(tail).toContain(
+      "## Tool catalog (current policy still applies)\nAsks for approval first: web.search\nRuns without asking: fs.read, time.now",
+    );
+    expect(tail).toMatch(/a specific call can still be blocked or need approval because of its arguments/i);
   });
 
-  it("only describes approval for the tools the catalog shows, not the ones folded into 'and N more'", () => {
+  it("lists a fresh install's whole catalog, each tool once with its approval group (#502)", () => {
+    // A fresh install has ~90 callable tools; the old cap of 60 hid the rest behind "and 31 more",
+    // and the approval line then repeated most names a second time.
+    const toolNames = Array.from({ length: 95 }, (_, index) => `tool.n${index}`);
+    const asksFirst = toolNames.filter((_, index) => index % 3 !== 0);
+    const tail = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames, approvalRequiredToolNames: asksFirst } }),
+    ).volatileTail;
+    expect(tail).not.toMatch(/and \d+ more/);
+    for (const name of toolNames)
+      expect(tail.split(new RegExp(`\\b${name.replace(".", "\\.")}\\b`)).length - 1).toBe(1);
+    const asksLine = tail.split("\n").find((line) => line.startsWith("Asks for approval first: "))!;
+    const runsLine = tail.split("\n").find((line) => line.startsWith("Runs without asking: "))!;
+    expect(asksLine.replace("Asks for approval first: ", "").split(", ")).toEqual(asksFirst);
+    expect(runsLine.replace("Runs without asking: ", "").split(", ")).toEqual(
+      toolNames.filter((name) => !asksFirst.includes(name)),
+    );
+  });
+
+  it("only describes approval for the tools the catalog shows, not the ones past the cap", () => {
     // Live P-03 (#502): the approval line named tools past the catalog cap that the catalog never listed.
     const toolNames = Array.from({ length: MAX_BASE_PROMPT_TOOL_NAMES + 2 }, (_, index) => `tool.n${index}`);
     const hidden = toolNames[MAX_BASE_PROMPT_TOOL_NAMES]!;
     const some = buildBaseAgentSystemPrompt(
       input({ toolset: { toolNames, approvalRequiredToolNames: ["tool.n1", hidden] } }),
     ).volatileTail;
-    expect(some).toContain(", and 2 more");
-    expect(some).toContain("Approval: these ask the operator for approval before they run: tool.n1.");
+    expect(some).toContain("2 more tools are not listed here.");
+    expect(some).toContain("Asks for approval first: tool.n1\n");
     expect(some).not.toContain(hidden);
     const onlyHidden = buildBaseAgentSystemPrompt(
       input({ toolset: { toolNames, approvalRequiredToolNames: [hidden] } }),
