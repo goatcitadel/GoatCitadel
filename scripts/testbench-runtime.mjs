@@ -47,10 +47,35 @@ export function parseTestbenchArgs(argv) {
 }
 
 /**
+ * The sandbox starts from an empty model-metadata manifest, so the CLI models get their entries from the tracked
+ * shipped file, as an install has them. Without a context window the CLI route has no fingerprint and every
+ * route-pinned Chat feature (automatic delegation, explicit context, provider fallback) is refused (#495).
+ */
+async function copyShippedClaudeCodeCliMetadata(runtimeRoot, sourceRoot) {
+  const shipped = JSON.parse(await fs.readFile(path.join(sourceRoot, "config", "llm-model-metadata.json"), "utf8"));
+  const metadataPath = path.join(runtimeRoot, "config", "llm-model-metadata.json");
+  let metadata = { version: 1, entries: {} };
+  try {
+    metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const prefix = `${CLAUDE_CODE_CLI_PROVIDER.providerId}/`;
+  const cliEntries = Object.entries(shipped.entries ?? {}).filter(([key]) => key.startsWith(prefix));
+  const entries = { ...metadata.entries, ...Object.fromEntries(cliEntries) };
+  await fs.writeFile(metadataPath, `${JSON.stringify({ ...metadata, entries }, null, 2)}\n`, "utf8");
+}
+
+/**
  * Makes the built-in Claude Code CLI provider the only, active provider of a sandbox runtime root, in both the unified
  * config and the compatibility provider file (the same two files live-provider-preqa rewrites).
  */
-export async function writeClaudeCodeCliProviderConfig(runtimeRoot, model = CLAUDE_CODE_CLI_MODEL) {
+export async function writeClaudeCodeCliProviderConfig(
+  runtimeRoot,
+  model = CLAUDE_CODE_CLI_MODEL,
+  sourceRoot = repoRoot,
+) {
+  await copyShippedClaudeCodeCliMetadata(runtimeRoot, sourceRoot);
   const llm = {
     activeProviderId: CLAUDE_CODE_CLI_PROVIDER.providerId,
     activeModel: model,

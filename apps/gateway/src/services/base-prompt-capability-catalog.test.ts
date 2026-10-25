@@ -1,6 +1,6 @@
 import type { ToolAccessEvaluateRequest, ToolAccessEvaluateResponse } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { filterBasePromptToolsetByPolicy } from "./base-prompt-capability-catalog.js";
+import { filterBasePromptToolsetByPolicy, withoutUnadmittedFanout } from "./base-prompt-capability-catalog.js";
 
 const SCOPE = { sessionId: "session-1", workspaceId: "workspace-1", mode: "chat" } as const;
 
@@ -58,5 +58,15 @@ describe("filterBasePromptToolsetByPolicy", () => {
     });
     const filtered = await filterBasePromptToolsetByPolicy({ toolNames: ["fs.read", "fs.patch"] }, SCOPE, inspect);
     expect(filtered.toolNames).toEqual(["fs.read"]);
+  });
+});
+
+describe("withoutUnadmittedFanout", () => {
+  it("keeps agent.fanout only on a turn whose automatic delegation was admitted (#495)", () => {
+    const toolset = { toolNames: ["fs.list", "agent.fanout"], approvalRequiredToolNames: ["agent.fanout"] };
+    expect(withoutUnadmittedFanout(toolset, "auto_when_useful")).toBe(toolset);
+    expect(withoutUnadmittedFanout(toolset, "ask_when_useful").toolNames).toEqual(["fs.list"]);
+    expect(withoutUnadmittedFanout(toolset, "off").toolNames).toEqual(["fs.list"]);
+    expect(withoutUnadmittedFanout(toolset, undefined).toolNames).toEqual(["fs.list"]);
   });
 });

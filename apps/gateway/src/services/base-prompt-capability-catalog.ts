@@ -9,7 +9,13 @@
  * through the step's real tool list.
  */
 
-import type { ChatMode, ToolAccessEvaluateRequest, ToolAccessEvaluateResponse } from "@goatcitadel/contracts";
+import type {
+  ChatMode,
+  ChatSessionPrefsRecord,
+  ToolAccessEvaluateRequest,
+  ToolAccessEvaluateResponse,
+} from "@goatcitadel/contracts";
+import { SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
 import type { BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
 import { buildToolAccessProbeArgs } from "./chat-turn-agent-runner.js";
 
@@ -66,4 +72,17 @@ export async function filterBasePromptToolsetByPolicy(
     policyDeniedToolNames: names.filter((toolName) => !allowed.has(toolName)),
     approvalRequiredToolNames: names.filter((toolName) => asksFirst.has(toolName)),
   };
+}
+
+/**
+ * The runner offers agent.fanout only on a turn whose automatic delegation was admitted, which turn preparation
+ * records as the "auto_when_useful" subagent policy. Listing it otherwise told the model it could delegate, and on
+ * the Claude Code CLI a call to a tool the step does not offer fails closed (#495).
+ */
+export function withoutUnadmittedFanout(
+  toolset: BaseAgentPromptToolset,
+  subagentPolicy: ChatSessionPrefsRecord["subagentPolicy"] | undefined,
+): BaseAgentPromptToolset {
+  if (subagentPolicy === "auto_when_useful" || !toolset.toolNames.includes(SUBAGENT_FANOUT_TOOL_NAME)) return toolset;
+  return { ...toolset, toolNames: toolset.toolNames.filter((name) => name !== SUBAGENT_FANOUT_TOOL_NAME) };
 }
