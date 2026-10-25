@@ -1007,9 +1007,20 @@ export async function rejectPendingChatTurnApprovals(
   // each distinct foreign turn is resolved once across the whole scan.
   const scannedOwners = new Map<string, { target: { sessionId: string; turnId: string } } | { skipped: string }>();
   for (const familySessionId of await collectChatTurnFamilySessionIds(storage, [sessionId, owner.sessionId])) {
-    for (const approval of await storage.approvals.listPendingBySession(familySessionId, undefined, 500, {
-      includeExpired: true,
-    })) {
+    // Exhaust every page: an approval past any fixed cap whose projection has not arrived yet
+    // would otherwise survive the cancellation unresolved.
+    const familyPending: ApprovalRequest[] = [];
+    let pendingCursor: string | undefined;
+    do {
+      const page = await storage.approvals.listPendingBySessionPage(familySessionId, {
+        includeExpired: true,
+        cursor: pendingCursor,
+        pageSize: 500,
+      });
+      familyPending.push(...page.items);
+      pendingCursor = page.nextCursor;
+    } while (pendingCursor);
+    for (const approval of familyPending) {
       if (!approval.linkage?.sessionId || !approval.linkage.turnId) continue;
       const scanKey = `${approval.linkage.sessionId}\u0000${approval.linkage.turnId}`;
       let scanned = scannedOwners.get(scanKey);

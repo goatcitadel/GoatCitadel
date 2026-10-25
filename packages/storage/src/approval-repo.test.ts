@@ -1119,4 +1119,19 @@ describe("ApprovalRepository.listPendingBySession", () => {
     assert.deepEqual(repo.listPendingBySession("session-none", "ws-a"), []);
     assert.throws(() => repo.listPendingBySession("  "), /required/u);
   });
+
+  it("pages through every pending approval for a session with a keyset cursor", () => {
+    const repo = createRepo();
+    const created = [0, 1, 2].map(() => repo.create(chatApproval("session-paged")).approvalId);
+
+    const first = repo.listPendingBySessionPage("session-paged", { pageSize: 2 });
+    assert.equal(first.items.length, 2);
+    assert.ok(first.nextCursor);
+    const second = repo.listPendingBySessionPage("session-paged", { pageSize: 2, cursor: first.nextCursor });
+    assert.equal(second.nextCursor, undefined);
+    assert.deepEqual(
+      [...first.items, ...second.items].map((approval) => approval.approvalId).sort(),
+      [...created].sort(),
+    );
+  });
 });
