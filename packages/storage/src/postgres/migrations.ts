@@ -15244,6 +15244,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: CITADEL_VAULT_KEYS_SCHEMA_CONVERGENCE_POSTGRES_SQL,
     integritySha256: "a80c3efa7adb6246a127793838e95491c974f429c67045a7edf8384cbed8a7aa",
   },
+  {
+    // Parity with SQLite v270: the boot-time orphan scan joins on user_message_id.
+    version: 219,
+    name: "chat_turn_traces_user_message_index",
+    sql: `CREATE INDEX IF NOT EXISTS idx_chat_turn_traces_user_message ON chat_turn_traces(user_message_id);`,
+    integritySha256: "10c9319a7fa04be0c6adf099d1a6d3d0a999f4b452b861268e4ea78b6d7ddc5b",
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {
