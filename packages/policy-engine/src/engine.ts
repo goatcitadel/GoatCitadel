@@ -81,6 +81,7 @@ import {
   type MeshToolPolicyBinding,
 } from "./mesh-tool-policy-binding.js";
 import { resolveReadPathAccess } from "./sandbox/path-jail.js";
+import { isSamePathOrDescendant } from "./sandbox/write-root-safety.js";
 import {
   assertNotHardForbiddenWritePath,
   assertToolWritePath,
@@ -1792,7 +1793,9 @@ export class ToolPolicyEngine {
       );
       if (
         candidates.length === 0 &&
-        (requiresExplicitPathForGrantConstraints(request.toolName) || request.toolName === "docs.ingest")
+        (requiresExplicitPathForGrantConstraints(request.toolName) ||
+          request.toolName === "docs.ingest" ||
+          hasRequiredPathArgument(toolDef))
       ) {
         return "grant path constraints require an explicit output path";
       }
@@ -2977,7 +2980,7 @@ function extractPathCandidates(args?: Record<string, unknown>): string[] {
     return [];
   }
   const listed = Array.isArray(args.paths) ? args.paths : [];
-  return [args.path, args.from, args.to, args.relativePath, args.outputPath, ...listed]
+  return [args.path, args.from, args.to, args.relativePath, args.outputPath, args.cwd, ...listed]
     .map((value) => (typeof value === "string" ? value.trim() : ""))
     .filter(Boolean);
 }
@@ -3056,6 +3059,18 @@ function requiresExplicitWritePath(toolName: string): boolean {
   return toolName === "fs.delete";
 }
 
+const PATH_ARGUMENT_NAMES = ["path", "from", "to", "relativePath", "outputPath", "cwd"] as const;
+
+/**
+ * True when the tool's own schema marks a filesystem path argument as required.
+ * With an allowedPaths grant, such a call that yields no path candidate must be
+ * refused rather than skipping the constraint (fail closed).
+ */
+function hasRequiredPathArgument(toolDef?: ToolDefinition): boolean {
+  const required = toolDef?.argSchema?.required;
+  return Array.isArray(required) && required.some((name) => PATH_ARGUMENT_NAMES.some((arg) => arg === name));
+}
+
 function requiresExplicitPathForGrantConstraints(toolName: string): boolean {
   return toolName === "browser.screenshot" || toolName === "git.add";
 }
@@ -3091,17 +3106,13 @@ function getReferenceRootPaths(constraints?: ToolGrantConstraints): string[] {
 
 function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {
   try {
-    const resolvedCandidate = normalizePathForMatch(candidate);
     for (const root of roots) {
       if (root.trim() === "*") {
         return true;
       }
-      const rootVariants = normalizePathVariantsForMatch(root);
-      if (
-        rootVariants.some(
-          (resolvedRoot) => resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}/`),
-        )
-      ) {
+      // isSamePathOrDescendant folds case on Windows (like the write jail) and
+      // checks the separator boundary, so "/data2" is not inside "/data".
+      if (normalizePathVariantsForMatch(root).some((rootVariant) => isSamePathOrDescendant(rootVariant, candidate))) {
         return true;
       }
     }
@@ -3111,14 +3122,10 @@ function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {
   }
 }
 
-function normalizePathForMatch(value: string): string {
-  return path.normalize(path.resolve(value)).replaceAll("\\", "/").replace(/\/+$/, "");
-}
-
 function normalizePathVariantsForMatch(value: string): string[] {
-  const resolvedValue = normalizePathForMatch(value);
+  const resolvedValue = path.resolve(value);
   try {
-    const realValue = fs.realpathSync(path.resolve(value)).replaceAll("\\", "/").replace(/\/+$/, "");
+    const realValue = fs.realpathSync.native(resolvedValue);
     return realValue === resolvedValue ? [resolvedValue] : [resolvedValue, realValue];
   } catch {
     return [resolvedValue];
