@@ -11,7 +11,7 @@ import {
   WidthType,
 } from "docx";
 import { createArtifactDesignPlan, cssColor, type ArtifactDesignPlan } from "./artifact-design.js";
-import { createDocumentPdf } from "./document-pdf.js";
+import { createDocumentPdf, createPlainDocumentPdf } from "./document-pdf.js";
 import { createStoredZip, type ZipEntry } from "./presentation-pptx.js";
 
 export type DocumentArtifactFormat = "markdown" | "txt" | "html" | "json" | "csv" | "docx" | "pdf";
@@ -101,7 +101,8 @@ export async function createDocumentArtifact(
     case "pdf": {
       const design = input.design;
       if (!design || design.mode === "plain" || design.mode === "minimal") {
-        return { ...output, data: buildPdf(input), renderedLayouts: ["plain-text"], warnings: [] };
+        const pdf = createPlainDocumentPdf(input.title, plainLines(input));
+        return { ...output, data: pdf.buffer, renderedLayouts: ["plain-text"], warnings: pdf.warnings };
       }
       const pdf = createDocumentPdf({ ...input, design });
       return { ...output, data: pdf.buffer, renderedLayouts: pdf.layouts, warnings: pdf.warnings };
@@ -473,59 +474,6 @@ function paragraph(text: string, options: { bold?: boolean; size?: number } = {}
   return `<w:p><w:r>${runProps}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
-function buildPdf(input: DocumentArtifactInput): Buffer {
-  const wrappedLines = plainLines(input).flatMap((line) => wrapLine(toPdfSafeText(line), 90));
-  const pages = chunk(wrappedLines.length > 0 ? wrappedLines : ["No content provided."], 44);
-  const pageIds = pages.map((_, index) => 4 + index * 2);
-  const contentIds = pages.map((_, index) => 5 + index * 2);
-  const objects: string[] = [
-    "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
-    `2 0 obj\n<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pages.length} >>\nendobj\n`,
-    "3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
-  ];
-  pages.forEach((lines, index) => {
-    const pageId = pageIds[index] as number;
-    const contentId = contentIds[index] as number;
-    const stream = buildPageStream(lines);
-    objects.push(
-      `${pageId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>\nendobj\n`,
-    );
-    objects.push(
-      `${contentId} 0 obj\n<< /Length ${Buffer.byteLength(stream, "utf8")} >>\nstream\n${stream}\nendstream\nendobj\n`,
-    );
-  });
-  return buildPdfBuffer(objects);
-}
-
-function buildPageStream(lines: string[]): string {
-  return [
-    "BT",
-    "/F1 12 Tf",
-    "16 TL",
-    "72 740 Td",
-    ...lines.map((line) => `(${escapePdfLiteral(line)}) Tj T*`),
-    "ET",
-  ].join("\n");
-}
-
-function buildPdfBuffer(objects: string[]): Buffer {
-  let output = "%PDF-1.4\n% GoatCitadel\n";
-  const offsets = [0];
-  for (const object of objects) {
-    offsets.push(Buffer.byteLength(output, "utf8"));
-    output += object;
-  }
-  const xrefOffset = Buffer.byteLength(output, "utf8");
-  output += `xref\n0 ${objects.length + 1}\n`;
-  output += "0000000000 65535 f \n";
-  output += offsets
-    .slice(1)
-    .map((offset) => `${String(offset).padStart(10, "0")} 00000 n `)
-    .join("\n");
-  output += `\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
-  return Buffer.from(output, "utf8");
-}
-
 function plainLines(input: DocumentArtifactInput): string[] {
   const lines = [input.title, ""];
   if (input.body?.trim()) {
@@ -613,45 +561,4 @@ function stringifyCell(value: unknown): string {
     return String(value);
   }
   return JSON.stringify(value);
-}
-
-function wrapLine(line: string, maxLength: number): string[] {
-  if (line.length <= maxLength) {
-    return [line];
-  }
-  const words = line.split(/\s+/);
-  const lines: string[] = [];
-  let current = "";
-  for (const word of words) {
-    if (!current) {
-      current = word;
-      continue;
-    }
-    if (`${current} ${word}`.length > maxLength) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = `${current} ${word}`;
-    }
-  }
-  if (current) {
-    lines.push(current);
-  }
-  return lines;
-}
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-  return chunks.length > 0 ? chunks : [[]];
-}
-
-function escapePdfLiteral(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
-}
-
-function toPdfSafeText(value: string): string {
-  return value.replace(/[^\t\n\r -~]/g, "?");
 }

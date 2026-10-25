@@ -158,7 +158,51 @@ describe("createDocumentPdf", () => {
     expect(Math.min(...baselines)).toBeGreaterThanOrEqual(32);
     expect(contentStreams(pdf.buffer).join("\n")).toContain("\x85) Tj");
   });
+
+  it("keeps checkboxes, arrows, and non-Latin letters by embedding a fallback font (#504)", async () => {
+    const design = createArtifactDesignPlan({ kind: "pdf", title: "Launch checklist", format: "pdf" });
+    const lines = ["☐ Book the venue", "☑ Send invites → guests", "✓ Café für Жанна", "Ελληνικά ő ł ş"];
+    const pdf = createDocumentPdf({
+      title: "Launch checklist ☐",
+      sections: [{ heading: "Tasks", body: "", bullets: lines }],
+      design,
+    });
+    const text = await extractPdfText(pdf.buffer);
+
+    // The bundled fonts have no Arrows block, so "→" keeps its readable ASCII stand-in.
+    const expected = [...lines.map((line) => line.replace("→", "->")), "Launch checklist ☐"];
+    for (const line of expected) expect(text).toContain(line);
+    expect(pdf.warnings).toEqual([]);
+    // Latin text keeps the standard Helvetica face; only the other characters use the embedded font.
+    expect(contentStreams(pdf.buffer).join("\n")).toContain("(Tasks) Tj");
+    expect(pdf.buffer.toString("latin1")).toMatch(/\/FontFile2 \d+ 0 R/u);
+  });
+
+  it("draws a visible substitute for characters no embedded font covers, and says so", async () => {
+    const design = createArtifactDesignPlan({ kind: "pdf", title: "Unsupported", format: "pdf" });
+    const pdf = createDocumentPdf({
+      title: "Unsupported",
+      sections: [{ heading: "Notes", body: "", bullets: ["Party 🎉 in 中文"] }],
+      design,
+    });
+    const text = await extractPdfText(pdf.buffer);
+
+    expect(text).toContain("Party � in ��");
+    expect(pdf.warnings).toEqual([expect.stringContaining("3 character(s)")]);
+    expect(pdf.warnings[0]).toContain("�");
+  });
 });
+
+async function extractPdfText(buffer: Buffer): Promise<string> {
+  // unpdf's bundled type declarations do not resolve under this package's settings, as in native-document-parser.ts.
+  const { extractText, getDocumentProxy } = (await import("unpdf" as string)) as {
+    extractText: (document: unknown, options: { mergePages: true }) => Promise<{ text: string }>;
+    getDocumentProxy: (data: Uint8Array) => Promise<unknown>;
+  };
+  const document = await getDocumentProxy(new Uint8Array(buffer));
+  const { text } = await extractText(document, { mergePages: true });
+  return text;
+}
 
 describe("documents.create pdf design report", () => {
   it("reports the layouts the renderer drew and the design colors it used", async () => {
@@ -179,7 +223,7 @@ describe("documents.create pdf design report", () => {
 
     expect(report.layouts).toEqual(["report-cover", "callout-box", "title-body", "data-table"]);
     expect(report.residualRisks).toContain(
-      "PDF reports use standard Helvetica text and built-in color shapes; photos and custom fonts are not embedded.",
+      "PDF reports use Helvetica text and built-in color shapes, embedding bundled Noto glyphs only for characters Helvetica lacks; photos are not embedded, and emoji or CJK text is shown as a substitute glyph.",
     );
     expect(contentStreams(fs.readFileSync(path.join(root, "trails.pdf"))).join("\n")).toContain("0.122 0.369 0.294 rg");
   });

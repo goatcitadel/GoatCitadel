@@ -1,9 +1,23 @@
 import { deflateSync } from "node:zlib";
+import {
+  PDF_FALLBACK_RESOURCE_NAMES,
+  PDF_MISSING_GLYPH_SUBSTITUTE,
+  pdfFallbackFaceFor,
+  pdfFallbackGlyph,
+  pdfGlyphHex,
+  writePdfFallbackFont,
+  type PdfFallbackFace,
+} from "./pdf-fallback-fonts.js";
 
 /**
  * Minimal dependency-free PDF 1.4 writer for server-rendered artifacts.
- * Text uses the standard Helvetica faces with WinAnsiEncoding, so no font
- * files are embedded; widths come from the Adobe core-font metrics.
+ * Text uses the standard Helvetica faces with WinAnsiEncoding (widths from the
+ * Adobe core-font metrics). Characters WinAnsi lacks are drawn from bundled
+ * fallback fonts, of which each PDF embeds only the glyphs it uses.
+ *
+ * "WinAnsi byte-string" text below holds one character per drawn glyph: codes up
+ * to 0xFF are WinAnsi bytes for Helvetica, and higher BMP code points are drawn
+ * with a fallback font.
  */
 
 export type PdfFont = "regular" | "bold";
@@ -86,6 +100,14 @@ const WIN_ANSI_SPECIALS: ReadonlyMap<string, number> = new Map([
   ["ž", 0x9e],
   ["Ÿ", 0x9f],
 ]);
+// Spacing and hyphen variants keep their meaning for line wrapping.
+const NORMALIZED: Readonly<Record<string, string>> = {
+  "‐": "-",
+  "‑": "-",
+  "\u2009": " ",
+  "\u202f": " ",
+};
+// Used only when no fallback font has the symbol.
 const ASCII_FALLBACKS: Readonly<Record<string, string>> = {
   "→": "->",
   "←": "<-",
@@ -97,57 +119,82 @@ const ASCII_FALLBACKS: Readonly<Record<string, string>> = {
   "✓": "v",
   "✔": "v",
   "★": "*",
-  "‐": "-",
-  "‑": "-",
   "−": "-",
-  "\u2009": " ",
-  "\u202f": " ",
 };
 
 /**
- * Maps text to a string whose every character is a single WinAnsi byte
- * (char code 0..255). Pictographs are dropped; other unmappable characters
- * fall back to their unaccented base letter or "?".
+ * Maps text to WinAnsi byte-string text (see the module comment). A character
+ * no font can draw falls back to an ASCII stand-in or its unaccented base
+ * letter, else to the visible missing-glyph substitute; each emoji or other
+ * unsupported grapheme becomes one substitute.
  */
 export function toWinAnsiBytes(text: string): string {
   let output = "";
-  for (const char of text.replace(/\r\n?/gu, "\n")) {
-    output += winAnsiByteString(char);
-  }
+  for (const grapheme of graphemes(text)) output += mapGrapheme(grapheme).bytes;
   return output;
 }
 
-/**
- * Counts visible characters that WinAnsi cannot show: those replaced by "?"
- * or dropped (pictographs). Non-Latin scripts are lost in a Helvetica PDF.
- */
+/** Counts visible graphemes, and those shown as the missing-glyph substitute or dropped. */
 export function countWinAnsiLoss(text: string): { lost: number; visible: number } {
   let lost = 0;
   let visible = 0;
-  for (const char of text) {
-    if (/\s/u.test(char) || (char.codePointAt(0) ?? 0) < 0x20 || VARIATION_OR_JOINER.test(char)) continue;
+  for (const grapheme of graphemes(text)) {
+    const chars = [...grapheme].filter((char) => !INVISIBLE.test(char));
+    if (chars.length === 0 || chars.every((char) => /\s/u.test(char) || (char.codePointAt(0) ?? 0) < 0x20)) continue;
     visible += 1;
-    const mapped = winAnsiByteString(char);
-    if (mapped === "" || (mapped === "?" && char !== "?")) lost += 1;
+    if (mapGrapheme(grapheme).lost) lost += 1;
   }
   return { lost, visible };
 }
 
-const VARIATION_OR_JOINER = /[\uFE0F\u200D]/u;
+/** The warning for graphemes shown as the missing-glyph substitute. */
+export function missingGlyphWarning(lost: number): string {
+  return `${lost} character(s) that no PDF font here can draw (such as emoji or CJK script) are shown as "${missingGlyphSubstitute()}".`;
+}
 
-function winAnsiByteString(char: string): string {
+/** The glyph shown for characters no font can draw; reported in loss warnings. */
+export function missingGlyphSubstitute(): string {
+  return pdfFallbackFaceFor(PDF_MISSING_GLYPH_SUBSTITUTE.codePointAt(0)!, "regular")
+    ? PDF_MISSING_GLYPH_SUBSTITUTE
+    : "?";
+}
+
+// Variation selectors and joiners shape emoji sequences but have no glyph of their own.
+const INVISIBLE = /[\uFE0E\uFE0F\u200D]/u;
+const GRAPHEMES = new Intl.Segmenter("und", { granularity: "grapheme" });
+
+function graphemes(text: string): string[] {
+  return [...GRAPHEMES.segment(text.replace(/\r\n?/gu, "\n").normalize("NFC"))].map(({ segment }) => segment);
+}
+
+function mapGrapheme(grapheme: string): { bytes: string; lost: boolean } {
+  let bytes = "";
+  for (const char of grapheme) {
+    if (INVISIBLE.test(char)) continue;
+    const mapped = winAnsiByteString(char);
+    if (mapped === undefined) return { bytes: missingGlyphSubstitute(), lost: true };
+    bytes += mapped;
+  }
+  return { bytes, lost: false };
+}
+
+/** WinAnsi byte-string text for one character, or undefined when nothing can draw it. */
+function winAnsiByteString(char: string): string | undefined {
   const code = char.codePointAt(0) ?? 0x3f;
   if (char === "\t" || char === "\n") return " ";
   if (code < 0x20 || code === 0x7f) return "";
   if (code <= 0x7e || (code >= 0xa0 && code <= 0xff)) return char;
   const special = WIN_ANSI_SPECIALS.get(char);
   if (special !== undefined) return String.fromCharCode(special);
+  const normalized = NORMALIZED[char];
+  if (normalized !== undefined) return normalized;
+  // Astral code points stay out so every drawn glyph is one UTF-16 unit for wrapping.
+  if (code > 0xff && code <= 0xffff && pdfFallbackFaceFor(code, "regular")) return char;
   const fallback = ASCII_FALLBACKS[char];
   if (fallback !== undefined) return fallback;
-  if (/\p{Extended_Pictographic}/u.test(char) || VARIATION_OR_JOINER.test(char)) return "";
   const base = char.normalize("NFKD").replace(/\p{M}/gu, "");
   if (base && base !== char && [...base].every((part) => (part.codePointAt(0) ?? 0x100) <= 0xff)) return base;
-  return "?";
+  return undefined;
 }
 
 /** Width in points of WinAnsi byte-string text. */
@@ -156,6 +203,11 @@ export function measureWinAnsi(bytes: string, font: PdfFont, size: number): numb
   let units = 0;
   for (let index = 0; index < bytes.length; index += 1) {
     const code = bytes.charCodeAt(index);
+    if (code > 0xff) {
+      const face = pdfFallbackFaceFor(code, font);
+      units += face ? pdfFallbackGlyph(face, code).width : 1000;
+      continue;
+    }
     units += code >= 0x20 && code <= 0x7e ? table[code - 0x20]! : (EXTENDED_WIDTHS[code] ?? 556);
   }
   return (units * size) / 1000;
@@ -243,11 +295,45 @@ function escapeLiteral(bytes: string): string {
   return bytes.replace(/[\\()]/gu, (char) => `\\${char}`);
 }
 
+/** A PDF text string (UTF-16BE with a byte-order mark) for document metadata. */
+function textString(text: string): string {
+  const units = `\ufeff${text}`;
+  let hex = "";
+  for (let index = 0; index < units.length; index += 1) hex += units.charCodeAt(index).toString(16).padStart(4, "0");
+  return `<${hex}>`;
+}
+
+interface TextRun {
+  /** Undefined for Helvetica (WinAnsi) text. */
+  face: PdfFallbackFace | undefined;
+  text: string;
+}
+
+/** Splits WinAnsi byte-string text into runs that share one font. */
+function textRuns(bytes: string, font: PdfFont): TextRun[] {
+  const runs: TextRun[] = [];
+  for (let index = 0; index < bytes.length; index += 1) {
+    const code = bytes.charCodeAt(index);
+    const face = code > 0xff ? pdfFallbackFaceFor(code, font) : undefined;
+    const last = runs[runs.length - 1];
+    if (last && last.face === face) last.text += bytes[index];
+    else runs.push({ face, text: bytes[index]! });
+  }
+  return runs;
+}
+
+/** Percent-encodes anything outside printable ASCII so a link URI stays one byte per character. */
+function asciiUri(url: string): string {
+  return url.replace(/[^\x21-\x7e]/gu, (char) => encodeURIComponent(char));
+}
+
 /** One page's drawing surface. Coordinates are points from the top-left corner. */
 export class PdfPage {
   private readonly ops: string[] = [];
   readonly links: Array<{ x: number; y: number; w: number; h: number; url: string }> = [];
   readonly images = new Map<string, number>();
+  /** Fallback-font glyphs this page draws, per face: glyph id to code point. */
+  readonly fallbackGlyphs = new Map<PdfFallbackFace, Map<number, number>>();
 
   constructor(
     readonly width: number,
@@ -282,14 +368,23 @@ export class PdfPage {
     this.ops.push(`q ${colorOperands(color)} RG ${formatNumber(width)} w 1 J 1 j ${path} S Q`);
   }
 
-  /** Draws WinAnsi byte-string text with its baseline at y. */
+  /** Draws WinAnsi byte-string text with its baseline at y, switching fonts between runs. */
   text(x: number, y: number, bytes: string, style: PdfTextStyle) {
     if (!bytes) return;
-    const font = style.font === "bold" ? "F2" : "F1";
+    const size = formatNumber(style.size);
+    const shows = textRuns(bytes, style.font).map((run) => {
+      const resource = run.face ? PDF_FALLBACK_RESOURCE_NAMES[run.face] : style.font === "bold" ? "F2" : "F1";
+      const operand = run.face ? this.fallbackOperand(run.face, run.text) : `(${escapeLiteral(run.text)})`;
+      return { select: `/${resource} ${size} Tf`, show: `${operand} Tj` };
+    });
+    const [first, ...rest] = shows;
+    if (!first) return;
     this.ops.push(
-      `BT /${font} ${formatNumber(style.size)} Tf ${colorOperands(style.color)} rg ${formatNumber(x)} ${formatNumber(
-        this.height - y,
-      )} Td (${escapeLiteral(bytes)}) Tj ET`,
+      [
+        `BT ${first.select} ${colorOperands(style.color)} rg ${formatNumber(x)} ${formatNumber(this.height - y)} Td ${first.show}`,
+        ...rest.map((part) => `${part.select} ${part.show}`),
+        "ET",
+      ].join(" "),
     );
   }
 
@@ -312,6 +407,18 @@ export class PdfPage {
     return [link.x, this.height - link.y - link.h, link.x + link.w, this.height - link.y].map(formatNumber).join(" ");
   }
 
+  private fallbackOperand(face: PdfFallbackFace, text: string): string {
+    const used = this.fallbackGlyphs.get(face) ?? new Map<number, number>();
+    this.fallbackGlyphs.set(face, used);
+    const glyphIds = [...text].map((char) => {
+      const codePoint = char.codePointAt(0)!;
+      const { glyphId } = pdfFallbackGlyph(face, codePoint);
+      used.set(glyphId, codePoint);
+      return glyphId;
+    });
+    return pdfGlyphHex(glyphIds);
+  }
+
   private box(x: number, y: number, w: number, h: number): string {
     return [x, this.height - y - h, w, h].map(formatNumber).join(" ");
   }
@@ -320,6 +427,8 @@ export class PdfPage {
 /** Collects numbered objects and serializes the cross-reference table. */
 export class PdfDocumentWriter {
   private readonly objects: Array<Buffer | undefined> = [];
+  /** Reserved Type0 font object and the glyphs every page used, per fallback face. */
+  private readonly fallbackFonts = new Map<PdfFallbackFace, { id: number; glyphs: Map<number, number> }>();
 
   reserve(): number {
     this.objects.push(undefined);
@@ -367,15 +476,18 @@ export class PdfDocumentWriter {
     const annotIds = page.links.map((link) =>
       this.add(
         `<< /Type /Annot /Subtype /Link /Rect [${page.linkRect(link)}] /Border [0 0 0] /A << /Type /Action /S /URI /URI (${escapeLiteral(
-          toWinAnsiBytes(link.url),
+          asciiUri(link.url),
         )}) >> >>`,
       ),
     );
     const xObjects = [...page.images.entries()].map(([name, id]) => `/${name} ${id} 0 R`).join(" ");
+    const fallbackFonts = [...page.fallbackGlyphs.entries()]
+      .map(([face, glyphs]) => ` /${PDF_FALLBACK_RESOURCE_NAMES[face]} ${this.useFallbackFont(face, glyphs)} 0 R`)
+      .join("");
     return this.add(
       [
         `<< /Type /Page /Parent ${parentId} 0 R /MediaBox [0 0 ${formatNumber(page.width)} ${formatNumber(page.height)}]`,
-        `/Resources << /Font << /F1 ${fontIds.regular} 0 R /F2 ${fontIds.bold} 0 R >>${xObjects ? ` /XObject << ${xObjects} >>` : ""} >>`,
+        `/Resources << /Font << /F1 ${fontIds.regular} 0 R /F2 ${fontIds.bold} 0 R${fallbackFonts} >>${xObjects ? ` /XObject << ${xObjects} >>` : ""} >>`,
         `/Contents ${contentId} 0 R${annotIds.length > 0 ? ` /Annots [${annotIds.map((id) => `${id} 0 R`).join(" ")}]` : ""} >>`,
       ].join(" "),
     );
@@ -389,10 +501,21 @@ export class PdfDocumentWriter {
   }
 
   infoDictionary(title: string): string {
-    return `<< /Title (${escapeLiteral(toWinAnsiBytes(title))}) /Producer (GoatCitadel) /Creator (GoatCitadel presentations.create) >>`;
+    return `<< /Title ${textString(title)} /Producer (GoatCitadel) /Creator (GoatCitadel presentations.create) >>`;
+  }
+
+  /** The font object id for a fallback face, recording the glyphs a page used. */
+  private useFallbackFont(face: PdfFallbackFace, glyphs: ReadonlyMap<number, number>): number {
+    const entry = this.fallbackFonts.get(face) ?? { id: this.reserve(), glyphs: new Map<number, number>() };
+    this.fallbackFonts.set(face, entry);
+    for (const [glyphId, codePoint] of glyphs) entry.glyphs.set(glyphId, codePoint);
+    return entry.id;
   }
 
   serialize(rootId: number, infoId: number): Buffer {
+    // Fallback fonts are written last, once every page has added the glyphs it draws.
+    for (const [face, { id, glyphs }] of this.fallbackFonts) writePdfFallbackFont(this, id, face, glyphs);
+    this.fallbackFonts.clear();
     const chunks: Buffer[] = [Buffer.from("%PDF-1.4\n%\xe2\xe3\xcf\xd3\n", "latin1")];
     const offsets: number[] = [];
     let length = chunks[0]!.length;

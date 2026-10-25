@@ -742,7 +742,7 @@ function buildResidualRisks(
     risks.push(
       plan.mode === "plain" || plan.mode === "minimal"
         ? "Plain PDF output is unstyled text: no cover, color, callouts, or tables."
-        : "PDF reports use standard Helvetica text and built-in color shapes; photos and custom fonts are not embedded.",
+        : "PDF reports use Helvetica text and built-in color shapes, embedding bundled Noto glyphs only for characters Helvetica lacks; photos are not embedded, and emoji or CJK text is shown as a substitute glyph.",
     );
   }
   for (const finding of designQuality.findings) {

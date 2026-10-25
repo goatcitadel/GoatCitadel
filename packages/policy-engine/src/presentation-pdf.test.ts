@@ -31,8 +31,9 @@ const SOURCES: PresentationSource[] = [
 ];
 
 describe("pdf writer text primitives", () => {
-  it("encodes typographic punctuation as WinAnsi bytes and drops pictographs", () => {
-    expect(toWinAnsiBytes("“Hi” – café 🎉 → ok")).toBe("\x93Hi\x94 \x96 caf\xe9  -> ok");
+  it("encodes typographic punctuation as WinAnsi bytes and substitutes pictographs visibly", () => {
+    // The ballot box is a fallback-font glyph, the arrow keeps its ASCII stand-in, and the emoji has no font.
+    expect(toWinAnsiBytes("“Hi” – café ☐ 🎉 → ok")).toBe("\x93Hi\x94 \x96 caf\xe9 ☐ � -> ok");
   });
 
   it("splits a very long unbroken token in linear time", () => {
@@ -44,9 +45,10 @@ describe("pdf writer text primitives", () => {
     for (const line of lines) expect(measureWinAnsi(line, "regular", 16)).toBeLessThanOrEqual(300);
   });
 
-  it("counts characters WinAnsi cannot show", () => {
+  it("counts characters no PDF font can show", () => {
     expect(countWinAnsiLoss("café – “ok”")).toEqual({ lost: 0, visible: 9 });
-    expect(countWinAnsiLoss("Привет 🎉")).toEqual({ lost: 7, visible: 7 });
+    // Cyrillic and the ballot box come from the bundled Noto fonts; emoji and CJK do not.
+    expect(countWinAnsiLoss("Привет ☐ 🎉 中文")).toEqual({ lost: 3, visible: 10 });
   });
 
   it("measures with Helvetica metrics and wraps within the width", () => {
@@ -313,7 +315,7 @@ describe("createPresentationPdf", () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it("discloses dropped emoji but rejects a mostly non-Latin deck", async () => {
+  it("discloses emoji, draws Cyrillic, and rejects a deck mostly in scripts no font covers", async () => {
     const emojiSlides: PresentationSlide[] = [{ title: "Party Plan 🎉", bullets: ["Bring snacks and music."] }];
     const emoji = await createPresentationPdf({
       title: "Party",
@@ -321,17 +323,26 @@ describe("createPresentationPdf", () => {
       sources: [],
       design: designFor("Party", emojiSlides),
     });
-    expect(emoji.warnings.join(" ")).toMatch(/1 character\(s\) outside the PDF's Latin character set/u);
+    expect(emoji.warnings.join(" ")).toMatch(/1 character\(s\) that no PDF font here can draw/u);
 
     const russianSlides: PresentationSlide[] = [{ title: "Планы на вечер", bullets: ["Ужин и кино в центре города."] }];
+    const russian = await createPresentationPdf({
+      title: "Вечер",
+      slides: russianSlides,
+      sources: [],
+      design: designFor("Вечер", russianSlides),
+    });
+    expect(russian.warnings).toEqual([]);
+
+    const japaneseSlides: PresentationSlide[] = [{ title: "今夜の予定", bullets: ["街の中心で夕食と映画。"] }];
     await expect(
       createPresentationPdf({
-        title: "Вечер",
-        slides: russianSlides,
+        title: "今夜",
+        slides: japaneseSlides,
         sources: [],
-        design: designFor("Вечер", russianSlides),
+        design: designFor("今夜", japaneseSlides),
       }),
-    ).rejects.toThrow("PDF decks support Latin-script text only");
+    ).rejects.toThrow("PDF decks support Latin, Greek, and Cyrillic text");
   });
 
   it("warns instead of overflowing when a slide holds more text than fits", async () => {

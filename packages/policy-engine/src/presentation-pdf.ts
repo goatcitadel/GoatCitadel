@@ -5,6 +5,7 @@ import {
   PdfPage,
   countWinAnsiLoss,
   measureWinAnsi,
+  missingGlyphWarning,
   mixPdfColors,
   pdfColor,
   pdfColorLuminance,
@@ -151,9 +152,10 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
 }
 
 /**
- * The PDF uses the standard Latin (WinAnsi) Helvetica faces. Mostly non-Latin
- * decks would render as "?" glyphs, so they fail before writing; a few lost
- * characters (emoji, stray symbols) are disclosed as a warning instead.
+ * The PDF draws Helvetica plus bundled Noto fonts (Latin, Greek, Cyrillic, and
+ * symbols). Decks mostly in other scripts would render as substitute glyphs, so
+ * they fail before writing; a few lost characters (emoji, stray CJK) are
+ * disclosed as a warning instead.
  */
 function assertLatinRenderable(slides: readonly PresentationSlide[], warnings: string[]): void {
   const text = slides.flatMap((slide) => [
@@ -166,12 +168,10 @@ function assertLatinRenderable(slides: readonly PresentationSlide[], warnings: s
   if (lost === 0) return;
   if (lost >= MIN_LOST_TO_REJECT && lost / Math.max(1, visible) > MAX_LOST_SHARE) {
     throw new Error(
-      `PDF decks support Latin-script text only, and ${lost} of ${visible} characters cannot be shown; use format "pptx" for this content.`,
+      `PDF decks support Latin, Greek, and Cyrillic text, and ${lost} of ${visible} characters cannot be shown; use format "pptx" for this content.`,
     );
   }
-  warnings.push(
-    `${lost} character(s) outside the PDF's Latin character set (such as emoji or non-Latin script) were replaced or dropped.`,
-  );
+  warnings.push(missingGlyphWarning(lost));
 }
 
 function resolveTheme(design: ArtifactDesignPlan): PdfDeckTheme {
