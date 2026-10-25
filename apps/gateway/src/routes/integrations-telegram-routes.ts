@@ -178,6 +178,8 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
           },
           lastSyncAt: new Date().toISOString(),
           lastError: undefined,
+        }, async () => {
+          await markMutationCommitted(request);
         });
         return reply.send({
           approved: true,
@@ -186,7 +188,10 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
           connectionId: updated.connectionId,
         });
       } catch (error) {
-        return reply.code(404).send({ error: (error as Error).message });
+        // Only a genuinely missing connection is a 404; conflicts, validation and storage failures
+        // keep their own status instead of being flattened into "not found".
+        await markMutationCommittedFromError(request, error);
+        return sendRouteError(reply, error, request.log);
       }
     },
   );

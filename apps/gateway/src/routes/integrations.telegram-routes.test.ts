@@ -321,7 +321,13 @@ describe("integrations Telegram route tails", () => {
       .mockReturnValueOnce({ key: "slack", config: {} })
       .mockReturnValueOnce({ key: "telegram", config: {} })
       .mockImplementationOnce(() => {
-        throw new Error("connection missing");
+        throw new NotFoundError({ entity: "integration connection", id: "11111111-1111-1111-1111-111111111111" });
+      })
+      .mockImplementationOnce(() => {
+        throw new ConflictError({ message: "Connection changed." });
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("disk exploded");
       });
     createApp({ getIntegrationConnection, updateIntegrationConnection });
 
@@ -357,6 +363,20 @@ describe("integrations Telegram route tails", () => {
       payload: { code: "ABCDEFGH" },
     });
     expect(missing.statusCode).toBe(404);
-    expect(missing.json()).toEqual({ error: "connection missing" });
+
+    const conflict = await app!.inject({
+      method: "POST",
+      url: "/api/v1/channels/connections/11111111-1111-1111-1111-111111111111/telegram/pairing/approve",
+      payload: { code: "ABCDEFGH" },
+    });
+    expect(conflict.statusCode).toBe(409);
+
+    const unexpected = await app!.inject({
+      method: "POST",
+      url: "/api/v1/channels/connections/11111111-1111-1111-1111-111111111111/telegram/pairing/approve",
+      payload: { code: "ABCDEFGH" },
+    });
+    expect(unexpected.statusCode).toBe(500);
+    expect(unexpected.json()).toEqual({ error: "Internal server error" });
   });
 });
