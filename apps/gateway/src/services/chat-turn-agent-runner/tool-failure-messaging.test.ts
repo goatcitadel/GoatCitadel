@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 import {
   MEMORY_CONSENT_BLOCKED_REASON,
+  answerCoversMemoryConsentBlocks,
   buildGovernanceBlockGuidance,
   buildMemoryConsentBlockGuidance,
   buildPathBridgeFailureGuidance,
@@ -287,7 +288,7 @@ describe("buildMemoryConsentBlockGuidance", () => {
   it("tells the model the check reads the user's message, so a different input will not pass it", () => {
     const guidance = buildMemoryConsentBlockGuidance({ status: "blocked", error: MEMORY_CONSENT_BLOCKED_REASON });
 
-    expect(guidance).toContain("user's own message explicitly asks for it");
+    expect(guidance).toContain("user's own message uses an accepted consent phrasing");
     expect(guidance).toContain('a bare "yes" does not pass the check');
     expect(guidance).not.toMatch(/narrower, more explicit input/);
   });
@@ -340,5 +341,43 @@ describe("buildPolicyBlockedRecoveryText path-bridge blocks", () => {
         toolRun({ toolRunId: "run-2", toolName: "fs.delete", error: "blocked: tool denied by policy" }),
       ]),
     ).toBeUndefined();
+  });
+});
+
+describe("memory-consent appendix", () => {
+  const consentRun = toolRun({ toolName: "memory.write", error: MEMORY_CONSENT_BLOCKED_REASON });
+
+  it("gives a consent note instead of the policy appendix", () => {
+    const text = buildToolFailureAppendixText([consentRun]);
+
+    expect(text).toContain("Note: nothing was saved to memory.");
+    expect(text).toContain('"Remember that …"');
+    expect(text).not.toMatch(/blocked by policy|keep going|narrower/i);
+  });
+
+  it("treats an answer that already talks about memory as covering consent-only blocks", () => {
+    expect(answerCoversMemoryConsentBlocks("I didn't save that to memory.", [consentRun])).toBe(true);
+    expect(answerCoversMemoryConsentBlocks("Your favourite colour is teal.", [consentRun])).toBe(false);
+    expect(
+      answerCoversMemoryConsentBlocks("I didn't save that to memory.", [
+        consentRun,
+        toolRun({ toolRunId: "run-2", toolName: "fs.delete", error: "blocked: tool denied by policy" }),
+      ]),
+    ).toBe(false);
+  });
+});
+
+describe("buildPolicyBlockedRecoveryText guidance for several blocks", () => {
+  it("keeps the guidance for every distinct governance block", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({ toolName: "fs.delete", error: "blocked: tool denied by policy" }),
+      toolRun({ toolRunId: "run-2", toolName: "memory.write", error: "blocked: denied by a Citadel Ward" }),
+      toolRun({ toolRunId: "run-3", toolName: "fs.delete", error: "blocked: tool denied by policy" }),
+    ]);
+
+    expect(text).toContain("tool policy blocked fs.delete, memory.write.");
+    expect(text).toContain("Why: fs.delete is denied by the operator's tool policy.");
+    expect(text).toContain("Why: memory.write is denied by a Citadel Ward.");
+    expect(text?.match(/Why: fs\.delete/g)).toHaveLength(1);
   });
 });

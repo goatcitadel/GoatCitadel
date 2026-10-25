@@ -83,12 +83,12 @@ describe("ChatTurnAgentRunner policy-block recovery answer", () => {
     expect(invokeTool).not.toHaveBeenCalled();
     const blockedRun = result.turnTrace.toolRuns[0];
     expect(blockedRun?.status).toBe("blocked");
-    expect(blockedRun?.failureGuidance).toContain("user's own message explicitly asks for it");
+    expect(blockedRun?.failureGuidance).toContain("user's own message uses an accepted consent phrasing");
     expect(blockedRun?.failureGuidance).not.toMatch(/narrower, more explicit input/);
     expect(result.assistantContent).toContain("I didn't save that to memory.");
     expect(result.assistantContent).toContain('"Remember that …"');
     expect(result.assistantContent).not.toMatch(
-      /tool policy|narrower|exhausted the current tool approaches|sticking point|Suggested retry/i,
+      /tool policy|blocked by policy|keep going|narrower|exhausted the current tool approaches|sticking point|Suggested retry/i,
     );
   });
 

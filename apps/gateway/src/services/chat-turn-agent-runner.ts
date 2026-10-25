@@ -229,6 +229,7 @@ import {
 import { groundResearchPresentationArgs } from "./chat-turn-agent-runner/presentation-research-evidence.js";
 import {
   MEMORY_CONSENT_BLOCKED_REASON,
+  answerCoversMemoryConsentBlocks,
   buildGovernanceBlockGuidance,
   buildMemoryConsentBlockGuidance,
   buildPathBridgeFailureGuidance,
@@ -13960,6 +13961,9 @@ function appendToolFailureConstraints(content: string, toolRuns: ChatToolRunReco
     failedOrBlocked.length > 0 &&
     failedOrBlocked.every((run) => run.status === "blocked" && run.toolName === "browser.search");
   if (onlyBlockedWebSearch && concreteFileEvidenceCount > 0) {
+    return trimmed;
+  }
+  if (answerCoversMemoryConsentBlocks(trimmed, failedOrBlocked)) {
     return trimmed;
   }
   if (mentionsToolFailureConstraints(trimmed, failedOrBlocked)) {
