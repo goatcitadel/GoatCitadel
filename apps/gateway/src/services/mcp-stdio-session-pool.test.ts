@@ -254,12 +254,13 @@ describe("MCP stdio session ownership", () => {
     vi.useFakeTimers();
     const pool = createPool(100, 1);
     const client = createClient();
-    await pool.use(
+    let release!: () => void;
+    const busy = pool.use(
       "server",
       "session",
       "binding",
       async () => client,
-      async () => undefined,
+      () => new Promise<void>((resolve) => (release = resolve)),
     );
     await expect(
       pool.use(
@@ -270,6 +271,9 @@ describe("MCP stdio session ownership", () => {
         async () => undefined,
       ),
     ).rejects.toThrow("session limit");
+    await vi.advanceTimersByTimeAsync(0);
+    release();
+    await busy;
     await vi.advanceTimersByTimeAsync(100);
     expect(client.close).toHaveBeenCalledOnce();
     await expect(
@@ -318,5 +322,95 @@ describe("MCP stdio session ownership", () => {
         async () => undefined,
       ),
     ).rejects.toThrow("owner is closed");
+  });
+});
+
+describe("MCP stdio session pool capacity and abort", () => {
+  it("evicts the least-recently-used idle session at the cap instead of throwing", async () => {
+    vi.useFakeTimers();
+    const pool = createPool(60_000, 2);
+    const clients = [createClient(), createClient(), createClient()];
+    for (const [index, client] of clients.slice(0, 2).entries()) {
+      vi.setSystemTime(1000 + index);
+      await pool.use(
+        "s",
+        `scope-${index}`,
+        "b",
+        async () => client,
+        async () => undefined,
+      );
+    }
+    vi.setSystemTime(2000);
+    await pool.use(
+      "s",
+      "scope-2",
+      "b",
+      async () => clients[2]!,
+      async () => undefined,
+    );
+    await Promise.resolve();
+    expect(clients[0]!.close).toHaveBeenCalledOnce();
+    expect(clients[1]!.close).not.toHaveBeenCalled();
+  });
+
+  it("still throws at the cap when every session is busy", async () => {
+    const pool = createPool(60_000, 1);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const busy = pool.use(
+      "s",
+      "a",
+      "b",
+      async () => createClient(),
+      () => gate,
+    );
+    await expect(
+      pool.use(
+        "s",
+        "c",
+        "b",
+        async () => createClient(),
+        async () => undefined,
+      ),
+    ).rejects.toThrow(/session limit/);
+    release();
+    await busy;
+  });
+
+  it("does not kill the shared child when a queued caller aborts before dispatch", async () => {
+    const pool = createPool();
+    const client = createClient();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const first = pool.use(
+      "s",
+      "a",
+      "b",
+      async () => client,
+      () => gate,
+    );
+    const controller = new AbortController();
+    const queued = pool.use(
+      "s",
+      "a",
+      "b",
+      async () => client,
+      async () => "x",
+      controller.signal,
+    );
+    controller.abort();
+    release();
+    await first;
+    await expect(queued).rejects.toThrow();
+    expect(client.close).not.toHaveBeenCalled();
+    await expect(
+      pool.use(
+        "s",
+        "a",
+        "b",
+        async () => client,
+        async () => "again",
+      ),
+    ).resolves.toBe("again");
   });
 });

@@ -18,6 +18,7 @@ interface Session<C extends RetainedMcpClient> {
   invalidated: boolean;
   abort: AbortController;
   idleTimer?: ReturnType<typeof setTimeout>;
+  lastUsedAt: number;
   resourceOwner?: Readonly<McpStdioResourceOwner>;
 }
 
@@ -49,6 +50,7 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
       session = undefined;
     }
     if (!session) {
+      if (this.sessions.size >= this.maxSessions) this.evictLeastRecentlyUsedIdle();
       if (this.sessions.size >= this.maxSessions) {
         throw new Error("MCP session limit reached. Disconnect an idle server before opening another session.");
       }
@@ -60,6 +62,7 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
         client: Promise.resolve().then(() => create(creationSignal)),
         queue: Promise.resolve(),
         users: 0,
+        lastUsedAt: Date.now(),
         invalidated: false,
         abort,
         resourceOwner: owner,
@@ -70,12 +73,21 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
     }
     clearTimeout(session.idleTimer);
     session.users += 1;
+    session.lastUsedAt = Date.now();
     const owned = session;
+    // A caller that gives up while still queued must not tear down the shared child other users depend on.
+    let abandonedBeforeDispatch = false;
     const work = session.queue.then(async () => {
-      signal?.throwIfAborted();
+      if (signal?.aborted) {
+        abandonedBeforeDispatch = true;
+        signal.throwIfAborted();
+      }
       if (owned.invalidated || this.closed) throw new Error("MCP session was disconnected before dispatch.");
       const client = await owned.client;
-      signal?.throwIfAborted();
+      if (signal?.aborted) {
+        abandonedBeforeDispatch = true;
+        signal.throwIfAborted();
+      }
       if (owned.invalidated || this.closed || client.isClosed()) {
         throw new Error("MCP session is no longer connected. Request a new invocation.");
       }
@@ -88,10 +100,11 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
     try {
       return await work;
     } catch (error) {
-      this.invalidate(key, owned);
+      if (!abandonedBeforeDispatch) this.invalidate(key, owned);
       throw error;
     } finally {
       owned.users -= 1;
+      owned.lastUsedAt = Date.now();
       if (owned.users === 0 && !owned.invalidated) {
         owned.idleTimer = setTimeout(() => this.invalidate(key, owned), this.idleMs);
         owned.idleTimer.unref();
@@ -138,6 +151,15 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
   public close(): void {
     this.closed = true;
     for (const [key, session] of this.sessions) this.invalidate(key, session);
+  }
+
+  private evictLeastRecentlyUsedIdle(): void {
+    let victim: [string, Session<C>] | undefined;
+    for (const entry of this.sessions) {
+      if (entry[1].users > 0 || entry[1].invalidated) continue;
+      if (!victim || entry[1].lastUsedAt < victim[1].lastUsedAt) victim = entry;
+    }
+    if (victim) this.invalidate(victim[0], victim[1]);
   }
 
   private invalidate(key: string, session: Session<C>): void {
