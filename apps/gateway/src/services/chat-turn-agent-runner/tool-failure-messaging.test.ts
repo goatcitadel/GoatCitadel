@@ -233,14 +233,17 @@ describe("buildPolicyBlockedRecoveryText", () => {
     expect(text).not.toContain("sandbox policy blocked");
   });
 
-  it("says plainly that nothing was saved when a memory write fails, instead of the generic retry template (#566)", () => {
+  it("says plainly that a memory write failed, without promising nothing was stored (#566)", () => {
     const text = buildPolicyBlockedRecoveryText([
       toolRun({ toolName: "memory.write", status: "failed", error: "execution error: namespace is required" }),
     ]);
 
-    expect(text).toContain("I didn't save that to memory");
+    expect(text).toContain("The memory write failed");
     expect(text).toContain("namespace is required");
-    expect(text).toContain("Nothing was saved");
+    // Review on #570: the write is not atomic (document first, then chunks), so part of it may remain.
+    expect(text).toContain("part of it may have been stored");
+    expect(text).toContain("Library > Memory");
+    expect(text).not.toMatch(/nothing was saved/i);
     expect(text).not.toMatch(/sticking point|narrower|specific URL|keep going/i);
   });
 

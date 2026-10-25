@@ -199,14 +199,15 @@ export function buildPolicyBlockedRecoveryText(failedOrBlocked: readonly ChatToo
     ].join("\n\n");
   }
   if (failedOrBlocked.every(isFailedMemoryWrite)) {
-    // A failed write saved nothing; the generic "try a narrower input" template hid that (#566).
+    // The generic "try a narrower input" template hid a failed write (#566). The write is not atomic (the
+    // document is stored before its chunks), so the reply must not promise that nothing was kept.
     const reason = failedOrBlocked
       .at(-1)
       ?.error?.replace(/^execution error:\s*/i, "")
       .trim();
     return [
-      `I didn't save that to memory: the memory write failed${reason ? ` (${reason})` : ""}. Nothing was saved, so I won't be able to recall it later.`,
-      "Ask me to remember it again. If it keeps failing, the error above is what to report.",
+      `The memory write failed${reason ? ` (${reason})` : ""}, so I can't confirm that this was saved, and part of it may have been stored.`,
+      "Check Library > Memory before asking me to remember it again, so you don't end up with a duplicate. If it keeps failing, the error above is what to report.",
     ].join("\n\n");
   }
   const lastBlock = failedOrBlocked.at(-1);
