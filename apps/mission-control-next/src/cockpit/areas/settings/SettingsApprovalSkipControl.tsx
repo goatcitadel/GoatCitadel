@@ -15,8 +15,8 @@ export const SETTINGS_APPROVAL_SKIP_ANCHOR = "settings-approval-skip";
 const FLAG = "settingsApprovalSkipEnabled";
 /** What the switch does and does not change, as the Gateway enforces it. */
 const SKIP_FACTS = [
-  "Covers saves through the Settings forms, such as the network allowlist, Firecrawl, approval mode and runtime switches. Gateway sign-in, API keys and other credentials still ask for approval.",
-  "Change requests a model makes in Chat still need your approval. Anything that can call the Settings API as you, such as a script on this computer while Gateway sign-in is off, can also save without one.",
+  "Covers saves through the Settings forms, such as the network allowlist, Firecrawl, approval mode and runtime switches. GoatCitadel sign-in, API keys and other credentials still ask for approval.",
+  "Change requests a model makes in Chat still need your approval. Anything that can call the Settings API as you, such as a script on this computer while GoatCitadel sign-in is off, can also save without one.",
   "Each change is still recorded as a change plan, with its audit trail and any undo it supports.",
   "Turning this on needs one last approval. A remote-hardened install ignores it.",
 ];

@@ -66,7 +66,7 @@ describe("cockpit Settings approval skip", () => {
       expect(container.textContent).toContain("Apply my Settings changes without an Inbox approval");
       expect(container.textContent).toContain("Change requests a model makes in Chat still need your approval.");
       expect(container.textContent).toContain(
-        "Gateway sign-in, API keys and other credentials still ask for approval.",
+        "GoatCitadel sign-in, API keys and other credentials still ask for approval.",
       );
       expect(container.textContent).toContain("A remote-hardened install ignores it.");
       expect(checkbox(container).checked).toBe(false);
