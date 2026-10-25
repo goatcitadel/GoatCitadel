@@ -3,8 +3,17 @@ import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/conte
 import { formatDuration, plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useModelLabel } from "../../data/use-model-label";
 import { recordedCostLabel } from "./recorded-cost";
+import { recordedTurnTime } from "./chat-turn-timing";
 
 const RECEIPT_CLASS = "mt-2 inline-flex min-h-8 items-center text-left text-xs text-fg-muted max-sm:min-h-11";
+
+/** The whole turn's recorded time; without a recorded finish, the model-call time, named as such (#499). */
+function timeLabel(turn: ChatThreadTurnRecord): string | null {
+  const total = recordedTurnTime(turn.trace);
+  if (total.kind === "recorded") return `${formatDuration(total.ms)} total`;
+  const modelMs = turn.trace.completion?.latencyMs;
+  return modelMs ? `${formatDuration(modelMs)} model time` : null;
+}
 
 /**
  * The compact model, tools, sources, latency and cost receipt under a completed answer. It opens the Message tab of
@@ -26,7 +35,7 @@ export function TurnReceipt({
     modelId ? modelLabel : null,
     turn.toolRuns.length ? plural(turn.toolRuns.length, "tool") : null,
     turn.citations.length ? plural(turn.citations.length, "source") : null,
-    turn.trace.completion?.latencyMs ? formatDuration(turn.trace.completion.latencyMs) : null,
+    timeLabel(turn),
     usage?.costUsd !== undefined ? `Cost ${recordedCostLabel(usage.costUsd, usage.costSource)}` : null,
   ]
     .filter(Boolean)
