@@ -29,6 +29,9 @@ export const BudgetModeControl = preloadable(async () => ({
 export const ApprovalModeControl = preloadable(async () => ({
   default: (await import("./ApprovalModeControl")).ApprovalModeControl,
 }));
+export const SettingsApprovalSkipControl = preloadable(async () => ({
+  default: (await import("./SettingsApprovalSkipControl")).SettingsApprovalSkipControl,
+}));
 export const FilesystemWriteRootsControl = preloadable(async () => ({
   default: (await import("./FilesystemWriteRootsControl")).FilesystemWriteRootsControl,
 }));
@@ -120,7 +123,13 @@ const SECTION_CONTROLS: Record<string, readonly { preload: () => Promise<void> }
   "local-ai": [LlamaSetupSettings, LocalAiSettings],
   permissions: [PermissionProfileSettings],
   hooks: [HooksSettings],
-  tools: [ApprovalModeControl, FilesystemWriteRootsControl, ToolGrantSettings, SafetyCatalogSummary],
+  tools: [
+    ApprovalModeControl,
+    SettingsApprovalSkipControl,
+    FilesystemWriteRootsControl,
+    ToolGrantSettings,
+    SafetyCatalogSummary,
+  ],
   budget: [BudgetModeControl],
   "trust-policy": [TrustPolicySettings],
 };

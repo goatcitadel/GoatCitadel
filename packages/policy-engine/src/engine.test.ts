@@ -3522,6 +3522,29 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(navigateResult.policyReason).toContain("firecrawl.example");
   });
 
+  it("allows a LAN Firecrawl backend only through an exact allowlist entry", async () => {
+    const engineWith = (networkAllowlist: string[]) =>
+      new ToolPolicyEngine(
+        { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist } },
+        createStorageStub(),
+      );
+    const search = (engine: ToolPolicyEngine) =>
+      engine.invoke({
+        toolName: "browser.search",
+        args: { query: "coverage", backend: "firecrawl", firecrawlBaseUrl: "http://192.168.0.199:3002" },
+        agentId: "agent",
+        sessionId: "session",
+        dryRun: true,
+      });
+
+    const exact = await search(engineWith([EXAMPLE_HOST, "192.168.0.199:3002"]));
+    const wildcard = await search(engineWith([EXAMPLE_HOST, "192.168.*"]));
+
+    expect(exact.outcome).not.toBe("blocked");
+    expect(wildcard.outcome).toBe("blocked");
+    expect(wildcard.policyReason).toContain("Private, metadata, or reserved host is blocked");
+  });
+
   it("allows native browser.search without per-host search-engine allowlisting", async () => {
     const engine = new ToolPolicyEngine(
       {

@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   assertHostAllowed,
   assertHostAllowedInDangerProfile,
+  assertNotPrivateOrReservedHost,
+  createGuardedDnsLookup,
   evaluateDangerousHostBypass,
   evaluateHostEgress,
   isHostAllowed,
+  type DnsLookupFunction,
 } from "./sandbox/network-guard.js";
 
 const HOST_DOT = ".";
@@ -197,6 +200,74 @@ describe("isHostAllowed", () => {
       approvalState: "blocked",
       matchedAllowlistPattern: "printer.local",
     });
+  });
+
+  it("allows a private LAN IPv4 host only through an exact allowlist entry", () => {
+    expect(evaluateHostEgress("http://192.168.0.199:3002/v2/scrape", ["192.168.0.199:3002"])).toMatchObject({
+      allowed: true,
+      approvalState: "not_required",
+      reason: "Private network host explicitly allowlisted.",
+      matchedAllowlistPattern: "192.168.0.199:3002",
+    });
+    expect(evaluateHostEgress("http://10.0.0.5/", ["10.0.0.5"])).toMatchObject({ allowed: true });
+    expect(evaluateHostEgress("172.20.1.2:9000", ["172.20.1.2:9000"])).toMatchObject({ allowed: true });
+    expect(evaluateHostEgress("http://100.101.102.103/", ["100.101.102.103"])).toMatchObject({ allowed: true });
+    // The exact entry still applies when a wildcard comes first in the list.
+    expect(evaluateHostEgress("http://192.168.0.199:3002/", ["*", "192.168.0.199:3002"])).toMatchObject({
+      allowed: true,
+      matchedAllowlistPattern: "192.168.0.199:3002",
+    });
+  });
+
+  it("keeps private hosts blocked for wildcards, other hosts or ports, and non-LAN reserved ranges", () => {
+    const blocked: Array<[string, string[]]> = [
+      ["http://192.168.0.199:3002/", ["192.168.*"]],
+      ["http://192.168.0.199:3002/", ["*"]],
+      ["http://192.168.0.199:3003/", ["192.168.0.199:3002"]],
+      ["http://192.168.0.200:3002/", ["192.168.0.199:3002"]],
+      // A bare LAN entry names the default port only, never every port on the host.
+      ["http://10.0.0.5:8080/", ["10.0.0.5"]],
+      ["http://169.254.169.254/latest/meta-data", ["169.254.169.254"]],
+      ["http://169.254.8.9/", ["169.254.8.9"]],
+      ["http://100.100.100.200/latest/meta-data/", ["100.100.100.200"]],
+      ["http://0.0.0.0:3002/", ["0.0.0.0:3002"]],
+      ["http://224.0.0.1/", ["224.0.0.1"]],
+      ["http://[fd00::5]:3002/", ["[fd00::5]:3002"]],
+      ["http://[::ffff:192.168.0.199]:3002/", ["[::ffff:192.168.0.199]:3002"]],
+    ];
+    for (const [target, allowlist] of blocked) {
+      expect(evaluateHostEgress(target, allowlist), target).toMatchObject({
+        allowed: false,
+        approvalState: "blocked",
+      });
+    }
+  });
+
+  it("lets the SSRF floor accept an exactly allowlisted LAN host and nothing broader", () => {
+    expect(() => assertNotPrivateOrReservedHost("http://192.168.0.199:3002", ["192.168.0.199:3002"])).not.toThrow();
+    expect(() => assertNotPrivateOrReservedHost("http://192.168.0.199:3002")).toThrow(/Private/);
+    expect(() => assertNotPrivateOrReservedHost("http://192.168.0.199:3002", ["192.168.*"])).toThrow(/Private/);
+    expect(() => assertNotPrivateOrReservedHost("http://127.0.0.1:9999", ["127.0.0.1"])).toThrow(/Private/);
+    expect(() => assertNotPrivateOrReservedHost("http://169.254.169.254/", ["169.254.169.254"])).toThrow(/Private/);
+  });
+
+  it("lets an exactly allowlisted LAN literal resolve to itself and to no other private address", async () => {
+    const resolveTo =
+      (address: string): DnsLookupFunction =>
+      (_hostname, _options, callback) =>
+        callback(null, address, 4);
+    const lookupWith = (address: string) =>
+      new Promise<NodeJS.ErrnoException | null>((resolve) => {
+        createGuardedDnsLookup("http://192.168.0.199:3002", ["192.168.0.199:3002"], resolveTo(address))(
+          "192.168.0.199",
+          {},
+          (error) => resolve(error),
+        );
+      });
+
+    await expect(lookupWith("192.168.0.199")).resolves.toBeNull();
+    await expect(lookupWith("192.168.0.200")).resolves.toMatchObject({ message: expect.stringMatching(/blocked/) });
+    await expect(lookupWith("169.254.169.254")).resolves.toMatchObject({ message: expect.stringMatching(/blocked/) });
   });
 
   it("marks dangerous-profile public unallowlisted hosts for low-level bypass audit", () => {

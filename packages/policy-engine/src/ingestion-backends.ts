@@ -362,7 +362,7 @@ async function fetchDocument(input: {
     const isCanonicalLocalBase =
       (parsedBase.hostname === "127.0.0.1" || parsedBase.hostname === "localhost") && parsedBase.port === "3002";
     if (!isCanonicalLocalBase) {
-      assertNotPrivateOrReservedHost(parsedBase.toString());
+      assertNotPrivateOrReservedHost(parsedBase.toString(), input.networkAllowlist);
     }
     // Refuse to scrape a private or non-HTTP source URL — Firecrawl would
     // happily fetch it for us.

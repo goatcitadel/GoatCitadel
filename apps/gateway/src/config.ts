@@ -123,6 +123,8 @@ export interface FeatureFlagsConfig {
   claudeCliWarmContinuationEnabled?: boolean;
   /** Gateway-owned governed Change Plan authority. Default-on after foundation proof, with an explicit kill switch. */
   evolutionControlPlaneV1Enabled?: boolean;
+  /** Operator opt-in: the operator's own Settings saves apply without a separate approval. Off by default; ignored under remote_hardened. */
+  settingsApprovalSkipEnabled?: boolean;
   /** Cheap local improvement signal collection. Enabled only after the control plane rolls out. */
   improvementLocalObservationV1Enabled?: boolean;
   /** Scheduled model-based improvement evaluation remains explicit opt-in. */
@@ -884,6 +886,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["claudeCliToolBridgeEnabled", process.env.GOATCITADEL_FEATURE_CLAUDE_CLI_TOOL_BRIDGE_ENABLED],
     ["claudeCliWarmContinuationEnabled", process.env.GOATCITADEL_FEATURE_CLAUDE_CLI_WARM_CONTINUATION_ENABLED],
     ["evolutionControlPlaneV1Enabled", process.env.GOATCITADEL_FEATURE_EVOLUTION_CONTROL_PLANE_V1_ENABLED],
+    ["settingsApprovalSkipEnabled", process.env.GOATCITADEL_FEATURE_SETTINGS_APPROVAL_SKIP_ENABLED],
     ["improvementLocalObservationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LOCAL_OBSERVATION_V1_ENABLED],
     ["improvementModelEvaluationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_MODEL_EVALUATION_V1_ENABLED],
     ["productSourceEvolutionV1Enabled", process.env.GOATCITADEL_FEATURE_PRODUCT_SOURCE_EVOLUTION_V1_ENABLED],
@@ -1512,6 +1515,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       claudeCliToolBridgeEnabled: featuresInput.claudeCliToolBridgeEnabled ?? true,
       claudeCliWarmContinuationEnabled: featuresInput.claudeCliWarmContinuationEnabled ?? true,
       evolutionControlPlaneV1Enabled: featuresInput.evolutionControlPlaneV1Enabled ?? true,
+      settingsApprovalSkipEnabled: featuresInput.settingsApprovalSkipEnabled ?? false,
       improvementLocalObservationV1Enabled: featuresInput.improvementLocalObservationV1Enabled ?? true,
       improvementModelEvaluationV1Enabled: featuresInput.improvementModelEvaluationV1Enabled ?? false,
       productSourceEvolutionV1Enabled: featuresInput.productSourceEvolutionV1Enabled ?? false,

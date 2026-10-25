@@ -26,6 +26,7 @@ import {
   WebSearchSettings,
   BudgetModeControl,
   ApprovalModeControl,
+  SettingsApprovalSkipControl,
   FilesystemWriteRootsControl,
   ModelsSettings,
   ClaudeCliToolBridgeControl,
@@ -190,6 +191,7 @@ export function SettingsArea() {
         return (
           <>
             <ApprovalModeControl />
+            <SettingsApprovalSkipControl />
             <FilesystemWriteRootsControl />
             <ToolGrantSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />
             <SafetyCatalogSummary />
@@ -234,6 +236,7 @@ export function SettingsArea() {
               "claude-cli-warm-continuation",
               "filesystem-write-roots",
               "notification-routing",
+              "settings-approval-skip",
             ].includes(hash) &&
             !page.entries.some((entry) => entry.anchor === hash || entry.section === hash)
           ? "This link does not match a section on this settings page. Choose a section from Settings."

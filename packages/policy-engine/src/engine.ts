@@ -214,7 +214,7 @@ function assertFirecrawlBaseUrlAllowedForConfig(hostOrUrl: string, config: ToolP
     return;
   }
   assertHostAllowedForConfig(parsed.toString(), config);
-  assertNotPrivateOrReservedHost(parsed.toString());
+  assertNotPrivateOrReservedHost(parsed.toString(), config.sandbox.networkAllowlist);
 }
 
 function parseHttpUrlForPolicy(value: string, label: string): URL {

@@ -640,6 +640,7 @@ export interface RuntimeSettingsResponse {
     /** Lets a bridged Claude Code CLI tool step park its process and resume it (on by default). false => each step spawns a fresh process. */
     claudeCliWarmContinuationEnabled?: boolean;
     evolutionControlPlaneV1Enabled?: boolean;
+    settingsApprovalSkipEnabled?: boolean;
     improvementLocalObservationV1Enabled?: boolean;
     improvementModelEvaluationV1Enabled?: boolean;
     productSourceEvolutionV1Enabled?: boolean;

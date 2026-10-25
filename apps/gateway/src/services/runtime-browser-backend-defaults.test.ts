@@ -151,7 +151,9 @@ describe("isFirecrawlBaseUrlAllowlisted", () => {
     expect(isFirecrawlBaseUrlAllowlisted("http://127.0.0.1:3002", [])).toBe(true);
     expect(isFirecrawlBaseUrlAllowlisted("https://api.firecrawl.dev", ["api.firecrawl.dev"])).toBe(true);
     expect(isFirecrawlBaseUrlAllowlisted("https://api.firecrawl.dev", [])).toBe(false);
-    expect(isFirecrawlBaseUrlAllowlisted("http://192.168.1.20:3002", ["192.168.1.20:3002"])).toBe(false);
+    expect(isFirecrawlBaseUrlAllowlisted("http://192.168.1.20:3002", ["192.168.1.20:3002"])).toBe(true);
+    expect(isFirecrawlBaseUrlAllowlisted("http://192.168.1.20:3002", ["192.168.*"])).toBe(false);
+    expect(isFirecrawlBaseUrlAllowlisted("http://127.0.0.1:9999", ["127.0.0.1"])).toBe(false);
     expect(isFirecrawlBaseUrlAllowlisted("not a url", ["*"])).toBe(false);
   });
 });

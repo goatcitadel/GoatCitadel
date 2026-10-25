@@ -637,7 +637,10 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
         completedSummary: `Runtime presets now match: ${description}`,
         impact:
           "The selected registered flags change together at one settings revision. Tool and memory governance remain authoritative.",
-        risk: request.change.flags.productSourceEvolutionV1Enabled ? ("danger" as const) : ("caution" as const),
+        risk:
+          request.change.flags.productSourceEvolutionV1Enabled || request.change.flags.settingsApprovalSkipEnabled
+            ? ("danger" as const)
+            : ("caution" as const),
       };
     }
   }
@@ -659,7 +662,10 @@ function describeFeatureFlagChange(flag: ChangePlanRuntimeFeatureFlag, enabled: 
       : `${enabled ? "Enable" : "Disable"} the registered ${flag} rollout gate.`,
     completedSummary: `${name} is now ${state}.`,
     impact: `Only ${named ? "this setting" : `this setting (${flag})`} changes. You can turn it ${enabled ? "off" : "on"} again the same way.`,
-    risk: flag === "productSourceEvolutionV1Enabled" && enabled ? ("danger" as const) : ("caution" as const),
+    risk:
+      (flag === "productSourceEvolutionV1Enabled" || flag === "settingsApprovalSkipEnabled") && enabled
+        ? ("danger" as const)
+        : ("caution" as const),
   };
 }
 

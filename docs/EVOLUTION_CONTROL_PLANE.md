@@ -70,6 +70,8 @@ A denied canonical approval settles its waiting parent as `cancelled`; an expire
 
 Refusing rollback approval instead records `manual_required`: the earlier effect remains in place, with its recovery evidence retained for operator review. Refusal settlement never invokes apply or rollback or activates a candidate. Initial-apply refusals discard temporary setup inputs through the existing adapter cleanup owner before releasing the target claim; cleanup failure remains retryable. Pending and approved decisions do not auto-apply through reconciliation; approved resume still requires its original scope, revision, approval binding, deadline and owner checks. `GET` and list projections remain read-only.
 
+An operator can opt out of the separate approval for their own Settings saves with the `settingsApprovalSkipEnabled` runtime flag (Settings, Tools, "Apply my Settings changes without an Inbox approval"). It is off by default, turning it on is a danger-level plan that still needs one approval, and a `remote_hardened` install ignores it. Only the Gateway Settings save route (`PATCH /api/v1/settings`) can ask for the skip, and only for a plan whose origin surface is `settings`; the generic Change Plan confirmation API and Chat-originated plans always keep their approval. A skipped approval still records the plan, its confirmation nonce, and an `operator_approval_skipped` event before apply. The skip follows the Settings API, not a person: any caller holding operator access to that route, such as a local script while Gateway auth is off, gets it too, so turn it on only where that is acceptable.
+
 ## APIs and Compatibility
 
 Canonical resource APIs are:

@@ -17,4 +17,9 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS: Partial<
     description:
       "When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one.",
   },
+  settingsApprovalSkipEnabled: {
+    label: "Apply my Settings changes without an Inbox approval",
+    description:
+      "When on, a change you save through the Settings forms applies as soon as you save it instead of waiting for an approval in the Inbox. Credential changes and change requests from Chat still need approval.",
+  },
 };

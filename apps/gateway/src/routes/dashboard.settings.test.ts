@@ -86,6 +86,8 @@ describe("dashboard settings routes", () => {
       "plan-settings-budget",
       1,
       "nonce-settings-budget-1234",
+      // The Settings save is the only caller that may ask for the operator's opt-in approval skip.
+      { operatorSettingsSave: true },
     );
     expect(updateSettings).not.toHaveBeenCalled();
     expect(response.json()).toMatchObject({
@@ -142,6 +144,7 @@ describe("dashboard settings routes", () => {
         "plan-cli-bridge-flag",
         1,
         "nonce-cli-bridge-flag-1234",
+        { operatorSettingsSave: true },
       );
       expect(updateSettings).not.toHaveBeenCalled();
     },

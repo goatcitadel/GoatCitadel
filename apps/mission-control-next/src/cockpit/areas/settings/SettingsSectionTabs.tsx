@@ -36,7 +36,7 @@ export function selectedSettingsSection(page: SettingsIndexPage, routeSection: s
   const aliasedHash =
     hash === "application-updates"
       ? "appearance"
-      : hash === "approval-mode" || hash === "filesystem-write-roots"
+      : hash === "approval-mode" || hash === "filesystem-write-roots" || hash === "settings-approval-skip"
         ? "tools"
         : hash === "claude-cli-tool-bridge" || hash === "claude-cli-warm-continuation"
           ? "providers"

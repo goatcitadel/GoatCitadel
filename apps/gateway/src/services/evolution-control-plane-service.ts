@@ -5,6 +5,7 @@ import {
   settleRefusedChangePlanApproval,
 } from "./evolution-control-plane-approval-reconciliation.js";
 import { validatePublicValues } from "./evolution-control-plane-public-form.js";
+import * as operatorApprovalSkip from "./evolution-control-plane-operator-approval-skip.js";
 import {
   ConflictError,
   NotFoundError,
@@ -61,7 +62,7 @@ export interface EvolutionControlPlaneCreateInput {
   readonly expectedTargetRevision?: number;
 }
 
-export interface EvolutionControlPlaneServiceDependencies {
+export interface EvolutionControlPlaneServiceDependencies extends operatorApprovalSkip.Dependencies {
   readonly repository: EvolutionControlPlaneRepositoryPort;
   readonly adapters: EvolutionControlPlaneAdapterRegistry;
   readonly isEnabled?: () => boolean | Promise<boolean>;
@@ -189,6 +190,7 @@ export class EvolutionControlPlaneService {
     planId: string,
     expectedRevision: number,
     actionNonce: string,
+    options: operatorApprovalSkip.ConfirmOptions = {},
   ): Promise<ChangePlanRecord> {
     await this.requireEnabled();
     const current = await this.get(actor, planId);
@@ -217,10 +219,11 @@ export class EvolutionControlPlaneService {
         return await this.settleAdapterFailure(actor, staging, error);
       }
     }
-    if (current.risk !== "safe") {
+    const skipEvent = await operatorApprovalSkip.eventFor(current, options, this.deps);
+    if (current.risk !== "safe" && !skipEvent) {
       return await this.requestCanonicalApproval(actor, current, actionNonce);
     }
-    return await this.executeApply(actor, adapter, current, actionNonce);
+    return await this.executeApply(actor, adapter, current, actionNonce, skipEvent);
   }
 
   /** Compatibility seam for the original Chat route. The canonical API always supplies the nonce. */
@@ -436,7 +439,10 @@ export class EvolutionControlPlaneService {
         message: "This Change Plan crossed its live-effect boundary. Use rollback instead of cancellation.",
       });
     }
-    if (current.requiredAction && (actionNonce ?? current.requiredAction.actionNonce) !== current.requiredAction.actionNonce) {
+    if (
+      current.requiredAction &&
+      (actionNonce ?? current.requiredAction.actionNonce) !== current.requiredAction.actionNonce
+    ) {
       throw new ConflictError({ message: "Change Plan action nonce is missing or stale." });
     }
     const adapter = this.requireMatchingAdapter(current);
@@ -568,6 +574,7 @@ export class EvolutionControlPlaneService {
     adapter: EvolutionControlPlaneAdapter,
     plan: ChangePlanRecord,
     actionNonce?: string,
+    startEvent: operatorApprovalSkip.ApplyStartEvent = { eventType: "apply_started" },
   ): Promise<ChangePlanRecord> {
     const applying =
       plan.status === "applying"
@@ -577,7 +584,7 @@ export class EvolutionControlPlaneService {
             status: "applying",
             ...(actionNonce ? { actionNonce } : { internal: true }),
             requiredAction: null,
-            eventType: "apply_started",
+            ...startEvent,
             actorId: actor.actorId,
           });
     await this.signal("change_plan.applying", applying);

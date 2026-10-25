@@ -88,7 +88,10 @@ export function applyRuntimeBrowserBackendDefaults<TRequest extends ToolInvokeRe
   return request;
 }
 
-/** Mirrors the policy engine: the canonical local port is always allowed; other hosts need the allowlist and a public address. */
+/**
+ * Mirrors the policy engine: the canonical local port is always allowed; other hosts need the
+ * allowlist and a public address, or an exact allowlist entry for a private LAN IPv4 host.
+ */
 export function isFirecrawlBaseUrlAllowlisted(baseUrl: string, networkAllowlist: readonly string[]): boolean {
   let parsed: URL;
   try {
@@ -101,7 +104,7 @@ export function isFirecrawlBaseUrlAllowlisted(baseUrl: string, networkAllowlist:
   }
   if (!isHostAllowed(parsed.toString(), [...networkAllowlist])) return false;
   try {
-    assertNotPrivateOrReservedHost(parsed.toString());
+    assertNotPrivateOrReservedHost(parsed.toString(), networkAllowlist);
     return true;
   } catch {
     return false;

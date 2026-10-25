@@ -271,6 +271,7 @@ export const updateSettingsSchema = z.object({
       claudeCliToolBridgeEnabled: z.boolean().optional(),
       claudeCliWarmContinuationEnabled: z.boolean().optional(),
       evolutionControlPlaneV1Enabled: z.boolean().optional(),
+      settingsApprovalSkipEnabled: z.boolean().optional(),
       improvementLocalObservationV1Enabled: z.boolean().optional(),
       improvementModelEvaluationV1Enabled: z.boolean().optional(),
       productSourceEvolutionV1Enabled: z.boolean().optional(),
@@ -797,7 +798,10 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         if (plan.requiredAction?.kind !== "confirmation") {
           throw new ConflictError({ message: "The governed Settings plan is not ready for exact confirmation." });
         }
-        const settled = await evolution.confirm(actor, plan.planId, plan.revision, plan.requiredAction.actionNonce);
+        // This route is the operator's own Settings save, so it may ask for the opt-in approval skip.
+        const settled = await evolution.confirm(actor, plan.planId, plan.revision, plan.requiredAction.actionNonce, {
+          operatorSettingsSave: true,
+        });
         return reply.send({
           ...projectSettingsPublicValue(await fastify.services.settings.getSettings()),
           changePlanReceipt: {
