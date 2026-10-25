@@ -21,6 +21,11 @@ import type { SecretStoreService } from "./secret-store-service.js";
 
 const MAX_SECRET_LENGTH = 8_192;
 const FIRECRAWL_PROBE_PATH = "/v2/team/credit-usage";
+/**
+ * Asked when the credit probe is neither accepted nor rejected. A self-hosted server has no billing data, so
+ * its credit route fails, but this team-scoped route still goes through the same key check.
+ */
+const FIRECRAWL_FALLBACK_PROBE_PATH = "/v2/team/queue-status";
 const FIRECRAWL_PROBE_TIMEOUT_MS = 10_000;
 const FIRECRAWL_ACCOUNT_SUFFIX = "search.firecrawl";
 const FIRECRAWL_ACQUISITION_URL = "https://www.firecrawl.dev/app/api-keys";
@@ -130,28 +135,42 @@ export class WebSearchCredentialService {
     if (!endpoint.allowlisted) {
       return result("blocked", `${endpoint.host} is not in the outbound allowlist, so tools cannot reach it.`);
     }
-    let response: Response;
-    try {
-      response = await this.fetchImpl(`${baseUrl}${FIRECRAWL_PROBE_PATH}`, {
+    const probe = (path: string) =>
+      this.fetchImpl(`${baseUrl}${path}`, {
         allowlist: isCanonicalLocalFirecrawlBaseUrl(baseUrl)
           ? CANONICAL_LOCAL_FIRECRAWL_HOSTS
           : [...this.options.getNetworkAllowlist()],
         timeoutMs: Math.min(firecrawl.timeoutMs, FIRECRAWL_PROBE_TIMEOUT_MS),
         init: { method: "GET", headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {} },
       });
+    const unauthorized = (httpStatus: number) =>
+      result("unauthorized", apiKey ? "Firecrawl rejected the API key." : "Firecrawl needs an API key.", {
+        httpStatus,
+      });
+    let response: Response;
+    try {
+      response = await probe(FIRECRAWL_PROBE_PATH);
     } catch {
       return result("unreachable", `Nothing answered at ${baseUrl}. Tools fall back to native search when allowed.`);
     }
-    if (response.status === 401 || response.status === 403) {
-      return result("unauthorized", apiKey ? "Firecrawl rejected the API key." : "Firecrawl needs an API key.", {
-        httpStatus: response.status,
-      });
+    if (isKeyRejection(response.status)) {
+      return unauthorized(response.status);
     }
     if (response.ok) {
       const remainingCredits = await readRemainingCredits(response);
       return result("ok", "Firecrawl answered and accepted the request.", {
         httpStatus: response.status,
         ...(remainingCredits !== undefined ? { remainingCredits } : {}),
+      });
+    }
+    // The server already answered, so a failed fallback probe leaves the check at "reachable" below.
+    const fallback = await probe(FIRECRAWL_FALLBACK_PROBE_PATH).catch(() => undefined);
+    if (fallback && isKeyRejection(fallback.status)) {
+      return unauthorized(fallback.status);
+    }
+    if (fallback?.ok) {
+      return result("ok", "Firecrawl answered and accepted the request. This server does not report credit usage.", {
+        httpStatus: fallback.status,
       });
     }
     return result("reachable", `Firecrawl answered with HTTP ${response.status}; the key could not be confirmed.`, {
@@ -390,6 +409,10 @@ function isCanonicalLocalFirecrawlBaseUrl(baseUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isKeyRejection(httpStatus: number): boolean {
+  return httpStatus === 401 || httpStatus === 403;
 }
 
 async function readRemainingCredits(response: Response): Promise<number | undefined> {

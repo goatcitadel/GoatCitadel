@@ -29,6 +29,11 @@ function firecrawlConfig(overrides: Partial<FirecrawlRuntimeConfig> = {}): Firec
   };
 }
 
+/** A Firecrawl stand-in that answers each probe path with a fixed HTTP status, and 404 for anything else. */
+function firecrawlServer(statusByPath: Record<string, number>) {
+  return vi.fn(async (url: string) => new Response("{}", { status: statusByPath[new URL(url).pathname] ?? 404 }));
+}
+
 function service(overrides: Partial<WebSearchCredentialServiceOptions> = {}) {
   const secretStore = memoryStore();
   const options: WebSearchCredentialServiceOptions = {
@@ -127,8 +132,48 @@ describe("WebSearchCredentialService", () => {
   });
 
   it("reports remaining hosted credits on a successful check", async () => {
-    const { credentials } = service();
+    const { credentials, options } = service();
     await expect(credentials.checkFirecrawl()).resolves.toMatchObject({ status: "ok", remainingCredits: 480 });
+    expect(options.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms a self-hosted server without credit usage through its queue status", async () => {
+    const fetchImpl = firecrawlServer({ "/v2/team/credit-usage": 500, "/v2/team/queue-status": 200 });
+    const { credentials } = service({
+      fetchImpl,
+      env: { FIRECRAWL_API_KEY: "fc-self-hosted" },
+      getNetworkAllowlist: () => [],
+      getFirecrawlConfig: () => firecrawlConfig({ baseUrl: "http://127.0.0.1:3002" }),
+    });
+
+    const check = await credentials.checkFirecrawl();
+
+    expect(check).toMatchObject({ status: "ok", keySource: "env", httpStatus: 200 });
+    expect(check.message).toContain("does not report credit usage");
+    expect(check.remainingCredits).toBeUndefined();
+    expect(fetchImpl).toHaveBeenLastCalledWith(
+      "http://127.0.0.1:3002/v2/team/queue-status",
+      expect.objectContaining({
+        allowlist: ["127.0.0.1:3002", "localhost:3002"],
+        init: expect.objectContaining({ headers: { Authorization: "Bearer fc-self-hosted" } }),
+      }),
+    );
+  });
+
+  it("reports a key the self-hosted queue status rejects", async () => {
+    const { credentials } = service({
+      fetchImpl: firecrawlServer({ "/v2/team/credit-usage": 500, "/v2/team/queue-status": 401 }),
+    });
+
+    await expect(credentials.checkFirecrawl()).resolves.toMatchObject({ status: "unauthorized", httpStatus: 401 });
+  });
+
+  it("stays reachable when neither probe confirms the request", async () => {
+    const { credentials } = service({
+      fetchImpl: firecrawlServer({ "/v2/team/credit-usage": 500, "/v2/team/queue-status": 500 }),
+    });
+
+    await expect(credentials.checkFirecrawl()).resolves.toMatchObject({ status: "reachable", httpStatus: 500 });
   });
 
   it("runs Brave changes under the shared Chat owner fence and live probe", async () => {
