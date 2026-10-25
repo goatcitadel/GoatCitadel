@@ -13,6 +13,22 @@ import {
 import { chatStreamChunkToRecord, toChatStreamChunk } from "./chat-stream-codecs.js";
 
 const CHAT_STREAM_EVENT_POLL_INTERVAL_MS = 200;
+/** Idle (no new events) polls back off up to this ceiling; a new event or signal resets to the base interval. */
+const CHAT_STREAM_EVENT_IDLE_POLL_MAX_INTERVAL_MS = 2_000;
+
+/** Per-live-tail reuse of the run lookup so an idle reader does not re-prepare and re-query every poll. */
+export interface DurableTurnProbeCache {
+  statement?: Awaited<ReturnType<Storage["gatewaySql"]["prepare"]>>;
+  runId?: string;
+}
+
+/** Next idle poll delay: doubles from the base interval up to the idle ceiling. */
+export function nextChatStreamIdlePollDelayMs(currentMs: number): number {
+  return Math.min(
+    Math.max(currentMs, CHAT_STREAM_EVENT_POLL_INTERVAL_MS) * 2,
+    CHAT_STREAM_EVENT_IDLE_POLL_MAX_INTERVAL_MS,
+  );
+}
 const CHAT_STREAM_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 export interface GatewayChatStreamRuntimeHost {
@@ -187,12 +203,15 @@ export class GatewayChatStreamRuntime {
       }
     }
 
+    const durableProbe: DurableTurnProbeCache = {};
+    let idlePollDelayMs = CHAT_STREAM_EVENT_POLL_INTERVAL_MS;
     while (true) {
       if (options?.signal?.aborted) {
         return;
       }
       const events = await this.host.storage.chatStreamEvents.listByTurn(turnId, afterSequence, 200);
       if (events.length > 0) {
+        idlePollDelayMs = CHAT_STREAM_EVENT_POLL_INTERVAL_MS;
         for (const event of events) {
           afterSequence = event.sequence;
           const payload = toChatStreamChunk(event.payload);
@@ -239,14 +258,23 @@ export class GatewayChatStreamRuntime {
 
       const active = this.host.chatTurnExecutionRegistry.getActiveStream(turnId);
       const durablePending = options?.liveTail
-        ? await this.isDurableTurnStillStreaming(turnId, {
-            includeInterrupts: options.returnOnDurableInterrupt !== true,
-          })
+        ? await this.isDurableTurnStillStreaming(
+            turnId,
+            { includeInterrupts: options.returnOnDurableInterrupt !== true },
+            durableProbe,
+          )
         : false;
       if (!options?.liveTail || ((!active || active.completed) && !durablePending)) {
         return;
       }
-      await this.waitForChatStreamEvent(turnId, CHAT_STREAM_EVENT_POLL_INTERVAL_MS, options?.signal);
+      // Back off while nothing arrives (for example a run waiting on approval); a signalled
+      // append wakes the wait immediately and the next batch of events resets the delay.
+      const waitStartedAt = Date.now();
+      await this.waitForChatStreamEvent(turnId, idlePollDelayMs, options?.signal);
+      idlePollDelayMs =
+        Date.now() - waitStartedAt < idlePollDelayMs
+          ? CHAT_STREAM_EVENT_POLL_INTERVAL_MS
+          : nextChatStreamIdlePollDelayMs(idlePollDelayMs);
     }
   }
 
@@ -316,24 +344,33 @@ export class GatewayChatStreamRuntime {
   public async isDurableTurnStillStreaming(
     turnId: string,
     options?: { includeInterrupts?: boolean },
+    probe?: DurableTurnProbeCache,
   ): Promise<boolean> {
-    const statement = await this.host.storage.gatewaySql.prepare(
-      `
+    let runId: string | null = probe?.runId ?? null;
+    if (!runId) {
+      const statement =
+        probe?.statement ??
+        (await this.host.storage.gatewaySql.prepare(
+          `
       SELECT run_id
       FROM chat_stream_events
       WHERE turn_id = ?
       ORDER BY sequence DESC
       LIMIT 1
     `,
-    );
-    const eventRow = await statement.get<{ run_id: string | null }>(turnId);
-    let runId = eventRow?.run_id ?? null;
-    if (!runId) {
-      try {
-        runId = (await this.host.storage.chatTurnTraces.get(turnId)).durable?.runId ?? null;
-      } catch {
-        runId = null;
+        ));
+      if (probe) probe.statement = statement;
+      const eventRow = await statement.get<{ run_id: string | null }>(turnId);
+      runId = eventRow?.run_id ?? null;
+      if (!runId) {
+        try {
+          runId = (await this.host.storage.chatTurnTraces.get(turnId)).durable?.runId ?? null;
+        } catch {
+          runId = null;
+        }
       }
+      // A turn's durable run never changes once known, so later polls skip both lookups.
+      if (runId && probe) probe.runId = runId;
     }
     if (!runId) {
       return false;
