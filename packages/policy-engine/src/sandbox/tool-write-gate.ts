@@ -1,8 +1,11 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import { assertWritePathInJail } from "./path-jail.js";
 import {
   classifyHardForbiddenWritePath,
+  classifyWindowsLexicalTarget,
+  hasWindowsShortNameSegment,
   isSamePathOrDescendant,
   type WriteRootSafetyContext,
 } from "./write-root-safety.js";
@@ -94,6 +97,7 @@ export function assertToolWritePath(
 ): string {
   const roots = effectiveToolWriteRoots(sandbox, intent);
   if (intent === "write") roots.push(...admittedWriteRoots(sandbox, admission));
+  assertNoWindowsPathTricks(targetPath);
   const resolvedTarget = assertWritePathInJail(targetPath, roots);
   assertNotHardForbiddenWritePath(resolvedTarget, sandbox);
   if (intent === "delete") {
@@ -101,6 +105,33 @@ export function assertToolWritePath(
     assertNotProtectedPathAncestor(resolvedTarget, sandbox);
   }
   return resolvedTarget;
+}
+
+/**
+ * Win32 resolves alternate data streams, trailing dots/spaces, 8.3 short names
+ * and reserved device names to a different file than the lexical protected-path
+ * check sees (`index.db::$DATA`, `index.db.`), so refuse them outright.
+ * Short names are only suspicious in the not-yet-existing tail (existing ones
+ * are expanded by the native realpath).
+ */
+export function assertNoWindowsPathTricks(targetPath: string, platform: NodeJS.Platform = process.platform): void {
+  if (platform !== "win32") return;
+  const refusal = classifyWindowsLexicalTarget(targetPath) ?? shortNameTailRefusal(targetPath);
+  if (refusal) {
+    throw new Error(`Path uses a Windows path form tools may not write (${refusal}): ${targetPath}`);
+  }
+}
+
+function shortNameTailRefusal(targetPath: string): string | undefined {
+  const missingTail: string[] = [];
+  let probe = path.win32.resolve(targetPath);
+  while (!fs.existsSync(probe)) {
+    const parent = path.win32.dirname(probe);
+    if (parent === probe) break;
+    missingTail.unshift(path.win32.basename(probe));
+    probe = parent;
+  }
+  return hasWindowsShortNameSegment(missingTail) ? "short_name_segment" : undefined;
 }
 
 /**

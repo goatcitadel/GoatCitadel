@@ -14,7 +14,11 @@ import { effectiveToolWriteRoots } from "./tool-write-gate.js";
 import {
   canonicalizeOperatorWriteRoot,
   classifyHardForbiddenWritePath,
+  classifyWindowsLexicalTarget,
+  hasWindowsShortNameSegment,
+  isNetworkPath,
   isSamePathOrDescendant,
+  type WindowsLexicalRefusal,
   type WriteRootRejection,
   type WriteRootSafetyContext,
 } from "./write-root-safety.js";
@@ -28,45 +32,13 @@ import {
  */
 type ToolSandbox = ToolPolicyConfig["sandbox"];
 
-export type OutsideRootWriteRefusal =
-  | WriteRootRejection
-  | "device_namespace"
-  | "network_path"
-  | "reserved_device_name"
-  | "alternate_data_stream"
-  | "short_name_segment";
+export type OutsideRootWriteRefusal = WriteRootRejection | WindowsLexicalRefusal;
 
 export type OutsideRootWriteTargetResolution =
   | { ok: true; resolved: string }
   | { ok: false; refusal: OutsideRootWriteRefusal };
 
 const MAX_CANDIDATE_DEPTH = 3;
-const WINDOWS_RESERVED_DEVICE_NAMES = new Set([
-  "CON",
-  "PRN",
-  "AUX",
-  "NUL",
-  "CONIN$",
-  "CONOUT$",
-  "COM1",
-  "COM2",
-  "COM3",
-  "COM4",
-  "COM5",
-  "COM6",
-  "COM7",
-  "COM8",
-  "COM9",
-  "LPT1",
-  "LPT2",
-  "LPT3",
-  "LPT4",
-  "LPT5",
-  "LPT6",
-  "LPT7",
-  "LPT8",
-  "LPT9",
-]);
 
 /** Outside-root writes are possible only when opted in and runtime protection exists. */
 export function isOutsideRootWriteEnabled(sandbox: ToolSandbox): boolean {
@@ -106,7 +78,7 @@ export function resolveOutsideRootWriteTarget(
   }
   const absolute = path.resolve(trimmed);
   const { resolved, missingTail } = resolveThroughNativeAncestor(absolute);
-  if (platform === "win32" && missingTail.some((segment) => /~\d/u.test(segment))) {
+  if (platform === "win32" && hasWindowsShortNameSegment(missingTail)) {
     return { ok: false, refusal: "short_name_segment" };
   }
   const forbidden = classifyHardForbiddenWritePath(resolved, { ...ctx, platform });
@@ -224,26 +196,6 @@ function assertBoundedExpiry(expiresAt: string | undefined, nowMs: number, fail:
   const expiresMs = expiresAt ? Date.parse(expiresAt) : Number.NaN;
   if (!Number.isFinite(expiresMs) || expiresMs <= nowMs) fail("a future expiresAt is required");
   if (expiresMs - nowMs > OUTSIDE_ROOT_WRITE_GRANT_MAX_TTL_MS) fail("grants may last at most 24 hours");
-}
-
-function classifyWindowsLexicalTarget(value: string): OutsideRootWriteRefusal | undefined {
-  if (/^[\\/]{2}[?.][\\/]/u.test(value)) return "device_namespace";
-  if (isNetworkPath(value)) return "network_path";
-  const absolute = path.win32.resolve(value);
-  const segments = absolute
-    .slice(path.win32.parse(absolute).root.length)
-    .split(/[\\/]+/u)
-    .filter(Boolean);
-  for (const segment of segments) {
-    if (segment.includes(":")) return "alternate_data_stream";
-    const baseName = segment.split(".")[0]?.trimEnd().toUpperCase() ?? "";
-    if (WINDOWS_RESERVED_DEVICE_NAMES.has(baseName)) return "reserved_device_name";
-  }
-  return undefined;
-}
-
-function isNetworkPath(value: string): boolean {
-  return /^[\\/]{2}[^\\/?.]/u.test(value);
 }
 
 function resolveThroughNativeAncestor(absolute: string): { resolved: string; missingTail: string[] } {
