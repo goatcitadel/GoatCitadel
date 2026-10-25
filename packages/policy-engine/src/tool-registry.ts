@@ -54,6 +54,25 @@ const RESTRICTED_PACKAGE_SCRIPT_ARG_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+/** Where memory.write and memory.upsert save a note when the caller names no namespace (#566). */
+export const DEFAULT_MEMORY_NAMESPACE = "general";
+
+/** memory.write and memory.upsert: only the content is required; the executor fills the namespace and title. */
+const MEMORY_WRITE_ARG_SCHEMA = {
+  type: "object",
+  properties: {
+    content: { type: "string", description: "The text to remember, in full." },
+    title: { type: "string", description: "Short title. Defaults to the content's first line." },
+    namespace: {
+      type: "string",
+      description: `Optional grouping, such as "preferences" or a project name. Defaults to "${DEFAULT_MEMORY_NAMESPACE}".`,
+    },
+    tags: { type: "array", items: { type: "string" }, description: "Optional tags." },
+    metadata: { type: "object", description: "Optional extra fields stored with the note." },
+  },
+  required: ["content"],
+} as const;
+
 export const RUNTIME_CONFIGURATION_TARGET_IDS = ["search.brave", "search.parallel"] as const;
 
 export type RuntimeConfigurationTargetId = (typeof RUNTIME_CONFIGURATION_TARGET_IDS)[number];
@@ -1841,6 +1860,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     requiresApproval: false,
     description: "Write structured memory note into knowledge index.",
     pack: "knowledge",
+    argSchema: MEMORY_WRITE_ARG_SCHEMA,
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["memory_persist"],
     usageHints: ["Use only when the user explicitly asks to save or remember something."],
@@ -1852,6 +1872,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     requiresApproval: false,
     description: "Upsert structured memory note by deterministic key.",
     pack: "knowledge",
+    argSchema: MEMORY_WRITE_ARG_SCHEMA,
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["memory_persist"],
   },

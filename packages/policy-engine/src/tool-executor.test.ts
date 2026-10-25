@@ -7369,6 +7369,23 @@ describe("executeTool", () => {
     );
     expect(written).toMatchObject({ mode: "write", chunksSaved: 1 });
 
+    // #566: a Chat "remember this" call sent only the content; the write failed with "namespace is required".
+    const contentOnly = await executeTool(
+      toolRequest("memory.write", {
+        content: "My preferred report format is a one-page PDF with a summary table at the top.\nKeep it short.",
+      }),
+      policyConfig,
+      harness.storage,
+    );
+    expect(contentOnly).toMatchObject({
+      mode: "write",
+      chunksSaved: 1,
+      document: {
+        namespace: "general",
+        title: "My preferred report format is a one-page PDF with a summary table at the top.",
+      },
+    });
+
     const upserted = await executeTool(
       toolRequest("memory.upsert", {
         namespace: "project",

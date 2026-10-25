@@ -36,6 +36,22 @@ describe("tool registry", () => {
     }
   });
 
+  it("gives the memory write tools a schema that names their fields (#566)", () => {
+    // With no schema the model saw an open object, sent only the content, and the write failed with
+    // "namespace is required".
+    const catalog = createDefaultToolRegistry().toCatalog();
+    for (const name of ["memory.write", "memory.upsert"]) {
+      const schema = catalog.find((item) => item.toolName === name)?.argSchema as
+        | { properties: Record<string, { type?: string; description?: string }>; required: string[] }
+        | undefined;
+      expect(schema, name).toMatchObject({ type: "object", required: ["content"] });
+      expect(Object.keys(schema?.properties ?? {}), name).toEqual(
+        expect.arrayContaining(["namespace", "title", "content", "tags"]),
+      );
+      expect(schema?.properties.namespace?.description, name).toContain('"general"');
+    }
+  });
+
   it("does not register git.exec, which has no executor and only ever failed after approval", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     expect(catalog.some((item) => item.toolName === "git.exec")).toBe(false);
