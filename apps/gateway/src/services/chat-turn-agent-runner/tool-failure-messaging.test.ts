@@ -245,8 +245,14 @@ describe("buildPolicyBlockedRecoveryText", () => {
     expect(text).not.toMatch(/part of it may|sticking point|narrower|specific URL|keep going/i);
   });
 
-  it("stays cautious when a memory write timed out or was cancelled, since it may still have finished", () => {
-    for (const error of ["tool timed out after 30000ms", "execution aborted by caller"]) {
+  it("stays cautious unless the error is known to come before any write (#575)", () => {
+    // Review on #575: audit persistence runs after the tool commits, so only a known pre-write error (a missing
+    // required argument) proves nothing was kept; anything else may have failed after the note was stored.
+    for (const error of [
+      "tool timed out after 30000ms",
+      "execution aborted by caller",
+      "execution error: EACCES: permission denied, open audit.log",
+    ]) {
       const text = buildPolicyBlockedRecoveryText([toolRun({ toolName: "memory.upsert", status: "failed", error })]);
 
       expect(text, error).toContain("can't confirm");
