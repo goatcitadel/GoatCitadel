@@ -197,6 +197,76 @@ describe("ApprovalExplainerService", () => {
     });
   });
 
+  it("explains a change-plan approval from the plan's own description instead of asking a model (#496)", async () => {
+    // A model shown only the flag key and hashes guessed ("likely lets…") and said there was no way back.
+    const ctx = createService();
+    await ctx.service.explainApproval({
+      ...defaultApproval,
+      approvalId: "ap-plan",
+      kind: "change_plan_effect",
+      riskLevel: "caution",
+      payload: { planId: "plan-1", intentHash: "abc" },
+      preview: {
+        title: "Turn on Claude Code CLI: reuse one process between tool steps",
+        summary: "Keeps the turn's Claude Code process running between tool steps.",
+        impact: "You can turn it off again the same way in Settings.",
+        risk: "caution",
+      },
+    });
+    expect(ctx.chatCompletions).not.toHaveBeenCalled();
+    expect(ctx.setExplanation).toHaveBeenCalledWith(
+      "ap-plan",
+      expect.objectContaining({
+        summary: "Keeps the turn's Claude Code process running between tool steps.",
+        riskExplanation: "You can turn it off again the same way in Settings.",
+      }),
+    );
+    const [, explanation] = ctx.setExplanation.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(explanation.providerId).toBeUndefined();
+    expect(ctx.publishRealtime).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "ap-plan", status: "completed" }),
+    );
+  });
+
+  it("marks a change-plan explanation failed when writing it fails, so it never stays pending", async () => {
+    const ctx = createService();
+    ctx.setExplanation.mockImplementationOnce(() => {
+      throw new Error("approval store unavailable");
+    });
+    await ctx.service.explainApproval({
+      ...defaultApproval,
+      approvalId: "ap-plan",
+      kind: "change_plan_effect",
+      riskLevel: "caution",
+      payload: { planId: "plan-1" },
+      preview: { title: "Turn off a switch", summary: "Turns it off.", impact: "You can turn it on again." },
+    });
+    expect(ctx.setExplanationFailed).toHaveBeenCalledWith("ap-plan", "approval store unavailable");
+    expect(ctx.chatCompletions).not.toHaveBeenCalled();
+    expect(ctx.publishRealtime).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "ap-plan", status: "failed" }),
+    );
+  });
+
+  it("keeps a saved change-plan explanation completed when a later event fails, and reports that failure", async () => {
+    const ctx = createService();
+    ctx.appendEvent.mockImplementation((event: { eventType: string }) => {
+      if (event.eventType === "explanation_generated") throw new Error("event log unavailable");
+    });
+    await expect(
+      ctx.service.explainApproval({
+        ...defaultApproval,
+        approvalId: "ap-plan",
+        kind: "change_plan_effect",
+        riskLevel: "caution",
+        payload: { planId: "plan-1" },
+        preview: { title: "Turn off a switch", summary: "Turns it off.", impact: "You can turn it on again." },
+      }),
+    ).rejects.toThrow("event log unavailable");
+    expect(ctx.setExplanation).toHaveBeenCalledTimes(1);
+    expect(ctx.setExplanationFailed).not.toHaveBeenCalled();
+  });
+
   it("skips safe risk approvals by default threshold", async () => {
     const ctx = createService();
     const safeApproval: ApprovalRequest = {

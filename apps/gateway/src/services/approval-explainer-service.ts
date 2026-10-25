@@ -49,7 +49,6 @@ export class ApprovalExplainerService {
     if (!markedPending) {
       return;
     }
-
     await this.storage.approvalEvents.append({
       approvalId: approval.approvalId,
       eventType: "explanation_requested",
@@ -60,7 +59,16 @@ export class ApprovalExplainerService {
       },
     });
 
+    // Set once the explanation is stored: a later event or realtime failure must not mark it failed.
+    const saved = { done: false };
     try {
+      // Inside the try, so a failed write is recorded as failed instead of staying pending.
+      const planExplanation = changePlanExplanation(approval);
+      if (planExplanation) {
+        await this.recordExplanation(approval.approvalId, planExplanation, { source: "change_plan" }, saved);
+        await this.publishRealtime({ approvalId: approval.approvalId, status: "completed" });
+        return;
+      }
       const runtime = this.llmService.getRuntimeConfig();
       const providerId = this.config.providerId ?? runtime.activeProviderId;
       const model = this.config.model ?? runtime.activeModel;
@@ -123,16 +131,7 @@ export class ApprovalExplainerService {
         model,
       };
 
-      await this.storage.approvals.setExplanation(approval.approvalId, explanation);
-      await this.storage.approvalEvents.append({
-        approvalId: approval.approvalId,
-        eventType: "explanation_generated",
-        actorId: "system",
-        payload: {
-          providerId,
-          model,
-        },
-      });
+      await this.recordExplanation(approval.approvalId, explanation, { providerId, model }, saved);
 
       await this.publishRealtime({
         approvalId: approval.approvalId,
@@ -141,7 +140,8 @@ export class ApprovalExplainerService {
         model,
       });
     } catch (error) {
-      if (isAuthoritativeModelUsageAccountingError(error)) {
+      // A stored explanation stays completed; the caller reports the later failure.
+      if (saved.done || isAuthoritativeModelUsageAccountingError(error)) {
         throw error;
       }
       const message = truncate((error as Error).message, 500);
@@ -161,6 +161,36 @@ export class ApprovalExplainerService {
       });
     }
   }
+
+  private async recordExplanation(
+    approvalId: string,
+    explanation: ApprovalExplanation,
+    eventPayload: Record<string, unknown>,
+    saved: { done: boolean },
+  ): Promise<void> {
+    await this.storage.approvals.setExplanation(approvalId, explanation);
+    saved.done = true;
+    await this.storage.approvalEvents.append({
+      approvalId,
+      eventType: "explanation_generated",
+      actorId: "system",
+      payload: eventPayload,
+    });
+  }
+}
+
+/**
+ * A change plan already describes its effect in the owner's words, so its approval explains itself from them. A model
+ * shown only the flag key and hashes guessed at what a switch does and how to undo it (#496).
+ */
+function changePlanExplanation(approval: ApprovalRequest): ApprovalExplanation | undefined {
+  if (approval.kind !== "change_plan_effect") return undefined;
+  const preview = approval.preview ?? {};
+  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+  const summary = text(preview.summary);
+  const impact = text(preview.impact);
+  if (!summary || !impact) return undefined;
+  return { summary, riskExplanation: impact, generatedAt: new Date().toISOString() };
 }
 
 function riskScore(value: ApprovalRequest["riskLevel"] | ApprovalExplainerConfig["minRiskLevel"]): number {
