@@ -1,7 +1,8 @@
-import { skipToken, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import type { CapabilityConnectorItem, CapabilityConnectorsResponse, McpToolRecord } from "@goatcitadel/contracts";
 import { fetchMcpTools } from "@goatcitadel/mission-control-shared/api/mcp-operations";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { connectorListQuery } from "../../../data/capability-connectors-query";
 import { queryKeys } from "../../../data/query-keys";
 import { recordView } from "../../../data/record-view";
 import { Button } from "../../../ui/Button";
@@ -80,7 +81,7 @@ function TechnicalRows({ item }: { item: CapabilityConnectorItem }) {
   );
 }
 
-function ConnectorDetails({ item }: { item: CapabilityConnectorItem }) {
+function ConnectorDetails({ item, onRemoved }: { item: CapabilityConnectorItem; onRemoved?: () => void }) {
   const state = presentConnectorState(item);
   const connection = describeConnection(item);
   const savedServer = item.source === "mcp_server" && Boolean(item.serverId);
@@ -132,7 +133,7 @@ function ConnectorDetails({ item }: { item: CapabilityConnectorItem }) {
         </p>
       ) : null}
 
-      {savedServer ? <ConnectorServerControls item={item} /> : null}
+      {savedServer ? <ConnectorServerControls item={item} onRemoved={onRemoved} /> : null}
 
       <NativeOwnerLink scope={item.id} href={connectorSettingsHref(item)} className="text-sm">
         Advanced setup in Settings
@@ -147,16 +148,17 @@ function ConnectorDetails({ item }: { item: CapabilityConnectorItem }) {
 
 /**
  * The details panel of one connector, shown in the inspector. It reads the connector from the list the Connectors tab
- * keeps, so the switch and the state follow every change to that list, including the optimistic one.
+ * keeps, so the switch and the state follow every change to that list. It never reads the list itself (`enabled:
+ * false`) but carries the same options as the tab: observers write their options onto the one shared query, and one
+ * without a `queryFn` would leave the tab's next re-read with nothing to run.
  */
-export function ConnectorPanel({ itemId }: { itemId: string }) {
+export function ConnectorPanel({ itemId, onRemoved }: { itemId: string; onRemoved?: () => void }) {
   const { activeWorkspaceId } = useUiPreferences();
   const live = useQuery({
-    queryKey: queryKeys.capabilityConnectors(activeWorkspaceId),
-    // Only reads the cache: the tab owns fetching, so the panel and the list can't disagree.
-    queryFn: skipToken,
+    ...connectorListQuery(activeWorkspaceId),
+    enabled: false,
     select: (list: CapabilityConnectorsResponse) => list.items.find((entry) => entry.id === itemId),
   });
   if (!live.data) return <p className="text-sm text-fg-muted">This connector isn't in the list anymore.</p>;
-  return <ConnectorDetails item={live.data} />;
+  return <ConnectorDetails item={live.data} onRemoved={onRemoved} />;
 }

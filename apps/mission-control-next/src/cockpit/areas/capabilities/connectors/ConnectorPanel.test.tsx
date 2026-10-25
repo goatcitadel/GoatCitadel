@@ -323,8 +323,26 @@ describe("Connector panel switch", () => {
       enabled: false,
     });
     await act(async () => saving.resolve(savedServer({ revision: "b".repeat(64) })));
+    await vi.waitFor(() => expect(switchControl()?.getAttribute("aria-busy")).toBeNull());
     expect(switchControl()?.getAttribute("aria-checked")).toBe("false");
-    expect(switchControl()?.getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("moves the switch on at once but leaves the state above it alone until the list is read again", async () => {
+    const saving = deferred<McpServerRecord>();
+    mcp.updateMcpServer.mockReturnValue(saving.promise);
+    await renderPanel(LINEAR.id, [OFF_LINEAR]);
+    await vi.waitFor(() => expect(switchControl()?.getAttribute("aria-busy")).toBeNull());
+    await act(async () => switchControl()?.click());
+    expect(mcp.updateMcpServer).toHaveBeenCalledExactlyOnceWith("linear", {
+      expectedRevision: REVISION,
+      enabled: true,
+    });
+    expect(switchControl()?.getAttribute("aria-checked")).toBe("true");
+    // The badge and the reason still say what the Gateway last said.
+    expect(text()).toContain("Turned off");
+    expect(text()).toContain("Switched off");
+    expect(text()).not.toContain("Ready to use");
+    expect(cached(LINEAR.id)).toMatchObject({ state: "turned_off", reason: "turned_off", group: "turned_off" });
   });
 
   it("rolls back only the failed switch", async () => {
@@ -386,6 +404,19 @@ describe("Connector panel switch", () => {
     expect(mcp.updateMcpServer).not.toHaveBeenCalled();
   });
 
+  it("offers Retry when the check of a switched-off server fails", async () => {
+    mcp.fetchMcpServer.mockRejectedValueOnce(new Error("offline"));
+    await renderPanel(LINEAR.id, [OFF_LINEAR]);
+    await vi.waitFor(() => expect(text()).toContain("Couldn't check whether it can be switched on."));
+    expect(switchControl()?.disabled).toBe(true);
+    expect(text()).not.toContain("Try again");
+    mcp.fetchMcpServer.mockResolvedValue(savedServer());
+    await act(async () => button("Retry")?.click());
+    await vi.waitFor(() => expect(switchControl()?.disabled).toBe(false));
+    expect(text()).not.toContain("Couldn't check");
+    expect(button("Retry")).toBeUndefined();
+  });
+
   it("has no switch for an app that is not a saved server", async () => {
     await renderPanel(CONTEXT7.id);
     expect(switchControl()).toBeNull();
@@ -403,8 +434,15 @@ describe("Connector panel remove", () => {
     // The confirmation names the app and says what is lost.
     const dialog = body().querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain("Remove Linear?");
-    expect(dialog.textContent).toContain("every workspace");
+    // What the Gateway removes with a saved server: the setup for the whole installation, its saved sign-in and keys,
+    // its tool list and the approvals waiting on it.
+    expect(dialog.textContent).toContain("every workspace on this computer");
+    expect(dialog.textContent).toContain("saved sign-in and keys");
+    expect(dialog.textContent).toContain("tool list");
+    expect(dialog.textContent).toContain("approvals waiting on it");
     expect(dialog.textContent).toContain("can't be undone");
+    // Secrets are queued for deletion afterwards, so the copy says removed, never wiped.
+    expect(dialog.textContent).not.toMatch(/deleted|erased|wiped/i);
 
     await act(async () => button("Remove Linear")?.click());
     expect(mcp.deleteMcpServer).toHaveBeenCalledExactlyOnceWith("linear", REVISION);
@@ -484,6 +522,41 @@ describe("Connector panel from the Connectors tab", () => {
     await act(async () => body().querySelector<HTMLButtonElement>('button[aria-label="Close inspector"]')?.click());
     // Closing clears the address so the same row can be pressed again.
     expect(route.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/connectors", { replace: true });
+  });
+
+  it("reads the list again after a switch while the panel is open", async () => {
+    route.search = `?item=${encodeURIComponent(LINEAR.id)}`;
+    connectorsApi.fetchCapabilityConnectors.mockResolvedValue(response([LINEAR, NOTION]));
+    mcp.updateMcpServer.mockResolvedValue(savedServer({ revision: "b".repeat(64), enabled: false }));
+    await renderTab();
+    await vi.waitFor(() => expect(switchControl()).not.toBeNull());
+    expect(connectorsApi.fetchCapabilityConnectors).toHaveBeenCalledTimes(1);
+
+    connectorsApi.fetchCapabilityConnectors.mockResolvedValue(response([OFF_LINEAR, NOTION]));
+    await act(async () => switchControl()?.click());
+    // The panel and the tab observe one list; the panel must not stop the tab from reading it again.
+    await vi.waitFor(() => expect(connectorsApi.fetchCapabilityConnectors).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(client.getQueryState(KEY)?.fetchStatus).toBe("idle"));
+    expect(client.getQueryState(KEY)?.status).toBe("success");
+    expect(client.getQueryState(KEY)?.error).toBeNull();
+    expect(text()).not.toContain("Connectors couldn't load");
+    expect(cached(LINEAR.id)).toMatchObject({ state: "turned_off" });
+  });
+
+  it("moves focus to the search box after a removal, because the row it would return to is gone", async () => {
+    route.search = `?item=${encodeURIComponent(LINEAR.id)}`;
+    connectorsApi.fetchCapabilityConnectors.mockResolvedValue(response([LINEAR, NOTION]));
+    mcp.deleteMcpServer.mockResolvedValue({ deleted: true });
+    await renderTab();
+    await vi.waitFor(() => expect(switchControl()).not.toBeNull());
+    // A pointer click focuses the button it lands on; a scripted one does not.
+    button("Remove")?.focus();
+    await act(async () => button("Remove")?.click());
+    connectorsApi.fetchCapabilityConnectors.mockResolvedValue(response([NOTION]));
+    await act(async () => button("Remove Linear")?.click());
+    await vi.waitFor(() => expect(body().querySelector('[data-inspector-body="true"]')).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(body().querySelector('[role="search"] input')));
+    expect(body().querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("keeps the panel's switch current as the list is read again", async () => {

@@ -22,7 +22,14 @@ interface Failure {
  * The controls only a saved MCP server has: its on/off switch and Remove. Both save against the version the list
  * carried, and both say plainly when the server has changed since.
  */
-export function ConnectorServerControls({ item }: { item: CapabilityConnectorItem }) {
+export function ConnectorServerControls({
+  item,
+  onRemoved,
+}: {
+  item: CapabilityConnectorItem;
+  /** Called once the server is gone, before the panel closes. */
+  onRemoved?: () => void;
+}) {
   const client = useQueryClient();
   const inspector = useInspector();
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
@@ -51,6 +58,7 @@ export function ConnectorServerControls({ item }: { item: CapabilityConnectorIte
       return;
     }
     const listKey = queryKeys.capabilityConnectors(workspaceId);
+    onRemoved?.();
     // The panel is about a server that no longer exists.
     inspector.closeIfOpen(connectorPanelSource(item.id));
     client.setQueryData<CapabilityConnectorsResponse>(listKey, (list) =>
@@ -76,9 +84,21 @@ export function ConnectorServerControls({ item }: { item: CapabilityConnectorIte
         />
       </div>
       {switchState.unavailableReason ? (
-        <p id={reasonId} className="text-sm text-fg-secondary">
-          {switchState.unavailableReason}
-        </p>
+        <div className="space-y-2">
+          <p id={reasonId} className="text-sm text-fg-secondary">
+            {switchState.unavailableReason}
+          </p>
+          {switchState.checkRetry ? (
+            <Button
+              size="sm"
+              loading={switchState.checkRetry.running}
+              loadingLabel="Retrying…"
+              onClick={switchState.checkRetry.run}
+            >
+              Retry
+            </Button>
+          ) : null}
+        </div>
       ) : null}
       {failure ? (
         <div className="space-y-2">
@@ -113,7 +133,7 @@ export function ConnectorServerControls({ item }: { item: CapabilityConnectorIte
           if (!removing) setConfirming(open);
         }}
         title={`Remove ${item.name}?`}
-        description="This removes it for every workspace on this computer. Its saved settings and sign-in are deleted, and that can't be undone here."
+        description="This removes it for every workspace on this computer, along with its saved sign-in and keys, its tool list and any approvals waiting on it. Open connections close, and it can't be undone here."
       >
         <div className="flex flex-wrap justify-end gap-2">
           <Button disabled={removing} onClick={() => setConfirming(false)}>

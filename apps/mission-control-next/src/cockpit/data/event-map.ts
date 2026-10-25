@@ -68,6 +68,9 @@ const TOOL_KEYS: readonly QueryKey[] = [
 const CAPABILITY_CONNECTOR_KEYS: readonly QueryKey[] = [["mcp", "capability-connectors"]];
 const MCP_KEYS: readonly QueryKey[] = [
   ...CAPABILITY_CONNECTOR_KEYS,
+  // What a connector panel reads about one saved server: its tool list and its own record.
+  ["mcp", "capability-connector-tools"],
+  ["mcp", "capability-connector-server"],
   queryKeys.capabilities(),
   ["settings", "mcp-servers"],
   ["settings", "mcp-inspection"],

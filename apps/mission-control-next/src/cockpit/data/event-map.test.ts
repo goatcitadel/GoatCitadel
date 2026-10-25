@@ -88,6 +88,12 @@ describe("resolveRealtimeEvent", () => {
     }
     // The prefix covers the per-workspace key, so a change refreshes whichever workspace is open.
     expect(queryKeys.capabilityConnectors("ws-1").slice(0, 2)).toEqual(prefix);
+    // An MCP event also refreshes what a connector panel reads about a saved server: its tools and its record.
+    const mcpEvent = resolveRealtimeEvent(event("mcp_server_updated", "mcp"));
+    const mcpKeys = mcpEvent.kind === "mapped" ? mcpEvent.effect.keys : [];
+    for (const key of [queryKeys.capabilityConnectorTools("s-1"), queryKeys.capabilityConnectorServer("s-1")]) {
+      expect(mcpKeys).toContainEqual(key.slice(0, 2));
+    }
     // A tool call changes no connector.
     const call = resolveRealtimeEvent(event("tool_invoked", "mcp"));
     expect(call).toEqual({ kind: "mapped", effect: { keys: [], refresh: ["mcp"] } });

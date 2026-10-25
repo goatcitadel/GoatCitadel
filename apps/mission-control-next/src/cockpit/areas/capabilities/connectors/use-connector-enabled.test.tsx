@@ -1,15 +1,18 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { QueryClient, QueryClientProvider, skipToken, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import type { CapabilityConnectorItem, CapabilityConnectorsResponse, McpServerRecord } from "@goatcitadel/contracts";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { connectorListQuery } from "../../../data/capability-connectors-query";
 import { queryKeys } from "../../../data/query-keys";
 import { useConnectorEnabled } from "./use-connector-enabled";
 
 const api = vi.hoisted(() => ({ updateMcpServer: vi.fn(), fetchMcpServer: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/mcp-operations", () => api);
+const listApi = vi.hoisted(() => ({ fetchCapabilityConnectors: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/capability-connectors", () => listApi);
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "ws-1" }),
 }));
@@ -72,22 +75,25 @@ let root: Root;
 let client: QueryClient;
 let latest: ReturnType<typeof useConnectorEnabled>;
 
-/** Reads the item the way the panel does, live from the cached list, so the hook sees the optimistic change. */
-function Probe({ id }: { id: string }) {
+/**
+ * Reads the item the way the panel does, live from the cached list. With `reads` it is also the list's reader, like the
+ * Connectors tab, so a confirming read really runs.
+ */
+function Probe({ id, reads }: { id: string; reads: boolean }) {
   const live = useQuery({
-    queryKey: KEY,
-    queryFn: skipToken,
+    ...connectorListQuery("ws-1"),
+    enabled: reads,
     select: (list: CapabilityConnectorsResponse) => list.items.find((entry) => entry.id === id),
   });
   latest = useConnectorEnabled(live.data!);
   return null;
 }
 
-async function render(id = LINEAR.id) {
+async function render(id = LINEAR.id, reads = false) {
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
-        <Probe id={id} />
+        <Probe id={id} reads={reads} />
       </QueryClientProvider>,
     ),
   );
@@ -108,6 +114,7 @@ function deferred<T>() {
 beforeEach(() => {
   api.updateMcpServer.mockReset();
   api.fetchMcpServer.mockReset();
+  listApi.fetchCapabilityConnectors.mockReset();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(KEY, response([LINEAR, NOTION]));
   container = document.createElement("div");
@@ -147,26 +154,97 @@ describe("useConnectorEnabled", () => {
     });
 
     await act(async () => saving.resolve(savedServer({ revision: NEXT_REVISION, enabled: false })));
-    expect(latest.pending).toBe(false);
+    await vi.waitFor(() => expect(latest.pending).toBe(false));
     expect(latest.error).toBeUndefined();
     // The next switch must use the version the save produced.
     expect(cached(LINEAR.id)?.serverRevision).toBe(NEXT_REVISION);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: KEY });
   });
 
-  it("shows a switched-on server as connected until the list is read again", async () => {
-    api.fetchMcpServer.mockResolvedValue(savedServer());
-    api.updateMcpServer.mockResolvedValue(savedServer({ revision: NEXT_REVISION, enabled: true }));
-    client.setQueryData(KEY, response([OFF_LINEAR, NOTION]));
-    await render();
-    await vi.waitFor(() => expect(latest.unavailableReason).toBeUndefined());
-    await vi.waitFor(() => expect(latest.pending).toBe(false));
-    await act(async () => latest.setEnabled(true));
-    expect(api.updateMcpServer).toHaveBeenCalledExactlyOnceWith("linear", {
-      expectedRevision: REVISION,
-      enabled: true,
+  describe("switching on", () => {
+    beforeEach(() => {
+      client.setQueryData(KEY, response([OFF_LINEAR, NOTION]));
+      api.fetchMcpServer.mockResolvedValue(savedServer());
+      // The list's reader: the first read answers at once, the confirming read is held until the test lets it go.
+      listApi.fetchCapabilityConnectors.mockResolvedValueOnce(response([OFF_LINEAR, NOTION]));
     });
-    expect(cached(LINEAR.id)).toMatchObject({ state: "connected", reason: "ready", group: "connected" });
+
+    async function ready() {
+      await render(LINEAR.id, true);
+      await vi.waitFor(() => expect(listApi.fetchCapabilityConnectors).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(latest.pending).toBe(false));
+      expect(latest.unavailableReason).toBeUndefined();
+    }
+
+    it("moves only the switch, and leaves the rows alone until the confirming read lands", async () => {
+      const confirming = deferred<CapabilityConnectorsResponse>();
+      listApi.fetchCapabilityConnectors.mockReturnValueOnce(confirming.promise);
+      api.updateMcpServer.mockResolvedValue(savedServer({ revision: NEXT_REVISION, enabled: true }));
+      await ready();
+
+      await act(async () => latest.setEnabled(true));
+      expect(api.updateMcpServer).toHaveBeenCalledExactlyOnceWith("linear", {
+        expectedRevision: REVISION,
+        enabled: true,
+      });
+      // The switch shows the choice at once; no row or badge claims the server is connected yet.
+      expect(latest.enabled).toBe(true);
+      await vi.waitFor(() => expect(listApi.fetchCapabilityConnectors).toHaveBeenCalledTimes(2));
+      expect(cached(LINEAR.id)).toMatchObject({ state: "turned_off", reason: "turned_off", group: "turned_off" });
+      // The saved version is kept so a second switch does not collide with this save.
+      expect(cached(LINEAR.id)?.serverRevision).toBe(NEXT_REVISION);
+      // Still waiting on the Gateway's answer.
+      expect(latest.pending).toBe(true);
+      expect(latest.enabled).toBe(true);
+
+      const connected = { ...OFF_LINEAR, state: "connected", reason: "ready", group: "connected" } as const;
+      await act(async () => confirming.resolve(response([connected, NOTION])));
+      await vi.waitFor(() => expect(latest.pending).toBe(false));
+      expect(cached(LINEAR.id)).toMatchObject({ state: "connected", reason: "ready", group: "connected" });
+      expect(latest.enabled).toBe(true);
+    }, 10_000);
+
+    it("shows what the Gateway says when the confirming read disagrees", async () => {
+      listApi.fetchCapabilityConnectors.mockResolvedValueOnce(
+        response([{ ...OFF_LINEAR, state: "needs_sign_in", reason: "sign_in_needed", group: "connected" }, NOTION]),
+      );
+      api.updateMcpServer.mockResolvedValue(savedServer({ revision: NEXT_REVISION, enabled: true }));
+      await ready();
+      await act(async () => latest.setEnabled(true));
+      await vi.waitFor(() => expect(latest.pending).toBe(false));
+      expect(cached(LINEAR.id)?.state).toBe("needs_sign_in");
+      expect(latest.enabled).toBe(true);
+    });
+
+    it("puts the switch back when the save fails, with nothing in the list to undo", async () => {
+      api.updateMcpServer.mockRejectedValue(new Error("The server said no"));
+      await ready();
+      await act(async () => latest.setEnabled(true));
+      await vi.waitFor(() => expect(latest.error).toBe("The server said no"));
+      expect(latest.enabled).toBe(false);
+      expect(cached(LINEAR.id)).toEqual(OFF_LINEAR);
+      // No confirming read for a save that did not happen.
+      expect(listApi.fetchCapabilityConnectors).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the server check usable after a save, so the server can be switched off and on again", async () => {
+      api.updateMcpServer.mockResolvedValue(savedServer({ revision: NEXT_REVISION, enabled: true }));
+      listApi.fetchCapabilityConnectors.mockResolvedValueOnce(
+        response([{ ...OFF_LINEAR, state: "connected", reason: "ready", group: "connected" }, NOTION]),
+      );
+      await ready();
+      await act(async () => latest.setEnabled(true));
+      await vi.waitFor(() => expect(latest.pending).toBe(false));
+      expect(cached(LINEAR.id)?.state).toBe("connected");
+      // Off again later: the server check starts from a healthy query, not from an error left by the first save.
+      act(() => {
+        client.setQueryData(KEY, response([OFF_LINEAR, NOTION]));
+      });
+      await vi.waitFor(() => expect(latest.enabled).toBe(false));
+      await vi.waitFor(() => expect(latest.pending).toBe(false));
+      expect(latest.unavailableReason).toBeUndefined();
+      expect(client.getQueryState(queryKeys.capabilityConnectorServer("linear"))?.status).not.toBe("error");
+    });
   });
 
   it("rolls back only the failed row and says why", async () => {
@@ -268,14 +346,25 @@ describe("useConnectorEnabled", () => {
       expect(latest.unavailableReason).toBeUndefined();
     });
 
-    it("says so when the check itself fails", async () => {
-      api.fetchMcpServer.mockRejectedValue(new Error("offline"));
+    it("says so when the check itself fails, and offers to check again", async () => {
+      api.fetchMcpServer.mockRejectedValueOnce(new Error("offline"));
       await render();
-      await vi.waitFor(() =>
-        expect(latest.unavailableReason).toBe("Couldn't check whether it can be switched on. Try again."),
-      );
+      await vi.waitFor(() => expect(latest.unavailableReason).toBe("Couldn't check whether it can be switched on."));
+      expect(latest.checkRetry?.running).toBe(false);
       await act(async () => latest.setEnabled(true));
       expect(api.updateMcpServer).not.toHaveBeenCalled();
+
+      const again = deferred<McpServerRecord>();
+      api.fetchMcpServer.mockReturnValueOnce(again.promise);
+      await act(async () => latest.checkRetry?.run());
+      // The failure stays on screen, with the retry busy, until the check answers.
+      await vi.waitFor(() => expect(latest.checkRetry?.running).toBe(true));
+      expect(latest.unavailableReason).toBe("Couldn't check whether it can be switched on.");
+      expect(latest.pending).toBe(false);
+
+      await act(async () => again.resolve(savedServer()));
+      await vi.waitFor(() => expect(latest.unavailableReason).toBeUndefined());
+      expect(latest.checkRetry).toBeUndefined();
     });
   });
 

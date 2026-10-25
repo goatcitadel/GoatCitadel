@@ -18,7 +18,11 @@ import {
  *
  * The inspector closes whenever the address changes, so the panel always opens after the move, never before it.
  */
-export function useConnectorPanel(items: readonly CapabilityConnectorItem[] | undefined): {
+export function useConnectorPanel(
+  items: readonly CapabilityConnectorItem[] | undefined,
+  /** Called when the open connector was removed. Keep it stable: the panel keeps the one it was opened with. */
+  onRemoved?: () => void,
+): {
   open: (item: CapabilityConnectorItem) => void;
 } {
   const { open: openInspector, content } = useInspector();
@@ -37,10 +41,10 @@ export function useConnectorPanel(items: readonly CapabilityConnectorItem[] | un
       openInspector({
         source: connectorPanelSource(item.id),
         title: item.name,
-        body: <ConnectorPanel itemId={item.id} />,
+        body: <ConnectorPanel itemId={item.id} onRemoved={onRemoved} />,
       });
     },
-    [openInspector],
+    [openInspector, onRemoved],
   );
 
   useEffect(() => {

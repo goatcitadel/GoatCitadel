@@ -1,10 +1,10 @@
-import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
-import { fetchCapabilityConnectors } from "@goatcitadel/mission-control-shared/api/capability-connectors";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../../data/record-view";
+import { connectorListQuery } from "../../../data/capability-connectors-query";
 import { queryKeys } from "../../../data/query-keys";
 import { Button } from "../../../ui/Button";
 import { EmptyState } from "../../../ui/EmptyState";
@@ -42,19 +42,27 @@ function NoticeLine({ children }: { children: ReactNode }) {
 export function ConnectorsTab() {
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
   const client = useQueryClient();
-  const query = useQuery({
-    queryKey: queryKeys.capabilityConnectors(workspaceId),
-    queryFn: ({ signal }) => fetchCapabilityConnectors(workspaceId, { signal }),
-  });
+  const query = useQuery(connectorListQuery(workspaceId));
   // The loaded list stays while it is read again, and beside a failed recheck.
   const view = recordView(query);
-  const panel = useConnectorPanel(view.record?.items);
+  // A removed connector's row is gone, so the panel can't hand focus back to it: it asks for the search box instead.
+  const focusSearchAfterRemoval = useRef(false);
+  const markRemoved = useCallback(() => {
+    focusSearchAfterRemoval.current = true;
+  }, []);
+  const panel = useConnectorPanel(view.record?.items, markRemoved);
   const [adding, setAdding] = useState(false);
   const [search, setSearch] = useState("");
   const [chosenCategories, setChosenCategories] = useState<string[]>([]);
   const filtersRegion = useRef<HTMLDivElement>(null);
 
   const response = view.record;
+  useEffect(() => {
+    // The list without the removed row has landed, and the panel with its dialog is gone: now focus can settle.
+    if (!focusSearchAfterRemoval.current) return;
+    focusSearchAfterRemoval.current = false;
+    filtersRegion.current?.querySelector("input")?.focus();
+  }, [response?.items]);
   if (!response) {
     // Retrying clears the error while the first read runs again, so a read that has failed before keeps this view
     // (and the Retry button, with its focus) until it answers.
