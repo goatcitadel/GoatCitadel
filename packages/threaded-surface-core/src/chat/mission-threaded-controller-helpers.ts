@@ -285,7 +285,7 @@ export function formatAgenticBackgroundHandoffNotice(
   }
   const rootNode = getAgenticTreeRootNode(agenticRunTree);
   const label = rootNode?.label?.trim() || "A background run";
-  const rawStatus = rootNode?.status ?? agenticRunTree.status;
+  const rawStatus = rootNode?.status;
   const status = rawStatus ? ` is ${describeAgenticTreeStatus(rawStatus)}` : " is in progress";
   const childCount = agenticRunTree.nodes.filter((node) => node.kind === "task" || node.kind === "subagent").length;
   const childCopy = childCount > 0 ? `, with ${childCount} child ${childCount === 1 ? "task" : "tasks"}` : "";

@@ -43,6 +43,7 @@ type Input = {
     | "sessionData"
     | "loadSessionCoreState"
     | "threadController"
+    | "publishSessionLocation"
     | "refreshChatSessionAggregate"
     | "sessionControls"
     | "runVariables"
