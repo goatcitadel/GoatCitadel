@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { queryBoolean } from "./query-boolean.js";
 import {
   projectSessionMetaForPublic,
   projectSessionSummaryForPublic,
@@ -34,8 +35,8 @@ const runtimeLifecycleQuerySchema = runtimeLifecycleIdentifierSchema.refine(
 
 const runtimeLifecycleExportQuerySchema = runtimeLifecycleIdentifierSchema
   .extend({
-    includeTranscript: z.coerce.boolean().optional(),
-    includeTimeline: z.coerce.boolean().optional(),
+    includeTranscript: queryBoolean.optional(),
+    includeTimeline: queryBoolean.optional(),
     timelineLimit: z.coerce.number().int().positive().max(1000).optional(),
     format: z.enum(["bundle", "trust_report", "siem_ndjson"]).optional(),
   })

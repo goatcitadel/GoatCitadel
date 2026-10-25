@@ -485,17 +485,42 @@ export class CapabilitySystemService {
     }
   }
 
+  private skillLifecycleBackfill?: { fingerprint: string; done: Promise<void> };
+
   private resolveCurrentSandboxMetadata(): CodeModeSandboxMetadata {
     return this.resolveSandboxMetadata(this.options.runtimeConfig.codeModeSandbox);
   }
 
+  /**
+   * Backfills a lifecycle record for every loaded skill that lacks one. The work only depends on the
+   * loaded skill set, so it runs once per distinct set (ids + source + dir + mtime) instead of doing a
+   * storage lookup per skill on every catalog build.
+   */
   public async ensureSkillLifecycleBackfill(): Promise<void> {
     const skills = this.options.listLoadedSkills();
-    for (const skill of skills) {
-      if (await this.options.storage.skillLifecycle.find(skill.skillId)) {
-        continue;
+    const fingerprint = skills
+      .map((skill) => `${skill.skillId}|${skill.source}|${skill.dir}|${skill.mtime}`)
+      .sort()
+      .join("\n");
+    if (this.skillLifecycleBackfill?.fingerprint === fingerprint) {
+      return await this.skillLifecycleBackfill.done;
+    }
+    const done = (async () => {
+      for (const skill of skills) {
+        if (await this.options.storage.skillLifecycle.find(skill.skillId)) {
+          continue;
+        }
+        await this.options.storage.skillLifecycle.upsert(buildSkillLifecycleRecord(skill));
       }
-      await this.options.storage.skillLifecycle.upsert(buildSkillLifecycleRecord(skill));
+    })();
+    const entry = { fingerprint, done };
+    this.skillLifecycleBackfill = entry;
+    try {
+      await done;
+    } catch (error) {
+      // Do not memoize a failed backfill; the next call retries.
+      if (this.skillLifecycleBackfill === entry) this.skillLifecycleBackfill = undefined;
+      throw error;
     }
   }
 
@@ -609,13 +634,11 @@ export class CapabilitySystemService {
     effectiveSkills: EffectiveCapabilitySet = "ALL",
     workspaceId?: string,
   ): Promise<CapabilityCatalogEntry[]> {
-    await this.ensureSkillLifecycleBackfill();
     const inspectable = await this.buildInspectableCatalog(effectiveSkills, workspaceId);
     return scope === "callable" ? inspectable.filter((entry) => entry.callable) : inspectable;
   }
 
   public async getCompactToolDirectorySnapshot(ttlMs = 300_000): Promise<CompactToolDirectorySnapshot> {
-    await this.ensureSkillLifecycleBackfill();
     const now = new Date();
     const createdAt = now.toISOString();
     const resolvedTtlMs = Math.max(1_000, Math.min(ttlMs, 3_600_000));
@@ -767,7 +790,6 @@ export class CapabilitySystemService {
   public async getCatalogDriftMetrics(
     effectiveSkills: EffectiveCapabilitySet = "ALL",
   ): Promise<CapabilityCatalogDriftMetricsRecord> {
-    await this.ensureSkillLifecycleBackfill();
     const inspectableEntries = await this.buildInspectableCatalog(effectiveSkills);
     return buildCapabilityCatalogDriftMetrics(
       inspectableEntries,

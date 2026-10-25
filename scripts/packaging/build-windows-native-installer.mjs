@@ -375,9 +375,22 @@ begin
   end;
 end;
 
+// Quotes a value as a PowerShell single-quoted literal (apostrophes doubled). Paths are embedded
+// this way instead of being passed as trailing -Command arguments, which powershell.exe re-joins
+// with spaces and would truncate a path such as C:\\Users\\John Smith at the first space.
+function PowerShellLiteral(Value: String): String;
+var
+  Escaped: String;
+begin
+  Escaped := Value;
+  StringChangeEx(Escaped, '''', '''''', True);
+  Result := '''' + Escaped + '''';
+end;
+
 procedure StopExistingGoatCitadelRuntime(DuringUninstall: Boolean);
 var
   LauncherPath: String;
+  Parameters: String;
 begin
   if not GoatCitadelInstallMarkerExists() then
   begin
@@ -388,11 +401,12 @@ begin
   begin
     Exit;
   end;
+  Parameters := '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ' + PowerShellLiteral(LauncherPath) + ' stop --json"';
   if DuringUninstall then
   begin
     RunUninstallBestEffort(
       'powershell.exe',
-      ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ''{app}\\bin\\goatcitadel.cmd'' stop --json"'),
+      Parameters,
       ExpandConstant('{app}'),
       'Stopping the existing GoatCitadel runtime...'
     );
@@ -401,7 +415,7 @@ begin
   begin
     RunBestEffort(
       'powershell.exe',
-      ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ''{app}\\bin\\goatcitadel.cmd'' stop --json"'),
+      Parameters,
       ExpandConstant('{app}'),
       'Stopping the existing GoatCitadel runtime...'
     );
@@ -425,7 +439,7 @@ begin
   // Restart Manager gets the first chance to close the host. Then stop only processes whose
   // executable lives in this marker-owned app\\ payload, including an orphaned launch --wait
   // supervisor that would otherwise keep the bundled node.exe locked.
-  Parameters := '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& { param($payloadRoot) $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($payloadRoot, [System.StringComparison]::OrdinalIgnoreCase) }); if ($processes.Count -gt 0) { $processes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; $processes | ForEach-Object { Wait-Process -Id $_.ProcessId -Timeout 10 -ErrorAction SilentlyContinue } } }" ' + AddQuotes(PayloadRoot);
+  Parameters := '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& { $payloadRoot = ' + PowerShellLiteral(PayloadRoot) + '; $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($payloadRoot, [System.StringComparison]::OrdinalIgnoreCase) }); if ($processes.Count -gt 0) { $processes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; $processes | ForEach-Object { Wait-Process -Id $_.ProcessId -Timeout 10 -ErrorAction SilentlyContinue } } }"';
   if DuringUninstall then
   begin
     RunUninstallBestEffort(
@@ -465,7 +479,7 @@ begin
   begin
     RunUninstallOrFail(
       'powershell.exe',
-      ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "try {{ [System.IO.Directory]::Delete(''\\\\?\\{app}\\app'', $true) } catch {{}; try {{ [System.IO.Directory]::Delete(''\\\\?\\{app}\\bin'', $true) } catch {{}; Remove-Item -LiteralPath ''\\\\?\\{app}\\app'' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath ''\\\\?\\{app}\\bin'' -Recurse -Force -ErrorAction SilentlyContinue; exit 0"'),
+      '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "$a = ' + PowerShellLiteral('\\\\?\\' + AppPayloadPath) + '; $b = ' + PowerShellLiteral('\\\\?\\' + BinPayloadPath) + '; try { [System.IO.Directory]::Delete($a, $true) } catch {}; try { [System.IO.Directory]::Delete($b, $true) } catch {}; Remove-Item -LiteralPath $a -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $b -Recurse -Force -ErrorAction SilentlyContinue; exit 0"',
       '',
       'Removing the previous GoatCitadel payload...'
     );
@@ -498,7 +512,7 @@ begin
   DelTree(DirectoryPath, True, True, True);
   if DirExists(DirectoryPath) then
   begin
-    Parameters := '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& { param($path) Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue; exit 0 }" ' + AddQuotes(DirectoryPath);
+    Parameters := '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Remove-Item -LiteralPath ' + PowerShellLiteral(DirectoryPath) + ' -Recurse -Force -ErrorAction SilentlyContinue; exit 0"';
     RunOrFail('powershell.exe', Parameters, '', StatusText);
   end;
   if DirExists(DirectoryPath) then
@@ -666,7 +680,7 @@ begin
   // (the shortcut launches the executable directly), so a failure here is logged and ignored.
   RunBestEffort(
     'powershell.exe',
-    ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue; $package = Join-Path ''{app}'' ''{#MyIdentityPackage}''; if (Test-Path -LiteralPath $package) {{ Add-AppxPackage -Path $package -ExternalLocation ''{app}'' }}"'),
+    '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue; $app = ' + PowerShellLiteral(ExpandConstant('{app}')) + '; $package = Join-Path $app ''{#MyIdentityPackage}''; if (Test-Path -LiteralPath $package) { Add-AppxPackage -Path $package -ExternalLocation $app }"',
     '',
     'Registering GoatCitadel package identity...'
   );

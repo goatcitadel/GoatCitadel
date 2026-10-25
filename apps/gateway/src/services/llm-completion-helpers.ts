@@ -251,6 +251,13 @@ export function isProviderQuotaExhaustedError(error: Error): boolean {
   return PROVIDER_QUOTA_EXHAUSTED_TYPE_PATTERN.test(error.message);
 }
 
+// A status is a 3-digit code directly inside parentheses, e.g. "(429)" or "(503 Service Unavailable)".
+// "(4096 tokens)" must not read as 409.
+function parseParenthesizedHttpStatus(message: string): number | undefined {
+  const match = message.match(/\((\d{3})(?=[)\s:])/);
+  return match ? Number(match[1]) : undefined;
+}
+
 export function shouldRetryTransientProviderError(error: Error): boolean {
   if (isAuthoritativeChatDispatchError(error)) return false;
   if (error instanceof StreamIdleTimeoutError) return true;
@@ -260,8 +267,7 @@ export function shouldRetryTransientProviderError(error: Error): boolean {
     return true;
   }
   const message = error.message.toLowerCase();
-  const statusMatch = error.message.match(/\((\d{3})(?:\s|[)])?/);
-  const status = statusMatch ? Number(statusMatch[1]) : undefined;
+  const status = parseParenthesizedHttpStatus(error.message);
 
   if (status !== undefined && [408, 409, 425, 429, 500, 502, 503, 504].includes(status)) {
     return true;
@@ -314,8 +320,7 @@ export function classifyProviderFailure(error: Error): ProviderFailureClass {
     return "rate_limited";
   }
   const message = error.message.toLowerCase();
-  const statusMatch = error.message.match(/\((\d{3})(?:\s|[)])?/);
-  const status = statusMatch ? Number(statusMatch[1]) : undefined;
+  const status = parseParenthesizedHttpStatus(error.message);
   if (status === 401 || status === 403) {
     if (/(quota|billing|payment|insufficient|credit|subscription|not\s+available|region|unsupported)/.test(message)) {
       return "business_denial";

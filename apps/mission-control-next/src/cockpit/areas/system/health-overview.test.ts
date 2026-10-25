@@ -193,7 +193,9 @@ describe("describeRuntimeService (SY-01)", () => {
     const service = deriveHealthChecks({ ...healthy, daemonStatus: unsupported }).find(
       (check) => check.id === "service",
     );
-    expect(service?.status).toEqual({ label: "Unavailable", tone: "neutral" });
+    // Unavailable needs attention (amber); "Not set up" stays neutral, and the lead never says "no problems".
+    expect(service?.status).toEqual({ label: "Unavailable", tone: "waiting" });
+    expect(healthOverviewState([service!]).heading).toBe("1 check needs attention");
     expect(describeRuntimeService({ ...healthy.daemonStatus, running: false }).label).toBe("Problem");
     expect(describeRuntimeService(healthy.daemonStatus).label).toBe("Running");
     expect(describeRuntimeService(undefined).label).toBe("Unknown");

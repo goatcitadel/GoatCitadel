@@ -2561,22 +2561,22 @@ export async function listCompanionAuditEvents(
   const sessionId = options?.sessionId?.trim();
   const grantId = options?.grantId?.trim();
   const limit = clampInt(options?.limit, 50, 1, 200);
-  const records = await deps.storage.audit.list("approvals");
+  // Only the newest `limit` matching events are needed, so read from the end of the stream.
+  const records = await deps.storage.audit.listRecent("approvals", limit, (record) => {
+    const event = typeof record.event === "string" ? record.event : "";
+    if (!event.startsWith("auth.companion_")) {
+      return false;
+    }
+    if (sessionId && record.companionSessionId !== sessionId) {
+      return false;
+    }
+    if (grantId && record.grantId !== grantId) {
+      return false;
+    }
+    return true;
+  });
 
   return records
-    .filter((record) => {
-      const event = typeof record.event === "string" ? record.event : "";
-      if (!event.startsWith("auth.companion_")) {
-        return false;
-      }
-      if (sessionId && record.companionSessionId !== sessionId) {
-        return false;
-      }
-      if (grantId && record.grantId !== grantId) {
-        return false;
-      }
-      return true;
-    })
     .sort((left, right) => String(right.timestamp ?? "").localeCompare(String(left.timestamp ?? "")))
     .slice(0, limit)
     .map((record) => ({

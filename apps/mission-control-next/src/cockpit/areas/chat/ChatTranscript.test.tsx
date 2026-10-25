@@ -963,6 +963,19 @@ describe("ChatTranscript", () => {
     expect(onRetryTurn).toHaveBeenCalledWith("cancelled");
   });
 
+  it("labels a stopped answer that kept some text as partial", async () => {
+    const stopped = turn("stopped", true, "completed");
+    stopped.trace.status = "cancelled";
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={sessionProps([stopped])} />
+        </InspectorProvider>,
+      ),
+    );
+    expect(container.textContent).toContain("Stopped — partial answer");
+  });
+
   it("keeps per-turn progress notes as plain text beside the single transcript live region", async () => {
     const pending = turn("pending", true, "failed");
     pending.trace.status = "running";

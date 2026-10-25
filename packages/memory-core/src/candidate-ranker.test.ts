@@ -334,4 +334,38 @@ describe("rankMemoryCandidates", () => {
 
     expect(ranked[0]?.candidateId).toBe("current-clock");
   });
+
+  describe("non-English text", () => {
+    const candidate = (id: string, text: string): MemoryCandidate => ({
+      candidateId: id,
+      sourceType: "memory_item",
+      sourceRef: id,
+      text,
+      timestamp: "2026-05-07T12:00:00.000Z",
+    });
+    const rank = (prompt: string, texts: Record<string, string>) =>
+      rankMemoryCandidates(
+        prompt,
+        Object.entries(texts).map(([id, text]) => candidate(id, text)),
+        { maxCandidates: 5, nowIso: "2026-05-07T12:00:00.000Z" },
+      );
+
+    it("matches CJK text through character bigrams", () => {
+      const ranked = rank("部署流程检查", { m1: "发布前的部署流程检查清单", m2: "会议记录与设计讨论" });
+      expect(ranked[0]?.candidateId).toBe("m1");
+      expect(ranked[0]?.rankSignals.lexicalScore).toBeGreaterThan(ranked[1]?.rankSignals.lexicalScore ?? 0);
+    });
+
+    it("keeps accented words whole instead of cutting them at the accent", () => {
+      const ranked = rank("café menu", { m1: "Le café du coin sert un menu simple", m2: "caf unrelated words here" });
+      expect(ranked[0]?.candidateId).toBe("m1");
+      expect(ranked[0]?.rankSignals.lexicalScore).toBeGreaterThan(ranked[1]?.rankSignals.lexicalScore ?? 0);
+    });
+
+    it("tokenizes two-letter Cyrillic words", () => {
+      const ranked = rank("мы тут", { m1: "мы были тут вчера", m2: "ничего общего" });
+      expect(ranked[0]?.candidateId).toBe("m1");
+      expect(ranked[0]?.rankSignals.lexicalScore).toBeGreaterThan(0);
+    });
+  });
 });

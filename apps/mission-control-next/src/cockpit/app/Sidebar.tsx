@@ -160,16 +160,16 @@ export function Sidebar({
         </div>
       ) : (
         <a
-          href={cockpitHref("/system") ?? "/system"}
+          href={cockpitHref("/system/health") ?? "/system/health"}
           title={healthStatus.title}
           onPointerEnter={() => preload("system")}
           onFocus={() => preload("system")}
           onClick={(event) => {
             if (isModifiedClick(event)) return;
             event.preventDefault();
-            navigate("/system");
+            navigate("/system/health");
           }}
-          className="flex items-center gap-2 px-2 py-1 text-xs text-fg-muted hover:text-fg"
+          className="flex min-h-8 items-center gap-2 px-2 py-1 text-xs text-fg-muted hover:text-fg"
         >
           <HealthIcon aria-hidden="true" className={`size-4 shrink-0 ${healthText}`} />
           <span className={collapsed ? "sr-only" : ""}>{healthStatus.label}</span>

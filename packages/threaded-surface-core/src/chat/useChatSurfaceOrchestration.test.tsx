@@ -460,7 +460,10 @@ describe("useChatSurfaceOrchestration", () => {
       await latest!.controller.handleStopActiveTurn();
     });
     expect(apiMocks.cancelChatTurn).toHaveBeenCalledWith("session-1", "turn-active-123456", "mission-control");
-    expect(latest!.pushNotice).toHaveBeenCalledWith("Stopped turn 123456.", "warning");
+    expect(latest!.pushNotice).toHaveBeenCalledWith(
+      "You stopped this reply. What was written so far is kept.",
+      "neutral",
+    );
     expect(latest!.loadSessionCoreState).toHaveBeenCalledWith("session-1", {
       background: true,
       includeThread: true,
@@ -483,7 +486,10 @@ describe("useChatSurfaceOrchestration", () => {
       admittingStream.turnId = "turn-active-123456";
       await stopped;
     });
-    expect(latest!.pushNotice).toHaveBeenCalledWith("Stopped turn 123456.", "warning");
+    expect(latest!.pushNotice).toHaveBeenCalledWith(
+      "You stopped this reply. What was written so far is kept.",
+      "neutral",
+    );
 
     apiMocks.cancelChatTurn.mockRejectedValue(new Error("cancel failed"));
     mountHarness({

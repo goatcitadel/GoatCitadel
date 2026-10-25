@@ -433,6 +433,28 @@ describe("ToolPolicyEngine permission profile upper bound", () => {
     });
   });
 
+  it("fails closed when the supplied permission profile is archived", async () => {
+    const storage = createStorageStub();
+    const profile = {
+      ...createPermissionProfile({ approvalMode: "bypass", toolPatterns: ["*"] }),
+      status: "archived" as const,
+    };
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, tools: { ...policyConfig.tools, allow: ["*"] } },
+      storage,
+      createHeartbeatBoundaryRegistry(),
+    );
+    await expect(
+      engine.evaluateAccess({
+        toolName: "ordinary.safe",
+        args: {},
+        agentId: "ordinary",
+        sessionId: "session-archived",
+        policyContext: { permissionProfileId: profile.profileId, permissionProfile: profile },
+      }),
+    ).resolves.toMatchObject({ allowed: false, reasonCodes: ["permission_profile_upper_bound"] });
+  });
+
   it("preserves additive global and scoped-grant semantics when no permission profile is active", async () => {
     const storage = createStorageStub();
     const allowGrant = {
@@ -6050,6 +6072,75 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
 
     expect(evaluation.allowed).toBe(false);
     expect(evaluation.reasonCodes).toEqual(["grant_constraints_block"]);
+  });
+
+  describe("path-scoped grant constraints", () => {
+    const evaluateWithPathGrant = async (
+      toolName: string,
+      args: Record<string, unknown>,
+      constraints: { allowedPaths?: string[]; referenceRoots?: { rootPath: string }[] },
+    ) => {
+      const storage = createStorageStub();
+      vi.mocked(storage.toolGrants.list).mockResolvedValue([
+        {
+          grantId: `grant-${toolName}`,
+          toolPattern: toolName,
+          decision: "allow",
+          scope: "session",
+          scopeRef: "session-1",
+          grantType: "persistent",
+          constraints,
+          createdBy: "test",
+          createdAt: new Date().toISOString(),
+        },
+      ] as never);
+      const engine = new ToolPolicyEngine(
+        { ...policyConfig, tools: { ...policyConfig.tools, approvalMode: "bypass" } },
+        storage,
+      );
+      return await engine.evaluateAccess({ toolName, args, agentId: "agent", sessionId: "session-1" });
+    };
+
+    it("fails closed when a path-bearing tool supplies no path under an allowedPaths grant", async () => {
+      const evaluation = await evaluateWithPathGrant("fs.read", {}, { allowedPaths: ["./workspace/allowed"] });
+      expect(evaluation.allowed).toBe(false);
+      expect(evaluation.reasonCodes).toEqual(["grant_constraints_block"]);
+    });
+
+    it("checks the cwd argument against allowedPaths", async () => {
+      const evaluation = await evaluateWithPathGrant(
+        "shell.exec",
+        { command: "node --version", cwd: "./workspace/blocked" },
+        { allowedPaths: ["./workspace/allowed"] },
+      );
+      expect(evaluation.allowed).toBe(false);
+      expect(evaluation.reasonCodes).toEqual(["grant_constraints_block"]);
+    });
+
+    it("does not treat a sibling folder sharing a name prefix as inside the root", async () => {
+      const evaluation = await evaluateWithPathGrant(
+        "fs.read",
+        { path: "./workspace/allowed2/file.txt" },
+        { allowedPaths: ["./workspace/allowed"] },
+      );
+      expect(evaluation.allowed).toBe(false);
+      expect(evaluation.reasonCodes).toEqual(["grant_constraints_block"]);
+    });
+
+    it.runIf(process.platform === "win32")("matches grant roots case-insensitively on Windows", async () => {
+      const allowed = await evaluateWithPathGrant(
+        "fs.read",
+        { path: "./WORKSPACE/ALLOWED/file.txt" },
+        { allowedPaths: ["./workspace/allowed"] },
+      );
+      expect(allowed.reasonCodes).not.toContain("grant_constraints_block");
+      const readOnly = await evaluateWithPathGrant(
+        "fs.write",
+        { path: "./WORKSPACE/Ref/file.txt", content: "x" },
+        { referenceRoots: [{ rootPath: "./workspace/ref" }] },
+      );
+      expect(readOnly.allowed).toBe(false);
+    });
   });
 
   it("keeps scoped grant host constraints enforced across HTTP redirects", async () => {

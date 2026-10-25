@@ -227,6 +227,13 @@ async function reconcileActiveInterruptedTrace(
       result.skippedDurableOwnedTurnIds.push(trace.turnId);
       return;
     }
+  } catch (error) {
+    // Ownership could not be determined (for example a busy database). Never mark a
+    // possibly live turn interrupted; the next reconcile pass decides.
+    recordInterruptionRecoveryFailure(deps, trace, error, "durable ownership check");
+    return;
+  }
+  try {
     await reconcileDanglingToolRuns(deps, trace, now, result);
     const recoveredSource = await resolveRecoveredAssistantSource(deps.storage, trace);
     if (recoveredSource) {

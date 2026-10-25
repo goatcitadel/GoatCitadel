@@ -51,6 +51,7 @@ export class ChatFanoutInvocationRepository {
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly listActiveStmt;
+  private readonly listActiveBySessionStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_fanout_invocations WHERE invocation_id = ?");
@@ -87,6 +88,12 @@ export class ChatFanoutInvocationRepository {
     this.listActiveStmt = db.prepare(`
       SELECT * FROM chat_fanout_invocations
       WHERE status IN ('reserving', 'reserved', 'dispatching', 'waiting')
+      ORDER BY updated_at ASC, invocation_id ASC
+      LIMIT ?
+    `);
+    this.listActiveBySessionStmt = db.prepare(`
+      SELECT * FROM chat_fanout_invocations
+      WHERE session_id = ? AND status IN ('reserving', 'reserved', 'dispatching', 'waiting')
       ORDER BY updated_at ASC, invocation_id ASC
       LIMIT ?
     `);
@@ -203,6 +210,14 @@ export class ChatFanoutInvocationRepository {
   public listActive(limit = 200): ChatFanoutInvocationRecord[] {
     return this.listActiveStmt
       .all(Math.max(1, Math.min(1000, Math.floor(limit))))
+      .map((row: unknown) => mapRow(row))
+      .filter((row): row is ChatFanoutInvocationRecord => Boolean(row));
+  }
+
+  /** Active invocations of one Chat session; the limit applies after the session filter. */
+  public listActiveBySession(sessionId: string, limit = 100): ChatFanoutInvocationRecord[] {
+    return this.listActiveBySessionStmt
+      .all(sessionId, Math.max(1, Math.min(1000, Math.floor(limit))))
       .map((row: unknown) => mapRow(row))
       .filter((row): row is ChatFanoutInvocationRecord => Boolean(row));
   }

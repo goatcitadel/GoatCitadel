@@ -96,6 +96,33 @@ describe("ThreadList folders", () => {
   });
 });
 
+it("says what a search found nothing for and offers to clear it", async () => {
+  const onSearchChange = vi.fn();
+  const rail = {
+    missionSessions: [],
+    externalSessions: [],
+    selectedSessionId: null,
+    availableFolders: [],
+    selectedFolderId: "all",
+    selectedProjectId: "all",
+    search: "zzz",
+    loading: false,
+    onSearchChange,
+    onHistoryViewChange: vi.fn(),
+    onSelectProjectId: vi.fn(),
+    onCreateSession: vi.fn(),
+    historyView: "active",
+  } as unknown as MissionThreadedSessionRailData;
+  await act(async () => root.render(<ThreadList rail={rail} />));
+  expect(container.textContent).toContain("No conversations match “zzz”.");
+  expect(container.textContent).not.toContain("No conversations in this view.");
+  const clear = [...container.querySelectorAll("button")].find((button) => button.textContent === "Clear search");
+  await act(async () => clear?.click());
+  expect(onSearchChange).toHaveBeenCalledWith("");
+  await act(async () => root.render(<ThreadList rail={{ ...rail, search: "" }} />));
+  expect(container.textContent).toContain("No conversations in this view.");
+});
+
 it("keeps full titles, server previews and exact search targets on desktop and phone", async () => {
   const hit = { messageId: "message-2", turnId: "turn-2", excerpt: "The matching result", sequence: 2 };
   const title = "A long conversation title with a distinct ending retained for assistive technology";
@@ -132,8 +159,11 @@ it("keeps full titles, server previews and exact search targets on desktop and p
   expect(name.endsWith(", Visible server preview")).toBe(true);
   expect(row?.textContent).toContain("Visible server preview");
   expect(container.textContent).toContain("Visible server preview");
-  // Each row is two lines: the title with its time, then the preview; the search excerpt still wraps to two lines.
-  expect(row?.firstElementChild?.firstElementChild?.firstElementChild?.classList.contains("truncate")).toBe(true);
+  // Each row is two lines: the title alone, then the time and preview; the search excerpt still wraps to two lines.
+  const titleLine = row?.firstElementChild?.firstElementChild;
+  expect(titleLine?.classList.contains("truncate")).toBe(true);
+  expect(titleLine?.querySelector("time")).toBeNull();
+  expect(row?.firstElementChild?.lastElementChild?.querySelector("time")).not.toBeNull();
   expect(row?.textContent).not.toContain("Active");
   expect(container.querySelectorAll(".line-clamp-2").length).toBeGreaterThanOrEqual(1);
   expect([...container.querySelectorAll(".line-clamp-2")].every((node) => !node.classList.contains("block"))).toBe(

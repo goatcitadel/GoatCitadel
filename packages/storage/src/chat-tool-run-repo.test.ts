@@ -26,6 +26,45 @@ function setStartedAtBlob(db: DatabaseClient, toolRunId: string): void {
 }
 
 describe("ChatToolRunRepository", () => {
+  it("finds a tool run by approval even beyond the session list cap", () => {
+    const { db, repo } = createStore();
+    repo.create({
+      toolRunId: "tool-target",
+      turnId: "turn-t",
+      sessionId: "session-a",
+      toolName: "shell.run",
+      status: "approval_required",
+      approvalId: "approval-target",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    repo.create({
+      toolRunId: "tool-other-session",
+      turnId: "turn-x",
+      sessionId: "session-b",
+      toolName: "shell.run",
+      status: "approval_required",
+      approvalId: "approval-target",
+      startedAt: "2026-01-02T00:00:00.000Z",
+    });
+    db.transaction("immediate", () => {
+      for (let index = 0; index < 2005; index += 1) {
+        repo.create({
+          toolRunId: `filler-${index}`,
+          turnId: "turn-f",
+          sessionId: "session-a",
+          toolName: "file.read",
+          startedAt: new Date(Date.UTC(2026, 5, 1) + index * 1000).toISOString(),
+        });
+      }
+    });
+    assert.equal(
+      repo.listBySession("session-a", 2000).some((run) => run.toolRunId === "tool-target"),
+      false,
+    );
+    assert.equal(repo.findByApprovalId("session-a", "approval-target")?.toolRunId, "tool-target");
+    assert.equal(repo.findByApprovalId("session-a", "approval-none"), undefined);
+  });
+
   it("creates, patches, lists, and groups tool runs", () => {
     const { repo } = createStore();
     const full = repo.create({

@@ -159,7 +159,9 @@ export function ChatHeaderSubtitle({
   loading?: boolean;
 }) {
   const hasModel = Boolean(active?.selectedProviderId && active?.selectedModel);
-  const modelLabel = useModelLabel(active?.selectedProviderId, active?.selectedModel ?? undefined, hasModel);
+  const modelLabel = useModelLabel(active?.selectedProviderId, active?.selectedModel ?? undefined, hasModel, {
+    showIdWhenUnnamed: false,
+  });
   const parts = [
     projectName,
     active?.activePersonality?.name,

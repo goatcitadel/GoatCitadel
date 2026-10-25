@@ -237,6 +237,33 @@ export class MeshService {
     return this.storage.mesh.listReplicationOffsets(limit);
   }
 
+  private buildTransportPostureCheck(): MeshReadinessCheck {
+    const { mode, tailnetEnabled, requireMtls } = this.options;
+    const evidence = { requireMtls, tailnetEnabled, mode };
+    if (mode === "tailnet" && !tailnetEnabled) {
+      return {
+        key: "mtls_tailnet_posture",
+        status: "fail",
+        message: "Tailnet mode requires tailnet security posture to be enabled.",
+        evidence,
+      };
+    }
+    if (mode === "tailnet" || requireMtls) {
+      return {
+        key: "mtls_tailnet_posture",
+        status: "pass",
+        message: mode === "tailnet" ? "Tailnet transport security is enabled." : "mTLS is required for mesh transport.",
+        evidence,
+      };
+    }
+    return {
+      key: "mtls_tailnet_posture",
+      status: "warn",
+      message: "Mesh transport has neither a tailnet nor required mTLS; peer traffic is not transport-authenticated.",
+      evidence,
+    };
+  }
+
   private async buildReadinessChecks(statusSnapshot: MeshStatus): Promise<MeshReadinessCheck[]> {
     const [nodes, leases, owners, events, offsets] = await Promise.all([
       this.listNodes(20),
@@ -272,46 +299,33 @@ export class MeshService {
           ? "Join-token lifecycle is configured for operator-issued joins."
           : "No join token is configured; join-token lifecycle proof requires an operator/env token.",
       },
-      {
-        key: "mtls_tailnet_posture",
-        status: this.options.mode === "tailnet" && !this.options.tailnetEnabled ? "fail" : "pass",
-        message:
-          this.options.mode === "tailnet" && !this.options.tailnetEnabled
-            ? "Tailnet mode requires tailnet security posture to be enabled."
-            : "mTLS/tailnet posture is explicit in mesh runtime settings.",
-        evidence: {
-          requireMtls: this.options.requireMtls,
-          tailnetEnabled: this.options.tailnetEnabled,
-          mode: this.options.mode,
-        },
-      },
+      this.buildTransportPostureCheck(),
       {
         key: "lease_lifecycle",
-        status: "pass",
-        message: "Lease acquire, renew, release, takeover, and fencing APIs are exposed through mesh service/storage.",
+        status: leases.length > 0 ? "pass" : "warn",
+        message:
+          leases.length > 0
+            ? "Lease records exist in mesh storage, so acquire/renew/release has been exercised."
+            : "No lease has been recorded yet; lease lifecycle is unproven until a lease is acquired.",
         evidence: { activeLeases: leases.length },
       },
       {
         key: "session_owner_failover",
-        status: "pass",
-        message: "Session owner claim/failover APIs are exposed through mesh service/storage.",
+        status: owners.length > 0 ? "pass" : "warn",
+        message:
+          owners.length > 0
+            ? "Session owner records exist in mesh storage, so claim/failover has been exercised."
+            : "No session owner has been claimed yet; session-owner failover is unproven.",
         evidence: { ownedSessions: owners.length },
       },
       {
         key: "replication_offsets",
-        status: "pass",
-        message: "Replication event and offset APIs are exposed through mesh service/storage.",
+        status: events.length > 0 || offsets.length > 0 ? "pass" : "warn",
+        message:
+          events.length > 0 || offsets.length > 0
+            ? "Replication events or offsets exist in mesh storage."
+            : "No replication event or offset has been recorded yet; replication is unproven.",
         evidence: { recentEvents: events.length, offsets: offsets.length },
-      },
-      {
-        key: "gateway_route_visibility",
-        status: "pass",
-        message: "Gateway route diagnostics expose mesh status, nodes, leases, owners, replication, and readiness.",
-      },
-      {
-        key: "settings_visibility",
-        status: "pass",
-        message: "Settings owns mesh runtime configuration and diagnostics visibility.",
       },
     ];
   }

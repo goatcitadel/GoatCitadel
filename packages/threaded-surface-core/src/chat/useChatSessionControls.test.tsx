@@ -99,6 +99,8 @@ function Harness(props: {
   historyView?: "active" | "archived";
   selectedProjectId?: string;
   onSessionCreated?: (session: ChatSessionRecord) => void;
+  nextSessionAfterRemoval?: (sessionId: string) => string | null;
+  onSessionRemoved?: Parameters<typeof useChatSessionControls>[0]["onSessionRemoved"];
   refreshSessionAggregate?: (sessionId: string) => Promise<void>;
   setSessionMetadataConflictDraft?: Parameters<typeof useChatSessionControls>[0]["setSessionMetadataConflictDraft"];
 }) {
@@ -146,6 +148,8 @@ function Harness(props: {
     },
     loadSidebar: loadSidebar.current,
     onSessionCreated: props.onSessionCreated,
+    nextSessionAfterRemoval: props.nextSessionAfterRemoval,
+    onSessionRemoved: props.onSessionRemoved,
     refreshSessionAggregate: props.refreshSessionAggregate,
     setSessionMetadataConflictDraft: props.setSessionMetadataConflictDraft,
     setBinding,
@@ -408,6 +412,58 @@ describe("useChatSessionControls", () => {
     await act(async () => {
       renderer.unmount();
     });
+  });
+
+  it("moves to the next conversation and reports it when the open one is archived or deleted", async () => {
+    const removed = vi.fn();
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <Harness
+          session={{ ...selectedSession, title: "Launch Room" }}
+          nextSessionAfterRemoval={() => "session-next"}
+          onSessionRemoved={removed}
+        />,
+      );
+    });
+    await act(async () => {
+      await latest!.controls.handleToggleArchiveSession();
+    });
+    expect(latest!.snapshot().selectedSessionId).toBe("session-next");
+    expect(removed).toHaveBeenLastCalledWith({
+      sessionId: "session-1",
+      nextSessionId: "session-next",
+      label: "Launch Room",
+      kind: "archived",
+    });
+    expect(latest!.loadSidebar).toHaveBeenLastCalledWith("active", {
+      bypassCache: true,
+      preferredSessionId: "session-next",
+    });
+
+    await act(async () => {
+      renderer.update(
+        <Harness
+          key="second"
+          session={{ ...selectedSession, title: "Launch Room" }}
+          nextSessionAfterRemoval={() => null}
+          onSessionRemoved={removed}
+        />,
+      );
+    });
+    act(() => {
+      latest!.controls.handleDeleteSession("Launch Room");
+    });
+    await act(async () => {
+      await latest!.controls.confirmDeleteSession();
+    });
+    expect(removed).toHaveBeenLastCalledWith({
+      sessionId: "session-1",
+      nextSessionId: null,
+      label: "Launch Room",
+      kind: "deleted",
+    });
+    expect(latest!.snapshot().selectedSessionId).toBeNull();
   });
 
   it("pins, archives, deletes, imports code projects, and saves external bindings", async () => {

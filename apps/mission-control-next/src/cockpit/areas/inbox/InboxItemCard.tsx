@@ -9,6 +9,7 @@ import { TimeText } from "../../ui/TimeText";
 import { approvalExpiryLabel } from "./approval-preview";
 import { inboxItemKindLabel, inboxItemTitle } from "./inbox-presentation";
 import { InboxOwnerLink } from "./InboxOwnerLink";
+import { canDecideInRow, InboxRowDecision } from "./InboxRowDecision";
 import { InboxSourceContext } from "./InboxSourceContext";
 import { hasExpired, useMinuteClock } from "./use-minute-clock";
 
@@ -19,6 +20,7 @@ export function InboxItemCard({
   contextOpen,
   onDetails,
   onToggleContext,
+  onDecision,
 }: {
   item: OperatorInboxItem;
   workspaceId: string;
@@ -26,14 +28,17 @@ export function InboxItemCard({
   contextOpen: boolean;
   onDetails: () => void;
   onToggleContext: () => void;
+  /** Reports an in-row decision to the page, which announces it and moves focus once. */
+  onDecision?: (message: string, settled: boolean) => void;
 }) {
   const now = useMinuteClock(item.expiresAt);
   const expired = hasExpired(item.expiresAt, now);
+  const dangerous = item.kind === "approval" && (item.riskLevel === "danger" || item.riskLevel === "nuclear");
   return (
     <article
       data-selected={selected}
       aria-current={selected ? "true" : undefined}
-      className="rounded-lg border border-line bg-raised p-4 data-[selected=true]:border-accent"
+      className="border-b border-line-subtle py-4 data-[selected=true]:border-l-2 data-[selected=true]:border-l-accent data-[selected=true]:pl-3"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -56,8 +61,11 @@ export function InboxItemCard({
       ) : null}
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button size="sm" data-inbox-detail onClick={onDetails}>
-          Details
+          {dangerous ? "Review" : "Details"}
         </Button>
+        {onDecision && canDecideInRow(item) ? (
+          <InboxRowDecision item={item} workspaceId={workspaceId} onDecision={onDecision} />
+        ) : null}
         <InboxOwnerLink item={item} workspaceId={workspaceId} />
         {item.source.sessionId ? (
           <Button size="sm" aria-expanded={contextOpen} onClick={onToggleContext}>

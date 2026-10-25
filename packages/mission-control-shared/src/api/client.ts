@@ -1314,29 +1314,22 @@ async function ensureEventStreamConnected(): Promise<void> {
       });
       return;
     }
-    try {
-      if (typeof event.sequence === "number" && Number.isFinite(event.sequence)) {
-        persistRealtimeCursor(event.sequence);
-      }
-      lastEventAt = event.timestamp || new Date().toISOString();
-      recordClientDiagnostic({
-        level: "debug",
-        category: "sse",
-        event: "freshness",
-        message: event.eventType,
-        context: {
-          source: event.source,
-          eventId: event.eventId,
-        },
-      });
-      notifyEventStreamStatusToAll();
-      const delivery: RealtimeEventDelivery = { replayed: !streamLive };
-      for (const subscriber of eventStreamSubscribers) {
-        subscriber.onEvent(event, delivery);
-      }
-    } catch {
-      // ignore malformed messages
+    if (typeof event.sequence === "number" && Number.isFinite(event.sequence)) {
+      persistRealtimeCursor(event.sequence);
     }
+    lastEventAt = event.timestamp || new Date().toISOString();
+    recordClientDiagnostic({
+      level: "debug",
+      category: "sse",
+      event: "freshness",
+      message: event.eventType,
+      context: {
+        source: event.source,
+        eventId: event.eventId,
+      },
+    });
+    notifyEventStreamStatusToAll();
+    deliverRealtimeEvent(event, { replayed: !streamLive });
   };
 
   source.addEventListener("replay-gap", (evt) => {
@@ -1348,9 +1341,7 @@ async function ensureEventStreamConnected(): Promise<void> {
     lastErrorAt = new Date().toISOString();
     const replayGapEvent = buildReplayGapRealtimeEvent(evt.data);
     notifyEventStreamStatusToAll();
-    for (const subscriber of eventStreamSubscribers) {
-      subscriber.onEvent(replayGapEvent, { replayed: !streamLive });
-    }
+    deliverRealtimeEvent(replayGapEvent, { replayed: !streamLive });
   });
 
   source.addEventListener("stream-ready", (evt) => {
@@ -1466,8 +1457,18 @@ function notifyEventStreamState(subscriber: EventStreamSubscriber, state: EventS
 
 function notifyEventStreamStatusToAll(): void {
   const status = buildEventStreamStatus();
-  for (const subscriber of eventStreamSubscribers) {
-    notifyEventStreamStatus(subscriber, status);
+  for (const subscriber of Array.from(eventStreamSubscribers)) {
+    try {
+      notifyEventStreamStatus(subscriber, status);
+    } catch (error) {
+      recordClientDiagnostic({
+        level: "error",
+        category: "sse",
+        event: "subscriber-error",
+        message: "A realtime status subscriber threw while handling a status change",
+        context: { error: error instanceof Error ? error.message : String(error) },
+      });
+    }
   }
 }
 
@@ -1487,11 +1488,59 @@ function buildEventStreamStatus(): EventStreamStatus {
   };
 }
 
+/**
+ * Delivers one event to every subscriber. A throwing subscriber is recorded and
+ * skipped so it cannot stop delivery to the others.
+ */
+function deliverRealtimeEvent(event: RealtimeEvent, delivery: RealtimeEventDelivery): void {
+  for (const subscriber of Array.from(eventStreamSubscribers)) {
+    try {
+      subscriber.onEvent(event, delivery);
+    } catch (error) {
+      recordClientDiagnostic({
+        level: "error",
+        category: "sse",
+        event: "subscriber-error",
+        message: "A realtime event subscriber threw while handling an event",
+        context: {
+          eventType: event.eventType,
+          eventId: event.eventId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+}
+
+let fallbackRealtimeClientId: string | undefined;
+
+/** Blocked or full storage must not break the stream; callers fall back to memory. */
+function readRealtimeStorage(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeRealtimeStorage(key: string, value: string | null): boolean {
+  try {
+    if (value === null) {
+      window.localStorage.removeItem(key);
+    } else {
+      window.localStorage.setItem(key, value);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readStoredRealtimeCursor(): number | undefined {
   if (typeof window === "undefined") {
     return undefined;
   }
-  const raw = window.localStorage.getItem(EVENT_CURSOR_STORAGE_KEY)?.trim();
+  const raw = readRealtimeStorage(EVENT_CURSOR_STORAGE_KEY)?.trim();
   if (!raw || !/^\d+$/.test(raw)) {
     return undefined;
   }
@@ -1521,7 +1570,7 @@ function clearStoredRealtimeCursor(): void {
     realtimeCursorFlushTimer = null;
   }
   pendingRealtimeCursor = undefined;
-  window.localStorage.removeItem(EVENT_CURSOR_STORAGE_KEY);
+  writeRealtimeStorage(EVENT_CURSOR_STORAGE_KEY, null);
 }
 
 function flushRealtimeCursor(): void {
@@ -1535,8 +1584,10 @@ function flushRealtimeCursor(): void {
   if (pendingRealtimeCursor === undefined) {
     return;
   }
-  window.localStorage.setItem(EVENT_CURSOR_STORAGE_KEY, String(pendingRealtimeCursor));
+  const cursor = pendingRealtimeCursor;
+  // Drop the pending value even when storage rejects it so later flushes do not retry forever.
   pendingRealtimeCursor = undefined;
+  writeRealtimeStorage(EVENT_CURSOR_STORAGE_KEY, String(cursor));
 }
 
 function registerRealtimeCursorFlushListeners(): void {
@@ -1561,12 +1612,15 @@ function getOrCreateRealtimeClientId(): string {
   if (typeof window === "undefined") {
     return crypto.randomUUID();
   }
-  const existing = window.localStorage.getItem(EVENT_CLIENT_ID_STORAGE_KEY)?.trim();
+  const existing = readRealtimeStorage(EVENT_CLIENT_ID_STORAGE_KEY)?.trim();
   if (existing) {
     return existing;
   }
-  const next = crypto.randomUUID();
-  window.localStorage.setItem(EVENT_CLIENT_ID_STORAGE_KEY, next);
+  const next = fallbackRealtimeClientId ?? crypto.randomUUID();
+  if (!writeRealtimeStorage(EVENT_CLIENT_ID_STORAGE_KEY, next)) {
+    // Keep one id per page load so reconnects stay the same client.
+    fallbackRealtimeClientId = next;
+  }
   return next;
 }
 

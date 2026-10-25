@@ -57,6 +57,7 @@ import {
   mergeHistoricalContinuation,
 } from "./chat-session-history-projection";
 
+import { readRouteSidebarSession } from "./chat-route-session-read";
 import {
   getDevBootstrapPromise,
   appendMissingSidebarSession,
@@ -67,7 +68,7 @@ import {
   appendSidebarSessions,
   projectChatSessionSearch,
   reconcileSidebarSessions,
-  requireScopedSidebarSession,
+  routeFallbackSessionId,
   selectSidebarSession,
   sidebarActivityReconcileKey,
   type ChatSessionDataInput,
@@ -161,6 +162,8 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   const renderedRouteSelection = routeSelection.current;
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const routeSessionUnavailableRef = useRef(input.onRouteSessionUnavailable);
+  routeSessionUnavailableRef.current = input.onRouteSessionUnavailable;
   const sidebarMounted = useRef(true);
   const sidebarExactRead = useRef<{ scope: typeof renderedSidebarScope; controller: AbortController } | null>(null);
   useEffect(
@@ -228,6 +231,13 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         caller === getGatewayCallerScope() &&
         callerRevision === getGatewayCallerScopeRevision() &&
         gateway === getGatewayApiBaseUrl();
+      const readRoute = (sessionId: string) =>
+        readRouteSidebarSession(sessionId, {
+          workspaceId,
+          view: nextHistoryView,
+          mode: surfaceMode,
+          signal: controller.signal,
+        });
       const trimmedSearchQuery = searchQuery.trim();
       const sessionLimit = resolveSidebarSessionLimit(nextHistoryView, trimmedSearchQuery);
       if (options.routeOnly) {
@@ -237,20 +247,17 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         const requested = !trimmedSearchQuery ? input.routeSessionId?.trim() : undefined;
         if (!requested || renderedRouteSelection.applied) return;
         if (!sessionsRef.current?.items.some((item) => item.sessionId === requested)) {
-          const exact = await fetchChatSessions(
-            {
-              sessionId: requested,
-              workspaceId,
-              scope: "mission",
-              view: nextHistoryView,
-              mode: surfaceMode,
-              limit: 1,
-              includeActivity: true,
-            },
-            { signal: controller.signal },
-          );
+          const record = await readRoute(requested);
           if (!isCurrent()) return;
-          const record = requireScopedSidebarSession(exact, requested, workspaceId, nextHistoryView);
+          if (!record) {
+            // A stale or foreign link keeps the conversation already shown; the host clears the bad address.
+            renderedRouteSelection.applied = true;
+            routeSessionUnavailableRef.current?.(
+              requested,
+              routeFallbackSessionId(selectedSessionIdRef.current, sessionsRef.current),
+            );
+            return;
+          }
           setSessions((current) =>
             !current || !isCurrent() ? current : appendMissingSidebarSession(current, requested, record),
           );
@@ -438,21 +445,16 @@ export function useChatSessionData(input: ChatSessionDataInput) {
       if (requestedSessionId && !nextSessions.items.some((item) => item.sessionId === requestedSessionId)) {
         // A deep link may be older than the first page. Read only that exact,
         // visible, scoped owner; a missing/foreign response must never select a recent Chat.
-        const exact = await fetchChatSessions(
-          {
-            sessionId: requestedSessionId,
-            workspaceId,
-            scope: "mission",
-            view: nextHistoryView,
-            mode: surfaceMode,
-            limit: 1,
-            includeActivity: true,
-          },
-          { signal: controller.signal },
-        );
+        const record = await readRoute(requestedSessionId);
         if (!isCurrent()) return;
-        const record = requireScopedSidebarSession(exact, requestedSessionId, workspaceId, nextHistoryView);
-        nextSessions = { ...nextSessions, items: [...nextSessions.items, record] };
+        // A stale link still shows the list and opens the first conversation; the host clears the address.
+        if (record) nextSessions = { ...nextSessions, items: [...nextSessions.items, record] };
+        else {
+          routeSessionUnavailableRef.current?.(
+            requestedSessionId,
+            routeFallbackSessionId(selectedSessionIdRef.current, nextSessions, options),
+          );
+        }
       }
       loadedSidebarPages.current.cursors = [undefined];
       setProjects(nextProjects);

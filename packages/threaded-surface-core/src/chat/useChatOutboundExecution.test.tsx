@@ -992,6 +992,22 @@ describe("useChatOutboundExecution", () => {
     expect(latest?.getSnapshot()).toMatchObject({ sending: false, activeStream: null });
   });
 
+  it("releases a Send whose stream was dropped when the surface is hidden and shown again", async () => {
+    const loadSessionCoreState = vi.fn(async () => undefined);
+    const completedThread = makeThread();
+    completedThread.turns[0]!.trace.status = "completed";
+    // StrictMode replays effect cleanup then setup with the state kept, as a hidden-then-shown surface does.
+    await act(async () => {
+      create(
+        <React.StrictMode>
+          <Harness initialSending initialThread={completedThread} loadSessionCoreState={loadSessionCoreState} />
+        </React.StrictMode>,
+      );
+    });
+    expect(latest?.getSnapshot()).toMatchObject({ sending: false });
+    expect(loadSessionCoreState).toHaveBeenCalledWith("session-1", { background: true, includeThread: true });
+  });
+
   it("does not reconnect after a terminal provider error stream", async () => {
     const pushLocalNotice = vi.fn();
     streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {

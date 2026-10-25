@@ -1489,6 +1489,8 @@ describe("integration provider webhook routes", () => {
           }),
         }),
       }),
+      // The route now marks the mutation committed through the update's callback.
+      expect.any(Function),
     );
     expect(response.json()).toEqual(expect.objectContaining({ approved: true, actorId: "777" }));
   });

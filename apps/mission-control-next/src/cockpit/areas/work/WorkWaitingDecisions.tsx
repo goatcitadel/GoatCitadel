@@ -51,13 +51,18 @@ export function WorkWaitingDecisions({ workspaceId }: { workspaceId: string }) {
             <article key={item.id} className="py-2 text-sm text-fg-secondary">
               <p className="font-medium text-fg">{item.title}</p>
               <p>{item.summary}</p>
-              <div className="flex flex-wrap gap-3">
-                <NativeOwnerLink href={item.href} scope={[workspaceId, item.id]}>
+              <div className="flex flex-wrap items-center gap-x-1 divide-x divide-line-subtle">
+                <NativeOwnerLink
+                  href={item.href}
+                  scope={[workspaceId, item.id]}
+                  className="inline-flex min-h-8 items-center py-1 pr-3 text-accent hover:underline"
+                >
                   Review current decision<span className="sr-only">: {item.title}</span>
                 </NativeOwnerLink>
                 <NativeOwnerLink
                   href={`/work/runs/${encodeURIComponent(item.source.runId!)}`}
                   scope={[workspaceId, item.id, item.source.runId]}
+                  className="inline-flex min-h-8 items-center py-1 pl-3 text-accent hover:underline"
                 >
                   Open run<span className="sr-only">: {item.title}</span>
                 </NativeOwnerLink>

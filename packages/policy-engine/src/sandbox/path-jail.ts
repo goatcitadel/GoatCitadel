@@ -30,7 +30,7 @@ export function assertExistingPathRealpathAllowed(
   writeJailRoots: string[],
   readOnlyRoots: string[],
 ): void {
-  const resolvedTarget = fs.realpathSync(path.resolve(targetPath));
+  const resolvedTarget = fs.realpathSync.native(path.resolve(targetPath));
   assertWithinRoots(resolvedTarget, [...writeJailRoots, ...readOnlyRoots], "read allowlist");
 }
 
@@ -70,7 +70,7 @@ function matchingLexicalRoots(target: string, roots: string[]): string[] {
 function normalizedRootsForComparison(root: string): string[] {
   const resolvedRoot = path.resolve(root);
   try {
-    const realRoot = fs.realpathSync(resolvedRoot);
+    const realRoot = fs.realpathSync.native(resolvedRoot);
     return realRoot === resolvedRoot ? [resolvedRoot] : [resolvedRoot, realRoot];
   } catch {
     return [resolvedRoot];
@@ -103,7 +103,7 @@ function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots:
       }
       // Relative link targets resolve against the link's real directory, not its written parent.
       absoluteTarget = path.resolve(
-        fs.realpathSync(path.dirname(probe)),
+        fs.realpathSync.native(path.dirname(probe)),
         fs.readlinkSync(probe),
         path.relative(probe, absoluteTarget),
       );
@@ -111,7 +111,7 @@ function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots:
       continue;
     }
     if (fs.existsSync(probe)) {
-      const realExisting = fs.realpathSync(probe);
+      const realExisting = fs.realpathSync.native(probe);
       if (rootGuard) {
         if (!isWithinAnyRoot(realExisting, rootGuard.roots) && canCreateMissingJailRoot(probe, lexicalRoots)) {
           if (!sameFilesystemPath(realExisting, probe)) {

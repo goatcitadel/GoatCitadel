@@ -233,6 +233,59 @@ describe("client event stream", () => {
     cleanup();
   });
 
+  it("keeps delivering to later subscribers when one throws, for events and replay gaps", async () => {
+    const received: string[] = [];
+    const cleanups = [
+      connectEventStream(() => {
+        throw new Error("subscriber boom");
+      }),
+      connectEventStream((event) => received.push(event.eventType)),
+    ];
+    await waitForEventSourceCount(1);
+    const source = FakeEventSource.instances[0]!;
+
+    source.onmessage?.({
+      data: JSON.stringify({ eventId: "e1", eventType: "chat", source: "gateway", sequence: 5, timestamp: "t", payload: {} }),
+    });
+    expect(received).toEqual(["chat"]);
+
+    source.emit("replay-gap", { oldestCursor: 10 });
+    expect(received).toEqual(["chat", "system"]);
+
+    for (const cleanup of cleanups) cleanup();
+  });
+
+  it("survives blocked localStorage with an in-memory client id and no cursor persistence", async () => {
+    // Only the realtime keys are blocked; gateway auth storage is a separate owner.
+    const storage = window.localStorage;
+    const guard =
+      <Args extends [string, ...string[]], Result>(original: (...args: Args) => Result) =>
+      (...args: Args): Result => {
+        if (args[0].startsWith("goatcitadel.events.")) throw new Error("storage blocked");
+        return original.apply(storage, args);
+      };
+    Object.assign(storage, {
+      getItem: guard(storage.getItem),
+      setItem: guard(storage.setItem),
+      removeItem: guard(storage.removeItem),
+    });
+
+    const cleanup = connectEventStream(() => undefined);
+    await waitForEventSourceCount(1);
+    const source = FakeEventSource.instances[0]!;
+    const url = new URL(source.url);
+    expect(url.searchParams.get("clientId")).toBe("client-uuid");
+    expect(url.searchParams.has("afterCursor")).toBe(false);
+
+    source.onmessage?.({
+      data: JSON.stringify({ eventId: "e1", eventType: "chat", source: "gateway", sequence: 7, timestamp: "t", payload: {} }),
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    source.emit("replay-gap", { oldestCursor: 10 });
+
+    cleanup();
+  });
+
   it("falls back to replay when stored cursors are invalid and ignores non-positive event cursors", async () => {
     window.localStorage.setItem("goatcitadel.events.client.v1", "client-existing");
     for (const invalidCursor of ["0", "-1", "abc"]) {

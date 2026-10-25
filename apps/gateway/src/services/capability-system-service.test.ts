@@ -184,6 +184,33 @@ describe("CapabilitySystemService", () => {
     expect(harness.storage.skillLifecycle.find("invalid-import")?.provenance?.commitSha).toBeUndefined();
   });
 
+  it("backfills skill lifecycle once per loaded skill set, not on every catalog build", async () => {
+    const skill: LoadedSkill = {
+      skillId: "memo-skill",
+      name: "Memo skill",
+      source: "extra",
+      dir: os.tmpdir(),
+      declaredTools: [],
+      requires: [],
+      keywords: [],
+      instructionBody: "memo",
+      mtime: "2026-10-25T00:00:00.000Z",
+    };
+    const harness = await createHarness({ loadedSkills: [skill] });
+    const find = vi.spyOn(harness.storage.skillLifecycle, "find");
+
+    await harness.service.listCatalog("inspectable");
+    const afterFirst = find.mock.calls.filter(([id]) => id === "memo-skill").length;
+    await harness.service.listCatalog("inspectable");
+    await harness.service.listSkills();
+
+    // resolveSkillLifecycle may still read the record; the per-skill backfill probe must not repeat.
+    const backfillProbesAfterSecond = find.mock.calls.length;
+    expect(afterFirst).toBeGreaterThan(0);
+    await harness.service.ensureSkillLifecycleBackfill();
+    expect(find.mock.calls.length).toBe(backfillProbesAfterSecond);
+  });
+
   it("re-enqueues a redacted bounded terminal Code Mode transcript exactly once", async () => {
     const harness = await createHarness();
     harness.storage.sessions.upsert({ sessionId: "session-transcript", sessionKey: "mission:session-transcript" });

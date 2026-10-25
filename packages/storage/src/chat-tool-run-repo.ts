@@ -76,6 +76,7 @@ export class ChatToolRunRepository {
   private readonly insertStmt;
   private readonly listByTurnStmt;
   private readonly listBySessionStmt;
+  private readonly findByApprovalStmt;
   private readonly listByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly patchStmt;
   private readonly compareAndSwapResultStmt;
@@ -129,6 +130,12 @@ export class ChatToolRunRepository {
       WHERE session_id = @sessionId
       ORDER BY started_at DESC
       LIMIT @limit
+    `);
+    this.findByApprovalStmt = db.prepare(`
+      SELECT * FROM chat_tool_runs
+      WHERE session_id = @sessionId AND approval_id = @approvalId
+      ORDER BY started_at DESC
+      LIMIT 1
     `);
   }
 
@@ -245,6 +252,12 @@ export class ChatToolRunRepository {
       }),
     );
     return rows.map(mapRow);
+  }
+
+  /** Newest tool run of a session that owns this approval, regardless of how many runs the session has. */
+  public findByApprovalId(sessionId: string, approvalId: string): ChatToolRunRecord | undefined {
+    const rows = toChatToolRunRows(this.findByApprovalStmt.all({ sessionId, approvalId }));
+    return rows.map(mapRow)[0];
   }
 
   public listByTurnIds(turnIds: string[]): Map<string, ChatToolRunRecord[]> {

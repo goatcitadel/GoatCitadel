@@ -145,6 +145,22 @@ export function ChatTextComposer({
         : props.editingTurnId
           ? "Send edited message"
           : "Send";
+  // On wider layouts a plain "why not" sits beside Send, where the eye already is; the long form keeps its own line.
+  const reasonBesideSend = !phone && visibleReason !== null && visibleReason.kind !== "historical";
+  const reasonNode = visibleReason ? (
+    <div
+      id={REASON_ID}
+      role="status"
+      className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-secondary${reasonBesideSend ? " ml-auto justify-end text-right" : ""}`}
+    >
+      <p className="min-w-0">{visibleReason.message}</p>
+      {visibleReason.kind === "historical" && props.onReturnToLatest ? (
+        <Button size="sm" onClick={props.onReturnToLatest}>
+          Back to latest
+        </Button>
+      ) : null}
+    </div>
+  ) : null;
   const send = () => {
     if (!canSubmit) return;
     if (localReady && command === "/schedule") {
@@ -333,6 +349,7 @@ export function ChatTextComposer({
               </button>
               {coarse ? null : " · Shift+Enter for a new line"}
             </p>
+            {reasonBesideSend ? reasonNode : null}
             {props.hasActiveStream ? (
               <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
                 {submitLabel}
@@ -377,20 +394,7 @@ export function ChatTextComposer({
               Nothing is sent to the model.
             </p>
           ) : null}
-          {visibleReason ? (
-            <div
-              id={REASON_ID}
-              role="status"
-              className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-secondary"
-            >
-              <p className="min-w-0">{visibleReason.message}</p>
-              {visibleReason.kind === "historical" && props.onReturnToLatest ? (
-                <Button size="sm" onClick={props.onReturnToLatest}>
-                  Back to latest
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
+          {reasonBesideSend ? null : reasonNode}
         </div>
       </div>
     </form>

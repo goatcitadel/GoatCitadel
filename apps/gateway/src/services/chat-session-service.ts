@@ -314,16 +314,41 @@ export async function forkChatSessionFromTurn(
     ],
     workspaceId,
   );
-  const copiedAttachmentStorage = await Promise.all(
-    sourceAttachments.map(async (attachment) => ({
-      attachment,
-      storageRelPath: await deps.copyChatSessionStoredFile(attachment.storageRelPath, randomUUID()),
-    })),
-  );
+  const copiedAttachmentStorage: Array<{ attachment: (typeof sourceAttachments)[number]; storageRelPath: string }> = [];
+  const discardCopiedFiles = async (): Promise<void> => {
+    const results = await Promise.allSettled(
+      copiedAttachmentStorage.map(({ storageRelPath }) => deps.removeChatSessionStoredFile(storageRelPath)),
+    );
+    for (const result of results) {
+      if (result.status === "rejected") {
+        log.warn("chat session fork cleanup failed to remove a copied file", {
+          sessionId,
+          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        });
+      }
+    }
+  };
+  try {
+    for (const attachment of sourceAttachments) {
+      copiedAttachmentStorage.push({
+        attachment,
+        storageRelPath: await deps.copyChatSessionStoredFile(attachment.storageRelPath, randomUUID()),
+      });
+    }
+  } catch (error) {
+    await discardCopiedFiles();
+    throw error;
+  }
 
   const createdAt = new Date().toISOString();
   const title = input.title?.trim() || `Fork of ${source.title?.trim() || "Chat"}`;
-  const created = await createChatSession(deps, { workspaceId, title, mode: "chat", origin: "operator" });
+  let created: ChatSessionRecord;
+  try {
+    created = await createChatSession(deps, { workspaceId, title, mode: "chat", origin: "operator" });
+  } catch (error) {
+    await discardCopiedFiles();
+    throw error;
+  }
   const forkId = `fork_${randomUUID()}`;
   const turnIdMap = new Map(path.map((trace) => [trace.turnId, `turn_${randomUUID()}`]));
   const messageIdMap = new Map<string, string>();
@@ -335,7 +360,7 @@ export async function forkChatSessionFromTurn(
   const turnMappings: ChatSessionForkManifest["turnMappings"] = [];
   const artifactCopies: ChatSessionForkManifest["artifactCopies"] = [];
 
-  await deps.storage.runImmediateTransaction(async () => {
+  const forkTransaction = deps.storage.runImmediateTransaction(async () => {
     const sourcePrefs = await deps.storage.chatSessionPrefs.get(sessionId);
     if (sourcePrefs) {
       const {
@@ -494,6 +519,22 @@ export async function forkChatSessionFromTurn(
     };
     await deps.storage.chatSessionForks.create(manifest);
   });
+  try {
+    await forkTransaction;
+  } catch (error) {
+    // The transaction rolled back its rows; remove the empty session and the copied bytes
+    // created before it so a failed fork leaves no orphan "Fork of ..." session behind.
+    await discardCopiedFiles();
+    try {
+      await deleteChatSession(deps, created.sessionId);
+    } catch (cleanupError) {
+      log.warn("chat session fork cleanup failed to delete the new session", {
+        sessionId: created.sessionId,
+        error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      });
+    }
+    throw error;
+  }
   deps.operatorSummaryCache.invalidate();
   const manifest = await deps.storage.chatSessionForks.get(forkId);
   const session = {

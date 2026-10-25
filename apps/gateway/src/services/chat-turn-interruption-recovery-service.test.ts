@@ -215,6 +215,36 @@ describe("reconcileInterruptedChatTurns", () => {
     expect(storage.chatTurnTraces.get("turn-active").status).toBe("running");
   });
 
+  it("leaves a trace untouched when durable ownership cannot be determined", async () => {
+    const storage = createStorage();
+    const run = storage.durableRuns.createRun({
+      workflowKey: "chat.turn.execute",
+      status: "running",
+    });
+    storage.chatMessages.upsert(userMessage());
+    storage.chatTurnTraces.create({
+      ...activeTrace(),
+      durable: { runId: run.runId, status: "running" },
+    });
+    const deps = buildDeps(storage);
+    const busyRuns = new Proxy(deps.storage.durableRuns, {
+      get: (target, prop, receiver) =>
+        prop === "getRun"
+          ? async () => {
+              throw new Error("SQLITE_BUSY: database is locked");
+            }
+          : Reflect.get(target, prop, receiver),
+    });
+    deps.storage = new Proxy(deps.storage, {
+      get: (target, prop, receiver) => (prop === "durableRuns" ? busyRuns : Reflect.get(target, prop, receiver)),
+    });
+
+    const result = await reconcileInterruptedChatTurns(deps);
+
+    expect(result.interruptedTurnIds).toEqual([]);
+    expect(storage.chatTurnTraces.get("turn-active").status).toBe("running");
+  });
+
   it("fails an active trace whose durable run already reached a terminal status", async () => {
     const storage = createStorage();
     const run = storage.durableRuns.createRun({

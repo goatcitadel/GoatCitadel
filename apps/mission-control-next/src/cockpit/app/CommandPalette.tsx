@@ -10,6 +10,9 @@ import { useUiPreferences, type UiTheme } from "@goatcitadel/mission-control-sha
 import { THEME_SEARCH_TERMS } from "./theme-options";
 import { buildSettingsIndex } from "../areas/settings/settings-index";
 import { resourceTitle } from "../areas/library/resource-title";
+import { LIBRARY_SECTION_LABELS } from "../areas/library/library-sections";
+import { SYSTEM_VIEWS } from "../areas/system/system-views";
+import { WORK_VIEWS } from "../areas/work/work-views";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
 import { COCKPIT_AREAS } from "./routes";
@@ -30,9 +33,20 @@ import {
 import type { PaletteObject } from "./command-palette-search";
 
 const SETTINGS = buildSettingsIndex({ discovery: true }).flatMap((page) => page.entries);
+/** Tabs inside each area, matched on a typed query only so the empty palette stays a short list of areas. */
+const TAB_DESTINATIONS = [
+  ...SYSTEM_VIEWS.map((view) => ({ area: "system", label: `System › ${view.label}`, path: view.path })),
+  ...WORK_VIEWS.map((view) => ({ area: "work", label: `Work › ${view.label}`, path: view.href })),
+  ...Object.entries(LIBRARY_SECTION_LABELS).map(([section, label]) => ({
+    area: "library",
+    label: `Library › ${label}`,
+    path: section === "capabilities" ? "/library" : `/library/${section}`,
+  })),
+].map((entry) => ({ ...entry, key: entry.path, terms: "" }));
 const DESTINATIONS = [
   ...COCKPIT_AREAS.map((entry) => ({
     ...entry,
+    key: entry.area,
     terms:
       entry.area === "inbox"
         ? "approvals attention decisions"
@@ -42,6 +56,7 @@ const DESTINATIONS = [
   })),
   {
     area: "settings",
+    key: "settings",
     label: "Settings",
     path: "/settings/general",
     terms: "settings preferences account configuration",
@@ -109,7 +124,10 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       ? newChat.attempt
       : undefined;
   const matches = (text: string) => text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
-  const destinations = DESTINATIONS.filter((entry) => matches(`Go to ${entry.label} ${entry.terms}`));
+  // Static destinations are matched here, synchronously; remote records stream in below them.
+  const destinations = [...DESTINATIONS, ...(query.trim() ? TAB_DESTINATIONS : [])].filter((entry) =>
+    matches(`Go to ${entry.label} ${entry.terms}`),
+  );
   const settingsMatches = SETTINGS.filter((entry) => matches(`settings ${entry.label} ${entry.searchTerms}`));
   const commandMatches = matches("New chat conversation") || matches("Choose default model provider models switch");
   const preferenceMatches =
@@ -235,7 +253,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               {activeWorkspaceId
                 ? "Workspace: " + (workspaceName ?? "current workspace") + "."
                 : "No workspace selected."}
-              {" Type at least two characters to search."}
+              {query.trim().length < 2 ? " Type at least two characters to search." : ""}
             </p>
             {creationNotice}
             <p className="px-3 py-2 text-sm text-fg-secondary">

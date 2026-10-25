@@ -98,3 +98,65 @@ function isPrivateOrCarrierGradeIpv4(host: string): boolean {
   }
   return false;
 }
+
+/**
+ * The one Gateway origin policy: explicit origins (env or defaults), loopback dev origins outside
+ * production, and opt-in tailnet/private dev origins. CORS and the OAuth return hand-off both use it.
+ */
+export function isAllowedGatewayOrigin(origin: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (resolveAllowedOrigins().has(origin)) return true;
+  if (env.NODE_ENV !== "production" && isLoopbackDevOrigin(origin)) return true;
+  return resolveAllowTailnetDevOrigins() && isTailnetDevOrigin(origin, resolveTailnetShortHostAllowlist(env));
+}
+
+export function resolveAllowedOrigins(): Set<string> {
+  const defaults = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "http://127.0.0.1:8787",
+  ];
+  const envRaw = process.env.GOATCITADEL_ALLOWED_ORIGINS;
+  if (!envRaw?.trim()) {
+    return new Set(defaults);
+  }
+  const fromEnv = envRaw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((origin) => normalizeConfiguredOrigin(origin, "GOATCITADEL_ALLOWED_ORIGINS"));
+  return new Set(fromEnv.length > 0 ? fromEnv : defaults);
+}
+
+export function normalizeConfiguredOrigin(rawOrigin: string, envName: string): string {
+  try {
+    const origin = new URL(rawOrigin);
+    if (origin.protocol !== "http:" && origin.protocol !== "https:") {
+      throw new Error("origin must use http or https");
+    }
+    if (
+      origin.username ||
+      origin.password ||
+      (origin.pathname && origin.pathname !== "/") ||
+      origin.search ||
+      origin.hash
+    ) {
+      throw new Error("origin must not include credentials, paths, query strings, or fragments");
+    }
+    return origin.origin;
+  } catch (error) {
+    throw new Error(
+      `Invalid origin in ${envName}: "${rawOrigin}". Use a full http(s) origin such as https://example.com.`,
+      { cause: error },
+    );
+  }
+}
+
+export function resolveAllowTailnetDevOrigins(): boolean {
+  const raw = process.env.GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS?.trim().toLowerCase();
+  if (!raw) {
+    return false;
+  }
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}

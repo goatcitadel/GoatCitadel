@@ -105,6 +105,7 @@ public sealed class DesktopUpdateService : IDisposable
         using var response = await _http.OpenAsync(DesktopUpdatePolicy.ReleasesUrl,
             _checkedThisProcess ? _preferences.Etag : null, token);
         DesktopUpdateRelease? candidate = null;
+        IOException? lastVerificationError = null;
         if (response.StatusCode == HttpStatusCode.NotModified)
         {
             candidate = _preferences.CachedRelease;
@@ -126,7 +127,12 @@ public sealed class DesktopUpdateService : IDisposable
                 JsonElement? manifest;
                 if (Status.Channel == "stable")
                 {
-                    manifest = await _stableVerifier.ReadVerifiedManifestAsync(release, token);
+                    // Releases arrive newest first, but a backported patch can sit above a higher version, so
+                    // skip only the releases whose tag cannot beat the verified candidate instead of stopping.
+                    if (candidate is not null && System.Version.TryParse(tag.TrimStart('v'), out var tagVersion)
+                        && System.Version.TryParse(candidate.Version, out var bestVersion) && tagVersion <= bestVersion) continue;
+                    try { manifest = await _stableVerifier.ReadVerifiedManifestAsync(release, token); }
+                    catch (IOException error) { lastVerificationError = error; continue; }
                 }
                 else
                 {
@@ -148,6 +154,9 @@ public sealed class DesktopUpdateService : IDisposable
             && candidate.BuildSequence < _preferences.HighestPreviewSequence) candidate = null;
         var available = candidate is not null && DesktopUpdatePolicy.IsNewer(candidate,
             Status.InstalledVersion, Status.InstalledCommit, _installedSequence) ? candidate : null;
+        // One unverifiable release must not hide a good update, but it must not read as "up to date" either:
+        // when nothing newer verified, report the failure and leave the ETag uncached so the next check retries.
+        if (available is null && lastVerificationError is not null) throw lastVerificationError;
         string? downloaded = null;
         if (available is not null)
         {

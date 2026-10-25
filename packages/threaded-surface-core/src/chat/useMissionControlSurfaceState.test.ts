@@ -72,9 +72,7 @@ describe("mission control surface pure state helpers", () => {
     expect(looksMachineSessionLabel("external:slack")).toBe(true);
     expect(looksMachineSessionLabel("Readable launch plan")).toBe(false);
     expect(formatSessionLabel(makeSession())).toBe("Launch plan");
-    expect(formatSessionLabel(makeSession({ title: "mission:workspace:operator:chat_123" }))).toBe(
-      "Mission chat - abcdef",
-    );
+    expect(formatSessionLabel(makeSession({ title: "mission:workspace:operator:chat_123" }))).toBe("New chat");
     expect(
       formatSessionLabel(
         makeSession({ scope: "external", title: "", channel: "slack", account: "ops@example.test" } as any),

@@ -635,7 +635,7 @@ export class LlamaCppRuntimeService {
       buildLlamaCppLaunchArgs(this.options.rootDir, this.options.config),
       {
         cwd: this.options.rootDir,
-        env: process.env,
+        env: buildLlamaCppChildEnv(process.env),
         stdio: ["ignore", "pipe", "pipe"],
         detached: process.platform !== "win32",
         windowsHide: true,
@@ -2387,6 +2387,46 @@ async function downloadUrlToFile(input: {
     await fs.rm(tempPath, { force: true });
     throw error;
   }
+}
+
+const LLAMA_CPP_ENV_ALLOWLIST = new Set([
+  "PATH",
+  "PATHEXT",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "HOME",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "PROGRAMDATA",
+  "PROGRAMFILES",
+  "PROGRAMFILES(X86)",
+  "LD_LIBRARY_PATH",
+  "DYLD_LIBRARY_PATH",
+  "LANG",
+  "TZ",
+  "NUMBER_OF_PROCESSORS",
+]);
+const LLAMA_CPP_ENV_PREFIXES = ["CUDA_", "HIP_", "ROCR_", "HSA_", "GGML_", "LLAMA_", "VK_", "SYCL_", "ONEAPI_", "LC_"];
+
+/**
+ * llama-server needs the OS basics and GPU/runtime tuning variables, never provider keys or gateway
+ * secrets that happen to sit in the gateway's own environment.
+ */
+export function buildLlamaCppChildEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const scrubbed: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    const upper = key.toUpperCase();
+    if (LLAMA_CPP_ENV_ALLOWLIST.has(upper) || LLAMA_CPP_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))) {
+      scrubbed[key] = value;
+    }
+  }
+  return scrubbed;
 }
 
 export function buildLlamaCppLaunchArgs(rootDir: string, config: LlamaCppConfig): string[] {

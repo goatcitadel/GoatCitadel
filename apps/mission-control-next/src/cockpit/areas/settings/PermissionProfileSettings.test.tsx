@@ -147,6 +147,8 @@ describe("native Chat permission profile", () => {
     await select();
     await click("Review Chat profile selection");
     expect(text(view.root)).toContain("does not approve a tool execution");
+    // U-20: the confirmation can take focus, so a review below the fold is brought into view.
+    expect(view.root.findByProps({ "aria-label": "Reviewed Chat profile selection" }).props.tabIndex).toBe(-1);
     await click("Cancel selection");
     expect(api.activatePermissionProfile).not.toHaveBeenCalled();
     await click("Review Chat profile selection");

@@ -4,7 +4,7 @@ import { GOOGLE_WORKSPACE_CAPABILITIES } from "@goatcitadel/contracts";
 import { GOOGLE_OAUTH_CALLBACK_PATH } from "../services/google-workspace-oauth-service.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { sendRouteError } from "./_error-handler.js";
-import { allowedRequestOrigin } from "./allowed-request-origin.js";
+import { allowedRequestOrigin, rejectDisallowedRequestOrigin } from "./allowed-request-origin.js";
 import { createOAuthCallbackHandoff } from "./oauth-callback-handoff.js";
 
 /** Mission Control lands Google's redirect on Integrations; the code travels only in the URL fragment. */
@@ -56,6 +56,7 @@ export function registerGoogleOAuthIntegrationRoutes(fastify: FastifyInstance): 
       if (!params.success || !body.success) {
         return reply.code(400).send({ error: "Choose the Google capabilities to request." });
       }
+      if (rejectDisallowedRequestOrigin(request, reply)) return reply;
       reply.header("cache-control", "no-store");
       try {
         const flow = await fastify.services.integrations.startGoogleWorkspaceOAuth(params.data.connectionId, body.data);

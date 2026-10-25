@@ -11,6 +11,7 @@ import {
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { matchesSearchWords } from "./capability-catalog";
 
 /** The newest Skill Hub snapshot reviewed from this pack's shipped directory, if any. */
 export function findSkillPackItem(pack: ShippedSkillPack, items: readonly SkillHubOperatorItem[]) {
@@ -62,7 +63,7 @@ function stepStatus(step: PackStep): string {
   }
 }
 
-export function LibrarySkillPacks({ workspaceId }: { workspaceId: string }) {
+export function LibrarySkillPacks({ workspaceId, search = "" }: { workspaceId: string; search?: string }) {
   const hub = useQuery({
     queryKey: ["library", "skill-packs", workspaceId],
     queryFn: () => fetchSkillHubOperator({ workspaceId, limit: 100 }),
@@ -122,7 +123,9 @@ export function LibrarySkillPacks({ workspaceId }: { workspaceId: string }) {
       ) : null}
       {hub.isPending ? <p>Reading Skill Hub…</p> : null}
       <ul className="divide-y divide-line-subtle">
-        {SHIPPED_SKILL_PACKS.map((pack) => {
+        {SHIPPED_SKILL_PACKS.filter((pack) =>
+          matchesSearchWords(`${pack.label} ${pack.summary} ${pack.requiresCli}`, search),
+        ).map((pack) => {
           const item = hub.isSuccess ? findSkillPackItem(pack, items) : undefined;
           const step = nextSkillPackStep(item);
           const actionable = hub.isSuccess && (step.kind === "review" || step.kind === "action");

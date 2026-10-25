@@ -1091,3 +1091,47 @@ describe("ApprovalRepository.listByKindAndPayloadString", () => {
     assert.throws(() => repo.listByKindAndPayloadString("communications.mail.send", "draftId", ""), /required/u);
   });
 });
+
+describe("ApprovalRepository.listPendingBySession", () => {
+  const chatApproval = (sessionId: string, workspaceId = "ws-a") => ({
+    kind: "tool.invoke",
+    riskLevel: "caution" as const,
+    payload: { toolName: "x" },
+    preview: { title: "t" },
+    linkage: { workspaceId, sessionId, turnId: "turn-1" },
+  });
+
+  it("returns this session's pending approvals even when newer foreign approvals exceed any limit", () => {
+    const repo = createRepo();
+    const mine = repo.create(chatApproval("session-mine"));
+    for (let index = 0; index < 40; index += 1) repo.create(chatApproval(`session-other-${index}`));
+    repo.create(chatApproval("session-mine", "ws-b"));
+    const resolved = repo.create(chatApproval("session-mine"));
+    repo.resolve(resolved.approvalId, { decision: "approve", resolvedBy: "tester" });
+
+    const found = repo.listPendingBySession("session-mine", "ws-a", 5);
+
+    assert.deepEqual(
+      found.map((approval) => approval.approvalId),
+      [mine.approvalId],
+    );
+    assert.equal(repo.listPendingBySession("session-mine", undefined, 5).length, 2);
+    assert.deepEqual(repo.listPendingBySession("session-none", "ws-a"), []);
+    assert.throws(() => repo.listPendingBySession("  "), /required/u);
+  });
+
+  it("pages through every pending approval for a session with a keyset cursor", () => {
+    const repo = createRepo();
+    const created = [0, 1, 2].map(() => repo.create(chatApproval("session-paged")).approvalId);
+
+    const first = repo.listPendingBySessionPage("session-paged", { pageSize: 2 });
+    assert.equal(first.items.length, 2);
+    assert.ok(first.nextCursor);
+    const second = repo.listPendingBySessionPage("session-paged", { pageSize: 2, cursor: first.nextCursor });
+    assert.equal(second.nextCursor, undefined);
+    assert.deepEqual(
+      [...first.items, ...second.items].map((approval) => approval.approvalId).sort(),
+      [...created].sort(),
+    );
+  });
+});

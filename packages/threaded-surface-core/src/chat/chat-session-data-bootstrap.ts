@@ -140,6 +140,11 @@ export type ChatSessionDataInput = {
   messageMutationVersionRef: MutableRefObject<number>;
   lastLocalPrefMutationAtRef: MutableRefObject<number>;
   surfaceMode?: ChatMode;
+  /**
+   * A URL named a conversation that is not visible in this workspace and view (deleted, archived
+   * or never existed). The list still loads; `fallbackSessionId` is the conversation shown instead.
+   */
+  onRouteSessionUnavailable?: (requestedSessionId: string, fallbackSessionId: string | null) => void;
   /** Native shells request secondary evidence when its inspector opens. */
   secondaryEnabled?: boolean;
   /** Native optional catalogs load on inspector or composer-palette intent. */
@@ -213,6 +218,14 @@ export function reconcileSidebarSessions(
     items: [...survivors, ...[...records.values()].filter((record) => !retained.has(record.sessionId))],
   };
 }
+/** The conversation shown instead when the address named one that is not visible. */
+export function routeFallbackSessionId(
+  current: string | null,
+  sessions: ChatSessionsResponse | null,
+  options: ChatSidebarLoadOptions = {},
+): string | null {
+  return sessions ? selectSidebarSession(current, sessions, options, undefined) : null;
+}
 export function selectSidebarSession(
   current: string | null,
   nextSessions: ChatSessionsResponse,
@@ -230,12 +243,13 @@ export function selectSidebarSession(
     ? current
     : (nextSessions.items[0]?.sessionId ?? null);
 }
-export function requireScopedSidebarSession(
+/** Returns the exact record only when it is a visible conversation of this workspace and history view. */
+export function findScopedSidebarSession(
   exact: ChatSessionsResponse,
   requestedSessionId: string,
   workspaceId: string,
   nextHistoryView: ChatHistoryView,
-): ChatSessionsResponse["items"][number] {
+): ChatSessionsResponse["items"][number] | null {
   const record = exact.items[0];
   if (
     exact.items.length !== 1 ||
@@ -245,7 +259,7 @@ export function requireScopedSidebarSession(
     record.lifecycleStatus !== nextHistoryView ||
     record.includeInHistory === false
   ) {
-    throw new Error("The requested conversation is unavailable in this workspace and history view.");
+    return null;
   }
   return record;
 }

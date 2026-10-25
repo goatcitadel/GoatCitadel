@@ -286,7 +286,8 @@ describe("CommandPalette", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     const headings = [...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent);
-    expect(headings).toEqual(["Library capabilities"]);
+    expect(headings).toEqual(["Go to", "Library capabilities"]);
+    expect(document.body.textContent).toContain("Go to Work › Schedules");
     expect(document.body.textContent).not.toContain("Go to Chat");
     expect(document.body.textContent).toContain("Schedules capability");
     act(() => {
@@ -299,6 +300,24 @@ describe("CommandPalette", () => {
     expect([...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent)).not.toContain(
       "Commands",
     );
+  });
+
+  it("matches static tab destinations at once and drops the two-character hint (UX-08)", async () => {
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
+    expect(document.body.textContent).toContain("Type at least two characters to search.");
+    const input = document.querySelector<HTMLInputElement>("[cmdk-input]")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "mem");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(document.body.textContent).toContain("Go to Library › Memory");
+    expect(document.body.textContent).not.toContain("Type at least two characters to search.");
+    const item = [...document.querySelectorAll("[cmdk-item]")].find((node) =>
+      node.textContent?.includes("Library › Memory"),
+    );
+    act(() => item?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(controls.navigate).toHaveBeenCalledWith("/library/memory");
   });
 
   it("offers all areas and the classic view", async () => {

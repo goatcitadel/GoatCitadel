@@ -182,6 +182,34 @@ describe("ChatProactiveService", () => {
     }
   });
 
+  it("skips a scheduler tick while the previous tick is still running", async () => {
+    vi.useFakeTimers();
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const listChatSessions = vi.fn(async () => {
+        await gate;
+        return [];
+      });
+      const harness = createHarness({ callbacks: { listChatSessions } });
+
+      harness.service.startScheduler();
+      await vi.advanceTimersByTimeAsync(120_000 * 3);
+      expect(listChatSessions).toHaveBeenCalledTimes(1);
+
+      release();
+      await Promise.allSettled([...harness.backgroundTasks]);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await Promise.allSettled([...harness.backgroundTasks]);
+      harness.service.stopScheduler();
+      expect(listChatSessions).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("skips scheduler ticks when the session has no activity since the last proactive tick", async () => {
     const harness = createHarness();
     const triggerSpy = vi.spyOn(harness.service, "triggerChatSessionProactive");

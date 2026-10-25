@@ -1,5 +1,9 @@
+import { useEffect } from "react";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { isImeEnter } from "./ime";
+
+/** "Available" is the normal state of a row; only a row that differs (needs review, read-only…) carries a badge. */
+const DEFAULT_AVAILABILITY = "Available";
 
 type PaletteProps = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -14,7 +18,12 @@ export function ChatComposerPalette({
   onSelect?: (item: PaletteProps["commandSuggestions"][number]) => void;
 }) {
   const palette = props.composerPalette;
-  if (!palette?.globalOpen && props.commandSuggestions.length === 0) return null;
+  const activeId = `cockpit-suggestion-${props.commandIndex}`;
+  useEffect(() => {
+    document.getElementById(activeId)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeId]);
+  // A search that is still running keeps the menu open, so the first "/" never looks like nothing happened.
+  if (!palette?.globalOpen && !palette?.loading && props.commandSuggestions.length === 0) return null;
   const choose = (index: number) => {
     const item = props.commandSuggestions[index];
     if (!item) return;
@@ -23,7 +32,7 @@ export function ChatComposerPalette({
     props.composerRef.current?.focus();
   };
   return (
-    <div className="mb-2 max-h-56 overflow-y-auto rounded-md border border-line bg-overlay p-2">
+    <div className="mb-2 rounded-md border border-line bg-overlay p-2">
       {palette?.globalOpen ? (
         <label className="block text-xs text-fg-muted">
           Find a command, model, file, or variable
@@ -71,7 +80,8 @@ export function ChatComposerPalette({
         id="cockpit-composer-suggestions"
         role="listbox"
         aria-label="Composer suggestions"
-        className="mt-1 grid gap-0.5"
+        // Rows are 3rem tall with a 2px gap, so five rows fit exactly and a scrolled list rests on a whole row.
+        className="mt-1 grid max-h-62 snap-y snap-mandatory gap-0.5 overflow-y-auto"
       >
         {props.commandSuggestions.map((item, index) => (
           <button
@@ -85,13 +95,13 @@ export function ChatComposerPalette({
             // Focus stays on the combobox that owns the listbox; selection follows aria-activedescendant.
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => choose(index)}
-            className="flex w-full items-start justify-between gap-2 rounded-md px-2 py-1.5 text-left hover:bg-sunken aria-[selected=true]:bg-sunken"
+            className="flex h-12 w-full snap-start items-start justify-between gap-2 rounded-md px-2 py-1.5 text-left hover:bg-sunken aria-[selected=true]:bg-sunken"
           >
             <span className="min-w-0">
               <span className="block truncate text-sm font-medium text-fg">{item.command}</span>
               <span className="block truncate text-xs text-fg-muted">{item.description}</span>
             </span>
-            {item.availabilityLabel ? (
+            {item.availabilityLabel && item.availabilityLabel !== DEFAULT_AVAILABILITY ? (
               <span className="shrink-0 text-xs text-fg-muted">{item.availabilityLabel}</span>
             ) : null}
           </button>

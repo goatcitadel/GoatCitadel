@@ -32,6 +32,15 @@ import { assertContextRecord } from "./context-mutation-evidence";
 import { useManualChatSessionCreation } from "./useManualChatSessionCreation";
 import type { ChatHistoryView, ChatSidebarLoadOptions } from "./useChatSessionData";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
+import { formatSessionLabel } from "./useMissionControlSurfaceState";
+
+/** A conversation left the current list (archived or deleted); the host moves the address and says so. */
+export interface SessionRemovedFromView {
+  sessionId: string;
+  nextSessionId: string | null;
+  label: string;
+  kind: "archived" | "deleted";
+}
 
 function createSessionPlaceholder(input: {
   sessionId: string;
@@ -118,6 +127,9 @@ export function useChatSessionControls(input: {
   ) => Promise<void>;
   setSessionMetadataConflictDraft?: (draft: SessionMetadataConflictDraft | null) => void;
   setBinding: React.Dispatch<React.SetStateAction<ChatSessionBindingRecord | null>>;
+  /** The conversation to open once `sessionId` leaves the list (the next one down, if any). */
+  nextSessionAfterRemoval?: (sessionId: string) => string | null;
+  onSessionRemoved?: (removed: SessionRemovedFromView) => void;
 }) {
   const {
     workspaceId,
@@ -143,6 +155,8 @@ export function useChatSessionControls(input: {
     refreshSessionAggregate,
     setSessionMetadataConflictDraft,
     setBinding,
+    nextSessionAfterRemoval,
+    onSessionRemoved,
   } = input;
 
   const selectionScopeRef = useRef({ workspaceId, selectedSessionId, viewIdentity: input.viewIdentity });
@@ -438,17 +452,25 @@ export function useChatSessionControls(input: {
       const restoring = selectedSession.lifecycleStatus === "archived";
       if (restoring) await restoreChatSession(selectedSession.sessionId, selectedSession.revision);
       else await archiveChatSession(selectedSession.sessionId, selectedSession.revision);
+      let nextSessionId: string | null = null;
       if (!restoring && historyView === "active") {
+        nextSessionId = nextSessionAfterRemoval?.(selectedSession.sessionId) ?? null;
         setQueuedOutbound((current) => current.filter((item) => item.sessionId !== selectedSession.sessionId));
         setThread(null);
-        setSelectedSessionId((current) => (current === selectedSession.sessionId ? null : current));
+        setSelectedSessionId((current) => (current === selectedSession.sessionId ? nextSessionId : current));
+        onSessionRemoved?.({
+          sessionId: selectedSession.sessionId,
+          nextSessionId,
+          label: formatSessionLabel(selectedSession),
+          kind: "archived",
+        });
       }
       if (restoring && historyView === "archived") {
         setHistoryView("active");
         setSelectedSessionId(selectedSession.sessionId);
         await loadSidebar("active", { bypassCache: true, preferredSessionId: selectedSession.sessionId });
       } else {
-        await loadSidebar(historyView, { bypassCache: true });
+        await loadSidebar(historyView, { bypassCache: true, preferredSessionId: nextSessionId ?? undefined });
       }
     } catch (err) {
       if (isSessionRevisionConflict(err)) {
@@ -472,6 +494,8 @@ export function useChatSessionControls(input: {
     setHistoryView,
     setSelectedSessionId,
     setThread,
+    nextSessionAfterRemoval,
+    onSessionRemoved,
   ]);
 
   const handleDeleteSession = useCallback(
@@ -493,10 +517,17 @@ export function useChatSessionControls(input: {
     setSessionControlPending("delete");
     try {
       await deleteChatSession(sessionDeleteConfirm.sessionId, sessionDeleteConfirm.revision);
+      const nextSessionId = nextSessionAfterRemoval?.(sessionDeleteConfirm.sessionId) ?? null;
       setQueuedOutbound((current) => current.filter((item) => item.sessionId !== sessionDeleteConfirm.sessionId));
       setThread(null);
-      setSelectedSessionId((current) => (current === sessionDeleteConfirm.sessionId ? null : current));
-      await loadSidebar();
+      setSelectedSessionId((current) => (current === sessionDeleteConfirm.sessionId ? nextSessionId : current));
+      onSessionRemoved?.({
+        sessionId: sessionDeleteConfirm.sessionId,
+        nextSessionId,
+        label: sessionDeleteConfirm.label,
+        kind: "deleted",
+      });
+      await loadSidebar(undefined, { preferredSessionId: nextSessionId ?? undefined });
     } catch (err) {
       if (isSessionRevisionConflict(err)) {
         await (refreshSessionAggregate?.(sessionDeleteConfirm.sessionId) ??
@@ -519,6 +550,8 @@ export function useChatSessionControls(input: {
     setQueuedOutbound,
     setSelectedSessionId,
     setThread,
+    nextSessionAfterRemoval,
+    onSessionRemoved,
   ]);
 
   const handleAssignProject = useCallback(

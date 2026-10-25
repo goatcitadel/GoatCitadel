@@ -10,6 +10,12 @@ import {
 /* eslint-disable max-lines -- MemoryLifecycleService centralizes memory lifecycle writes, write-gate evidence, and structured memory governance until repository ownership is split. */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import {
+  STALENESS_CHECK_CONCURRENCY,
+  createLearningFileProbe,
+  mapWithConcurrency,
+  type LearningFileProbe,
+} from "./memory-learning-file-probe.js";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type {
@@ -996,8 +1002,15 @@ export class MemoryLifecycleService {
     const learnings = input.learningId
       ? [await this.requireMemoryLearning(input.learningId)]
       : await this.listMemoryLearnings({ workspaceId: input.workspaceId, status: "all", limit: input.limit });
+    // Bounded concurrency with a per-run probe: up to 500 learnings must not fan out into hundreds of
+    // simultaneous reads, and a file shared by several learnings is stat'ed/hashed once.
+    const probe = createLearningFileProbe();
     const issues = (
-      await Promise.all(learnings.map(async (learning) => await this.inspectLearningIssues(learning)))
+      await mapWithConcurrency(
+        learnings,
+        STALENESS_CHECK_CONCURRENCY,
+        async (learning) => await this.inspectLearningIssues(learning, probe),
+      )
     ).flat();
     return { checkedAt, issues };
   }
@@ -3924,11 +3937,14 @@ export class MemoryLifecycleService {
     return absolutePath;
   }
 
-  private async inspectLearningIssues(learning: MemoryLearningRecord): Promise<MemoryLearningStalenessIssue[]> {
+  private async inspectLearningIssues(
+    learning: MemoryLearningRecord,
+    probe: LearningFileProbe,
+  ): Promise<MemoryLearningStalenessIssue[]> {
     const issues: MemoryLearningStalenessIssue[] = [];
     for (const fileRef of learning.fileRefs) {
       const absolutePath = this.resolveLearningFilePath(fileRef.path);
-      if (!fsSync.existsSync(absolutePath)) {
+      if (!(await probe.exists(absolutePath))) {
         issues.push({
           learningId: learning.learningId,
           path: fileRef.path,
@@ -3937,7 +3953,8 @@ export class MemoryLifecycleService {
         });
         continue;
       }
-      const currentHash = hashFileIfPresent(absolutePath);
+      // Oversized files hash to undefined: their drift is unknown, so they are never reported as changed.
+      const currentHash = await probe.hash(absolutePath);
       if (fileRef.contentHash && currentHash && fileRef.contentHash !== currentHash) {
         issues.push({
           learningId: learning.learningId,
@@ -3951,7 +3968,7 @@ export class MemoryLifecycleService {
       const maybePath = sourceRef.sourceType === "artifact" ? sourceRef.sourceRef.replace(/^file:/, "") : "";
       if (maybePath && !maybePath.startsWith("http") && (maybePath.includes("/") || maybePath.includes("\\"))) {
         const absolutePath = this.resolveLearningFilePath(maybePath);
-        if (!fsSync.existsSync(absolutePath)) {
+        if (!(await probe.exists(absolutePath))) {
           issues.push({
             learningId: learning.learningId,
             path: maybePath,

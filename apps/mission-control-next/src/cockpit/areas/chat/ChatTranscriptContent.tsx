@@ -1,5 +1,5 @@
 import { ChatConversationStarters } from "./ChatConversationStarters";
-import { lazy, Suspense, type RefObject } from "react";
+import { lazy, memo, Suspense, type RefObject } from "react";
 import { canRetryTurn } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
 import {
   getChatTurnRecoveryActionSummary,
@@ -50,7 +50,11 @@ function turnAccessibleName(prompt: string, position?: number): string {
   return start ? `${label}: ${start}` : label;
 }
 
-export function Turn({
+/**
+ * Memoized so a streaming preview flush re-renders only the turn whose `previewText` changed.
+ * Callers must pass stable `actions` and callbacks.
+ */
+export const Turn = memo(function Turn({
   turn,
   position,
   previewText,
@@ -128,6 +132,11 @@ export function Turn({
           ) : (
             <p className="text-sm text-fg-muted">Preparing response…</p>
           )}
+          {stopped && assistantText && !streaming ? (
+            <p className="mt-1 text-xs text-fg-muted" role="note">
+              Stopped — partial answer
+            </p>
+          ) : null}
           {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} onInspectTurn={onInspectTurn} /> : null}
         </div>
       ) : !failed && !partial ? (
@@ -196,7 +205,7 @@ export function Turn({
       ) : null}
     </article>
   );
-}
+});
 
 export type TranscriptFooterContext = {
   renderedTurns?: readonly ChatThreadTurnRecord[];

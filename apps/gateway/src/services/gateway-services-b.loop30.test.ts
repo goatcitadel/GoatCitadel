@@ -8,6 +8,7 @@ import {
   SecretStoreService,
   SecretStoreUnavailableError,
   isSecretStoreUnavailableLikeError,
+  resetCommandAvailabilityCache,
 } from "./secret-store-service.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -35,6 +36,7 @@ const approval: ApprovalRequest = {
 
 afterEach(() => {
   spawnSyncMock.mockReset();
+  resetCommandAvailabilityCache();
   vi.useRealTimers();
   if (originalPlatform) {
     Object.defineProperty(process, "platform", originalPlatform);
@@ -277,7 +279,7 @@ describe("Gateway Services B loop 30 coverage", () => {
     spawnSyncMock
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never)
       .mockReturnValueOnce({ status: 0, stdout: "   \n", stderr: "" } as never)
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never)
+      // The "which security" probe is cached per process, so delete goes straight to security.
       .mockReturnValueOnce({ status: 44, stdout: "", stderr: "" } as never);
     expect(service.getSecret("provider:anthropic")).toBeUndefined();
     service.deleteSecret("provider:anthropic");

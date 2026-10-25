@@ -113,7 +113,8 @@ export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: 
       id: "service",
       title: "Runtime service",
       detail: service.detail,
-      status: { label: service.label, tone: service.tone },
+      // A service that cannot be read here is unconfirmed, not "not set up": it needs attention.
+      status: { label: service.label, tone: service.label === "Unavailable" ? "waiting" : service.tone },
       inspectPath: RUNTIME_INSPECT_PATH,
     },
     backupHealthCheck(backupTrust, Boolean(health.backups.latest)),

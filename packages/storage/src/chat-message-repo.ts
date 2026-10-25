@@ -637,18 +637,19 @@ export class ChatMessageRepository {
     const result = new Map<string, string>();
     for (let offset = 0; offset < ids.length; offset += 400) {
       const batch = ids.slice(offset, offset + 400);
-      const rows = this.db
-        .prepare(
-          `
-        SELECT session_id, content FROM (
-          SELECT session_id, content, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY seq DESC) AS position
-          FROM chat_messages WHERE session_id IN (${batch.map(() => "?").join(", ")})
-            AND role IN ('user', 'assistant') AND TRIM(content) <> ''
-        ) visible WHERE position = 1
-      `,
-        )
-        .all(...batch) as Array<{ session_id: string; content: string }>;
-      for (const row of rows) result.set(row.session_id, row.content);
+      // One index probe per session (newest visible message) instead of ranking every message.
+      const rows = this.db.prepare(`
+        SELECT wanted.session_id AS session_id, (
+          SELECT message.content FROM chat_messages message
+          WHERE message.session_id = wanted.session_id
+            AND message.role IN ('user', 'assistant') AND TRIM(message.content) <> ''
+          ORDER BY message.seq DESC LIMIT 1
+        ) AS content
+        FROM (${batch.map(() => "SELECT CAST(? AS TEXT) AS session_id").join(" UNION ALL ")}) wanted
+      `).all(...batch) as Array<{ session_id: string; content: string | null }>;
+      for (const row of rows) {
+        if (row.content !== null && row.content !== undefined) result.set(row.session_id, row.content);
+      }
     }
     return result;
   }

@@ -40,6 +40,34 @@ describe("composer palette", () => {
     ]);
   });
 
+  it("ranks name matches before description matches and ignores the trigger character", () => {
+    const entry = (key: string, command: string, description: string): ComposerPaletteItem => ({
+      ...item("commands", key, command),
+      description,
+    });
+    const items = [
+      entry("plan", "/plan", "Show or set advisory planning mode, then hold for approval."),
+      entry("new", "/new", "Start a fresh session. Keeps the help text short."),
+      entry("model", "/model", "Override provider/model for this session."),
+      entry("help", "/help", "Show the commands you can use."),
+      entry("shell", "/shell", "Run one governed command."),
+    ];
+    expect(rankComposerPaletteItems(items, "commands", "he").map((entry) => entry.key)).toEqual([
+      "help",
+      "shell",
+      "plan",
+      "new",
+    ]);
+    expect(rankComposerPaletteItems(items, "commands", "pla").map((entry) => entry.key)[0]).toBe("plan");
+  });
+
+  it("ignores the availability label and lists a repeated command once", () => {
+    const first = { ...item("commands", "skill-list", "/skill"), applyValue: "/skill", description: "List skills." };
+    const second = { ...item("commands", "skill-enable", "/skill"), applyValue: "/skill", description: "Enable one." };
+    expect(rankComposerPaletteItems([first, second], "commands", "").map((entry) => entry.key)).toEqual(["skill-list"]);
+    expect(rankComposerPaletteItems([first], "commands", "availab")).toEqual([]);
+  });
+
   it("degrades failed sources independently and caches successful loads per session", async () => {
     const loadCommands = vi.fn(() => [item("commands", "status", "/status")]);
     const loadFiles = vi.fn(() => Promise.reject(new Error("files offline")));

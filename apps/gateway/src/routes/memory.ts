@@ -357,33 +357,25 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.code(status).send({ error: message });
   };
 
-  fastify.post(
-    "/api/v1/memory/context/compose",
-    withRouteAccess(fastify, "authenticated-read"),
-    async (request, reply) => {
-      const parsed = composeSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.code(400).send({ error: parsed.error.flatten() });
-      }
-      return reply.send(await memory.composeContext(parsed.data));
-    },
-  );
+  fastify.post("/api/v1/memory/context/compose", operatorOnly, async (request, reply) => {
+    const parsed = composeSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(await memory.composeContext(parsed.data));
+  });
 
-  fastify.get(
-    "/api/v1/memory/context/:contextId",
-    withRouteAccess(fastify, "authenticated-read"),
-    async (request, reply) => {
-      const params = contextParamsSchema.safeParse(request.params);
-      if (!params.success) {
-        return reply.code(400).send({ error: params.error.flatten() });
-      }
-      try {
-        return reply.send(await memory.getContext(params.data.contextId));
-      } catch (error) {
-        return reply.code(404).send({ error: (error as Error).message });
-      }
-    },
-  );
+  fastify.get("/api/v1/memory/context/:contextId", operatorOnly, async (request, reply) => {
+    const params = contextParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await memory.getContext(params.data.contextId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
 
   fastify.get("/api/v1/memory/maintenance/policy", operatorOnly, async (request, reply) => {
     const parsed = workspaceQuerySchema.safeParse(request.query);
@@ -530,7 +522,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.get("/api/v1/memory/qmd/stats", withRouteAccess(fastify, "authenticated-read"), async (request, reply) => {
+  fastify.get("/api/v1/memory/qmd/stats", operatorOnly, async (request, reply) => {
     const parsed = statsQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -548,13 +540,9 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
-  fastify.get(
-    "/api/v1/memory/retrieval/status",
-    withRouteAccess(fastify, "authenticated-read"),
-    async (_request, reply) => {
-      return reply.send(await memory.getRetrievalStatus());
-    },
-  );
+  fastify.get("/api/v1/memory/retrieval/status", operatorOnly, async (_request, reply) => {
+    return reply.send(await memory.getRetrievalStatus());
+  });
 
   fastify.post("/api/v1/memory/retrieval-benchmark", operatorOnly, async (request, reply) => {
     const parsed = retrievalBenchmarkSchema.safeParse(request.body);
@@ -568,7 +556,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/memory/recall", withRouteAccess(fastify, "authenticated-read"), async (request, reply) => {
+  fastify.post("/api/v1/memory/recall", operatorOnly, async (request, reply) => {
     const parsed = memoryRecallSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });

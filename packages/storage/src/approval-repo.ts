@@ -17,8 +17,8 @@ import {
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { randomUUID } from "node:crypto";
-import { isProxy } from "node:util/types";
 import { safeJsonParse } from "./safe-json.js";
+import { assertCanonicalApprovalIdentifier, assertSafePlainApprovalRecord } from "./approval-input-guards.js";
 
 const APPROVAL_LINKAGE_KEY = "__gcApprovalLinkage";
 
@@ -417,6 +417,75 @@ export class ApprovalRepository {
     return mapped.filter((approval) => approval.linkage?.workspaceId === scopedWorkspaceId).slice(0, limit);
   }
 
+  /**
+   * Pending approvals naming one Chat session in their linkage (unexpired unless
+   * `includeExpired`). A dialect-neutral LIKE narrows the scan in SQL and every row is
+   * re-checked on its parsed linkage; the limit applies after the session filter.
+   */
+  public listPendingBySession(
+    sessionId: string,
+    workspaceId?: string,
+    limit = 200,
+    options: { includeExpired?: boolean } = {},
+  ): ApprovalRequest[] {
+    const workspace = workspaceId?.trim();
+    const bounded = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 500)) : 200;
+    const results: ApprovalRequest[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = this.listPendingBySessionPage(sessionId, { ...options, cursor, pageSize: 500 });
+      for (const approval of page.items) {
+        if (workspace && approval.linkage?.workspaceId !== workspace) continue;
+        results.push(approval);
+        if (results.length >= bounded) return results;
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    return results;
+  }
+
+  /**
+   * One newest-first keyset page of the session's pending approvals. `nextCursor` is set while
+   * more rows may exist, so callers that must see every approval (cancellation) can exhaust it.
+   */
+  public listPendingBySessionPage(
+    sessionId: string,
+    options: { includeExpired?: boolean; cursor?: string; pageSize?: number } = {},
+  ): { items: ApprovalRequest[]; nextCursor?: string } {
+    const session = sessionId?.trim();
+    if (!session) throw new ValidationError({ message: "Session is required for a pending approval lookup" });
+    const pageSize = Number.isFinite(options.pageSize)
+      ? Math.max(1, Math.min(Math.floor(options.pageSize!), 500))
+      : 200;
+    const after = decodeApprovalListCursor(options.cursor);
+    const pg = this.db.dialect === "postgres";
+    const expiresAt = pg ? "expires_at_ts" : "julianday(expires_at)";
+    const dbNow = pg ? "statement_timestamp()" : "julianday('now')";
+    const activeOnly = options.includeExpired
+      ? ""
+      : `AND (expires_at IS NULL OR (${expiresAt} IS NOT NULL AND ${expiresAt} > ${dbNow}))`;
+    const afterClause = after
+      ? "AND (created_at < @afterCreatedAt OR (created_at = @afterCreatedAt AND approval_id < @afterApprovalId))"
+      : "";
+    const pattern = `%${escapeLikePattern(JSON.stringify({ sessionId: session }).slice(1, -1))}%`;
+    const like = (column: string) => `${column} LIKE @pattern ESCAPE '\\'`;
+    const sql = `SELECT * FROM approvals WHERE status = 'pending' ${activeOnly} ${afterClause}
+      AND (${like("linkage_json")} OR ${like("payload_json")} OR ${like("preview_json")})
+      ORDER BY created_at DESC, approval_id DESC LIMIT @limit`;
+    const rows = toApprovalRows(
+      this.db.prepare(sql).all({
+        pattern,
+        limit: pageSize,
+        ...(after ? { afterCreatedAt: after.createdAt, afterApprovalId: after.approvalId } : {}),
+      }),
+    ).map(mapRow);
+    const last = rows.at(-1);
+    return {
+      items: rows.filter((approval) => approval.linkage?.sessionId === session),
+      nextCursor: rows.length === pageSize && last ? encodeApprovalListCursor(last) : undefined,
+    };
+  }
+
   public listExpiredPending(now = new Date().toISOString(), limit = 100, excludedKind?: string): ApprovalRequest[] {
     // Keep the legacy `now` argument for API compatibility, but never let a
     // caller clock decide whether an approval has expired.
@@ -810,74 +879,6 @@ function assertDeterministicDetachedApprovalInput(input: DeterministicDetachedAp
   assertSafePlainApprovalRecord(input.payload, "payload");
   assertSafePlainApprovalRecord(input.preview, "preview");
   if (input.linkage !== undefined) assertSafePlainApprovalRecord(input.linkage, "linkage");
-}
-
-function assertCanonicalApprovalIdentifier(value: unknown, field: string): asserts value is string {
-  if (
-    typeof value !== "string" ||
-    value !== value.normalize("NFKC").trim() ||
-    value.length < 1 ||
-    value.length > 256 ||
-    /\p{Cc}/u.test(value)
-  ) {
-    throw new ValidationError({ code: "FIELD_INVALID", field });
-  }
-}
-
-function assertSafePlainApprovalRecord(value: unknown, field: string): asserts value is Record<string, unknown> {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    isProxy(value) ||
-    Object.getPrototypeOf(value) !== Object.prototype
-  ) {
-    throw new ValidationError({ code: "FIELD_INVALID", field });
-  }
-  assertSafeApprovalJsonValue(value, field, new Set<object>());
-}
-
-function assertSafeApprovalJsonValue(value: unknown, field: string, seen: Set<object>): void {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
-  if (typeof value === "number") {
-    if (Number.isFinite(value)) return;
-    throw new ValidationError({ code: "FIELD_INVALID", field });
-  }
-  if (typeof value !== "object" || isProxy(value)) {
-    throw new ValidationError({ code: "FIELD_INVALID", field });
-  }
-  const isArray = Array.isArray(value);
-  if (Object.getPrototypeOf(value) !== (isArray ? Array.prototype : Object.prototype) || seen.has(value)) {
-    throw new ValidationError({ code: "FIELD_INVALID", field });
-  }
-  seen.add(value);
-  try {
-    if (Object.getOwnPropertySymbols(value).length > 0) {
-      throw new ValidationError({ code: "FIELD_INVALID", field });
-    }
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    if (isArray) {
-      const length = descriptors.length?.value;
-      const elementKeys = Object.keys(descriptors).filter((key) => key !== "length");
-      if (
-        !Number.isSafeInteger(length) ||
-        length < 0 ||
-        elementKeys.length !== length ||
-        elementKeys.some((key, index) => key !== String(index))
-      ) {
-        throw new ValidationError({ code: "FIELD_INVALID", field });
-      }
-    }
-    for (const [key, descriptor] of Object.entries(descriptors)) {
-      if (isArray && key === "length") continue;
-      if (!("value" in descriptor) || !descriptor.enumerable) {
-        throw new ValidationError({ code: "FIELD_INVALID", field });
-      }
-      assertSafeApprovalJsonValue(descriptor.value, field, seen);
-    }
-  } finally {
-    seen.delete(value);
-  }
 }
 
 function mapExactDetachedReplay(

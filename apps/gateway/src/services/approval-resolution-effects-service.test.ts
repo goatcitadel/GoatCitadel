@@ -8164,3 +8164,47 @@ describe("citadel ward approval effects", () => {
     }
   });
 });
+
+describe("approval effect drain isolation", () => {
+  it("keeps draining later effects when settling a failed effect itself throws", async () => {
+    const first = createEffect({ effectId: "effect-first", status: "running" });
+    const second = createEffect({ effectId: "effect-second", status: "running" });
+    const claimNextPendingEffect = vi
+      .fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+      .mockReturnValue(undefined);
+    const get = vi.fn((effectId: string) => {
+      if (effectId === first.effectId) throw new Error("storage offline");
+      return { ...second, claimedBy: "worker-under-test" };
+    });
+    const failEffect = vi.fn();
+    const publishRealtime = vi.fn(async () => undefined);
+    const service = new ApprovalEffectsService(
+      {
+        storage: { approvalEffects: { claimNextPendingEffect, get, failEffect } },
+        publishRealtime,
+      } as unknown as ServiceContext,
+      createApprovalEffectDeps(),
+    );
+    (service as unknown as { workerId: string }).workerId = "worker-under-test";
+    vi.spyOn(
+      service as unknown as { executeWithLeaseHeartbeat: () => Promise<void> },
+      "executeWithLeaseHeartbeat",
+    ).mockRejectedValue(new Error("effect exploded"));
+
+    await (service as unknown as { drainPendingEffects(): Promise<void> }).drainPendingEffects();
+
+    expect(failEffect).toHaveBeenCalledExactlyOnceWith(
+      "effect-second",
+      "worker-under-test",
+      second.version,
+      expect.objectContaining({ lastError: "effect exploded" }),
+    );
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "approval_effect_worker_failed",
+      "approvals",
+      expect.objectContaining({ error: "storage offline" }),
+    );
+  });
+});

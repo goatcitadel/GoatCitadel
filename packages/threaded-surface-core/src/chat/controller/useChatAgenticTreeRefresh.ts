@@ -11,10 +11,12 @@ type Input = {
   selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId">;
   workspaceId: NonNullable<MissionThreadedControllerHostProps["workspaceId"]>;
   setAgenticRunTree: React.Dispatch<React.SetStateAction<AgenticRunTreeResponse | null>>;
+  /** Changes when the run may have moved on (an approval was settled, the latest turn changed state). */
+  refreshKey?: string;
 };
 
 /** Reads the selected session run tree, ignoring obsolete async completions. */
-export function useChatAgenticTreeRefresh({ selection, workspaceId, setAgenticRunTree }: Input) {
+export function useChatAgenticTreeRefresh({ selection, workspaceId, setAgenticRunTree, refreshKey }: Input) {
   const resolveAgenticRunTree = useCallback(async (): Promise<AgenticRunTreeResponse | null> => {
     if (!selection.selectedSessionId) {
       return null;
@@ -46,7 +48,7 @@ export function useChatAgenticTreeRefresh({ selection, workspaceId, setAgenticRu
     return () => {
       cancelled = true;
     };
-  }, [resolveAgenticRunTree, setAgenticRunTree]);
+  }, [resolveAgenticRunTree, setAgenticRunTree, refreshKey]);
 
   return { resolveAgenticRunTree };
 }

@@ -93,7 +93,14 @@ import { durableRoutes } from "./routes/durable.js";
 import { connectorsRoutes } from "./routes/connectors.js";
 import { trustRoutes } from "./routes/trust.js";
 import { createGatewayLogger, isVerboseLoggingEnabled } from "./runtime-ux.js";
-import { isLoopbackDevOrigin, isTailnetDevOrigin, resolveTailnetShortHostAllowlist } from "./cors-origin-guard.js";
+import {
+  isLoopbackDevOrigin,
+  isTailnetDevOrigin,
+  normalizeConfiguredOrigin,
+  resolveAllowedOrigins,
+  resolveAllowTailnetDevOrigins,
+  resolveTailnetShortHostAllowlist,
+} from "./cors-origin-guard.js";
 import { projectPublicErrorValue } from "./services/public-secret-projection.js";
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
 import { assertAuthTokenIsNotPlaceholder } from "./startup-guard.js";
@@ -584,50 +591,6 @@ function readTraceId(traceparent: string | string[] | undefined, fallbackCorrela
   return fallbackCorrelationId;
 }
 
-function resolveAllowedOrigins(): Set<string> {
-  const defaults = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:4173",
-    "http://127.0.0.1:4173",
-    "http://127.0.0.1:8787",
-  ];
-  const envRaw = process.env.GOATCITADEL_ALLOWED_ORIGINS;
-  if (!envRaw?.trim()) {
-    return new Set(defaults);
-  }
-  const fromEnv = envRaw
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((origin) => normalizeConfiguredOrigin(origin, "GOATCITADEL_ALLOWED_ORIGINS"));
-  return new Set(fromEnv.length > 0 ? fromEnv : defaults);
-}
-
-function normalizeConfiguredOrigin(rawOrigin: string, envName: string): string {
-  try {
-    const origin = new URL(rawOrigin);
-    if (origin.protocol !== "http:" && origin.protocol !== "https:") {
-      throw new Error("origin must use http or https");
-    }
-    if (
-      origin.username ||
-      origin.password ||
-      (origin.pathname && origin.pathname !== "/") ||
-      origin.search ||
-      origin.hash
-    ) {
-      throw new Error("origin must not include credentials, paths, query strings, or fragments");
-    }
-    return origin.origin;
-  } catch (error) {
-    throw new Error(
-      `Invalid origin in ${envName}: "${rawOrigin}". Use a full http(s) origin such as https://example.com.`,
-      { cause: error },
-    );
-  }
-}
-
 function resolveRateLimitConfig(): {
   enabled: boolean;
   maxGeneral: number;
@@ -685,14 +648,6 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
     return fallback;
   }
   return parsed;
-}
-
-function resolveAllowTailnetDevOrigins(): boolean {
-  const raw = process.env.GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS?.trim().toLowerCase();
-  if (!raw) {
-    return false;
-  }
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
 function calculateRequestDurationMs(request: GatewayRequestState): number | undefined {

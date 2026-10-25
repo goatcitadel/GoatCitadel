@@ -17,12 +17,14 @@ export interface ChatToolEffectTruthProjection {
  * dedicated server-verified projection.
  */
 export function projectChatToolEffectTruth(
-  run: Pick<ChatToolRunRecord, "effectPotential" | "effectDisposition" | "effectOutcomeKind" | "effectEvidence">,
+  run: Pick<ChatToolRunRecord, "effectPotential" | "effectDisposition" | "effectOutcomeKind" | "effectEvidence"> &
+    Partial<Pick<ChatToolRunRecord, "status" | "result">>,
 ): ChatToolEffectTruthProjection | undefined {
   if (!run.effectPotential && !run.effectDisposition && !run.effectOutcomeKind && !run.effectEvidence) {
     return undefined;
   }
-  const outcome = run.effectOutcomeKind ?? "uncertain";
+  // A refused approval never dispatched, whatever an older row recorded.
+  const outcome = wasRefusedBeforeDispatch(run) ? "none" : (run.effectOutcomeKind ?? "uncertain");
   const reason = run.effectEvidence?.reason ?? "not recorded";
   const facts = [
     `potential ${run.effectPotential ?? "not recorded"}`,
@@ -47,4 +49,9 @@ export function projectChatToolEffectTruth(
     summary: [`Effect truth: ${facts}.`, guidance, concreteNote].filter(Boolean).join(" "),
     tone: outcome === "concrete" ? "concrete" : outcome === "uncertain" ? "uncertain" : "none",
   };
+}
+
+function wasRefusedBeforeDispatch(run: Partial<Pick<ChatToolRunRecord, "status" | "result">>): boolean {
+  const outcome = run.result?.approvalOutcome;
+  return run.status === "blocked" && (outcome === "denied" || outcome === "withdrawn" || outcome === "expired");
 }

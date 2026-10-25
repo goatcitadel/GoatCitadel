@@ -62,7 +62,7 @@ export interface ActiveChatTurnStreamExecution {
 }
 
 export class ChatTurnExecutionRegistry {
-  private readonly activeWriteLeases = new Map<string, string>();
+  private readonly activeWriteLeases = new Map<string, { operation: string; leaseToken: string }>();
   private readonly activeExecutions = new Map<string, ActiveChatTurnExecution>();
   private readonly activeStreams = new Map<
     string,
@@ -73,17 +73,17 @@ export class ChatTurnExecutionRegistry {
     const existing = this.activeWriteLeases.get(sessionId);
     if (existing) {
       throw new ChatTurnWriteConflictError(
-        `A chat turn write is already in progress for session ${sessionId}. Wait for the current ${existing} to finish and retry.`,
+        `A chat turn write is already in progress for session ${sessionId}. Wait for the current ${existing.operation} to finish and retry.`,
       );
     }
     const leaseToken = `${operation}:${randomUUID()}`;
-    this.activeWriteLeases.set(sessionId, operation);
+    this.activeWriteLeases.set(sessionId, { operation, leaseToken });
     return leaseToken;
   }
 
   public releaseWriteLease(sessionId: string, leaseToken: string): void {
-    const expectedOperation = leaseToken.split(":", 1)[0];
-    if (this.activeWriteLeases.get(sessionId) === expectedOperation) {
+    // Compare the full token: a stale holder of the same operation must not release a newer lease.
+    if (this.activeWriteLeases.get(sessionId)?.leaseToken === leaseToken) {
       this.activeWriteLeases.delete(sessionId);
     }
   }

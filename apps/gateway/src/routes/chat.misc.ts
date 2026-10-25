@@ -516,7 +516,8 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(await chatSupport().getChatSessionGoal(params.data.sessionId));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      // A missing conversation is a 404 here, as on /control, not a 400.
+      return sendRouteError(reply, error, request.log);
     }
   });
 
