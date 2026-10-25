@@ -81,7 +81,6 @@ import {
   type MeshToolPolicyBinding,
 } from "./mesh-tool-policy-binding.js";
 import { resolveReadPathAccess } from "./sandbox/path-jail.js";
-import { isSamePathOrDescendant } from "./sandbox/write-root-safety.js";
 import {
   assertNotHardForbiddenWritePath,
   assertToolWritePath,
@@ -3106,13 +3105,18 @@ function getReferenceRootPaths(constraints?: ToolGrantConstraints): string[] {
 
 function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {
   try {
+    const resolvedCandidate = normalizePathForMatch(candidate);
     for (const root of roots) {
       if (root.trim() === "*") {
         return true;
       }
-      // isSamePathOrDescendant folds case on Windows (like the write jail) and
-      // checks the separator boundary, so "/data2" is not inside "/data".
-      if (normalizePathVariantsForMatch(root).some((rootVariant) => isSamePathOrDescendant(rootVariant, candidate))) {
+      // Compare with a separator boundary ("/data2" is not inside "/data"), folding case for
+      // Windows paths like the write jail does. String-based so it behaves the same on every host.
+      if (
+        normalizePathVariantsForMatch(root).some(
+          (resolvedRoot) => resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}/`),
+        )
+      ) {
         return true;
       }
     }
@@ -3122,10 +3126,21 @@ function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {
   }
 }
 
+function normalizePathForMatch(value: string): string {
+  return foldWindowsPathCase(path.normalize(path.resolve(value)).replaceAll("\\", "/").replace(/\/+$/, ""));
+}
+
+/** Windows paths are case-insensitive: fold on a win32 host or for a drive-letter path. */
+function foldWindowsPathCase(value: string): string {
+  return process.platform === "win32" || /^[A-Za-z]:\//.test(value) ? value.toLowerCase() : value;
+}
+
 function normalizePathVariantsForMatch(value: string): string[] {
-  const resolvedValue = path.resolve(value);
+  const resolvedValue = normalizePathForMatch(value);
   try {
-    const realValue = fs.realpathSync.native(resolvedValue);
+    const realValue = foldWindowsPathCase(
+      fs.realpathSync.native(path.resolve(value)).replaceAll("\\", "/").replace(/\/+$/, ""),
+    );
     return realValue === resolvedValue ? [resolvedValue] : [resolvedValue, realValue];
   } catch {
     return [resolvedValue];
