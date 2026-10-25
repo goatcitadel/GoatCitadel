@@ -115,6 +115,43 @@ function createGuardRepo(options: {
 }
 
 describe("ChatMessageRepository", () => {
+  it("returns each session's newest visible user or assistant text for several sessions at once", () => {
+    const repo = createRepo();
+    repo.upsert(message({ messageId: "a1", sessionId: "sess-a", content: "a first" }));
+    repo.upsert(
+      message({ messageId: "a2", sessionId: "sess-a", role: "assistant", actorType: "agent", content: "a newest" }),
+    );
+    repo.upsert(
+      message({
+        messageId: "a3",
+        sessionId: "sess-a",
+        role: "system",
+        actorType: "system",
+        content: "a hidden system",
+      }),
+    );
+    repo.upsert(message({ messageId: "a4", sessionId: "sess-a", content: "   " }));
+    repo.upsert(message({ messageId: "b1", sessionId: "sess-b", content: "b only" }));
+    repo.upsert(
+      message({ messageId: "c1", sessionId: "sess-c", role: "system", actorType: "system", content: "c system" }),
+    );
+    repo.upsert(message({ messageId: "d1", sessionId: "sess-d", content: "d old" }));
+    repo.upsert(message({ messageId: "d2", sessionId: "sess-d", content: "d new" }));
+
+    const latest = repo.latestVisibleTextBySessionIds([
+      "sess-a",
+      "sess-b",
+      "sess-c",
+      "sess-d",
+      "sess-none",
+      "sess-a",
+      "",
+    ]);
+
+    assert.deepEqual(Object.fromEntries(latest), { "sess-a": "a newest", "sess-b": "b only", "sess-d": "d new" });
+    assert.equal(repo.latestVisibleTextBySessionIds([]).size, 0);
+  });
+
   it("lists latest messages in ascending display order", () => {
     const repo = createRepo();
     repo.upsert({
