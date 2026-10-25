@@ -82,7 +82,8 @@ Additional operator clarification, October 25: the native Google Workspace sign-
 for the Gmail and Calendar tools consolidates its route, diagnostics and action-host
 wiring into the existing owners within their original limits. Record the
 dependency/host caps of **19/0** for `google-workspace-oauth-service.ts`, the new
-Google sign-in owner, as an explicit C0 gate-reconciliation scope exception. Every
+Google sign-in owner, as an explicit C0 gate-reconciliation scope exception, following
+the October 23 **24/0** precedent for `web-search-credential-service.ts`. Every
 original baseline-owner limit remains unchanged; this does not permit future growth
 above this cap.
 
