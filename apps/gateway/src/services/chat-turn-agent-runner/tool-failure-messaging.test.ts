@@ -299,3 +299,46 @@ describe("buildMemoryConsentBlockGuidance", () => {
     expect(buildMemoryConsentBlockGuidance({ status: "failed", error: MEMORY_CONSENT_BLOCKED_REASON })).toBeUndefined();
   });
 });
+
+describe("buildPolicyBlockedRecoveryText path-bridge blocks", () => {
+  function pathBridgeRun(reasonCode: string, overrides: Partial<ChatToolRunRecord> = {}): ChatToolRunRecord {
+    return toolRun({
+      toolName: "shell.exec",
+      args: { command: "git status", cwd: "/work/repo" },
+      error: PATH_BRIDGE_REASON,
+      result: { workspacePathBridge: { status: "blocked", reasonCode, snapshotId: "snap-1" } },
+      ...overrides,
+    });
+  }
+
+  it("keeps the repair guidance for a repairable reason instead of blaming tool policy", () => {
+    const text = buildPolicyBlockedRecoveryText([pathBridgeRun("invalid_path")]);
+
+    expect(text).toContain("I stopped instead of retrying shell.exec.");
+    expect(text).toContain("Retry with an absolute folder path inside the workspace.");
+    expect(text).not.toMatch(/tool policy|Settings > Tools|not caused by the input/i);
+  });
+
+  it("names missing Git as the thing to repair", () => {
+    const text = buildPolicyBlockedRecoveryText([pathBridgeRun("git_unavailable")]);
+
+    expect(text).toContain("Install or repair Git on the Gateway host");
+    expect(text).not.toMatch(/tool policy|Settings > Tools/i);
+  });
+
+  it("explains a jail boundary as fixed", () => {
+    const text = buildPolicyBlockedRecoveryText([pathBridgeRun("outside_jail")]);
+
+    expect(text).toContain("outside the workspace folders");
+    expect(text).not.toMatch(/Settings > Tools/i);
+  });
+
+  it("leaves path-bridge blocks mixed with policy blocks to the generic recovery text", () => {
+    expect(
+      buildPolicyBlockedRecoveryText([
+        pathBridgeRun("invalid_path"),
+        toolRun({ toolRunId: "run-2", toolName: "fs.delete", error: "blocked: tool denied by policy" }),
+      ]),
+    ).toBeUndefined();
+  });
+});

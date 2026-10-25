@@ -119,13 +119,13 @@ export function buildGovernanceBlockGuidance(input: {
 /**
  * True for a non-web run stopped by a tool-policy decision: the policy
  * engine's `blocked: <reason>` outcome, a runner policy or capability-profile
- * revalidation, a path-bridge block, or an operator governance block. Runner
- * guards that are not policy (the memory-consent check, "execution skipped"
- * input repairs, content gates) are excluded, because their fix may be a
- * different request.
+ * revalidation, or an operator governance block. Path-bridge blocks have their
+ * own reason-specific recovery, and runner guards that are not policy (the
+ * memory-consent check, "execution skipped" input repairs, content gates) are
+ * excluded, because their fix may be a different request or a repair.
  */
 function isToolPolicyBlock(run: ChatToolRunRecord): boolean {
-  if (run.status !== "blocked" || isWebTool(run.toolName)) {
+  if (run.status !== "blocked" || isWebTool(run.toolName) || isPathBridgeBlock(run)) {
     return false;
   }
   const error = (run.error ?? "").trim().toLowerCase();
@@ -133,9 +133,12 @@ function isToolPolicyBlock(run: ChatToolRunRecord): boolean {
     error.startsWith("blocked:") ||
     /\bpolicy\b/.test(error) ||
     /\bcapability profile\b.*\bdoes not authorize\b/.test(error) ||
-    Boolean(readPathBridgeBlock(run.result, run.error)) ||
     Boolean(buildGovernanceBlockGuidance(run))
   );
+}
+
+function isPathBridgeBlock(run: ChatToolRunRecord): boolean {
+  return run.status === "blocked" && Boolean(readPathBridgeBlock(run.result, run.error));
 }
 
 function isMemoryConsentBlock(input: { status: ChatToolRunRecord["status"]; error?: string }): boolean {
@@ -159,11 +162,13 @@ export function buildMemoryConsentBlockGuidance(input: {
 
 /**
  * Recovery answer for a turn whose every failed attempt was blocked by tool
- * policy or by the memory-consent check. Neither block is caused by the tool
- * input, so the answer says what stopped the tool and what lifts it, and never
- * invites a narrower retry or echoes the raw reason. Returns undefined when any
- * attempt failed or was blocked for another reason, which keeps the generic
- * recovery text.
+ * policy, the memory-consent check, or the workspace path bridge. The answer
+ * says what stopped the tool and what lifts it, and never invites a narrower
+ * retry or echoes the raw reason. A path-bridge answer carries only its
+ * reason-specific guidance, because most of those reasons (an invalid path,
+ * missing Git or WSL) are repaired, not lifted by policy. Returns undefined when
+ * any attempt failed or was blocked for another reason, or the blocks are of
+ * mixed kinds, which keeps the generic recovery text.
  */
 export function buildPolicyBlockedRecoveryText(failedOrBlocked: readonly ChatToolRunRecord[]): string | undefined {
   if (failedOrBlocked.length === 0) {
@@ -175,14 +180,18 @@ export function buildPolicyBlockedRecoveryText(failedOrBlocked: readonly ChatToo
       `To save it, ask in those words, for example ${MEMORY_CONSENT_EXAMPLES}.`,
     ].join("\n\n");
   }
+  const lastBlock = failedOrBlocked.at(-1);
+  if (lastBlock && failedOrBlocked.every(isPathBridgeBlock)) {
+    const pathBridgeGuidance = buildPathBridgeFailureGuidance(lastBlock);
+    return pathBridgeGuidance
+      ? `I stopped instead of retrying ${lastBlock.toolName}. ${pathBridgeGuidance}`
+      : undefined;
+  }
   if (!failedOrBlocked.every(isToolPolicyBlock)) {
     return undefined;
   }
   const tools = [...new Set(failedOrBlocked.map((run) => run.toolName))].join(", ");
-  const lastBlock = failedOrBlocked.at(-1);
-  const guidance = lastBlock
-    ? (buildPathBridgeFailureGuidance(lastBlock) ?? buildGovernanceBlockGuidance(lastBlock))
-    : undefined;
+  const guidance = lastBlock ? buildGovernanceBlockGuidance(lastBlock) : undefined;
   return [
     `I couldn't do that: this workspace's tool policy blocked ${tools}. A policy block is not caused by the input, so I stopped instead of retrying it with a different one.`,
     guidance ? `Why: ${guidance}` : undefined,
