@@ -2474,7 +2474,7 @@ describe("MissionThreadedControllerHost", () => {
     expect(surface?.delegationRun).toBe(delegationRun);
     expect(surface?.trust.effectiveProviderModelSummary).toBe("OpenAI / gpt-5.5");
     expect(surface?.notices).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "lifecycle-approval-turn-1", tone: "warning" }),
+      expect.objectContaining({ id: "lifecycle-approval-turn-1", tone: "neutral" }),
       expect.objectContaining({ id: "lifecycle-resumed-checkpoint-resumed", tone: "success" }),
     ]));
     if (projectionFactory) {
@@ -4259,7 +4259,8 @@ describe("MissionThreadedControllerHost", () => {
     expect(latestSurfaceInput?.activeSessionSurfaceProps?.delegationRun).toBeNull();
     expect(
       latestSurfaceInput?.activeSessionSurfaceProps?.notices.some((notice) =>
-        notice.content === "A background run is running." && !notice.content.includes("agentic-run-1"),
+        // The run tree type carries no top-level status; without a root node status the notice says "in progress".
+        notice.content === "A background run is in progress." && !notice.content.includes("agentic-run-1"),
       ),
     ).toBe(true);
 
