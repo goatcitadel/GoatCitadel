@@ -44,8 +44,13 @@ function faces(): Partial<Record<PdfFallbackFace, TrueTypeFont>> {
     >) {
       try {
         loaded[face] = parseTrueTypeFont(fs.readFileSync(fileURLToPath(new URL(file, FONT_DIRECTORY))), name);
-      } catch {
-        // A missing or unreadable font only narrows coverage: its characters get the substitute and a warning.
+      } catch (error) {
+        // A missing or unreadable font only narrows coverage: its characters get the substitute and a
+        // document warning, and the operator log says which font failed and why.
+        process.emitWarning(
+          `PDF fallback font ${file} could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
+          { code: "GOATCITADEL_PDF_FALLBACK_FONT_UNAVAILABLE" },
+        );
       }
     }
     loadedFaces = loaded;
