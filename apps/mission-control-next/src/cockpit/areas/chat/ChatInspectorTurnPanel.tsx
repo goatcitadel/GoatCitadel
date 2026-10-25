@@ -9,8 +9,16 @@ import { presentToolRunStatus } from "./chat-vocabulary";
 import { recordedCostLabel } from "./recorded-cost";
 import { presentErrorText } from "../../lib/present-error";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
+import { recordedTurnTime } from "./chat-turn-timing";
 
-/** The inspector Message tab: status, model, fallback, counts, duration, cost and tool calls for one turn. */
+/** Start to finish, waits included. "Model time" below is the time inside model calls only. */
+function totalTimeLabel(turn: ChatThreadTurnRecord): string {
+  const time = recordedTurnTime(turn.trace);
+  if (time.kind === "recorded") return formatDuration(time.ms);
+  return time.kind === "not_finished" ? "Not finished" : "Not recorded";
+}
+
+/** The inspector Message tab: status, model, fallback, counts, total and model time, cost and tool calls for one turn. */
 export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThreadTurnRecord | undefined }) {
   if (!selectedTurn) return <p className="text-sm text-fg-muted">No message is available yet.</p>;
   return (
@@ -25,8 +33,9 @@ export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThr
         <FallbackDetailRow turn={selectedTurn} />
         <DetailRow label="Tools" value={String(selectedTurn.toolRuns.length)} />
         <DetailRow label="Sources" value={String(selectedTurn.citations.length)} />
+        <DetailRow label="Total time" value={totalTimeLabel(selectedTurn)} />
         <DetailRow
-          label="Duration"
+          label="Model time"
           value={
             selectedTurn.trace.completion?.latencyMs === undefined
               ? "Not recorded"

@@ -9,6 +9,7 @@ const ChatOpenCodeEvidence = lazy(async () => ({
 }));
 import { ChatTurnActions } from "./ChatTurnActions";
 import { ChatToolRunSummary } from "./ChatToolRunSummary";
+import { ChatToolApprovalLine } from "./ChatToolApprovalLine";
 import { useAutoOpenDisclosure } from "./use-auto-open-disclosure";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
@@ -145,6 +146,7 @@ export function ChatTurnDetails({
                 >
                   <span className="text-fg-secondary">{chatToolDisplayName(tool)}</span>
                   <span>{activityLabel(tool)}</span>
+                  {tool.approvalId ? <ChatToolApprovalLine tool={tool} /> : null}
                   {diagnostics.summary || tool.error || tool.failureGuidance ? (
                     <ChatToolRunSummary
                       text={
