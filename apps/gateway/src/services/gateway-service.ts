@@ -3569,7 +3569,8 @@ export class GatewayService {
             impact: plan.impact,
             risk: plan.risk,
           },
-          rollbackNote: "Any compensation must use rollback material already bound to this exact Change Plan.",
+          rollbackNote:
+            "If this plan saved a way to undo the change, you can roll it back once the change has run. Rolling back uses only what this plan saved, and asks you to confirm first.",
           linkage: changePlanApprovalLinkage(plan.origin, "change_plan_effect"),
           ...(plan.expiresAt ? { expiresAt: plan.expiresAt } : {}),
         });
