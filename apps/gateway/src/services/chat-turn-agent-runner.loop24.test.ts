@@ -120,6 +120,121 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(repairSystem).toContain("Approval: every tool listed here asks the operator for approval before it runs.");
   });
 
+  it("clears the 'repair pass is required' failure once the repair pass completes the answer", async () => {
+    // Usability re-run (K-04, R-02, P-01): the repaired, completed turn kept a retryable
+    // "The provider stopped before the answer finished, so a repair pass is required." failure,
+    // which the Chat inspector showed on a finished answer.
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "length",
+            message: { role: "assistant", content: "The release checklist has three parts: tests, docs and" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce(completion("The release checklist has three parts: tests, docs and packaging."));
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        content: "Summarize the release checklist.",
+        historyMessages: [{ role: "user", content: "Summarize the release checklist." }],
+      }),
+    );
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.completion).toMatchObject({ status: "complete", repaired: true });
+    expect(result.turnTrace.failure).toBeUndefined();
+  });
+
+  it("does not repair a complete answer that points at its own checklist below", async () => {
+    // Live P-01: "The checklist below is from general best practice…" opened a 5,000-character answer and
+    // the fragment check read it as a reference to missing earlier content.
+    const answer = [
+      "I drafted this myself. The checklist below is from general best practice, not checked against current docs.",
+      "",
+      "## Release",
+      "- Tag a version and write release notes.",
+      "- Publish the package and verify the install command.",
+      "## Docs",
+      "- Add a quick start, usage examples and a troubleshooting section.",
+      "",
+      "Tell me the language and I can tighten this into exact commands.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: answer } }],
+      });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        content: "Plan a launch checklist for a small CLI tool.",
+        historyMessages: [{ role: "user", content: "Plan a launch checklist for a small CLI tool." }],
+      }),
+    );
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(result.assistantContent).toBe(answer);
+    expect(result.turnTrace.completion?.repaired).toBeFalsy();
+    expect(result.turnTrace.failure).toBeUndefined();
+  });
+
+  it("still repairs an answer that points at an earlier message the reader cannot see", async () => {
+    // Live K-04: "the code from my earlier message" named text from an earlier step, which is not part of the
+    // saved answer, so the repair pass must make the answer self-contained.
+    const answer = [
+      "I couldn't create the files, because this workspace's policy turns off file writes.",
+      "",
+      "## What exists",
+      "- Nothing was saved and no tests ran.",
+      "- The code from my earlier message works if you paste it into c2f.js and c2f.test.js.",
+      "## Next step",
+      "- An operator can allow file writes in Settings, and I can then save and test the files.",
+      "",
+      "Should I request the file-write change?",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: answer } }],
+      })
+      .mockResolvedValueOnce(completion("I couldn't create the files. Here is the code to save yourself: …"));
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    await orchestrator.run(
+      turnInput({
+        content: "Write a converter and its tests.",
+        historyMessages: [{ role: "user", content: "Write a converter and its tests." }],
+      }),
+    );
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+  });
+
   it("repairs content-filter interrupted direct completions through the repair pass", async () => {
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()

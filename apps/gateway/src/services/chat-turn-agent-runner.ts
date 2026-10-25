@@ -2686,6 +2686,8 @@ export class ChatTurnAgentRunner {
     if (codingState) await persistCodingProgress(codingState.nextAction);
     let finalStatus: ChatTurnTraceRecord["status"] = "completed";
     let finalFailure: ChatTurnFailureRecord | undefined;
+    // The "a repair pass is required" record, so a repair that completes the answer can clear exactly it.
+    let incompleteAnswerFailure: ChatTurnFailureRecord | undefined;
     let completionState: NonNullable<ChatTurnTraceRecord["completion"]> = {
       status: "complete",
       repaired: false,
@@ -5009,11 +5011,14 @@ export class ChatTurnAgentRunner {
                   ...completionState,
                   status: completionOutcome.status,
                 };
-                finalFailure ??= buildChatTurnFailureRecord(
-                  "unknown",
-                  "The provider stopped before the answer finished, so a repair pass is required.",
-                  "continue_from_partial",
-                );
+                if (!finalFailure) {
+                  finalFailure = buildChatTurnFailureRecord(
+                    "unknown",
+                    "The provider stopped before the answer finished, so a repair pass is required.",
+                    "continue_from_partial",
+                  );
+                  incompleteAnswerFailure = finalFailure;
+                }
               }
             } else if (completionState.status !== "complete") {
               completionState = {
@@ -6121,6 +6126,9 @@ export class ChatTurnAgentRunner {
         if (!looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           markAnswerRecoveredByModel();
         }
+        // The repair answered in full, so the turn no longer needs one: a completed turn must not
+        // keep a retryable "a repair pass is required" failure (the inspector showed it).
+        if (finalFailure && finalFailure === incompleteAnswerFailure) finalFailure = undefined;
         if (finalStatus === "failed" && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           finalStatus = "completed";
         }
@@ -14077,6 +14085,19 @@ function looksLikeSerializedToolCallMarkupContent(content: string): boolean {
   return hits.length >= 2;
 }
 
+/**
+ * Whether a "the … below" / "the … above" reference can point at this answer's own text: there is enough of the
+ * answer after a "below" (or before an "above"/"earlier"/"previous") to hold what it names. A long answer that says
+ * "the checklist below" and then gives the checklist is complete (live P-01), not a fragment.
+ */
+function pointsWithinAnswer(content: string, match: RegExpMatchArray): boolean {
+  const SELF_REFERENCE_MIN_CHARS = 120;
+  const start = match.index ?? 0;
+  const before = content.slice(0, start).trim().length;
+  const after = content.slice(start + match[0].length).trim().length;
+  return match[0].endsWith("below") ? after >= SELF_REFERENCE_MIN_CHARS : before >= SELF_REFERENCE_MIN_CHARS;
+}
+
 function looksLikeFragmentaryStandaloneAnswer(input: {
   content: string;
   originalRequest: string;
@@ -14092,11 +14113,15 @@ function looksLikeFragmentaryStandaloneAnswer(input: {
     Array.isArray(input.priorMessages) && input.priorMessages.some((message) => message?.role === "assistant");
 
   if (!priorAssistantContext && !/\b(above|below|earlier|previous)\b/.test(normalizedRequest)) {
-    if (
-      /\b(the|those|these|all)\s+[a-z0-9 -]{0,40}\b(above|below|earlier|previous)\b/.test(normalized) ||
-      /\bas noted above\b/.test(normalized) ||
-      /\bas covered earlier\b/.test(normalized)
-    ) {
+    // A reference to an earlier message points at text the reader of this answer does not have.
+    if (/\b(my|the|your)\s+(earlier|previous|last|prior)\s+(message|reply|response|answer)\b/.test(normalized)) {
+      return true;
+    }
+    const references = [
+      ...normalized.matchAll(/\b(?:the|those|these|all)\s+[a-z0-9 -]{0,40}\b(above|below|earlier|previous)\b/g),
+      ...normalized.matchAll(/\bas (?:noted above|covered earlier)\b/g),
+    ];
+    if (references.some((match) => !pointsWithinAnswer(normalized, match))) {
       return true;
     }
   }
