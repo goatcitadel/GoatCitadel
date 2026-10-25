@@ -32,6 +32,7 @@ import {
   buildPersistedToolContinuationResult,
   serializeToolResultForModel,
 } from "./chat-tool-result-projection.js";
+import { projectArtifactPathsInAnswer, projectArtifactToolResultForModel } from "./chat-artifact-result-projection.js";
 /* eslint-disable max-lines -- Chat orchestration is still a centralized runtime coordinator pending a larger bounded-interface split. */
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -2543,9 +2544,14 @@ export class ChatTurnAgentRunner {
             .filter((run) => Date.parse(run.startedAt) >= Date.parse(codingState?.windowStartedAt ?? ""))
             .reduce((count, run) => count + toolRunBudgetCostForToolCall(run.toolName, run.args ?? {}), 0)
         : 0);
+    const workspaceFileRootDir = this.deps.workspaceFileRootDir;
     for (const persistedRun of persistedSettledToolRuns) {
       const toolCallId = buildPersistedToolContinuationCallId(persistedRun);
-      let persistedContinuationResult = buildPersistedToolContinuationResult(persistedRun);
+      let persistedContinuationResult = projectArtifactToolResultForModel(
+        persistedRun.toolName,
+        buildPersistedToolContinuationResult(persistedRun),
+        workspaceFileRootDir,
+      );
       if (
         persistedRun.toolName === RUNTIME_CONFIGURE_TOOL_NAME &&
         persistedRun.approvalId &&
@@ -5363,7 +5369,13 @@ export class ChatTurnAgentRunner {
               conversationMessages.push({
                 role: "tool",
                 tool_call_id: toolCall.id,
-                content: serializeToolResultForModel(buildPersistedToolContinuationResult(reusableApprovedRun)),
+                content: serializeToolResultForModel(
+                  projectArtifactToolResultForModel(
+                    reusableApprovedRun.toolName,
+                    buildPersistedToolContinuationResult(reusableApprovedRun),
+                    workspaceFileRootDir,
+                  ),
+                ),
               } as ChatCompletionMessage);
               continue;
             }
@@ -5693,7 +5705,9 @@ export class ChatTurnAgentRunner {
             conversationMessages.push({
               role: "tool",
               tool_call_id: toolCall.id,
-              content: serializeToolResultForModel(toolResultPayload),
+              content: serializeToolResultForModel(
+                projectArtifactToolResultForModel(executed.record.toolName, toolResultPayload, workspaceFileRootDir),
+              ),
             } as ChatCompletionMessage);
             if (requestResearchPresentationCorrection) {
               conversationMessages.push({
@@ -6184,7 +6198,6 @@ export class ChatTurnAgentRunner {
         markCompletionRepair("cowork_contract_normalization", "orchestrator", preRepairContent, assistantContent);
       }
     }
-    const workspaceFileRootDir = this.deps.workspaceFileRootDir;
     const presentationAttempts = toolRuns.filter((run) => run.toolName === "presentations.create");
     const verifiedPresentationWrite = presentationAttempts.some(hasVerifiedPresentationArtifactWrite);
     // "A deck, saved as a PDF" is satisfied by a verified PDF file; the deck
@@ -6266,6 +6279,7 @@ export class ChatTurnAgentRunner {
         );
       }
     }
+    assistantContent = projectArtifactPathsInAnswer(assistantContent, toolRuns, workspaceFileRootDir);
     if (finalStatus !== "cancelled" && !toolUseClosed && !durableFanoutWaiting && !promptLabEvalIntegrityTurn) {
       assistantContent = appendToolFailureConstraints(
         assistantContent,
