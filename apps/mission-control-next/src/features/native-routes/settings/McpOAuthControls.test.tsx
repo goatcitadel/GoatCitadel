@@ -328,6 +328,32 @@ it.each([
     expect(readMcpServerAttempt(initial.serverId).phase).toBe("uncertain");
   },
 );
+it("does not claim nothing changed when client registration reached the vendor", async () => {
+  api.startReviewedMcpOAuth.mockRejectedValueOnce(
+    new ApiRequestError("request failed", {
+      kind: "http",
+      status: 400,
+      method: "POST",
+      path: "/api/v1/mcp/servers/fixture/oauth/start-reviewed",
+      body: {
+        error:
+          "Sign-in for Fixture stopped at client registration: The provider may now hold an unused client. GoatCitadel's saved configuration did not change, and the attempt is recorded in the side-effect ledger.",
+        code: "FIELD_INVALID",
+        details: { field: "oauthRegistration" },
+      },
+    }),
+  );
+  const result = await commitMcpOAuth({
+    reviewed: initial,
+    action: "start",
+    isCurrent: () => true,
+    onDispatch: () => undefined,
+  });
+  expect(result.status).toBe("conflict");
+  if (result.status !== "conflict") return;
+  expect(result.message).toContain("may now hold an unused client");
+  expect(result.message).not.toContain("Nothing changed");
+});
 it.each(["discovery", "discovery-committed", "discovery-on-complete"] as const)(
   "shows a pre-admission sign-in discovery rejection without locking the server (%s)",
   async (kind) => {

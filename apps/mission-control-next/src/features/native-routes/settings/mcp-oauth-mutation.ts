@@ -40,17 +40,22 @@ function rejected(error: unknown, id: string, action: McpOAuthAction) {
   );
 }
 /**
- * Sign-in discovery (start) and the PKCE verifier check (complete) both run before admission; their 400
- * names the reason and changed nothing. A committed body never qualifies (see `rejected`).
+ * Sign-in discovery (start) and the PKCE verifier check (complete) both run before admission, so their
+ * 400 names the reason and changed nothing. A client registration that reached the vendor is also refused
+ * before admission, but the vendor may hold a client, so its message says so instead. A committed body
+ * never qualifies (see `rejected`).
  */
 function discoveryRejection(error: unknown): string | undefined {
   if (!isApiRequestError(error) || error.status !== 400 || !error.body || typeof error.body !== "object")
     return undefined;
   const body = error.body as Record<string, unknown>,
     details = body.details as Record<string, unknown> | undefined;
-  return body.code === "FIELD_INVALID" && details?.field === "oauth" && typeof body.error === "string"
-    ? body.error.slice(0, 600)
-    : undefined;
+  if (body.code !== "FIELD_INVALID" || typeof body.error !== "string") return undefined;
+  const reason = body.error.slice(0, 600),
+    sentence = /[.!?]$/u.test(reason) ? reason : `${reason}.`;
+  if (details?.field === "oauth") return `${sentence} Nothing changed; fix this, then review authorization again.`;
+  if (details?.field === "oauthRegistration") return `${sentence} Review authorization again when ready.`;
+  return undefined;
 }
 export async function commitMcpOAuth({
   reviewed,
@@ -153,7 +158,7 @@ export async function commitMcpOAuth({
       return {
         status: dispatched ? "conflict" : "unavailable",
         message: discovery
-          ? `${/[.!?]$/u.test(discovery) ? discovery : `${discovery}.`} Nothing changed; fix this, then review authorization again.`
+          ? discovery
           : dispatched
             ? "The reviewed request was rejected before admission. Refresh before reviewing again."
             : "Current OAuth metadata could not be verified.",

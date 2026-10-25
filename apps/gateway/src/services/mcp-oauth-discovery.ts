@@ -1,10 +1,13 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { discoverOAuthServerInfo, registerClient } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { McpServerRecord } from "@goatcitadel/contracts";
+import { redactSecretText, type McpServerRecord } from "@goatcitadel/contracts";
 import { fetchAllowlisted } from "@goatcitadel/policy-engine";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
+import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
 
 /**
  * Discovered authorization server for one MCP server, persisted in its auth-state record.
@@ -58,14 +61,43 @@ export function createAllowlistedOAuthFetch(allowlist: string[]): FetchLike {
   };
 }
 
+/** What a client registration attempt is about; only public identifiers, never a secret. */
+export interface McpClientRegistrationRequest {
+  serverId: string;
+  issuer: string;
+  registrationEndpoint: string;
+}
+
+/**
+ * Runs RFC 7591 registration, a side effect at the vendor, inside a durable boundary. `dispatch`
+ * sends the one registration request; the boundary records its completed or unknown outcome.
+ */
+export type McpClientRegistrationBoundary = (
+  request: McpClientRegistrationRequest,
+  dispatch: () => Promise<OAuthClientInformationFull>,
+) => Promise<OAuthClientInformationFull>;
+
+/** Registration reached the vendor: a client may exist there even though sign-in cannot continue. */
+export class McpClientRegistrationOutcomeError extends Error {
+  public constructor(
+    public readonly outcome: "unknown" | "confidential",
+    message: string,
+  ) {
+    super(message);
+    this.name = "McpClientRegistrationOutcomeError";
+  }
+}
+
 export interface DiscoverMcpAuthorizationServerInput {
-  server: Pick<McpServerRecord, "label" | "url">;
+  server: Pick<McpServerRecord, "serverId" | "label" | "url">;
   redirectUri: string;
   scopes?: string[];
   /** Operator-configured client id; skips dynamic registration when present. */
   configuredClientId?: string;
   /** The last record for this server; its registered client is reused when issuer, resource and redirect match. */
   previous?: McpAuthorizationServerRecord;
+  /** Durable boundary for client registration; production always supplies the side-effect ledger. */
+  registrationBoundary?: McpClientRegistrationBoundary;
   fetchFn: FetchLike;
   now?: () => Date;
 }
@@ -146,26 +178,84 @@ async function registerPublicClient(
         "Set a client ID environment variable in this server's OAuth settings.",
     );
   }
-  const registered = await registerClient(authorizationServerUrl, {
-    metadata,
-    clientMetadata: {
-      client_name: "GoatCitadel",
-      redirect_uris: [input.redirectUri],
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-      token_endpoint_auth_method: "none",
-    },
-    scope,
-    fetchFn: input.fetchFn,
-  });
+  const dispatch = () =>
+    registerClient(authorizationServerUrl, {
+      metadata,
+      clientMetadata: {
+        client_name: "GoatCitadel",
+        redirect_uris: [input.redirectUri],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+      },
+      scope,
+      fetchFn: input.fetchFn,
+    });
+  const request = {
+    serverId: input.server.serverId,
+    issuer: metadata.issuer,
+    registrationEndpoint: metadata.registration_endpoint,
+  };
+  const registered = input.registrationBoundary
+    ? await input.registrationBoundary(request, dispatch)
+    : await dispatch();
   if (registered.client_secret) {
     // A confidential client would need its secret in the OS keychain; v1 supports public clients only.
-    throw new Error(
-      `The sign-in provider for ${label} issued a confidential client. ` +
+    throw new McpClientRegistrationOutcomeError(
+      "confidential",
+      `The sign-in provider for ${label} issued a confidential client, which the provider now holds. ` +
         "Configure client ID and secret environment variables for this server instead.",
     );
   }
   return registered.client_id;
+}
+
+type RegistrationLedgerStorage = Pick<
+  AsyncStorage,
+  "runImmediateTransaction" | "mutationIdempotency" | "externalSideEffectRuns"
+>;
+
+/**
+ * The production registration boundary: each attempt is one run in the shared external side-effect
+ * ledger, recorded completed, failed before sending, or unknown after sending. The ledger holds the
+ * issuer, registration endpoint and the public client id only; a returned client secret never reaches it.
+ */
+export function createLedgeredMcpClientRegistration(storage: RegistrationLedgerStorage): McpClientRegistrationBoundary {
+  return async (request, dispatch) => {
+    let registered: OAuthClientInformationFull | undefined;
+    const run = await runIdempotentExternalSideEffect({
+      mutationStore: storage.mutationIdempotency,
+      sideEffectRunStore: storage.externalSideEffectRuns,
+      runClaimTransaction: (work) => storage.runImmediateTransaction(work),
+      requireDurableBoundaryRecord: true,
+      boundary: "mcp_oauth_client_registration",
+      catalogId: "mcp",
+      connectionId: request.serverId,
+      actionId: "register_client",
+      actorScope: request.serverId,
+      idempotencyKey: `mcp-oauth-registration:${randomUUID()}`,
+      checkedAt: new Date().toISOString(),
+      payload: { issuer: request.issuer, registrationEndpoint: request.registrationEndpoint },
+      label: "MCP OAuth client registration",
+      execute: async (claim) => {
+        await claim.markExternalCallStarted();
+        registered = await dispatch();
+        return { id: registered.client_id, confidential: Boolean(registered.client_secret) };
+      },
+    });
+    if (run.status === "executed") {
+      if (registered) return registered;
+      throw new McpClientRegistrationOutcomeError("unknown", "Client registration finished without a response.");
+    }
+    const reason = redactSecretText(run.status === "failed" ? run.error.message : run.message).value.slice(0, 512);
+    if (run.status === "failed" && run.claim.resumeState === "manual_review_unknown_external_outcome") {
+      throw new McpClientRegistrationOutcomeError(
+        "unknown",
+        `Client registration was sent but its outcome is unknown (${reason}). The provider may now hold an unused client.`,
+      );
+    }
+    throw new Error(`Client registration did not run: ${reason}`);
+  };
 }
 
 function assertSecureDiscoveryUrl(value: string, what: string, label: string): void {

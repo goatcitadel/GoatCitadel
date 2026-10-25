@@ -611,7 +611,11 @@ import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import type { McpRequesterScopePosture } from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import { McpOAuthTokenService } from "./mcp-oauth-token-service.js";
-import { createAllowlistedOAuthFetch, discoverMcpAuthorizationServer } from "./mcp-oauth-discovery.js";
+import {
+  createAllowlistedOAuthFetch,
+  createLedgeredMcpClientRegistration,
+  discoverMcpAuthorizationServer,
+} from "./mcp-oauth-discovery.js";
 import {
   McpStaticEnvironmentService,
   readMcpStaticEnvironment,
@@ -3126,6 +3130,7 @@ export class GatewayService {
           ...input,
           server,
           fetchFn: createAllowlistedOAuthFetch(this.config.toolPolicy.sandbox.networkAllowlist),
+          registrationBoundary: createLedgeredMcpClientRegistration(this.storage),
         }),
       resolveConnectedMcpTools: (server, existing, fence) =>
         this.resolveConnectedMcpTools(server, existing, undefined, fence),

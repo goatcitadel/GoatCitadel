@@ -72,9 +72,9 @@ Everything stays under the existing Gateway governance: deny-wins policy, the ne
 
 ### Known limits
 
-- Dynamic client registration is a vendor-side effect outside the durable side-effect ledger. A reviewed start that fails after registration can leave an unused public client at the vendor.
+- Dynamic client registration runs through the shared external side-effect ledger (`mcp_oauth_client_registration`), recorded completed, failed before sending, or unknown after sending, with public identifiers only. A start that stops after registration reached the vendor says the provider may hold an unused client instead of "nothing changed"; the client itself is not cleaned up automatically.
 - A shipped pack's snapshot records its absolute directory as `sourceRef`, so moving the installation changes the pack's source identity.
-- The provider return fragment is consumed on the Cockpit MCP settings page only.
+- The provider return lands on Cockpit Settings › Connections, which opens the MCP section so it can hand the result back; the Classic shell does not consume it.
 - "Allow host" adds the MCP server's own host. The sign-in provider may use other hosts, which the error names when they are blocked.
 - The default redirect is `http://127.0.0.1:8787/api/v1/mcp/oauth/callback`; a Gateway on another port needs `oauth.redirectUri`.
 

@@ -16,6 +16,7 @@ import { sameConfiguration } from "./mcp-server-state-helpers.js";
 import { isDeepStrictEqual } from "node:util";
 import { buildPublicMcpAuthState } from "./mcp-oauth-token-service.js";
 import {
+  McpClientRegistrationOutcomeError,
   mcpOAuthPkceStore,
   type DiscoveredMcpAuthorization,
   type McpAuthorizationServerRecord,
@@ -94,6 +95,12 @@ async function discoverMcpOAuth(
     });
   } catch (cause) {
     const reason = redactSecretText(cause instanceof Error ? cause.message : "unknown error").value.slice(0, 512);
+    // A registration that reached the vendor is recorded in the side-effect ledger; it did change something there.
+    if (cause instanceof McpClientRegistrationOutcomeError)
+      throw new ValidationError({
+        field: "oauthRegistration",
+        message: `Sign-in for ${server.label} stopped at client registration: ${reason} GoatCitadel's saved configuration did not change, and the attempt is recorded in the side-effect ledger.`,
+      });
     throw new ValidationError({ field: "oauth", message: `Sign-in discovery for ${server.label} failed: ${reason}` });
   }
 }

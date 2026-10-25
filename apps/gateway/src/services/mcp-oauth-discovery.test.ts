@@ -89,8 +89,8 @@ async function withFakeAuthServer<T>(
   }
 }
 
-function discoveryServer(base: string): Pick<McpServerRecord, "label" | "url"> {
-  return { label: "Vendor MCP", url: `${base}/mcp` };
+function discoveryServer(base: string): Pick<McpServerRecord, "serverId" | "label" | "url"> {
+  return { serverId: "server-1", label: "Vendor MCP", url: `${base}/mcp` };
 }
 
 describe("discoverMcpAuthorizationServer", () => {

@@ -5,6 +5,7 @@ import type { SettingsIndexEntry, SettingsIndexPage } from "./settings-index";
 import { preloadSettingsSection } from "./settings-controls";
 import { describeReleaseSurfaceStatus } from "../../../app/route-model";
 import { useOverflowEdges } from "./use-overflow-edges";
+import { isMcpOAuthReturnFragment } from "../../../features/native-routes/settings/mcp-oauth-return";
 
 const DEFAULT_SECTIONS: Record<string, string> = {
   models: "providers",
@@ -38,7 +39,10 @@ export function selectedSettingsSection(page: SettingsIndexPage, routeSection: s
         ? "tools"
         : hash === "claude-cli-tool-bridge" || hash === "claude-cli-warm-continuation"
           ? "providers"
-          : hash;
+          : // A provider sign-in lands here; the MCP section must mount so it can hand the result back.
+            isMcpOAuthReturnFragment(hash)
+            ? "mcp"
+            : hash;
   return (
     page.entries.find((entry) => entry.anchor === aliasedHash || entry.section === aliasedHash)?.section ??
     page.entries.find((entry) => entry.section === routeSection)?.section ??

@@ -39,10 +39,15 @@ function parseReturn(value: unknown): McpOAuthReturn | undefined {
   return undefined;
 }
 
+/** True for the fragment the Gateway's OAuth callback lands on (without the leading `#`). */
+export function isMcpOAuthReturnFragment(hash: string): boolean {
+  return hash.replace(/^#/u, "").startsWith(`${FRAGMENT}&`);
+}
+
 /** Reads a provider return from this tab's fragment, removes it from the address bar, and forwards it. */
 export function consumeMcpOAuthReturnFragment(location: Location = window.location): McpOAuthReturn | undefined {
   const hash = location.hash.replace(/^#/u, "");
-  if (!hash.startsWith(`${FRAGMENT}&`)) return undefined;
+  if (!isMcpOAuthReturnFragment(hash)) return undefined;
   const params = new URLSearchParams(hash.slice(FRAGMENT.length + 1));
   const result = parseReturn({
     state: params.get("state") ?? undefined,
