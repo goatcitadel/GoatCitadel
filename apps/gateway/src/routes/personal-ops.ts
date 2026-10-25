@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { queryBoolean } from "./query-boolean.js";
 import type { PersonalOpsRouteService } from "../services/personal-ops-route-service.js";
 import { sendRouteError } from "./_error-handler.js";
 
@@ -11,7 +12,7 @@ const sourceRefSchema = z.string().trim().max(1_000);
 const noteListQuerySchema = z.object({
   workspaceId: workspaceIdSchema,
   lifecycleStatus: z.enum(["active", "archived", "all"]).optional(),
-  includeArchived: z.coerce.boolean().optional(),
+  includeArchived: queryBoolean.optional(),
 });
 
 const createNoteSchema = z.object({
@@ -50,7 +51,7 @@ const reminderStatusSchema = z.enum(["scheduled", "completed", "cancelled", "all
 const reminderListQuerySchema = z.object({
   workspaceId: workspaceIdSchema,
   status: reminderStatusSchema.optional(),
-  includeCompleted: z.coerce.boolean().optional(),
+  includeCompleted: queryBoolean.optional(),
 });
 
 const createReminderSchema = z.object({

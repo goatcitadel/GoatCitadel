@@ -1,10 +1,11 @@
 import type { FastifyPluginAsync } from "fastify";
 import { NOTIFICATION_EVENT_TYPES } from "@goatcitadel/contracts";
 import { z } from "zod";
+import { queryBoolean } from "./query-boolean.js";
 
 const workspaceQuerySchema = z.object({
   workspaceId: z.string().trim().min(1).optional(),
-  includeArchived: z.coerce.boolean().optional(),
+  includeArchived: queryBoolean.optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 });
 

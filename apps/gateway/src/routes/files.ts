@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { queryBoolean } from "./query-boolean.js";
 import {
   MAX_FILE_UPLOAD_BYTES,
   MAX_HTML_PREVIEW_BYTES,
@@ -28,7 +29,7 @@ const uploadSchema = z.object({
 
 const downloadQuerySchema = z.object({
   relativePath: z.string().min(1),
-  raw: z.coerce.boolean().default(false),
+  raw: queryBoolean.default(false),
 });
 
 const previewQuerySchema = z.object({
