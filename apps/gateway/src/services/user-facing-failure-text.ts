@@ -4,7 +4,9 @@
  * goes through here.
  */
 
-const WINDOWS_HOME_PATTERN = /[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s'"`<>|]+/giu;
+// The profile segment may contain spaces ("Jane Doe") when a path separator follows it.
+const WINDOWS_HOME_PATTERN =
+  /[A-Za-z]:[\\/]+Users[\\/]+(?:[^\\/:\s'"`<>|]+(?: [^\\/:\s'"`<>|]+)*(?=[\\/])|[^\\/\s'"`<>|]+)/giu;
 const POSIX_HOME_PATTERN = /(?<![\w.])\/(?:home|Users)\/[^/\s'"`<>|]+/gu;
 
 /** Replaces home-directory prefixes (which carry the OS username) with `~`. */

@@ -253,6 +253,7 @@ it("never treats an empty host list as every host until Allow any host is checke
   expect((document.getElementById(hosts.htmlFor) as HTMLInputElement).disabled).toBe(true);
   await click("Review grant");
   expect(dialog()!.textContent).toContain("Danger");
+  expect(dialog()!.textContent).not.toContain("Danger risk");
   expect(dialog()!.textContent).toContain("This grant covers every host.");
   vi.mocked(createBrowserSessionGrant).mockResolvedValue(noHostReceipt);
   await click("Create grant");

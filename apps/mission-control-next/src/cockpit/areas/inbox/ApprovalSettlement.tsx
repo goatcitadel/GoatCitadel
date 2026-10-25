@@ -28,6 +28,9 @@ import { presentApprovalEffectKind, presentApprovalEffectStatus, presentApproval
 export function noRunLine(approval: ApprovalRequest, effectCount: number): string {
   if (effectCount > 0) return "No original run is linked. The follow-on steps above show what this decision did.";
   const decided = approval.status === "approved" || approval.status === "edited";
+  // An unknown outcome does not prove nothing ran, so it must not be described as such.
+  if (decided && approval.actionOutcome === "unknown")
+    return "Approved. The outcome of the approved action could not be verified.";
   const memory = /memory/u.test(`${approval.kind} ${approval.linkage?.toolName ?? ""}`);
   if (!decided) return "Nothing was waiting on this decision.";
   return memory

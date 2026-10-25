@@ -109,7 +109,7 @@ export function SettingsSectionTabs({
             <TabsTrigger
               key={entry.section}
               value={entry.section}
-              className="min-h-8 shrink-0 whitespace-nowrap rounded-md border-b-0 px-3 py-1 text-xs data-[state=active]:bg-raised data-[state=active]:shadow-sm"
+              className="min-h-8 shrink-0 whitespace-nowrap rounded-md border-b-0 px-3 py-1 text-xs data-[state=active]:bg-raised"
               onPointerEnter={() => preloadSettingsSection(entry.section)}
               onFocus={() => preloadSettingsSection(entry.section)}
               onPointerDown={() => preloadSettingsSection(entry.section)}
