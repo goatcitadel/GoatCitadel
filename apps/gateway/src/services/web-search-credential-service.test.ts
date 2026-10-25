@@ -190,11 +190,20 @@ describe("WebSearchCredentialService", () => {
     await expect(credentials.resolveFirecrawlCredential("not a url")).resolves.toBeUndefined();
   });
 
-  it("reports a private Firecrawl host as not allowlisted, like Settings and the tools", async () => {
+  it("reports an exactly allowlisted LAN Firecrawl host as allowlisted, like Settings and the tools", () => {
+    const { credentials } = service({
+      getNetworkAllowlist: () => ["192.168.1.20:3002"],
+      getFirecrawlConfig: () => firecrawlConfig({ baseUrl: "http://192.168.1.20:3002" }),
+    });
+
+    expect(credentials.status("search.firecrawl").endpointAllowlisted).toBe(true);
+  });
+
+  it("reports a private Firecrawl host reached only by a wildcard as not allowlisted", async () => {
     const fetchImpl = vi.fn();
     const { credentials } = service({
       fetchImpl,
-      getNetworkAllowlist: () => ["192.168.1.20:3002"],
+      getNetworkAllowlist: () => ["192.168.*"],
       getFirecrawlConfig: () => firecrawlConfig({ baseUrl: "http://192.168.1.20:3002" }),
     });
 

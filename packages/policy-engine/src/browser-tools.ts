@@ -2447,7 +2447,7 @@ function assertFirecrawlBaseUrlAllowed(baseUrl: string, config: ToolPolicyConfig
     return;
   }
   assertHostAllowedForConfig(baseUrl, config);
-  assertNotPrivateOrReservedHost(baseUrl);
+  assertNotPrivateOrReservedHost(baseUrl, config.sandbox.networkAllowlist);
 }
 
 const FIRECRAWL_SEARCH_PATH = "/v2/search";

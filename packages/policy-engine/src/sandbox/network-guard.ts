@@ -109,6 +109,18 @@ export function evaluateHostEgress(hostOrUrl: string, allowlist: string[]): Egre
     };
   }
 
+  const lanPattern = findExactLanPattern(host, hostname, allowlist);
+  if (lanPattern) {
+    return {
+      target: hostOrUrl,
+      hostname,
+      allowed: true,
+      approvalState: "not_required",
+      reason: "Private network host explicitly allowlisted.",
+      matchedAllowlistPattern: lanPattern,
+    };
+  }
+
   return {
     target: hostOrUrl,
     hostname,
@@ -131,7 +143,12 @@ export function assertHostAllowed(hostOrUrl: string, allowlist: string[]): void 
 // be on any public host, we still must block private/reserved/loopback/
 // metadata destinations. This helper enforces only the SSRF half of the
 // allowlist: it accepts any public host, rejects any private one.
-export function assertNotPrivateOrReservedHost(hostOrUrl: string): void {
+//
+// `exactLanAllowlist` is for service endpoints only (a Firecrawl base URL),
+// checked against the operator's network allowlist: a private LAN IPv4 host
+// named exactly in it passes. Never pass it for the URLs such a service is
+// asked to fetch (scrape sources, search results, reported final URLs).
+export function assertNotPrivateOrReservedHost(hostOrUrl: string, exactLanAllowlist?: readonly string[]): void {
   const parsed = parseHost(hostOrUrl);
   if (parsed.invalidReason) {
     throw new Error(`${parsed.invalidReason.trim()} (${redactUrlForError(hostOrUrl)})`);
@@ -139,9 +156,14 @@ export function assertNotPrivateOrReservedHost(hostOrUrl: string): void {
   if (!parsed.host && !parsed.hostname) {
     throw new Error(`Host is empty: ${redactUrlForError(hostOrUrl)}`);
   }
-  if (isPrivateOrReservedHost(parsed.hostname.toLowerCase())) {
-    throw new Error(`Private, metadata, or reserved host is blocked: ${redactUrlForError(hostOrUrl)}`);
+  const hostname = parsed.hostname.toLowerCase();
+  if (!isPrivateOrReservedHost(hostname)) {
+    return;
   }
+  if (exactLanAllowlist && findExactLanPattern(parsed.host.toLowerCase(), hostname, exactLanAllowlist)) {
+    return;
+  }
+  throw new Error(`Private, metadata, or reserved host is blocked: ${redactUrlForError(hostOrUrl)}`);
 }
 
 const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
@@ -797,7 +819,21 @@ function findBlockedResolvedAddress(
   return addresses.find(
     (candidate) =>
       isPrivateOrReservedHost(stripIpv6Brackets(candidate.toLowerCase())) &&
-      !isResolvedLoopbackAllowed(hostOrUrl, allowlist, candidate),
+      !isResolvedLoopbackAllowed(hostOrUrl, allowlist, candidate) &&
+      !isResolvedExactLanAllowed(hostOrUrl, allowlist, candidate),
+  );
+}
+
+// An exactly allowlisted LAN literal may only resolve to itself, never to another private address.
+function isResolvedExactLanAllowed(hostOrUrl: string, allowlist: string[], resolvedAddress: string): boolean {
+  const parsed = parseHost(hostOrUrl);
+  if (parsed.invalidReason) {
+    return false;
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  return (
+    findExactLanPattern(parsed.host.toLowerCase(), hostname, allowlist) !== undefined &&
+    stripIpv6Brackets(resolvedAddress.toLowerCase()) === hostname
   );
 }
 
@@ -923,6 +959,32 @@ function stripIpv6Brackets(hostname: string): string {
     return hostname.slice(1, -1);
   }
   return hostname;
+}
+
+/**
+ * Finds an allowlist entry that names one private LAN IPv4 endpoint exactly: `192.168.0.10:3002` allows
+ * that port only, and a bare `192.168.0.10` only the scheme's default port. Only RFC 1918 and carrier-grade
+ * NAT (100.64.0.0/10, used by Tailscale) literals qualify. Wildcards, hostnames, IPv6, loopback, link-local
+ * and cloud-metadata addresses never do.
+ */
+function findExactLanPattern(host: string, hostname: string, allowlist: readonly string[]): string | undefined {
+  if (!isLanIpv4Literal(hostname)) {
+    return undefined;
+  }
+  return allowlist.find((pattern) => {
+    const normalized = pattern.trim().toLowerCase();
+    return !normalized.includes("*") && normalized === host;
+  });
+}
+
+function isLanIpv4Literal(hostname: string): boolean {
+  if (isIP(hostname) !== 4 || DISALLOWED_HOSTS.has(hostname)) {
+    return false;
+  }
+  const [a = -1, b = -1] = hostname.split(".").map((part) => Number(part));
+  return (
+    a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
+  );
 }
 
 function isExplicitLoopbackPattern(pattern: string, hostname: string): boolean {

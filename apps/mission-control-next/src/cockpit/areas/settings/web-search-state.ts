@@ -121,7 +121,9 @@ export function firecrawlUrlProblem(baseUrl: string): string | undefined {
   try {
     const parsed = new URL(baseUrl);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "Use an http or https URL.";
-    if (parsed.protocol === "http:" && !isLocalHost(parsed.hostname)) return "Use https for a remote Firecrawl.";
+    if (parsed.protocol === "http:" && !isLocalHost(parsed.hostname) && !isLanIpv4(parsed.hostname)) {
+      return "Use https for a remote Firecrawl.";
+    }
     return undefined;
   } catch {
     return "Enter a full URL, for example https://api.firecrawl.dev.";
@@ -159,4 +161,16 @@ export function isBaseUrlAllowlisted(baseUrl: string, allowlist: readonly string
 
 function isLocalHost(hostname: string): boolean {
   return hostname === "127.0.0.1" || hostname === "localhost";
+}
+
+/** A self-hosted Firecrawl on the LAN usually serves plain http; the Gateway allows it only by an exact allowlist entry. */
+function isLanIpv4(hostname: string): boolean {
+  const parts = hostname.split(".");
+  if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/u.test(part) && Number(part) <= 255)) return false;
+  const [a = -1, b = -1] = parts.map(Number);
+  // 100.100.100.200 is a cloud-metadata address the Gateway always blocks.
+  return (
+    hostname !== "100.100.100.200" &&
+    (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127))
+  );
 }
