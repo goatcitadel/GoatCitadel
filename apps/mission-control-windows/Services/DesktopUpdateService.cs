@@ -105,6 +105,7 @@ public sealed class DesktopUpdateService : IDisposable
         using var response = await _http.OpenAsync(DesktopUpdatePolicy.ReleasesUrl,
             _checkedThisProcess ? _preferences.Etag : null, token);
         DesktopUpdateRelease? candidate = null;
+        IOException? lastVerificationError = null;
         if (response.StatusCode == HttpStatusCode.NotModified)
         {
             candidate = _preferences.CachedRelease;
@@ -115,7 +116,6 @@ public sealed class DesktopUpdateService : IDisposable
             using var document = JsonDocument.Parse(text);
             if (document.RootElement.ValueKind != JsonValueKind.Array) throw new IOException("GitHub returned invalid update metadata.");
             var inspected = 0;
-            IOException? lastVerificationError = null;
             var channelReleases = document.RootElement.EnumerateArray().Where(release =>
                 !release.GetProperty("draft").GetBoolean()
                 && release.GetProperty("prerelease").GetBoolean() == (Status.Channel == "preview"));
@@ -149,13 +149,14 @@ public sealed class DesktopUpdateService : IDisposable
                 if (parsedCandidate is not null && DesktopUpdatePolicy.IsPreferred(parsedCandidate, candidate))
                     candidate = parsedCandidate;
             }
-            // One unverifiable release must not hide a good one; only report it when nothing verified.
-            if (candidate is null && lastVerificationError is not null) throw lastVerificationError;
         }
         if (candidate is not null && candidate.Channel == "preview"
             && candidate.BuildSequence < _preferences.HighestPreviewSequence) candidate = null;
         var available = candidate is not null && DesktopUpdatePolicy.IsNewer(candidate,
             Status.InstalledVersion, Status.InstalledCommit, _installedSequence) ? candidate : null;
+        // One unverifiable release must not hide a good update, but it must not read as "up to date" either:
+        // when nothing newer verified, report the failure and leave the ETag uncached so the next check retries.
+        if (available is null && lastVerificationError is not null) throw lastVerificationError;
         string? downloaded = null;
         if (available is not null)
         {
