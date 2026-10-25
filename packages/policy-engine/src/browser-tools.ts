@@ -2519,12 +2519,7 @@ async function executeBrowserSearchViaFirecrawl(
   }
   const payload = (await response.json()) as Record<string, unknown>;
   const payloadData = asRecord(payload.data);
-  const data = Array.isArray(payload.data)
-    ? payload.data
-    : Array.isArray(payloadData.results)
-      ? (payloadData.results as unknown[])
-      : [];
-  const results = data
+  const results = readFirecrawlSearchItems(payload)
     .map((item) => normalizeFirecrawlSearchResult(item))
     .filter((item): item is { title: string; url: string; snippet: string } => Boolean(item))
     .filter((item) => isBrowserSearchResultAllowed(item.url, config, executionContext))
@@ -2536,6 +2531,18 @@ async function executeBrowserSearchViaFirecrawl(
     results,
     summary: asString(payloadData.summary) ?? asString(payload.summary),
   };
+}
+
+/** `/v2/search` groups results by source (`web` is the default); older replies list them in `data` or `data.results`. */
+function readFirecrawlSearchItems(payload: Record<string, unknown>): unknown[] {
+  if (Array.isArray(payload.data)) {
+    return payload.data;
+  }
+  const payloadData = asRecord(payload.data);
+  if (Array.isArray(payloadData.web)) {
+    return payloadData.web;
+  }
+  return Array.isArray(payloadData.results) ? payloadData.results : [];
 }
 
 function normalizeFirecrawlSearchResult(value: unknown): { title: string; url: string; snippet: string } | undefined {
