@@ -316,6 +316,26 @@ describe("useScrollToBottom", () => {
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
+  it("keeps one ResizeObserver across streaming preview flushes and still pins each flush", () => {
+    const geometry = deferredGeometry();
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    const onBottomStateChange = vi.fn();
+    render({ followOutput: true, onBottomStateChange, signals: baseSignals({ streamStatus: "streaming" }) });
+    geometry.flush();
+    scrollIntoView.mockClear();
+    for (const length of [10, 20, 30]) {
+      render({
+        followOutput: true,
+        onBottomStateChange,
+        signals: baseSignals({ streamStatus: "streaming", streamingPreviewSignal: `turn-1:${length}` }),
+      });
+      geometry.flush();
+    }
+    expect(geometry.observations).toHaveLength(1);
+    expect(geometry.observations[0].disconnect).not.toHaveBeenCalled();
+    expect(scrollIntoView).toHaveBeenCalledTimes(3);
+  });
+
   it("disconnects deferred geometry and rejects a queued callback after unmount", async () => {
     const geometry = deferredGeometry();
     const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
