@@ -168,6 +168,7 @@ export * from "./channel-setup-evidence.js";
 export * from "./research.js";
 export * from "./research-search.js";
 export * from "./web-search.js";
+export * from "./capability-connectors.js";
 export * from "./update-scout.js";
 export * from "./prompt-pack.js";
 export * from "./local-ai.js";
