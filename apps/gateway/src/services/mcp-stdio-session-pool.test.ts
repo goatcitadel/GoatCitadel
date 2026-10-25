@@ -413,4 +413,32 @@ describe("MCP stdio session pool capacity and abort", () => {
       ),
     ).resolves.toBe("again");
   });
+
+  it("creates a fresh client after the creating caller aborts before dispatch", async () => {
+    const pool = createPool();
+    const controller = new AbortController();
+    const first = pool.use(
+      "s",
+      "a",
+      "b",
+      (signal) =>
+        new Promise<ReturnType<typeof createClient>>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("initialization cancelled")), { once: true });
+        }),
+      async () => "never",
+      controller.signal,
+    );
+    controller.abort();
+    await expect(first).rejects.toThrow();
+    const client = createClient();
+    await expect(
+      pool.use(
+        "s",
+        "a",
+        "b",
+        async () => client,
+        async () => "fresh",
+      ),
+    ).resolves.toBe("fresh");
+  });
 });

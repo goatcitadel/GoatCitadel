@@ -45,6 +45,7 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
     const owner = resourceOwner ? readResourceOwner(resourceOwner) : undefined;
     const key = JSON.stringify([serverId, scopeKey]);
     let session = this.sessions.get(key);
+    let createdByThisCall = false;
     if (session && (session.binding !== binding || !sameResourceOwner(session.resourceOwner, owner))) {
       this.invalidate(key, session);
       session = undefined;
@@ -68,8 +69,11 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
         resourceOwner: owner,
       };
       this.sessions.set(key, session);
-      // Observe creation failure even if the caller cancels while waiting.
-      void session.client.catch(() => undefined);
+      createdByThisCall = true;
+      // A failed or cancelled creation must never stay cached for the next caller, even when the
+      // caller that triggered it gave up before dispatch.
+      const created = session;
+      void session.client.catch(() => this.invalidate(key, created));
     }
     clearTimeout(session.idleTimer);
     session.users += 1;
@@ -100,7 +104,8 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
     try {
       return await work;
     } catch (error) {
-      if (!abandonedBeforeDispatch) this.invalidate(key, owned);
+      // The creation is bound to the creating caller's signal, so a session that caller abandoned is tainted.
+      if (!abandonedBeforeDispatch || createdByThisCall) this.invalidate(key, owned);
       throw error;
     } finally {
       owned.users -= 1;
