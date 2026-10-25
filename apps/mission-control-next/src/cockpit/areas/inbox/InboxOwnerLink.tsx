@@ -1,5 +1,4 @@
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
-import { ArrowUpRight } from "lucide-react";
 import { resolveCockpitContinuation } from "../../app/cockpit-compatibility";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 
@@ -14,7 +13,7 @@ const AREA_NAMES: Readonly<Record<string, string>> = {
 };
 
 export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
-  const className = "inline-flex min-h-9 items-center gap-1 text-sm font-medium text-accent hover:underline";
+  const className = "inline-flex min-h-9 items-center text-sm font-medium text-accent hover:underline";
   if (!item.href.startsWith("/") || item.href.startsWith("//")) return null;
   let destination: URL;
   try {
@@ -88,7 +87,6 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
       data-inbox-owner
     >
       {label ?? (resolvedArea ? `Open in ${resolvedArea}` : "Open source")}
-      <ArrowUpRight aria-hidden="true" className="size-4" />
     </NativeOwnerLink>
   );
 }

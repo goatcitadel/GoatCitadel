@@ -1,13 +1,23 @@
 import type { OperatorInboxResponse } from "@goatcitadel/contracts";
 import { plural, presentTime } from "@goatcitadel/mission-control-shared/content/format";
 import { EmptyState } from "../../ui/EmptyState";
-import { inboxCountIsExact, inboxKnownCount, inboxReadGaps } from "./inbox-presentation";
+import { inboxKnownCount, inboxReadGaps } from "./inbox-presentation";
 
 function summaryLine(projection: OperatorInboxResponse): string {
   const total = inboxKnownCount(projection);
-  return inboxCountIsExact(projection, total.complete)
-    ? `${plural(total.known, "item")} in this workspace.`
-    : `${plural(total.known, "known item")}; more may be outside this view.`;
+  const decisions = projection.counts.needs_decision.known;
+  const updates = projection.counts.updates.known;
+  const other = Math.max(0, total.known - decisions - updates);
+  const parts = [
+    decisions ? `${plural(decisions, "decision")} waiting` : "",
+    updates ? plural(updates, "update") : "",
+    other ? `${other} other` : "",
+  ].filter(Boolean);
+  const counts = parts.length ? `${parts.join(", ")}.` : "Nothing waiting.";
+  // The count is honest only when every source was read; a declared scope limit is explained under "What this Inbox covers".
+  return inboxReadGaps(projection).length > 0
+    ? `${counts} Some sources couldn't be checked, so there may be more.`
+    : counts;
 }
 
 /** Which sources were not fully read, and which have a declared scope. Plain disclosures, no box. */

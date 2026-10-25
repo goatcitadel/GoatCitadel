@@ -20,6 +20,16 @@ import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 import { presentErrorText } from "../../lib/present-error";
 import { presentApprovalEffectKind, presentApprovalEffectStatus, presentApprovalEvent } from "./inbox-vocabulary";
 
+/** What a decision with no waiting run means, in plain words. Copy only; the approval's effect is unchanged. */
+export function noRunLine(approval: ApprovalRequest): string {
+  const decided = approval.status === "approved" || approval.status === "edited";
+  const memory = /memory/u.test(`${approval.kind} ${approval.linkage?.toolName ?? ""}`);
+  if (!decided) return "Nothing was waiting on this decision.";
+  return memory
+    ? "Approved. Nothing was waiting to use this approval, so no memory was saved."
+    : "Approved. Nothing was waiting to use this approval, so nothing ran.";
+}
+
 export function ApprovalSettlement({
   approval,
   workspaceId,
@@ -124,8 +134,8 @@ export function ApprovalSettlement({
       {query.isFetching ? <p className="text-fg-muted">Checking follow-on work…</p> : null}
       {state?.wait ? (
         <p>
-          Approval wait: {presentRunStatus(state.wait.status).label}. This tracks the approval itself, not the original
-          work.
+          The approval itself is {presentRunStatus(state.wait.status).label.toLowerCase()}. The original work is tracked
+          separately.
         </p>
       ) : null}
       {planId ? (
@@ -139,7 +149,7 @@ export function ApprovalSettlement({
           <RecordedErrorDetails error={run.lastError} />
         </>
       ) : state ? (
-        <p>No original run was found. A recorded decision does not show the work ran.</p>
+        <p>{noRunLine(settled)}</p>
       ) : (
         <p>Original linked work outcome is not yet verified.</p>
       )}

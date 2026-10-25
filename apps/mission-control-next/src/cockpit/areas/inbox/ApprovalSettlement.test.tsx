@@ -328,3 +328,13 @@ it("says a rollback is running instead of 'Applying'", async () => {
   await renderPlanApproval();
   await vi.waitFor(() => expect(container.textContent).toContain("Linked change: Rolling back the change…"));
 });
+
+it("explains a decision that had no waiting run in plain words", async () => {
+  const { noRunLine } = await import("./ApprovalSettlement");
+  const base = { approvalId: "a", kind: "tool_call", status: "approved" } as never;
+  expect(noRunLine({ ...(base as object), kind: "memory.write" } as never)).toBe(
+    "Approved. Nothing was waiting to use this approval, so no memory was saved.",
+  );
+  expect(noRunLine(base)).toBe("Approved. Nothing was waiting to use this approval, so nothing ran.");
+  expect(noRunLine({ ...(base as object), status: "rejected" } as never)).toBe("Nothing was waiting on this decision.");
+});

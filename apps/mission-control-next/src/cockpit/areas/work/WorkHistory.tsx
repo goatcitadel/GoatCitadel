@@ -41,7 +41,7 @@ export function WorkHistory() {
   return (
     <section className={AREA_PAGE}>
       <AreaHeader
-        title="Work history"
+        title="History"
         description="Saved runs, conversations, and recent activity in this workspace."
         actions={
           <Button

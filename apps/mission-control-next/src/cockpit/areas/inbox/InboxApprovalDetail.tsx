@@ -290,6 +290,7 @@ export function InboxApprovalDetail({
             <InboxApprovalActions
               // This detail states the expiry above, so the decision summary leaves it out.
               expiryShownNearby
+              stickyDecisions
               specialistEvidence={specialistEvidence}
               item={item}
               approval={approval}
