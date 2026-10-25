@@ -971,7 +971,7 @@ async function collectChatTurnFamilySessionIds(
     const current = queue.shift()!;
     if (visited.has(current)) continue;
     visited.add(current);
-    for (const run of await storage.chatDelegationRuns.listBySession(current, 100)) {
+    for (const run of (await storage.chatDelegationRuns?.listBySession(current, 100)) ?? []) {
       for (const step of await storage.chatDelegationSteps.listByRun(run.runId)) {
         if (step.childSessionId && !visited.has(step.childSessionId)) queue.push(step.childSessionId);
       }
