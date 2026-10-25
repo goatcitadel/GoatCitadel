@@ -247,6 +247,14 @@ export async function createStdioMcpClient(
   // gateway via an unhandled stream 'error' event.
   attachChildStdinErrorHandler(child, server, failStream);
 
+  const respondToServerRequest = (message: JsonRpcEnvelope) => {
+    const reply =
+      message.method === "ping"
+        ? { jsonrpc: "2.0", id: message.id, result: {} }
+        : { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } };
+    writeToChildStdin(child, server, `${JSON.stringify(reply)}\n`);
+  };
+
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
     stdoutBuffer += chunk;
@@ -261,7 +269,10 @@ export async function createStdioMcpClient(
         } catch {
           message = undefined;
         }
-        if (message && typeof message.id === "number" && pending.has(message.id)) {
+        if (message && typeof message.method === "string" && message.id !== undefined) {
+          // Server-initiated request: never settle a pending call of ours, even on an id collision.
+          respondToServerRequest(message);
+        } else if (message && typeof message.id === "number" && pending.has(message.id)) {
           const entry = pending.get(message.id);
           if (entry) {
             clearTimeout(entry.timer);
