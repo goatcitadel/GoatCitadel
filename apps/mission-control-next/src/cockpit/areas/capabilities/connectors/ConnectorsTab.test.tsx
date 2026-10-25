@@ -11,6 +11,18 @@ vi.mock("@goatcitadel/mission-control-shared/api/capability-connectors", () => a
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "ws-1" }),
 }));
+// The panel and the address have their own tests (ConnectorPanel.test.tsx); here only the hand-off is checked.
+const route = vi.hoisted(() => ({ search: "", navigate: vi.fn() }));
+vi.mock("../../../app/use-cockpit-route", () => ({ useCockpitRoute: () => route }));
+const inspector = vi.hoisted(() => ({ open: vi.fn(), content: null as null | { source?: string } }));
+vi.mock("../../../app/inspector", () => ({ useInspector: () => inspector }));
+vi.mock("../../settings/McpServerCreate", () => ({
+  McpServerCreate: ({ onClose }: { onClose: () => void }) => (
+    <div role="dialog" aria-label="Register MCP server">
+      <button onClick={onClose}>Close registration</button>
+    </div>
+  ),
+}));
 
 function item(overrides: Partial<CapabilityConnectorItem>): CapabilityConnectorItem {
   return {
@@ -68,7 +80,6 @@ function response(items: CapabilityConnectorItem[], issues: CapabilityConnectors
 let container: HTMLDivElement;
 let root: Root;
 let client: QueryClient;
-const onOpen = vi.fn();
 
 const text = () => container.textContent ?? "";
 const button = (label: string) =>
@@ -81,7 +92,7 @@ async function render() {
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
-        <ConnectorsTab onOpen={onOpen} />
+        <ConnectorsTab />
       </QueryClientProvider>,
     ),
   );
@@ -96,7 +107,10 @@ async function type(value: string) {
 
 beforeEach(() => {
   api.fetchCapabilityConnectors.mockReset();
-  onOpen.mockReset();
+  route.navigate.mockReset();
+  route.search = "";
+  inspector.open = vi.fn();
+  inspector.content = null;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.append(container);
@@ -149,12 +163,57 @@ describe("Connectors tab", () => {
     expect(notion.querySelector("button")?.textContent).toBe("Set up");
   });
 
-  it("opens the row's item from its button", async () => {
+  it("opens the row's panel from its button by moving the address to that item", async () => {
     api.fetchCapabilityConnectors.mockResolvedValue(response([SLACK, NOTION]));
     await render();
     await vi.waitFor(() => expect(text()).toContain("Notion"));
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Set up Notion"]')?.click());
-    expect(onOpen).toHaveBeenCalledExactlyOnceWith(NOTION);
+    expect(route.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/connectors?item=mcp-template%3Anotion");
+  });
+
+  it("opens the panel the address names once the list has it", async () => {
+    route.search = "?item=mcp-template%3Anotion";
+    api.fetchCapabilityConnectors.mockResolvedValue(response([SLACK, NOTION]));
+    await render();
+    await vi.waitFor(() => expect(inspector.open).toHaveBeenCalledTimes(1));
+    expect(inspector.open).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "capabilities:mcp-template:notion", title: "Notion" }),
+    );
+  });
+
+  it("asks again when the inspector was replaced before the first request landed", async () => {
+    route.search = "?item=mcp-template%3Anotion";
+    api.fetchCapabilityConnectors.mockResolvedValue(response([SLACK, NOTION]));
+    await render();
+    await vi.waitFor(() => expect(inspector.open).toHaveBeenCalledTimes(1));
+    // A new address brings a new inspector; a request made to the old one is lost.
+    const replacement = vi.fn();
+    inspector.open = replacement;
+    await render();
+    expect(replacement).toHaveBeenCalledTimes(1);
+    await render();
+    expect(replacement).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the Add your own form and reads the list again when it closes", async () => {
+    api.fetchCapabilityConnectors.mockResolvedValue(response([SLACK, NOTION]));
+    await render();
+    await vi.waitFor(() => expect(text()).toContain("Notion"));
+    expect(container.querySelector('[role="search"] button')?.textContent).toBe("Add your own");
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => button("Add your own")?.click());
+    await vi.waitFor(() => expect(container.querySelector('[role="dialog"]')).not.toBeNull());
+    expect(api.fetchCapabilityConnectors).toHaveBeenCalledTimes(1);
+    await act(async () => button("Close registration")?.click());
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    await vi.waitFor(() => expect(api.fetchCapabilityConnectors).toHaveBeenCalledTimes(2));
+  });
+
+  it("offers Add your own when there is nothing to list", async () => {
+    api.fetchCapabilityConnectors.mockResolvedValue(response([]));
+    await render();
+    await vi.waitFor(() => expect(text()).toContain("No connectors yet"));
+    expect(button("Add your own")).toBeDefined();
   });
 
   it("keeps rows and shows an issue line when one source failed", async () => {
@@ -239,6 +298,31 @@ describe("Connectors tab", () => {
     await render();
     await vi.waitFor(() => expect(text()).toContain("No connectors yet"));
     expect(button("Clear filters")).toBeUndefined();
+  });
+
+  it("says it couldn't load any connectors when sources failed and nothing is left to list", async () => {
+    api.fetchCapabilityConnectors.mockResolvedValue(
+      response(
+        [],
+        [
+          { source: "mcp_server", message: "Saved MCP servers couldn't be read." },
+          { source: "integration", message: "Integrations couldn't be read." },
+        ],
+      ),
+    );
+    await render();
+    await vi.waitFor(() => expect(text()).toContain("Couldn't load any connectors right now"));
+    expect(text()).toContain("Saved MCP servers couldn't be read.");
+    expect(text()).toContain("Integrations couldn't be read.");
+    // An empty answer from failed sources is not an empty list.
+    expect(text()).not.toContain("No connectors yet");
+    expect(container.querySelector("input")).toBeNull();
+    expect(button("Add your own")).toBeUndefined();
+
+    api.fetchCapabilityConnectors.mockResolvedValue(response([SLACK]));
+    await act(async () => button("Retry")?.click());
+    await vi.waitFor(() => expect(rowNames()).toEqual(["Slack"]));
+    expect(text()).not.toContain("Couldn't load any connectors");
   });
 
   it("shows the checking line while the first read runs", async () => {

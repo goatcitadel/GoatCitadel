@@ -131,15 +131,59 @@ export function groupConnectors(
 
 /**
  * The state badge and the reason line under it. A row never reads as plainly usable when the AI can't use it: a
- * connected MCP row that Chat can't reach says so, and a row hidden in this workspace says that instead of its state.
+ * connected MCP row that Chat can't reach says so, and a row hidden in this workspace says that instead of its state
+ * and of its reason ("Ready to use" beside "Hidden in this workspace" would contradict itself).
  */
 export function presentConnectorState(item: CapabilityConnectorItem): StatusPresentation & { reason: string } {
   const chatBlocked = item.state === "connected" && !item.chat.available;
   const label = item.hiddenInWorkspace ? "Hidden in this workspace" : STATE_LABELS[item.state];
   // Green says "usable". A connection Chat can't use yet asks for a look, and a hidden row is neither good nor bad.
   const tone: StatusTone = item.hiddenInWorkspace ? "neutral" : chatBlocked ? "waiting" : STATE_TONES[item.state];
-  const reason = chatBlocked ? "Connected · not available in Chat" : REASON_LINES[item.reason];
+  const reason = item.hiddenInWorkspace
+    ? "The AI can't use it in this workspace"
+    : chatBlocked
+      ? "Connected · not available in Chat"
+      : REASON_LINES[item.reason];
   return { label, tone, reason };
+}
+
+/** Said under an on-device program's command: it runs outside the Gateway's own network rules. */
+export const ON_DEVICE_NETWORK_WARNING =
+  "This program's own internet access isn't limited by GoatCitadel's allowed sites.";
+
+export interface ConnectionDescription {
+  /** Plain sentences, for example "Signs in at mcp.linear.app". */
+  lines: string[];
+  /** The exact command line, only for a program that runs on this computer. */
+  command?: string;
+  warning?: string;
+}
+
+/**
+ * "How it connects": where it signs in, what key it needs, or that it runs here. The sign-in host is the first host
+ * the Gateway lists for the app.
+ */
+export function describeConnection(item: CapabilityConnectorItem): ConnectionDescription {
+  if (item.runsOnThisDevice) {
+    return {
+      lines: ["Runs on this computer", ...(item.auth === "api_key" ? ["Needs an API key"] : [])],
+      ...(item.command ? { command: item.command } : {}),
+      warning: ON_DEVICE_NETWORK_WARNING,
+    };
+  }
+  const host = item.networkHosts[0];
+  switch (item.auth) {
+    case "api_key":
+      return { lines: ["Needs an API key"] };
+    case "bot_token":
+      return { lines: ["Needs a bot token"] };
+    case "oauth":
+      return { lines: [host ? `Signs in at ${host}` : "Signs in with your account"] };
+    case "google":
+      return { lines: ["Signs in with your Google account"] };
+    case "none":
+      return { lines: [host ? `Connects to ${host}` : "Needs no sign-in"] };
+  }
 }
 
 export type ConnectorActionKind = "install" | "set_up" | "reconnect" | "try_again" | "turn_back_on" | "manage";

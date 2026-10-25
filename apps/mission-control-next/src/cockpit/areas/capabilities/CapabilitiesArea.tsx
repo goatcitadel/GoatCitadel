@@ -17,8 +17,7 @@ export function CapabilitiesArea() {
     >
       <section className={`${AREA_PAGE} min-h-full`}>
         <AreaHeader title="Capabilities" description="Everything GoatCitadel's AI can use, in one place." />
-        {/* Each row's button has nothing to open until the connector panel lands. */}
-        {tab === "connectors" ? <ConnectorsTab onOpen={() => undefined} /> : null}
+        {tab === "connectors" ? <ConnectorsTab /> : null}
       </section>
     </AreaTabsProvider>
   );

@@ -1,0 +1,74 @@
+import { useCallback, useEffect, useRef } from "react";
+import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
+import { useInspector } from "../../../app/inspector";
+import { useCockpitRoute } from "../../../app/use-cockpit-route";
+import { ConnectorPanel } from "./ConnectorPanel";
+import {
+  CONNECTORS_HREF,
+  connectorIdFromSource,
+  connectorItemHref,
+  connectorPanelSource,
+  readLinkedConnectorId,
+} from "./connector-links";
+
+/**
+ * Connects the Connectors tab to the inspector. The address says which connector is open (`?item=`): pressing a row
+ * moves the address, and the panel opens when the address names a connector the loaded list has. Closing the panel
+ * clears the address again, so the same row can be pressed once more and a reload doesn't bring the panel back.
+ *
+ * The inspector closes whenever the address changes, so the panel always opens after the move, never before it.
+ */
+export function useConnectorPanel(items: readonly CapabilityConnectorItem[] | undefined): {
+  open: (item: CapabilityConnectorItem) => void;
+} {
+  const { open: openInspector, content } = useInspector();
+  const { search, navigate } = useCockpitRoute();
+  const linkedId = readLinkedConnectorId(search);
+  const openId = connectorIdFromSource(content?.source);
+  const linked = linkedId ? items?.find((entry) => entry.id === linkedId) : undefined;
+  // The panel this page last asked the inspector for (and with which inspector: a new address brings a new one, and a
+  // request made to the old one is lost), and the address whose panel has been on screen.
+  const asked = useRef<{ id: string; inspectorOpen: typeof openInspector } | null>(null);
+  const shown = useRef<string | null>(null);
+
+  const show = useCallback(
+    (item: CapabilityConnectorItem) => {
+      asked.current = { id: item.id, inspectorOpen: openInspector };
+      openInspector({
+        source: connectorPanelSource(item.id),
+        title: item.name,
+        body: <ConnectorPanel itemId={item.id} />,
+      });
+    },
+    [openInspector],
+  );
+
+  useEffect(() => {
+    if (openId) {
+      shown.current = openId;
+      return;
+    }
+    if (!linkedId) {
+      asked.current = null;
+      shown.current = null;
+      return;
+    }
+    if (shown.current === linkedId) {
+      // The panel the address asked for was on screen and is gone: it was closed.
+      shown.current = null;
+      navigate(CONNECTORS_HREF, { replace: true });
+      return;
+    }
+    // An address naming a connector the list doesn't have is left alone.
+    const alreadyAsked = asked.current?.id === linkedId && asked.current.inspectorOpen === openInspector;
+    if (linked && !alreadyAsked) show(linked);
+  }, [openId, linkedId, linked, show, openInspector, navigate]);
+
+  return {
+    open: (item) => {
+      // The address already names it (the panel was closed without clearing it): there is nothing to move.
+      if (linkedId === item.id) show(item);
+      else navigate(connectorItemHref(item.id));
+    },
+  };
+}

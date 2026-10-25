@@ -1,7 +1,6 @@
-import { useRef, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
-import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
 import { fetchCapabilityConnectors } from "@goatcitadel/mission-control-shared/api/capability-connectors";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -14,6 +13,12 @@ import { CapabilitySearch } from "../CapabilitySearch";
 import { CategoryFilter } from "../CategoryFilter";
 import { ConnectorRow } from "./ConnectorRow";
 import { connectorCategoryLabel, connectorCategoryOptions, filterConnectors, groupConnectors } from "./connector-view";
+import { useConnectorPanel } from "./use-connector-panel";
+
+// The custom server form belongs to Settings and is large; it loads only when someone asks to add their own.
+const McpServerCreate = lazy(async () => ({
+  default: (await import("../../settings/McpServerCreate")).McpServerCreate,
+}));
 
 /** The search suggestion when nothing is connected yet. */
 const FALLBACK_SUGGESTION = "automation";
@@ -30,18 +35,21 @@ function NoticeLine({ children }: { children: ReactNode }) {
 
 /**
  * The Connectors tab: every app the AI can use, in the Gateway's own groups (Connected, On this device, Available,
- * Turned off), with search and category buttons. The tab only lists and filters what the Gateway returned.
- *
- * `onOpen` is called with a row's item when its button is pressed; the page decides what that opens.
+ * Turned off), with search and category buttons. The tab only lists and filters what the Gateway returned. A row's
+ * button opens that connector's panel in the inspector (`?item=` in the address), and "Add your own" opens the custom
+ * server form.
  */
-export function ConnectorsTab({ onOpen }: { onOpen: (item: CapabilityConnectorItem) => void }) {
+export function ConnectorsTab() {
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
+  const client = useQueryClient();
   const query = useQuery({
     queryKey: queryKeys.capabilityConnectors(workspaceId),
     queryFn: ({ signal }) => fetchCapabilityConnectors(workspaceId, { signal }),
   });
   // The loaded list stays while it is read again, and beside a failed recheck.
   const view = recordView(query);
+  const panel = useConnectorPanel(view.record?.items);
+  const [adding, setAdding] = useState(false);
   const [search, setSearch] = useState("");
   const [chosenCategories, setChosenCategories] = useState<string[]>([]);
   const filtersRegion = useRef<HTMLDivElement>(null);
@@ -74,6 +82,7 @@ export function ConnectorsTab({ onOpen }: { onOpen: (item: CapabilityConnectorIt
   const suggestion = firstConnected ? connectorCategoryLabel(firstConnected.category) : FALLBACK_SUGGESTION;
   const lastVersion = lastVersionNote(view);
 
+  const addYourOwn = <Button onClick={() => setAdding(true)}>Add your own</Button>;
   const clearFilters = () => {
     setSearch("");
     setChosenCategories([]);
@@ -90,6 +99,7 @@ export function ConnectorsTab({ onOpen }: { onOpen: (item: CapabilityConnectorIt
             value={search}
             onChange={setSearch}
             placeholder={`Try "${suggestion}"`}
+            actions={addYourOwn}
           />
           {options.length >= 2 ? (
             <CategoryFilter options={options} selected={categories} onChange={setChosenCategories} />
@@ -107,10 +117,21 @@ export function ConnectorsTab({ onOpen }: { onOpen: (item: CapabilityConnectorIt
       ))}
       {view.phase === "checking" ? <p className="text-sm text-fg-muted">{CHECKING_FOR_CHANGES}</p> : null}
       {items.length === 0 ? (
-        <EmptyState
-          title="No connectors yet"
-          description="Apps GoatCitadel's AI can use will show up here as they become available."
-        />
+        response.issues.length > 0 ? (
+          // The lines above say which source failed. An empty list beside them is a failed read, not an empty one.
+          <div className="space-y-2">
+            <p className="text-sm text-fg">Couldn't load any connectors right now.</p>
+            <Button size="sm" loading={query.isFetching} loadingLabel="Retrying…" onClick={() => void query.refetch()}>
+              Retry
+            </Button>
+          </div>
+        ) : (
+          <EmptyState
+            title="No connectors yet"
+            description="Apps GoatCitadel's AI can use will show up here as they become available."
+            action={addYourOwn}
+          />
+        )
       ) : groups.length === 0 ? (
         <EmptyState
           title="Nothing matches"
@@ -123,13 +144,25 @@ export function ConnectorsTab({ onOpen }: { onOpen: (item: CapabilityConnectorIt
             <Section key={group.group} title={`${group.label} ${group.items.length}`}>
               <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {group.items.map((entry) => (
-                  <ConnectorRow key={entry.id} item={entry} onOpen={onOpen} />
+                  <ConnectorRow key={entry.id} item={entry} onOpen={panel.open} />
                 ))}
               </ul>
             </Section>
           ))}
         </div>
       )}
+      {adding ? (
+        <Suspense fallback={null}>
+          <McpServerCreate
+            workspaceId={workspaceId}
+            onClose={() => {
+              setAdding(false);
+              // A server saved in the form shows up in the list.
+              void client.invalidateQueries({ queryKey: queryKeys.capabilityConnectors(workspaceId) });
+            }}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

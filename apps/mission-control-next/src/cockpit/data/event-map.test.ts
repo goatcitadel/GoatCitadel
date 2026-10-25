@@ -74,6 +74,30 @@ describe("resolveRealtimeEvent", () => {
     });
   });
 
+  it("refreshes the Capabilities connector list for MCP, integration and channel events", () => {
+    const prefix = ["mcp", "capability-connectors"];
+    for (const [type, source] of [
+      ["mcp_server_updated", "mcp"],
+      ["integration_connection_updated", "integrations"],
+      ["channel_updated", "channels"],
+    ] as const) {
+      const result = resolveRealtimeEvent(event(type, source));
+      expect(result.kind).toBe("mapped");
+      const keys = result.kind === "mapped" ? result.effect.keys : [];
+      expect(keys).toContainEqual(prefix);
+    }
+    // The prefix covers the per-workspace key, so a change refreshes whichever workspace is open.
+    expect(queryKeys.capabilityConnectors("ws-1").slice(0, 2)).toEqual(prefix);
+    // A tool call changes no connector.
+    const call = resolveRealtimeEvent(event("tool_invoked", "mcp"));
+    expect(call).toEqual({ kind: "mapped", effect: { keys: [], refresh: ["mcp"] } });
+  });
+
+  it("refreshes the connector list when a runtime settings change plan moves, for web search and Chat access", () => {
+    // Firecrawl and Brave state, and whether Chat can reach MCP, are read from the settings.
+    expect(SETTINGS_READER_KEYS).toContainEqual(["mcp", "capability-connectors"]);
+  });
+
   it("refreshes every settings reader when a runtime settings change plan moves", () => {
     for (const targetOwnerId of ["runtime_settings", "runtime_settings.llm_defaults"]) {
       const result = resolveRealtimeEvent(

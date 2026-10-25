@@ -11,6 +11,7 @@ import {
   connectorCategoryLabel,
   connectorCategoryOptions,
   connectorKindLabel,
+  describeConnection,
   filterConnectors,
   groupConnectors,
   LETTER_ICON_TONE_COUNT,
@@ -200,6 +201,63 @@ describe("presentConnectorState", () => {
     const shown = presentConnectorState(item({ state: "connected", reason: "ready", hiddenInWorkspace: true }));
     expect(shown.label).toBe("Hidden in this workspace");
     expect(shown.tone).toBe("neutral");
+  });
+
+  it("gives a hidden row's own reason line instead of the state's", () => {
+    // "Ready to use" beside "Hidden in this workspace" would say the AI can use it.
+    const hidden = presentConnectorState(item({ state: "connected", reason: "ready", hiddenInWorkspace: true }));
+    expect(hidden.reason).toBe("The AI can't use it in this workspace");
+    const blockedInChat = presentConnectorState(
+      item({
+        state: "connected",
+        reason: "ready",
+        hiddenInWorkspace: true,
+        chat: { available: false, blockedBy: "mcp_in_chat_off" },
+      }),
+    );
+    expect(blockedInChat.reason).toBe("The AI can't use it in this workspace");
+    const off = presentConnectorState(item({ state: "turned_off", reason: "turned_off", hiddenInWorkspace: true }));
+    expect(off.reason).toBe("The AI can't use it in this workspace");
+  });
+});
+
+describe("describeConnection", () => {
+  it("says an on-device program runs here, with its command and the network warning", () => {
+    expect(
+      describeConnection(item({ runsOnThisDevice: true, command: "npx -y context7-mcp@1.2.3", auth: "none" })),
+    ).toEqual({
+      lines: ["Runs on this computer"],
+      command: "npx -y context7-mcp@1.2.3",
+      warning: "This program's own internet access isn't limited by GoatCitadel's allowed sites.",
+    });
+  });
+
+  it("adds the key it needs to an on-device program", () => {
+    expect(describeConnection(item({ runsOnThisDevice: true, command: "run-it", auth: "api_key" })).lines).toEqual([
+      "Runs on this computer",
+      "Needs an API key",
+    ]);
+  });
+
+  it("still warns about the network when the command is missing", () => {
+    const shown = describeConnection(item({ runsOnThisDevice: true }));
+    expect(shown.command).toBeUndefined();
+    expect(shown.warning).toContain("isn't limited by GoatCitadel's allowed sites");
+  });
+
+  it.each<[Partial<CapabilityConnectorItem>, string[]]>([
+    [{ auth: "api_key" }, ["Needs an API key"]],
+    [{ auth: "bot_token" }, ["Needs a bot token"]],
+    [{ auth: "oauth", networkHosts: ["mcp.linear.app"] }, ["Signs in at mcp.linear.app"]],
+    [{ auth: "oauth", networkHosts: [] }, ["Signs in with your account"]],
+    [{ auth: "google" }, ["Signs in with your Google account"]],
+    [{ auth: "none", networkHosts: ["mcp.example.com"] }, ["Connects to mcp.example.com"]],
+    [{ auth: "none", networkHosts: [] }, ["Needs no sign-in"]],
+  ])("describes how %j connects", (overrides, lines) => {
+    const shown = describeConnection(item(overrides));
+    expect(shown.lines).toEqual(lines);
+    expect(shown.command).toBeUndefined();
+    expect(shown.warning).toBeUndefined();
   });
 });
 
