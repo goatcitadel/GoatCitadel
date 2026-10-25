@@ -76,12 +76,35 @@ function roundScore(value: number): number {
   return Number(value.toFixed(3));
 }
 
+const CJK_RUN =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|[^\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
+const CJK_CHAR = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const LATIN_OR_DIGITS = /^[\p{Script=Latin}\p{M}\p{N}]+$/u;
+
+/**
+ * Unicode-aware tokens. Latin words and numbers keep the 3-character minimum;
+ * other alphabets (Cyrillic, Greek, ...) allow 2; CJK text has no spaces, so it
+ * becomes character bigrams (a lone character stays as one token).
+ */
 function tokenize(input: string): string[] {
-  return input
-    .toLowerCase()
-    .split(/[^a-z0-9]+/g)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3);
+  const tokens: string[] = [];
+  for (const chunk of input.toLowerCase().split(/[^\p{L}\p{M}\p{N}]+/u)) {
+    for (const segment of chunk.match(CJK_RUN) ?? []) {
+      if (CJK_CHAR.test(segment)) {
+        const chars = [...segment];
+        if (chars.length === 1) {
+          tokens.push(segment);
+        } else {
+          for (let index = 0; index < chars.length - 1; index += 1) {
+            tokens.push(chars[index] + chars[index + 1]);
+          }
+        }
+      } else if (segment.length >= (LATIN_OR_DIGITS.test(segment) ? 3 : 2)) {
+        tokens.push(segment);
+      }
+    }
+  }
+  return tokens;
 }
 
 function semanticHintScore(terms: string[], hints?: string[]): number {
