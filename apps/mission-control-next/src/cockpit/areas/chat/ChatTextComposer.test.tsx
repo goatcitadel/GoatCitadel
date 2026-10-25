@@ -391,6 +391,62 @@ describe("cockpit text composer", () => {
     expect(container.querySelector('[role="listbox"]')).not.toBeNull();
   });
 
+  it("badges only rows that differ from the usual state, and keeps the menu open while searching", async () => {
+    const paletteState = (loading: boolean) => ({
+      enabled: true,
+      globalOpen: false,
+      query: "",
+      failures: [],
+      onOpen: vi.fn(),
+      onQueryChange: vi.fn(),
+      onClose: vi.fn(),
+      onIndexChange: vi.fn(),
+      onSelect: vi.fn(),
+      loading,
+    });
+    const props = composerProps({
+      draft: "/",
+      commandSuggestions: [
+        {
+          key: "a",
+          command: "/status",
+          description: "Show status",
+          applyValue: "/status",
+          availabilityLabel: "Available",
+        },
+        {
+          key: "b",
+          command: "/shell",
+          description: "Run one command",
+          applyValue: "/shell",
+          availabilityLabel: "Needs review",
+        },
+      ] as ComposerProps["commandSuggestions"],
+      composerPalette: paletteState(false),
+    });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const options = [...container.querySelectorAll('[role="option"]')];
+    expect(options[0]?.textContent).not.toContain("Available");
+    expect(options[1]?.textContent).toContain("Needs review");
+
+    const searching = composerProps({ draft: "/", commandSuggestions: [], composerPalette: paletteState(true) });
+    await act(async () => root.render(<ChatTextComposer props={searching} />));
+    expect(container.textContent).toContain("Searching");
+  });
+
+  it("puts the 'choose a suggestion' hint beside Send, not on its own line below", async () => {
+    const props = composerProps({
+      draft: "/he",
+      commandSuggestions: [{ key: "help", command: "/help", description: "Show help", applyValue: "/help" }],
+    });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const hint = [...container.querySelectorAll('[role="status"]')].find((element) =>
+      element.textContent?.includes("Choose a suggestion before sending."),
+    );
+    expect(hint).toBeDefined();
+    expect(hint?.parentElement?.contains(sendButton())).toBe(true);
+  });
+
   it("the draft is text-md at every width", async () => {
     await act(async () => root.render(<ChatTextComposer props={composerProps()} />));
     const classes = (container.querySelector("textarea") as HTMLTextAreaElement).className.split(/\s+/);

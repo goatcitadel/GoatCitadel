@@ -49,6 +49,7 @@ function Harness(props: {
   settings?: Record<string, unknown> | null;
   catalog?: typeof runtimeProviderCatalog;
   getCachedModels?: (providerId: string) => string[];
+  commandCatalog?: Array<{ command: string; usage: string; description: string }>;
 }) {
   latest = useChatProviderRoutingController({
     runtimeLlmConfig:
@@ -68,7 +69,7 @@ function Harness(props: {
         ? ({ llm: { activeProviderId: "google", activeModel: "gemini-3-pro-image-preview" } } as never)
         : (props.settings as never),
     draft: props.draft,
-    commandCatalog: commandCatalog as never,
+    commandCatalog: (props.commandCatalog ?? commandCatalog) as never,
     installedSkills: [
       { skillId: "reviewer", name: "Code Reviewer", state: "enabled", tags: ["quality"] },
       { skillId: "writer", name: "Writer", state: "sleeping", tags: ["docs"] },
@@ -221,6 +222,23 @@ describe("useChatProviderRoutingController", () => {
     expect(latest!.selectionSource).toBe("global");
     expect(latest!.runtimeStatus).toBe("unreachable");
     expect(latest!.commandSuggestions[0]?.command).toBe("/memory");
+  });
+
+  it("lists commands whose name matches the typed text before commands that only mention it", async () => {
+    await act(async () => {
+      create(
+        <Harness
+          draft="/he"
+          commandCatalog={[
+            { command: "/plan", usage: "/plan", description: "Hold the plan for review." },
+            { command: "/shell", usage: "/shell", description: "Run one governed command." },
+            { command: "/help", usage: "/help", description: "Show the commands you can use." },
+          ]}
+        />,
+      );
+    });
+
+    expect(latest!.commandSuggestions.map((item) => item.command)).toEqual(["/help", "/shell", "/plan"]);
   });
 
   it("uses settings routing when runtime config and session prefs are absent", async () => {

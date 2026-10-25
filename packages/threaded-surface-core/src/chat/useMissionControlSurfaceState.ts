@@ -44,7 +44,7 @@ export function formatSessionLabel(session: ChatSessionRecord): string {
     const channel = [session.channel, session.account].filter(Boolean).join(" / ");
     return channel ? `External chat - ${channel}` : `External chat - ${session.sessionId.slice(-6)}`;
   }
-  return `Mission chat - ${session.sessionId.slice(-6)}`;
+  return "New chat";
 }
 
 export function shouldShowTracePanel(mode: ChatMode, turn: ChatThreadResponse["turns"][number] | null): boolean {

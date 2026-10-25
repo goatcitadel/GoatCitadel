@@ -52,6 +52,10 @@ interface ApprovalDecisionBarProps {
   checking?: boolean;
   /** The surrounding view already states the expiry (Inbox approval detail), so the review summary leaves it out. */
   expiryShownNearby?: boolean;
+  /** An in-row decision: the buttons and their outcome only. The detail panel keeps the full review. */
+  compact?: boolean;
+  /** Pin the Approve/Deny buttons to the bottom of the scrolling panel so they never need a scroll to reach. */
+  stickyDecisions?: boolean;
   onResolved: (message: string) => void;
   onInvalidated: (message?: string) => void;
 }
@@ -85,6 +89,8 @@ function ApprovalDecisionReview({
   workspaceId,
   focusAction,
   expiryShownNearby = false,
+  compact = false,
+  stickyDecisions = false,
   onResolved,
   onInvalidated,
   activeWorkspaceId,
@@ -300,13 +306,23 @@ function ApprovalDecisionReview({
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">
       {canApprove ? (
-        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
+        compact ? null : (
+          <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
+        )
       ) : (
         <p role="alert">
           The exact action preview is unavailable, so this approval can&apos;t be approved. You can still deny it.
         </p>
       )}
-      <div role="group" aria-label="Approval decisions" className="flex flex-wrap gap-2">
+      <div
+        role="group"
+        aria-label="Approval decisions"
+        className={
+          stickyDecisions
+            ? "sticky bottom-0 z-10 flex flex-wrap gap-2 border-t border-line-subtle bg-raised py-2"
+            : "flex flex-wrap gap-2"
+        }
+      >
         {canApprove ? (
           <span ref={approveRef} className="inline-flex">
             <RiskApprovalAction
@@ -355,19 +371,21 @@ function ApprovalDecisionReview({
           {error}
         </p>
       ) : null}
-      <details className="text-xs text-fg-muted">
-        <summary className="cursor-pointer font-medium text-fg-secondary">How this decision works</summary>
-        <div className="mt-1 space-y-1">
-          <p>
-            The current pending record is checked again before either decision. Approval alone does not prove the action
-            ran.
-          </p>
-          <p>
-            To change this request, open its source and submit a new request. Editing an approval withdraws the original
-            action; it does not authorize a replacement. Project-wide always-allow is unavailable here.
-          </p>
-        </div>
-      </details>
+      {compact ? null : (
+        <details className="text-xs text-fg-muted">
+          <summary className="cursor-pointer font-medium text-fg-secondary">How this decision works</summary>
+          <div className="mt-1 space-y-1">
+            <p>
+              The current pending record is checked again before either decision. Approval alone does not prove the
+              action ran.
+            </p>
+            <p>
+              To change this request, open its source and submit a new request. Editing an approval withdraws the
+              original action; it does not authorize a replacement. Project-wide always-allow is unavailable here.
+            </p>
+          </div>
+        </details>
+      )}
     </div>
   );
 }

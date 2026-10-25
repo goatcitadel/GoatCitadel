@@ -9,6 +9,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { redactUrlForError } from "@goatcitadel/policy-engine";
+import { redactLocalHomePaths } from "./user-facing-failure-text.js";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { BackupRetentionService } from "./backup-retention-service.js";
 import type { DaemonRouteService } from "./daemon-route-service.js";
@@ -128,6 +129,17 @@ async function readOptionalOwner<T>(read: () => Promise<T>): Promise<T | undefin
     if (error instanceof NotFoundError) return undefined;
     throw error;
   }
+}
+
+const DELIVERABLE_LEADS: Record<string, string> = {
+  file: "A file was added to",
+  url: "A web link was added to",
+  artifact: "A result was added to",
+};
+
+function deliverableUpdateSummary(type: string, taskTitle: string): string {
+  const lead = DELIVERABLE_LEADS[type] ?? "Something new was added to";
+  return `${lead} ‘${taskTitle}’. Open the task in Work to see it.`;
 }
 
 export class InboxProjectionService {
@@ -468,7 +480,11 @@ export class InboxProjectionService {
             kind: "failed_run",
             group: "needs_attention",
             title: "Recover failed run",
-            summary: bounded(run.recoverySummary || run.lastError || "The run failed. Review the run before retrying."),
+            summary: bounded(
+              redactLocalHomePaths(
+                run.recoverySummary || run.lastError || "The run failed. Review the run before retrying.",
+              ),
+            ),
             createdAt: run.createdAt,
             updatedAt: run.updatedAt,
             source: { workspaceId, runId: run.runId },
@@ -556,7 +572,7 @@ export class InboxProjectionService {
             kind: "task_deliverable",
             group: "updates",
             title: bounded(deliverable.title || "Task deliverable"),
-            summary: `A ${deliverable.deliverableType} deliverable was recorded for ${bounded(deliverable.taskTitle || "a task")}. Open Kanban to inspect its current record.`,
+            summary: deliverableUpdateSummary(deliverable.deliverableType, bounded(deliverable.taskTitle || "a task")),
             createdAt: deliverable.createdAt,
             source: { workspaceId, taskId: deliverable.taskId, deliverableId: deliverable.deliverableId },
             // Cockpit owns the task board natively (`/work/kanban`); Classic is reachable through its own shell switch.

@@ -253,7 +253,7 @@ describe("visible Chat session", () => {
 
   it("offers the conversations sheet from the empty state below the desktop rail", async () => {
     const surface = input(null);
-    Object.assign(surface.sessionRail, { availableFolders: [], historyView: "active" });
+    Object.assign(surface.sessionRail, { availableFolders: [], historyView: "active", search: "" });
     await act(async () => root.render(view(surface)));
     const show = [...container.querySelectorAll("button")].find((b) => b.textContent === "Show conversations")!;
     expect(show.className).toContain("md:hidden");

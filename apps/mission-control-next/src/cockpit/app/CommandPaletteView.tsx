@@ -20,7 +20,7 @@ export interface CommandPaletteViewProps {
   commandMatches: boolean;
   preferenceMatches: boolean;
   noMatches: boolean;
-  destinations: { area: string; label: string; path: string }[];
+  destinations: { key: string; label: string; path: string }[];
   settingsMatches: { section: string; label: string; href: string; releaseStatus?: string }[];
   theme: UiTheme;
   density: string;
@@ -73,8 +73,8 @@ export function CommandPaletteView({
         className="h-10 min-w-0 border-b border-line-subtle bg-transparent px-3 text-base text-fg outline-none"
       />
       <p className="px-3 py-2 text-xs text-fg-muted">
-        {activeWorkspaceId ? `Workspace: ${workspaceName ?? "current workspace"}.` : "No workspace selected."} Type at
-        least two characters to search.
+        {activeWorkspaceId ? `Workspace: ${workspaceName ?? "current workspace"}.` : "No workspace selected."}
+        {query.trim().length < 2 ? " Type at least two characters to search." : ""}
       </p>
       {creationNotice}
       <div className="max-h-80 overflow-y-auto p-1">
@@ -109,8 +109,8 @@ export function CommandPaletteView({
             <Command.Group heading="Go to" className="text-xs text-fg-muted">
               {destinations.map((entry) => (
                 <Command.Item
-                  key={entry.area}
-                  value={`go-${entry.area}`}
+                  key={entry.key}
+                  value={`go-${entry.key}`}
                   onSelect={() => onDestination(entry.path)}
                   className={PALETTE_ITEM_CLASS}
                 >

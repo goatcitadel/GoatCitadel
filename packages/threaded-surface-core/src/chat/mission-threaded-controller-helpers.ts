@@ -284,11 +284,19 @@ export function formatAgenticBackgroundHandoffNotice(
     return undefined;
   }
   const rootNode = getAgenticTreeRootNode(agenticRunTree);
-  const label = rootNode?.label?.trim() || agenticRunTree.runId;
-  const status = rootNode?.status ? ` is ${formatAgenticTreeStatus(rootNode.status)}` : " is visible";
+  const label = rootNode?.label?.trim() || "A background run";
+  const rawStatus = rootNode?.status;
+  const status = rawStatus ? ` is ${describeAgenticTreeStatus(rawStatus)}` : " is in progress";
   const childCount = agenticRunTree.nodes.filter((node) => node.kind === "task" || node.kind === "subagent").length;
-  const childCopy = childCount > 0 ? ` with ${childCount} child ${childCount === 1 ? "item" : "items"}` : "";
-  return `Background handoff visible from the session run table: ${label} (${agenticRunTree.runId})${status}${childCopy}. Open run details for the full lineage.`;
+  const childCopy = childCount > 0 ? `, with ${childCount} child ${childCount === 1 ? "task" : "tasks"}` : "";
+  return `${label}${status}${childCopy}.`;
+}
+
+/** The run's own id stays out of the sentence; technical details carry it for support. */
+export function agenticBackgroundHandoffTechnicalDetails(
+  agenticRunTree: AgenticRunTreeResponse | null | undefined,
+): Array<{ label: string; value: string }> | undefined {
+  return agenticRunTree?.runId ? [{ label: "Run ID", value: agenticRunTree.runId }] : undefined;
 }
 
 function getAgenticTreeRootNode(agenticRunTree: AgenticRunTreeResponse) {
@@ -301,6 +309,18 @@ function getAgenticTreeRootNode(agenticRunTree: AgenticRunTreeResponse) {
 
 function formatAgenticTreeStatus(status: string): string {
   return status.replaceAll("_", " ");
+}
+
+function describeAgenticTreeStatus(status: string): string {
+  switch (status) {
+    case "approval_required":
+    case "waiting_for_approval":
+      return "waiting on your approval";
+    case "waiting_for_user_input":
+      return "waiting on your answer";
+    default:
+      return formatAgenticTreeStatus(status);
+  }
 }
 
 export function requiresBoundaryAcknowledgment(preflight: RoutingPreflightResult | null): boolean {

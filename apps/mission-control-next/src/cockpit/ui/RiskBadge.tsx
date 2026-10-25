@@ -5,5 +5,5 @@ import { StatusBadge } from "./StatusBadge";
 
 export function RiskBadge({ risk }: { risk: ApprovalRequest["riskLevel"] }) {
   const status = presentRiskLevel(risk);
-  return <StatusBadge status={{ ...status, label: `${status.label} risk` }} icon={risk === "safe" ? Shield : ShieldAlert} />;
+  return <StatusBadge status={status} icon={risk === "safe" ? Shield : ShieldAlert} />;
 }

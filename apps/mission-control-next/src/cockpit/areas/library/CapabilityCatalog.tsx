@@ -1,7 +1,6 @@
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Virtuoso } from "react-virtuoso";
 import {
   BookOpen,
   Code,
@@ -53,6 +52,7 @@ import {
 } from "./capability-catalog";
 import { catalogHref, readCatalogLocation } from "./capability-catalog-route";
 import { AREA_COLUMN } from "../../ui/area-layout";
+import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
@@ -161,8 +161,11 @@ function CatalogDetail({
   );
 }
 
+/** Above this many capabilities the list windows instead of rendering every row. */
+const CATALOG_WINDOW_THRESHOLD = 200;
+
 /** `footer` is page content under the catalog (the Mesh publications disclosure on the Skills and tools tab). */
-export function CapabilityCatalog({ footer }: { footer?: ReactNode } = {}) {
+export function CapabilityCatalog({ footer }: { footer?: ReactNode | ((search: string) => ReactNode) } = {}) {
   const route = useCockpitRoute();
   const location = readCatalogLocation(route.rest, route.search);
   const { search, kind, status, trust } = location.filters;
@@ -216,8 +219,8 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode } = {}) {
   const workspacePolicyState = workspacePolicyQuery.isPending ? "loading" : workspacePolicy ? "ready" : "unavailable";
 
   return (
-    // The page fills the area's height so the catalog list, not the page, scrolls (LB-06).
-    <section className={`${AREA_COLUMN} flex min-h-0 flex-1 flex-col gap-3 p-4 sm:p-6`}>
+    // The list uses the page's height (one scroll, whole rows); the detail pane stays in view beside it.
+    <section className={`${AREA_COLUMN} flex flex-col gap-3 p-4 sm:p-6`}>
       <AreaHeader
         title={LIBRARY_SECTION_LABELS.capabilities}
         description="Inspect skills, tools, and other capabilities available in GoatCitadel."
@@ -283,12 +286,18 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode } = {}) {
             />
           ) : null}
           {filtered.length ? (
-            <div className="flex min-h-80 flex-1 gap-4">
-              <div className="min-h-0 min-w-0 flex-1 overflow-hidden border-t border-line-subtle">
-                <Virtuoso
-                  data={filtered}
-                  className="h-full w-full"
-                  itemContent={(_index, item) => {
+            <div className="flex items-start gap-4">
+              {/* Typical catalogs render in page height (one scroll, whole rows); very large ones window
+                  inside a viewport-tall list so rendering stays bounded. */}
+              <div className="min-w-0 flex-1 border-t border-line-subtle">
+                <WindowedRecordList
+                  items={filtered}
+                  itemKey={(item) => item.capabilityId}
+                  label="Capabilities"
+                  threshold={CATALOG_WINDOW_THRESHOLD}
+                  className="h-dvh min-h-48"
+                >
+                  {(item) => {
                     const presented = callableKnown
                       ? presentCapabilityStatus(item)
                       : { label: "Callability unknown", tone: "neutral" as const };
@@ -323,12 +332,12 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode } = {}) {
                       </button>
                     );
                   }}
-                />
+                </WindowedRecordList>
               </div>
               {!isPhone && selected ? (
                 <aside
                   aria-label="Capability details"
-                  className="hidden w-80 shrink-0 overflow-y-auto border-l border-line-subtle pl-4 sm:block xl:w-96"
+                  className="sticky top-4 hidden max-h-dvh w-80 shrink-0 self-start overflow-y-auto border-l border-line-subtle pl-4 sm:block xl:w-96"
                 >
                   <h2 className="mb-2 text-base font-semibold text-fg">{presentCapabilityTitle(selected)}</h2>
                   <CatalogDetail
@@ -373,7 +382,7 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode } = {}) {
           ) : null}
         </>
       ) : null}
-      {footer}
+      {typeof footer === "function" ? footer(search) : footer}
     </section>
   );
 }

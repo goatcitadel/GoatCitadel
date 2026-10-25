@@ -120,10 +120,10 @@ export function LibraryArea() {
           />
         ) : (
           <CapabilityCatalog
-            footer={
+            footer={(search) =>
               route.rest.length === 0 ? (
                 <>
-                  <LibrarySkillPacks key={`packs-${workspaceId}`} workspaceId={workspaceId} />
+                  <LibrarySkillPacks key={`packs-${workspaceId}`} workspaceId={workspaceId} search={search} />
                   <MeshCapabilityPublications key={workspaceId} workspaceId={workspaceId} />
                 </>
               ) : null

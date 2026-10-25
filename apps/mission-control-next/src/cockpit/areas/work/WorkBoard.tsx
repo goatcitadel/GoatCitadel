@@ -322,15 +322,11 @@ export function WorkBoard() {
             ))}
           </div>
           <p className="text-xs text-fg-muted">
-            {`Counts cover only loaded records; records without a matching workspace are omitted. Done shows up to ${DONE_LIMIT} matching tasks and ${DONE_LIMIT} matching runs. `}
+            {`The Done column shows the latest ${DONE_LIMIT} tasks and ${DONE_LIMIT} runs. `}
             <NativeOwnerLink href="/work/history" scope={workspaceId}>
-              Open run history
+              See History
             </NativeOwnerLink>
-            {" or "}
-            <NativeOwnerLink href="/work/kanban" scope={workspaceId}>
-              the Kanban
-            </NativeOwnerLink>
-            {" for older records."}
+            {" for older work."}
           </p>
         </>
       ) : null}

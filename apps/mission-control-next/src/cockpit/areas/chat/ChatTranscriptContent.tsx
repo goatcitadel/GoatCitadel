@@ -132,6 +132,11 @@ export const Turn = memo(function Turn({
           ) : (
             <p className="text-sm text-fg-muted">Preparing response…</p>
           )}
+          {stopped && assistantText && !streaming ? (
+            <p className="mt-1 text-xs text-fg-muted" role="note">
+              Stopped — partial answer
+            </p>
+          ) : null}
           {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} onInspectTurn={onInspectTurn} /> : null}
         </div>
       ) : !failed && !partial ? (

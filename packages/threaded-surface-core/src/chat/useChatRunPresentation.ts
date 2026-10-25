@@ -15,6 +15,7 @@ import {
   formatThreadedRunStateLabel,
   formatThreadedRunStateSummary,
   formatAgenticBackgroundHandoffSummary,
+  agenticBackgroundHandoffTechnicalDetails,
   formatAgenticBackgroundHandoffNotice,
 } from "./mission-threaded-controller-helpers";
 import { useChatDelegatedScopeControls } from "./useChatDelegatedScopeControls";
@@ -171,6 +172,7 @@ export function useChatRunPresentation({
         id: `lifecycle-agentic-handoff-${agenticRunTree?.runId ?? "active"}`,
         tone: "neutral",
         content: backgroundHandoffNotice,
+        technicalDetails: agenticBackgroundHandoffTechnicalDetails(agenticRunTree),
         timestamp: agenticRunTree?.generatedAt ?? timestamp,
       });
     }
@@ -187,8 +189,8 @@ export function useChatRunPresentation({
     if (activeTrace?.status === "waiting_for_approval") {
       notices.push({
         id: `lifecycle-approval-${activeWorkflowTurn?.turnId ?? "active"}`,
-        tone: "warning",
-        content: "Run is paused for approval. Respond to the blocker to let durable execution resume.",
+        tone: "neutral",
+        content: "Waiting for your approval below.",
         timestamp,
       });
     }

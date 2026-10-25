@@ -151,6 +151,22 @@ describe("useChatThreadController", () => {
     expect(latest!.selectedSessionId).toBe("session-2");
   });
 
+  it("follows Back to a conversation-less address by showing the default conversation again", async () => {
+    let renderer: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<Harness routeSearch="?shell=cockpit" showAllModes />);
+    });
+    expect(latest!.selectedSessionId).toBe("session-1");
+    await act(async () => {
+      renderer!.update(<Harness routeSearch="?shell=cockpit&sessionId=session-3" showAllModes />);
+    });
+    expect(latest!.selectedSessionId).toBe("session-3");
+    await act(async () => {
+      renderer!.update(<Harness routeSearch="?shell=cockpit" showAllModes />);
+    });
+    expect(latest!.selectedSessionId).toBe("session-1");
+  });
+
   it("derives folders, tags, visible sessions, labels, and mission counts", async () => {
     await act(async () => {
       create(

@@ -222,7 +222,7 @@ describe("viewed Updates presentation", () => {
     expect(container.querySelector('[aria-label="Inspector: Viewed report"]')).not.toBeNull();
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(0);
     expect(container.querySelector('[data-inbox-count="updates"]')?.textContent).toBe("At least 4");
-    expect(container.textContent).toContain("4 known items; more may be outside this view.");
+    expect(container.textContent).toContain("4 updates. Some sources couldn't be checked, so there may be more.");
     expect(container.textContent).toContain("0 unread · 1 read from shown updates");
     await clickButton("Show read updates (1)");
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(1);
@@ -540,14 +540,14 @@ describe("InboxArea", () => {
         </QueryClientProvider>,
       ),
     );
-    expect(container.textContent).toContain("1 known item; more may be outside this view");
+    expect(container.textContent).toContain("1 decision waiting. Some sources couldn't be checked");
     expect(container.textContent).toContain("Couldn't fully check 1 source");
     expect(container.textContent).toContain("Review file write");
     // The empty group with an incomplete count is hidden; the coverage line above says more may exist (IN-10).
     expect(container.querySelector('[data-inbox-count="needs_attention"]')).toBeNull();
     const link = container.querySelector('a[href="/inbox?approvalId=test&shell=cockpit&workspaceId=default"]');
     expect(link?.textContent).toContain("Open approval");
-    const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
+    const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review");
     if (!details) throw new Error("Missing details control");
     const input = document.createElement("input");
     container.appendChild(input);

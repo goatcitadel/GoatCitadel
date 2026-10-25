@@ -5,6 +5,7 @@ import { fetchSkills } from "@goatcitadel/mission-control-shared/api/skills";
 import {
   deriveCapabilityStatus,
   mergeCapabilities,
+  presentCapabilityTitle,
   type CapabilityStatusFilter,
 } from "@goatcitadel/mission-control-shared/content/capability-rows";
 
@@ -72,13 +73,25 @@ export interface CatalogFilters {
   trust: string;
 }
 
+/** Lower-cased words with `_ . -` and spaces treated alike, so "browser cookies clear" finds browser_cookies_clear. */
+function searchWords(text: string): string[] {
+  return text.toLocaleLowerCase().split(/[\s_.-]+/u).filter(Boolean);
+}
+
+/** Every search word must appear (as a prefix or inside a word) somewhere in the text; order does not matter. */
+export function matchesSearchWords(text: string, search: string): boolean {
+  const wanted = searchWords(search);
+  if (!wanted.length) return true;
+  const haystack = searchWords(text).join(" ");
+  return wanted.every((word) => haystack.includes(word));
+}
+
 export function filterCapabilities(items: readonly CapabilityCatalogEntry[], filters: CatalogFilters): CapabilityCatalogEntry[] {
-  const search = filters.search.trim().toLocaleLowerCase();
+  const search = filters.search;
   return items.filter((item) => {
     if (filters.kind !== "all" && item.kind !== filters.kind) return false;
     if (filters.status !== "all" && deriveCapabilityStatus(item).status !== filters.status) return false;
     if (filters.trust !== "all" && (item.trustLabel ?? "unlabeled") !== filters.trust) return false;
-    if (!search) return true;
-    return `${item.title} ${item.summary} ${item.kind}`.toLocaleLowerCase().includes(search);
+    return matchesSearchWords(`${item.title} ${presentCapabilityTitle(item)} ${item.summary} ${item.kind}`, search);
   });
 }

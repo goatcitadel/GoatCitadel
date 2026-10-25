@@ -94,15 +94,22 @@ function lowerBoundAmount(usd: number): string {
   return moneyAmount(Math.floor(usd * 100 + 1e-9) / 100);
 }
 
+/** "At least <$0.01" reads as nonsense, so a known amount under a cent says what is and is not known. */
+function lowerBoundText(usd: number, prefix: string): string {
+  if (usd > 0 && usd < 0.01)
+    return prefix === "At least" ? "Under $0.01 known (some costs unknown)" : "under $0.01 known (some costs unknown)";
+  return `${prefix} ${lowerBoundAmount(usd)}`;
+}
+
 /** US dollars at two decimals; positive amounts under a cent read "<$0.01"; unknown never becomes $0.00. */
 export function formatMoney(usd: number | null | undefined, options: { atLeast?: boolean } = {}): string {
   if (usd === null || usd === undefined || !Number.isFinite(usd)) return "Unknown";
-  return options.atLeast ? `at least ${lowerBoundAmount(usd)}` : moneyAmount(usd);
+  return options.atLeast ? lowerBoundText(usd, "at least") : moneyAmount(usd);
 }
 
-/** A known lower bound standing on its own, for example "At least $3.00" or "At least <$0.01" (SY-N03). */
+/** A known lower bound standing on its own, for example "At least $3.00" or "Under $0.01 known (some costs unknown)" (SY-N03). */
 export function formatMoneyLowerBound(usd: number): string {
-  return `At least ${lowerBoundAmount(usd)}`;
+  return lowerBoundText(usd, "At least");
 }
 
 const BYTE_UNITS = ["KB", "MB", "GB", "TB"] as const;

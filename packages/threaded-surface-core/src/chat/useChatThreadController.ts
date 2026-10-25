@@ -47,19 +47,32 @@ export function useChatThreadController(input: {
     input;
   const appliedRouteSelectionKeyRef = useRef<string | null>(null);
   const pendingRouteTurnSelectionRef = useRef<string | null>(null);
+  const listedSessionsRef = useRef(input.sessions);
+  listedSessionsRef.current = input.sessions;
+  const selectedSessionIdRef = useRef(selectedSessionId);
+  selectedSessionIdRef.current = selectedSessionId;
 
   useEffect(() => {
-    if (!routeSearch) {
-      appliedRouteSelectionKeyRef.current = null;
-      pendingRouteTurnSelectionRef.current = null;
-      return;
-    }
     const params = new URLSearchParams(routeSearch);
     const routeSessionId = params.get("sessionId")?.trim() || "";
     const routeTurnId = params.get("turnId")?.trim() || "";
     if (!routeSessionId) {
+      // Back/Forward to an address without a conversation (the landing page): the address no longer names
+      // the conversation it last selected, so show the default one instead of keeping the later choice.
+      const lastRouteSessionId = appliedRouteSelectionKeyRef.current?.split(":")[0];
       appliedRouteSelectionKeyRef.current = null;
       pendingRouteTurnSelectionRef.current = null;
+      // A turn or artifact target without a conversation keeps the current selection.
+      const bareConversationAddress = !params.get("turnId") && !params.get("artifactId");
+      if (bareConversationAddress && lastRouteSessionId && lastRouteSessionId === selectedSessionIdRef.current) {
+        const fallback = listedSessionsRef.current?.find(
+          (item) => item.scope === "mission" && item.lifecycleStatus === "active",
+        );
+        if (fallback && fallback.sessionId !== lastRouteSessionId) {
+          setSelectedSessionId(fallback.sessionId);
+          setSelectedTurnId(null);
+        }
+      }
       return;
     }
     const routeSelectionKey = `${routeSessionId}:${routeTurnId}`;

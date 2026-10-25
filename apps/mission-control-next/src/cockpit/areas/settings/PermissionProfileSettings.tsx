@@ -79,6 +79,14 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
     focusAfterToggle.current = false;
     (changing ? firstChoice.current : changeButton.current)?.focus();
   }, [changing]);
+  // The confirmation renders below the choices, often off-screen: bring it into view and move focus to it (U-20).
+  const reviewPanel = useRef<HTMLDivElement>(null);
+  const reviewedProfileId = reviewed?.profile?.profileId;
+  useEffect(() => {
+    if (!reviewedProfileId) return;
+    reviewPanel.current?.scrollIntoView?.({ block: "center" });
+    reviewPanel.current?.focus({ preventScroll: true });
+  }, [reviewedProfileId]);
   const toggleChanging = (next: boolean) => {
     control.clear();
     if (!next) {
@@ -243,9 +251,11 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
       ) : null}
       {reviewed?.profile ? (
         <div
+          ref={reviewPanel}
+          tabIndex={-1}
           role="group"
           aria-label={`Reviewed ${contextLabel} profile selection`}
-          className="space-y-3 border-t border-line-subtle pt-3 text-sm text-fg-secondary"
+          className="space-y-3 border-t outline-none border-line-subtle pt-3 text-sm text-fg-secondary"
         >
           <p>
             Apply <strong className="text-fg">{reviewed.profile.label}</strong> to {contextLabel} in the selected

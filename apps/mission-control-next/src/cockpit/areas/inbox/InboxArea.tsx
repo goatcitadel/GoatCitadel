@@ -380,6 +380,7 @@ export function InboxArea() {
                     workspaceId={workspaceId}
                     selected={selectedId === item.id}
                     contextOpen={contextSelection?.scope === scopeKey && contextSelection.id === item.id}
+                    onDecision={(message, settled) => decisionRef.current(item, message, settled)}
                     onDetails={() => {
                       setSelectedId(item.id);
                       inspect(item, undefined, true);

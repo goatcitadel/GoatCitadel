@@ -284,9 +284,9 @@ export function useChatSurfaceOrchestration(input: {
         const confirmed = result.cancelled && result.trace.status === "cancelled";
         input.pushLocalNoticeRef.current?.(
           confirmed
-            ? `Stopped turn ${turnId.slice(-6)}.`
+            ? "You stopped this reply. What was written so far is kept."
             : "Cancellation was not confirmed. Refreshing the turn status.",
-          "warning",
+          confirmed ? "neutral" : "warning",
         );
         const reloadSession = input.loadSessionCoreStateRef.current;
         if (reloadSession) {

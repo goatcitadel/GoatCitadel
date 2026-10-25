@@ -42,3 +42,35 @@ it("names the target from the Inbox summary and never reads the approval record 
   act(() => root.unmount());
   client.clear();
 });
+
+it("offers in-row decisions only for safe and caution approvals; danger and nuclear keep a Review button", async () => {
+  const { canDecideInRow } = await import("./InboxRowDecision");
+  expect(canDecideInRow({ ...item, riskLevel: "safe" })).toBe(true);
+  expect(canDecideInRow({ ...item, riskLevel: "caution" })).toBe(true);
+  expect(canDecideInRow({ ...item, riskLevel: "danger" })).toBe(false);
+  expect(canDecideInRow({ ...item, riskLevel: "nuclear" })).toBe(false);
+  expect(canDecideInRow({ ...item, kind: "failed_run", riskLevel: "safe" })).toBe(false);
+  const container = document.createElement("div"),
+    root = createRoot(container);
+  const client = new QueryClient();
+  act(() =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <InboxItemCard
+          item={{ ...item, riskLevel: "danger" }}
+          workspaceId="w"
+          selected={false}
+          contextOpen={false}
+          onDetails={() => undefined}
+          onToggleContext={() => undefined}
+          onDecision={() => undefined}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toContain("Review");
+  expect(container.textContent).not.toContain("Approve once");
+  expect(container.querySelector("article")?.className).not.toContain("rounded-lg");
+  act(() => root.unmount());
+  client.clear();
+});
