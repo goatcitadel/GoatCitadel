@@ -393,6 +393,86 @@ describe("integration provider webhook routes", () => {
     );
   });
 
+  it("names a private conversation after the sender and a group after its title", async () => {
+    const connectionId = "11111111-1111-1111-1111-111111111111";
+    const getIntegrationConnection = vi.fn(() => ({
+      connectionId,
+      key: "telegram",
+      config: {
+        botToken: "telegram-bot-token",
+        webhookSecret: "telegram-webhook-secret",
+        telegramPairing: {
+          approved: [
+            { actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Sam Lee" },
+            { actorId: "888", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Alex" },
+          ],
+          pending: [],
+        },
+      },
+    }));
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    const privateUpdate = {
+      update_id: 9101,
+      message: {
+        message_id: 501,
+        from: { id: 777, is_bot: false, first_name: "Sam", last_name: "Lee", username: "sam" },
+        chat: { id: 777, type: "private", first_name: "Sam", last_name: "Lee" },
+        text: "hello from a private chat",
+      },
+    };
+    const groupUpdate = {
+      update_id: 9102,
+      message: {
+        message_id: 502,
+        from: { id: 888, is_bot: false, first_name: "Alex", username: "alex" },
+        chat: { id: -1001234567891, type: "group", title: "Family group" },
+        text: "hello from a group",
+      },
+    };
+
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection,
+      acceptInboundChannelEvent,
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    for (const update of [privateUpdate, groupUpdate]) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/integrations/connections/${connectionId}/telegram/webhook`,
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "telegram-webhook-secret",
+        },
+        payload: JSON.stringify(update),
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(2);
+    const [privateAccepted, groupAccepted] = acceptInboundChannelEvent.mock.calls.map(
+      ([input]) => input as { dispatchKind: string; message: { displayName?: string } },
+    );
+    expect(privateAccepted?.dispatchKind).toBe("agent_turn");
+    expect(privateAccepted?.message.displayName).toBe("Sam Lee");
+    expect(groupAccepted?.dispatchKind).toBe("agent_turn");
+    expect(groupAccepted?.message.displayName).toBe("Family group");
+  });
+
   it("handles Telegram /sethome before normal chat dispatch", async () => {
     const getIntegrationConnection = vi.fn(() => ({
       connectionId: "11111111-1111-1111-1111-111111111111",

@@ -77,8 +77,8 @@ export class SessionRepository {
         last_activity_at, updated_at
       ) VALUES (@sessionId, @sessionKey, @kind, @channel, @account, @displayName, @routingHintsJson, @timestamp, @timestamp)
       ON CONFLICT(session_key) DO UPDATE SET
-        display_name = excluded.display_name,
-        routing_hints_json = excluded.routing_hints_json,
+        display_name = COALESCE(excluded.display_name, sessions.display_name),
+        routing_hints_json = COALESCE(excluded.routing_hints_json, sessions.routing_hints_json),
         last_activity_at = excluded.last_activity_at,
         updated_at = excluded.updated_at
     `);

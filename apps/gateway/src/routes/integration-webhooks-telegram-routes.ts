@@ -247,6 +247,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
             threadId: routedTelegramMessage.threadId,
             actorId: parsed.actorId,
             actorType: parsed.actorType,
+            displayName: resolveTelegramConversationName(parsed.metadata),
             content: parsed.content,
             metadata: parsed.metadata,
           },
@@ -300,6 +301,15 @@ async function resolveRoutePersonalityCatalog(
 function readTelegramMetadataString(metadata: Record<string, unknown>, key: string): string | undefined {
   const value = metadata[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+// A private chat is named after the person; a group or channel after its title.
+function resolveTelegramConversationName(metadata: Record<string, unknown>): string | undefined {
+  const actorDisplayName = readTelegramMetadataString(metadata, "actorDisplayName");
+  if (readTelegramMetadataString(metadata, "chatType") === "private") {
+    return actorDisplayName;
+  }
+  return readTelegramMetadataString(metadata, "chatTitle") ?? actorDisplayName;
 }
 
 function withoutTelegramEphemeralCallbackMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
