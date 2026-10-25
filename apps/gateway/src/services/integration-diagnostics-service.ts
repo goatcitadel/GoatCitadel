@@ -6,13 +6,15 @@ import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.j
 import { appendQqbotStructuralChecks, runConfiguredQqbotChecks } from "./qqbot-live-probes.js";
 import { appendWecomStructuralChecks, runConfiguredWecomChecks } from "./wecom-live-probes.js";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
-import { evaluateChannelInboundAccess } from "@goatcitadel/contracts";
+import { GOOGLE_WORKSPACE_CATALOG_ID, evaluateChannelInboundAccess } from "@goatcitadel/contracts";
 import type {
   ChannelProbeReport,
   ConnectorDiagnosticReport,
   DiscordRuntimeStatus,
+  GoogleWorkspaceOAuthStatus,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
+import { buildGoogleWorkspaceConfigChecks, buildGoogleWorkspaceSignInChecks } from "./google-workspace-diagnostics.js";
 import {
   runIMessageBridgeLiveChecks,
   runLineBotLiveChecks,
@@ -67,6 +69,8 @@ export interface IntegrationDiagnosticsPort {
     envKey: string,
     catalogId: string,
   ): string | undefined;
+  /** Google sign-in readiness for a Gmail and Google Calendar connection, read from the OS keychain. */
+  getGoogleWorkspaceOAuthStatus?(connectionId: string): Promise<GoogleWorkspaceOAuthStatus>;
 }
 
 export class IntegrationDiagnosticsService {
@@ -433,18 +437,7 @@ export function buildIntegrationConnectionChecks(
       checkUrl("url", "Webhook base URL", deps.readConnectionConfigValue(config, "baseUrl"), true);
     }
     if (connection.key === "gmail") {
-      requireText("auth", "Gmail refresh token handle", deps.readConnectionConfigValue(config, "refreshTokenHandle"));
-      checks.push({
-        key: "auth_mode",
-        status:
-          hasConnectionEnvValue(deps, config, "clientIdEnv") && hasConnectionEnvValue(deps, config, "clientSecretEnv")
-            ? "pass"
-            : "warn",
-        message:
-          hasConnectionEnvValue(deps, config, "clientIdEnv") && hasConnectionEnvValue(deps, config, "clientSecretEnv")
-            ? "OAuth client env references are configured."
-            : "OAuth client env references are not fully configured yet.",
-      });
+      checks.push(...buildGoogleWorkspaceConfigChecks(config));
     }
     if (connection.key === "gif-search") {
       requireText("provider", "GIF search provider", deps.readConnectionConfigValue(config, "provider"), "warn");
@@ -656,6 +649,12 @@ export async function runIntegrationConnectionLiveChecks(
   }
   if (connection.catalogId === "productivity.github") {
     return { checks: await runGitHubLiveChecks(deps, connection) };
+  }
+  if (connection.catalogId === GOOGLE_WORKSPACE_CATALOG_ID) {
+    const readGoogleSignIn = deps.getGoogleWorkspaceOAuthStatus;
+    if (readGoogleSignIn) {
+      return { checks: buildGoogleWorkspaceSignInChecks(await readGoogleSignIn.call(deps, connection.connectionId)) };
+    }
   }
   if (connection.kind !== "channel") {
     return { checks: [] };

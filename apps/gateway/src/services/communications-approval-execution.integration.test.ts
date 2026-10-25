@@ -67,8 +67,10 @@ describe("communications approval execution through the real Gateway tool path",
       label: "WS2 Gmail integration test",
       enabled: true,
       status: "connected",
-      config: { accessTokenEnv: "GOATCITADEL_WS2_TEST_GMAIL_TOKEN" },
+      config: { clientId: "1234567890-ws2.apps.googleusercontent.com", gmailSend: true },
     });
+    // The OS keychain is not used in tests: stand in for the stored Google sign-in, keeping the real tool path.
+    vi.spyOn(gateway.googleWorkspaceOAuth, "resolveAccessToken").mockResolvedValue("ws2-test-gmail-token");
     const live = gateway;
     const dashboard = new CommunicationsDashboardService({
       createApproval: (input) => live.createApproval(input),
@@ -107,6 +109,8 @@ describe("communications approval execution through the real Gateway tool path",
       approvals.map((approval) => ({ approvalId: approval.approvalId, kind: approval.kind, status: approval.status })),
     ).toEqual([{ approvalId, kind: "communications.mail.send", status: "approved" }]);
     expect(gmailCalls).toHaveLength(1);
+    // The approved send took its token from the connection's Google sign-in, checked for Send Gmail.
+    expect(live.googleWorkspaceOAuth.resolveAccessToken).toHaveBeenCalledWith(connection.connectionId, "gmail.send");
     expect(pendingAction?.resolutionStatus).toBe("executed");
     // The recorded row is the Gateway-normalized request the policy engine matched.
     expect(pendingAction?.request).toMatchObject({ toolName: "gmail.send", workspaceId: "default" });

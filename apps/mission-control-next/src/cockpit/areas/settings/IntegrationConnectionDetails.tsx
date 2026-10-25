@@ -1,4 +1,6 @@
+import { GOOGLE_WORKSPACE_CATALOG_ID } from "@goatcitadel/contracts";
 import type { IntegrationSettingsOwner } from "../../../features/native-routes/settings/sections/use-integration-settings";
+import { GoogleWorkspaceSignIn } from "../../../features/native-routes/settings/GoogleWorkspaceSignIn";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { IntegrationFormFields, integrationInputClass } from "./IntegrationFormFields";
@@ -93,6 +95,13 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
           </ul>
           {s.diagnostics.recommendedNextAction ? <p>{s.diagnostics.recommendedNextAction}</p> : null}
         </section>
+      ) : null}
+      {connection.catalogId === GOOGLE_WORKSPACE_CATALOG_ID ? (
+        <GoogleWorkspaceSignIn
+          key={connection.connectionId}
+          connection={connection}
+          onChanged={() => void s.reload()}
+        />
       ) : null}
       <details className="text-sm">
         <summary className="cursor-pointer font-medium">Advertised operator actions</summary>

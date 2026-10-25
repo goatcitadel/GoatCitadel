@@ -7,14 +7,14 @@ Last updated: 2026-10-24
 Let an operator connect the common third-party services through paths that already work in other agent runtimes, instead of new GoatCitadel-specific connectors:
 
 - vendor-hosted remote MCP servers (the reviewed list Hermes Agent ships in `optional-mcps/`), and
-- for services with no vendor MCP server, the CLI-backed skills OpenClaw and Hermes Agent ship (`himalaya`, `github`; `gog` is held back, see E).
+- for services with no vendor MCP server, the CLI-backed skills OpenClaw and Hermes Agent ship (`himalaya`, `github`; `gog` is not shipped, see E).
 
 Everything stays under the existing Gateway governance: deny-wins policy, the network allowlist, connection reviews, first-tool approval, approval-gated `shell.exec`, and governed skill activation.
 
 ## Sources
 
 - Hermes Agent `optional-mcps/*/manifest.yaml` (MIT, Nous Research). Each entry names a vendor-documented Streamable HTTP endpoint and its auth type. Upstream commit: `07ee800dc7`.
-- OpenClaw `skills/himalaya` and `skills/github` (MIT, OpenClaw Foundation), with `skills/gog` reviewed but held back. Upstream commit: `7559fb21a57`.
+- OpenClaw `skills/himalaya` and `skills/github` (MIT, OpenClaw Foundation), with `skills/gog` reviewed but not shipped. Upstream commit: `7559fb21a57`.
 - The official MCP TypeScript SDK (`@modelcontextprotocol/sdk`, already in the workspace lockfile) for the OAuth discovery, client registration and PKCE helpers. Hermes Agent uses the Python SDK's equivalent.
 
 ## Current gaps this closes
@@ -22,7 +22,7 @@ Everything stays under the existing Gateway governance: deny-wins policy, the ne
 1. MCP OAuth needs a hand-entered `authorizationUrl`, `tokenUrl` and client-id env var. Vendor MCP servers instead publish RFC 9728 protected-resource metadata, RFC 8414 authorization-server metadata and RFC 7591 dynamic client registration, and require PKCE. The existing GitHub and Stripe templates therefore report `missing_oauth_config`.
 2. The redirect lands on a Gateway path with no handler, so operators copy the code by hand.
 3. The Cockpit template picker is a flat list of twelve rows with no search, category, host or provenance detail.
-4. No supported path exists for Google Workspace, generic IMAP mail, or GitHub CLI work from Chat.
+4. No supported path exists for Google Workspace, generic IMAP mail, or GitHub CLI work from Chat. (Google Workspace later got native sign-in for the Gmail and Calendar tools: see [GOOGLE_WORKSPACE_SIGN_IN.md](./GOOGLE_WORKSPACE_SIGN_IN.md).)
 
 ## Design
 
@@ -60,7 +60,7 @@ Everything stays under the existing Gateway governance: deny-wins policy, the ne
 - Skill Hub source review accepts a `packId` from `SHIPPED_SKILL_PACKS` (contracts) as an alternative to an HTTPS source. The Gateway resolves the directory itself, then runs the unchanged production admission (validation, promptware scan, tool mapping, exact-byte CAS snapshot). Both packs pass admission.
 - The Cockpit Library (Skills and tools) shows an "Integration skill packs" panel: review, then the existing Skill Hub `install_inactive` and `activate` approvals, with the next step derived from the Gateway's Skill Hub projection.
 - Each command runs through `shell.exec`, which requires approval by default. The skills tell the model never to request credentials in Chat, and to have the operator install and sign in to the CLI in a terminal. Multi-line bodies go through one explicit `sh -c` or `pwsh -Command` call, because imported skills cannot declare `fs.write`.
-- **`gog` is held back.** Skill Hub admission routes Google CLI/OAuth skills to the native integration (`google_cli_oauth` overlap) and rejects them, so a shipped `gog` pack would always be blocked. Shipping it needs an explicit product decision to relax that rule; Google Workspace otherwise stays on the native `gmail.*` / `calendar.*` path.
+- **`gog` is not shipped.** Native Google sign-in covers Google Workspace for the `gmail.*` and `calendar.*` tools (see [GOOGLE_WORKSPACE_SIGN_IN.md](./GOOGLE_WORKSPACE_SIGN_IN.md)), and no CLI skill ships for a service GoatCitadel integrates natively. The Skill Hub `google_cli_oauth` admission rule stays as it is, routing Google CLI/OAuth skills to the native integration.
 
 ### Hardening from independent review
 

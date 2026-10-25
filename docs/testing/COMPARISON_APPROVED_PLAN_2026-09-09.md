@@ -78,6 +78,15 @@ the Web & Search owners added in #464, as explicit C0 gate-reconciliation scope
 exceptions. Every original baseline-owner limit remains unchanged; this does not
 permit future growth above these caps.
 
+Additional operator clarification, October 25: the native Google Workspace sign-in
+for the Gmail and Calendar tools consolidates its route, diagnostics and action-host
+wiring into the existing owners within their original limits. Record the
+dependency/host caps of **19/0** for `google-workspace-oauth-service.ts`, the new
+Google sign-in owner, as an explicit C0 gate-reconciliation scope exception, following
+the October 23 **24/0** precedent for `web-search-credential-service.ts`. Every
+original baseline-owner limit remains unchanged; this does not permit future growth
+above this cap.
+
 ### 2. Simplify onboarding through the first useful response
 
 Use the existing guided setup and Change Plans to provide one continuous flow:

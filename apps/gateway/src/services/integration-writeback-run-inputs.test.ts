@@ -204,11 +204,16 @@ describe("integration-writeback-run-inputs", () => {
     const scope = liveScope(connection, "integration_operator_action", "write");
     const host = createHost([jsonResponse({ id: "msg-1" }), jsonResponse({ messages: [{ id: "msg-1" }] })]);
     const parts = expectInput(
-      buildGmailSendRunInput(host, connection, {
-        checkedAt: CHECKED_AT,
-        payload: gmailPayload,
-        idempotencyKey: "operator-key-1",
-      }),
+      buildGmailSendRunInput(
+        host,
+        connection,
+        {
+          checkedAt: CHECKED_AT,
+          payload: gmailPayload,
+          idempotencyKey: "operator-key-1",
+        },
+        "gmail-token",
+      ),
     );
     await parts.input.execute(createClaim(host.order, { routePath: scope.routePath, actorScope: scope.actorScope }));
     await parts.input.reconcileExternalOutcome!();
@@ -226,7 +231,7 @@ describe("integration-writeback-run-inputs", () => {
   it("gmail send carries the derived Message-ID", async () => {
     const host = createHost([jsonResponse({ id: "msg-1", threadId: "thread-1" })]);
     const parts = expectInput(
-      buildGmailSendRunInput(host, gmailConnection(), { checkedAt: CHECKED_AT, payload: gmailPayload }),
+      buildGmailSendRunInput(host, gmailConnection(), { checkedAt: CHECKED_AT, payload: gmailPayload }, "gmail-token"),
     );
     expect(parts.target).toBe("https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
     expect(parts.input.externalDestinationFingerprint).toBe(fingerprintExternalSideEffectDestination(parts.target));
@@ -246,11 +251,16 @@ describe("integration-writeback-run-inputs", () => {
   it("gmail probe searches by rfc822msgid", async () => {
     const host = createHost([jsonResponse({ messages: [{ id: "msg-9", threadId: "thread-9" }] })]);
     const parts = expectInput(
-      buildGmailSendRunInput(host, gmailConnection(), {
-        checkedAt: CHECKED_AT,
-        payload: gmailPayload,
-        idempotencyKey: "operator-key-1",
-      }),
+      buildGmailSendRunInput(
+        host,
+        gmailConnection(),
+        {
+          checkedAt: CHECKED_AT,
+          payload: gmailPayload,
+          idempotencyKey: "operator-key-1",
+        },
+        "gmail-token",
+      ),
     );
 
     const probe = await parts.input.reconcileExternalOutcome!();
@@ -274,11 +284,16 @@ describe("integration-writeback-run-inputs", () => {
   it("gmail probe reports not found and throws a generic error on a provider failure", async () => {
     const host = createHost([jsonResponse({}), jsonResponse({ error: "secret provider detail" }, 500)]);
     const parts = expectInput(
-      buildGmailSendRunInput(host, gmailConnection(), {
-        checkedAt: CHECKED_AT,
-        payload: gmailPayload,
-        idempotencyKey: "operator-key-1",
-      }),
+      buildGmailSendRunInput(
+        host,
+        gmailConnection(),
+        {
+          checkedAt: CHECKED_AT,
+          payload: gmailPayload,
+          idempotencyKey: "operator-key-1",
+        },
+        "gmail-token",
+      ),
     );
     await expect(parts.input.reconcileExternalOutcome!()).resolves.toMatchObject({ found: false });
     const failure = await parts.input.reconcileExternalOutcome!().catch((error: Error) => error);
@@ -289,12 +304,17 @@ describe("integration-writeback-run-inputs", () => {
   it("gmail replay finds the sent message and does not resend", async () => {
     const host = createHost([jsonResponse({ messages: [{ id: "msg-1" }] })]);
     const parts = expectInput(
-      buildGmailSendRunInput(host, gmailConnection(), {
-        checkedAt: CHECKED_AT,
-        payload: gmailPayload,
-        idempotencyKey: "operator-key-1",
-        replay: true,
-      }),
+      buildGmailSendRunInput(
+        host,
+        gmailConnection(),
+        {
+          checkedAt: CHECKED_AT,
+          payload: gmailPayload,
+          idempotencyKey: "operator-key-1",
+          replay: true,
+        },
+        "gmail-token",
+      ),
     );
     const claim = createClaim(host.order);
 
@@ -311,7 +331,12 @@ describe("integration-writeback-run-inputs", () => {
   it("gmail replay throws before the boundary when the probe fails", async () => {
     const host = createHost([jsonResponse({}, 503)]);
     const parts = expectInput(
-      buildGmailSendRunInput(host, gmailConnection(), { checkedAt: CHECKED_AT, payload: gmailPayload, replay: true }),
+      buildGmailSendRunInput(
+        host,
+        gmailConnection(),
+        { checkedAt: CHECKED_AT, payload: gmailPayload, replay: true },
+        "gmail-token",
+      ),
     );
     const claim = createClaim(host.order);
 
@@ -323,7 +348,12 @@ describe("integration-writeback-run-inputs", () => {
   it("gmail replay sends when the probe does not find the message", async () => {
     const host = createHost([jsonResponse({ resultSizeEstimate: 0 }), jsonResponse({ id: "msg-2" })]);
     const parts = expectInput(
-      buildGmailSendRunInput(host, gmailConnection(), { checkedAt: CHECKED_AT, payload: gmailPayload, replay: true }),
+      buildGmailSendRunInput(
+        host,
+        gmailConnection(),
+        { checkedAt: CHECKED_AT, payload: gmailPayload, replay: true },
+        "gmail-token",
+      ),
     );
     const claim = createClaim(host.order);
 
@@ -500,7 +530,7 @@ describe("integration-writeback-run-inputs", () => {
   it("skips the seal when the claim has no side-effect run id", async () => {
     const host = createHost([jsonResponse({ id: "msg-1" })]);
     const parts = expectInput(
-      buildGmailSendRunInput(host, gmailConnection(), { checkedAt: CHECKED_AT, payload: gmailPayload }),
+      buildGmailSendRunInput(host, gmailConnection(), { checkedAt: CHECKED_AT, payload: gmailPayload }, "gmail-token"),
     );
 
     await parts.input.execute(createClaim(host.order, { sideEffectRunId: undefined }));
@@ -511,9 +541,6 @@ describe("integration-writeback-run-inputs", () => {
 
   it("blocks when provider credentials are missing", () => {
     const host = createHost([]);
-    expect(
-      buildGmailSendRunInput(host, createConnection(), { checkedAt: CHECKED_AT, payload: gmailPayload }),
-    ).toMatchObject({ blockedReason: "gmail_auth_missing" });
     expect(
       buildTrelloCardCreateRunInput(host, createConnection({ catalogId: "productivity.trello" }), {
         checkedAt: CHECKED_AT,

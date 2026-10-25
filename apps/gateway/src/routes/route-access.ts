@@ -147,6 +147,7 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/dev/diagnostics/stream", accessClass: "sse-read" },
   { prefix: "/api/v1/dev", accessClass: "operator" },
   { prefix: "/api/v1/integrations/slack/oauth/callback", accessClass: "public" },
+  { prefix: "/api/v1/integrations/google/oauth/callback", accessClass: "public" },
   { prefix: "/api/v1/integrations/connections/:connectionId/:channel/inbound", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/connections/:connectionId/telegram/webhook", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/connections/:connectionId/whatsapp/webhook", accessClass: "webhook" },

@@ -2624,6 +2624,14 @@
       "maxDependencyMemberAccesses": 2,
       "reason": "Reviewed new owner for the Web & Search phases of the runtime-configuration Change Plan adapter (#464, operator clarification 2026-10-23): prepares, applies, resumes and observes engine-order and keychain credential changes. It reads only the evolution context's get and resumeOwnerInput, so the adapter delegates instead of growing.",
       "evidence": "2026-10-23: web-search-credential-change.test.ts covers engine-order apply and verify, secure-input prepare/confirm/store/verify, stale secure-input actions and key removal; repository counters measure 0 host callbacks and 2 dependency accesses."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/google-workspace-oauth-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 19,
+      "reason": "Reviewed new owner for native Google Workspace sign-in (operator clarification 2026-10-25): Google's installed-app OAuth (authorization code, PKCE S256, loopback redirect), refresh, revocation and per-capability scope gating for the Gmail and Calendar tools. It reads only its own options bag (secret store, integration connections, the in-memory PKCE store and the ledgered Google OAuth client) and keeps tokens and the client secret in the OS keychain, out of GatewayService and connection config. Its route, diagnostics and action-host wiring was consolidated into the existing owners within their original limits.",
+      "evidence": "2026-10-25: google-workspace-oauth-service.test.ts covers the PKCE challenge and verifier, single-use state, ledger rows without codes or tokens, granted-scope gating, single-flight refresh, invalid_grant renewal and revocation; repository counters measure 0 host callbacks and 19 dependency accesses (4 keychain, 2 connection, 4 PKCE store and 4 Google client calls, the rest constructor reads of its options)."
     }
   ]
 }

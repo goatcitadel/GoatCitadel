@@ -686,6 +686,12 @@ Operator-facing mutating JSON endpoints require `Idempotency-Key` and block dupl
 - `PATCH /api/v1/integrations/connections/:connectionId`
 - `DELETE /api/v1/integrations/connections/:connectionId`
 - `POST /api/v1/integrations/connections/:connectionId/:channel/inbound`
+- `GET /api/v1/integrations/connections/:connectionId/google-oauth`
+- `POST /api/v1/integrations/connections/:connectionId/google-oauth/start`
+- `POST /api/v1/integrations/connections/:connectionId/google-oauth/complete`
+- `POST /api/v1/integrations/connections/:connectionId/google-oauth/disconnect`
+- `GET /api/v1/integrations/google/oauth/callback` (public; hands the code back to Mission Control and exchanges nothing)
+  - Native Google sign-in for the Gmail and Calendar tools on an `automation.gmail` connection. See [docs/GOOGLE_WORKSPACE_SIGN_IN.md](./GOOGLE_WORKSPACE_SIGN_IN.md).
 
 ### Comms Helpers
 

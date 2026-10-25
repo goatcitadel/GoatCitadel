@@ -1,10 +1,15 @@
-import type {
-  IntegrationActionInvokeInput,
-  IntegrationActionInvokeResult,
-  IntegrationConnection,
-  IntegrationExternalWritebackResumeState,
-  IntegrationExternalWritebackReplayOutcome,
-  IntegrationOperatorAction,
+import {
+  GMAIL_SUMMARY_HEADERS,
+  GMAIL_UNTRUSTED_CONTENT_NOTICE,
+  summarizeGmailMessage,
+  type GmailMessageSummary,
+  type GoogleWorkspaceCapability,
+  type IntegrationActionInvokeInput,
+  type IntegrationActionInvokeResult,
+  type IntegrationConnection,
+  type IntegrationExternalWritebackResumeState,
+  type IntegrationExternalWritebackReplayOutcome,
+  type IntegrationOperatorAction,
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { invokeActivepiecesRunStatusAction } from "./activepieces-run-status-action.js";
@@ -77,6 +82,8 @@ export interface IntegrationActionHost {
     catalogId: string,
   ): string | undefined;
   publishRealtime(scope: string, channel: string, payload: Record<string, unknown>): Promise<unknown>;
+  /** The connection's native Google sign-in; Gmail actions never read a pasted access token. */
+  resolveGoogleWorkspaceAccessToken?(connectionId: string, capability: GoogleWorkspaceCapability): Promise<string>;
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
   mutationStore?: MutationIdempotencyStore;
   sideEffectRunStore?: ExternalSideEffectRunStore;
@@ -590,6 +597,13 @@ async function invokeTrelloAction(
   );
 }
 
+const OPERATOR_READ_MAX_RESULTS = 10;
+
+/**
+ * Gmail operator actions on a Google-signed-in connection. `read` returns bounded message
+ * metadata like the `gmail.read` tool; `write` sends one test message through the shared
+ * idempotent side-effect runner behind the Citadel Ward gate.
+ */
 async function invokeGmailAction(
   host: IntegrationActionHost,
   connection: IntegrationConnection,
@@ -598,105 +612,138 @@ async function invokeGmailAction(
   checkedAt: string,
   ward?: IntegrationWardContext,
 ): Promise<IntegrationActionInvokeResult> {
-  const token = host.resolveConnectionSecret(connection.config, "accessToken", "accessTokenEnv", connection.catalogId);
-  if (!token) {
+  if (actionId !== "read" && actionId !== "write") {
     return blocked(
       connection,
       actionId,
       checkedAt,
-      "Configure a Gmail access token before running operator actions.",
-      "gmail_auth_missing",
+      `Unsupported Gmail operator action: ${actionId}.`,
+      "action_unsupported",
     );
   }
+  const token = await resolveGmailActionToken(host, connection, actionId === "write" ? "gmail.send" : "gmail.read");
+  if ("message" in token) {
+    return blocked(connection, actionId, checkedAt, token.message, "gmail_auth_missing");
+  }
+  return actionId === "read"
+    ? await runRead(host, connection, token.accessToken, request, checkedAt)
+    : await runWrite(host, connection, token.accessToken, request, checkedAt, ward);
+}
 
-  if (actionId === "read") {
-    const url = new URL("/gmail/v1/users/me/messages", gmailApiBaseUrl());
-    const query = readStringInput(request.input, "query");
-    if (query) {
-      url.searchParams.set("q", query);
-    }
-    url.searchParams.set("maxResults", readStringInput(request.input, "maxResults") ?? "10");
-    const response = await host.fetchWithDiagnosticsTimeout(url.toString(), {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    const parsed = await parseResponse(response);
-    if (!response.ok) {
-      return failed(connection, actionId, checkedAt, parsed.message ?? `Gmail read failed (${response.status}).`, {
-        provider: "gmail",
-      });
-    }
-    const body = isRecord(parsed.output) ? parsed.output : {};
-    const items = Array.isArray(body.messages) ? body.messages.slice(0, 10) : [];
+/** The connection's Google sign-in, or the refusal the operator sees. Never a pasted token. */
+export async function resolveGmailActionToken(
+  host: Pick<IntegrationActionHost, "resolveGoogleWorkspaceAccessToken">,
+  connection: IntegrationConnection,
+  capability: GoogleWorkspaceCapability,
+): Promise<{ accessToken: string } | { message: string }> {
+  const resolveAccessToken = host.resolveGoogleWorkspaceAccessToken;
+  if (!resolveAccessToken) {
+    return { message: "Google sign-in is not available here. Connect Google before running Gmail actions." };
+  }
+  try {
+    return { accessToken: await resolveAccessToken.call(host, connection.connectionId, capability) };
+  } catch (error) {
     return {
-      connectionId: connection.connectionId,
-      catalogId: connection.catalogId,
-      actionId,
-      status: "executed",
-      message: `Fetched ${items.length} Gmail message${items.length === 1 ? "" : "s"}.`,
-      output: {
-        provider: "gmail",
-        items,
-      },
-      checkedAt,
+      message: (error instanceof Error ? error.message : "Google sign-in failed.").replace(/^blocked:\s*/u, ""),
     };
   }
+}
 
-  if (actionId === "write") {
-    const to = readStringInput(request.input, "to");
-    const subject = readStringInput(request.input, "subject");
-    const bodyText = readStringInput(request.input, "bodyText");
-    if (!to || !subject || !bodyText) {
-      return blocked(
-        connection,
-        actionId,
-        checkedAt,
-        "Provide recipient, subject, and body text before sending a Gmail operator test.",
-        "gmail_message_incomplete",
-      );
-    }
-    const parts = buildGmailSendRunInput(host, connection, {
-      checkedAt,
-      idempotencyKey: request.idempotencyKey,
-      payload: { provider: "gmail", to, subject, bodyText },
+async function runRead(
+  host: IntegrationActionHost,
+  connection: IntegrationConnection,
+  accessToken: string,
+  request: IntegrationActionInvokeInput,
+  checkedAt: string,
+): Promise<IntegrationActionInvokeResult> {
+  const url = new URL("/gmail/v1/users/me/messages", gmailApiBaseUrl());
+  const query = readStringInput(request.input, "query");
+  if (query) url.searchParams.set("q", query.slice(0, 512));
+  const requested = Number(readStringInput(request.input, "maxResults") ?? OPERATOR_READ_MAX_RESULTS);
+  const maxResults = Number.isInteger(requested) ? Math.min(Math.max(requested, 1), OPERATOR_READ_MAX_RESULTS) : 10;
+  url.searchParams.set("maxResults", String(maxResults));
+  const headers = { Authorization: `Bearer ${accessToken}` };
+  const fetchWithTimeout = host.fetchWithDiagnosticsTimeout.bind(host);
+  const list = await fetchWithTimeout(url.toString(), { method: "GET", headers });
+  const parsed = await parseResponse(list);
+  if (!list.ok) {
+    return failed(connection, "read", checkedAt, parsed.message ?? `Gmail read failed (${list.status}).`, {
+      provider: "gmail",
     });
-    if ("blockedReason" in parts) {
-      return blocked(connection, actionId, checkedAt, parts.message, parts.blockedReason, parts.output);
-    }
-    const replayRun = await runWardGatedExternalSideEffect(host, ward, parts.input, {
-      externalDestination: parts.target,
-    });
-    if (replayRun.status === "blocked") {
-      return blocked(connection, actionId, checkedAt, replayRun.message, replayRun.blockedReason, replayRun.output);
-    }
-    if (replayRun.status === "failed") {
-      return failed(connection, actionId, checkedAt, replayRun.error.message, replayRun.output);
-    }
-    const parsed = replayRun.value;
-    const output = normalizeProviderOutput(parsed.output);
-    return {
-      connectionId: connection.connectionId,
-      catalogId: connection.catalogId,
-      actionId,
-      status: "executed",
-      message: "Sent a Gmail operator test message through the configured connection.",
-      output: buildExternalSideEffectReplayOutput(replayRun.claim, {
-        provider: "gmail",
-        ...output,
-      }),
-      checkedAt,
-    };
   }
-
-  return blocked(
-    connection,
-    actionId,
+  const ids = (isRecord(parsed.output) && Array.isArray(parsed.output.messages) ? parsed.output.messages : [])
+    .map((item) => (isRecord(item) && typeof item.id === "string" ? item.id : ""))
+    .filter((id) => /^[A-Za-z0-9_-]{1,128}$/u.test(id))
+    .slice(0, maxResults);
+  const items: GmailMessageSummary[] = [];
+  for (const id of ids) {
+    const messageUrl = new URL(`/gmail/v1/users/me/messages/${encodeURIComponent(id)}`, gmailApiBaseUrl());
+    messageUrl.searchParams.set("format", "metadata");
+    for (const header of GMAIL_SUMMARY_HEADERS) messageUrl.searchParams.append("metadataHeaders", header);
+    const response = await fetchWithTimeout(messageUrl.toString(), { method: "GET", headers });
+    const message = await parseResponse(response);
+    const summary = response.ok ? summarizeGmailMessage(message.output) : undefined;
+    if (summary) items.push(summary);
+  }
+  return {
+    connectionId: connection.connectionId,
+    catalogId: connection.catalogId,
+    actionId: "read",
+    status: "executed",
+    message: `Fetched ${items.length} Gmail message${items.length === 1 ? "" : "s"}.`,
+    output: { provider: "gmail", items, contentTrust: "untrusted_external", notice: GMAIL_UNTRUSTED_CONTENT_NOTICE },
     checkedAt,
-    `Unsupported Gmail operator action: ${actionId}.`,
-    "action_unsupported",
+  };
+}
+
+async function runWrite(
+  host: IntegrationActionHost,
+  connection: IntegrationConnection,
+  accessToken: string,
+  request: IntegrationActionInvokeInput,
+  checkedAt: string,
+  ward?: IntegrationWardContext,
+): Promise<IntegrationActionInvokeResult> {
+  const to = readStringInput(request.input, "to");
+  const subject = readStringInput(request.input, "subject");
+  const bodyText = readStringInput(request.input, "bodyText");
+  if (!to || !subject || !bodyText) {
+    return blocked(
+      connection,
+      "write",
+      checkedAt,
+      "Provide recipient, subject, and body text before sending a Gmail operator test.",
+      "gmail_message_incomplete",
+    );
+  }
+  const parts = buildGmailSendRunInput(
+    host,
+    connection,
+    { checkedAt, idempotencyKey: request.idempotencyKey, payload: { provider: "gmail", to, subject, bodyText } },
+    accessToken,
   );
+  const replayRun = await runWardGatedExternalSideEffect(host, ward, parts.input, {
+    externalDestination: parts.target,
+  });
+  if (replayRun.status === "blocked") {
+    return blocked(connection, "write", checkedAt, replayRun.message, replayRun.blockedReason, replayRun.output);
+  }
+  if (replayRun.status === "failed") {
+    return failed(connection, "write", checkedAt, replayRun.error.message, replayRun.output);
+  }
+  const output = replayRun.value.output;
+  return {
+    connectionId: connection.connectionId,
+    catalogId: connection.catalogId,
+    actionId: "write",
+    status: "executed",
+    message: "Sent a Gmail operator test message through the configured connection.",
+    output: buildExternalSideEffectReplayOutput(replayRun.claim, {
+      provider: "gmail",
+      ...(isRecord(output) ? output : output === undefined ? {} : { raw: output }),
+    }),
+    checkedAt,
+  };
 }
 
 /**

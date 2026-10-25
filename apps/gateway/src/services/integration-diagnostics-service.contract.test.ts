@@ -356,49 +356,101 @@ describe("integration-diagnostics-service contract behavior", () => {
     );
   });
 
-  it("treats gmail connections as operator-ready when token handles and oauth env references exist", () => {
+  it("checks a Google connection's client ID and capability switches, and flags a pasted token as ignored", () => {
     const host = createPort();
-    host.readConnectionConfigValue = vi.fn((config: Record<string, unknown>, key: string) => {
-      const value = config[key];
-      return typeof value === "string" ? value : undefined;
-    });
-    const originalEnv = process.env.GMAIL_CLIENT_ID;
-    const originalSecret = process.env.GMAIL_CLIENT_SECRET;
-    process.env.GMAIL_CLIENT_ID = "client-id";
-    process.env.GMAIL_CLIENT_SECRET = "client-secret";
-    try {
-      const connection = createIntegrationConnection("gmail", "automation", {
+    const ready = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("gmail", "automation", {
+        clientId: "1234567890-abc.apps.googleusercontent.com",
+        gmailRead: true,
+        calendarWrite: true,
+      }),
+    );
+    expect(ready).toEqual([
+      expect.objectContaining({ key: "oauth_client", status: "pass" }),
+      expect.objectContaining({
+        key: "capabilities",
+        status: "pass",
+        message: "Turned on: Read Gmail, Create Calendar events.",
+      }),
+    ]);
+    const legacy = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("gmail", "automation", {
         refreshTokenHandle: "gmail-primary",
-        clientIdEnv: "GMAIL_CLIENT_ID",
-        clientSecretEnv: "GMAIL_CLIENT_SECRET",
-      });
+        accessToken: "ya29.x",
+      }),
+    );
+    expect(legacy).toEqual([
+      expect.objectContaining({ key: "oauth_client", status: "fail" }),
+      expect.objectContaining({ key: "capabilities", status: "warn" }),
+      expect.objectContaining({ key: "legacy_access_token", status: "warn" }),
+    ]);
+  });
 
-      const checks = buildIntegrationConnectionChecks(host, connection);
-
-      expect(checks).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            key: "auth",
-            status: "pass",
-          }),
-          expect.objectContaining({
-            key: "auth_mode",
-            status: "pass",
-          }),
-        ]),
-      );
-    } finally {
-      if (originalEnv === undefined) {
-        delete process.env.GMAIL_CLIENT_ID;
-      } else {
-        process.env.GMAIL_CLIENT_ID = originalEnv;
-      }
-      if (originalSecret === undefined) {
-        delete process.env.GMAIL_CLIENT_SECRET;
-      } else {
-        process.env.GMAIL_CLIENT_SECRET = originalSecret;
-      }
-    }
+  it("reports Google sign-in readiness and each switched-on scope without contacting Google", async () => {
+    const fetchWithDiagnosticsTimeout = vi.fn();
+    const port = {
+      ...createPort(),
+      fetchWithDiagnosticsTimeout,
+      getGoogleWorkspaceOAuthStatus: vi.fn(async (connectionId: string) => ({
+        connectionId,
+        keychainAvailable: true,
+        clientIdConfigured: true,
+        clientSecretSource: "keychain" as const,
+        redirectUri: "http://127.0.0.1:8787/api/v1/integrations/google/oauth/callback",
+        connected: true,
+        requiresReauth: false,
+        accountLabel: "operator@example.com",
+        grantedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+        capabilities: [
+          {
+            capability: "gmail.read" as const,
+            scope: "https://www.googleapis.com/auth/gmail.readonly",
+            write: false,
+            enabled: true,
+            granted: true,
+          },
+          {
+            capability: "gmail.send" as const,
+            scope: "https://www.googleapis.com/auth/gmail.send",
+            write: true,
+            enabled: true,
+            granted: false,
+          },
+          {
+            capability: "calendar.read" as const,
+            scope: "https://www.googleapis.com/auth/calendar.events.readonly",
+            write: false,
+            enabled: false,
+            granted: false,
+          },
+          {
+            capability: "calendar.write" as const,
+            scope: "https://www.googleapis.com/auth/calendar.events",
+            write: true,
+            enabled: false,
+            granted: false,
+          },
+        ],
+        legacyAccessTokenConfigured: false,
+      })),
+    };
+    const connection = createIntegrationConnection("gmail", "automation", {
+      clientId: "1234567890-abc.apps.googleusercontent.com",
+    });
+    const { checks } = await runIntegrationConnectionLiveChecks(port, connection, { includeSandboxSend: true });
+    expect(checks).toEqual([
+      expect.objectContaining({ key: "client_secret", status: "pass" }),
+      expect.objectContaining({
+        key: "sign_in",
+        status: "pass",
+        message: "Signed in to Google as operator@example.com.",
+      }),
+      expect.objectContaining({ key: "scope:gmail.read", status: "pass" }),
+      expect.objectContaining({ key: "scope:gmail.send", status: "fail" }),
+    ]);
+    expect(fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
   });
 
   it("checks the Notion token structurally and with a live users/me probe", async () => {

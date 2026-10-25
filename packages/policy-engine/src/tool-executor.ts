@@ -160,6 +160,12 @@ export interface ToolExecutorRuntimeHooks {
   deleteApprovalActionTokenSecret?: (secretRef: string) => void;
   /** Revalidate authenticated callback ingress immediately before a protected provider send. */
   isApprovalActionConnectorReady?: (connectionId: string) => Promise<boolean>;
+  /**
+   * Gateway-owned Google sign-in for the Gmail and Calendar tools: checks the connection's
+   * capability switch and granted scope, refreshes before expiry, and returns an access token.
+   * Absent means no native Google sign-in, so those tools stay unavailable.
+   */
+  resolveGoogleWorkspaceAccessToken?: (input: { connectionId: string; toolName: string }) => Promise<string>;
   /** Called at the concrete provider or irreversible mutation boundary. */
   beforeExternalSideEffect?: () => void | Promise<void>;
   /**

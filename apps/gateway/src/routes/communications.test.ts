@@ -33,7 +33,7 @@ describe("communications routes", () => {
             status: "connected",
             config: {
               address: "operator@example.test",
-              refreshTokenHandle: "gmail-primary",
+              clientSecretEnv: "GMAIL_CLIENT_SECRET",
               accessToken: "raw-token-that-must-not-leak",
             },
             createdAt: "2026-06-01T00:00:00.000Z",
@@ -60,7 +60,7 @@ describe("communications routes", () => {
         {
           accountId: "11111111-1111-4111-8111-111111111111",
           connectionId: "11111111-1111-4111-8111-111111111111",
-          secretRef: "gmail-primary",
+          secretRef: "GMAIL_CLIENT_SECRET",
         },
       ],
       messages: [{ messageId: "msg-1", subject: "Status" }],

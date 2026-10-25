@@ -134,18 +134,13 @@ export function deriveLocalBridgeIdempotencyKey(scope: WritebackDedupeScope): st
   return digestScope(LOCAL_BRIDGE_IDEMPOTENCY_KEY_DOMAIN, scope);
 }
 
+/** `token` is the connection's Google sign-in, resolved by the caller before any provider request. */
 export function buildGmailSendRunInput(
   host: IntegrationActionHost,
   connection: IntegrationConnection,
   options: WritebackRunInputOptions<GmailSendPayload>,
-): WritebackRunInputParts | WritebackRunInputBlocked {
-  const token = host.resolveConnectionSecret(connection.config, "accessToken", "accessTokenEnv", connection.catalogId);
-  if (!token) {
-    return {
-      blockedReason: "gmail_auth_missing",
-      message: "Configure a Gmail access token before running operator actions.",
-    };
-  }
+  token: string,
+): WritebackRunInputParts {
   const { payload } = options;
   const target = new URL("/gmail/v1/users/me/messages/send", gmailApiBaseUrl()).toString();
   const probe = async (scope: WritebackDedupeScope): Promise<ExternalSideEffectProbeResult> => {

@@ -1,6 +1,6 @@
 import type { ExternalSideEffectRunRecord, IntegrationConnection } from "@goatcitadel/contracts";
 import { hashExternalSideEffectPayload } from "./external-side-effect-runner-service.js";
-import type { IntegrationActionHost } from "./integration-action-service.js";
+import { resolveGmailActionToken, type IntegrationActionHost } from "./integration-action-service.js";
 import { getIntegrationOperatorActions } from "./integration-action-registry.js";
 import {
   buildGmailSendRunInput,
@@ -41,11 +41,19 @@ type SealedInputBuilder = (
   options: Omit<WritebackRunInputOptions<unknown>, "payload">,
 ) => WritebackRunInputParts | WritebackRunInputBlocked | undefined;
 
-export const reconstructSealedGmailSend: SealedReplayReconstructor = async (host, connection, run, checkedAt) =>
-  await reconstructFromSealedRecord(host, run, checkedAt, (payload, options) => {
+export const reconstructSealedGmailSend: SealedReplayReconstructor = async (host, connection, run, checkedAt) => {
+  // Without a usable Google sign-in for sending, the live connection can no longer build the input.
+  const token = await resolveGmailActionToken(host, connection, "gmail.send");
+  if (!("accessToken" in token)) {
+    return undefined;
+  }
+  return await reconstructFromSealedRecord(host, run, checkedAt, (payload, options) => {
     const gmail = readGmailPayload(payload);
-    return gmail ? buildGmailSendRunInput(host, connection, { ...options, payload: gmail }) : undefined;
+    return gmail
+      ? buildGmailSendRunInput(host, connection, { ...options, payload: gmail }, token.accessToken)
+      : undefined;
   });
+};
 
 export const reconstructSealedTrelloCardCreate: SealedReplayReconstructor = async (host, connection, run, checkedAt) =>
   await reconstructFromSealedRecord(host, run, checkedAt, (payload, options) => {

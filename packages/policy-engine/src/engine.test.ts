@@ -1243,6 +1243,38 @@ describe("ToolPolicyEngine invocation coverage", () => {
     expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps Gmail send and Calendar create as danger tools that ask for approval on every call", async () => {
+    const registry = new ToolRegistry();
+    for (const toolName of ["gmail.send", "calendar.create_event"]) {
+      expect(registry.get(toolName)).toMatchObject({ riskLevel: "danger", requiresApproval: true });
+    }
+    const resolveGoogleWorkspaceAccessToken = vi.fn(async () => "google-token");
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage, undefined, { resolveGoogleWorkspaceAccessToken });
+    const send = await engine.invoke({
+      toolName: "gmail.send",
+      args: { connectionId: "google", to: ["ops@example.com"], subject: "Hi", bodyText: "Body" },
+      agentId: "assistant",
+      sessionId: "session-google-writes",
+    });
+    const create = await engine.invoke({
+      toolName: "calendar.create_event",
+      args: {
+        connectionId: "google",
+        title: "Sync",
+        startIso: "2026-11-02T17:00:00.000Z",
+        endIso: "2026-11-02T17:30:00.000Z",
+      },
+      agentId: "assistant",
+      sessionId: "session-google-writes",
+    });
+
+    expect(send.outcome).toBe("approval_required");
+    expect(create.outcome).toBe("approval_required");
+    // A Google sign-in never substitutes for the approval: no token is resolved before a decision.
+    expect(resolveGoogleWorkspaceAccessToken).not.toHaveBeenCalled();
+  });
+
   it("blocks an invoke whose resolved Citadel has a matching deny Ward (enforcement on the invoke path)", async () => {
     const storage = createStorageStub();
     Object.assign(storage, {

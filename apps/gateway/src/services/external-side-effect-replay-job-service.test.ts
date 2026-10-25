@@ -71,6 +71,7 @@ function createHost(
       return typeof envValue === "string" && envValue.length > 0 ? envValue : undefined;
     }),
     publishRealtime: vi.fn(),
+    resolveGoogleWorkspaceAccessToken: vi.fn(async () => "gmail-token"),
     mutationStore: {
       claim: vi.fn(() => ({
         outcome: "claimed" as const,
@@ -583,7 +584,7 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
       key: "gmail",
       label: "Gmail",
       workspaceId: "ws-guarded",
-      config: { accessToken: "gmail-token" },
+      config: { gmailSend: true },
     });
     const run = buildRun({
       workspaceId: "ws-guarded",

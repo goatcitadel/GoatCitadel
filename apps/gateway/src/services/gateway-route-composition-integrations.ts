@@ -182,14 +182,25 @@ export function composeIntegrationChannelRouteDependencies(
     ];
     return kind ? mapped.filter((entry) => entry.kind === kind) : mapped;
   };
+  const requireNotificationRouting = () => gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+  const googleSignIn = gateway.googleWorkspaceOAuth;
   const integrations = createIntegrationRoutePort({
     approveDiscordPairing: (connectionId, pairingId) =>
       integrationChannel.approveDiscordPairing(connectionId, pairingId),
     createIntegrationConnection: (input, onCommitted) =>
       integrationChannel.createIntegrationConnection(input, onCommitted),
     deleteIntegrationConnection: (connectionId, expectedRevision, onCommitted) =>
-      integrationChannel.deleteIntegrationConnection(connectionId, expectedRevision, onCommitted),
+      googleSignIn.deleteConnection(
+        connectionId,
+        () => integrationChannel.deleteIntegrationConnection(connectionId, expectedRevision, onCommitted),
+        (error) => reportGoogleSignInCleanupFailure(gateway, connectionId, error),
+      ),
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
+    // Resolved per call, like every other dependency here, so a narrow test port need not carry it.
+    getGoogleWorkspaceOAuthStatus: (connectionId) => googleSignIn.getStatus(connectionId),
+    startGoogleWorkspaceOAuth: (connectionId, input) => googleSignIn.start(connectionId, input),
+    completeGoogleWorkspaceOAuth: (connectionId, input) => googleSignIn.complete(connectionId, input),
+    disconnectGoogleWorkspaceOAuth: (connectionId) => googleSignIn.disconnect(connectionId),
     ...createIntegrationFormGuidancePort(integrationChannel),
     getExternalConnectorAction: (sourceId, serviceId, actionId, workspaceId) =>
       externalConnectorCatalog.getAction(sourceId, serviceId, actionId, workspaceId),
@@ -218,47 +229,47 @@ export function composeIntegrationChannelRouteDependencies(
     listIntegrationPlugins: async () =>
       (await integrationChannel.listIntegrationPlugins()).map(projectIntegrationPluginConfiguration),
     listNotificationDeliveries: async (workspaceId, limit) => {
-      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      await requireNotificationRouting();
       return notificationRouting.listDeliveries(workspaceId, limit);
     },
     listNotificationRules: async (workspaceId, includeArchived) => {
-      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      await requireNotificationRouting();
       return notificationRouting.listRules(workspaceId, includeArchived);
     },
     listNotificationTargets: async (workspaceId, includeArchived) => {
-      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      await requireNotificationRouting();
       return notificationRouting.listTargets(workspaceId, includeArchived);
     },
     createNotificationRule: async (workspaceId, input) => {
-      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      await requireNotificationRouting();
       return notificationRouting.createRule(workspaceId, input);
     },
     createNotificationTarget: async (workspaceId, input) => {
-      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      await requireNotificationRouting();
       return notificationRouting.createTarget(workspaceId, input);
     },
     dispatchNotificationEvent: async (workspaceId, input) => {
-      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      await requireNotificationRouting();
       return notificationRouting.dispatch(workspaceId, input);
     },
     requestNotification: async (workspaceId, input) => {
-      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      await requireNotificationRouting();
       return notificationRouting.request(workspaceId, input);
     },
     sendTestNotification: async (workspaceId, targetId) => {
-      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      await requireNotificationRouting();
       return notificationRouting.sendTest(workspaceId, targetId);
     },
     updateNotificationRule: async (workspaceId, ruleId, expectedRevision, input) => {
-      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      await requireNotificationRouting();
       return notificationRouting.updateRule(workspaceId, ruleId, expectedRevision, input);
     },
     updateNotificationTarget: async (workspaceId, targetId, expectedRevision, input) => {
-      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      await requireNotificationRouting();
       return notificationRouting.updateTarget(workspaceId, targetId, expectedRevision, input);
     },
     upsertNotificationPresence: async (input) => {
-      await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      await requireNotificationRouting();
       return notificationRouting.upsertPresence(input);
     },
     reconnectDiscordRuntime: (connectionId) => integrationChannel.reconnectDiscordRuntime(connectionId),
@@ -543,6 +554,7 @@ export function createIntegrationDiagnosticsServiceForGateway(
     readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
     resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
       gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
+    getGoogleWorkspaceOAuthStatus: (connectionId) => gateway.googleWorkspaceOAuth.getStatus(connectionId),
   });
 }
 
@@ -669,6 +681,21 @@ function assertDiscordConnection(connection: IntegrationConnection): void {
   }
 }
 
+/** The connection is already gone; its Google sign-in could not be revoked or removed from the OS keychain. */
+function reportGoogleSignInCleanupFailure(
+  gateway: GatewayRouteCompositionPort,
+  connectionId: string,
+  error: unknown,
+): void {
+  gateway.recordDevDiagnostic({
+    level: "warn",
+    category: "integrations",
+    event: "google_workspace.sign_in_cleanup_failed",
+    message: "A deleted Google connection left its sign-in in the OS keychain or at Google.",
+    context: { connectionId, errorName: error instanceof Error ? error.name : "unknown" },
+  });
+}
+
 /**
  * The single construction site for the integration-action host. Used by the route
  * composition above AND by the gateway's approved dry-run commit replay, so the two
@@ -683,6 +710,8 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
     resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
       gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
     publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
+    resolveGoogleWorkspaceAccessToken: (connectionId, capability) =>
+      gateway.googleWorkspaceOAuth.resolveAccessToken(connectionId, capability),
     evidenceEnvelopeService: gateway.evidenceEnvelopeService,
     mutationStore: gateway.mutationIdempotencyStore,
     sideEffectRunStore: storage.externalSideEffectRuns,

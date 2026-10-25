@@ -150,6 +150,9 @@ export const authPlugin = fp(async (fastify) => {
     if (request.url.split("?", 1)[0] === "/api/v1/mcp/oauth/callback") {
       return;
     }
+    if (request.url.split("?", 1)[0] === "/api/v1/integrations/google/oauth/callback") {
+      return;
+    }
     if (
       isGenericChannelInboundPath(request.url) ||
       isLineWebhookPath(request.url) ||
