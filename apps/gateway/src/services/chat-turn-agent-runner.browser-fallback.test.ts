@@ -7374,6 +7374,89 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(result.assistantContent).toContain("Safe Auto");
   });
 
+  // #501: an ambiguous request gets a clarifying question first, still without a model or tool call.
+  it("asks a clarifying question plus the tools-off note for an ambiguous manual-autonomy request", async () => {
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>();
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-manual-ambiguous-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-manual-ambiguous-1",
+      content: "Research the best option for me and decide.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "manual",
+      historyMessages: [{ role: "user", content: "Research the best option for me and decide." }],
+    });
+
+    expect(createChatCompletion).not.toHaveBeenCalled();
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.assistantContent).toContain('"The best option" for what?');
+    expect(result.assistantContent).toContain("tool autonomy is set to Manual");
+    expect(result.assistantContent).toContain("Inspect > Conversation > Tool autonomy");
+    expect(result.assistantContent).not.toContain("I can't fetch web-backed information");
+  });
+
+  it.each([
+    {
+      label: "a clear request",
+      content: "Research the best option for a 14-inch laptop under $1000 and decide.",
+      historyMessages: [
+        { role: "user", content: "Research the best option for a 14-inch laptop under $1000 and decide." },
+      ],
+    },
+    {
+      label: "an ambiguous request whose referent an earlier turn gave",
+      content: "Research the best option for me and decide.",
+      historyMessages: [
+        { role: "user", content: "I'm choosing between Postgres and SQLite for a small app." },
+        { role: "assistant", content: "Both can work; it depends on concurrency." },
+        { role: "user", content: "Research the best option for me and decide." },
+      ],
+    },
+  ])("keeps the truthful manual-autonomy decline for $label", async ({ content, historyMessages }) => {
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>();
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-manual-clear-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-manual-clear-1",
+      content,
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "manual",
+      historyMessages,
+    });
+
+    expect(createChatCompletion).not.toHaveBeenCalled();
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.assistantContent).toContain("I can't fetch web-backed information");
+    expect(result.assistantContent).toContain("Inspect > Conversation > Tool autonomy");
+    expect(result.assistantContent).not.toContain("for what?");
+  });
+
   it("does not trap a fresh standalone prompt in an old clarification exchange", async () => {
     const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
       model: "glm-5",
