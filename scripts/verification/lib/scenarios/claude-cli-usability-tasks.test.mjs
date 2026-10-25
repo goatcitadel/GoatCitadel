@@ -61,6 +61,10 @@ test("planning and memory tasks run on safe_auto, so they can reach the tools th
   for (const id of ["P-01", "P-02", "P-03", "M-01", "M-02", "M-03"]) {
     assert.equal(CLAUDE_CLI_USABILITY_TASKS.find((task) => task.id === id).prefs.toolAutonomy, "safe_auto", id);
   }
+  // On safe_auto the recall tasks call memory.search, which asks for approval; without an answer the turn waits.
+  for (const id of ["M-02", "M-03"]) {
+    assert.equal(CLAUDE_CLI_USABILITY_TASKS.find((task) => task.id === id).approval, "approve", id);
+  }
 });
 
 test("tasks that need the web run with safe_auto tool autonomy, because manual autonomy blocks web tools", () => {
