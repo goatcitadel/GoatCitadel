@@ -55,6 +55,18 @@ test("the write-and-run code tasks run on safe_auto, so they reach the bridged t
   }
 });
 
+test("planning and memory tasks run on safe_auto, so they can reach the tools they test (#563)", () => {
+  // Manual autonomy gives the model no tools: P-01 could not delegate, P-02 never raised its Inbox approval,
+  // P-03 had no tools to report, and M-01..M-03 never reached the memory tools.
+  for (const id of ["P-01", "P-02", "P-03", "M-01", "M-02", "M-03"]) {
+    assert.equal(CLAUDE_CLI_USABILITY_TASKS.find((task) => task.id === id).prefs.toolAutonomy, "safe_auto", id);
+  }
+  // On safe_auto the recall tasks call memory.search, which asks for approval; without an answer the turn waits.
+  for (const id of ["M-02", "M-03"]) {
+    assert.equal(CLAUDE_CLI_USABILITY_TASKS.find((task) => task.id === id).approval, "approve", id);
+  }
+});
+
 test("tasks that need the web run with safe_auto tool autonomy, because manual autonomy blocks web tools", () => {
   for (const id of ["R-01", "R-02", "E-02"]) {
     assert.equal(CLAUDE_CLI_USABILITY_TASKS.find((task) => task.id === id).prefs.toolAutonomy, "safe_auto", id);
