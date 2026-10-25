@@ -6,6 +6,7 @@ import type { McpAuthStateRecord, McpAuthStateUpdate } from "./mcp-server-admin-
 import type { McpCredentialRetirementStore } from "./mcp-credential-retirement-store.js";
 import type { McpCredentialStagingStore } from "./mcp-credential-staging-store.js";
 import { isMcpOAuthTokenRefForServer } from "./mcp-oauth-token-service.js";
+import { isMcpAuthorizationServerRecord } from "./mcp-oauth-discovery.js";
 import { newMcpServerRevision, mcpServerRevision, assertMcpConnectionReview } from "./mcp-server-revision.js";
 import { callerOwnedServers, assertUniqueServers, assertConfigurationSnapshot, jsonMaterial } from "./mcp-server-state-helpers.js";
 const MCP_SERVERS_SETTING_KEY = "mcp_servers_v1";
@@ -104,6 +105,7 @@ function assertAuthStateTarget(serverId: string, state: McpAuthStateRecord | und
     "oauthState",
     "scopes",
     "resourceIndicator",
+    "authorizationServer",
     "updatedAt",
     "lastRefreshedAt",
     "error",
@@ -112,6 +114,9 @@ function assertAuthStateTarget(serverId: string, state: McpAuthStateRecord | und
   ]);
   if (Object.keys(state).some((key) => !allowed.has(key))) {
     throw new ConflictError({ message: "MCP auth state contains unsupported fields." });
+  }
+  if (state.authorizationServer !== undefined && !isMcpAuthorizationServerRecord(state.authorizationServer)) {
+    throw new ConflictError({ message: "MCP discovered authorization server record is invalid." });
   }
   if (state.tokenRequest !== undefined) {
     const request = state.tokenRequest;

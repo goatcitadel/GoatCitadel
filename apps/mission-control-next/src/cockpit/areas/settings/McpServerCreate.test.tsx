@@ -15,6 +15,7 @@ import { __resetFormDirtyRegistryForTests } from "../../../features/native-route
 
 const api = vi.hoisted(() => ({
   fetchMcpServers: vi.fn(), fetchMcpTemplates: vi.fn(), createMcpServer: vi.fn(), fetchMcpServer: vi.fn(), getGatewayApiBaseUrl: vi.fn(),
+  fetchSettings: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", async original => ({ ...(await original<object>()), ...api }));
 const saved: McpServerRecord = {
@@ -45,6 +46,7 @@ beforeEach(() => {
   api.getGatewayApiBaseUrl.mockReturnValue("http://gateway-a.invalid");
   __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests();
   api.fetchMcpServers.mockResolvedValue({ items: [] });
+  api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: [] });
   api.fetchMcpTemplates.mockResolvedValue({ items: [{ ...saved, templateId: "fixture", description: "Disabled fixture", enabledByDefault: false }] });
   api.createMcpServer.mockResolvedValue(structuredClone(saved));
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -1,5 +1,11 @@
 import { persistMcpOAuthTokenResponse, accessTokenAccount, refreshTokenAccount, type TokenResponse } from "./mcp-oauth-token-persistence.js";
-import type { McpOAuthConfig, McpOAuthReadiness, McpServerRecord } from "@goatcitadel/contracts";
+import {
+  hasMcpOAuthEndpointSource,
+  type McpOAuthConfig,
+  type McpOAuthReadiness,
+  type McpServerRecord,
+} from "@goatcitadel/contracts";
+import { mcpOAuthPkceStore } from "./mcp-oauth-discovery.js";
 import { logger } from "@goatcitadel/gateway-core";
 import { fetchAllowlisted, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
@@ -9,7 +15,8 @@ import type { McpConnectionFence } from "./mcp-static-environment-service.js";
 
 export interface McpOAuthTokenServiceOptions {
   secretStore: Pick<SecretStoreService, "setSecret" | "getSecret" | "deleteSecret"> & Partial<Pick<SecretStoreService, "setSecretForCustody" | "supportsCredentialWriteReceipts">>;
-  networkAllowlist: string[];
+  /** A getter reads the live allowlist; settings edits replace the array, so a startup snapshot goes stale. */
+  networkAllowlist: string[] | (() => string[]);
   env?: NodeJS.ProcessEnv;
   environmentResolver?: (server: McpServerRecord, fence?: McpConnectionFence) => Promise<NodeJS.ProcessEnv>;
   stageCredentials?: (serverId: string, refs: readonly string[], write: (custodyId?: string, writeId?: string) => undefined) => Promise<void>;
@@ -17,9 +24,12 @@ export interface McpOAuthTokenServiceOptions {
 
 export class McpOAuthTokenService {
   private readonly env: NodeJS.ProcessEnv;
+  private readonly networkAllowlist: () => string[];
 
   public constructor(private readonly options: McpOAuthTokenServiceOptions) {
     this.env = options.env ?? process.env;
+    const allowlist = options.networkAllowlist;
+    this.networkAllowlist = typeof allowlist === "function" ? allowlist : () => allowlist;
   }
 
   public async exchangeAuthorizationCode(
@@ -30,18 +40,24 @@ export class McpOAuthTokenService {
     fence?: McpConnectionFence,
   ): Promise<McpAuthStateRecord> {
     if (server.authType !== "oauth2") throw new Error("MCP OAuth exchange requires oauth2 configuration.");
-    const oauth = requireOAuthConfig(server);
+    const oauth = requireOAuthConfig(server, stateRecord);
+    const codeVerifier = mcpOAuthPkceStore.read(server.serverId, stateRecord.oauthState);
+    if (!codeVerifier && oauth.discovered) {
+      throw new Error("This sign-in has expired or the Gateway restarted; start Connect again for this server.");
+    }
     const response = await this.requestToken(
       server,
       oauth,
       {
         grant_type: "authorization_code",
         code,
-        redirect_uri: oauth.redirectUri?.trim() || "http://127.0.0.1:8787/api/v1/mcp/oauth/callback",
+        redirect_uri: oauth.redirectUri?.trim() || DEFAULT_REDIRECT_URI,
+        ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
       },
       beforeRequest,
       fence,
     );
+    mcpOAuthPkceStore.discard(server.serverId);
     return this.persistTokenResponse(server.serverId, response, {
       ...stateRecord,
       // A new authorization grant must not inherit the previous grant's refresh token or scopes.
@@ -134,7 +150,7 @@ export class McpOAuthTokenService {
     stateRecord: McpAuthStateRecord,
     beforeRequest?: () => Promise<void>,
   ): Promise<{ accessToken: string; state: McpAuthStateRecord }> {
-    const oauth = requireOAuthConfig(server);
+    const oauth = requireOAuthConfig(server, stateRecord);
     const refreshToken = stateRecord.refreshTokenRef
       ? this.readSecretRef(stateRecord.refreshTokenRef, server.serverId, "refresh-token")
       : undefined;
@@ -166,7 +182,7 @@ export class McpOAuthTokenService {
 
   private async requestToken(
     server: McpServerRecord,
-    oauth: Required<Pick<McpOAuthConfig, "tokenUrl">> & McpOAuthConfig,
+    oauth: ResolvedMcpOAuthConfig,
     params: Record<string, string>,
     beforeRequest?: () => Promise<void>,
     fence?: McpConnectionFence,
@@ -174,8 +190,9 @@ export class McpOAuthTokenService {
     if (!beforeRequest) throw new Error("MCP OAuth token requests require a durable boundary owner.");
     const tokenUrl = oauth.tokenUrl.trim();
     const body = new URLSearchParams(params);
-    const environment = this.options.environmentResolver ? await this.options.environmentResolver(server, fence) : this.env;
-    const clientId = readEnv(environment, oauth.clientIdEnv);
+    const resolveEnvironment = this.options.environmentResolver;
+    const environment = resolveEnvironment ? await resolveEnvironment(server, fence) : this.env;
+    const clientId = oauth.discovered?.clientId ?? readEnv(environment, oauth.clientIdEnv);
     const clientSecret = readEnv(environment, oauth.clientSecretEnv);
     if (clientId) {
       body.set("client_id", clientId);
@@ -186,9 +203,12 @@ export class McpOAuthTokenService {
     if (oauth.scopes?.length && !body.has("scope")) {
       body.set("scope", oauth.scopes.join(" "));
     }
+    if (oauth.discovered) {
+      body.set("resource", oauth.discovered.resource);
+    }
     await beforeRequest();
     const response = await fetchAllowlisted(tokenUrl, {
-      allowlist: this.options.networkAllowlist,
+      allowlist: this.networkAllowlist(),
       timeoutMs: 15000,
       init: {
         method: "POST",
@@ -252,7 +272,7 @@ export function buildPublicMcpAuthState(
       readiness: "not_required",
     };
   }
-  if (!server.oauth?.authorizationUrl?.trim() || !server.oauth.tokenUrl?.trim()) {
+  if (!hasMcpOAuthEndpointSource(server.oauth)) {
     return {
       authType: "oauth2",
       readiness: "missing_oauth_config",
@@ -274,6 +294,7 @@ export function buildPublicMcpAuthState(
     return {
       authType: "oauth2",
       readiness: "needs_auth",
+      ...(stateRecord?.authorizationServer ? { authorizationIssuer: stateRecord.authorizationServer.issuer } : {}),
       scopes: stateRecord?.scopes,
       updatedAt: stateRecord?.updatedAt,
       error: stateRecord?.error,
@@ -287,6 +308,7 @@ export function buildPublicMcpAuthState(
     refreshTokenRef: stateRecord.refreshTokenRef,
     tokenExpiresAt: stateRecord.tokenExpiresAt,
     scopes: stateRecord.scopes,
+    ...(stateRecord.authorizationServer ? { authorizationIssuer: stateRecord.authorizationServer.issuer } : {}),
     updatedAt: stateRecord.updatedAt,
     lastRefreshedAt: stateRecord.lastRefreshedAt,
     error: stateRecord.error,
@@ -345,14 +367,21 @@ export function buildMcpStaleAuthInvokeError(
   );
 }
 
-function requireOAuthConfig(server: McpServerRecord): Required<Pick<McpOAuthConfig, "tokenUrl">> & McpOAuthConfig {
-  if (!server.oauth?.tokenUrl?.trim()) {
-    throw new Error("MCP OAuth tokenUrl is not configured for this server.");
+const DEFAULT_REDIRECT_URI = "http://127.0.0.1:8787/api/v1/mcp/oauth/callback";
+
+type ResolvedMcpOAuthConfig = Required<Pick<McpOAuthConfig, "tokenUrl">> &
+  McpOAuthConfig & { discovered?: NonNullable<McpAuthStateRecord["authorizationServer"]> };
+
+/** Saved endpoints win; otherwise the token endpoint and client id come from the discovered record. */
+function requireOAuthConfig(server: McpServerRecord, stateRecord?: McpAuthStateRecord): ResolvedMcpOAuthConfig {
+  if (server.oauth?.tokenUrl?.trim() && (server.oauth.authorizationUrl?.trim() || server.oauth.metadataDiscovery !== true)) {
+    return { ...server.oauth, tokenUrl: server.oauth.tokenUrl };
   }
-  return {
-    ...server.oauth,
-    tokenUrl: server.oauth.tokenUrl,
-  };
+  const discovered = server.oauth?.metadataDiscovery === true ? stateRecord?.authorizationServer : undefined;
+  if (!discovered) {
+    throw new Error("MCP OAuth token endpoint is not known for this server; start Connect again.");
+  }
+  return { ...server.oauth, tokenUrl: discovered.tokenEndpoint, discovered };
 }
 
 function readEnv(env: NodeJS.ProcessEnv, key?: string): string | undefined {

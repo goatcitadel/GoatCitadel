@@ -256,11 +256,22 @@ export interface McpServerPolicy {
 export interface McpOAuthConfig {
   authorizationUrl?: string;
   tokenUrl?: string;
+  /**
+   * Discover the authorization server from the MCP server URL (RFC 9728, then RFC 8414 / OIDC)
+   * instead of saved endpoints. Without `clientIdEnv` the Gateway registers a public client
+   * (RFC 7591). Every request still honours the operator network allowlist.
+   */
+  metadataDiscovery?: boolean;
   clientIdEnv?: string;
   clientSecretEnv?: string;
   scopes?: string[];
   redirectUri?: string;
   tokenRefreshSkewSeconds?: number;
+}
+
+/** True when OAuth can find its endpoints: saved authorization and token URLs, or metadata discovery. */
+export function hasMcpOAuthEndpointSource(oauth: McpOAuthConfig | undefined): boolean {
+  return Boolean(oauth?.metadataDiscovery === true || (oauth?.authorizationUrl?.trim() && oauth.tokenUrl?.trim()));
 }
 
 export type McpOAuthReadiness = "not_required" | "needs_auth" | "ready" | "expired" | "missing_oauth_config";
@@ -272,6 +283,8 @@ export interface McpServerAuthState {
   refreshTokenRef?: string;
   tokenExpiresAt?: string;
   scopes?: string[];
+  /** Issuer of the discovered authorization server, when metadata discovery is in use. */
+  authorizationIssuer?: string;
   updatedAt?: string;
   lastRefreshedAt?: string;
   error?: string;
@@ -333,6 +346,21 @@ export interface McpServerTemplateRecord {
   costTier: McpCostTier;
   policy: McpServerPolicy;
   enabledByDefault: boolean;
+  /** Hosts the operator must allow before this server can connect. Never added automatically. */
+  networkHosts?: string[];
+  /** Where this template came from; display-only, never invocation authority. */
+  provenance?: McpServerTemplateProvenance;
+  /** Operator-facing risk notes shown before the server is created. */
+  riskNotes?: string[];
+}
+
+export interface McpServerTemplateProvenance {
+  /** Catalog the entry was reviewed from, for example "hermes-agent/optional-mcps". */
+  catalog: string;
+  catalogLicense: string;
+  catalogCommit: string;
+  /** Vendor documentation for the endpoint. */
+  documentationUrl?: string;
 }
 
 /** Bounded retained Chat proof, never connection health or future invocation authority. */

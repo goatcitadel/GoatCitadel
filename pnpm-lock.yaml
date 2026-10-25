@@ -163,6 +163,9 @@ importers:
       '@inquirer/prompts':
         specifier: 7.10.1
         version: 7.10.1(@types/node@25.9.1)
+      '@modelcontextprotocol/sdk':
+        specifier: 1.32.0
+        version: 1.32.0(zod@4.6.6)
       '@sigstore/bundle':
         specifier: 4.0.0
         version: 4.0.0

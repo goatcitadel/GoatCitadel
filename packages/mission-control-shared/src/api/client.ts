@@ -935,6 +935,7 @@ export {
 export {
   createSkillHubOperatorApproval,
   fetchSkillHubOperator,
+  reviewSkillHubPack,
   type CreateSkillHubOperatorApprovalResponse,
   type SkillHubOperatorAction,
   type SkillHubOperatorActionGuard,

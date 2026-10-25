@@ -33,10 +33,24 @@ function rejected(error: unknown, id: string, action: McpOAuthAction) {
   )
     return false;
   return (
-    error.status === 409 &&
-    body.code === "WRITE_CONFLICT" &&
-    ["MCP_SERVER_REVIEW_REQUIRED", "MCP_CONNECTION_REVIEW_REQUIRED"].includes(String(details?.reason))
+    (error.status === 409 &&
+      body.code === "WRITE_CONFLICT" &&
+      ["MCP_SERVER_REVIEW_REQUIRED", "MCP_CONNECTION_REVIEW_REQUIRED"].includes(String(details?.reason))) ||
+    discoveryRejection(error) !== undefined
   );
+}
+/**
+ * Sign-in discovery (start) and the PKCE verifier check (complete) both run before admission; their 400
+ * names the reason and changed nothing. A committed body never qualifies (see `rejected`).
+ */
+function discoveryRejection(error: unknown): string | undefined {
+  if (!isApiRequestError(error) || error.status !== 400 || !error.body || typeof error.body !== "object")
+    return undefined;
+  const body = error.body as Record<string, unknown>,
+    details = body.details as Record<string, unknown> | undefined;
+  return body.code === "FIELD_INVALID" && details?.field === "oauth" && typeof body.error === "string"
+    ? body.error.slice(0, 600)
+    : undefined;
 }
 export async function commitMcpOAuth({
   reviewed,
@@ -135,11 +149,14 @@ export async function commitMcpOAuth({
   } catch (error) {
     if (!dispatched || (!acknowledged && rejected(error, id, action))) {
       writeMcpServerAttempt(id, IDLE_MCP_ATTEMPT);
+      const discovery = dispatched && !acknowledged ? discoveryRejection(error) : undefined;
       return {
         status: dispatched ? "conflict" : "unavailable",
-        message: dispatched
-          ? "The reviewed request was rejected before admission. Refresh before reviewing again."
-          : "Current OAuth metadata could not be verified.",
+        message: discovery
+          ? `${/[.!?]$/u.test(discovery) ? discovery : `${discovery}.`} Nothing changed; fix this, then review authorization again.`
+          : dispatched
+            ? "The reviewed request was rejected before admission. Refresh before reviewing again."
+            : "Current OAuth metadata could not be verified.",
       };
     }
     const message =

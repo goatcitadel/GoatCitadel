@@ -611,6 +611,7 @@ import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import type { McpRequesterScopePosture } from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import { McpOAuthTokenService } from "./mcp-oauth-token-service.js";
+import { createAllowlistedOAuthFetch, discoverMcpAuthorizationServer } from "./mcp-oauth-discovery.js";
 import {
   McpStaticEnvironmentService,
   readMcpStaticEnvironment,
@@ -1498,7 +1499,7 @@ export class GatewayService {
     this.mcpOAuthTokenService = new McpOAuthTokenService({
       secretStore,
       stageCredentials: (...args) => this.stageMcpCredentialVersions(...args),
-      networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
+      networkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
       environmentResolver: async (server, fence) =>
         readMcpStaticEnvironment(await this.mcpStaticEnvironment.capture(server, fence), server),
     });
@@ -1940,6 +1941,7 @@ export class GatewayService {
         path.resolve(config.rootDir, config.assistant.dataDir, "skill-hub", "artifacts"),
       ),
       skillImport: this.skillImportService,
+      shippedSkillPackRoot: path.join(config.rootDir, "skills", "import-packs"),
     });
     this.skillMutationService = new SkillMutationService({
       rootDir: config.rootDir,
@@ -3119,6 +3121,12 @@ export class GatewayService {
       captureMcpServerSessionCloser: (serverId) => this.mcpStdioSessions.captureServerCloser(serverId),
       prepareMcpStaticEnvironment: (server, fence) => this.prepareMcpStaticEnvironment(server, fence),
       resolveMcpOAuthClientId: (server, fence) => this.resolveMcpOAuthClientId(server, fence),
+      discoverMcpOAuthAuthorization: (server, input) =>
+        discoverMcpAuthorizationServer({
+          ...input,
+          server,
+          fetchFn: createAllowlistedOAuthFetch(this.config.toolPolicy.sandbox.networkAllowlist),
+        }),
       resolveConnectedMcpTools: (server, existing, fence) =>
         this.resolveConnectedMcpTools(server, existing, undefined, fence),
       exchangeMcpOAuthCode: (server, code, state, review) =>

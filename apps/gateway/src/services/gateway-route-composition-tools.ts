@@ -36,6 +36,7 @@ export function composeMcpAdministration(
     | "captureMcpServerSessionCloser"
     | "prepareMcpStaticEnvironment"
     | "resolveMcpOAuthClientId"
+    | "discoverMcpOAuthAuthorization"
     | "resolveConnectedMcpTools"
     | "exchangeMcpOAuthCode"
     | "publishRealtime"

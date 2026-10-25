@@ -6,8 +6,9 @@ import {
   MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
 } from "./mcp-approval-inbox.js";
 import { MCP_DURABLE_TASKS_URL } from "./mcp-durable-tasks.js";
+import { MCP_VENDOR_CATALOG_PROVENANCE, MCP_VENDOR_SERVER_TEMPLATES } from "./mcp-vendor-server-templates.js";
 
-export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
+const MCP_CORE_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   {
     templateId: "approval-inbox",
     label: "GoatCitadel Approval Inbox",
@@ -134,6 +135,7 @@ export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     transport: "http",
     url: "https://mcp.stripe.com",
     authType: "oauth2",
+    oauth: { metadataDiscovery: true },
     category: "automation",
     trustTier: "restricted",
     costTier: "mixed",
@@ -144,6 +146,9 @@ export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
       blockedToolPatterns: [],
     },
     enabledByDefault: false,
+    networkHosts: ["mcp.stripe.com"],
+    provenance: { ...MCP_VENDOR_CATALOG_PROVENANCE, documentationUrl: "https://docs.stripe.com/mcp" },
+    riskNotes: ["Can create charges, refunds and subscriptions. Review every write before approving it."],
   },
   {
     templateId: "context7",
@@ -240,3 +245,5 @@ export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     enabledByDefault: false,
   },
 ];
+
+export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [...MCP_CORE_SERVER_TEMPLATES, ...MCP_VENDOR_SERVER_TEMPLATES];

@@ -13,6 +13,7 @@ import { Dialog } from "../../ui/Dialog";
 import { McpDraftLeave } from "./McpDraftLeave";
 import { McpCreateFields } from "./McpCreateFields";
 import { McpCreateReview } from "./McpCreateReview";
+import { McpTemplateCatalog } from "./McpTemplateCatalog";
 import { McpOutcomeCheck } from "../../../features/native-routes/settings/McpOutcomeCheck";
 
 export function McpServerCreate({
@@ -26,8 +27,7 @@ export function McpServerCreate({
 }) {
   const client = useQueryClient(),
     leave = useDraftLeave();
-  const [reviewed, setReviewed] = useState<McpCreateInput | null>(null),
-    [templateLimit, setTemplateLimit] = useState(12);
+  const [reviewed, setReviewed] = useState<McpCreateInput | null>(null);
   const [created, setCreated] = useState<McpServerRecord | null>(null);
   const openedAccess = useRef(getGatewayAccessRevision()).current;
   const templates = useQuery({ queryKey: ["settings", "mcp-templates"], queryFn: fetchMcpTemplates, retry: false });
@@ -99,26 +99,13 @@ export function McpServerCreate({
                 {templates.isError ? (
                   <p role="alert">Templates unavailable: {describeApiError(templates.error).summary}</p>
                 ) : null}
-                <ul className="mt-2 divide-y divide-line-subtle">
-                  {templateItems.slice(0, templateLimit).map((template) => (
-                    <li key={template.templateId} className="py-2">
-                      <p className="font-semibold text-fg">{template.label}</p>
-                      <p className="break-words">{template.description.slice(0, 1200)}</p>
-                      <Button
-                        size="sm"
-                        disabled={control.mutation.locked || templates.isFetching}
-                        onClick={() => replacement.request(template)}
-                      >
-                        Use {template.label} template
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-                {templateItems.length > templateLimit ? (
-                  <Button size="sm" onClick={() => setTemplateLimit((value) => value + 12)}>
-                    Show more templates
-                  </Button>
-                ) : null}
+                <div className="mt-2">
+                  <McpTemplateCatalog
+                    items={templateItems}
+                    disabled={control.mutation.locked || templates.isFetching}
+                    onUse={(template) => replacement.request(template)}
+                  />
+                </div>
                 <p className="mt-2 text-xs text-fg-muted">
                   Template arguments, authentication references and policy are copied into the draft and included in the
                   review.

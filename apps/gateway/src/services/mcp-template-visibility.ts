@@ -1,4 +1,4 @@
-import type { McpServerTemplateRecord } from "@goatcitadel/contracts";
+import { hasMcpOAuthEndpointSource, type McpServerTemplateRecord } from "@goatcitadel/contracts";
 import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 import { MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
 
@@ -48,7 +48,7 @@ export function areExperimentalRemoteMcpTransportsEnabled(env: NodeJS.ProcessEnv
 }
 
 export function buildUnsupportedMcpTransportMessage(transport: string): string {
-  return `MCP transport ${transport} requires local stdio, the built-in Approval Inbox, or a remote http/sse URL with supported auth. OAuth-backed remote records require authorizationUrl/tokenUrl metadata and a connected Gateway OAuth token.`;
+  return `MCP transport ${transport} requires local stdio, the built-in Approval Inbox, or a remote http/sse URL with supported auth. OAuth-backed remote records require authorizationUrl/tokenUrl metadata or metadata discovery, and a connected Gateway OAuth token.`;
 }
 
 function isSupportedRemoteMcpAuth(input: RuntimeSupportInput): boolean {
@@ -59,7 +59,7 @@ function isSupportedRemoteMcpAuth(input: RuntimeSupportInput): boolean {
     return normalizeSafeEnvKeyNames(input.policy?.allowedEnvKeys).length > 0;
   }
   if (input.authType === "oauth2") {
-    return Boolean(input.oauth?.authorizationUrl?.trim() && input.oauth.tokenUrl?.trim());
+    return hasMcpOAuthEndpointSource(input.oauth);
   }
   return false;
 }

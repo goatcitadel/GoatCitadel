@@ -27,6 +27,7 @@ const policySchema = z.object({
 const oauthSchema = z.object({
   authorizationUrl: z.string().url().optional(),
   tokenUrl: z.string().url().optional(),
+  metadataDiscovery: z.boolean().optional(),
   clientIdEnv: z.string().trim().min(1).optional(),
   clientSecretEnv: z.string().trim().min(1).optional(),
   scopes: z.array(z.string().trim().min(1)).optional(),

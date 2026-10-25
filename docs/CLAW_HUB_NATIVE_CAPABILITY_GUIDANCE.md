@@ -21,6 +21,7 @@ GoatCitadel absorbs the reviewed ClawHub ideas as native capabilities, not raw c
 - Design and canvas ideas belong to A2UI proof lanes and Mission Control Next frontend guidance.
 - Voice ideas belong to the managed local whisper runtime.
 - GitHub, GOG, and free-ride ideas are connector/playbook and provider-advice improvements.
+- The OpenClaw `github` and `himalaya` skills ship as adapted packs under `skills/import-packs/`, admitted only through Skill Hub review, inactive install and activation approvals. `gog` stays conditional: Skill Hub admission still routes Google CLI/OAuth to the native integration.
 
 ## Frontend And Copy Review Pack
 

@@ -1,8 +1,9 @@
-import type {
-  McpElicitationRequest,
-  McpRemotePreviewResponse,
-  McpServerModeManifestResponse,
-  McpServerRecord,
+import {
+  hasMcpOAuthEndpointSource,
+  type McpElicitationRequest,
+  type McpRemotePreviewResponse,
+  type McpServerModeManifestResponse,
+  type McpServerRecord,
 } from "@goatcitadel/contracts";
 import { formatDateTime } from "./input-format";
 
@@ -22,7 +23,7 @@ export function isRuntimeInvokableMcpServer(server: {
     server.authType === "none" ||
     (server.authType === "token" && (server.policy?.allowedEnvKeys ?? []).some((item) => item.trim())) ||
     (server.authType === "oauth2" &&
-      Boolean(server.oauth?.authorizationUrl?.trim() && server.oauth.tokenUrl?.trim()) &&
+      hasMcpOAuthEndpointSource(server.oauth) &&
       server.authState?.readiness === "ready");
   return (
     server.trustTier !== "quarantined" &&
