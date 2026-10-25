@@ -227,6 +227,7 @@ import {
   normalizePathForComparison,
 } from "./chat-turn-agent-runner/artifact-write-helpers.js";
 import { groundResearchPresentationArgs } from "./chat-turn-agent-runner/presentation-research-evidence.js";
+import { buildManualAutonomyClarification } from "./chat-turn-agent-runner/manual-autonomy-clarification.js";
 import {
   MEMORY_CONSENT_BLOCKED_REASON,
   answerCoversMemoryConsentBlocks,
@@ -3075,6 +3076,7 @@ export class ChatTurnAgentRunner {
         timeIntent: intents.time,
         localFileIntent,
         userPrompt: input.content,
+        historyMessages: input.historyMessages,
         webMode: input.webMode,
         toolAutonomy: input.toolAutonomy,
       });
@@ -11085,6 +11087,7 @@ function buildLiveDataSettingsConflictMessage(input: {
   timeIntent: boolean;
   localFileIntent: boolean;
   userPrompt: string;
+  historyMessages: ChatCompletionRequest["messages"];
   webMode: ChatWebMode;
   toolAutonomy: ChatTurnAgentRunnerInput["toolAutonomy"];
 }): string | undefined {
@@ -11136,6 +11139,10 @@ function buildLiveDataSettingsConflictMessage(input: {
     ].join(" ");
   }
   if (input.toolAutonomy === "manual") {
+    const clarification = buildManualAutonomyClarification(input.userPrompt, input.historyMessages);
+    if (clarification) {
+      return clarification;
+    }
     return [
       "I can't fetch web-backed information for that because tool autonomy is set to Manual for this chat, so I can't run the browser tools needed to verify it.",
       "To turn tools on, set Inspect > Conversation > Tool autonomy to Safe Auto and resend, or ask a non-web question instead.",
