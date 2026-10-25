@@ -169,6 +169,7 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAGS = [
   "claudeCliWarmContinuationEnabled",
   ...CHAT_RESTORATION_FEATURE_FLAGS,
   "evolutionControlPlaneV1Enabled",
+  "settingsApprovalSkipEnabled",
   "improvementLocalObservationV1Enabled",
   "improvementModelEvaluationV1Enabled",
   "productSourceEvolutionV1Enabled",

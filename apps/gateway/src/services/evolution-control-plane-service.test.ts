@@ -188,7 +188,10 @@ class TestAdapter implements EvolutionControlPlaneAdapter<ChangePlanRuntimeConfi
   }
 }
 
-function fixture(mode: TestAdapter["mode"] = "confirmation") {
+function fixture(
+  mode: TestAdapter["mode"] = "confirmation",
+  extra: Pick<ConstructorParameters<typeof EvolutionControlPlaneService>[0], "allowsOperatorApprovalSkip"> = {},
+) {
   const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-evolution-service-")), "test.db");
   files.push(dbPath);
   const database = createDatabase({ dbPath });
@@ -215,6 +218,7 @@ function fixture(mode: TestAdapter["mode"] = "confirmation") {
     adapters: new EvolutionControlPlaneAdapterRegistry([adapter]),
     getApprovalDisposition,
     createApproval,
+    ...extra,
   });
   return {
     service,
@@ -627,6 +631,93 @@ describe("EvolutionControlPlaneService", () => {
       expect(waiting.status).toBe("awaiting_approval");
     },
   );
+
+  describe("operator Settings approval skip", () => {
+    const settingsActor = { workspaceId: "default", actorId: "operator-1", surface: "settings" as const };
+    const flagRequest: ChangePlanRuntimeConfigurationRequest = {
+      kind: "runtime_configuration",
+      change: { operation: "feature_flag", flag: "codeModeV1Enabled", enabled: true },
+    };
+
+    it("applies a confirmed caution plan with no approval when the Settings save asks and the owner allows it", async () => {
+      const allowsOperatorApprovalSkip = vi.fn(async () => true);
+      const { service, adapter, createApproval, sync } = fixture("confirmation", { allowsOperatorApprovalSkip });
+      const plan = await service.create({ actor: settingsActor, request: flagRequest });
+      expect(plan.risk).toBe("caution");
+
+      const settled = await service.confirm(
+        settingsActor,
+        plan.planId,
+        plan.revision,
+        plan.requiredAction!.actionNonce,
+        { operatorSettingsSave: true },
+      );
+
+      expect(settled.status).toBe("completed");
+      expect(createApproval).not.toHaveBeenCalled();
+      expect(adapter.applyCount).toBe(1);
+      expect(allowsOperatorApprovalSkip).toHaveBeenCalledWith(expect.objectContaining({ planId: plan.planId }));
+      expect(sync.listEvents(plan.planId)).toContainEqual(
+        expect.objectContaining({
+          eventType: "operator_approval_skipped",
+          actorId: "operator-1",
+          payload: { risk: "caution", reason: "settings_approval_skip_enabled" },
+        }),
+      );
+    });
+
+    it("still asks for approval when the owner does not allow the skip", async () => {
+      const { service, adapter, createApproval } = fixture("confirmation", {
+        allowsOperatorApprovalSkip: async () => false,
+      });
+      const plan = await service.create({ actor: settingsActor, request: flagRequest });
+
+      const waiting = await service.confirm(
+        settingsActor,
+        plan.planId,
+        plan.revision,
+        plan.requiredAction!.actionNonce,
+        {
+          operatorSettingsSave: true,
+        },
+      );
+
+      expect(waiting.status).toBe("awaiting_approval");
+      expect(createApproval).toHaveBeenCalledOnce();
+      expect(adapter.applyCount).toBe(0);
+    });
+
+    it("never skips for a confirmation that did not come from the Settings save", async () => {
+      const allowsOperatorApprovalSkip = vi.fn(async () => true);
+      const { service, adapter } = fixture("confirmation", { allowsOperatorApprovalSkip });
+      const plan = await service.create({ actor: settingsActor, request: flagRequest });
+
+      const waiting = await service.confirm(
+        settingsActor,
+        plan.planId,
+        plan.revision,
+        plan.requiredAction!.actionNonce,
+      );
+
+      expect(waiting.status).toBe("awaiting_approval");
+      expect(adapter.applyCount).toBe(0);
+      expect(allowsOperatorApprovalSkip).not.toHaveBeenCalled();
+    });
+
+    it("never skips for a plan that started outside Settings", async () => {
+      const allowsOperatorApprovalSkip = vi.fn(async () => true);
+      const { service, adapter } = fixture("confirmation", { allowsOperatorApprovalSkip });
+      const plan = await service.create({ actor, request: flagRequest });
+
+      const waiting = await service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce, {
+        operatorSettingsSave: true,
+      });
+
+      expect(waiting.status).toBe("awaiting_approval");
+      expect(adapter.applyCount).toBe(0);
+      expect(allowsOperatorApprovalSkip).not.toHaveBeenCalled();
+    });
+  });
 
   it("does not replay staging when an exact artifact review is followed by final confirmation", async () => {
     const { service, adapter, createApproval } = fixture("review_then_approval");

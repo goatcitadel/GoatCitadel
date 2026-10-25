@@ -12,6 +12,7 @@ export type SettingsApprovalOwner =
   | "filesystem-write-access"
   | "claude-cli-tool-bridge"
   | "claude-cli-warm-continuation"
+  | "settings-approval-skip"
   | "firecrawl"
   | "search-engine-order";
 export type SettingsApprovalReceipt = Pick<ChangePlanRecord, "planId" | "revision" | "status" | "requiredAction">;
@@ -130,9 +131,18 @@ export function settingsApprovalOwnerBinding(
       plan.adapter.adapterId === "runtime-configuration" &&
       plan.adapter.version === 2 &&
       plan.scope === "runtime";
-  } else if (owner === "claude-cli-tool-bridge" || owner === "claude-cli-warm-continuation") {
+  } else if (
+    owner === "claude-cli-tool-bridge" ||
+    owner === "claude-cli-warm-continuation" ||
+    owner === "settings-approval-skip"
+  ) {
     // A registered rollout gate: the plan names this one flag, never another.
-    const flag = owner === "claude-cli-tool-bridge" ? "claudeCliToolBridgeEnabled" : "claudeCliWarmContinuationEnabled";
+    const flag =
+      owner === "claude-cli-tool-bridge"
+        ? "claudeCliToolBridgeEnabled"
+        : owner === "claude-cli-warm-continuation"
+          ? "claudeCliWarmContinuationEnabled"
+          : "settingsApprovalSkipEnabled";
     expectedWorkspace = "default";
     matches =
       plan.kind === "runtime_configuration" &&

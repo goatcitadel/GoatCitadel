@@ -270,6 +270,23 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
     expect(prepared.risk).toBe("danger");
   });
 
+  it("classifies turning on the Settings approval skip as danger and turning it off as caution", async () => {
+    const adapter = new RuntimeConfigurationChangePlanAdapter({
+      ...authCredentialDeps,
+      getSettings: vi.fn(async () => settings()),
+      updateSettings: vi.fn(),
+    });
+    const prepare = (enabled: boolean) =>
+      adapter.prepare(context, {
+        kind: "runtime_configuration",
+        change: { operation: "feature_flag", flag: "settingsApprovalSkipEnabled", enabled },
+      });
+    const on = await prepare(true);
+    expect(on.risk).toBe("danger");
+    expect(on.title).toBe("Turn on Apply my Settings changes without an Inbox approval");
+    expect((await prepare(false)).risk).toBe("caution");
+  });
+
   it("names a Settings switch in plain words and says how to undo it, not by its flag key (#496)", async () => {
     const adapter = new RuntimeConfigurationChangePlanAdapter({
       ...authCredentialDeps,

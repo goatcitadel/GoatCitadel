@@ -3517,6 +3517,10 @@ export class GatewayService {
       repository: this.storage.changePlans,
       adapters: evolutionAdapters,
       isEnabled: async () => await this.isFeatureEnabled("evolutionControlPlaneV1Enabled"),
+      // The operator's opt-in never applies to a remote_hardened install.
+      allowsOperatorApprovalSkip: async () =>
+        this.config.assistant.deploymentProfile !== "remote_hardened" &&
+        (await this.isFeatureEnabled("settingsApprovalSkipEnabled")),
       appendAudit: async (event, payload) => {
         await this.storage.audit.append("approvals", { event, ...payload });
       },
