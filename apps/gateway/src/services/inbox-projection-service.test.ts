@@ -694,6 +694,7 @@ describe("Gateway inbox projection", () => {
     expect(projection.items.map((item) => item.id)).toEqual(["task_deliverable:delivery-a"]);
     expect(projection.items[0]).toMatchObject({
       kind: "task_deliverable",
+      summary: "A file was added to ‘Write report’. Open the task in Work to see it.",
       group: "updates",
       source: { workspaceId: "workspace-a", taskId: "task-a", deliverableId: "delivery-a" },
       // Cockpit owns the task board natively; the projection no longer hands updates to Classic Kanban.

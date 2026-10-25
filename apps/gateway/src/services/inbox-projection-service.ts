@@ -130,6 +130,17 @@ async function readOptionalOwner<T>(read: () => Promise<T>): Promise<T | undefin
   }
 }
 
+const DELIVERABLE_LEADS: Record<string, string> = {
+  file: "A file was added to",
+  url: "A web link was added to",
+  artifact: "A result was added to",
+};
+
+function deliverableUpdateSummary(type: string, taskTitle: string): string {
+  const lead = DELIVERABLE_LEADS[type] ?? "Something new was added to";
+  return `${lead} ‘${taskTitle}’. Open the task in Work to see it.`;
+}
+
 export class InboxProjectionService {
   private backupTrustCache?: {
     at: number;
@@ -556,7 +567,7 @@ export class InboxProjectionService {
             kind: "task_deliverable",
             group: "updates",
             title: bounded(deliverable.title || "Task deliverable"),
-            summary: `A ${deliverable.deliverableType} deliverable was recorded for ${bounded(deliverable.taskTitle || "a task")}. Open Kanban to inspect its current record.`,
+            summary: deliverableUpdateSummary(deliverable.deliverableType, bounded(deliverable.taskTitle || "a task")),
             createdAt: deliverable.createdAt,
             source: { workspaceId, taskId: deliverable.taskId, deliverableId: deliverable.deliverableId },
             // Cockpit owns the task board natively (`/work/kanban`); Classic is reachable through its own shell switch.
