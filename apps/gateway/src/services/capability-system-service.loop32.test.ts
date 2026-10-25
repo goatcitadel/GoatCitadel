@@ -664,21 +664,21 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       ]);
     });
 
-    it("re-trusts the shipped design-intelligence tree through the compiled lock on an upgraded install", async () => {
+    it("re-trusts the shipped coding tree through the compiled lock on an upgraded install", async () => {
       const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
-      const skillDir = path.join(repoRoot, "skills", "bundled", "design-intelligence");
-      const lockEntry = resolveBundledSkillLockEntry("bundled:design-intelligence");
+      const skillDir = path.join(repoRoot, "skills", "bundled", "coding");
+      const lockEntry = resolveBundledSkillLockEntry("bundled:coding");
       expect(lockEntry).toBeDefined();
-      const skill: LoadedSkill = { ...buildShippedSkill("bundled", skillDir), skillId: "bundled:design-intelligence" };
-      // Row created by an earlier release (the pre-presentation.md tree had 9 files).
+      const skill: LoadedSkill = { ...buildShippedSkill("bundled", skillDir), skillId: "bundled:coding" };
+      // Row created by an earlier release whose tree had different bytes.
       const staleRow = trustedRowAt(
         skill,
         {
           skillId: skill.skillId,
           manifestVersion: "goatcitadel.skill-tree.v1",
           treeSha256: "c29670f1a6fdba47820556db51bb93abafb092ea5feebe3cda7429100d64eccf",
-          fileCount: 9,
-          totalBytes: 124237,
+          fileCount: 1,
+          totalBytes: 1024,
         },
         "Built-in",
       );
@@ -691,14 +691,52 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
         lifecycle: { provenance: { contentIntegrity: { treeSha256: lockEntry!.treeSha256, verified: true } } },
       });
       expect(await harness.service.listCatalog("callable")).toEqual([
-        expect.objectContaining({ capabilityId: "skill:bundled:design-intelligence", callable: true }),
+        expect.objectContaining({ capabilityId: "skill:bundled:coding", callable: true }),
       ]);
       expect(harness.audit.append).toHaveBeenCalledWith(
         "approvals",
-        expect.objectContaining({ skillId: "bundled:design-intelligence", lockEntry: { ...lockEntry } }),
+        expect.objectContaining({ skillId: "bundled:coding", lockEntry: { ...lockEntry } }),
         expect.anything(),
       );
     });
+
+    it.each(["fresh", "upgraded"] as const)(
+      "ignores a lifecycle row left by the retired design-intelligence skill on the %s lineage",
+      async (lineage) => {
+        const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
+        const skill: LoadedSkill = {
+          ...buildShippedSkill("bundled", path.join(repoRoot, "skills", "bundled", "coding")),
+          skillId: "bundled:coding",
+        };
+        const retiredLock: BundledSkillLockEntry = {
+          skillId: "bundled:design-intelligence",
+          manifestVersion: "goatcitadel.skill-tree.v1",
+          treeSha256: "c29670f1a6fdba47820556db51bb93abafb092ea5feebe3cda7429100d64eccf",
+          fileCount: 10,
+          totalBytes: 130000,
+        };
+        // An upgraded install still holds the trusted row the retired skill wrote; a fresh one never had it.
+        const retiredRow = trustedRowAt(
+          { ...skill, skillId: "bundled:design-intelligence", name: "design-intelligence" },
+          retiredLock,
+          "Built-in",
+        );
+        const harness = createService({
+          rootDir: repoRoot,
+          skills: [skill],
+          skillLifecycleRecords: lineage === "upgraded" ? [retiredRow] : [],
+        });
+
+        expect(resolveBundledSkillLockEntry("bundled:design-intelligence")).toBeUndefined();
+        expect((await harness.service.listSkills()).map((item) => item.skillId)).toEqual(["bundled:coding"]);
+        expect((await harness.service.listCatalog("callable")).map((entry) => entry.capabilityId)).toEqual([
+          "skill:bundled:coding",
+        ]);
+        expect(harness.skillLifecycle.get("bundled:design-intelligence")).toEqual(
+          lineage === "upgraded" ? retiredRow : undefined,
+        );
+      },
+    );
   });
 
   it("ignores forged source.json activation evidence even when payload provenance is valid", async () => {

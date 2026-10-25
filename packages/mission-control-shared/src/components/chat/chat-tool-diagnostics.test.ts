@@ -14,7 +14,7 @@ function run(result: Record<string, unknown>): ChatToolRunRecord {
   };
 }
 
-const NOT_INJECTED = "Governed design-intelligence instructions were not injected; renderer defaults were used.";
+const NOT_INJECTED = "Governed design instructions were not injected; renderer defaults were used.";
 
 describe("getChatToolRunDiagnostics design-instruction posture", () => {
   it("states when the full design report records that governed instructions were not injected", () => {

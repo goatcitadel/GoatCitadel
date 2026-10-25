@@ -71,7 +71,7 @@ function describeDesignInstructionPosture(result: Record<string, unknown>): stri
   if (!status || status === "skipped" || instructionStatus !== "not_injected") {
     return undefined;
   }
-  return "Governed design-intelligence instructions were not injected; renderer defaults were used.";
+  return "Governed design instructions were not injected; renderer defaults were used.";
 }
 
 function joinSummaryParts(...parts: Array<string | undefined>): string | undefined {
