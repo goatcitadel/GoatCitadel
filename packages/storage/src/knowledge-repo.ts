@@ -169,6 +169,21 @@ export class KnowledgeRepository {
     };
   }
 
+  /**
+   * Stores a document and all of its chunks in one transaction, so a failed chunk insert leaves neither the
+   * document nor earlier chunks behind (#571). Callers prepare every chunk (embeddings included) first.
+   */
+  public createDocumentWithChunks(
+    input: Parameters<KnowledgeRepository["createDocument"]>[0],
+    chunks: Parameters<KnowledgeRepository["appendChunks"]>[1],
+    now = new Date().toISOString(),
+  ): { document: KnowledgeDocumentRecord; chunks: KnowledgeChunkRecord[] } {
+    return this.db.transaction("immediate", () => {
+      const document = this.createDocument(input, now);
+      return { document, chunks: this.appendChunks(document.docId, chunks, now) };
+    });
+  }
+
   public appendChunks(
     docId: string,
     chunks: Array<{

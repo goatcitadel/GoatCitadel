@@ -28,6 +28,7 @@ import { OrchestrationRepository } from "../orchestration-repo.js";
 import { PermissionProfileRepository } from "../permission-profile-repo.js";
 import { RealtimeEventRepository } from "../realtime-event-repo.js";
 import { MemoryMaintenanceRepository } from "../memory-maintenance-repo.js";
+import { KnowledgeRepository } from "../knowledge-repo.js";
 import { SystemSettingsRepository } from "../system-settings-repo.js";
 import { ExternalSideEffectRunRepository } from "../external-side-effect-run-repo.js";
 import { RemoteActionTokenRepository } from "../remote-action-token-repo.js";
@@ -5392,6 +5393,62 @@ test(
           .map((item) => item.itemId)
           .sort(),
         ["mem-canonical-a", "mem-global", "mem-legacy-a"],
+      );
+    } finally {
+      syncClient?.close();
+      await scopedPool.end();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres stores a knowledge document and its chunks together or not at all (#571)",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_knowledge_atomic_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString() });
+    const migrationClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: scopedPool },
+    );
+    let syncClient: PostgresSyncDatabaseClient | undefined;
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
+      syncClient = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-knowledge-atomic-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      const repo = new KnowledgeRepository(syncClient);
+
+      const saved = repo.createDocumentWithChunks(
+        { namespace: "general", sourceType: "memory", sourceRef: "memory:ok", title: "Report format" },
+        [{ content: "One-page PDF." }, { content: "Summary table at the top." }],
+      );
+      assert.equal(saved.chunks.length, 2);
+
+      // A failed second chunk (content is NOT NULL) must roll back the document and the first chunk.
+      assert.throws(() =>
+        repo.createDocumentWithChunks(
+          { namespace: "half", sourceType: "memory", sourceRef: "memory:half", title: "Half written" },
+          [{ content: "First chunk is fine." }, { content: null as unknown as string }],
+        ),
+      );
+      assert.deepEqual(repo.listDocuments("half", 10), []);
+      assert.deepEqual(repo.listChunksByNamespace("half", 10), []);
+      assert.deepEqual(
+        repo.listChunksByNamespace("general", 10).map((chunk) => chunk.content),
+        ["One-page PDF.", "Summary table at the top."],
       );
     } finally {
       syncClient?.close();

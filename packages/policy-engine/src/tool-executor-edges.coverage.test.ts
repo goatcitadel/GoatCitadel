@@ -1196,6 +1196,18 @@ function knowledgeStorage(): Storage & AsyncStorage {
         chunksByDocId.set(docId, [...(chunksByDocId.get(docId) ?? []), ...saved]);
         return saved;
       }),
+      // Mirrors the repository: one call stores the document and its chunks (#571).
+      createDocumentWithChunks: vi.fn(function (
+        this: {
+          createDocument: (input: Record<string, unknown>) => { docId: string };
+          appendChunks: (docId: string, entries: Array<Record<string, unknown>>) => unknown[];
+        },
+        input: Record<string, unknown>,
+        entries: Array<Record<string, unknown>>,
+      ) {
+        const document = this.createDocument(input);
+        return { document, chunks: this.appendChunks(document.docId, entries) };
+      }),
       listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
       listChunksByNamespace: vi.fn((namespace?: string) => {
         const matchingDocIds = documents

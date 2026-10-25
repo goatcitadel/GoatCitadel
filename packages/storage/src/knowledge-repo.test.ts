@@ -98,6 +98,43 @@ describe("KnowledgeRepository", () => {
     assert.deepEqual(repo.listChunksByNamespace(undefined, 10), []);
   });
 
+  it("stores a document and its chunks together", () => {
+    const repo = createRepo();
+    const saved = repo.createDocumentWithChunks(
+      { namespace: "general", sourceType: "memory", sourceRef: "memory:1", title: "Report format" },
+      [{ content: "One-page PDF." }, { content: "Summary table at the top." }],
+      "2026-10-25T00:00:00.000Z",
+    );
+
+    assert.equal(saved.document.title, "Report format");
+    assert.deepEqual(
+      saved.chunks.map((chunk) => [chunk.docId, chunk.seq, chunk.content]),
+      [
+        [saved.document.docId, 0, "One-page PDF."],
+        [saved.document.docId, 1, "Summary table at the top."],
+      ],
+    );
+    assert.deepEqual(
+      repo.listChunksByNamespace("general", 10).map((chunk) => chunk.content),
+      ["One-page PDF.", "Summary table at the top."],
+    );
+  });
+
+  it("keeps neither the document nor earlier chunks when a chunk insert fails (#571)", () => {
+    // memory.write used to store the document, then insert chunks one by one, so a failure partway left a
+    // document (and any earlier chunks) behind for recall to find.
+    const repo = createRepo();
+    assert.throws(() =>
+      repo.createDocumentWithChunks(
+        { namespace: "general", sourceType: "memory", sourceRef: "memory:2", title: "Half written" },
+        [{ content: "First chunk is fine." }, { content: null as unknown as string }],
+      ),
+    );
+
+    assert.deepEqual(repo.listDocuments("general", 10), []);
+    assert.deepEqual(repo.listChunksByNamespace("general", 10), []);
+  });
+
   it("filters malformed rows and falls back on invalid JSON fields", () => {
     const validDocumentRow = {
       doc_id: "doc-valid",
