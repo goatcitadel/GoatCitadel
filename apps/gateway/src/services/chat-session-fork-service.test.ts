@@ -192,4 +192,117 @@ describe("forkChatSessionFromTurn", () => {
     );
     storage.close();
   });
+
+  it("removes the new session and copied files when materializing the fork fails", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-chat-fork-"));
+    tempDirs.push(root);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const asyncStorage = createSqliteAsyncStorage(storage);
+    const deps = {} as ChatSessionDependencies;
+    const requireSession = async (sessionId: string): Promise<ChatSessionRecord> => {
+      const record = (
+        await listChatSessions(deps, { workspaceId: "workspace-1", view: "all", includeHidden: true, limit: 100 })
+      ).find((session) => session.sessionId === sessionId);
+      if (!record) throw new Error(`missing session ${sessionId}`);
+      return record;
+    };
+    const copied: string[] = [];
+    const removed: string[] = [];
+    Object.assign(deps, {
+      storage: asyncStorage,
+      operatorSummaryCache: { invalidate() {} },
+      normalizeWorkspaceId: (value) => value?.trim() || "workspace-1",
+      ensureChatSessionRuntimeGrants() {},
+      requireChatSession: requireSession,
+      getSession: (sessionId) => asyncStorage.sessions.getBySessionId(sessionId),
+      async publishRealtime() {},
+      clearChatTurnWriteLease() {},
+      removeChatSessionStoredFile: async (relPath) => {
+        removed.push(relPath);
+      },
+      getChatSessionModelDefaults: () => ({
+        providerId: undefined,
+        model: undefined,
+        thinkingLevel: "standard" as const,
+      }),
+      copyChatSessionStoredFile: async (_storageRelPath, copyId) => {
+        const destinationRelPath = `forks/${copyId}.txt`;
+        copied.push(destinationRelPath);
+        return destinationRelPath;
+      },
+      ensureChatSessionModelDefaults: (_sessionId, prefs) => prefs,
+      hydrateChatPrefsWithAutonomy: (_sessionId, prefs) => prefs,
+      patchSessionAutonomyPrefs() {},
+    });
+    const source = await createChatSession(deps, { workspaceId: "workspace-1", title: "Source" });
+    storage.chatAttachments.create({
+      attachmentId: "attachment-1",
+      sessionId: source.sessionId,
+      workspaceId: "workspace-1",
+      fileName: "attachment.txt",
+      mimeType: "text/plain",
+      sizeBytes: 12,
+      sha256: "b".repeat(64),
+      storageRelPath: "attachment.txt",
+      extractStatus: "ready",
+    });
+    storage.chatMessages.upsert({
+      messageId: "user-1",
+      sessionId: source.sessionId,
+      role: "user",
+      sourceAuthority: "operator",
+      actorType: "user",
+      actorId: "operator",
+      content: "Use this file",
+      timestamp: "2026-07-27T20:00:00.000Z",
+      attachments: [
+        { attachmentId: "attachment-1", fileName: "attachment.txt", mimeType: "text/plain", sizeBytes: 12 },
+      ],
+    });
+    storage.chatTurnTraces.create({
+      turnId: "turn-1",
+      sessionId: source.sessionId,
+      userMessageId: "user-1",
+      status: "completed",
+      mode: "chat",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "off",
+      startedAt: "2026-07-27T20:00:00.000Z",
+      finishedAt: "2026-07-27T20:00:01.000Z",
+    });
+    const failingForks = new Proxy(asyncStorage.chatSessionForks, {
+      get: (target, prop, receiver) =>
+        prop === "create"
+          ? async () => {
+              throw new Error("manifest write failed");
+            }
+          : Reflect.get(target, prop, receiver),
+    });
+    Object.assign(deps, {
+      storage: new Proxy(asyncStorage, {
+        get: (target, prop, receiver) =>
+          prop === "chatSessionForks" ? failingForks : Reflect.get(target, prop, receiver),
+      }),
+    });
+
+    await expect(forkChatSessionFromTurn(deps, source.sessionId, "turn-1", {}, "operator")).rejects.toThrow(
+      /manifest write failed/,
+    );
+
+    expect(copied).toHaveLength(1);
+    expect(removed).toEqual(copied);
+    const remaining = await listChatSessions(deps, {
+      workspaceId: "workspace-1",
+      view: "all",
+      includeHidden: true,
+      limit: 100,
+    });
+    expect(remaining.map((session) => session.sessionId)).toEqual([source.sessionId]);
+    storage.close();
+  });
 });

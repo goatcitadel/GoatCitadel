@@ -489,3 +489,44 @@ describe("GatewayChatStreamRuntime terminal admission barrier", () => {
     expect(beforeDeliverTerminalChatStreamEvent).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("GatewayChatStreamRuntime idle live-tail polling", () => {
+  it("backs off while a durable run waits and reuses the run lookup", async () => {
+    vi.useFakeTimers();
+    try {
+      const get = vi.fn(async () => ({ run_id: "run-1" }));
+      const prepare = vi.fn(async () => ({ get }));
+      const getRun = vi.fn(async () => ({ status: "waiting" }));
+      const listByTurn = vi.fn(() => []);
+      const runtime = new GatewayChatStreamRuntime({
+        storage: {
+          chatStreamEvents: { listByTurn },
+          gatewaySql: { prepare },
+          durableRuns: { getRun },
+        } as unknown as Storage,
+        chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
+        createHydratedChatTurnTrace: (_turnId, trace) => trace,
+      });
+      const abort = new AbortController();
+      const stream = runtime.streamPersistedChatTurnEvents("session-1", "turn-1", {
+        liveTail: true,
+        signal: abort.signal,
+      });
+      const next = stream.next();
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      // A fixed 200 ms cadence would poll ~100 times in 20 s.
+      expect(listByTurn.mock.calls.length).toBeGreaterThan(5);
+      expect(listByTurn.mock.calls.length).toBeLessThan(20);
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(get).toHaveBeenCalledTimes(1);
+
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(next).resolves.toEqual({ value: undefined, done: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

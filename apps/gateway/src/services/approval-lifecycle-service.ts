@@ -957,6 +957,29 @@ async function assertLinkedChatTurnActive(
   await assertChatTurnToolUseOpen(storage, linkage.sessionId, linkage.turnId);
 }
 
+const CHAT_TURN_FAMILY_SESSION_LIMIT = 64;
+
+/** Sessions that can hold approvals owned by a Chat turn: the roots plus every
+ * delegated child session reachable through delegation runs (bounded). */
+async function collectChatTurnFamilySessionIds(
+  storage: ApprovalLifecycleHost["storage"],
+  roots: string[],
+): Promise<string[]> {
+  const visited = new Set<string>();
+  const queue = [...roots];
+  while (queue.length > 0 && visited.size < CHAT_TURN_FAMILY_SESSION_LIMIT) {
+    const current = queue.shift()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (const run of (await storage.chatDelegationRuns?.listBySession(current, 100)) ?? []) {
+      for (const step of await storage.chatDelegationSteps.listByRun(run.runId)) {
+        if (step.childSessionId && !visited.has(step.childSessionId)) queue.push(step.childSessionId);
+      }
+    }
+  }
+  return [...visited];
+}
+
 /** Called inside the durable Chat cancellation transaction. Reuse the normal
  * rejection owner so pending actions, inline state, tokens, and follow-up effects
  * settle together. Effect processing runs after commit through its durable queue. */
@@ -977,14 +1000,27 @@ export async function rejectPendingChatTurnApprovals(
     ...inline.filter((item) => item.sessionId === sessionId).map((item) => item.approvalId),
     ...toolRuns.filter((item) => item.sessionId === sessionId && item.approvalId).map((item) => item.approvalId!),
   ]);
-  // An approval can be committed before its tool/inline projection arrives.
-  let cursor: string | undefined;
+  // An approval can be committed before its tool/inline projection arrives. Scan only
+  // the sessions of the cancelled turn family (this session, the owner session and
+  // delegated child sessions) with session-scoped queries, not every pending approval.
   // A foreign approval with invalid lineage must not abort this cancellation, and
   // each distinct foreign turn is resolved once across the whole scan.
   const scannedOwners = new Map<string, { target: { sessionId: string; turnId: string } } | { skipped: string }>();
-  do {
-    const page = await storage.approvals.listPage({ status: "pending", limit: 200, cursor, includeExpired: true });
-    for (const approval of page.items) {
+  for (const familySessionId of await collectChatTurnFamilySessionIds(storage, [sessionId, owner.sessionId])) {
+    // Exhaust every page: an approval past any fixed cap whose projection has not arrived yet
+    // would otherwise survive the cancellation unresolved.
+    const familyPending: ApprovalRequest[] = [];
+    let pendingCursor: string | undefined;
+    do {
+      const page = await storage.approvals.listPendingBySessionPage(familySessionId, {
+        includeExpired: true,
+        cursor: pendingCursor,
+        pageSize: 500,
+      });
+      familyPending.push(...page.items);
+      pendingCursor = page.nextCursor;
+    } while (pendingCursor);
+    for (const approval of familyPending) {
       if (!approval.linkage?.sessionId || !approval.linkage.turnId) continue;
       const scanKey = `${approval.linkage.sessionId}\u0000${approval.linkage.turnId}`;
       let scanned = scannedOwners.get(scanKey);
@@ -1005,7 +1041,11 @@ export async function rejectPendingChatTurnApprovals(
         scannedOwners.set(scanKey, scanned);
       }
       if ("skipped" in scanned) {
-        // Leave durable evidence for every approval skipped, not just the first lookup.
+        // Leave durable evidence once per approval; later cancels must not re-append it.
+        const alreadyRecorded = (await storage.approvalEvents.listByApprovalId(approval.approvalId)).some(
+          (event) => event.eventType === "cancellation_lineage_skipped",
+        );
+        if (alreadyRecorded) continue;
         await storage.approvalEvents.append({
           approvalId: approval.approvalId,
           eventType: "cancellation_lineage_skipped",
@@ -1021,8 +1061,7 @@ export async function rejectPendingChatTurnApprovals(
         approvalIds.add(approval.approvalId);
       }
     }
-    cursor = page.nextCursor;
-  } while (cursor);
+  }
   for (const approvalId of approvalIds) {
     const approval = await storage.approvals.get(approvalId);
     if (approval.status !== "pending") continue;
@@ -1428,9 +1467,7 @@ export async function resolveChatToolApproval(
   if (existingInlineApproval && existingInlineApproval.sessionId !== sessionId) {
     throw new Error(`Approval ${approvalId} does not belong to session ${sessionId}.`);
   }
-  const turn = (await host.storage.chatToolRuns.listBySession(sessionId, 2000)).find(
-    (toolRun) => toolRun.approvalId === approvalId,
-  );
+  const turn = await host.storage.chatToolRuns.findByApprovalId(sessionId, approvalId);
   const turnId = turn?.turnId ?? existingInlineApproval?.turnId;
   if (!turnId) {
     throw new Error(`Approval ${approvalId} is not attached to session ${sessionId}.`);

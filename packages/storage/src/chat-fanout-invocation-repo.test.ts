@@ -118,3 +118,21 @@ describe("ChatFanoutInvocationRepository", () => {
     }
   });
 });
+
+describe("ChatFanoutInvocationRepository.listActiveBySession", () => {
+  it("returns only the session's active invocations regardless of other sessions' volume", () => {
+    const { db, repo } = createStore();
+    try {
+      for (let index = 0; index < 5; index++) {
+        repo.createOrGet(invocation({ invocationId: `other-${index}`, parentRunId: `p-${index}`,
+          toolRunId: `t-${index}`, sessionId: "session-other", updatedAt: `2026-08-13T12:00:0${index}.000Z` }));
+      }
+      repo.createOrGet(invocation({ invocationId: "mine", parentRunId: "p-mine", toolRunId: "t-mine",
+        sessionId: "session-mine", updatedAt: "2026-08-13T13:00:00.000Z" }));
+      repo.createOrGet(invocation({ invocationId: "mine-done", parentRunId: "p-done", toolRunId: "t-done",
+        sessionId: "session-mine", status: "completed", finishedAt: "2026-08-13T13:00:00.000Z" }));
+      assert.deepEqual(repo.listActive(2).map((r) => r.sessionId), ["session-other", "session-other"]);
+      assert.deepEqual(repo.listActiveBySession("session-mine", 2).map((r) => r.invocationId), ["mine"]);
+    } finally { db.close(); }
+  });
+});
