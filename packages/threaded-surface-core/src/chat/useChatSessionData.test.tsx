@@ -222,6 +222,7 @@ function Harness(props: {
   searchQuery?: string;
   initialSelectedSessionId?: string | null;
   routeSessionId?: string;
+  onRouteSessionUnavailable?: (requestedSessionId: string, fallbackSessionId: string | null) => void;
   runtimeLlmConfig?: any;
   assignmentControls?: boolean;
 }) {
@@ -248,6 +249,7 @@ function Harness(props: {
     secondaryEnabled: props.secondaryEnabled,
     catalogEnabled: props.catalogEnabled,
     routeSessionId: props.routeSessionId,
+    onRouteSessionUnavailable: props.onRouteSessionUnavailable,
     historyView: props.historyView ?? "active",
     searchQuery: props.searchQuery ?? "",
     selectedSessionId,
@@ -1622,25 +1624,37 @@ describe("useChatSessionData", () => {
     { items: [] },
     { items: [{ ...makeSession("old-target"), workspaceId: "foreign" }] },
     { items: [{ ...makeSession("other-id"), workspaceId: "workspace-linked" }] },
-  ])("withholds a missing or foreign deep-link record without selecting a recent Chat", async ({ items }) => {
-    fetchChatSessionsMock.mockImplementation(async (query) =>
-      query.sessionId ? { items } : { items: [makeSession("newest")] },
-    );
-    let renderer!: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<Harness workspaceId="workspace-linked" routeSessionId="old-target" />);
-      await flushEffects();
-    });
-    await act(async () => {
-      await flushEffects();
-    });
-    expect(latestHarness!.selectedSessionId).toBeNull();
-    expect(latestHarness!.result.sessions).toBeNull();
-    expect(latestHarness!.errors).toContain(
-      "The requested conversation is unavailable in this workspace and history view.",
-    );
-    await act(async () => renderer.unmount());
-  });
+  ])(
+    "keeps the list and opens the first Chat when a deep link names a missing or foreign record",
+    async ({ items }) => {
+      const unavailable = vi.fn();
+      fetchChatSessionsMock.mockImplementation(async (query) =>
+        query.sessionId ? { items } : { items: [makeSession("newest")] },
+      );
+      let renderer!: ReactTestRenderer;
+      await act(async () => {
+        renderer = create(
+          <Harness
+            workspaceId="workspace-linked"
+            routeSessionId="old-target"
+            onRouteSessionUnavailable={unavailable}
+          />,
+        );
+        await flushEffects();
+      });
+      await act(async () => {
+        await flushEffects();
+      });
+      expect(latestHarness!.selectedSessionId).toBe("newest");
+      expect(latestHarness!.result.sessions?.items.map((item) => item.sessionId)).toEqual(["newest"]);
+      expect(latestHarness!.errors).not.toContain(
+        "The requested conversation is unavailable in this workspace and history view.",
+      );
+      expect(unavailable).toHaveBeenCalledTimes(1);
+      expect(unavailable).toHaveBeenCalledWith("old-target", "newest");
+      await act(async () => renderer.unmount());
+    },
+  );
 
   it("aborts an exact deep-link read and withholds its late response after scope ABA", async () => {
     let resolveRead!: (value: unknown) => void;

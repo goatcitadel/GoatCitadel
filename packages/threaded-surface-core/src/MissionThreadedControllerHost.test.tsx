@@ -4259,7 +4259,7 @@ describe("MissionThreadedControllerHost", () => {
     expect(latestSurfaceInput?.activeSessionSurfaceProps?.delegationRun).toBeNull();
     expect(
       latestSurfaceInput?.activeSessionSurfaceProps?.notices.some((notice) =>
-        notice.content.includes("Background handoff visible from the session run table: agentic-run-1"),
+        notice.content === "A background run is running." && !notice.content.includes("agentic-run-1"),
       ),
     ).toBe(true);
 

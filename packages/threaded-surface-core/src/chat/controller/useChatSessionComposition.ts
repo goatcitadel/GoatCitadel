@@ -4,13 +4,13 @@ import { fetchChatSessionGoal } from "@goatcitadel/mission-control-shared/api/cl
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useEventStreamStatus } from "@goatcitadel/mission-control-shared/hooks/useEventStreamStatus";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
 import { useChatHistoricalRoute } from "../useChatHistoricalRoute";
 import { useChatChangePlanHistory } from "../useChatChangePlanHistory";
 import { useChatChangePlanState } from "../useChatChangePlanState";
 import { useChatDocuments } from "../useChatDocuments";
-import { useChatSessionControls } from "../useChatSessionControls";
+import { useChatSessionControls, type SessionRemovedFromView } from "../useChatSessionControls";
 import { useChatSessionData } from "../useChatSessionData";
 import { useChatSessionStatus } from "../useChatSessionStatus";
 import type { OutboundContextBlock } from "../useChatSurfaceOrchestration";
@@ -111,7 +111,24 @@ export function useChatSessionComposition({
 }: Input) {
   // Citadel is presentation currency; creation admission remains installation/workspace owned.
   const { activeCitadelId: viewIdentity } = useUiPreferences();
+  const currentSessionMode: ChatMode = "chat";
+  // A conversation this host just archived or deleted already announced itself; its stale address is expected.
+  const removedSessionIdRef = useRef<string | null>(null);
+  const handleRouteSessionUnavailable = useCallback(
+    (requestedSessionId: string, fallbackSessionId: string | null) => {
+      if (removedSessionIdRef.current === requestedSessionId) return;
+      pushLocalNotice(
+        fallbackSessionId
+          ? "That conversation is no longer available here, so the most recent one is open instead."
+          : "That conversation is no longer available here.",
+        "neutral",
+      );
+      onNavigateSurface?.(currentSessionMode, { sessionId: fallbackSessionId, turnId: null, artifactId: null });
+    },
+    [currentSessionMode, onNavigateSurface, pushLocalNotice],
+  );
   const sessionData = useChatSessionData({
+    onRouteSessionUnavailable: handleRouteSessionUnavailable,
     secondaryEnabled: secondaryEvidenceEnabled,
     catalogEnabled: catalogEvidenceEnabled,
     workspaceId,
@@ -133,7 +150,6 @@ export function useChatSessionComposition({
   const { loadSessionSecondaryState } = sessionData;
 
   const activationGrants = useChatActivationGrants({ workspaceId });
-  const currentSessionMode: ChatMode = "chat";
   const sessionStatusEnabled = sessionData.settings?.features?.chatSessionStatusV1Enabled === true;
   const chatTimersEnabled = sessionData.settings?.features?.chatTimersV1Enabled === true;
   const typedRunVariablesEnabled = sessionData.settings?.features?.typedRunVariablesV1Enabled === true;
@@ -168,7 +184,13 @@ export function useChatSessionComposition({
     setActiveChangePlan: changePlanState.setActiveChangePlan,
   });
   useChatModeSynchronization({ currentSessionMode, onResolvedModeChange, selection });
-  const agenticTree = useChatAgenticTreeRefresh({ selection, workspaceId, setAgenticRunTree });
+  const latestTurnStatus = sessionData.thread?.turns.at(-1)?.trace?.status ?? null;
+  const agenticTree = useChatAgenticTreeRefresh({
+    selection,
+    workspaceId,
+    setAgenticRunTree,
+    refreshKey: `${approvalsCount}:${latestTurnStatus}`,
+  });
   const { resolveAgenticRunTree } = agenticTree;
 
   const threadController = useChatThreadController({
@@ -256,11 +278,40 @@ export function useChatSessionComposition({
         turnId: null,
         artifactId: null,
       });
+      // The new conversation renders on the next frame; typing should start right away.
+      globalThis.setTimeout(() => coordination.composerRef.current?.focus(), 0);
     },
-    [currentSessionMode, onNavigateSurface],
+    [coordination.composerRef, currentSessionMode, onNavigateSurface],
   );
 
+  const publishSessionLocation = useCallback(
+    (sessionId: string) => onNavigateSurface?.(currentSessionMode, { sessionId, turnId: null, artifactId: null }),
+    [currentSessionMode, onNavigateSurface],
+  );
+  const handleSessionRemoved = useCallback(
+    (removed: SessionRemovedFromView) => {
+      removedSessionIdRef.current = removed.sessionId;
+      onNavigateSurface?.(currentSessionMode, { sessionId: removed.nextSessionId, turnId: null, artifactId: null });
+      pushLocalNotice(
+        removed.kind === "archived"
+          ? `Archived "${removed.label}". Find it under Archived in the conversation list.`
+          : `Deleted "${removed.label}".`,
+        "success",
+      );
+    },
+    [currentSessionMode, onNavigateSurface, pushLocalNotice],
+  );
+  const missionSessionsRef = useRef(threadController.missionSessions);
+  missionSessionsRef.current = threadController.missionSessions;
+  const nextSessionAfterRemoval = useCallback((removedSessionId: string) => {
+    const list = missionSessionsRef.current.filter((item) => item.lifecycleStatus === "active");
+    const index = list.findIndex((item) => item.sessionId === removedSessionId);
+    const rest = list.filter((item) => item.sessionId !== removedSessionId);
+    return (rest[Math.min(Math.max(index, 0), rest.length - 1)] ?? rest[0])?.sessionId ?? null;
+  }, []);
   const sessionControls = useChatSessionControls({
+    onSessionRemoved: handleSessionRemoved,
+    nextSessionAfterRemoval,
     historicalRevisionRef: sessionData.historicalWindowGenerationRef,
     historicalReadOnly: sessionData.contextMutationReadOnly,
     selectionRevisionRef: selection.selectedSessionRevisionRef,
@@ -349,6 +400,7 @@ export function useChatSessionComposition({
     typedRunVariablesEnabled,
     documentEditingEnabled,
     sessionControls,
+    publishSessionLocation,
     loadSidebar,
     refreshChatSessionAggregate,
     loadSessionCoreState,

@@ -26,6 +26,8 @@ type Input = {
   setDraft: React.Dispatch<React.SetStateAction<string>>;
   notices: Pick<ReturnType<typeof useChatNoticesAndPresetRefresh>, "pushLocalNotice">;
   coordination: Pick<ReturnType<typeof useChatControllerCoordination>, "composerRef">;
+  /** Moves the address to the conversation the fork just opened. */
+  publishSessionLocation?: (sessionId: string) => void;
   setForkConfirm: React.Dispatch<
     React.SetStateAction<{
       turnId: string;
@@ -51,6 +53,7 @@ export function useChatConversationFork({
   notices,
   coordination,
   setForkConfirm,
+  publishSessionLocation,
 }: Input) {
   const { setUiError } = scopedErrors;
   const { setHistoryView } = selection;
@@ -189,7 +192,8 @@ export function useChatConversationFork({
         setPendingThreadContext(null);
         setThread(null);
         setDraft("");
-        pushLocalNotice("Created an independent fork with immutable source provenance.", "success");
+        publishSessionLocation?.(session.sessionId);
+        pushLocalNotice("Started a new conversation from here. The original conversation is unchanged.", "success");
         coordination.composerRef.current?.focus();
       } catch (cause) {
         if (ownsRequest()) setUiError(cause instanceof Error ? cause.message : "Unable to fork this conversation.");
@@ -209,6 +213,7 @@ export function useChatConversationFork({
       selection.historyView,
       setSessions,
       pushLocalNotice,
+      publishSessionLocation,
       threadController.selectedSession,
       selection.selectedSessionId,
       setHistoryView,

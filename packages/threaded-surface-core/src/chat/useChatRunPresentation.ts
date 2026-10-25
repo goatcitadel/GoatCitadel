@@ -15,6 +15,7 @@ import {
   formatThreadedRunStateLabel,
   formatThreadedRunStateSummary,
   formatAgenticBackgroundHandoffSummary,
+  agenticBackgroundHandoffTechnicalDetails,
   formatAgenticBackgroundHandoffNotice,
 } from "./mission-threaded-controller-helpers";
 import { useChatDelegatedScopeControls } from "./useChatDelegatedScopeControls";
@@ -171,6 +172,7 @@ export function useChatRunPresentation({
         id: `lifecycle-agentic-handoff-${agenticRunTree?.runId ?? "active"}`,
         tone: "neutral",
         content: backgroundHandoffNotice,
+        technicalDetails: agenticBackgroundHandoffTechnicalDetails(agenticRunTree),
         timestamp: agenticRunTree?.generatedAt ?? timestamp,
       });
     }

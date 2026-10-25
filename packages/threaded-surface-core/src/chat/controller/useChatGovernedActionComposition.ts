@@ -216,6 +216,7 @@ export function useChatGovernedActionComposition({
     notices,
     coordination,
     setForkConfirm,
+    publishSessionLocation: session.publishSessionLocation,
   });
   const planningPreferences = useChatPlanningPreferences({
     preferenceActions,

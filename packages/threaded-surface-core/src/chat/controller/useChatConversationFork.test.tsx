@@ -19,6 +19,7 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+const publishLocation = vi.fn();
 const focus = vi.fn(),
   notice = vi.fn(),
   setThread = vi.fn(),
@@ -94,6 +95,7 @@ function Harness({
     setForkConfirm: updateConfirm,
     setSelectedContextTurnIds: vi.fn(),
     setPendingThreadContext: vi.fn(),
+    publishSessionLocation: publishLocation,
   });
   state = { selected, draft, pending, error, confirm, history, sessions: sessions?.items ?? [] };
   return null;
@@ -135,6 +137,11 @@ describe("conversation fork ownership", () => {
     expect(loadSidebar).not.toHaveBeenCalled();
     expect(loadCore).not.toHaveBeenCalled();
     expect(notice).toHaveBeenCalledTimes(1);
+    expect(notice).toHaveBeenCalledWith(
+      "Started a new conversation from here. The original conversation is unchanged.",
+      "success",
+    );
+    expect(publishLocation).toHaveBeenCalledExactlyOnceWith("copy-a");
     await act(async () => {
       navigate("b");
     });

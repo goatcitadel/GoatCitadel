@@ -167,7 +167,7 @@ describe("threaded-surface-core pure helpers", () => {
         title: "mission:chat_123",
         scope: "mission",
       } as never),
-    ).toBe("Mission chat - abc123");
+    ).toBe("New chat");
 
     expect(
       formatSessionLabel({

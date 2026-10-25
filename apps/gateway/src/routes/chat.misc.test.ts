@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { registerChatMiscRoutes } from "./chat.misc.js";
 
 describe("chat misc routes", () => {
@@ -24,6 +24,17 @@ describe("chat misc routes", () => {
     registerChatMiscRoutes(app);
     return app;
   }
+
+  it("answers 404 when the goal of a missing conversation is read", async () => {
+    const getChatSessionGoal = vi.fn(async () => {
+      throw new NotFoundError({ entity: "Chat session", id: "sess_doesnotexist" });
+    });
+    createApp({ getChatSessionGoal });
+
+    const response = await app!.inject({ method: "GET", url: "/api/v1/chat/sessions/sess_doesnotexist/goal" });
+
+    expect(response.statusCode).toBe(404);
+  });
 
   it("server-stamps slash-command approval resolution with the authenticated actor", async () => {
     const parseChatCommand = vi.fn(async () => ({
