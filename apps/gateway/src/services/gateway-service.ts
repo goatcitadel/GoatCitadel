@@ -961,6 +961,8 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
   "session.search",
   "session.history",
   "local_business.research",
+  // #503: reads back this session's own saved tool output; the reader is scoped to the calling session.
+  "tool_artifact.read",
 ] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 

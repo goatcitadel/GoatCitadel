@@ -26,7 +26,7 @@ function bootstrapFixture() {
     createdBy: "operator", toolPattern: "fixture.unrelated", decision: "deny", scope: "workspace",
     scopeRef: "workspace-a", grantType: "persistent" }] };
   const added = ["runtime.configure", "browser.search", "browser.navigate", "browser.extract", "http.get",
-    "session.search", "session.history", "local_business.research"].map((toolPattern, index) => ({
+    "session.search", "session.history", "local_business.research", "tool_artifact.read"].map((toolPattern, index) => ({
     grantId: `bootstrap-${index}`, createdAt: `2026-10-01T00:01:00.00${index}Z`, toolPattern,
     decision: "allow", scope: "session", scopeRef: sessionId, grantType: "persistent", createdBy: "system-chat-agent-bootstrap",
   }));
@@ -37,8 +37,8 @@ function matchIndependentAdditions(input) {
   input.sessionGrants.items = structuredClone(input.after.items.filter(item => item.grantId !== "original"));
   return input;
 }
-test("palette creation admits only the exact eight canonical bootstrap grants while preserving originals", () => {
-  assert.equal(assertPaletteBootstrapGrants(bootstrapFixture()), 8);
+test("palette creation admits only the exact nine canonical bootstrap grants while preserving originals", () => {
+  assert.equal(assertPaletteBootstrapGrants(bootstrapFixture()), 9);
   for (const patch of [{ createdBy: "system-other-bootstrap" }, { createdBy: "operator" },
     { scope: "workspace" }, { scopeRef: "another-session" }, { scopeRef: "workspace-a" },
     { toolPattern: "fs.write" }, { toolPattern: "browser.*" }, { decision: "deny" },

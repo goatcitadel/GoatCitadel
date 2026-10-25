@@ -47,6 +47,7 @@ export function assertPaletteBootstrapGrants({ before, after, sessionGrants, ses
     "session.search",
     "session.history",
     "local_business.research",
+    "tool_artifact.read",
   ].sort();
   assert.ok(
     before.items.length + tools.length <= 400,
