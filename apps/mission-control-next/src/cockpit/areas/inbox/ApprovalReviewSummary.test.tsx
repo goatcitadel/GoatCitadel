@@ -197,3 +197,28 @@ it("uses an explanation GoatCitadel wrote itself, with no model, as the conseque
   expect(consequence?.textContent).toBe("Consequence: Turn it back on in Settings to undo.");
   expect(review.textContent).not.toContain("Model explanation");
 });
+
+it("says when a read approval reaches outside the workspace, and stays quiet for an ordinary read", () => {
+  // Usability pass: an approved fs.read opened a system file, and its review looked like any workspace read.
+  const read = (preview: Record<string, unknown>): ApprovalRequest => ({
+    approvalId: "a",
+    kind: "fs.read",
+    status: "pending",
+    riskLevel: "safe",
+    explanationStatus: "not_requested",
+    payload: { path: String(preview.path) },
+    preview: { toolName: "fs.read", ...preview },
+    linkage: { toolName: "fs.read", workspaceId: "w" },
+    createdAt: "2026-01-01",
+  });
+  const text = (record: ApprovalRequest) => {
+    const host = document.createElement("div");
+    host.innerHTML = markup(<ApprovalReviewSummary approval={record} workspaceId="w" />);
+    return host.querySelector('section[aria-label="Approval scope and consequences"]')!.textContent ?? "";
+  };
+
+  expect(text(read({ path: "/etc/hosts", outsideRootRead: true }))).toContain(
+    "Outside the workspace: this reads a file outside the workspace and project folders.",
+  );
+  expect(text(read({ path: "notes.txt" }))).not.toContain("Outside the workspace");
+});
