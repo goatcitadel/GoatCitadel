@@ -45,6 +45,41 @@ describe("change.request approval preview", () => {
     expect(preview?.requestSummary).toContainEqual({ label: "Change api token", value: "[redacted]" });
   });
 
+  it("keeps non-secret credential lifecycle fields readable so replace and remove differ", () => {
+    const summary = (credentialAction: string) =>
+      changeRequestApprovalPreview(
+        request({
+          intent: {
+            kind: "provider_connection",
+            providerId: "openai",
+            credentialAction,
+            credentialStorage: "env",
+            credentialEnvVar: "OPENAI_API_KEY",
+            profile: { apiKeyEnv: "OPENAI_API_KEY" },
+          },
+        }),
+      )?.requestSummary;
+    expect(summary("replace_api_key")).toEqual([
+      { label: "Kind", value: "provider_connection" },
+      { label: "Provider id", value: "openai" },
+      { label: "Credential action", value: "replace_api_key" },
+      { label: "Credential storage", value: "env" },
+      { label: "Credential env var", value: "OPENAI_API_KEY" },
+      { label: "Profile api key env", value: "OPENAI_API_KEY" },
+    ]);
+    expect(summary("remove_oauth")).toContainEqual({ label: "Credential action", value: "remove_oauth" });
+    expect(
+      changeRequestApprovalPreview(
+        request({
+          intent: {
+            kind: "runtime_configuration",
+            change: { operation: "gateway_auth_configuration", mode: "token", replaceCredential: true },
+          },
+        }),
+      )?.requestSummary,
+    ).toContainEqual({ label: "Change replace credential", value: "true" });
+  });
+
   it("withholds the summary when the intent can't be listed exactly", () => {
     const flags = Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`flag${index}`, true]));
     for (const intent of [

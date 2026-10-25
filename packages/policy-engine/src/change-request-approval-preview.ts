@@ -5,6 +5,13 @@ import { CHANGE_REQUEST_TOOL_NAME } from "./tool-registry.js";
 const MAX_SUMMARY_ENTRIES = 40;
 const MAX_DEPTH = 6;
 const SECRET_LOOKING_KEY = /secret|token|password|credential|api[-_]?key|private[-_]?key/i;
+/**
+ * Change Plan intents are secret-free by contract; these secret-sounding names hold lifecycle choices or
+ * environment-variable names, which the operator must see to tell, say, `replace_oauth` from `remove_oauth`.
+ */
+const NON_SECRET_KEYS = new Set(["credentialAction", "credentialStorage", "credentialDeleteScope"]);
+/** `credentialEnvVar`, `apiKeyEnv`, `botTokenEnv`: environment-variable names, never their values. */
+const ENVIRONMENT_REFERENCE_KEY = /Env(Var)?$/;
 const REDACTED = "[redacted]";
 
 interface RequestSummaryEntry {
@@ -52,10 +59,17 @@ function collect(
     }
     const text = describeLeaf(value);
     if (text === undefined) return false;
-    entries.push({ label: labelFor(keyPath), value: SECRET_LOOKING_KEY.test(key) ? REDACTED : text });
+    entries.push({ label: labelFor(keyPath), value: redactsByKey(key, value) ? REDACTED : text });
     if (entries.length > MAX_SUMMARY_ENTRIES) return false;
   }
   return true;
+}
+
+/** A secret-sounding key hides its value unless the value can't be a secret (a flag or count) or the key is known metadata. */
+function redactsByKey(key: string, value: unknown): boolean {
+  if (typeof value === "boolean" || typeof value === "number") return false;
+  if (NON_SECRET_KEYS.has(key) || ENVIRONMENT_REFERENCE_KEY.test(key)) return false;
+  return SECRET_LOOKING_KEY.test(key);
 }
 
 function describeLeaf(value: unknown): string | undefined {
