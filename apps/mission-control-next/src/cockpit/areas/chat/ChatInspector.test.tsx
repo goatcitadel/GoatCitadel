@@ -268,6 +268,24 @@ describe("conversation inspector", () => {
     expect(container.querySelector('[aria-label="Conversation execution settings"]')).not.toBeNull();
   });
 
+  it("shows the saved tool autonomy, not the last message's, so it agrees with the control below it (#501)", async () => {
+    const input = fixture();
+    // The last message ran under Manual; the operator has since switched this conversation to Safe Auto.
+    input.contextDockProps!.effectiveToolAutonomy = "manual";
+    Object.assign(input.contextDockProps!.prefs as object, {
+      planningMode: "off",
+      webMode: "off",
+      toolAutonomy: "safe_auto",
+    });
+    await act(async () => root.render(<ChatInspector input={input} initialTab="thread" />));
+    const autonomyRow = [...container.querySelectorAll("dt")].find((term) => term.textContent === "Tool autonomy");
+    expect(autonomyRow?.nextElementSibling?.textContent).toBe("Safe Auto (approvals still apply)");
+    // Advisory planning sends no tools whatever is saved, so the row says Manual.
+    Object.assign(input.contextDockProps!.prefs as object, { planningMode: "advisory" });
+    await act(async () => root.render(<ChatInspector input={input} initialTab="thread" />));
+    expect(autonomyRow?.nextElementSibling?.textContent).toBe("Manual (tools off)");
+  });
+
   it("hides execution mutations for historical or mismatched conversation selections", async () => {
     const input = fixture();
     Object.assign(input.contextDockProps!.prefs as object, { planningMode: "auto", webMode: "off" });

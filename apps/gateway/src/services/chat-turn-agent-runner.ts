@@ -11128,7 +11128,7 @@ function buildLiveDataSettingsConflictMessage(input: {
   if (input.toolAutonomy === "manual") {
     return [
       "I can't fetch web-backed information for that because tool autonomy is set to Manual for this chat, so I can't run the browser tools needed to verify it.",
-      "Switch tool autonomy to Safe Auto and resend, or ask a non-web question instead.",
+      "To turn tools on, set Inspect > Conversation > Tool autonomy to Safe Auto and resend, or ask a non-web question instead.",
     ].join(" ");
   }
   return undefined;
