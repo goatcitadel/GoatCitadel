@@ -57,7 +57,7 @@ test("installer promotes during ssInstall before Inno managed state can commit",
   const iss = renderSample();
 
   assert.match(iss, /procedure StopExistingGoatCitadelRuntime\(DuringUninstall: Boolean\);/);
-  assert.match(iss, /goatcitadel\.cmd'' stop --json/);
+  assert.match(iss, /PowerShellLiteral\(LauncherPath\) \+ ' stop --json"/);
   const curSteps = iss.match(/procedure CurStepChanged\(CurStep: TSetupStep\);[\s\S]*?procedure CurUninstallStepChanged/)?.[0] ?? "";
   const postInstallIndex = curSteps.indexOf("if CurStep = ssPostInstall then");
   assert.ok(postInstallIndex > 0);
@@ -90,7 +90,6 @@ test("installer updates close the running desktop host without double-restarting
   assert.ok(iss.includes("RegisterExtraCloseApplicationsResource(False, ExpandConstant('{app}\\{#MyDesktopExe}'));"));
   assert.match(iss, /Flags: nowait postinstall skipifsilent/);
   assert.match(iss, /procedure StopExistingGoatCitadelPayloadProcesses\(DuringUninstall: Boolean\);/);
-  assert.match(iss, /param\(\$payloadRoot\)/);
   assert.match(iss, /ExecutablePath\.StartsWith\(\$payloadRoot, \[System\.StringComparison\]::OrdinalIgnoreCase\)/);
   assert.match(iss, /Stop-Process -Id \$_\.ProcessId -Force/);
   assert.match(iss, /Sleep\(1500\);/);
@@ -216,8 +215,7 @@ test("uninstall stops the packaged runtime before removing its payload", () => {
   const removePayload = iss.match(/procedure RemoveGoatCitadelPayload\(\);[\s\S]*?procedure WriteTransactionMarker/)?.[0] ?? "";
   assert.match(removePayload, /RunUninstallOrFail\(/);
   assert.doesNotMatch(removePayload, /RunOrFail\(/);
-  assert.match(removePayload, /try \{\{ \[System\.IO\.Directory\]::Delete[\s\S]*?\} catch \{\{\}; try \{\{/);
-  assert.doesNotMatch(removePayload, /\} catch \{\{\}\}/);
+  assert.match(removePayload, /try \{ \[System\.IO\.Directory\]::Delete\(\$a, \$true\) \} catch \{\}; try \{ \[System\.IO\.Directory\]::Delete\(\$b, \$true\) \} catch \{\};/);
 });
 
 test("installer consumes only the exact adjacent release-evidence files", () => {
@@ -289,3 +287,29 @@ function resolveIsccForTest() {
     return !result.error;
   });
 }
+
+test("installer never passes paths to PowerShell as trailing -Command arguments", () => {
+  const iss = renderSample();
+
+  // powershell.exe -Command re-joins trailing arguments with spaces, so a path such as
+  // C:\Users\John Smith\AppData\Local\GoatCitadel was truncated at the first space and an
+  // AddBackslash'd path ending in \ turned the closing quote into an escaped quote.
+  assert.doesNotMatch(iss, /param\(\$payloadRoot\)/);
+  assert.doesNotMatch(iss, /param\(\$path\)/);
+  assert.doesNotMatch(iss, /-Command[^\n]*"\s*'\s*\+\s*AddQuotes\(/);
+
+  // Paths reach PowerShell as single-quoted literals produced by one shared helper.
+  const helper = iss.match(/function PowerShellLiteral\(Value: String\): String;[\s\S]*?\nend;/)?.[0] ?? "";
+  assert.ok(helper.length > 0, "PowerShellLiteral helper must exist");
+  assert.match(helper, /StringChangeEx\(Escaped, '''', '''''', True\)/);
+
+  assert.match(iss, /\$payloadRoot = ' \+ PowerShellLiteral\(PayloadRoot\)/);
+  assert.match(iss, /Remove-Item -LiteralPath ' \+ PowerShellLiteral\(DirectoryPath\)/);
+  assert.match(iss, /-Command "& ' \+ PowerShellLiteral\(LauncherPath\)/);
+  assert.match(iss, /PowerShellLiteral\('\\\\\?\\' \+ AppPayloadPath\)/);
+
+  // {app} must never be spliced into a single-quoted PowerShell string by ExpandConstant
+  // (an apostrophe in the profile name, e.g. O'Brien, would break out of the literal).
+  assert.doesNotMatch(iss, /''\{app\}/);
+  assert.doesNotMatch(iss, /''\\\?\\{app\}/);
+});
