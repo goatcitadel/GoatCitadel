@@ -75,7 +75,7 @@ import {
   type BaseAgentPromptToolset,
   type BaseAgentToolsUnavailableReason,
 } from "./base-agent-system-prompt.js";
-import type { BasePromptCatalogScope } from "./base-prompt-capability-catalog.js";
+import { withoutUnadmittedFanout, type BasePromptCatalogScope } from "./base-prompt-capability-catalog.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
 import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
 import type {
@@ -1112,11 +1112,10 @@ export async function prepareAgentChatTurn(
     let promptCapabilityCatalog: BaseAgentPromptToolset = { toolNames: [] };
     if (!quickWebTurn && host.resolveBasePromptCapabilityCatalog) {
       try {
-        promptCapabilityCatalog = await host.resolveBasePromptCapabilityCatalog({
-          sessionId,
-          workspaceId,
-          mode: effectiveMode,
-        });
+        promptCapabilityCatalog = withoutUnadmittedFanout(
+          await host.resolveBasePromptCapabilityCatalog({ sessionId, workspaceId, mode: effectiveMode }),
+          prefs.subagentPolicy,
+        );
       } catch {
         promptCapabilityCatalog = { toolNames: [] };
       }
