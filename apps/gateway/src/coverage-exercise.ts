@@ -99,12 +99,14 @@ async function withTempRoot(run: (app: FastifyInstance, tempRoot: string) => Pro
 }
 
 function applyCoverageEnvironment(rootDir: string): EnvSnapshot {
-  const keys = ["GOATCITADEL_ROOT_DIR", ...Object.keys(COVERAGE_ENV_OVERRIDES)];
+  const keys = ["GOATCITADEL_ROOT_DIR", "GOATCITADEL_BACKUP_DIR", ...Object.keys(COVERAGE_ENV_OVERRIDES)];
   const snapshot: EnvSnapshot = {};
   for (const key of keys) {
     snapshot[key] = process.env[key];
   }
   process.env.GOATCITADEL_ROOT_DIR = rootDir;
+  // The backup directory does not follow the root; unpinned, the sweep writes into the operator's ~/.GoatCitadel/backups.
+  process.env.GOATCITADEL_BACKUP_DIR = path.join(rootDir, "backups");
   for (const [key, value] of Object.entries(COVERAGE_ENV_OVERRIDES)) {
     process.env[key] = value;
   }
