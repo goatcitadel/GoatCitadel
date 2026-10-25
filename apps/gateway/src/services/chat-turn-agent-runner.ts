@@ -14113,8 +14113,9 @@ function looksLikeFragmentaryStandaloneAnswer(input: {
     Array.isArray(input.priorMessages) && input.priorMessages.some((message) => message?.role === "assistant");
 
   if (!priorAssistantContext && !/\b(above|below|earlier|previous)\b/.test(normalizedRequest)) {
-    // A reference to an earlier message points at text the reader of this answer does not have.
-    if (/\b(my|the|your)\s+(earlier|previous|last|prior)\s+(message|reply|response|answer)\b/.test(normalized)) {
+    // A reference to the assistant's own earlier message points at text the reader of this answer does not have.
+    // "Your last message" or "the previous message" can mean the user's visible request, so only "my" counts.
+    if (/\bmy\s+(earlier|previous|last|prior)\s+(message|reply|response|answer)\b/.test(normalized)) {
       return true;
     }
     const references = [

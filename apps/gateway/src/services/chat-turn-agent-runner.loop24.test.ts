@@ -197,6 +197,34 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(result.turnTrace.failure).toBeUndefined();
   });
 
+  it("does not repair an answer that refers to the user's own message", async () => {
+    // Review on #558: "your last message" is the user's visible request, not missing assistant output.
+    const answer =
+      "Your last message asks me to turn 20 degrees Celsius into Fahrenheit. The result is 68 degrees Fahrenheit.";
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: answer } }],
+      });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        content: "Convert 20 C to F.",
+        historyMessages: [{ role: "user", content: "Convert 20 C to F." }],
+      }),
+    );
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(result.assistantContent).toBe(answer);
+  });
+
   it("still repairs an answer that points at an earlier message the reader cannot see", async () => {
     // Live K-04: "the code from my earlier message" named text from an earlier step, which is not part of the
     // saved answer, so the repair pass must make the answer self-contained.
