@@ -226,8 +226,12 @@ export function wrapWinAnsi(bytes: string, font: PdfFont, size: number, maxWidth
     }
     if (current) lines.push(current);
     current = word;
-    while (measureWinAnsi(current, font, size) > maxWidth && current.length > 1) {
-      const cut = fittingPrefixLength(current, font, size, maxWidth);
+    // Each pass measures only up to the next cut, so splitting a very long word stays linear.
+    for (
+      let cut = fittingPrefixLength(current, font, size, maxWidth);
+      cut < current.length;
+      cut = fittingPrefixLength(current, font, size, maxWidth)
+    ) {
       lines.push(current.slice(0, cut));
       current = current.slice(cut);
     }
