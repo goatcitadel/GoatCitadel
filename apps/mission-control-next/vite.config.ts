@@ -303,8 +303,10 @@ export function createCockpitBootChunkSelector() {
       )
     )
       return undefined;
-    // These primitives belong to Gallery, Library and Settings; actual imports still determine loading.
-    if (/\/node_modules\/@radix-ui\/react-(?:tooltip|tabs)\//.test(normalizedId)) return undefined;
+    // These primitives belong to Gallery, Library, Settings and Capabilities; actual imports still determine loading.
+    // Switch reaches boot only through the radix-ui barrel; in cockpit-runtime its automatic react-use-size leaf
+    // would import React back from cockpit-runtime and form a chunk cycle that blanks the production build.
+    if (/\/node_modules\/@radix-ui\/react-(?:tooltip|tabs|switch)\//.test(normalizedId)) return undefined;
     // Library transport stays at its actual destination; the eager Chat leaf remains grouped.
     if (/\/packages\/mission-control-shared\/(?:dist|src)\/api\/external-sources\.[jt]s$/.test(normalizedId))
       return undefined;
