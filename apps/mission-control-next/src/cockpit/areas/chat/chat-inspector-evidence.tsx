@@ -7,6 +7,7 @@ import { presentDelegationRunStatus, presentDelegationStepStatus, presentSourceT
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { presentErrorText } from "../../lib/present-error";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
+import { presentTurnModelReason } from "./chat-model-reason";
 export function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-3 border-b border-line-subtle py-2 text-sm">
@@ -179,4 +180,18 @@ export function FallbackDetailRow({ turn }: { turn: ChatThreadTurnRecord }) {
     : [destination ? name : null, routing?.fallbackReason].filter(Boolean).join(" · ") ||
       "Used; destination not recorded";
   return <DetailRow label="Fallback" value={value} />;
+}
+
+/** "Chosen because": plain words for why this turn used its model, from what the turn recorded. */
+export function ChosenBecauseDetailRow({ turn }: { turn: ChatThreadTurnRecord }) {
+  const routing = turn.trace.routing;
+  const requested = Boolean(routing?.primaryProviderId || routing?.primaryModel);
+  const requestedLabel = useModelLabel(routing?.primaryProviderId, routing?.primaryModel, requested);
+  const recorded = Boolean(routing?.effectiveModel ?? turn.trace.model);
+  return (
+    <DetailRow
+      label="Chosen because"
+      value={presentTurnModelReason(routing, requested ? requestedLabel : null, recorded)}
+    />
+  );
 }

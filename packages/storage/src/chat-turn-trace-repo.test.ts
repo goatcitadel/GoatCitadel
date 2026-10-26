@@ -615,6 +615,14 @@ describe("ChatTurnTraceRepository", () => {
     );
   });
 
+  it("round-trips the recorded model selection source and reads older routing without it", () => {
+    const { repo } = createStore();
+    repo.create(baseTrace({ routing: { primaryModel: "m", selectionSource: "citadel_ward_route_local" } }));
+    assert.equal(repo.get("turn-a").routing.selectionSource, "citadel_ward_route_local");
+    repo.create(baseTrace({ turnId: "turn-b", userMessageId: "user-message-b", routing: { primaryModel: "m" } }));
+    assert.equal(repo.get("turn-b").routing.selectionSource, undefined);
+  });
+
   it("filters malformed rows and falls back on malformed persisted JSON", () => {
     const { db, repo } = createStore();
     repo.create(

@@ -23,6 +23,7 @@ import type {
   ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import { traceSelectionSource } from "./chat-route-resolution.js";
 import {
   ChatTurnCancelledError,
   dedupeChatCitations,
@@ -1069,6 +1070,7 @@ export async function sendPreparedIntegrationChatTurn(
           effectiveProviderId:
             prepared.capabilityProfile?.selection.effectiveProviderId ?? input.providerId ?? prepared.prefs.providerId,
           effectiveModel: prepared.capabilityProfile?.selection.effectiveModel ?? input.model ?? prepared.prefs.model,
+          ...traceSelectionSource(input.routeDecision),
         },
         startedAt,
       });
