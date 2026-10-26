@@ -1338,21 +1338,34 @@ export class DurableRunService {
         (await this.settleCanonicalAutonomousChatWriteAuthority(claim.run)) === "authority_superseded";
       if (!authoritySupersededBeforeSideEffect) {
         const postCommitAbort = new AbortController();
+        // One renewal at a time: a slow renewal must not stack ticks, and a failure in the failure
+        // reporter itself must still abort rather than surface as an unhandled rejection.
+        let claimHeartbeatInFlight = false;
         const claimHeartbeat = setInterval(
-          async () => {
-            try {
-              if (!(await this.renewAutonomousChatPostCommitClaim(claim.run.runId, claim.pending))) {
-                postCommitAbort.abort(
-                  new DurableWorkerInterruptionError(
-                    "lease_lost",
-                    `Autonomous Chat post-commit ${claim.run.runId} lost claim ownership.`,
-                  ),
-                );
-              }
-            } catch (error) {
-              await this.reportDurableRunRecoveryFailure(claim.run.runId, error);
-              postCommitAbort.abort(error);
+          () => {
+            if (claimHeartbeatInFlight) {
+              return;
             }
+            claimHeartbeatInFlight = true;
+            void (async () => {
+              try {
+                if (!(await this.renewAutonomousChatPostCommitClaim(claim.run.runId, claim.pending))) {
+                  postCommitAbort.abort(
+                    new DurableWorkerInterruptionError(
+                      "lease_lost",
+                      `Autonomous Chat post-commit ${claim.run.runId} lost claim ownership.`,
+                    ),
+                  );
+                }
+              } catch (error) {
+                await this.reportDurableRunRecoveryFailure(claim.run.runId, error);
+                postCommitAbort.abort(error);
+              }
+            })()
+              .catch((error) => postCommitAbort.abort(error))
+              .finally(() => {
+                claimHeartbeatInFlight = false;
+              });
           },
           Math.floor(AUTONOMOUS_CHAT_POST_COMMIT_CLAIM_TTL_MS / 3),
         );
@@ -3162,11 +3175,17 @@ export class DurableRunService {
       if (process.env.NODE_ENV === "test") return;
       throw new Error("Heartbeat occurrence repository is unavailable during terminal Chat handoff.");
     }
-    const featureBound = typeof payload.featureReferenceSha256 === "string" && /^[a-f0-9]{64}$/u.test(payload.featureReferenceSha256) &&
-      payload.capabilityProfileId === undefined && payload.capabilityProfileHash === undefined;
-    const profileBound = payload.featureReferenceSha256 === undefined &&
-      typeof payload.capabilityProfileId === "string" && Boolean(payload.capabilityProfileId.trim()) &&
-      typeof payload.capabilityProfileHash === "string" && /^[a-f0-9]{64}$/u.test(payload.capabilityProfileHash);
+    const featureBound =
+      typeof payload.featureReferenceSha256 === "string" &&
+      /^[a-f0-9]{64}$/u.test(payload.featureReferenceSha256) &&
+      payload.capabilityProfileId === undefined &&
+      payload.capabilityProfileHash === undefined;
+    const profileBound =
+      payload.featureReferenceSha256 === undefined &&
+      typeof payload.capabilityProfileId === "string" &&
+      Boolean(payload.capabilityProfileId.trim()) &&
+      typeof payload.capabilityProfileHash === "string" &&
+      /^[a-f0-9]{64}$/u.test(payload.capabilityProfileHash);
     if (
       typeof payload.heartbeatOccurrenceId !== "string" ||
       !payload.heartbeatOccurrenceId.trim() ||
@@ -3182,8 +3201,12 @@ export class DurableRunService {
       admissionId: admission.admissionId,
       turnId: admission.turnId,
       durableRunId: run.runId,
-      ...(featureBound ? { featureReferenceSha256: payload.featureReferenceSha256 as string }
-        : { capabilityProfileId: payload.capabilityProfileId as string, capabilityProfileHash: payload.capabilityProfileHash as string }),
+      ...(featureBound
+        ? { featureReferenceSha256: payload.featureReferenceSha256 as string }
+        : {
+            capabilityProfileId: payload.capabilityProfileId as string,
+            capabilityProfileHash: payload.capabilityProfileHash as string,
+          }),
     });
     if (settlement.disposition === "still_bound") {
       throw new Error(`System heartbeat ${run.runId} terminal handoff did not settle its occurrence.`);
@@ -4698,8 +4721,13 @@ export class DurableRunService {
     }
     const interruptedByRestart = await this.verifyLinkedFinalizationAuthority(claim.run, claim.pending);
     const finalizationAbort = new AbortController();
+    let claimHeartbeatInFlight = false;
     const claimHeartbeat = setInterval(
       () => {
+        if (claimHeartbeatInFlight) {
+          return;
+        }
+        claimHeartbeatInFlight = true;
         void (async () => {
           try {
             if (!(await this.renewPendingLinkedFinalizationClaim(claim.run.runId, claim.pending))) {
@@ -4714,7 +4742,11 @@ export class DurableRunService {
             await this.reportDurableRunRecoveryFailure(claim.run.runId, error);
             finalizationAbort.abort(error);
           }
-        })().catch((error) => finalizationAbort.abort(error));
+        })()
+          .catch((error) => finalizationAbort.abort(error))
+          .finally(() => {
+            claimHeartbeatInFlight = false;
+          });
       },
       Math.floor(LINKED_FINALIZATION_CLAIM_TTL_MS / 3),
     );
@@ -5354,7 +5386,19 @@ export class DurableRunService {
         return;
       }
       const expectedAtMs = Date.now() + DURABLE_LEASE_HEARTBEAT_MS;
-      heartbeatTimer = setTimeout(() => void heartbeat(expectedAtMs), DURABLE_LEASE_HEARTBEAT_MS);
+      heartbeatTimer = setTimeout(() => {
+        // A heartbeat that throws unexpectedly must fail closed (abort the run), never become an
+        // unhandled rejection that leaves the run executing without lease renewal.
+        heartbeat(expectedAtMs).catch((error: unknown) => {
+          active = false;
+          const interruption = new DurableWorkerInterruptionError(
+            "heartbeat_unavailable",
+            error instanceof Error ? error.message : `Durable run ${run.runId} lease heartbeat failed.`,
+          );
+          controller.abort(interruption);
+          rejectHeartbeatFailure(interruption);
+        });
+      }, DURABLE_LEASE_HEARTBEAT_MS);
     };
     let consecutiveHeartbeatFailures = 0;
     let lastSuccessfulRenewalMs = Date.now();
@@ -5378,7 +5422,11 @@ export class DurableRunService {
         rejectHeartbeatFailure(error);
         return;
       }
-      await this.recordEventLoopLag(Date.now() - expectedAtMs, run.runId);
+      try {
+        await this.recordEventLoopLag(Date.now() - expectedAtMs, run.runId);
+      } catch {
+        // Lag diagnostics are best effort; they must not decide the lease outcome.
+      }
       let current: DurableRunRecord;
       try {
         current = await this.ctx.storage.durableRuns.getRun(run.runId);
