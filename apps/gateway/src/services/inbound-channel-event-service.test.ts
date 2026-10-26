@@ -454,6 +454,53 @@ describe("InboundChannelEventService", () => {
     expect(desk.harness.storage.inboundChannelEvents.get(eventId)?.deliveryId).toBe("desk-delivery-1");
   });
 
+  it("escapes an underscore in the quoted question for a Markdown Telegram connection", async () => {
+    const desk = await createDeskHarness({ parseMode: "Markdown" });
+
+    const { eventId } = await desk.ask("status of PR_123?");
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "completed");
+
+    // Unescaped, Telegram would refuse the whole message ("can't parse entities") and the answer would never arrive.
+    expect(desk.gateway.commsSend.mock.calls[0]?.[0]).toMatchObject({
+      message: 'From your desk: "status of PR\\_123?"\n\nLevel 3, near the lifts.',
+    });
+    // The recorded question keeps the operator's own text.
+    const recorded = desk.harness.storage.inboundChannelEvents.get(eventId);
+    expect(desk.harness.storage.chatMessages.get(recorded!.messageId!)?.content).toBe("status of PR_123?");
+  });
+
+  it("answers a desk question with the operator's provider and model, also after an approval wait", async () => {
+    const desk = await createDeskHarness({ answerStatus: "waiting_for_approval" });
+
+    const { eventId } = await desk.ask("Book the usual table.", "request-1", {
+      providerId: "openai",
+      model: "gpt-5.1",
+    });
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "waiting");
+    expect(desk.gateway.prepareAgentChatTurn).toHaveBeenCalledWith(
+      desk.session.sessionId,
+      expect.objectContaining({ providerId: "openai", model: "gpt-5.1" }),
+      expect.any(Object),
+    );
+    expect(desk.gateway.sessionControlRuntimeOwner.admitSystemChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ request: expect.objectContaining({ providerId: "openai", model: "gpt-5.1" }) }),
+    );
+
+    desk.settleApprovedTurn("Booked.");
+    desk.harness.service.close();
+    desk.harness.storage.db
+      .prepare("UPDATE inbound_channel_events SET claim_expires_at = ? WHERE event_id = ?")
+      .run(new Date(0).toISOString(), eventId);
+    await desk.harness.createAdditionalService().drain();
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "completed");
+
+    // The retry re-reads the choice from the durable event, not from the original request.
+    expect(desk.harness.respondToExistingChatMessage).toHaveBeenCalledTimes(2);
+    for (const [, , options] of desk.harness.respondToExistingChatMessage.mock.calls) {
+      expect(options).toMatchObject({ providerId: "openai", model: "gpt-5.1" });
+    }
+  });
+
   it("never answers a desk question once the conversation is no longer the operator's own", async () => {
     const desk = await createDeskHarness({ ownerActorIds: ["someone-else"] });
 
@@ -1276,9 +1323,10 @@ describe("InboundChannelEventService", () => {
     options: Partial<InboundChannelEventServiceDeps> & {
       answerStatus?: "completed" | "waiting_for_approval";
       ownerActorIds?: string[];
+      parseMode?: string;
     } = {},
   ) {
-    const { answerStatus = "completed", ownerActorIds = ["4242"], ...overrides } = options;
+    const { answerStatus = "completed", ownerActorIds = ["4242"], parseMode, ...overrides } = options;
     const session = resolveSessionRoute({ channel: "telegram", account: "telegram-1", peer: "4242" });
     const deskBinding: ChatSessionBindingRecord = {
       sessionId: session.sessionId,
@@ -1318,7 +1366,7 @@ describe("InboundChannelEventService", () => {
         key: "telegram",
         enabled: true,
         status: "connected",
-        config: { ownerActorIds },
+        config: { ownerActorIds, ...(parseMode ? { parseMode } : {}) },
       }),
       ensureInboundChatSession: vi.fn(async (input) => ({
         ...resolveSessionRoute(input.route),
@@ -1336,7 +1384,11 @@ describe("InboundChannelEventService", () => {
       ),
       ...overrides,
     });
-    const ask = async (content: string, idempotencyKey = "request-1") => {
+    const ask = async (
+      content: string,
+      idempotencyKey = "request-1",
+      selection: { providerId?: string; model?: string } = {},
+    ) => {
       const response = await acceptOperatorDeskTurn(
         (acceptance) => harness.service.acceptOperatorDeskEvent(acceptance),
         {
@@ -1345,6 +1397,7 @@ describe("InboundChannelEventService", () => {
           binding: deskBinding,
           content,
           idempotencyKey,
+          ...selection,
         },
       );
       const event = harness.storage.inboundChannelEvents.getByIdentity({

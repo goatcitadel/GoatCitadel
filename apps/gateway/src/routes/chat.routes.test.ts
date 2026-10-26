@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { NotFoundError } from "@goatcitadel/contracts";
+import { resolveSessionRoute } from "@goatcitadel/gateway-core";
+import { routeOperatorDeskSend } from "../services/channel-desk-turn.js";
 import { chatRoutes } from "./chat.js";
 
 function testRouteDecision(overrides: Partial<Record<string, unknown>> = {}) {
@@ -2131,9 +2133,12 @@ describe("chat routes additional coverage", () => {
       });
       expect(sent.statusCode).toBe(200);
       expect(sent.json()).toEqual(deskResponse);
+      // The route's provider and model choice travels with the desk question.
       expect(sendOperatorDeskMessage).toHaveBeenCalledWith("sess-1", {
         content: "What's on my calendar today?",
         idempotencyKey: "request-key-1",
+        providerId: "openai",
+        model: "gpt-5.1",
       });
 
       const streamed = await app!.inject({
@@ -2164,6 +2169,77 @@ describe("chat routes additional coverage", () => {
         expect(response.statusCode).toBe(409);
         expect(response.json()).toEqual({ error: "Turn Telegram back on to reply." });
       }
+      expect(agentSendChatMessage).not.toHaveBeenCalled();
+      expect(agentSendChatMessageStream).not.toHaveBeenCalled();
+    });
+
+    it("refuses files and templates in a desk send to the operator's own conversation", async () => {
+      const session = resolveSessionRoute({ channel: "telegram", account: "telegram-1", peer: "4242" });
+      const accept = vi.fn(async () => {
+        throw new Error("must not accept");
+      });
+      // The real desk decision, on the operator's own Telegram conversation.
+      const sendOperatorDeskMessage = vi.fn(async (sessionId: string, input: Record<string, unknown>) =>
+        routeOperatorDeskSend(
+          {
+            ...(input as { content: string; idempotencyKey: string }),
+            sessionId,
+            sessionKey: session.sessionKey,
+            binding: {
+              sessionId,
+              transport: "integration",
+              connectionId: "telegram-1",
+              target: "4242",
+              conversation: { kind: "direct", counterpartActorId: "4242" },
+              writable: true,
+              createdAt: "2026-10-25T10:00:00.000Z",
+              updatedAt: "2026-10-25T10:00:00.000Z",
+            },
+            connection: {
+              connectionId: "telegram-1",
+              revision: "r1",
+              catalogId: "channel.telegram",
+              kind: "channel",
+              key: "telegram",
+              label: "Telegram",
+              enabled: true,
+              status: "connected",
+              config: { ownerActorIds: ["4242"] },
+              createdAt: "2026-10-25T10:00:00.000Z",
+              updatedAt: "2026-10-25T10:00:00.000Z",
+            },
+          },
+          accept,
+        ),
+      );
+      const { agentSendChatMessage, agentSendChatMessageStream } = await createDeskApp(sendOperatorDeskMessage);
+
+      const extras = [
+        { attachments: ["attachment-1"] },
+        { parts: [{ type: "image_ref", attachmentId: "attachment-1" }] },
+        {
+          templateInvocation: {
+            ownerKind: "prompt_pack",
+            ownerId: "pack-1",
+            ownerRevision: "rev-1",
+            schemaHash: "a".repeat(64),
+            values: {},
+          },
+        },
+        { workspaceSnapshot: { capture: true, requestId: "snapshot-1" } },
+      ];
+      for (const extra of extras) {
+        for (const url of [
+          "/api/v1/chat/sessions/sess-1/agent-send",
+          "/api/v1/chat/sessions/sess-1/agent-send/stream",
+        ]) {
+          const response = await app!.inject({ method: "POST", url, payload: { ...deskPayload, ...extra } });
+          expect(response.statusCode).toBe(400);
+          expect(response.json()).toEqual({ error: "Files and templates aren't sent in channel conversations." });
+        }
+      }
+      expect(sendOperatorDeskMessage).toHaveBeenCalledTimes(extras.length * 2);
+      expect(accept).not.toHaveBeenCalled();
       expect(agentSendChatMessage).not.toHaveBeenCalled();
       expect(agentSendChatMessageStream).not.toHaveBeenCalled();
     });

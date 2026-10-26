@@ -61,7 +61,22 @@ export interface OperatorDeskTurnInput {
   content: string;
   /** The send request's own idempotency key. */
   idempotencyKey: string;
+  /** The route the send request was checked against; the desk turn answers with the same choice. */
+  providerId?: string;
+  model?: string;
 }
+
+/** Send-request fields a desk question cannot carry into a channel conversation. */
+export interface OperatorDeskRequestExtras {
+  attachments?: readonly string[];
+  parts?: ReadonlyArray<{ type: string }>;
+  templateInvocation?: unknown;
+  workspaceSnapshot?: unknown;
+}
+
+/** One desk send as the chat route hands it over. */
+export type OperatorDeskSendInput = Pick<OperatorDeskTurnInput, "content" | "idempotencyKey" | "providerId" | "model"> &
+  OperatorDeskRequestExtras;
 
 /** The accepted desk question, with the turn the inbound worker answers it under. */
 export type OperatorDeskTurnResponse = ChatSendMessageResponse & { turnId: string };
@@ -69,7 +84,10 @@ export type OperatorDeskTurnResponse = ChatSendMessageResponse & { turnId: strin
 export type OperatorDeskSendResult =
   | { mode: "post" }
   | { mode: "blocked"; message: string }
+  | { mode: "refused"; message: string }
   | { mode: "ask"; response: OperatorDeskTurnResponse };
+
+export const DESK_FILES_REFUSED_MESSAGE = "Files and templates aren't sent in channel conversations.";
 
 /** True only for a direct conversation whose other person is on the connection's owner list. */
 export function isOperatorOwnConversation(
@@ -113,10 +131,44 @@ export function describeBlockedDeskReply(connection: IntegrationConnection | und
   return `${connection.label} isn't connected right now. Check its channel page.`;
 }
 
-/** Quotes the desk question above GoatCitadel's answer, so the phone shows what was asked. */
-export function buildDeskDeliveryPrefix(content: string): string {
-  const quoted = Array.from(content.trim()).slice(0, DESK_QUOTE_CHARACTERS).join("");
-  return `From your desk: "${quoted}"\n\n`;
+/**
+ * Quotes the desk question above GoatCitadel's answer, so the phone shows what was asked. A cut quote ends in "…".
+ * On a Telegram connection with a parse mode, the quote is escaped for it: one stray `_` or `<` in the question would
+ * otherwise make Telegram refuse the whole message. Only the quote is escaped; the answer is sent as composed.
+ */
+export function buildDeskDeliveryPrefix(
+  content: string,
+  channel?: { key: string; config: Record<string, unknown> },
+): string {
+  const characters = Array.from(content.trim());
+  const cut = characters.length > DESK_QUOTE_CHARACTERS;
+  // Cut first, then escape, so an escape sequence is never split.
+  const quoted = escapeDeskQuote(characters.slice(0, DESK_QUOTE_CHARACTERS).join(""), channel);
+  return `From your desk: "${quoted}${cut ? "…" : ""}"\n\n`;
+}
+
+function escapeDeskQuote(text: string, channel: { key: string; config: Record<string, unknown> } | undefined): string {
+  const parseMode = channel?.key === "telegram" ? channel.config.parseMode : undefined;
+  switch (typeof parseMode === "string" ? parseMode.trim().toLowerCase() : "") {
+    case "markdown":
+      return text.replace(/[_*`[]/g, "\\$&");
+    case "markdownv2":
+      return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, "\\$&");
+    case "html":
+      return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    default:
+      return text;
+  }
+}
+
+/** True when a send request carries something only a mission chat can use: files, non-text parts, a template. */
+function carriesFilesOrTemplates(extras: OperatorDeskRequestExtras): boolean {
+  return Boolean(
+    (extras.attachments?.length ?? 0) > 0 ||
+    extras.parts?.some((part) => part.type !== "text") ||
+    extras.templateInvocation !== undefined ||
+    extras.workspaceSnapshot !== undefined,
+  );
 }
 
 export function isOperatorDeskEvent(event: { dispatchKind: string; transport: string }): boolean {
@@ -174,6 +226,10 @@ export function buildOperatorDeskAcceptance(input: OperatorDeskTurnInput): Opera
     throw new ConflictError({ message: "This conversation's channel address does not match its session." });
   }
   const idempotencyKey = `desk:${input.sessionId}:${requestKey}`;
+  // Stored with the event, so a retry after an approval wait answers with the same choice.
+  const providerId = input.providerId?.trim();
+  const model = input.model?.trim();
+  const selection = { ...(providerId ? { providerId } : {}), ...(model ? { model } : {}) };
   return {
     channelKey: route.channel,
     connectionId,
@@ -194,6 +250,7 @@ export function buildOperatorDeskAcceptance(input: OperatorDeskTurnInput): Opera
         actorType: "user",
         content,
       },
+      ...(Object.keys(selection).length > 0 ? { responseOptions: selection } : {}),
     },
   };
 }
@@ -225,16 +282,18 @@ export async function acceptOperatorDeskTurn(
 
 /**
  * Decides what one desk send does and, in the operator's own conversation, accepts it. A missing binding, a mission
- * session, or any conversation that is not provably the operator's own keeps the existing verbatim path.
+ * session, or any conversation that is not provably the operator's own keeps the existing verbatim path. A desk
+ * question is text only: files, non-text parts, a template or a workspace snapshot are refused, never dropped.
  */
 export async function routeOperatorDeskSend(
-  input: Omit<OperatorDeskTurnInput, "binding"> & {
-    binding: ChatSessionBindingRecord | undefined;
-    connection: IntegrationConnection | undefined;
-  },
+  input: Omit<OperatorDeskTurnInput, "binding"> &
+    OperatorDeskRequestExtras & {
+      binding: ChatSessionBindingRecord | undefined;
+      connection: IntegrationConnection | undefined;
+    },
   host: ChannelDeskTurnHost,
 ): Promise<OperatorDeskSendResult> {
-  const { binding, connection, ...turn } = input;
+  const { binding, connection, attachments, parts, templateInvocation, workspaceSnapshot, ...turn } = input;
   if (!binding) {
     return { mode: "post" };
   }
@@ -244,6 +303,9 @@ export async function routeOperatorDeskSend(
   }
   if (mode === "post") {
     return { mode };
+  }
+  if (carriesFilesOrTemplates({ attachments, parts, templateInvocation, workspaceSnapshot })) {
+    return { mode: "refused", message: DESK_FILES_REFUSED_MESSAGE };
   }
   return { mode, response: await acceptOperatorDeskTurn(host, { ...turn, binding }) };
 }

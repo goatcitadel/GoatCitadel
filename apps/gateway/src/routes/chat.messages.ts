@@ -592,9 +592,9 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         if (decisionRejected) {
           return reply;
         }
-        const desk = await resolveDeskSend(fastify, request, params.data.sessionId, body.data.content);
-        if (desk?.mode === "blocked") {
-          return reply.code(409).send({ error: desk.message });
+        const desk = await resolveDeskSend(fastify, request, params.data.sessionId, body.data);
+        if (desk?.mode === "blocked" || desk?.mode === "refused") {
+          return reply.code(desk.mode === "blocked" ? 409 : 400).send({ error: desk.message });
         }
         if (desk?.mode === "ask") {
           await markMutationCommitted(request);
@@ -684,9 +684,9 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
           if (decisionRejected) {
             return reply;
           }
-          const desk = await resolveDeskSend(fastify, request, params.data.sessionId, body.data.content);
-          if (desk?.mode === "blocked") {
-            return reply.code(409).send({ error: desk.message });
+          const desk = await resolveDeskSend(fastify, request, params.data.sessionId, body.data);
+          if (desk?.mode === "blocked" || desk?.mode === "refused") {
+            return reply.code(desk.mode === "blocked" ? 409 : 400).send({ error: desk.message });
           }
           if (desk?.mode === "ask") {
             await markMutationCommitted(request);
@@ -1058,19 +1058,26 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
 /**
  * In a channel conversation a desk send depends on whose conversation it is: in the operator's own it is a question
  * for GoatCitadel, a removed or switched-off channel refuses it, and any other conversation keeps the verbatim post.
- * It is decided before the normal send entry, so a desk question never holds a turn admission of its own.
+ * It is decided before the normal send entry, so a desk question never holds a turn admission of its own. The desk
+ * question answers with the request's checked provider and model; files and templates are refused there, not dropped.
  */
 async function resolveDeskSend(
   fastify: FastifyInstance,
   request: FastifyRequest,
   sessionId: string,
-  content: string,
+  body: z.infer<typeof sendMessageSchema>,
 ): Promise<OperatorDeskSendResult | undefined> {
   // The composed route port always provides this owner; route test doubles written before desk questions leave it
   // out and keep the unchanged send path.
   return (await fastify.services.integrationWebhooks?.sendOperatorDeskMessage?.(sessionId, {
-    content,
+    content: body.content,
     idempotencyKey: request.idempotencyKey,
+    providerId: body.providerId,
+    model: body.model,
+    attachments: body.attachments,
+    parts: body.parts,
+    templateInvocation: body.templateInvocation,
+    workspaceSnapshot: body.workspaceSnapshot,
   })) as OperatorDeskSendResult | undefined;
 }
 

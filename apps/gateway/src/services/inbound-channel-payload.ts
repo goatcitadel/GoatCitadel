@@ -13,6 +13,7 @@ import {
 import type { ChannelVoiceInboundRequest } from "./channel-voice-inbound-service.js";
 import type { DurableInboundChannelAcceptInput, IngestChannelMessageInput } from "./channel-inbound-dispatch.js";
 import { readChannelConversation } from "./channel-conversation.js";
+import { isOperatorDeskEvent } from "./channel-desk-turn.js";
 import { sanitizeMetadata } from "./inbound-channel-metadata.js";
 
 export interface StoredInboundPayload {
@@ -23,6 +24,9 @@ export interface StoredInboundPayload {
   responseOptions?: {
     deliveryReplyToMessageId?: string;
     channelSystemInstruction?: string;
+    /** Only a desk question carries the operator's provider and model choice; provider events never do. */
+    providerId?: string;
+    model?: string;
   };
   voiceRequest?: PersistedVoiceRequest;
   voiceFallbackContent?: string;
@@ -129,6 +133,10 @@ export function parseStoredPayload(event: InboundChannelEventRecord): StoredInbo
     voiceFallbackContent: readOptionalString(value.voiceFallbackContent),
     voiceCaption: readOptionalString(value.voiceCaption),
   };
+  if (payload.responseOptions && isRecord(value.responseOptions) && isOperatorDeskEvent(event)) {
+    assignDefined(payload.responseOptions, "providerId", readOptionalString(value.responseOptions.providerId));
+    assignDefined(payload.responseOptions, "model", readOptionalString(value.responseOptions.model));
+  }
   return payload;
 }
 

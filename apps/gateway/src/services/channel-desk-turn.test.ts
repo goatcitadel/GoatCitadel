@@ -8,6 +8,7 @@ import type { ChatSessionBindingRecord, IntegrationConnection } from "@goatcitad
 import {
   acceptOperatorDeskTurn,
   buildDeskDeliveryPrefix,
+  buildOperatorDeskAcceptance,
   describeBlockedDeskReply,
   resolveDeskConversationMode,
   routeOperatorDeskSend,
@@ -231,7 +232,85 @@ describe("channel desk turns", () => {
       'From your desk: "Where is the spare key?"\n\n',
     );
     const long = "x".repeat(250);
-    expect(buildDeskDeliveryPrefix(long)).toBe(`From your desk: "${"x".repeat(200)}"\n\n`);
+    // A cut quote says so inside its closing quote mark.
+    expect(buildDeskDeliveryPrefix(long)).toBe(`From your desk: "${"x".repeat(200)}…"\n\n`);
+    expect(buildDeskDeliveryPrefix("x".repeat(200))).toBe(`From your desk: "${"x".repeat(200)}"\n\n`);
+  });
+
+  it("escapes the quoted question for the Telegram connection's parse mode", () => {
+    const telegram = (parseMode?: string) => ({ key: "telegram", config: parseMode ? { parseMode } : {} });
+    // Telegram's guided setup saves Markdown; an unmatched underscore would make it reject the whole answer.
+    expect(buildDeskDeliveryPrefix("status of PR_123?", telegram("Markdown"))).toBe(
+      'From your desk: "status of PR\\_123?"\n\n',
+    );
+    expect(buildDeskDeliveryPrefix("a *b* `c` [d]", telegram("markdown"))).toBe(
+      'From your desk: "a \\*b\\* \\`c\\` \\[d]"\n\n',
+    );
+    expect(buildDeskDeliveryPrefix("PR_1 (v2.0)! a-b \\ ok", telegram("MarkdownV2"))).toBe(
+      'From your desk: "PR\\_1 \\(v2\\.0\\)\\! a\\-b \\\\ ok"\n\n',
+    );
+    expect(buildDeskDeliveryPrefix("Is 1 < 2 & 3 > 2?", telegram("HTML"))).toBe(
+      'From your desk: "Is 1 &lt; 2 &amp; 3 &gt; 2?"\n\n',
+    );
+    // No parse mode, or another channel, sends the text as typed.
+    expect(buildDeskDeliveryPrefix("status of PR_123?", telegram())).toBe('From your desk: "status of PR_123?"\n\n');
+    expect(buildDeskDeliveryPrefix("PR_123", { key: "slack", config: { parseMode: "Markdown" } })).toBe(
+      'From your desk: "PR_123"\n\n',
+    );
+    // The cut happens before escaping, so an escape is never split and the ellipsis stays outside it.
+    expect(buildDeskDeliveryPrefix(`${"x".repeat(199)}_tail`, telegram("Markdown"))).toBe(
+      `From your desk: "${"x".repeat(199)}\\_…"\n\n`,
+    );
+  });
+
+  it("refuses files and templates in the operator's own conversation, before accepting anything", async () => {
+    const session = resolveSessionRoute({ channel: "telegram", account: "telegram-1", peer: OWNER_ID });
+    const host = vi.fn(async () => {
+      throw new Error("must not accept");
+    });
+    const base = {
+      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
+      content: "hi",
+      idempotencyKey: "request-1",
+      binding: binding({ sessionId: session.sessionId }),
+      connection: connection(),
+    };
+    const refused = { mode: "refused", message: "Files and templates aren't sent in channel conversations." };
+    for (const extra of [
+      { attachments: ["attachment-1"] },
+      {
+        parts: [
+          { type: "text", text: "hi" },
+          { type: "image_ref", attachmentId: "attachment-1" },
+        ],
+      },
+      { templateInvocation: { ownerKind: "prompt_pack", ownerId: "pack-1" } },
+      { workspaceSnapshot: { mode: "summary" } },
+    ]) {
+      await expect(routeOperatorDeskSend({ ...base, ...extra }, host)).resolves.toEqual(refused);
+    }
+    expect(host).not.toHaveBeenCalled();
+    // Text-only parts and an empty attachment list carry nothing extra.
+    await expect(
+      routeOperatorDeskSend({ ...base, attachments: [], parts: [{ type: "text", text: "hi" }] }, async () => {
+        throw new Error("accepted");
+      }),
+    ).rejects.toThrow("accepted");
+    // A verbatim post keeps today's path, whatever it carries.
+    await expect(
+      routeOperatorDeskSend(
+        { ...base, binding: binding({ conversation: { kind: "group" } }), attachments: ["a"] },
+        host,
+      ),
+    ).resolves.toEqual({ mode: "post" });
+  });
+
+  it("carries the operator's provider and model choice into the desk event", () => {
+    expect(
+      buildOperatorDeskAcceptance({ ...validDeskInput(), providerId: " openai ", model: "gpt-5.1" }).payload,
+    ).toMatchObject({ responseOptions: { providerId: "openai", model: "gpt-5.1" } });
+    expect(buildOperatorDeskAcceptance(validDeskInput()).payload).not.toHaveProperty("responseOptions");
   });
 
   async function createAcceptingService(): Promise<InboundChannelEventService> {

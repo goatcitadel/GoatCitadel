@@ -123,6 +123,9 @@ export interface InboundChannelEventServiceDeps {
       channelSystemInstruction?: string;
       /** Text delivered to the channel ahead of the answer. */
       deliveryPrefix?: string;
+      /** A desk question's provider and model choice; provider events never carry one. */
+      providerId?: string;
+      model?: string;
       inboundDurableIdentity: InboundChannelDeterministicIdentity;
     },
   ) => Promise<ChatSendMessageResponse>;
@@ -668,7 +671,7 @@ export class InboundChannelEventService {
     const respond = () =>
       this.deps.respondToExistingChatMessage(ingestResult.session.sessionId, messageId, {
         ...payload.responseOptions,
-        ...(desk ? { deliveryPrefix: buildDeskDeliveryPrefix(content) } : {}),
+        ...(desk ? { deliveryPrefix: buildDeskDeliveryPrefix(content, connection) } : {}),
         inboundDurableIdentity: identity,
       });
     const response = ["telegram", "discord"].includes(claim.event.channelKey)

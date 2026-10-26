@@ -911,6 +911,7 @@ import {
   OPERATOR_DESK_INGEST_ORIGIN,
   buildOperatorDeskGatewayEvent,
   routeOperatorDeskSend,
+  type OperatorDeskSendInput,
   type OperatorDeskSendResult,
 } from "./channel-desk-turn.js";
 import { enqueueApprovalRemoteTokenConnectorDelivery } from "./approval-connector-delivery.js";
@@ -4859,7 +4860,7 @@ export class GatewayService {
    */
   public async sendOperatorDeskMessage(
     sessionId: string,
-    input: { content: string; idempotencyKey: string },
+    input: OperatorDeskSendInput,
   ): Promise<OperatorDeskSendResult> {
     const binding = await this.storage.chatSessionBindings.get(sessionId);
     if (binding?.transport !== "integration" || !binding.connectionId) {
