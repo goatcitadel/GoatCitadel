@@ -53,7 +53,7 @@ export async function runUxBudgetChat(environment) {
               `Cockpit Chat ${variant}: message area ${chat.ratio} (minimum ${chat.threshold}), horizontal overflow ${overflow.overflow}px`,
             );
           await page.getByRole("button", { name: "Conversation actions", exact: true }).click();
-          await page.getByRole("menuitem", { name: "Build editor", exact: true }).click();
+          await page.getByRole("menuitem", { name: "Open code workbench", exact: true }).click();
           await page.getByRole("heading", { name: "Build editor" }).waitFor({ timeout: 30_000 });
           if (variant === "mobile") await page.getByRole("button", { name: "Browse files" }).click();
           await page.getByText("Choose a code source").waitFor();

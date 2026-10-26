@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { seedMissionControlNextFixture } from "./fixture-seeding.mjs";
+import { seedMissionControlNextFixture, settleApprovedSettingsChangePlan } from "./fixture-seeding.mjs";
 
 test("fails when the seeded thread has no artifact turn", async () => {
   const requests = [];
@@ -146,6 +146,23 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     if (path === "/api/v1/approvals/00000000-0000-0000-0000-000000000001/resolve") {
       settingsApprovalRequest = options;
       return { ok: true, body: { status: "approved" } };
+    }
+    if (path === "/api/v1/change-plans/settings-plan-1?workspaceId=default") {
+      // After approval the plan has moved on; a continuation is answered with its current revision.
+      return {
+        ok: true,
+        body: settingsPlanResponseRequest
+          ? { status: "completed", revision: 7 }
+          : {
+              status: "awaiting_confirmation",
+              revision: 6,
+              requiredAction: {
+                kind: "confirmation",
+                actionId: "settings-action-2",
+                actionNonce: "settings-action-nonce-2234567890",
+              },
+            },
+      };
     }
     if (path === "/api/v1/change-plans/settings-plan-1/responses") {
       settingsPlanResponseRequest = options;
@@ -356,12 +373,78 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     method: "POST",
     body: {
       workspaceId: "default",
-      expectedRevision: 3,
-      actionId: "settings-action-1",
-      actionNonce: "settings-action-nonce-1234567890",
+      expectedRevision: 6,
+      actionId: "settings-action-2",
+      actionNonce: "settings-action-nonce-2234567890",
       values: {},
     },
   });
   assert.deepEqual(retryDelays, [250, 250]);
   assert.ok(requests.includes("/api/v1/memory/items?workspaceId=workspace-1&status=all&limit=200"));
+});
+
+test("an approved Settings plan that already applied is not answered again", async () => {
+  const requests = [];
+  const deps = {
+    assertOk(response) {
+      assert.equal(response.ok, true);
+    },
+    delay: async () => undefined,
+    requestJson: async (_url, path, options) => {
+      requests.push([path, options?.method ?? "GET"]);
+      return { ok: true, body: { status: "completed", revision: 6 } };
+    },
+  };
+  await settleApprovedSettingsChangePlan("http://gateway.test", "plan-1", deps);
+  assert.deepEqual(requests, [["/api/v1/change-plans/plan-1?workspaceId=default", "GET"]]);
+});
+
+test("an approved Settings plan that failed stops the fixture with its status", async () => {
+  const deps = {
+    assertOk() {},
+    delay: async () => undefined,
+    requestJson: async () => ({ ok: true, body: { status: "rollback_failed", revision: 6 } }),
+  };
+  await assert.rejects(
+    settleApprovedSettingsChangePlan("http://gateway.test", "plan-1", deps),
+    /ended as rollback_failed/,
+  );
+});
+
+test("an approved Settings plan that is still applying is polled until it completes", async () => {
+  const statuses = ["applying", "applying", "completed"];
+  const delays = [];
+  const deps = {
+    assertOk(response) {
+      assert.equal(response.ok, true);
+    },
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+    requestJson: async (_url, _path, options) => {
+      assert.equal(options?.method ?? "GET", "GET", "an applying plan is never answered");
+      return { ok: true, body: { status: statuses.shift(), revision: 6 } };
+    },
+  };
+  await settleApprovedSettingsChangePlan("http://gateway.test", "plan-1", deps);
+  assert.equal(statuses.length, 0);
+  assert.equal(delays.length, 2);
+});
+
+test("an approved Settings plan that never settles stops the fixture after the retry budget", async () => {
+  let reads = 0;
+  const deps = {
+    assertOk() {},
+    delay: async () => undefined,
+    requestJson: async () => {
+      reads += 1;
+      return { ok: true, body: { status: "applying", revision: 6 } };
+    },
+  };
+  await assert.rejects(
+    settleApprovedSettingsChangePlan("http://gateway.test", "plan-1", deps),
+    /did not settle after approval/,
+  );
+  // The settle loop shares the Settings reconciliation budget (120 attempts).
+  assert.equal(reads, 120);
 });

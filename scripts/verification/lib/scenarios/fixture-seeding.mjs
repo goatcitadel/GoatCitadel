@@ -520,21 +520,7 @@ async function enableVerificationMemoryAdmin(gatewayUrl, deps) {
           },
         );
         assertOk(approvalResponse, "approve mission-control-next verification memory admin Change Plan");
-        const resumeResponse = await requestJson(
-          gatewayUrl,
-          `/api/v1/change-plans/${encodeURIComponent(pendingPlan.planId)}/responses`,
-          {
-            method: "POST",
-            body: {
-              workspaceId: "default",
-              expectedRevision: pendingPlan.revision,
-              actionId: pendingPlan.actionId,
-              actionNonce: pendingPlan.actionNonce,
-              values: {},
-            },
-          },
-        );
-        assertOk(resumeResponse, "resume mission-control-next verification memory admin Change Plan");
+        await settleApprovedSettingsChangePlan(gatewayUrl, pendingPlan.planId, deps);
         await delay(SETTINGS_RECONCILIATION_RETRY_MS);
         continue;
       }
@@ -547,6 +533,51 @@ async function enableVerificationMemoryAdmin(gatewayUrl, deps) {
     assertOk(updatedSettingsResponse, "enable mission-control-next verification memory admin");
   }
   throw new Error("mission-control-next verification settings reconciliation retry budget was exhausted");
+}
+
+const CHANGE_PLAN_APPLIED_STATUSES = new Set(["completed", "applied"]);
+const CHANGE_PLAN_FAILED_STATUSES = new Set([
+  "failed",
+  "cancelled",
+  "manual_required",
+  "rolling_back",
+  "rolled_back",
+  "rollback_failed",
+]);
+
+/**
+ * Approving a Settings feature-flag plan applies it on the Gateway (#543), so a separate "continue" response is
+ * only sent when the plan still asks for one. Answering with the pre-approval revision would conflict (409).
+ */
+export async function settleApprovedSettingsChangePlan(gatewayUrl, planId, deps) {
+  const { assertOk, delay, requestJson } = deps;
+  const planPath = `/api/v1/change-plans/${encodeURIComponent(planId)}`;
+  for (let attempt = 1; attempt <= SETTINGS_RECONCILIATION_ATTEMPTS; attempt += 1) {
+    const planResponse = await requestJson(gatewayUrl, `${planPath}?workspaceId=default`);
+    assertOk(planResponse, "read mission-control-next verification memory admin Change Plan");
+    const plan = planResponse.body;
+    if (CHANGE_PLAN_APPLIED_STATUSES.has(plan?.status)) return;
+    if (CHANGE_PLAN_FAILED_STATUSES.has(plan?.status)) {
+      throw new Error(`mission-control-next verification memory admin Change Plan ended as ${plan.status}`);
+    }
+    const action = plan?.requiredAction;
+    if (action && action.kind !== "approval" && action.actionId && action.actionNonce) {
+      const resumeResponse = await requestJson(gatewayUrl, `${planPath}/responses`, {
+        method: "POST",
+        body: {
+          workspaceId: "default",
+          expectedRevision: plan.revision,
+          actionId: action.actionId,
+          actionNonce: action.actionNonce,
+          values: {},
+        },
+      });
+      assertOk(resumeResponse, "resume mission-control-next verification memory admin Change Plan");
+      return;
+    }
+    await delay(SETTINGS_RECONCILIATION_RETRY_MS);
+  }
+  throw new Error("mission-control-next verification memory admin Change Plan did not settle after approval");
 }
 
 function readPendingSettingsChangePlan(receipt) {

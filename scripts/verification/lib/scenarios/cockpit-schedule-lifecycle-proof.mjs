@@ -188,7 +188,7 @@ export async function runCockpitScheduleLifecycleProof({
               .getByRole("navigation", { name: "Work views", exact: true })
               .getByRole("link", { name: "History", exact: true }),
             destinationPath: "/work/history?shell=cockpit",
-            destinationReady: () => page.getByRole("heading", { name: "Work history", exact: true }).waitFor(),
+            destinationReady: () => page.getByRole("heading", { name: "History", exact: true }).waitFor(),
             reopen: () => page.getByRole("button", { name: "New schedule", exact: true }).click(),
             selection,
             writes,
