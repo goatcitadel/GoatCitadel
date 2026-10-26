@@ -86,7 +86,7 @@ export const Turn = memo(function Turn({
   const capture = getWorkflowSkillCaptureDisplay(turn.userMessage.content);
   return (
     <article
-      className="mx-auto w-full max-w-3xl space-y-4 px-3 py-5 sm:px-6"
+      className="group/turn mx-auto w-full max-w-3xl space-y-4 px-3 py-5 sm:px-6"
       aria-label={turnAccessibleName(capture?.summary ?? turn.userMessage.content, position)}
       data-turn-id={turn.turnId}
     >
@@ -187,6 +187,7 @@ export const Turn = memo(function Turn({
           answerContent={assistantText}
           streaming={streaming}
           readOnly={actions.historicalReadOnly}
+          latest={isLatest}
           actions={{
             ...actions,
             onOpenRunDetails: onInspectTurn ?? actions.onOpenRunDetails,
