@@ -489,6 +489,43 @@ describe("ChannelPage who can message it", () => {
     expect(container.textContent).toContain("Couldn't approve that request.");
     expect(container.textContent).toContain("Outcome uncertain. Channel changes are locked in this app session.");
     expect(button("Approve", row(section("Who can message it"), "Eve")).disabled).toBe(true);
+    // The lock is installation-wide, as in Settings: turning off, removing and marking you wait on it too.
+    expect(button("Turn off").disabled).toBe(true);
+    expect(button("Remove").disabled).toBe(true);
+    expect(button("This is you", row(section("Who can message it"), "Ada")).disabled).toBe(true);
+    expect(api.updateIntegrationConnection).not.toHaveBeenCalled();
+    expect(api.deleteIntegrationConnection).not.toHaveBeenCalled();
+  });
+
+  it("holds Turn off, Remove and This is you while a pairing answer is in flight, then frees them", async () => {
+    load({});
+    await mount();
+    const approved: TelegramItem = { actorId: "55", status: "approved", displayName: "Eve" };
+    let answer!: (value: ReturnType<typeof telegramList>) => void;
+    api.approveTelegramChannelPairing.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    api.fetchTelegramChannelPairings
+      .mockResolvedValueOnce(telegramList([ADA, UNNAMED, EVE]))
+      .mockResolvedValue(telegramList([ADA, UNNAMED, approved]));
+    expect(button("Turn off").disabled).toBe(false);
+
+    await click(button("Approve", row(section("Who can message it"), "Eve")));
+
+    expect(api.approveTelegramChannelPairing).toHaveBeenCalledOnce();
+    expect(button("Turn off").disabled).toBe(true);
+    expect(button("Remove").disabled).toBe(true);
+    expect(button("This is you", row(section("Who can message it"), "Ada")).disabled).toBe(true);
+
+    await act(async () => answer(telegramList([ADA, UNNAMED, approved])));
+    await settle();
+
+    expect(button("Turn off").disabled).toBe(false);
+    expect(button("Remove").disabled).toBe(false);
+    expect(button("This is you", row(section("Who can message it"), "Ada")).disabled).toBe(false);
   });
 
   it("shows a Discord approval in who can message it although the connection did not change", async () => {

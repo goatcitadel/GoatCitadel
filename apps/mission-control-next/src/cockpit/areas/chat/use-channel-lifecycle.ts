@@ -12,6 +12,10 @@ import {
   useIntegrationConnectionMutation,
 } from "../../../features/native-routes/settings/integration-connection-mutation";
 import {
+  readChannelMutationState,
+  useChannelMutationState,
+} from "../../../features/native-routes/settings/sections/channel-setup-state";
+import {
   verifyIntegrationDeleted,
   verifyIntegrationReadback,
 } from "../../../features/native-routes/settings/sections/integration-editor-receipts";
@@ -26,10 +30,13 @@ class ChangedUnderReview extends Error {}
 /**
  * Turn a channel off or on, or remove it, through the same connection owners Settings uses: the change carries the
  * version the page showed, is read back afterwards, and a write whose answer is lost locks further changes until its
- * outcome is checked. Turning it off or on can be undone; removing it cannot, so it is asked about first.
+ * outcome is checked. Like Settings, it also waits on the installation-wide channel write lock: while a pairing answer
+ * is in flight, or one whose outcome is unknown has not been checked, nothing here can be sent. Turning it off or on can
+ * be undone; removing it cannot, so it is asked about first.
  */
 export function useChannelLifecycle(connection: IntegrationConnection, reload: () => Promise<unknown>) {
   const mutation = useIntegrationConnectionMutation(connection.connectionId);
+  const channel = useChannelMutationState();
   const [busy, setBusy] = useState<"toggle" | "remove" | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const mounted = useRef(true);
@@ -40,8 +47,14 @@ export function useChannelLifecycle(connection: IntegrationConnection, reload: (
     };
   }, []);
 
+  /** Read live, so a pairing answer that started after the last render still holds this back. */
+  const channelLocked = () => {
+    const state = readChannelMutationState();
+    return state.pending || Boolean(state.uncertain);
+  };
+
   async function toggle() {
-    if (busy || mutation.locked) return;
+    if (busy || mutation.locked || channelLocked()) return;
     setBusy("toggle");
     setNote(null);
     const result = await commitIntegrationConnectionUpdate({
@@ -58,7 +71,7 @@ export function useChannelLifecycle(connection: IntegrationConnection, reload: (
 
   /** Settles before the page reads again; the caller closes its confirmation and the page says what happened. */
   async function remove(): Promise<void> {
-    if (busy) return;
+    if (busy || channelLocked()) return;
     const operation = beginIntegrationMutation(connection.connectionId);
     if (!operation) return;
     setBusy("remove");
@@ -89,5 +102,6 @@ export function useChannelLifecycle(connection: IntegrationConnection, reload: (
     await reload();
   }
 
-  return { toggle, remove, busy, locked: busy !== null || mutation.locked, note };
+  const locked = busy !== null || mutation.locked || channel.pending || Boolean(channel.uncertain);
+  return { toggle, remove, busy, locked, note };
 }

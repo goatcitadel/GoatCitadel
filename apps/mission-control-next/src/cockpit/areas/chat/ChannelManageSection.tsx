@@ -64,6 +64,7 @@ export function ManageSection({
         <div className="mt-4 flex flex-wrap gap-2">
           <Button
             variant="danger"
+            disabled={lifecycle.locked && lifecycle.busy !== "remove"}
             loading={lifecycle.busy === "remove"}
             loadingLabel="Removing…"
             onClick={() => void lifecycle.remove().then(() => setConfirming(false))}
