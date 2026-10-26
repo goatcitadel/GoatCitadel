@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using GoatCitadel.MissionControl.Windows.Models;
@@ -6,6 +7,10 @@ namespace GoatCitadel.MissionControl.Windows.Services;
 
 public sealed class EventStreamService
 {
+    public static readonly TimeSpan HealthyStreamDuration = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan CleanCloseBaseDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan CleanCloseMaxDelay = TimeSpan.FromSeconds(30);
+
     private readonly RuntimeStatusService _runtimeStatusService;
     private readonly Func<HttpClient> _clientFactory;
 
@@ -37,6 +42,7 @@ public sealed class EventStreamService
         }
 
         using var client = _clientFactory();
+        var shortStreamCount = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -60,7 +66,22 @@ public sealed class EventStreamService
                     continue;
                 }
 
+                var streamOpenedAt = Stopwatch.GetTimestamp();
                 await ReadSseAsync(response, cancellationToken);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                // The gateway ended the stream cleanly (restart, lease replacement,
+                // proxy idle close). Back off before reconnecting so repeated quick
+                // closes cannot turn into a tight reconnect loop.
+                shortStreamCount = Stopwatch.GetElapsedTime(streamOpenedAt) >= HealthyStreamDuration
+                    ? 0
+                    : shortStreamCount + 1;
+                await DelayOrCancel(
+                    ComputeCleanCloseReconnectDelay(shortStreamCount, Random.Shared.NextDouble()),
+                    cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -91,6 +112,22 @@ public sealed class EventStreamService
                 await HandleStreamFailureAsync(error, cancellationToken);
             }
         }
+    }
+
+    /// <summary>
+    /// Delay before reconnecting after the gateway closed the stream cleanly.
+    /// A stream that stayed open past <see cref="HealthyStreamDuration"/> gets the
+    /// base delay; each consecutive short-lived stream doubles it up to the cap.
+    /// <paramref name="jitterSample"/> in [0, 1) spreads the delay by ±20%.
+    /// </summary>
+    public static TimeSpan ComputeCleanCloseReconnectDelay(int consecutiveShortStreams, double jitterSample)
+    {
+        var exponent = Math.Clamp(consecutiveShortStreams - 1, 0, 10);
+        var seconds = Math.Min(
+            CleanCloseBaseDelay.TotalSeconds * Math.Pow(2, exponent),
+            CleanCloseMaxDelay.TotalSeconds);
+        var jitter = 0.8 + (Math.Clamp(jitterSample, 0, 1) * 0.4);
+        return TimeSpan.FromSeconds(seconds * jitter);
     }
 
     public static string BuildEventStreamUrl(string gatewayUrl, string? token)

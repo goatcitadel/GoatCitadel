@@ -723,7 +723,7 @@ function looksLikeExplicitCredential(value: string): boolean {
     /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#\s]+@/.test(value) ||
     /grat_[A-Za-z0-9_-]{43}/.test(value) ||
     /\b\d{6,12}:[A-Za-z0-9_-]{30,}\b/.test(value) ||
-    /(?:[?&](?:api[-_]?key|apikey|key|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|signature)=)[^&#\s]+/i.test(
+    /(?:[?&](?:api[-_]?key|apikey|key|token|sse[-_]?token|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|signature)=)[^&#\s]+/i.test(
       value,
     ) ||
     /\b(?:sk-[A-Za-z0-9_-]{16,}|key-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{12,}|AKIA[0-9A-Z]{16})\b/.test(
@@ -1400,7 +1400,7 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
     },
     {
       pattern:
-        /([?&](?:api[-_]?key|apikey|key|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|signature)=)[^&#\s]+/gi,
+        /([?&](?:api[-_]?key|apikey|key|token|sse[-_]?token|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|signature)=)[^&#\s]+/gi,
       replace: (_match, prefix) => `${prefix}${marker}`,
     },
     {

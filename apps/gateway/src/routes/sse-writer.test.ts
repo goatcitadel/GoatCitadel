@@ -34,14 +34,22 @@ describe("sse-writer", () => {
     expect(raw.writes).toEqual(["data: one\n\n"]);
   });
 
-  it("writes named payload events with ids", async () => {
+  it("writes a named payload event with its id as one chunk", async () => {
     const raw = new FakeWritable();
 
     await expect(writeSsePayload(raw, { type: "ready" }, { eventName: "stream-ready", eventId: 42 })).resolves.toBe(
       true,
     );
 
-    expect(raw.writes).toEqual(["event: stream-ready\n", "id: 42\n", 'data: {"type":"ready"}\n\n']);
+    expect(raw.writes).toEqual(['event: stream-ready\nid: 42\ndata: {"type":"ready"}\n\n']);
+  });
+
+  it("writes an unnamed payload event without an id as one data chunk", async () => {
+    const raw = new FakeWritable();
+
+    await expect(writeSsePayload(raw, { type: "plain" })).resolves.toBe(true);
+
+    expect(raw.writes).toEqual(['data: {"type":"plain"}\n\n']);
   });
 
   it("stops promptly when aborted while waiting for drain", async () => {

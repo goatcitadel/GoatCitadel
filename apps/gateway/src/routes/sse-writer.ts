@@ -30,19 +30,11 @@ export async function writeSsePayload(
   payload: unknown,
   options: WriteSsePayloadOptions = {},
 ): Promise<boolean> {
-  if (options.eventName) {
-    const wroteEvent = await writeSseChunk(raw, `event: ${options.eventName}\n`, options.signal);
-    if (!wroteEvent) {
-      return false;
-    }
-  }
-  if (options.eventId !== undefined) {
-    const wroteId = await writeSseChunk(raw, `id: ${options.eventId}\n`, options.signal);
-    if (!wroteId) {
-      return false;
-    }
-  }
-  return writeSseChunk(raw, `data: ${JSON.stringify(payload)}\n\n`, options.signal);
+  // One write per event: the event, id and data lines go out as a single chunk
+  // so a busy stream does one socket write (and at most one drain) per event.
+  const eventLine = options.eventName ? `event: ${options.eventName}\n` : "";
+  const idLine = options.eventId !== undefined ? `id: ${options.eventId}\n` : "";
+  return writeSseChunk(raw, `${eventLine}${idLine}data: ${JSON.stringify(payload)}\n\n`, options.signal);
 }
 
 function waitForDrain(raw: SseWritable, signal?: AbortSignal): Promise<void> {

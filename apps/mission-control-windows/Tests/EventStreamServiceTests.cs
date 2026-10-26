@@ -33,6 +33,26 @@ public sealed class EventStreamServiceTests
     }
 
     [TestMethod]
+    public void CleanCloseReconnectDelayBacksOffForShortStreamsAndCaps()
+    {
+        // jitterSample 0.5 is the midpoint, so the delay is exactly the base value.
+        Assert.AreEqual(TimeSpan.FromSeconds(1), EventStreamService.ComputeCleanCloseReconnectDelay(0, 0.5));
+        Assert.AreEqual(TimeSpan.FromSeconds(1), EventStreamService.ComputeCleanCloseReconnectDelay(1, 0.5));
+        Assert.AreEqual(TimeSpan.FromSeconds(2), EventStreamService.ComputeCleanCloseReconnectDelay(2, 0.5));
+        Assert.AreEqual(TimeSpan.FromSeconds(16), EventStreamService.ComputeCleanCloseReconnectDelay(5, 0.5));
+        Assert.AreEqual(TimeSpan.FromSeconds(30), EventStreamService.ComputeCleanCloseReconnectDelay(6, 0.5));
+        Assert.AreEqual(TimeSpan.FromSeconds(30), EventStreamService.ComputeCleanCloseReconnectDelay(500, 0.5));
+    }
+
+    [TestMethod]
+    public void CleanCloseReconnectDelayJitterStaysWithinTwentyPercent()
+    {
+        Assert.AreEqual(TimeSpan.FromSeconds(0.8), EventStreamService.ComputeCleanCloseReconnectDelay(1, 0));
+        Assert.AreEqual(TimeSpan.FromSeconds(1.2), EventStreamService.ComputeCleanCloseReconnectDelay(1, 1));
+        Assert.AreEqual(TimeSpan.FromSeconds(1.2), EventStreamService.ComputeCleanCloseReconnectDelay(1, 7));
+    }
+
+    [TestMethod]
     public void ParsesApprovalCreatedNotification()
     {
         var parsed = EventStreamService.TryParseApprovalNotification(
