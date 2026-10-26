@@ -17,6 +17,7 @@ import { ChatLegacyInputNotice } from "./ChatLegacyInputNotice";
 import { Dialog } from "../../ui/Dialog";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
+import { ChatLongInputNotice } from "./ChatLongInputNotice";
 import { useCoarsePointer } from "../../lib/use-coarse-pointer";
 
 const REASON_ID = "cockpit-chat-send-reason";
@@ -232,6 +233,7 @@ export function ChatTextComposer({
           onRestore={props.onDraftChange}
           disabled={props.historicalReadOnly || props.sending || Boolean(props.sessionControlBanner)}
         />
+        <ChatLongInputNotice draft={props.draft} />
         <ChatRunVariables panel={props.runVariablePanel} />
         <ChatComposerPalette
           props={slashDismissed ? { ...props, commandSuggestions } : props}

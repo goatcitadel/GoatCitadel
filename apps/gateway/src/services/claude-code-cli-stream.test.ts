@@ -40,18 +40,18 @@ describe("createClaudeCliStreamMapper", () => {
       choices: [{ index: 0, delta: { content: "hello " } }],
     });
     expect(chunks[1]).toMatchObject({ choices: [{ delta: { content: "world" } }] });
-    // Same shape as the Anthropic Messages adapter: uncached input, cache fields passed through.
+    // Same shape as the Anthropic Messages adapter: total input (incl. cache), cache fields passed through.
     expect(final.usage).toEqual({
-      prompt_tokens: 4,
+      prompt_tokens: 7,
       completion_tokens: 2,
-      total_tokens: 6,
+      total_tokens: 9,
       cache_read_input_tokens: 2,
       cache_creation_input_tokens: 1,
     });
     expect(final.text).toBe("hello world");
     expect(final.finalChunk).toMatchObject({
       choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      usage: { prompt_tokens: 4, completion_tokens: 2, cache_read_input_tokens: 2 },
+      usage: { prompt_tokens: 7, completion_tokens: 2, cache_read_input_tokens: 2 },
     });
     // The CLI's notional API price is not a subscription charge.
     expect(JSON.stringify(final.finalChunk)).not.toContain("0.42");
@@ -605,9 +605,9 @@ describe("continuation segments", () => {
       resultLine,
     ]);
     const expected = {
-      prompt_tokens: 2,
+      prompt_tokens: 1412,
       completion_tokens: 15,
-      total_tokens: 17,
+      total_tokens: 1427,
       cache_read_input_tokens: 1167,
       cache_creation_input_tokens: 243,
     };
@@ -631,7 +631,7 @@ describe("continuation segments", () => {
     const cold = createClaudeCliStreamMapper(MODEL, { bridge });
     pushAll(cold, [init, messageStart, segmentTextDelta("ok"), messageDelta("end_turn"), messageStop, resultLine]);
     expect(cold.finish({ exitCode: 0, stderrTail: "" }).usage).toMatchObject({
-      prompt_tokens: 4,
+      prompt_tokens: 2581,
       completion_tokens: 137,
     });
   });

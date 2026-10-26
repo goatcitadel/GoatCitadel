@@ -43,6 +43,26 @@ describe("worktree manager coverage", () => {
     expect(execFileMock.mock.calls[1]?.[1]).toEqual(["worktree", "remove", "--force", expectedResolvedPath]);
   });
 
+  it("refuses to remove a path outside the worktrees root and accepts names starting with dots", async () => {
+    const { WorktreeManager } = await import("./worktree-manager.js");
+    const manager = new WorktreeManager({
+      repoRoot: "/repo/root",
+      worktreesRoot: "/repo/worktrees",
+    });
+
+    await expect(manager.remove("/repo/root")).rejects.toThrow(/outside worktrees root/);
+    await expect(manager.remove("/repo/worktrees")).rejects.toThrow(/outside worktrees root/);
+    await expect(manager.remove("/repo/worktrees-evil/wt")).rejects.toThrow(/outside worktrees root/);
+    await expect(manager.remove(path.join("/repo/worktrees", "..", "other"))).rejects.toThrow(/outside worktrees root/);
+    expect(execFileMock).not.toHaveBeenCalled();
+
+    await expect(manager.create("../escape")).rejects.toThrow(/outside worktrees root/);
+    const dotted = await manager.create("..cache", "main");
+    expect(dotted).toBe(path.resolve("/repo/worktrees", "..cache"));
+    await manager.remove(dotted);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
   it("prunes stale worktree metadata so .git/worktrees entries are not orphaned", async () => {
     const { WorktreeManager } = await import("./worktree-manager.js");
     const manager = new WorktreeManager({

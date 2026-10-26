@@ -42,3 +42,12 @@ it("WK-01: opens the older Kanban from the Work overflow menu at its kept route"
   act(() => item.click());
   expect(navigate).toHaveBeenCalledWith("/work/kanban");
 });
+
+it("UX-15: folds the secondary header actions into the menu for phones only", () => {
+  const onSelect = vi.fn();
+  act(() => root.render(<WorkMoreViews phoneActions={[{ label: "Refresh", onSelect }]} />));
+  const items = [...host.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+  expect(items.map((item) => item.textContent)).toEqual(["Refresh", "Older Kanban view"]);
+  act(() => items[0]!.click());
+  expect(onSelect).toHaveBeenCalledOnce();
+});

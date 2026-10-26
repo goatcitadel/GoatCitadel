@@ -254,11 +254,12 @@ public sealed class LauncherService
         ProcessStartInfo startInfo;
         if (launcher.WindowsShell)
         {
-            startInfo = new ProcessStartInfo("cmd.exe");
-            startInfo.ArgumentList.Add("/d");
-            startInfo.ArgumentList.Add("/s");
-            startInfo.ArgumentList.Add("/c");
-            startInfo.ArgumentList.Add(BuildWindowsCommand(commandArgs));
+            // Raw Arguments, not ArgumentList: .NET would escape the embedded quotes around spaced install
+            // paths as \", which cmd.exe does not understand.
+            startInfo = new ProcessStartInfo("cmd.exe")
+            {
+                Arguments = BuildWindowsShellArguments(commandArgs),
+            };
         }
         else
         {
@@ -302,6 +303,10 @@ public sealed class LauncherService
         startInfo.Environment["GOATCITADEL_SOURCE_UPDATE_HELPER_PATH"] = Path.GetFullPath(helperPath);
         startInfo.Environment["GOATCITADEL_SOURCE_UPDATE_HELPER_SHA256"] = sha256;
     }
+
+    /// <summary>The raw cmd.exe argument string: with /s, cmd strips exactly the outer pair of quotes.</summary>
+    public static string BuildWindowsShellArguments(IEnumerable<string> parts) =>
+        $"/d /s /c \"{BuildWindowsCommand(parts)}\"";
 
     public static string BuildWindowsCommand(IEnumerable<string> parts) =>
         string.Join(" ", parts.Select(QuoteWindowsCommandArg));

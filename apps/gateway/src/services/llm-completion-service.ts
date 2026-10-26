@@ -63,6 +63,7 @@ import {
 } from "./llm-completion-runtime-measurements.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 import { StreamIdleTimeoutError, resolveStreamIdleTimeoutMs, withStreamIdleWatchdog } from "./stream-idle-watchdog.js";
+import { readRetryAfterMs } from "./provider-retry-after.js";
 
 export type { LlmCompletionHost } from "./llm-completion-host.js";
 
@@ -371,6 +372,7 @@ export async function createChatCompletion(
               hookableRequest.timeoutMs,
               transientRetryIndex,
               attemptRequest.signal,
+              { retryAfterMs: readRetryAfterMs(lastError) },
             )
           ) {
             continue;
@@ -487,6 +489,7 @@ export async function createChatCompletion(
                 hookableRequest.timeoutMs,
                 transientRetryIndex,
                 hookableRequest.signal,
+                { retryAfterMs: readRetryAfterMs(lastError) },
               )
             ) {
               continue;
@@ -957,6 +960,7 @@ export async function* createChatCompletionStream(
               withContext.timeoutMs,
               transientRetryIndex,
               attemptRequest.signal,
+              { retryAfterMs: readRetryAfterMs(lastError) },
             )
           ) {
             continue;
@@ -1185,6 +1189,7 @@ export async function* createChatCompletionStream(
                 withContext.timeoutMs,
                 transientRetryIndex,
                 withContext.signal,
+                { retryAfterMs: readRetryAfterMs(lastError) },
               )
             ) {
               continue;

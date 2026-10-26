@@ -100,7 +100,7 @@ export async function executeOrchestrationPlan(input: {
   };
 }
 
-async function mapWithConcurrency<TItem, TResult>(
+export async function mapWithConcurrency<TItem, TResult>(
   items: TItem[],
   concurrency: number,
   mapper: (item: TItem, index: number) => Promise<TResult>,
@@ -110,16 +110,23 @@ async function mapWithConcurrency<TItem, TResult>(
   }
   const results = new Array<TResult>(items.length);
   let nextIndex = 0;
+  // After any mapper rejects, Promise.all rejects immediately; stop the other workers from starting new items.
+  let failed = false;
   const workerCount = Math.min(Math.max(1, concurrency), items.length);
 
   async function runWorker(): Promise<void> {
-    while (true) {
+    while (!failed) {
       const currentIndex = nextIndex;
       nextIndex += 1;
       if (currentIndex >= items.length) {
         return;
       }
-      results[currentIndex] = await mapper(items[currentIndex] as TItem, currentIndex);
+      try {
+        results[currentIndex] = await mapper(items[currentIndex] as TItem, currentIndex);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
   }
 

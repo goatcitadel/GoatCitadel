@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
 import type { ChatCompletionResponse } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
+
+const log = logger.child("llm-pricing");
+
+/** A single provider-reported call cost above this is treated as bogus rather than recorded. */
+export const MAX_PROVIDER_REPORTED_COST_USD = 10_000;
 
 interface TextModelPricing {
   modelId: string;
@@ -184,7 +190,7 @@ export function estimateUsageCostUsd(input: EstimateUsageCostInput): number | un
     return undefined;
   }
 
-  const existingCostUsd = readUsageNumber(usage.cost_usd) ?? readUsageNumber(usage.total_cost_usd);
+  const existingCostUsd = readProviderReportedCostUsd(usage);
   if (existingCostUsd !== undefined) {
     return existingCostUsd;
   }
@@ -388,7 +394,7 @@ function hasUsageCost(usage: unknown): boolean {
   if (!isRecord(usage)) {
     return false;
   }
-  return readUsageNumber(usage.cost_usd) !== undefined || readUsageNumber(usage.total_cost_usd) !== undefined;
+  return readProviderReportedCostUsd(usage) !== undefined;
 }
 
 function findPricing(providerId: string, model: string | undefined): TextModelPricing | undefined {
@@ -436,6 +442,25 @@ function normalizeId(value: string | undefined): string | undefined {
 function normalizeModelId(value: string | undefined): string | undefined {
   const trimmed = value?.trim().toLowerCase();
   return trimmed ? trimmed : undefined;
+}
+
+/**
+ * A provider-supplied cost is only trusted when it is a finite, non-negative number within a sanity cap.
+ * Anything else is ignored so the gateway falls back to its own estimate (or records the cost as unknown).
+ */
+function readProviderReportedCostUsd(usage: Record<string, unknown>): number | undefined {
+  for (const candidate of [usage.cost_usd, usage.total_cost_usd]) {
+    const value = readUsageNumber(candidate);
+    if (value === undefined || value < 0) {
+      continue;
+    }
+    if (value > MAX_PROVIDER_REPORTED_COST_USD) {
+      log.warn("ignoring implausible provider-reported cost", { costUsd: value });
+      continue;
+    }
+    return value;
+  }
+  return undefined;
 }
 
 function readUsageNumber(value: unknown): number | undefined {

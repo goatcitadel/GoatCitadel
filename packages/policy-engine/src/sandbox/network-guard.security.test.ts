@@ -132,6 +132,29 @@ describe("assertNotPrivateOrReservedHost (codex #11, #12, #13, #23)", () => {
     expect(() => assertNotPrivateOrReservedHost("http://[::ffff:169.254.169.254]/")).toThrow(/Private/);
   });
 
+  it("rejects multicast, NAT64, 6to4 and IPv4-compatible IPv6 forms that embed private IPv4", () => {
+    for (const host of [
+      "[ff02::1]",
+      "[ff0e::1234]",
+      "[64:ff9b::169.254.169.254]",
+      "[64:ff9b::7f00:1]",
+      "[64:ff9b:1::1]",
+      "[2002:a9fe:a9fe::1]",
+      "[2002:7f00:1::]",
+      "[::127.0.0.1]",
+      "[::7f00:1]",
+      "[::a00:1]",
+    ]) {
+      expect(() => assertNotPrivateOrReservedHost(`http://${host}/`), host).toThrow(/Private/);
+    }
+  });
+
+  it("still allows NAT64, 6to4 and IPv4-compatible forms of public IPv4 addresses", () => {
+    expect(() => assertNotPrivateOrReservedHost("http://[64:ff9b::808:808]/")).not.toThrow();
+    expect(() => assertNotPrivateOrReservedHost("http://[2002:808:808::1]/")).not.toThrow();
+    expect(() => assertNotPrivateOrReservedHost("http://[2606:4700:4700::1111]/")).not.toThrow();
+  });
+
   it("rejects documentation and deprecated site-local IPv6 ranges", () => {
     expect(() => assertNotPrivateOrReservedHost("http://[2001:db8::1]/")).toThrow(/Private/);
     expect(() => assertNotPrivateOrReservedHost("http://[fec0::1]/")).toThrow(/Private/);
