@@ -59,5 +59,5 @@ export function presentTurnModelReason(
         routing.effectiveProviderId &&
         routing.primaryProviderId !== routing.effectiveProviderId));
   if (changed) return "Adjusted by routing rules";
-  return routing.primaryModel ? "The model selected for this conversation" : NEUTRAL_MODEL_REASON;
+  return routing.primaryModel ? "The requested model; no fallback was needed" : NEUTRAL_MODEL_REASON;
 }

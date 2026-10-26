@@ -133,7 +133,7 @@ describe("ChatInspectorTurnPanel chosen because", () => {
         />,
       ),
     );
-    expect(row("Chosen because")).toBe("The model selected for this conversation");
+    expect(row("Chosen because")).toBe("The requested model; no fallback was needed");
     act(() => root.render(<ChatInspectorTurnPanel selectedTurn={turnWith({ status: "completed", model: "" })} />));
     expect(row("Chosen because")).toBe("Selected by routing rules");
   });

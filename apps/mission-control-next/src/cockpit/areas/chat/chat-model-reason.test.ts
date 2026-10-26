@@ -40,7 +40,7 @@ describe("presentTurnModelReason", () => {
       "Adjusted by routing rules",
     );
     expect(presentTurnModelReason({ primaryModel: "a", effectiveModel: "a" } as never, null, true)).toBe(
-      "The model selected for this conversation",
+      "The requested model; no fallback was needed",
     );
     expect(presentTurnModelReason(undefined, null, false)).toBe(NEUTRAL_MODEL_REASON);
   });
