@@ -76,7 +76,7 @@ const AIRTABLE = item({
 const ASANA = item({ id: "mcp-template:asana", name: "Asana", description: "Team tasks" });
 
 function response(items: CapabilityConnectorItem[], issues: CapabilityConnectorsResponse["issues"] = []) {
-  return { workspaceId: "ws-1", items, issues, generatedAt: "2026-10-25T10:00:00.000Z" };
+  return { workspaceId: "ws-1", items, issues, approvalReliefAvailable: true, generatedAt: "2026-10-25T10:00:00.000Z" };
 }
 
 let container: HTMLDivElement;

@@ -107,9 +107,9 @@ export function formatThreadedPermissionSummary(state?: ThreadedPermissionState)
 export function formatThreadedApprovalMode(value?: string): string | undefined {
   switch (value) {
     case "approve_all":
-      return "asks every time";
+      return "asks every time, except connectors set to run on their own";
     case "approve_risky":
-      return "asks on risk";
+      return "asks on risk, except connectors set to run on their own";
     case "bypass":
       return "skips normal prompts";
     default:

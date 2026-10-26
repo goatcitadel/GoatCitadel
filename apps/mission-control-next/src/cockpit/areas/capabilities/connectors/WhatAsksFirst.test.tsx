@@ -40,7 +40,9 @@ const NEXT_REVISION = "b".repeat(64);
 const KEY = queryKeys.capabilityConnectors("ws-1");
 const PER_CHAT_LINE = "This connector's tools are listed per chat, so every action asks you first.";
 const FOOTER =
-  "This goes by how the app labels its own tools. Deny rules, wards and quarantine still apply, and it applies whichever approval profile Chat uses.";
+  "This goes by how the app labels its own tools. Deny rules, wards, risky requests and quarantine still apply, and it applies whichever approval profile Chat uses.";
+const REMOTE_LINE = "This install is set up for remote access, so every action asks you first.";
+const MONEY_LINE = "This connector can move money, so changes always ask you first.";
 
 function linear(overrides: Partial<CapabilityConnectorItem> = {}): CapabilityConnectorItem {
   return {
@@ -100,8 +102,18 @@ const TOOLS: McpToolRecord[] = [
   tool("mystery_tool"),
 ];
 
-function response(items: CapabilityConnectorItem[]): CapabilityConnectorsResponse {
-  return { workspaceId: "ws-1", items, issues: [], generatedAt: "2026-10-25T10:00:00.000Z" };
+function response(
+  items: CapabilityConnectorItem[],
+  overrides: Partial<CapabilityConnectorsResponse> = {},
+): CapabilityConnectorsResponse {
+  return {
+    workspaceId: "ws-1",
+    items,
+    issues: [],
+    approvalReliefAvailable: true,
+    generatedAt: "2026-10-25T10:00:00.000Z",
+    ...overrides,
+  };
 }
 
 let container: HTMLDivElement;
@@ -120,9 +132,13 @@ const checkedRadios = () =>
 const group = () => document.body.querySelector("fieldset");
 const alertText = () => document.body.querySelector('[role="alert"]')?.textContent;
 const cached = () => client.getQueryData<CapabilityConnectorsResponse>(KEY)?.items[0];
-const toolLine = (name: string) =>
-  [...document.body.querySelectorAll("li")].find((entry) => entry.querySelector("code")?.textContent === name)
-    ?.textContent ?? "";
+const toolLines = (name: string) =>
+  [...document.body.querySelectorAll("li")]
+    .filter((entry) => entry.querySelector("code")?.textContent === name)
+    .map((entry) => entry.textContent ?? "");
+const toolLine = (name: string) => toolLines(name)[0] ?? "";
+const describedText = (element: Element | null | undefined) =>
+  document.getElementById(element?.getAttribute("aria-describedby") ?? "")?.textContent;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -134,9 +150,13 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function renderPanel(item: CapabilityConnectorItem = linear(), tools: McpToolRecord[] = TOOLS) {
+async function renderPanel(
+  item: CapabilityConnectorItem = linear(),
+  tools: McpToolRecord[] = TOOLS,
+  list: Partial<CapabilityConnectorsResponse> = {},
+) {
   mcp.fetchMcpTools.mockResolvedValue({ items: tools });
-  client.setQueryData(KEY, response([item]));
+  client.setQueryData(KEY, response([item], list));
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -255,7 +275,7 @@ describe("What asks first", () => {
     expect(radios.map((entry) => entry.labels?.[0]?.textContent)).toEqual([
       "Everything asksEvery action asks you first.",
       "Reading is free RecommendedReads run on their own. Anything that creates or changes something asks you first.",
-      "Nothing asksChanges run on their own. Anything the app marks as destructive, or doesn't label, still asks you first.",
+      "Nothing asksChanges run on their own, including sends the app marks as non-destructive. Anything the app marks as destructive, or doesn't label, still asks you first.",
     ]);
     expect(text()).toContain(FOOTER);
     expect(checkedRadios()).toEqual(["reads_free"]);
@@ -477,5 +497,108 @@ describe("What asks first", () => {
   it("never shows the internal word for the setting", async () => {
     await renderPanel(linear({ approvalPosture: "nothing_asks" }));
     expect(text().toLowerCase()).not.toContain("posture");
+  });
+
+  // R49: a remote install never relaxes an approval, so the setting is locked to Everything asks.
+  it("shows Everything asks, switched off, with the reason, when this install never lets a call run on its own", async () => {
+    await renderPanel(linear({ approvalPosture: "nothing_asks" }), TOOLS, { approvalReliefAvailable: false });
+    expect(checkedRadios()).toEqual(["everything_asks"]);
+    expect(group()?.disabled).toBe(true);
+    expect(describedText(group())).toBe(REMOTE_LINE);
+    expect(text()).not.toContain(FOOTER);
+    for (const entry of TOOLS) {
+      expect(toolLine(entry.toolName)).toContain("Asks first");
+      expect(toolLine(entry.toolName)).not.toContain("Runs freely");
+    }
+    await choose("reads_free");
+    expect(mcp.updateMcpServerPolicy).not.toHaveBeenCalled();
+    for (const banned of ["hardened", "posture", "gateway"]) expect(text().toLowerCase()).not.toContain(banned);
+  });
+
+  it("treats a list that doesn't say whether settings apply as never letting a call run on its own", async () => {
+    await renderPanel(linear({ approvalPosture: "reads_free" }), TOOLS, {
+      approvalReliefAvailable: undefined as unknown as boolean,
+    });
+    expect(group()?.disabled).toBe(true);
+    expect(toolLine("list_issues")).toContain("Asks first");
+  });
+
+  // R52: a connector that can move money can't let changes run on their own.
+  it("switches off only Nothing asks for a connector that can move money, and says why", async () => {
+    mcp.updateMcpServerPolicy.mockResolvedValue(savedServer());
+    await renderPanel(linear({ movesMoney: true }));
+    expect(radio("nothing_asks")?.disabled).toBe(true);
+    expect(describedText(radio("nothing_asks"))).toBe(MONEY_LINE);
+    for (const posture of ["everything_asks", "reads_free"] as const) {
+      expect(radio(posture)?.disabled).toBe(false);
+      expect(radio(posture)?.hasAttribute("aria-describedby")).toBe(false);
+    }
+    expect(text()).toContain(FOOTER);
+    await choose("nothing_asks");
+    expect(mcp.updateMcpServerPolicy).not.toHaveBeenCalled();
+    await choose("reads_free");
+    expect(mcp.updateMcpServerPolicy).toHaveBeenCalledExactlyOnceWith("linear", {
+      expectedRevision: REVISION,
+      approvalPosture: "reads_free",
+    });
+  });
+
+  it("shows a money connector's saved Nothing asks as Reading is free, and labels its tools that way", async () => {
+    await renderPanel(linear({ movesMoney: true, approvalPosture: "nothing_asks" }));
+    expect(checkedRadios()).toEqual(["reads_free"]);
+    expect(toolLine("list_issues")).toContain("Runs freely");
+    // A change the app marks as non-destructive still asks on a connector that can move money.
+    expect(toolLine("update_issue")).toContain("Asks first");
+    expect(toolLine("delete_issue")).toContain("Asks first");
+  });
+
+  it("does not show the money line where the whole choice is already locked", async () => {
+    await renderPanel(linear({ movesMoney: true }), TOOLS, { approvalReliefAvailable: false });
+    expect(text()).not.toContain(MONEY_LINE);
+    expect(describedText(group())).toBe(REMOTE_LINE);
+  });
+
+  it("labels no tool on a connector that is switched off", async () => {
+    await renderPanel(linear({ state: "turned_off", reason: "turned_off", approvalPosture: "reads_free" }), [
+      tool("list_issues", { readOnlyHint: true }),
+      tool("update_issue"),
+      tool("old_tool", { readOnlyHint: true }, false),
+    ]);
+    for (const name of ["list_issues", "update_issue", "old_tool"]) {
+      expect(toolLine(name)).not.toContain("Asks first");
+      expect(toolLine(name)).not.toContain("Runs freely");
+    }
+    expect(toolLine("old_tool")).toContain("Switched off");
+  });
+
+  // R40: the Gateway lets a tool name run on its own only when every entry with that name allows it.
+  it.each([
+    ["one unlabelled duplicate", [tool("list_issues", { readOnlyHint: true }), tool("list_issues")], "Asks first"],
+    [
+      "a switched-off duplicate that asks",
+      [tool("list_issues", { readOnlyHint: true }), tool("list_issues", undefined, false)],
+      "Asks first",
+    ],
+    [
+      "every duplicate labelled read-only",
+      [tool("list_issues", { readOnlyHint: true }), tool("list_issues", { readOnlyHint: true })],
+      "Runs freely",
+    ],
+  ] as const)("labels a duplicated tool name the way the Gateway decides it (%s)", async (_label, tools, label) => {
+    await renderPanel(linear({ approvalPosture: "reads_free" }), [...tools]);
+    const enabledLines = toolLines("list_issues").filter((line) => !line.includes("Switched off"));
+    expect(enabledLines.length).toBeGreaterThan(0);
+    for (const line of enabledLines) {
+      expect(line).toContain(label);
+      expect(line).not.toContain(label === "Asks first" ? "Runs freely" : "Asks first");
+    }
+  });
+
+  // R53: a tool the app marks destructive always asks, even when it is also marked read-only.
+  it("labels a tool marked both read-only and destructive Asks first", async () => {
+    await renderPanel(linear({ approvalPosture: "nothing_asks" }), [
+      tool("list_issues", { readOnlyHint: true, destructiveHint: true }),
+    ]);
+    expect(toolLine("list_issues")).toContain("Asks first");
   });
 });

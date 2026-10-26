@@ -44,7 +44,9 @@ describe("presentSetupCenterItems", () => {
     };
     const items = presentSetupCenterItems(state);
     const descriptionOf = (label: string) => items.find((item) => item.label === label)?.description;
-    expect(descriptionOf("Local runtime")).toBe("Risky tool calls need approval · Balanced budget.");
+    expect(descriptionOf("Local runtime")).toBe(
+      "Risky tool calls need approval, except connectors set to let reads or changes run on their own · Balanced budget.",
+    );
     expect(descriptionOf("Access and auth")).toBe("Sign-in: Access token.");
     expect(descriptionOf("Provider smoke")).toBe(
       "1 provider credential source available. Active model: model-a · Provider A.",

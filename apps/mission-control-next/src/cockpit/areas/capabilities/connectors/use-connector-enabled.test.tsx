@@ -66,7 +66,13 @@ function savedServer(overrides: Partial<McpServerRecord> = {}): McpServerRecord 
 }
 
 function response(items: CapabilityConnectorItem[]): CapabilityConnectorsResponse {
-  return { workspaceId: "ws-1", items, issues: [], generatedAt: "2026-10-25T10:00:00.000Z" };
+  return {
+    workspaceId: "ws-1",
+    items,
+    issues: [],
+    approvalReliefAvailable: true,
+    generatedAt: "2026-10-25T10:00:00.000Z",
+  };
 }
 
 const KEY = queryKeys.capabilityConnectors("ws-1");

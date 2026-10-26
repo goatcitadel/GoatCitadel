@@ -7,6 +7,7 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { queryKeys } from "../../../data/query-keys";
 import { Button } from "../../../ui/Button";
 import { cn } from "../../../lib/cn";
+import { approvalPostureInEffect } from "./connector-view";
 import { CONNECTOR_CONFLICT_MESSAGE, withRow } from "./use-connector-enabled";
 
 interface Choice {
@@ -27,12 +28,15 @@ const CHOICES: readonly Choice[] = [
   {
     value: "nothing_asks",
     title: "Nothing asks",
-    detail: "Changes run on their own. Anything the app marks as destructive, or doesn't label, still asks you first.",
+    detail:
+      "Changes run on their own, including sends the app marks as non-destructive. Anything the app marks as destructive, or doesn't label, still asks you first.",
   },
 ];
 
 const BOUNDARY_LINE =
-  "This goes by how the app labels its own tools. Deny rules, wards and quarantine still apply, and it applies whichever approval profile Chat uses.";
+  "This goes by how the app labels its own tools. Deny rules, wards, risky requests and quarantine still apply, and it applies whichever approval profile Chat uses.";
+const REMOTE_LINE = "This install is set up for remote access, so every action asks you first.";
+const MONEY_LINE = "This connector can move money, so changes always ask you first.";
 const PER_CHAT_LINE = "This connector's tools are listed per chat, so every action asks you first.";
 const NO_BINDING_LINE = "This server's saved version isn't available, so it can't be changed here.";
 
@@ -47,14 +51,18 @@ interface Failure {
  * tool labels in the panel follow the saved setting (`item.approvalPosture`), never the choice still in flight.
  * A choice made while a save is running is remembered and saved when that one settles, so moving through the group with
  * the arrow keys ends on the last choice.
- * A server whose tools are listed per chat has nothing to relax, so it shows "Everything asks" and can't be changed.
+ * A server whose tools are listed per chat has nothing to relax, and an install set up for remote access never lets a
+ * call run on its own (`reliefAvailable` false), so either shows "Everything asks" and can't be changed. A connector
+ * that can move money can't choose "Nothing asks", and a saved one shows as "Reading is free", which is how the
+ * Gateway decides its calls.
  */
-export function WhatAsksFirst({ item }: { item: CapabilityConnectorItem }) {
+export function WhatAsksFirst({ item, reliefAvailable }: { item: CapabilityConnectorItem; reliefAvailable: boolean }) {
   const client = useQueryClient();
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
   const listKey = queryKeys.capabilityConnectors(workspaceId);
   const groupName = useId();
   const noteId = useId();
+  const moneyNoteId = useId();
   const [saving, setSaving] = useState(false);
   const [choice, setChoice] = useState<{ value: McpApprovalPosture; since: string | undefined } | undefined>();
   const [failure, setFailure] = useState<Failure | undefined>();
@@ -65,14 +73,17 @@ export function WhatAsksFirst({ item }: { item: CapabilityConnectorItem }) {
 
   const { serverId, serverRevision } = item;
   const perChat = item.requesterScoped === true;
-  const locked = perChat || !serverId || !serverRevision;
-  const saved: McpApprovalPosture = perChat ? "everything_asks" : (item.approvalPosture ?? "everything_asks");
+  const locked = !reliefAvailable || perChat || !serverId || !serverRevision;
+  const saved: McpApprovalPosture = approvalPostureInEffect(item, reliefAvailable) ?? "everything_asks";
+  // Only where the choice is open; a locked group already says why nothing can change.
+  const moneyLocked = item.movesMoney === true && !locked;
+  const selectable = (posture: McpApprovalPosture) => !(item.movesMoney === true && posture === "nothing_asks");
   // The group shows the choice while it saves, and after that until the list carries a newer version of the server, so it
   // never flickers back to the old setting between the save and the list catching up.
   const selected = choice && (saving || choice.since === serverRevision) ? choice.value : saved;
 
   async function choose(next: McpApprovalPosture) {
-    if (locked) return;
+    if (locked || !selectable(next)) return;
     if (busy.current) {
       queued.current = next;
       setChoice((current) => (current ? { ...current, value: next } : current));
@@ -123,7 +134,13 @@ export function WhatAsksFirst({ item }: { item: CapabilityConnectorItem }) {
     }
   }
 
-  const note = perChat ? PER_CHAT_LINE : !serverRevision ? NO_BINDING_LINE : BOUNDARY_LINE;
+  const note = !reliefAvailable
+    ? REMOTE_LINE
+    : perChat
+      ? PER_CHAT_LINE
+      : !serverRevision
+        ? NO_BINDING_LINE
+        : BOUNDARY_LINE;
   return (
     <div className="space-y-3">
       <fieldset
@@ -133,17 +150,26 @@ export function WhatAsksFirst({ item }: { item: CapabilityConnectorItem }) {
         aria-describedby={locked ? noteId : undefined}
       >
         <legend className="sr-only">What asks first</legend>
-        {CHOICES.map((entry) => (
-          <ChoiceRow
-            key={entry.value}
-            choice={entry}
-            groupName={groupName}
-            checked={selected === entry.value}
-            locked={locked}
-            dimmed={saving}
-            onChoose={() => void choose(entry.value)}
-          />
-        ))}
+        {CHOICES.map((entry) => {
+          const moneyOption = moneyLocked && !selectable(entry.value);
+          return (
+            <ChoiceRow
+              key={entry.value}
+              choice={entry}
+              groupName={groupName}
+              checked={selected === entry.value}
+              locked={locked || moneyOption}
+              dimmed={saving}
+              describedBy={moneyOption ? moneyNoteId : undefined}
+              onChoose={() => void choose(entry.value)}
+            />
+          );
+        })}
+        {moneyLocked ? (
+          <p id={moneyNoteId} className="text-sm text-fg-secondary">
+            {MONEY_LINE}
+          </p>
+        ) : null}
       </fieldset>
       <p id={noteId} className="text-sm text-fg-secondary">
         {note}
@@ -177,6 +203,7 @@ function ChoiceRow({
   checked,
   locked,
   dimmed,
+  describedBy,
   onChoose,
 }: {
   choice: Choice;
@@ -184,6 +211,8 @@ function ChoiceRow({
   checked: boolean;
   locked: boolean;
   dimmed: boolean;
+  /** The line that says why this one choice can't be made. */
+  describedBy?: string;
   onChoose: () => void;
 }) {
   return (
@@ -194,6 +223,7 @@ function ChoiceRow({
         value={choice.value}
         checked={checked}
         disabled={locked}
+        aria-describedby={describedBy}
         className="mt-1 shrink-0"
         onChange={onChoose}
       />

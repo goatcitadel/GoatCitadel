@@ -847,7 +847,7 @@ describe("ThreadedSurfacePage", () => {
     expect(formatRelativeTime("2026-05-14T09:00:00.000Z")).toBe("3h ago");
     expect(formatRelativeTime("2026-05-12T12:00:00.000Z")).toBe("2d ago");
     expect(formatThreadedPermissionSummary({ profileLabel: "Safe", approvalMode: "approve_all" })).toBe(
-      "Policy: Safe · asks every time",
+      "Policy: Safe · asks every time, except connectors set to run on their own",
     );
     expect(
       formatThreadedPermissionSummary({
