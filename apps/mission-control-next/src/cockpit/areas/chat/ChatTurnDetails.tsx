@@ -63,12 +63,15 @@ export function ChatTurnDetails({
   answerContent = turn.assistantMessage?.content,
   streaming,
   readOnly,
+  fromChannel = false,
   actions,
 }: {
   turn: ChatThreadTurnRecord;
   answerContent?: string;
   streaming: boolean;
   readOnly: boolean;
+  /** The message arrived through a channel: it is not retried or edited from here. */
+  fromChannel?: boolean;
   actions: TurnActions;
 }) {
   const { showTechnicalDetails } = useUiPreferences();
@@ -236,6 +239,7 @@ export function ChatTurnDetails({
         actions={actions}
         streaming={streaming}
         readOnly={readOnly}
+        fromChannel={fromChannel}
         hasAnswer={Boolean(answerContent)}
         copied={copy.copied}
         onCopy={() => void copyAnswer()}

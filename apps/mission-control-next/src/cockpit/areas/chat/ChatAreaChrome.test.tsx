@@ -6,6 +6,7 @@ import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/re
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { ChatHeaderSubtitle, ChatSessionHeader } from "./ChatAreaChrome";
+import type { ChannelConversationContext } from "./channel-conversation";
 
 const media = vi.hoisted(() => ({ phone: false }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
@@ -198,4 +199,96 @@ it("names the model and run status in plain words, never their wire values", () 
   expect(container.textContent).toBe("Launch · Researcher · Claude Sonnet · Anthropic · Run · Waiting on you");
   expect(container.textContent).not.toContain("waiting_for_approval");
   expect(container.textContent).not.toContain("claude-sonnet");
+});
+
+describe("ChatSessionHeader for a channel conversation", () => {
+  const channel: ChannelConversationContext = {
+    sessionId: "session-1",
+    connectionId: "conn-1",
+    channelLabel: "Telegram",
+    title: "You",
+    kind: "direct",
+    own: true,
+    status: "on",
+  };
+  // Enough of the conversation to count as open; the title and menu need only these.
+  const active = { thread: { turns: [] }, sessionTitle: "Release notes" } as unknown as NonNullable<
+    MissionThreadedRenderSurfaceInput["activeSessionSurfaceProps"]
+  >;
+  const dock = {
+    selectedSession: { sessionId: "session-1", pinned: false },
+    sessionControlPending: null,
+    renameTitle: "Release notes",
+    onRenameTitleChange: vi.fn(),
+  } as unknown as NonNullable<MissionThreadedRenderSurfaceInput["contextDockProps"]>;
+
+  function renderChannelHeader(props: { channel?: ChannelConversationContext; onFork?: () => void }) {
+    const view = { ...input(), contextDockProps: dock, activeSessionSurfaceProps: active };
+    act(() =>
+      root.render(
+        <ChatSessionHeader
+          input={view}
+          active={active}
+          session={session}
+          selectedSessionId="session-1"
+          buildEditor={null}
+          onOpenProjects={vi.fn()}
+          onOpenConversations={vi.fn()}
+          onInspect={vi.fn()}
+          {...props}
+        />,
+      ),
+    );
+    return container.querySelector("header") as HTMLElement;
+  }
+  const continueButton = (header: HTMLElement) =>
+    [...header.querySelectorAll("button")].find((button) => button.textContent === "Continue in a new chat");
+
+  it("offers Continue in a new chat and forks from the latest turn", () => {
+    const onFork = vi.fn();
+    const header = renderChannelHeader({ channel, onFork });
+    const button = continueButton(header)!;
+    // A visible action in the header row, named by its visible text.
+    expect(button.parentElement).toBe(header);
+    expect(button.hasAttribute("aria-label")).toBe(false);
+    act(() => button.click());
+    expect(onFork).toHaveBeenCalledOnce();
+  });
+
+  it("hides Continue in a new chat until the conversation has a turn, and outside channel conversations", () => {
+    expect(continueButton(renderChannelHeader({ channel }))).toBeUndefined();
+    expect(continueButton(renderChannelHeader({ onFork: vi.fn() }))).toBeUndefined();
+  });
+
+  it("says which channel the conversation is held through", () => {
+    const header = renderChannelHeader({ channel, onFork: vi.fn() });
+    expect(header.textContent).toContain("via Telegram");
+  });
+
+  it("keeps the phone header to one row and moves the action into the actions menu", async () => {
+    media.phone = true;
+    const onFork = vi.fn();
+    const header = renderChannelHeader({ channel, onFork });
+    expect(continueButton(header)).toBeUndefined();
+    const items = await openPhoneMenu(
+      header.querySelector<HTMLButtonElement>('button[aria-label="Conversation actions"]')!,
+    );
+    const labels = items.map((item) => item.textContent);
+    // The same action is not offered twice under two names.
+    expect(labels.filter((label) => label === "Continue in a new chat")).toHaveLength(1);
+    expect(labels).not.toContain("New conversation from latest message");
+    await act(async () => items[labels.indexOf("Continue in a new chat")]!.click());
+    expect(onFork).toHaveBeenCalledOnce();
+  });
+
+  it("does not offer the phone menu item until the conversation has a turn", async () => {
+    media.phone = true;
+    const header = renderChannelHeader({ channel });
+    const items = await openPhoneMenu(
+      header.querySelector<HTMLButtonElement>('button[aria-label="Conversation actions"]')!,
+    );
+    const labels = items.map((item) => item.textContent);
+    expect(labels).not.toContain("Continue in a new chat");
+    expect(labels).not.toContain("New conversation from latest message");
+  });
 });

@@ -1541,7 +1541,7 @@ describe("useChatSessionData", () => {
       {
         sessionId: "old-target",
         workspaceId: "workspace-linked",
-        scope: "mission",
+        scope: "all",
         view: "active",
         mode: undefined,
         limit: 1,
@@ -1550,6 +1550,58 @@ describe("useChatSessionData", () => {
       },
       { signal: expect.any(AbortSignal) },
     ]);
+    await act(async () => renderer.unmount());
+  });
+
+  it("reads an exact channel session link with scope all", async () => {
+    // A conversation held through a channel is an external session bound to a connection.
+    const requested = {
+      ...makeSession("old-channel"),
+      workspaceId: "workspace-linked",
+      scope: "external",
+      channelConnectionId: "conn-1",
+    } as ChatSessionRecord;
+    fetchChatSessionsMock.mockImplementation(async (query) =>
+      query.sessionId ? { items: [requested] } : { items: [makeSession("newest")], nextCursor: "page-2" },
+    );
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness workspaceId="workspace-linked" routeSessionId="old-channel" />);
+      await flushEffects();
+    });
+    await act(async () => {
+      await flushEffects();
+    });
+    const reads = fetchChatSessionsMock.mock.calls.filter(([query]) => query.sessionId);
+    expect(reads).toHaveLength(1);
+    expect(reads[0]![0]).toMatchObject({ sessionId: "old-channel", scope: "all", view: "active", limit: 1 });
+    expect(latestHarness!.selectedSessionId).toBe("old-channel");
+    expect(latestHarness!.result.sessions?.items.map((item) => item.sessionId)).toEqual(["newest", "old-channel"]);
+    await act(async () => renderer.unmount());
+  });
+
+  it("still refuses an exact link to an external session no channel carries", async () => {
+    const delegated = {
+      ...makeSession("delegated"),
+      workspaceId: "workspace-linked",
+      scope: "external",
+    } as ChatSessionRecord;
+    fetchChatSessionsMock.mockImplementation(async (query) =>
+      query.sessionId ? { items: [delegated] } : { items: [makeSession("newest")] },
+    );
+    const onUnavailable = vi.fn();
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <Harness workspaceId="workspace-linked" routeSessionId="delegated" onRouteSessionUnavailable={onUnavailable} />,
+      );
+      await flushEffects();
+    });
+    await act(async () => {
+      await flushEffects();
+    });
+    expect(onUnavailable).toHaveBeenCalledWith("delegated", expect.anything());
+    expect(latestHarness!.result.sessions?.items.map((item) => item.sessionId)).toEqual(["newest"]);
     await act(async () => renderer.unmount());
   });
 

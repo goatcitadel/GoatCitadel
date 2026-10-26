@@ -3,8 +3,10 @@ import { fetchChatSessions, type ChatSessionsResponse } from "@goatcitadel/missi
 import { findScopedSidebarSession, type ChatHistoryView } from "./chat-session-data-bootstrap";
 
 /**
- * Reads one conversation named by the address. A deep link may be older than the first page, so only that exact,
- * visible, scoped owner is accepted; a missing, archived or foreign record yields null and never selects a recent Chat.
+ * Reads one conversation named by the address or chosen from Messaging. It may be older than the first page, so
+ * only that exact, visible, scoped owner is accepted; a missing, archived or foreign record yields null and never
+ * selects a recent Chat. The read spans every scope because a conversation held through a channel is an external
+ * session; `findScopedSidebarSession` decides which of those may be named.
  */
 export async function readRouteSidebarSession(
   sessionId: string,
@@ -12,7 +14,7 @@ export async function readRouteSidebarSession(
 ): Promise<ChatSessionsResponse["items"][number] | null> {
   const { workspaceId, view, mode, signal } = scope;
   const exact = await fetchChatSessions(
-    { sessionId, workspaceId, scope: "mission", view, mode, limit: 1, includeActivity: true },
+    { sessionId, workspaceId, scope: "all", view, mode, limit: 1, includeActivity: true },
     { signal },
   );
   return findScopedSidebarSession(exact, sessionId, workspaceId, view);

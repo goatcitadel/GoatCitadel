@@ -24,6 +24,7 @@ import { InspectorSourceContext } from "../../app/inspector-context";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { ChatOwnerNavigationBoundary } from "./ChatOwnerNavigationBoundary";
 import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
+import { useSelectedChannelConversation } from "./use-channel-conversation";
 import { ThreadedBtwSideChatPanel } from "../../../features/threaded-surface/ThreadedBtwSideChatPanel";
 import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
@@ -204,7 +205,10 @@ export function ChatAreaView({
   );
   const codePanel = input.workflowPanel?.kind === "code" ? input.workflowPanel : null;
   const latestLocalNotice = active?.notices.find((notice) => notice.id.startsWith("notice-"));
-  const session = input.sessionRail.missionSessions.find((item) => item.sessionId === selectedSessionId);
+  // A conversation held through a channel is an external session; the header needs it as much as a mission chat.
+  const { missionSessions, externalSessions = [] } = input.sessionRail;
+  const session = [...missionSessions, ...externalSessions].find((item) => item.sessionId === selectedSessionId);
+  const channel = useSelectedChannelConversation(activeWorkspaceId ?? "default", session, selectedSessionId);
   const latestTurnId = active?.thread?.turns.filter((turn) => turn.branch.isSelectedPath).at(-1)?.turnId;
   const openInspector = (turnId?: string, tab?: ChatInspectorTab) => {
     if (inspectorView.current !== renderedInspectorView) return;
@@ -281,6 +285,7 @@ export function ChatAreaView({
           input={input}
           active={active}
           session={session}
+          channel={channel}
           selectedSessionId={selectedSessionId}
           buildEditor={
             codePanel
@@ -335,6 +340,7 @@ export function ChatAreaView({
             <ChatTranscript
               gatewayUnavailable={gatewayUnavailable}
               props={active}
+              channel={channel}
               receipt={input.changePlanReceipt}
               onReviewPlan={input.onReviewChangePlan}
               onInspectTurn={(turnId) => openInspector(turnId, "turn")}

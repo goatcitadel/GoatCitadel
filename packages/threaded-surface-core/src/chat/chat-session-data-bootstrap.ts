@@ -243,6 +243,13 @@ export function selectSidebarSession(
     ? current
     : (nextSessions.items[0]?.sessionId ?? null);
 }
+/**
+ * A conversation an address or a Messaging row may name: a mission conversation, or an external one a channel
+ * carries. Any other external session (a delegated run's, say) stays unreachable by address.
+ */
+function isNameableSession(record: ChatSessionsResponse["items"][number]): boolean {
+  return record.scope === "mission" || (record.scope === "external" && Boolean(record.channelConnectionId));
+}
 /** Returns the exact record only when it is a visible conversation of this workspace and history view. */
 export function findScopedSidebarSession(
   exact: ChatSessionsResponse,
@@ -255,7 +262,7 @@ export function findScopedSidebarSession(
     exact.items.length !== 1 ||
     record?.sessionId !== requestedSessionId ||
     record.workspaceId !== workspaceId ||
-    record.scope !== "mission" ||
+    !isNameableSession(record) ||
     record.lifecycleStatus !== nextHistoryView ||
     record.includeInHistory === false
   ) {

@@ -381,6 +381,7 @@ export function MissionThreadedControllerHost({
 
   const navigation = useChatSurfaceNavigation({
     sessionData: session.sessionData,
+    ensureSessionListed: session.ensureSessionListed,
     selection,
     setSelectedTurnId,
     setSelectedContextTurnIds,

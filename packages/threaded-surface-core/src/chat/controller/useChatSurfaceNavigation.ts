@@ -10,6 +10,8 @@ import { useChatSessionSelection } from "./useChatSessionSelection";
 
 type Input = {
   sessionData: Pick<ReturnType<typeof useChatSessionData>, "openHistoricalWindow" | "returnToLatest">;
+  /** Lists a chosen conversation the loaded page of the list does not hold (see `useEnsureListedSession`). */
+  ensureSessionListed?: (sessionId: string) => void;
   selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId" | "setSelectedSessionId">;
   setSelectedTurnId: React.Dispatch<React.SetStateAction<string | null>>;
   setSelectedContextTurnIds: React.Dispatch<React.SetStateAction<string[]>>;
@@ -27,6 +29,7 @@ type Input = {
 /** Coordinates explicit session/history selection and responsive rail/dock navigation. */
 export function useChatSurfaceNavigation({
   sessionData,
+  ensureSessionListed,
   selection,
   setSelectedTurnId,
   setSelectedContextTurnIds,
@@ -47,6 +50,7 @@ export function useChatSurfaceNavigation({
 
   const handleSelectSessionFromRail = useCallback(
     (sessionId: string, options?: { turnId?: string | null; searchHit?: ChatSessionSearchHitRecord }) => {
+      ensureSessionListed?.(sessionId);
       const openRequestedHistory = () => {
         if (options?.searchHit) {
           void openHistoricalWindow(sessionId, options.searchHit);
@@ -65,7 +69,9 @@ export function useChatSurfaceNavigation({
           sessionId,
           turnId: options?.turnId ?? options?.searchHit?.turnId ?? null,
           artifactId: null,
-          ...(!options?.turnId && !options?.searchHit?.turnId && options?.searchHit ? { messageId: options.searchHit.messageId, sequence: options.searchHit.sequence } : {}),
+          ...(!options?.turnId && !options?.searchHit?.turnId && options?.searchHit
+            ? { messageId: options.searchHit.messageId, sequence: options.searchHit.sequence }
+            : {}),
         });
         return;
       }
@@ -81,11 +87,14 @@ export function useChatSurfaceNavigation({
           sessionId,
           turnId: options?.turnId ?? options?.searchHit?.turnId ?? null,
           artifactId: null,
-          ...(!options?.turnId && !options?.searchHit?.turnId && options?.searchHit ? { messageId: options.searchHit.messageId, sequence: options.searchHit.sequence } : {}),
+          ...(!options?.turnId && !options?.searchHit?.turnId && options?.searchHit
+            ? { messageId: options.searchHit.messageId, sequence: options.searchHit.sequence }
+            : {}),
         });
       }
     },
     [
+      ensureSessionListed,
       surfaceState.messageMode,
       onNavigateSurface,
       openHistoricalWindow,

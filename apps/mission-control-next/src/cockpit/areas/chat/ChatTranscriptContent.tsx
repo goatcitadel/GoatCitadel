@@ -17,6 +17,8 @@ import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/conte
 import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
 import { CircleAlert, OctagonAlert, TriangleAlert } from "lucide-react";
 import { presentAttachmentType, presentFailureClass } from "./chat-vocabulary";
+import { describeChannelMessageSource, type ChannelConversationContext } from "./channel-conversation";
+import { ChannelNewMessagesDivider } from "./ChannelNewMessagesDivider";
 import { useChatStreamingPreviewSnapshot } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import type {
   MissionThreadedActiveSessionSurfaceProps,
@@ -60,6 +62,8 @@ export const Turn = memo(function Turn({
   previewText,
   streaming,
   actions,
+  channel,
+  newMessageCount,
   onInspectTurn,
   onOpenArtifact,
   onReviewPlan,
@@ -70,6 +74,10 @@ export const Turn = memo(function Turn({
   previewText: string | null;
   streaming: boolean;
   actions: MissionThreadedActiveSessionSurfaceProps;
+  /** Set in a channel conversation, so each message can say where it came from. Callers keep it stable. */
+  channel?: ChannelConversationContext;
+  /** When set, this turn's message is the first new one since the reader was last here. */
+  newMessageCount?: number;
   onInspectTurn?: (turnId: string) => void;
   onOpenArtifact?: (turnId: string, artifactId?: string) => void;
   onReviewPlan?: MissionThreadedRenderSurfaceInput["onReviewChangePlan"];
@@ -79,17 +87,21 @@ export const Turn = memo(function Turn({
   const partial = turn.trace.status === "partial";
   const stopped = turn.trace.status === "cancelled";
   const capture = getWorkflowSkillCaptureDisplay(turn.userMessage.content);
+  // What someone else wrote through a channel is theirs: it is neither retried, edited nor captured as a workflow.
+  const fromChannel = turn.userMessage.sourceAuthority === "external_channel";
+  const source = channel ? describeChannelMessageSource(channel, turn.userMessage.sourceAuthority) : null;
   return (
     <article
       className="mx-auto w-full max-w-3xl space-y-4 px-3 py-5 sm:px-6"
       aria-label={turnAccessibleName(capture?.summary ?? turn.userMessage.content, position)}
       data-turn-id={turn.turnId}
     >
+      {newMessageCount ? <ChannelNewMessagesDivider count={newMessageCount} /> : null}
       {/* Heading navigation moves message by message; the visible "You" and "Assistant" labels stay as they are. */}
-      <h2 className="sr-only">You said</h2>
+      <h2 className="sr-only">{source?.heading ?? "You said"}</h2>
       <div className="cockpit-chat-user-bubble ml-auto rounded-lg border border-line-subtle bg-raised p-3">
         <p className="mb-1 text-xs font-medium text-fg-muted">
-          You · <ActorTimestamp timestamp={turn.userMessage.timestamp ?? ""} />
+          {source?.label ?? "You"} · <ActorTimestamp timestamp={turn.userMessage.timestamp ?? ""} />
         </p>
         <AssistantMessageRenderer role="user" content={capture?.summary ?? turn.userMessage.content} />
         {capture ? (
@@ -160,7 +172,7 @@ export const Turn = memo(function Turn({
               : ""}{" "}
             {turn.trace.failure?.recommendedAction
               ? getChatTurnRecoveryActionSummary(turn.trace.failure.recommendedAction)
-              : canRetryTurn(turn)
+              : canRetryTurn(turn) && !fromChannel
                 ? "Use Retry, or Run details under More, below this message."
                 : "Use Run details under More, below this message."}
           </p>
@@ -177,6 +189,7 @@ export const Turn = memo(function Turn({
           answerContent={assistantText}
           streaming={streaming}
           readOnly={actions.historicalReadOnly}
+          fromChannel={fromChannel}
           actions={{
             ...actions,
             onOpenRunDetails: onInspectTurn ?? actions.onOpenRunDetails,
@@ -185,6 +198,7 @@ export const Turn = memo(function Turn({
         />
       ) : null}
       {!actions.historicalReadOnly &&
+      !fromChannel &&
       !streaming &&
       actions.selectedSessionId &&
       turn.trace.status === "completed" &&
