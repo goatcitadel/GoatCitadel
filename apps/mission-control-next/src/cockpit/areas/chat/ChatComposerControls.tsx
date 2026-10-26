@@ -8,6 +8,7 @@ import { ChatAttachmentChips } from "./ChatAttachmentChips";
 import type { ChatCompletionReasoningEffort, ChatWebMode, RoutingPreflightRuntimeClass } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { useModelLabel } from "../../data/use-model-label";
+import { presentPreflightReason } from "./chat-model-reason";
 import { PLAN_HELP, REVIEW_HELP, presentThinkingLevel } from "./chat-vocabulary";
 
 type Controls = Pick<
@@ -294,7 +295,7 @@ export function ChatComposerNotices({ props, onChooseModel }: { props: Controls;
   const routeLabel = useModelLabel(
     route?.effectiveProviderId,
     route?.effectiveModel,
-    Boolean(props.routeBoundaryAckRequired && (route?.effectiveProviderId || route?.effectiveModel)),
+    Boolean(route?.effectiveProviderId || route?.effectiveModel),
   );
   return (
     <>
@@ -327,6 +328,12 @@ export function ChatComposerNotices({ props, onChooseModel }: { props: Controls;
             </TechnicalDetails>
           ) : null}
         </div>
+      ) : null}
+      {/* Uses the preflight already fetched for the composer; the notice above explains a fallback on its own. */}
+      {route?.effectiveModel && !props.routeBoundaryAckRequired ? (
+        <p className="mb-1 text-xs text-fg-muted">
+          Will use {routeLabel} — {presentPreflightReason(route)}
+        </p>
       ) : null}
       {/* Not a live region: preflight re-runs while the draft changes, so it would re-announce on every keystroke. */}
       {route?.fileOutputNotice ? (

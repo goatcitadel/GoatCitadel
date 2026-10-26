@@ -478,6 +478,7 @@ import {
   type RuntimeConfigurationAuthorizationInput,
 } from "./runtime-configuration-service.js";
 import { WebSearchCredentialService } from "./web-search-credential-service.js";
+import { composeCapabilityConnectors } from "./capability-connectors-composition.js";
 import { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
 import { applyRuntimeBrowserBackendDefaults } from "./runtime-browser-backend-defaults.js";
 import { submitEvolutionWebSearchCredential } from "./web-search-credential-change.js";
@@ -3836,8 +3837,9 @@ export class GatewayService {
   }
 
   private buildRouteServices(): GatewayRouteServices {
+    const composed = composeGatewayRouteServices(this.getRouteCompositionPort());
     return {
-      ...composeGatewayRouteServices(this.getRouteCompositionPort()),
+      ...composed,
       meshCapabilityPublication: this.meshCapabilityPublicationService,
       meshCapabilityActivation: this.meshCapabilityActivationService,
       meshCapabilityInvocation: this.meshCapabilityInvocationService,
@@ -3903,6 +3905,14 @@ export class GatewayService {
           submitEvolutionWebSearchCredential(this.evolutionControlPlaneService, this.webSearchCredentials, input),
       },
       webSearchCredentials: this.webSearchCredentials,
+      capabilityConnectors: composeCapabilityConnectors({
+        mcp: this,
+        integrations: composed.integrations,
+        webSearchCredentials: this.webSearchCredentials,
+        settings: this,
+        capabilityScope: composed.capabilityScope,
+        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      }),
     };
   }
 

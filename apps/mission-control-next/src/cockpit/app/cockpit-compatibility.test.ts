@@ -42,6 +42,21 @@ describe("Cockpit compatibility coverage", () => {
   ])("keeps %s unavailable: a channel page needs exactly one readable connection id", (input) => {
     expect(resolveCockpitCompatibility(input)).toEqual({ kind: "missing" });
   });
+  it.each(["/capabilities", "/capabilities/connectors", "/capabilities/connectors?workspaceId=w#top"])(
+    "opens the Capabilities area natively: %s",
+    (href) => {
+      expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
+    },
+  );
+  it.each(["/capabilities/skills", "/capabilities/connectors/extra", "/capabilities/unknown"])(
+    "reports %s missing until its tab exists",
+    (href) => {
+      expect(resolveCockpitCompatibility(href)).toEqual({ kind: "missing" });
+    },
+  );
+  it("offers Classic for an explicit rollback of the Capabilities area", () => {
+    expect(resolveCockpitCompatibility("/capabilities/connectors?shell=classic")).toMatchObject({ kind: "classic" });
+  });
   it("retains explicit Classic Projects rollback", () => {
     expect(resolveCockpitCompatibility("/projects/p?shell=classic&workspaceId=w#context")).toMatchObject({
       kind: "classic",

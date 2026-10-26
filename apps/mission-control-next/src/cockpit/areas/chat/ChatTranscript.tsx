@@ -351,6 +351,7 @@ export function ChatTranscript({
                 <Turn
                   turn={turn}
                   position={index + 1}
+                  isLatest={turn.turnId === latestTurn?.turnId}
                   previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
                   streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
                   actions={props}
@@ -369,6 +370,7 @@ export function ChatTranscript({
                   <Turn
                     turn={turn}
                     position={fallbackOffset + index + 1}
+                    isLatest={turn.turnId === latestTurn?.turnId}
                     previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
                     streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
                     actions={props}

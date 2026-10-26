@@ -974,6 +974,26 @@ describe("ChatTranscript", () => {
       ),
     );
     expect(container.textContent).toContain("Stopped — partial answer");
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Continue")).toBe(true);
+  });
+
+  it("offers Continue only on the latest stopped turn and drafts the follow-up", async () => {
+    const older = turn("older-stopped", true, "completed");
+    older.trace.status = "cancelled";
+    const latest = turn("latest-stopped", true, "completed");
+    latest.trace.status = "cancelled";
+    const onDraftChange = vi.fn();
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={{ ...sessionProps([older, latest]), canSend: true, onDraftChange, onSend: vi.fn() }} />
+        </InspectorProvider>,
+      ),
+    );
+    const continues = [...container.querySelectorAll("button")].filter((b) => b.textContent === "Continue");
+    expect(continues).toHaveLength(1);
+    await act(async () => continues[0]?.click());
+    expect(onDraftChange).toHaveBeenCalledWith("Continue from where you stopped.");
   });
 
   it("keeps per-turn progress notes as plain text beside the single transcript live region", async () => {

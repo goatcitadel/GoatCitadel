@@ -186,13 +186,34 @@ describe("ChatTranscript in a channel conversation", () => {
     expect(container.textContent).not.toContain("Capture this as a workflow");
     const arrived = await openMoreMenu(container.querySelector("article")!);
     expect(arrived).toContain("Run details");
-    expect(arrived).not.toContain("Edit and resend");
+    expect(arrived).not.toContain("Edit your message and resend");
 
     // A message sent from the desk stays editable and retryable, with the capture control.
     await render(<ChatTranscript props={props([deskMessage])} channel={channel} />);
     expect(buttons()).toContain("Retry");
     expect(container.textContent).toContain("Capture this as a workflow");
-    expect(await openMoreMenu(container.querySelector("article")!)).toContain("Edit and resend");
+    expect(await openMoreMenu(container.querySelector("article")!)).toContain("Edit your message and resend");
+  });
+
+  it("does not offer Continue under a stopped reply in a channel conversation", async () => {
+    // Continue sends a message, which a channel conversation would deliver or post to the channel.
+    const stoppedTurn = (authority: Authority) => {
+      const stopped = channelTurn("stopped", authority, "2026-10-25T09:00:00.000Z", "2026-10-25T09:00:05.000Z");
+      stopped.trace.status = "cancelled";
+      return stopped;
+    };
+    const continueButtons = () => [...container.querySelectorAll("button")].filter((b) => b.textContent === "Continue");
+    const channel = { ...telegram, lastReadAt: "2026-10-25T10:00:00Z" };
+
+    await render(<ChatTranscript props={props([stoppedTurn("operator")], { canSend: true })} channel={channel} />);
+    expect(container.textContent).toContain("Stopped — partial answer");
+    expect(continueButtons()).toHaveLength(0);
+    // A message that arrived through a channel is not continued even before the channel is known.
+    await remount(<ChatTranscript props={props([stoppedTurn("external_channel")], { canSend: true })} />);
+    expect(continueButtons()).toHaveLength(0);
+    // A mission chat keeps Continue.
+    await remount(<ChatTranscript props={props([stoppedTurn("operator")], { canSend: true })} />);
+    expect(continueButtons()).toHaveLength(1);
   });
 
   it("does not point at Retry in the recovery note of a channel message that failed", async () => {

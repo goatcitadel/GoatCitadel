@@ -99,3 +99,56 @@ describe("ChatInspectorTurnPanel cost (#499)", () => {
     expect(row("Cost")).toBe("Unknown");
   });
 });
+
+describe("ChatInspectorTurnPanel chosen because", () => {
+  it("says a recorded fallback was a fallback, without printing ids", () => {
+    act(() =>
+      root.render(
+        <ChatInspectorTurnPanel
+          selectedTurn={turnWith({
+            status: "completed",
+            routing: {
+              primaryProviderId: "p1",
+              primaryModel: "model-a",
+              effectiveProviderId: "p2",
+              effectiveModel: "model-b",
+              fallbackUsed: true,
+              fallbackReason: "The provider was unavailable",
+            },
+          })}
+        />,
+      ),
+    );
+    expect(row("Chosen because")).toBe("Fell back from model-a because the provider was unavailable");
+  });
+
+  it("names the selected model when nothing changed and stays neutral when nothing is recorded", () => {
+    act(() =>
+      root.render(
+        <ChatInspectorTurnPanel
+          selectedTurn={turnWith({
+            status: "completed",
+            routing: { primaryModel: "model-a", effectiveModel: "model-a" },
+          })}
+        />,
+      ),
+    );
+    expect(row("Chosen because")).toBe("The requested model; no fallback was needed");
+    act(() => root.render(<ChatInspectorTurnPanel selectedTurn={turnWith({ status: "completed", model: "" })} />));
+    expect(row("Chosen because")).toBe("Selected by routing rules");
+  });
+
+  it("says which setting chose the model when the turn recorded it", () => {
+    act(() =>
+      root.render(
+        <ChatInspectorTurnPanel
+          selectedTurn={turnWith({
+            status: "completed",
+            routing: { primaryModel: "model-a", effectiveModel: "model-a", selectionSource: "global" },
+          })}
+        />,
+      ),
+    );
+    expect(row("Chosen because")).toBe("Workspace default");
+  });
+});

@@ -45,8 +45,11 @@ export const ANATOMY_RULES = [
     budget: 9,
     help: "make the page the only card; use ui/Section for sub-sections",
     // Card containers: a large radius with a border. Controls (inputs, buttons, chips) use rounded-md and stay out.
-    count: (_relative, contents) =>
-      contents.match(/["'`][^"'`\n]*\brounded-(?:lg|xl)\b[^"'`\n]*\bborder\b[^"'`\n]*["'`]/g)?.length ?? 0,
+    // The Capabilities catalog's row cards are the exception (DESIGN.md › Page anatomy).
+    count: (relative, contents) =>
+      relative.startsWith("areas/capabilities/")
+        ? 0
+        : (contents.match(/["'`][^"'`\n]*\brounded-(?:lg|xl)\b[^"'`\n]*\bborder\b[^"'`\n]*["'`]/g)?.length ?? 0),
   },
   {
     id: "padded-panel",
@@ -54,8 +57,9 @@ export const ANATOMY_RULES = [
     help: "list rows are hairline-separated (divide-y divide-line-subtle); a bordered padded box is a nested card",
     // A container element in a page area whose class has rounded-md, a full border and padding. Form controls and
     // buttons also use rounded-md border, so only container tags count; rounded-lg/xl is the card-surface rule.
+    // The Capabilities catalog's row cards are the exception (DESIGN.md › Page anatomy).
     count: (relative, contents) =>
-      relative.startsWith("areas/")
+      relative.startsWith("areas/") && !relative.startsWith("areas/capabilities/")
         ? [
             ...contents.matchAll(
               /<(?:div|section|article|aside|li|ul|ol|dl|details|fieldset|figure|form|p|label)\b[^>]*?className=(?:"([^"]*)"|\{`([^`]*)`\})/gs,

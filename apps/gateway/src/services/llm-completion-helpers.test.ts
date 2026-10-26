@@ -431,6 +431,13 @@ describe("llm-completion-helpers", () => {
       new Error("Chat completion timed out after 250ms."),
     );
     expect(normalizeChatCompletionAttemptError("plain failure", undefined)).toEqual(new Error("plain failure"));
+
+    const rateLimited = Object.assign(new Error("Provider request failed (429): upstream timeout, try later"), {
+      retryAfterMs: 2000,
+    });
+    const kept = normalizeChatCompletionAttemptError(rateLimited, 250);
+    expect(kept).toBe(rateLimited);
+    expect(shouldRetryTransientProviderError(kept)).toBe(true);
   });
 
   it("delays retries only when backoff leaves a five-second secondary attempt window", async () => {
@@ -444,7 +451,7 @@ describe("llm-completion-helpers", () => {
     expect(hasChatCompletionSecondaryAttemptBudget(Date.now() + 5_749, 1)).toBe(false);
     expect(hasChatCompletionSecondaryAttemptBudget(Date.now() + 5_750, 1)).toBe(true);
 
-    const firstDelay = delayChatCompletionRetry(Date.now() + 5_250, 5_250, 0);
+    const firstDelay = delayChatCompletionRetry(Date.now() + 5_250, 5_250, 0, undefined, { random: () => 0 });
     await vi.advanceTimersByTimeAsync(249);
     let settled = false;
     firstDelay.then(() => {
@@ -465,6 +472,56 @@ describe("llm-completion-helpers", () => {
     controller.abort(new ChatTurnCancelledError("turn-cancelled"));
 
     await expect(retry).resolves.toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("delayChatCompletionRetry Retry-After and jitter", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function settledAfter(promise: Promise<boolean>, ms: number): Promise<boolean | "pending"> {
+    let result: boolean | "pending" = "pending";
+    void promise.then((value) => {
+      result = value;
+    });
+    await vi.advanceTimersByTimeAsync(ms);
+    return result;
+  }
+
+  it("waits for the larger of Retry-After and the fixed backoff", async () => {
+    vi.useFakeTimers();
+    const wait = delayChatCompletionRetry(undefined, undefined, 0, undefined, { retryAfterMs: 4_000, random: () => 0 });
+    expect(await settledAfter(wait, 3_999)).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(wait).resolves.toBe(true);
+  });
+
+  it("adds bounded jitter and never exceeds the 30 second cap", async () => {
+    vi.useFakeTimers();
+    const jittered = delayChatCompletionRetry(undefined, undefined, 1, undefined, { random: () => 1 });
+    expect(await settledAfter(jittered, 899)).toBe("pending"); // 750 + 20% = 900
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(jittered).resolves.toBe(true);
+
+    const capped = delayChatCompletionRetry(undefined, undefined, 0, undefined, {
+      retryAfterMs: 29_000,
+      random: () => 1,
+    });
+    expect(await settledAfter(capped, 29_999)).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(capped).resolves.toBe(true);
+  });
+
+  it("skips the retry when Retry-After exceeds the cap or the remaining deadline", async () => {
+    vi.useFakeTimers();
+    await expect(
+      delayChatCompletionRetry(undefined, undefined, 0, undefined, { retryAfterMs: 31_000, random: () => 0 }),
+    ).resolves.toBe(false);
+    await expect(
+      delayChatCompletionRetry(Date.now() + 9_000, undefined, 0, undefined, { retryAfterMs: 5_000, random: () => 0 }),
+    ).resolves.toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

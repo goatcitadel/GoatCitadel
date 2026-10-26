@@ -312,6 +312,9 @@ import { PersonalOpsStorageRepository } from "./personal-ops-repo.js";
 import { GovernedLifecycleEventRepository } from "./governed-lifecycle-event-repo.js";
 import { GovernedRemediationRepository } from "./governed-remediation-repo.js";
 import { ImprovementLifecycleOperationRepository } from "./improvement-lifecycle-operation-repo.js";
+
+/** Session id that usage and cost rows keep after their chat is deleted. */
+export const DELETED_SESSION_USAGE_TOMBSTONE = "deleted-session";
 export {
   PersonalOpsInMemoryRepository,
   PersonalOpsStorageRepository,
@@ -970,8 +973,6 @@ export class Storage {
         "tool_access_decisions",
         "tool_invocations",
         "policy_blocks",
-        "model_usage_events",
-        "cost_ledger",
         "voice_sessions",
         "mesh_session_owners",
         "transcript_outbox",
@@ -993,6 +994,15 @@ export class Storage {
         "chat_session_workbench",
         "chat_attachments",
       ];
+      // Spend history outlives the chat: re-key usage and cost rows to a tombstone so Ops totals do not
+      // drop retroactively. These rows hold ids, tokens and cost only (no prompts or messages).
+      if (sid !== DELETED_SESSION_USAGE_TOMBSTONE) {
+        for (const table of ["model_usage_events", "cost_ledger"]) {
+          this.db
+            .prepare(`UPDATE ${table} SET session_id = ? WHERE session_id = ?`)
+            .run(DELETED_SESSION_USAGE_TOMBSTONE, sid);
+        }
+      }
       for (const table of simpleSessionDeletes) {
         this.db.prepare(`DELETE FROM ${table} WHERE session_id = ?`).run(sid);
       }

@@ -7,6 +7,7 @@ export { Menu, MenuContent, MenuItem, MenuTrigger } from "./Menu";
 export { Sheet } from "./Sheet";
 export { Skeleton } from "./Skeleton";
 export { StatusBadge } from "./StatusBadge";
+export { Switch, type SwitchProps } from "./Switch";
 export { Tabs, TabsContent, TabsList, TabsTrigger } from "./Tabs";
 export { CockpitToaster } from "./Toaster";
 export { Tooltip } from "./Tooltip";

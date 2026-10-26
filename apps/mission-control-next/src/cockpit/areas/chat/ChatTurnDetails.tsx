@@ -16,6 +16,7 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { presentErrorText } from "../../lib/present-error";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { useCoarsePointer } from "../../lib/use-coarse-pointer";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 
 /** How long a copy confirmation stays before the button returns to its label. */
@@ -65,6 +66,7 @@ export function ChatTurnDetails({
   readOnly,
   fromChannel = false,
   actions,
+  latest = true,
 }: {
   turn: ChatThreadTurnRecord;
   answerContent?: string;
@@ -73,7 +75,10 @@ export function ChatTurnDetails({
   /** The message arrived through a channel: it is not retried or edited from here. */
   fromChannel?: boolean;
   actions: TurnActions;
+  /** Older turns keep their actions in the page but show them on hover or keyboard focus only. */
+  latest?: boolean;
 }) {
+  const coarsePointer = useCoarsePointer();
   const { showTechnicalDetails } = useUiPreferences();
   const [copy, setCopy] = useState<{ status: string; copied: boolean }>({ status: "", copied: false });
   // CH-31: success is temporary; the confirmation clears after a moment. Failures stay until the next try.
@@ -234,16 +239,24 @@ export function ChatTurnDetails({
           </ul>
         </section>
       ) : null}
-      <ChatTurnActions
-        turn={turn}
-        actions={actions}
-        streaming={streaming}
-        readOnly={readOnly}
-        fromChannel={fromChannel}
-        hasAnswer={Boolean(answerContent)}
-        copied={copy.copied}
-        onCopy={() => void copyAnswer()}
-      />
+      <div
+        className={
+          latest || coarsePointer
+            ? undefined
+            : "opacity-0 transition-opacity group-hover/turn:opacity-100 group-focus-within/turn:opacity-100"
+        }
+      >
+        <ChatTurnActions
+          turn={turn}
+          actions={actions}
+          streaming={streaming}
+          readOnly={readOnly}
+          fromChannel={fromChannel}
+          hasAnswer={Boolean(answerContent)}
+          copied={copy.copied}
+          onCopy={() => void copyAnswer()}
+        />
+      </div>
       {copy.status ? <p role="status">{copy.status}</p> : null}
     </div>
   );

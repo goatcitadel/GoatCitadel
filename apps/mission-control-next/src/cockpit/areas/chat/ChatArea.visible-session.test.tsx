@@ -137,7 +137,7 @@ describe("visible Chat session", () => {
       });
       const item = await vi.waitFor(() => {
         const found = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-          (node) => node.textContent === "Build editor",
+          (node) => node.textContent === "Open code workbench",
         );
         expect(found).toBeDefined();
         return found!;

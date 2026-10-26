@@ -333,7 +333,7 @@ export function ChatAreaView({
           <Suspense
             fallback={
               <p role="status" className="p-4 text-sm text-fg-muted">
-                Loading build editor…
+                Loading code workbench…
               </p>
             }
           >

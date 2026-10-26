@@ -75,6 +75,7 @@ import {
   type HeartbeatDecisionReceipt,
 } from "./chat-durable-runtime-authority.js";
 import { assertDurableRetryPolicyMatchesRun, DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
+import { traceSelectionSource } from "./chat-route-resolution.js";
 import { CHAT_TURN_CONTROL_KEY, type ChatTurnControl } from "./chat-turn-control.js";
 import {
   computeEffectiveChatTurnRequestMaterialSha256,
@@ -864,6 +865,7 @@ export async function persistInitialChatTurnTrace(
       effectiveProviderId:
         prepared.capabilityProfile?.selection.effectiveProviderId ?? input.providerId ?? prepared.prefs.providerId,
       effectiveModel: prepared.capabilityProfile?.selection.effectiveModel ?? input.model ?? prepared.prefs.model,
+      ...traceSelectionSource(input.routeDecision),
       ...(routedContextSnapshot ? { routedContext: buildRoutedContextBindingReceipt(routedContextSnapshot) } : {}),
       modelRouter: prepared.modelRouterDecision,
     },

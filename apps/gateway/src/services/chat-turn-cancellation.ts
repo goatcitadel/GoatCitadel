@@ -17,6 +17,7 @@ import type { ChatMode, ChatTurnTraceRecord, DurableRunRecord, RealtimeEvent } f
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ActiveChatTurnStreamExecution } from "./chat-turn-execution-registry.js";
 import type { DurableChatTurnExecutionPayload } from "./chat-turn-types.js";
+import { traceSelectionSource } from "./chat-route-resolution.js";
 
 export interface ChatTurnCancellationDeps {
   storage: Pick<Storage, "chatTurnTraces" | "durableRuns" | "chatSessionPrefs">;
@@ -167,6 +168,7 @@ async function createRunningTraceForActiveStreamCancellation(
       primaryModel: request.model ?? prefs?.model,
       effectiveProviderId: request.providerId ?? prefs?.providerId,
       effectiveModel: request.model ?? prefs?.model,
+      ...traceSelectionSource(request.routeDecision),
     },
     durable: {
       runId: activeStream.runId,

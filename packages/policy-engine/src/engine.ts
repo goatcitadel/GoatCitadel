@@ -2832,6 +2832,16 @@ const CAUTION_MUTATING_TOOL_NAMES = new Set([
   "presentations.create",
 ]);
 
+const BARE_HOST_PORT_PATTERN = /^(?:[^\s/?#:@[\]]+|\[[0-9a-f:.]+\]):\d+(?:[/?#]|$)/iu;
+
+function tryParseHostname(url: string): string | undefined {
+  try {
+    return new URL(url).hostname.toLowerCase() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function extractHostCandidates(args?: Record<string, unknown>): string[] {
   if (!args) {
     return [];
@@ -2875,6 +2885,14 @@ function extractHostCandidates(args?: Record<string, unknown>): string[] {
 
   const hosts = new Set<string>();
   for (const value of values) {
+    // A bare `host:port` ("localhost:3000") parses as a URL whose *scheme* is
+    // the host and whose hostname is empty. Read it as an authority instead so
+    // the real host is what allowedHosts is checked against.
+    const authority = BARE_HOST_PORT_PATTERN.test(value) ? tryParseHostname(`http://${value}`) : undefined;
+    if (authority) {
+      hosts.add(authority);
+      continue;
+    }
     try {
       hosts.add(new URL(value).hostname.toLowerCase());
     } catch {

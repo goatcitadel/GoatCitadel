@@ -69,6 +69,19 @@ describe("page-anatomy guard", () => {
     assert.deepEqual(countAnatomy("ui/Callout.tsx", card), {});
   });
 
+  it("exempts Capabilities catalog cards from the card and padded-panel budgets only (DESIGN.md › Page anatomy)", () => {
+    const cards = [
+      '<section className="rounded-lg border border-line p-4">Catalog</section>',
+      '<div className="rounded-md border border-line p-3 text-sm">Row</div>',
+    ].join("\n");
+    assert.deepEqual(countAnatomy("areas/capabilities/X.tsx", cards), {});
+    assert.deepEqual(countAnatomy("areas/work/X.tsx", cards), { "card-surface": 1, "padded-panel": 1 });
+    // The exemption relaxes the card rules; a raw page title in the area still counts.
+    assert.deepEqual(countAnatomy("areas/capabilities/X.tsx", '<h1 className="text-xl">Capabilities</h1>'), {
+      "raw-h1": 1,
+    });
+  });
+
   it("fails above the budget and asks for a lower budget below it", () => {
     const rules = [{ id: "card-surface", budget: 3, help: "flatten", count: () => 0 }];
     assert.deepEqual(evaluateAnatomy({ "card-surface": 3 }, rules), []);

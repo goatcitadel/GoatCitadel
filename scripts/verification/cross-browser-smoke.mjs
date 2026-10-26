@@ -26,7 +26,10 @@ import { repoRoot } from "./lib/shared.mjs";
  */
 export const SMOKE_ROUTES = [
   { href: "/chat", readySelector: 'section[aria-label="Chat"]' },
-  ...["/inbox", "/work", "/library", "/system", "/settings/general"].map((href) =>
+  ...["/inbox", "/work"].map((href) => COCKPIT_VISUAL_MANIFEST.find((route) => route.href === href)),
+  // Capabilities has no visual-lane capture yet, so it waits on its page title.
+  { href: "/capabilities", readyText: "Capabilities" },
+  ...["/library", "/system", "/settings/general"].map((href) =>
     COCKPIT_VISUAL_MANIFEST.find((route) => route.href === href),
   ),
 ];

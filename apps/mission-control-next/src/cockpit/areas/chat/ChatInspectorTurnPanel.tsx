@@ -4,7 +4,13 @@ import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/conte
 import { formatDuration } from "@goatcitadel/mission-control-shared/content/format";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
-import { DetailRow, FallbackDetailRow, ModelDetailRow, ModelTechnicalDetails } from "./chat-inspector-evidence";
+import {
+  ChosenBecauseDetailRow,
+  DetailRow,
+  FallbackDetailRow,
+  ModelDetailRow,
+  ModelTechnicalDetails,
+} from "./chat-inspector-evidence";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { recordedCostLabel, subscriptionCostLabel } from "./recorded-cost";
 import { useProviderAuthMode } from "../../data/use-model-label";
@@ -33,6 +39,7 @@ export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThr
           modelId={selectedTurn.trace.routing?.effectiveModel ?? selectedTurn.trace.model}
           missing="Not recorded"
         />
+        <ChosenBecauseDetailRow turn={selectedTurn} />
         <FallbackDetailRow turn={selectedTurn} />
         <DetailRow label="Tools" value={String(selectedTurn.toolRuns.length)} />
         <DetailRow label="Sources" value={String(selectedTurn.citations.length)} />

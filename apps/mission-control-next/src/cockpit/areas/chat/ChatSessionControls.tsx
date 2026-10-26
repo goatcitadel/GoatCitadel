@@ -111,7 +111,7 @@ export function ChatSessionOverflow({
           ) : null}
           {onOpenBuildEditor ? (
             <MenuItem className="max-sm:min-h-11" onSelect={onOpenBuildEditor}>
-              Build editor
+              Open code workbench
             </MenuItem>
           ) : null}
           {dock && onInspect ? (

@@ -1641,6 +1641,8 @@ export interface ChatTurnTraceRecord {
     promptContextBudget?: ChatPromptContextBudgetReceipt;
     routedContext?: import("./routed-context.js").ChatRoutedContextBindingReceipt;
     usedVisionFallback?: boolean;
+    /** Which setting chose the model, copied from the verified route decision. Absent on older or system turns. */
+    selectionSource?: RoutingPreflightSelectionSource;
     effectiveProviderId?: string;
     effectiveModel?: string;
     effectiveApiStyle?: import("./llm.js").LlmApiStyle;

@@ -1114,7 +1114,7 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
     await settle();
     expect(document.activeElement?.textContent).toBe("Deny");
     await act(async () => (document.activeElement as HTMLButtonElement).click());
-    await vi.waitFor(() => expect(announcer()).toContain("Decision recorded: Denied"));
+    await vi.waitFor(() => expect(announcer()).toContain("Denied Review file write."));
     await vi.waitFor(() =>
       expect(document.activeElement?.closest("[data-inbox-row]")?.getAttribute("data-inbox-row")).toBe(
         "approval:second",

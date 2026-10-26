@@ -91,6 +91,15 @@ describe("code-mode-docker-launch", () => {
     );
   });
 
+  it("fails closed when the run temp root would inject --mount CSV options", async () => {
+    const root = await createTempRoot();
+    for (const unsafe of [`${root},readonly=false`, `${root}"quoted`, `${root},src=/etc`]) {
+      await expect(
+        prepareCodeModeDockerLaunch(launchInput(unsafe), { image: "goatcitadel/code-mode:test" }),
+      ).rejects.toThrow(/commas or double quotes/);
+    }
+  });
+
   it("rejects unsafe image references before building docker argv", async () => {
     const root = await createTempRoot();
     await expect(

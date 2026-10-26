@@ -5,6 +5,7 @@ import {
   anthropicModelRejectsSamplingControls,
   anthropicProviderAdapter,
   buildAnthropicMessagesPayload,
+  normalizeAnthropicUsage,
 } from "./llm-provider-anthropic.js";
 
 const resolved: LlmProviderResolution = {
@@ -359,9 +360,9 @@ describe("anthropicProviderAdapter", () => {
         model: "claude-test",
         choices: [{ index: 0, delta: {}, finish_reason: "length" }],
         usage: {
-          prompt_tokens: 7,
+          prompt_tokens: 9,
           completion_tokens: 3,
-          total_tokens: 10,
+          total_tokens: 12,
           cache_read_input_tokens: 2,
         },
       }),
@@ -990,3 +991,27 @@ function countCacheBreakpoints(payload: Record<string, unknown>): number {
   visit(payload.messages);
   return count;
 }
+
+describe("normalizeAnthropicUsage", () => {
+  it("reports prompt_tokens as total input (uncached + cache read + cache write) like OpenAI", () => {
+    const usage = normalizeAnthropicUsage({
+      input_tokens: 10,
+      cache_read_input_tokens: 1000,
+      cache_creation_input_tokens: 200,
+      output_tokens: 5,
+    });
+    expect(usage).toEqual({
+      prompt_tokens: 1210,
+      completion_tokens: 5,
+      total_tokens: 1215,
+      cache_read_input_tokens: 1000,
+      cache_creation_input_tokens: 200,
+    });
+  });
+
+  it("keeps the cached share within prompt_tokens so cost math bills uncached input once", () => {
+    const usage = normalizeAnthropicUsage({ input_tokens: 0, cache_read_input_tokens: 1_000_000, output_tokens: 0 });
+    expect(usage?.prompt_tokens).toBe(1_000_000);
+    expect(Number(usage?.cache_read_input_tokens)).toBeLessThanOrEqual(Number(usage?.prompt_tokens));
+  });
+});

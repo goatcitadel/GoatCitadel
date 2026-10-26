@@ -4,11 +4,18 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
+import { lookup as dnsLookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import AdmZip from "adm-zip";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
-import { assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
+import {
+  assertHostAllowed,
+  assertNotPrivateOrReservedHost,
+  assertWritePathInJail,
+  fetchAllowlisted,
+} from "@goatcitadel/policy-engine";
 import { readBoundedResponseBytes, readBoundedResponseText } from "./bounded-response-reader.js";
 import { assertSafeGitPositionalArg } from "./security-utils.js";
 import { NETWORK_INDICATOR_PATTERN, SUSPICIOUS_SCRIPT_PATTERN } from "./skill-content-validation.js";
@@ -1482,6 +1489,7 @@ export class SkillImportService {
       GIT_MATERIALIZATION_TIMEOUT_MS,
     );
     try {
+      await assertGitSourceHostIsPublic(safeSourceRef);
       await execFileAsync("git", buildHardenedGitCloneArgs(safeSourceRef, cloneDir), {
         windowsHide: true,
         env: buildSanitizedSkillImportGitEnvironment(),
@@ -2467,6 +2475,48 @@ async function resolveGitHeadRevision(repoDir: string): Promise<string | undefin
   });
   const stdout = String(result.stdout ?? "").trim();
   return stdout || undefined;
+}
+
+type GitSourceDnsLookup = (hostname: string) => Promise<Array<{ address: string }>>;
+
+// SECURITY (G2-10): the clone runs in a git subprocess outside fetchAllowlisted,
+// so apply the same private/loopback/link-local/metadata egress rule up front,
+// to the literal host and to every address it resolves to. No operator LAN
+// exception is plumbed into this service, so private targets fail closed.
+// Git re-resolves the name itself, so this narrows rather than eliminates
+// DNS-rebinding; redirects are already disabled in the hardened git config.
+export async function assertGitSourceHostIsPublic(
+  sourceRef: string,
+  lookup: GitSourceDnsLookup = (hostname) => dnsLookup(hostname, { all: true, verbatim: true }),
+): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(sourceRef);
+  } catch {
+    throw new Error("Git source must be an https URL.");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error("Git source must be an https URL.");
+  }
+  assertHostAllowed(parsed.toString(), ["*"]);
+  // URL keeps IPv6 literals bracketed ("[2606:4700::1]"); strip them so the literal is checked, not resolved.
+  const hostname = parsed.hostname.replace(/^\[|\]$/gu, "");
+  if (isIP(hostname)) {
+    return;
+  }
+  let addresses: Array<{ address: string }>;
+  try {
+    addresses = await lookup(hostname);
+  } catch (error) {
+    throw new Error(`Git source host could not be resolved: ${(error as Error).message}`, { cause: error });
+  }
+  if (addresses.length === 0) {
+    throw new Error("Git source host did not resolve to any address.");
+  }
+  for (const entry of addresses) {
+    const literal = entry.address.includes(":") ? `[${entry.address}]` : entry.address;
+    assertNotPrivateOrReservedHost(`https://${literal}/`);
+  }
 }
 
 function hardenedGitConfigArgs(): string[] {

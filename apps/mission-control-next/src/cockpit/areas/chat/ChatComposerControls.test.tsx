@@ -272,3 +272,15 @@ describe("File output notice", () => {
     await vi.waitFor(() => expect(document.querySelector('select[aria-label="Provider"]')).not.toBeNull());
   });
 });
+
+describe("Why this model hint", () => {
+  it("says which model the next message will use and why, never the raw source", async () => {
+    const input = props({ routePreflight: { effectiveModel: "stub-chat", selectionSource: "global" } as never });
+    await act(async () => root.render(<ChatComposerControls props={input} />));
+    expect(container.textContent).toContain("Will use stub-chat — Workspace default");
+    const unknown = props({ routePreflight: { effectiveModel: "stub-chat", selectionSource: "future_kind" } as never });
+    await act(async () => root.render(<ChatComposerControls props={unknown} />));
+    expect(container.textContent).toContain("Will use stub-chat — Selected by routing rules");
+    expect(container.textContent).not.toContain("future_kind");
+  });
+});

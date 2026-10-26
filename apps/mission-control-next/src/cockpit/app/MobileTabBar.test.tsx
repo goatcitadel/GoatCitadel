@@ -138,6 +138,13 @@ describe("MobileTabBar", () => {
     expect(container.querySelector('a[aria-label="Inbox, 2 decisions"]')).not.toBeNull();
     await act(async () => button("More").click());
     expect(document.querySelector('[role="dialog"][aria-label="More"]')).not.toBeNull();
+    // Capabilities is not a fifth tab: it lives in the More sheet, ahead of System.
+    expect(() => tab("Capabilities")).toThrow("Missing area link");
+    const sheetLabels = [...document.querySelectorAll('[role="dialog"][aria-label="More"] button')].map((element) =>
+      element.textContent?.trim(),
+    );
+    expect(sheetLabels.indexOf("Capabilities")).toBeGreaterThan(-1);
+    expect(sheetLabels.indexOf("Capabilities")).toBeLessThan(sheetLabels.indexOf("System"));
     // GL-15: the quick toggle offers the two theme choices that are not already saved.
     expect(button("Use light theme")).not.toBeNull();
     expect(button("Match system theme")).not.toBeNull();
@@ -152,6 +159,42 @@ describe("MobileTabBar", () => {
     await act(async () => button("System").click());
     expect(window.location.pathname).toBe("/system");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it("opens Capabilities from the More sheet and warms it first", async () => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <UiPreferencesProvider>
+            <CockpitNavigationProvider>
+              <MobileTabBar onOpenPalette={vi.fn()} />
+            </CockpitNavigationProvider>
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await act(async () => button("More").click());
+    act(() => button("Capabilities").focus());
+    expect(preload).toHaveBeenLastCalledWith("capabilities");
+    expect(window.location.pathname).toBe("/chat");
+    await act(async () => button("Capabilities").click());
+    expect(window.location.pathname).toBe("/capabilities");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it("marks More as current on Capabilities, which has no tab of its own", async () => {
+    window.history.replaceState(null, "", "/capabilities");
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <UiPreferencesProvider>
+            <CockpitNavigationProvider>
+              <MobileTabBar onOpenPalette={vi.fn()} />
+            </CockpitNavigationProvider>
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    expect(button("More").getAttribute("aria-current")).toBe("page");
+    expect(document.querySelector('nav a[aria-current="page"]')).toBeNull();
   });
   it("keeps the bottom chrome to the tab bar and moves scope and status into More (SH-01, SH-22)", async () => {
     status.tone = "failed";

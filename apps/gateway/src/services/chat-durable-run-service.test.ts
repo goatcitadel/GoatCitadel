@@ -17,6 +17,7 @@ import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import {
   beginDurableChatRun,
   finalizeDurableChatRun,
+  persistInitialChatTurnTrace,
   readCanonicalDurableChatTerminalOutput,
   type ChatDurableRunFinalizeDeps,
 } from "./chat-durable-run-service.js";
@@ -35,6 +36,35 @@ import {
 } from "./chat-durable-runtime-authority.js";
 
 describe("chat-durable-run-service", () => {
+  it.each([
+    [{ selectionSource: "citadel_ward_route_local" as const }, "citadel_ward_route_local"],
+    [undefined, undefined],
+  ])("records the route decision source on the initial trace (%#)", async (routeDecision, expected) => {
+    const create = vi.fn(async () => ({}) as ChatTurnTraceRecord);
+    const get = vi.fn(async () => {
+      throw new NotFoundError("missing");
+    });
+    const prepared = {
+      turnId: "turn-1",
+      session: { sessionId: "session-1" },
+      userEventId: "user-1",
+      assistantMessageId: "assistant-1",
+      branchKind: "append",
+      prefs: { providerId: "p1", model: "m1" },
+      normalized: {},
+      mode: "chat",
+    } as unknown as PreparedAgentChatTurn;
+    await persistInitialChatTurnTrace(
+      { chatTurnTraces: { get, create } as never },
+      prepared,
+      createSendRequest({ providerId: "p1", model: "m1", routeDecision: routeDecision as never }),
+    );
+    const routing = (create.mock.calls[0] as unknown as [{ routing: ChatTurnTraceRecord["routing"] }])[0].routing;
+    expect(routing.selectionSource).toBe(expected);
+    expect(routing.primaryModel).toBe("m1");
+    expect("selectionSource" in routing).toBe(expected !== undefined);
+  });
+
   it("reads terminal output only from the immutable prepared assistant message and preserves exact text", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed", assistantMessageId: "assistant-1" });

@@ -66,7 +66,9 @@ export function ChatTurnActions({
     canBranch
       ? { label: "New conversation from here", run: () => actions.onStartNewThreadFromTurn(turn.turnId) }
       : null,
-    canBranch && !fromChannel ? { label: "Edit and resend", run: () => actions.onEditTurn(turn.turnId) } : null,
+    canBranch && !fromChannel
+      ? { label: "Edit your message and resend", run: () => actions.onEditTurn(turn.turnId) }
+      : null,
     { label: "Run details", run: () => actions.onOpenRunDetails(turn.turnId) },
     canSave ? { label: "Save answer", run: () => actions.onCreateGeneratedArtifact(turn.turnId) } : null,
   ].filter((item): item is { label: string; run: () => void } => Boolean(item));

@@ -48,3 +48,19 @@ describe("extractHostCandidates with attachments (codex #22)", () => {
     );
   });
 });
+
+describe("extractHostCandidates with a bare host:port (C-19)", () => {
+  it("extracts the host instead of an empty scheme-like hostname", () => {
+    expect(extractHostCandidatesForTests({ url: "localhost:3000" })).toEqual(["localhost"]);
+    expect(extractHostCandidatesForTests({ host: "Internal.Example.com:8443/path" })).toEqual(["internal.example.com"]);
+    expect(extractHostCandidatesForTests({ target: "127.0.0.1:2375" })).toEqual(["127.0.0.1"]);
+    expect(extractHostCandidatesForTests({ url: "[::1]:8080" })).toEqual(["[::1]"]);
+  });
+
+  it("never yields an empty candidate and leaves ordinary forms unchanged", () => {
+    expect(extractHostCandidatesForTests({ url: "https://a.example.com:8443/x" })).toEqual(["a.example.com"]);
+    expect(extractHostCandidatesForTests({ host: "plain.example.com" })).toEqual(["plain.example.com"]);
+    expect(extractHostCandidatesForTests({ domain: ".example.com" })).toEqual(["example.com"]);
+    expect(extractHostCandidatesForTests({ url: "localhost:3000" })).not.toContain("");
+  });
+});

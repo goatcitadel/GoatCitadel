@@ -540,3 +540,15 @@ function stableJson(value: unknown): string {
     .sort(([left], [right]) => left.localeCompare(right));
   return `{${entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableJson(entryValue)}`).join(",")}}`;
 }
+
+/**
+ * Trace-routing fragment recording which setting chose the model. Empty when no route decision is in scope
+ * (system, autonomous, or older turns), so the trace never claims a source it did not receive.
+ */
+export function traceSelectionSource(
+  decision: { selectionSource?: RoutingPreflightResult["selectionSource"] } | undefined,
+): {
+  selectionSource?: RoutingPreflightResult["selectionSource"];
+} {
+  return decision?.selectionSource ? { selectionSource: decision.selectionSource } : {};
+}
