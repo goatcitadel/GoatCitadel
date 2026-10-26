@@ -320,6 +320,17 @@ describe("CommandPalette", () => {
     expect(controls.navigate).toHaveBeenCalledWith("/library/memory");
   });
 
+  it("matches a tab destination typed as plain words without the › separator", async () => {
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
+    const input = document.querySelector<HTMLInputElement>("[cmdk-input]")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "library  memory");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(document.body.textContent).toContain("Go to Library › Memory");
+  });
+
   it("offers all areas and the classic view", async () => {
     act(() => {
       root.render(<CommandPalette open onOpenChange={() => undefined} />);

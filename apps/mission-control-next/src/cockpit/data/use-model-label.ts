@@ -72,7 +72,7 @@ export function useModelLabel(
   });
   // A compact header can pass showIdWhenUnnamed: false so a raw id never sits beside the provider's display name.
   const named = models.data?.items.find((model) => model.id === modelId)?.label;
-  const modelLabel = named || (options.showIdWhenUnnamed === false && providerLabel ? undefined : modelId);
+  const modelLabel = named || (options.showIdWhenUnnamed === false ? undefined : modelId);
   if (!modelLabel) return providerLabel ?? "Unknown model";
   return providerLabel ? `${modelLabel} · ${providerLabel}` : modelLabel;
 }

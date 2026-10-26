@@ -85,7 +85,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
   return (
     <section className={AREA_PAGE}>
       <AreaHeader
-        title="Archived tasks"
+        title={view === "trash" ? "Archived tasks" : "Active tasks"}
         description="Workspace operator tasks. Archive removes a task from active lists and can be reversed. It does not cancel a run."
         actions={
           <Button

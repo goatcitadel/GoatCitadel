@@ -339,6 +339,9 @@ it("explains a decision that had no waiting run in plain words", async () => {
   expect(noRunLine({ ...(base as object), status: "rejected" } as never, 0)).toBe(
     "Nothing was waiting on this decision.",
   );
+  expect(noRunLine({ ...(base as object), actionOutcome: "unknown" } as never, 0)).toBe(
+    "Approved. The outcome of the approved action could not be verified.",
+  );
 });
 
 it("does not claim nothing ran when the approval recorded its own follow-on effects", async () => {
