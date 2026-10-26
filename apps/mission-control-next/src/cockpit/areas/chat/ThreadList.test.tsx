@@ -253,9 +253,9 @@ describe("channel conversations and the conversation list", () => {
     ({
       missionSessions: [session("mission-1")],
       externalSessions: [
-        session("channel-1", { channelConnectionId: "conn-1" }),
-        session("channel-2", { channelConnectionId: "conn-2" }),
-        session("external-1"),
+        session("channel-1", { scope: "external", channelConnectionId: "conn-1" }),
+        session("channel-2", { scope: "external", channelConnectionId: "conn-2" }),
+        session("external-1", { scope: "external" }),
       ],
       availableFolders: [],
       selectedSessionId: null,

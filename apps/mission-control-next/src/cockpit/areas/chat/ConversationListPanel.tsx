@@ -9,6 +9,7 @@ import { TIME_UNAVAILABLE, presentTime } from "@goatcitadel/mission-control-shar
 import { TimeText } from "../../ui/TimeText";
 import { ChatConversationFilters, type ChatProjectFilterOption } from "./ChatConversationFilters";
 import { MessagingSection } from "./MessagingSection";
+import { isChannelConversation } from "./channel-conversation-scope";
 
 type RailSession = MissionThreadedSessionRailData["missionSessions"][number];
 
@@ -66,7 +67,7 @@ export function ConversationListPanel({
   const listedElsewhere = Boolean(messaging) && rail.historyView === "active" && !rail.search.trim();
   const sessions = [
     ...rail.missionSessions,
-    ...(rail.externalSessions ?? []).filter((session) => !(listedElsewhere && session.channelConnectionId)),
+    ...(rail.externalSessions ?? []).filter((session) => !(listedElsewhere && isChannelConversation(session))),
   ];
   // Status comes with the sessions list, so the rail makes no request of its own.
   const activity = useThreadActivity(sessions);

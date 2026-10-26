@@ -28,6 +28,7 @@ import { ChatOwnerNavigationBoundary } from "./ChatOwnerNavigationBoundary";
 import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
 import { useSelectedChannelConversation } from "./use-channel-conversation";
 import { useChannelComposerProps } from "./use-channel-composer";
+import { isChannelConversation } from "./channel-conversation-scope";
 import { ThreadedBtwSideChatPanel } from "../../../features/threaded-surface/ThreadedBtwSideChatPanel";
 import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
@@ -284,7 +285,10 @@ export function ChatAreaView({
         onOpenProjects={openProjects}
         messaging={messaging}
       />
-      <ChatMainColumn channelPageId={channelPageConnectionId(rest)}>
+      <ChatMainColumn
+        channelPageId={channelPageConnectionId(rest)}
+        channelConversation={isChannelConversation(session)}
+      >
         <ChatSessionHeader
           input={input}
           active={active}

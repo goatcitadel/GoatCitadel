@@ -26,6 +26,7 @@ const overview: ChatMessagingOverview = {
           own: true,
           lastActivityAt: "2026-10-25T10:00:00.000Z",
           lastReadAt: "2026-10-25T09:00:00.000Z",
+          newMessageCount: 2,
         },
         {
           sessionId: "group-1",
@@ -57,6 +58,7 @@ function channelOf(overrides: Partial<ChannelConversationContext> = {}): Channel
     kind: "direct",
     own: true,
     status: "on",
+    tracksReading: true,
     ...overrides,
   };
 }
@@ -79,12 +81,30 @@ describe("describeChannelConversation", () => {
       kind: "direct",
       own: true,
       status: "on",
+      tracksReading: true,
       lastReadAt: "2026-10-25T09:00:00.000Z",
     });
     // A conversation nobody has read yet carries no read marker, not an empty one.
     const unread = describeChannelConversation("dm-1", overview);
     expect(unread).toMatchObject({ connectionId: "conn-sl", channelLabel: "Slack", status: "needs_attention" });
     expect(unread).not.toHaveProperty("lastReadAt");
+  });
+
+  it("says whether the Gateway keeps read state for the reader: only when it gave a count", () => {
+    // Without a reader identity the overview leaves the count out, so there is nothing to mark read.
+    expect(describeChannelConversation("dm-1", overview)?.tracksReading).toBe(false);
+    expect(describeChannelConversation("group-1", overview)?.tracksReading).toBe(false);
+    const counted = {
+      ...overview,
+      channels: [
+        {
+          ...overview.channels[1]!,
+          conversations: [{ ...overview.channels[1]!.conversations[0]!, newMessageCount: 0 }],
+        },
+      ],
+    };
+    // A known zero is still a count.
+    expect(describeChannelConversation("dm-1", counted)?.tracksReading).toBe(true);
   });
 
   it("returns nothing for a mission session", () => {

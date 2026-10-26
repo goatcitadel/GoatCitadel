@@ -31,7 +31,10 @@ let container: HTMLDivElement;
 let client: QueryClient;
 let seen: Array<ChannelConversationContext | undefined>;
 
-function Probe(props: { session?: { channelConnectionId?: string }; selectedSessionId?: string }) {
+function Probe(props: {
+  session?: { scope?: "mission" | "external"; channelConnectionId?: string };
+  selectedSessionId?: string;
+}) {
   seen.push(useSelectedChannelConversation("default", props.session, props.selectedSessionId));
   return null;
 }
@@ -66,13 +69,20 @@ afterEach(() => {
 
 describe("useSelectedChannelConversation", () => {
   it("reads the Messaging overview for a conversation a channel carries and describes it", async () => {
-    await mount({ session: { channelConnectionId: "conn-1" }, selectedSessionId: "channel-1" });
+    await mount({ session: { scope: "external", channelConnectionId: "conn-1" }, selectedSessionId: "channel-1" });
     expect(api.fetchChatMessaging).toHaveBeenCalledExactlyOnceWith("default", expect.anything());
     expect(seen.at(-1)).toMatchObject({ sessionId: "channel-1", channelLabel: "Telegram", own: true });
   });
 
   it("does not fetch the overview for an ordinary conversation", async () => {
     await mount({ session: {}, selectedSessionId: "session-1" });
+    expect(api.fetchChatMessaging).not.toHaveBeenCalled();
+    expect(seen.at(-1)).toBeUndefined();
+  });
+
+  it("does not fetch the overview for a mission chat bound to a channel", async () => {
+    // Binding a chat to a channel in the context dock keeps it an ordinary chat under Chats.
+    await mount({ session: { scope: "mission", channelConnectionId: "conn-1" }, selectedSessionId: "session-1" });
     expect(api.fetchChatMessaging).not.toHaveBeenCalled();
     expect(seen.at(-1)).toBeUndefined();
   });
@@ -85,7 +95,7 @@ describe("useSelectedChannelConversation", () => {
   });
 
   it("keeps the same context object while nothing it describes changed", async () => {
-    await mount({ session: { channelConnectionId: "conn-1" }, selectedSessionId: "channel-1" });
+    await mount({ session: { scope: "external", channelConnectionId: "conn-1" }, selectedSessionId: "channel-1" });
     const first = seen.at(-1);
     const [channel] = overview.channels;
     const publish = async (conversations: ChatMessagingOverview["channels"][number]["conversations"]) => {

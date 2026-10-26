@@ -9,6 +9,7 @@ import { InspectorProvider } from "../../app/inspector";
 import { queryKeys } from "../../data/query-keys";
 import { ChatTranscript } from "./ChatTranscript";
 import type { ChannelConversationContext } from "./channel-conversation";
+import { ChannelConversationScope } from "./channel-conversation-scope";
 
 const api = vi.hoisted(() => ({ markChatSessionRead: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", async (importOriginal) => ({
@@ -59,6 +60,7 @@ const telegram: ChannelConversationContext = {
   kind: "direct",
   own: true,
   status: "on",
+  tracksReading: true,
 };
 
 let root: Root;
@@ -170,7 +172,7 @@ describe("ChatTranscript in a channel conversation", () => {
     expect(userLabels()[0]).not.toContain("via");
   });
 
-  it("hides retry and edit on messages that arrived through a channel", async () => {
+  it("hides retry and edit on every message of a channel conversation", async () => {
     const channelMessage = channelTurn(
       "phone",
       "external_channel",
@@ -186,13 +188,40 @@ describe("ChatTranscript in a channel conversation", () => {
     expect(container.textContent).not.toContain("Capture this as a workflow");
     const arrived = await openMoreMenu(container.querySelector("article")!);
     expect(arrived).toContain("Run details");
+    expect(arrived).toContain("New conversation from here");
     expect(arrived).not.toContain("Edit your message and resend");
 
-    // A message sent from the desk stays editable and retryable, with the capture control.
-    await render(<ChatTranscript props={props([deskMessage])} channel={channel} />);
-    expect(buttons()).toContain("Retry");
+    // A desk message is not retried or edited either: either would send the words through the channel again.
+    await remount(<ChatTranscript props={props([deskMessage])} channel={channel} />);
+    expect(buttons()).not.toContain("Retry");
     expect(container.textContent).toContain("Capture this as a workflow");
+    const desk = await openMoreMenu(container.querySelector("article")!);
+    expect(desk).toContain("New conversation from here");
+    expect(desk).not.toContain("Edit your message and resend");
+
+    // The same desk message in a mission chat keeps both.
+    await remount(<ChatTranscript props={props([deskMessage])} />);
+    expect(buttons()).toContain("Retry");
     expect(await openMoreMenu(container.querySelector("article")!)).toContain("Edit your message and resend");
+  });
+
+  it("knows a channel conversation from the session alone, before the Messaging overview loads", async () => {
+    const desk = channelTurn("desk", "operator", "2026-10-25T09:10:00.000Z", "2026-10-25T09:10:05.000Z");
+    const stopped = channelTurn("stopped", "operator", "2026-10-25T09:20:00.000Z", "2026-10-25T09:20:05.000Z");
+    stopped.trace.status = "cancelled";
+    await render(
+      <ChannelConversationScope.Provider value>
+        <ChatTranscript props={props([desk, stopped], { canSend: true })} />
+      </ChannelConversationScope.Provider>,
+    );
+    const buttons = [...container.querySelectorAll("button")].map((button) => button.textContent);
+    expect(buttons).not.toContain("Retry");
+    expect(buttons).not.toContain("Continue");
+    const menu = await openMoreMenu(container.querySelector("article")!);
+    expect(menu).toContain("New conversation from here");
+    expect(menu).not.toContain("Edit your message and resend");
+    // Nothing is marked read before the channel is known.
+    expect(api.markChatSessionRead).not.toHaveBeenCalled();
   });
 
   it("does not offer Continue under a stopped reply in a channel conversation", async () => {
@@ -226,6 +255,31 @@ describe("ChatTranscript in a channel conversation", () => {
     const note = container.querySelector('[aria-label="Response recovery"]');
     expect(note?.textContent).toContain("Run details");
     expect(note?.textContent).not.toContain("Use Retry");
+  });
+
+  it("points only at Run details when a desk message fails in a channel conversation", async () => {
+    const recoveryNote = () => container.querySelector('[aria-label="Response recovery"]')?.textContent ?? "";
+    const retryable = channelTurn("desk", "operator", "2026-10-25T09:00:00.000Z");
+    retryable.trace.status = "failed";
+    retryable.trace.failure = { retryable: true } as never;
+    // A recommended recovery that says to resend or retry would send the words through the channel again.
+    const resend = channelTurn("desk", "operator", "2026-10-25T09:00:00.000Z");
+    resend.trace.status = "failed";
+    resend.trace.failure = { retryable: true, recommendedAction: "reconnect_auth" } as never;
+    const channel = { ...telegram, lastReadAt: "2026-10-25T10:00:00Z" };
+
+    await render(<ChatTranscript props={props([retryable])} channel={channel} />);
+    expect(recoveryNote()).toContain("Use Run details under More, below this message.");
+    expect(recoveryNote()).not.toContain("Retry");
+    await remount(<ChatTranscript props={props([resend])} channel={channel} />);
+    expect(recoveryNote()).toContain("Use Run details under More, below this message.");
+    expect(recoveryNote()).not.toContain("resend");
+
+    // A mission chat keeps the recommended recovery and the Retry hint.
+    await remount(<ChatTranscript props={props([resend])} />);
+    expect(recoveryNote()).toContain("resend the turn");
+    await remount(<ChatTranscript props={props([retryable])} />);
+    expect(recoveryNote()).toContain("Use Retry");
   });
 
   it("marks where the new messages start", async () => {
@@ -314,6 +368,19 @@ describe("ChatTranscript in a channel conversation", () => {
       <ChatTranscript props={props(turns, { historicalWindowLoading: true } as never)} channel={telegram} />,
     );
     expect(container.textContent).toContain("Loading the exact historical message");
+    expect(api.markChatSessionRead).not.toHaveBeenCalled();
+  });
+
+  it("does not ask to mark a conversation read when the Gateway keeps no read state for this reader", async () => {
+    // Without a reader identity the overview carries no count; a read request would only be refused.
+    const turns = [channelTurn("one", "external_channel", "2026-10-25T09:40:00.000Z", "2026-10-25T09:40:05.000Z")];
+    await render(<ChatTranscript props={props(turns)} channel={{ ...telegram, tracksReading: false }} />);
+    await render(
+      <ChatTranscript
+        props={props([...turns, channelTurn("two", "external_channel", "2026-10-25T10:05:00.000Z")])}
+        channel={{ ...telegram, tracksReading: false }}
+      />,
+    );
     expect(api.markChatSessionRead).not.toHaveBeenCalled();
   });
 

@@ -28,6 +28,7 @@ function channelContext(overrides: Partial<ChannelConversationContext> = {}): Ch
     kind: "direct",
     own: false,
     status: "on",
+    tracksReading: true,
     ...overrides,
   };
 }
@@ -130,7 +131,7 @@ describe("useChannelComposerProps", () => {
       },
     ],
   };
-  const held = { channelConnectionId: "conn-1" };
+  const held = { scope: "external" as const, channelConnectionId: "conn-1" };
   let root: Root;
   let container: HTMLDivElement;
   let client: QueryClient;
@@ -152,7 +153,7 @@ describe("useChannelComposerProps", () => {
   function Probe(props: {
     active: Active | null;
     channel?: ChannelConversationContext;
-    session?: { channelConnectionId?: string };
+    session?: { scope?: "mission" | "external"; channelConnectionId?: string };
   }) {
     seen.push(useChannelComposerProps(props.active, props.channel, "default", props.session));
     return null;
@@ -192,6 +193,16 @@ describe("useChannelComposerProps", () => {
     expect(seen.at(-1)).toBe(active);
     await mount({ active: null, session: undefined });
     expect(seen.at(-1)).toBeNull();
+    expect(api.fetchChatMessaging).not.toHaveBeenCalled();
+  });
+
+  it("keeps a mission chat bound to a channel on its own composer, with files and tools", async () => {
+    // Binding through the context dock does not make a chat a channel conversation: it still posts through the
+    // binding as before, and nothing waits on the Messaging overview.
+    const active = activeProps();
+    await mount({ active, session: { scope: "mission", channelConnectionId: "conn-1" } });
+    expect(seen.at(-1)).toBe(active);
+    expect(seen.at(-1)).not.toHaveProperty("channelCheck");
     expect(api.fetchChatMessaging).not.toHaveBeenCalled();
   });
 

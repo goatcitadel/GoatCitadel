@@ -12,6 +12,7 @@ import {
   type ChannelConversationContext,
   type NewChannelMessages,
 } from "./channel-conversation";
+import { isChannelConversation } from "./channel-conversation-scope";
 import { useMessagingOverview } from "./use-messaging-overview";
 
 function sameContext(left: ChannelConversationContext | undefined, right: ChannelConversationContext | undefined) {
@@ -24,22 +25,23 @@ function sameContext(left: ChannelConversationContext | undefined, right: Channe
     left.kind === right.kind &&
     left.own === right.own &&
     left.status === right.status &&
-    left.lastReadAt === right.lastReadAt
+    left.lastReadAt === right.lastReadAt &&
+    left.tracksReading === right.tracksReading
   );
 }
 
 /**
  * The open conversation's channel context, or nothing for a mission chat. The Messaging overview is read only for a
- * conversation a channel carries (the sidebar usually loaded it already, and both share one query); an overview that
- * is already cached is used either way. The same object comes back until something it describes changes, so a
- * refetch about another conversation does not re-render the transcript.
+ * channel conversation (the sidebar usually loaded it already, and both share one query); an overview that is
+ * already cached is used either way, and it never lists a mission chat. The same object comes back until something
+ * it describes changes, so a refetch about another conversation does not re-render the transcript.
  */
 export function useSelectedChannelConversation(
   workspaceId: string,
-  session: Pick<ChatSessionRecord, "channelConnectionId"> | undefined,
+  session: Pick<ChatSessionRecord, "scope" | "channelConnectionId"> | undefined,
   selectedSessionId: string | undefined,
 ): ChannelConversationContext | undefined {
-  const overview = useMessagingOverview(workspaceId, { enabled: Boolean(session?.channelConnectionId) });
+  const overview = useMessagingOverview(workspaceId, { enabled: isChannelConversation(session) });
   const described = useMemo(
     () => (selectedSessionId ? describeChannelConversation(selectedSessionId, overview.data) : undefined),
     [selectedSessionId, overview.data],
@@ -58,6 +60,7 @@ export function useSelectedChannelConversation(
  * - A conversation that is shown with a message newer than its read time is marked read through that message, once
  *   per newest message. A failed request is not the reader's concern: the API client records it, nothing is shown
  *   and nothing is retried until a newer message arrives.
+ * - Nothing is marked read when the Gateway keeps no read state for this reader (the overview gave no count).
  */
 export function useChannelReading(
   channel: ChannelConversationContext | undefined,
@@ -87,7 +90,7 @@ export function useChannelReading(
   );
   const newest = useMemo(() => (ready ? newestMessageTimestamp(turns) : undefined), [ready, turns]);
   const asked = useRef(new Set<string>());
-  const sessionId = channel?.sessionId;
+  const sessionId = channel?.tracksReading ? channel.sessionId : undefined;
   const lastReadAt = channel?.lastReadAt;
   useEffect(() => {
     if (!sessionId || !newest || !isNewerThan(newest, lastReadAt)) return;
@@ -98,7 +101,7 @@ export function useChannelReading(
       () => void queryClient.invalidateQueries({ queryKey: queryKeys.chatMessaging(workspaceId) }),
       () => {
         /* Non-fatal, and already recorded: the API client logs every failed request as a diagnostic, with its
-           status (409 without an operator identity). The reader sees nothing; the count may stay until next time. */
+           status. The reader sees nothing; the count may stay until next time. */
       },
     );
   }, [sessionId, lastReadAt, newest, workspaceId, queryClient]);

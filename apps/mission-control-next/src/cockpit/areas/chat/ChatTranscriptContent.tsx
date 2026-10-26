@@ -18,6 +18,7 @@ import { formatBytes } from "@goatcitadel/mission-control-shared/content/format"
 import { CircleAlert, OctagonAlert, TriangleAlert } from "lucide-react";
 import { presentAttachmentType, presentFailureClass } from "./chat-vocabulary";
 import { describeChannelMessageSource, type ChannelConversationContext } from "./channel-conversation";
+import { useInChannelConversation } from "./channel-conversation-scope";
 import { ChannelNewMessagesDivider } from "./ChannelNewMessagesDivider";
 import { useChatStreamingPreviewSnapshot } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import type {
@@ -45,6 +46,19 @@ const WorkflowSkillCaptureControl = lazy(() =>
 );
 
 const TURN_NAME_WORDS = 8;
+
+const RUN_DETAILS_HINT = "Use Run details under More, below this message.";
+
+/**
+ * Where a failed or partial answer's note points. A turn that cannot be resent (a channel message, or any turn of a
+ * channel conversation) is not pointed at Retry or at a recovery that says to retry or resend.
+ */
+function recoveryHint(turn: ChatThreadTurnRecord, resendable: boolean): string {
+  if (!resendable) return RUN_DETAILS_HINT;
+  const recommended = turn.trace.failure?.recommendedAction;
+  if (recommended) return getChatTurnRecoveryActionSummary(recommended);
+  return canRetryTurn(turn) ? "Use Retry, or Run details under More, below this message." : RUN_DETAILS_HINT;
+}
 
 /** Names a turn by its position and the start of its prompt so the transcript's articles are distinguishable. */
 function turnAccessibleName(prompt: string, position?: number): string {
@@ -94,6 +108,10 @@ export const Turn = memo(function Turn({
   const capture = getWorkflowSkillCaptureDisplay(turn.userMessage.content);
   // What someone else wrote through a channel is theirs: it is neither retried, edited nor captured as a workflow.
   const fromChannel = turn.userMessage.sourceAuthority === "external_channel";
+  // In a channel conversation Retry, Edit and Continue would send words through the channel again, even the operator's
+  // own desk question, so no turn offers them. The session says so before the Messaging overview has loaded.
+  const inChannel = useInChannelConversation() || channel !== undefined;
+  const resendable = !fromChannel && !inChannel;
   const source = channel ? describeChannelMessageSource(channel, turn.userMessage.sourceAuthority) : null;
   return (
     <article
@@ -157,7 +175,7 @@ export const Turn = memo(function Turn({
             </p>
           ) : null}
           {/* Continue sends a message, which a channel conversation would deliver or post to the channel. */}
-          {stopped && assistantText && !streaming && !channel && !fromChannel ? (
+          {stopped && assistantText && !streaming && resendable ? (
             <ChatContinueAction turn={turn} isLatest={isLatest} actions={actions} />
           ) : null}
           {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} onInspectTurn={onInspectTurn} /> : null}
@@ -181,11 +199,7 @@ export const Turn = memo(function Turn({
             {turn.trace.failure?.failureClass && turn.trace.failure.failureClass !== "unknown"
               ? ` Cause: ${presentFailureClass(turn.trace.failure.failureClass)}.`
               : ""}{" "}
-            {turn.trace.failure?.recommendedAction
-              ? getChatTurnRecoveryActionSummary(turn.trace.failure.recommendedAction)
-              : canRetryTurn(turn) && !fromChannel
-                ? "Use Retry, or Run details under More, below this message."
-                : "Use Run details under More, below this message."}
+            {recoveryHint(turn, resendable)}
           </p>
         </div>
       ) : null}
@@ -200,7 +214,7 @@ export const Turn = memo(function Turn({
           answerContent={assistantText}
           streaming={streaming}
           readOnly={actions.historicalReadOnly}
-          fromChannel={fromChannel}
+          resendBlocked={!resendable}
           latest={isLatest}
           actions={{
             ...actions,

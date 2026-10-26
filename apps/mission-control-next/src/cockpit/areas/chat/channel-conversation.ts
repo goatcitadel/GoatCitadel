@@ -20,6 +20,11 @@ export interface ChannelConversationContext {
   own: boolean;
   status: ChatMessagingChannelStatus;
   lastReadAt?: string;
+  /**
+   * Whether the Gateway keeps read state for this reader. It gives a new-message count only when it does; without a
+   * reader identity there is no count, nothing to mark read, and a read request would only be refused.
+   */
+  tracksReading: boolean;
 }
 
 /** The channel context for a session, or nothing when no channel in the overview holds it (a mission chat). */
@@ -38,6 +43,7 @@ export function describeChannelConversation(
       kind: conversation.kind,
       own: conversation.own,
       status: channel.status,
+      tracksReading: conversation.newMessageCount !== undefined,
       ...(conversation.lastReadAt ? { lastReadAt: conversation.lastReadAt } : {}),
     };
   }
