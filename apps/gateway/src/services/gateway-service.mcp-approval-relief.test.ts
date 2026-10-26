@@ -131,11 +131,16 @@ describe("GatewayService access probes report the MCP approval setting", () => {
     }
   });
 
-  it("still asks for a relaxed read under the default Safe profile, which asks before every tool", async () => {
-    for (const access of await probe("nothing_asks", { readOnlyHint: true })) {
-      expect(access).toMatchObject({ allowed: true, requiresApproval: true, permissionProfileId: "safe" });
-      expect(access.reasonCodes).toContain("approval_mode_all");
-      expect(access.reasonCodes).not.toContain("mcp_approval_relief");
+  // R46: the connector's own setting overrides the default Safe profile's ask-for-everything for its relieved calls.
+  it.each([
+    ["a relaxed read-only tool", "nothing_asks", { readOnlyHint: true }, false],
+    ["the same tool under Everything asks", "everything_asks", { readOnlyHint: true }, true],
+    ["a relaxed tool with no labels", "nothing_asks", undefined, true],
+  ] as const)("reports whether %s asks under the default Safe profile", async (_label, posture, annotations, asks) => {
+    for (const access of await probe(posture, annotations)) {
+      expect(access).toMatchObject({ allowed: true, requiresApproval: asks, permissionProfileId: "safe" });
+      expect(access.reasonCodes).toContain(asks ? "approval_mode_all" : "mcp_approval_relief");
+      expect(access.reasonCodes.includes("mcp_approval_relief")).toBe(!asks);
     }
   });
 });

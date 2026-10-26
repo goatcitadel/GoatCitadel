@@ -4987,10 +4987,22 @@ describe("MCP approval setting: server-authored relief through real policy", () 
     expect(unset.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
   });
 
-  it("leaves approve_all asking and gives a remote A2A peer no relief", async () => {
-    const strict = fixture({ posture: "nothing_asks", approvalMode: "approve_all" });
-    expect((await strict.coordinator.invokeTool(wrapperCall())).outcome).toBe("approval_required");
-    const peer = fixture({ posture: "nothing_asks" });
+  it("lets the setting override an ask-for-everything profile only for relieved calls", async () => {
+    const relieved = fixture({ posture: "nothing_asks", approvalMode: "approve_all" });
+    expect((await relieved.coordinator.invokeTool(wrapperCall())).outcome).toBe("executed");
+    expect(relieved.host.invokeMcpRuntimeTool).toHaveBeenCalledTimes(1);
+    for (const asks of [
+      fixture({ posture: "everything_asks", approvalMode: "approve_all" }),
+      fixture({ posture: "reads_free", approvalMode: "approve_all", tools: [createMcpTool()] }),
+      fixture({ approvalMode: "approve_all" }),
+    ]) {
+      expect((await asks.coordinator.invokeTool(wrapperCall())).outcome).toBe("approval_required");
+      expect(asks.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["approve_risky", "approve_all"] as const)("gives a remote A2A peer no relief (%s)", async (approvalMode) => {
+    const peer = fixture({ posture: "nothing_asks", approvalMode });
     const result = await peer.coordinator.invokeTool(wrapperCall({ policyContext: { authActorSource: "a2a_peer" } }));
     expect(result.outcome).toBe("approval_required");
     expect(peer.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();

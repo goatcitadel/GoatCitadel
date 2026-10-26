@@ -394,8 +394,14 @@ describe("named MCP policy execution", () => {
   });
 
   describe("server-authored MCP approval relief", () => {
-    it.each(POSTURE_ROWS)("posture %s with %j asks: %s", async (posture, annotations, asks) => {
-      const engine = new ToolPolicyEngine(config("approve_risky"), asyncStorage);
+    // R46: the connector's own setting also overrides an ask-for-everything profile for its relieved calls.
+    const MODE_ASK_CODE = { approve_risky: "approval_mode_risky", approve_all: "approval_mode_all" } as const;
+    it.each(
+      (["approve_risky", "approve_all"] as const).flatMap((mode) =>
+        POSTURE_ROWS.map(([posture, annotations, asks]) => [mode, posture, annotations, asks] as const),
+      ),
+    )("under %s, posture %s with %j asks: %s", async (mode, posture, annotations, asks) => {
+      const engine = new ToolPolicyEngine(config(mode), asyncStorage);
       const relieved = !mcpCallAsksFirst(posture, annotations);
       expect(relieved).toBe(!asks);
       for (const [target, named] of [
@@ -405,7 +411,8 @@ describe("named MCP policy execution", () => {
         const access = await engine.inspectAccess(target, { ...named, ...(relieved ? relief() : {}) });
         expect(access.allowed).toBe(true);
         expect(access.requiresApproval).toBe(asks);
-        expect(access.reasonCodes).toContain(asks ? "approval_mode_risky" : "mcp_approval_relief");
+        expect(access.reasonCodes).toContain(asks ? MODE_ASK_CODE[mode] : "mcp_approval_relief");
+        expect(access.reasonCodes.includes("mcp_approval_relief")).toBe(!asks);
       }
     });
 
@@ -422,29 +429,55 @@ describe("named MCP policy execution", () => {
       expect(unrelieved.outcome).toBe("approval_required");
     });
 
-    it.each([
-      ["approve_all", true, "approval_mode_all"],
-      ["bypass", false, "approval_bypass_mode"],
-    ] as const)("leaves the %s approval mode in charge", async (mode, asks, reasonCode) => {
-      const access = await new ToolPolicyEngine(config(mode), asyncStorage).inspectAccess(request(), {
+    it("stops the approve_all ask for a relieved call and records why", async () => {
+      const engine = new ToolPolicyEngine(config("approve_all"), asyncStorage);
+      const invoked = await engine.invoke(request(), { ...options(), ...relief() });
+      expect(invoked.outcome).toBe("executed");
+      expect(invoked.audit?.reasonCodes).toContain("mcp_approval_relief");
+      expect(invoked.audit?.reasonCodes).not.toContain("approval_mode_all");
+      expect((await engine.invoke(request(), options())).outcome).toBe("approval_required");
+    });
+
+    it("leaves bypass in charge without claiming relief", async () => {
+      const access = await new ToolPolicyEngine(config("bypass"), asyncStorage).inspectAccess(request(), {
         ...options(),
         ...relief(),
       });
-      expect(access.requiresApproval).toBe(asks);
-      expect(access.reasonCodes).toContain(reasonCode);
+      expect(access.requiresApproval).toBe(false);
+      expect(access.reasonCodes).toContain("approval_bypass_mode");
       expect(access.reasonCodes).not.toContain("mcp_approval_relief");
     });
 
-    it("gives a remote A2A peer no relief", async () => {
+    it.each(["approve_risky", "approve_all"] as const)("gives a remote A2A peer no relief under %s", async (mode) => {
       const peer = { ...request(), policyContext: { authActorSource: "a2a_peer" as const } };
-      const access = await new ToolPolicyEngine(config("approve_risky"), asyncStorage).inspectAccess(peer, {
+      const access = await new ToolPolicyEngine(config(mode), asyncStorage).inspectAccess(peer, {
         ...options(),
         ...relief(),
       });
       expect(access.requiresApproval).toBe(true);
-      expect(access.reasonCodes).toContain("approval_mode_risky");
+      expect(access.reasonCodes).toContain(MODE_ASK_CODE[mode]);
       expect(access.reasonCodes).not.toContain("mcp_approval_relief");
     });
+
+    it.each(["approve_risky", "approve_all"] as const)(
+      "still denies a relieved call under %s when deny rules match",
+      async (mode) => {
+        // The shipped tool-policy example denies mcp.invoke globally; relief never widens that.
+        const policy = config(mode);
+        policy.tools.deny = ["mcp.invoke"];
+        const engine = new ToolPolicyEngine(policy, asyncStorage);
+        for (const [target, named] of [
+          [request(), options()],
+          [wrapperRequest(), {}],
+        ] as const) {
+          const denied = await engine.inspectAccess(target, { ...named, ...relief() });
+          expect(denied).toMatchObject({ allowed: false });
+          expect(denied.reasonCodes).toContain("policy_deny");
+          expect(denied.reasonCodes).not.toContain("mcp_approval_relief");
+        }
+        expect((await engine.invoke(request(), { ...options(), ...relief() })).outcome).toBe("blocked");
+      },
+    );
 
     it("still denies under nothing_asks when a deny grant matches", async () => {
       await asyncStorage.toolGrants.create({
@@ -464,42 +497,52 @@ describe("named MCP policy execution", () => {
       expect(denied.reasonCodes).toContain("policy_deny");
     });
 
-    it("keeps every other reason to ask: Wards, risky arguments, and the first mutation under an allow grant", async () => {
-      await asyncStorage.citadels.addWard({
-        citadelId: "personal",
-        name: "relief fixture",
-        actionPattern: request().toolName,
-        effect: "require_approval",
-      });
-      const engine = new ToolPolicyEngine(config("approve_risky"), asyncStorage);
-      const warded = await engine.inspectAccess({ ...request(), citadelId: "personal" }, { ...options(), ...relief() });
-      expect(warded.requiresApproval).toBe(true);
-      expect(warded.reasonCodes).toContain("citadel_ward_requires_approval");
+    it.each(["approve_risky", "approve_all"] as const)(
+      "keeps every other reason to ask under %s: Wards, risky arguments, and the first mutation under an allow grant",
+      async (mode) => {
+        await asyncStorage.citadels.addWard({
+          citadelId: "personal",
+          name: "relief fixture",
+          actionPattern: request().toolName,
+          effect: "require_approval",
+        });
+        const engine = new ToolPolicyEngine(config(mode), asyncStorage);
+        const warded = await engine.inspectAccess(
+          { ...request(), citadelId: "personal" },
+          { ...options(), ...relief() },
+        );
+        expect(warded.requiresApproval).toBe(true);
+        expect(warded.reasonCodes).toContain("citadel_ward_requires_approval");
+        // The relief code names only a call that ends up not asking, so audits never mislabel it.
+        expect(warded.reasonCodes).not.toContain("mcp_approval_relief");
 
-      const risky = config("approve_risky");
-      risky.sandbox.riskyArgumentPatterns = [{ toolNamePattern: "mcp.*", valuePatterns: ["drop everything"] }];
-      const argument = await new ToolPolicyEngine(risky, asyncStorage).inspectAccess(
-        { ...request(), args: { query: "please drop everything now" } },
-        { ...options(), ...relief() },
-      );
-      expect(argument.requiresApproval).toBe(true);
-      expect(argument.reasonCodes).toContain("argument_risky_requires_approval");
+        const risky = config(mode);
+        risky.sandbox.riskyArgumentPatterns = [{ toolNamePattern: "mcp.*", valuePatterns: ["drop everything"] }];
+        const argument = await new ToolPolicyEngine(risky, asyncStorage).inspectAccess(
+          { ...request(), args: { query: "please drop everything now" } },
+          { ...options(), ...relief() },
+        );
+        expect(argument.requiresApproval).toBe(true);
+        expect(argument.reasonCodes).toContain("argument_risky_requires_approval");
+        expect(argument.reasonCodes).not.toContain("mcp_approval_relief");
 
-      await asyncStorage.toolGrants.create({
-        toolPattern: request().toolName,
-        scope: "session",
-        scopeRef: request().sessionId,
-        decision: "allow",
-        grantType: "persistent",
-        createdBy: "operator",
-      });
-      // R38: with a matching allow grant, the first mutation in the grant's scope this hour asks once,
-      // with or without relief. Without an allow grant this check never runs.
-      for (const relieved of [false, true]) {
-        const first = await engine.inspectAccess(request(), { ...options(), ...(relieved ? relief() : {}) });
-        expect(first.requiresApproval).toBe(true);
-      }
-    });
+        await asyncStorage.toolGrants.create({
+          toolPattern: request().toolName,
+          scope: "session",
+          scopeRef: request().sessionId,
+          decision: "allow",
+          grantType: "persistent",
+          createdBy: "operator",
+        });
+        // R38: with a matching allow grant, the first mutation in the grant's scope this hour asks once,
+        // with or without relief. Without an allow grant this check never runs.
+        for (const relieved of [false, true]) {
+          const first = await engine.inspectAccess(request(), { ...options(), ...(relieved ? relief() : {}) });
+          expect(first.requiresApproval).toBe(true);
+          expect(first.reasonCodes).not.toContain("mcp_approval_relief");
+        }
+      },
+    );
 
     it("cannot be supplied by a request, its arguments, a forged handle, or another target", async () => {
       const engine = new ToolPolicyEngine(config("approve_risky"), asyncStorage);

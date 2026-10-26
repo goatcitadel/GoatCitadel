@@ -2,9 +2,10 @@ const reliefBrand: unique symbol = Symbol("McpApprovalRelief");
 
 /**
  * Gateway-authored, process-local relief for one MCP call: the server's saved approval setting and
- * that tool's stored labels say the call need not ask just because it is an MCP call. It is bound to
- * one canonical target and cannot be serialized, so no request body, tool argument or model output
- * can carry it. It never clears any other reason to ask.
+ * that tool's stored labels say the call need not ask under the approval mode, including an
+ * ask-for-everything profile. It is bound to one canonical target and cannot be serialized, so no
+ * request body, tool argument or model output can carry it. It never clears a Ward, deny rule, risky
+ * argument, outside-root access or any other reason to ask.
  */
 export interface McpApprovalRelief {
   readonly [reliefBrand]: true;

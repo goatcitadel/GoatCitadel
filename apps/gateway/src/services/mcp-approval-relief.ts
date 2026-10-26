@@ -21,7 +21,8 @@ export interface McpApprovalReliefPort {
 const CANONICAL_MCP_TOOL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$/;
 
 /**
- * Decide, from server-owned state, whether one MCP call may skip the generic MCP approval ask.
+ * Decide, from server-owned state, whether one MCP call may skip the approval mode's ask (the
+ * connector's own setting overrides even an ask-for-everything profile for that call).
  * The target comes from the trusted named binding, or from the exact `mcp.invoke` wrapper fields the
  * transport owner will send. Returns a relief only when the server is a static connector with a saved
  * approval setting and every stored inventory entry for that tool name says the call need not ask.

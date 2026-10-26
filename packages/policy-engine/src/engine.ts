@@ -1335,14 +1335,17 @@ export class ToolPolicyEngine {
     // A remote A2A peer (lowest-trust inbound actor) never rides the local
     // operator's blanket bypass mode or a connector's approval setting.
     const isRemoteA2APeer = request.policyContext?.authActorSource === "a2a_peer";
-    // The Gateway's relief replaces only the generic `mcp.invoke` classification
-    // (its tool-level ask and the approve_risky danger-tier ask) for this one
-    // call. approve_all and every other reason to ask below still apply.
+    // The Gateway's relief is the connector's own setting for this one call: it
+    // replaces the approval-mode asks (approve_all, the tool-level ask, and the
+    // approve_risky danger-tier ask). Wards, deny rules, the profile ceiling,
+    // risky shell/arguments, outside-root access, nuclear risk, official-search
+    // consent and the first-mutation check below all still apply.
     const mcpApprovalReliefApplied = mcpApprovalRelief && !isRemoteA2APeer;
     let requiresApproval =
       wardRequiresApproval ||
       (!hasAllowGrant &&
-        (policy.approvalMode === "approve_all" || (Boolean(toolDef?.requiresApproval) && !mcpApprovalReliefApplied)));
+        !mcpApprovalReliefApplied &&
+        (policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval)));
     const outsideRootsReadRequiresApproval = await this.requiresApprovalForOutsideRootsRead(
       request,
       policy,
@@ -1558,10 +1561,16 @@ export class ToolPolicyEngine {
       if (riskLevel === "nuclear") {
         reasonCodes.push("nuclear_risk_requires_approval");
       }
+    } else if (mcpApprovalReliefApplied && !hasAllowGrant) {
+      // The connector's setting replaced the approval mode's ask. Name it only when the call
+      // ends up not asking, so an audit never credits relief for a call something else gated.
+      if (!requiresApproval) {
+        reasonCodes.push("mcp_approval_relief");
+      }
     } else if (policy.approvalMode === "approve_all" && !hasAllowGrant) {
       reasonCodes.push("approval_mode_all");
     } else if (riskLevel !== "safe" && !hasAllowGrant) {
-      reasonCodes.push(mcpApprovalReliefApplied ? "mcp_approval_relief" : "approval_mode_risky");
+      reasonCodes.push("approval_mode_risky");
     }
     let policyReason = "allowed";
     if (wardRequiresApproval) {
