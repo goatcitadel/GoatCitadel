@@ -9,6 +9,7 @@ import {
   ROUTE_CHECK_HINT_DELAY_MS,
   type ComposerProps,
 } from "./ChatTextComposer";
+import { withoutFileInput } from "./channel-file-input";
 // Catalog labels read the query cache; these tests exercise the controls, so the model id stands in for its name.
 vi.mock("../../data/use-model-label", () => ({
   useModelLabel: (_providerId?: string, modelId?: string) => modelId ?? "Unknown model",
@@ -920,5 +921,66 @@ describe("channel conversation composer", () => {
     expect(container.querySelector("#cockpit-chat-send-reason")).toBeNull();
     await act(async () => buttonNamed("Post to Maya")!.click());
     expect(props.onSend).toHaveBeenCalledOnce();
+  });
+
+  it("adds no file from a drop or a paste, and still pastes text", async () => {
+    const base = composerProps({ channelReply: post, onDrop: vi.fn(), onComposerPaste: vi.fn() });
+    await act(async () => root.render(<ChatTextComposer props={withoutFileInput(base)} />));
+    const file = new File(["x"], "a.txt", { type: "text/plain" });
+    const fire = (target: Element, type: string, extra: Record<string, unknown>) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      for (const [key, value] of Object.entries(extra)) Object.defineProperty(event, key, { value });
+      act(() => void target.dispatchEvent(event));
+      return event;
+    };
+    const drop = fire(container.querySelector("form")!, "drop", { dataTransfer: { types: ["Files"], files: [file] } });
+    expect(base.onDrop).not.toHaveBeenCalled();
+    expect(drop.defaultPrevented).toBe(true);
+    const textarea = container.querySelector("textarea")!;
+    const image = fire(textarea, "paste", { clipboardData: { types: ["Files"], files: [file], items: [] } });
+    expect(base.onComposerPaste).not.toHaveBeenCalled();
+    expect(image.defaultPrevented).toBe(true);
+    const text = fire(textarea, "paste", { clipboardData: { types: ["text/plain"], files: [], items: [] } });
+    expect(base.onComposerPaste).toHaveBeenCalledOnce();
+    expect(text.defaultPrevented).toBe(false);
+  });
+
+  it("does not send a file that is attached, with or without a message", async () => {
+    const pendingAttachments = [{ attachmentId: "a", fileName: "a.txt", mimeType: "text/plain", sizeBytes: 1 }];
+    const reason = "Files aren't sent in channel conversations. Remove them to send.";
+    for (const draft of ["", "Hello"]) {
+      const props = composerProps({ channelReply: post, pendingAttachments, draft });
+      await act(async () => root.render(<ChatTextComposer props={props} />));
+      expect((buttonNamed("Post to Maya") as HTMLButtonElement).disabled).toBe(true);
+      expect(container.querySelector("#cockpit-chat-send-reason")?.textContent).toBe(reason);
+      // The chip stays so the operator can remove the file.
+      expect(container.textContent).toContain("a.txt");
+      expect(props.onSend).not.toHaveBeenCalled();
+    }
+  });
+
+  it("shows a neutral, unsendable composer while the channel is being checked", async () => {
+    const props = composerProps({ channelCheck: "checking" });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(placeholder()).toBe("Checking this channel…");
+    expect(container.querySelector("#cockpit-chat-send-reason")?.textContent).toBe("Checking this channel…");
+    expect(sendButton().disabled).toBe(true);
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => container.querySelector("textarea")!.dispatchEvent(enter));
+    expect(props.onSend).not.toHaveBeenCalled();
+    expect(container.querySelector('button[aria-label="Attach files"]')).toBeNull();
+    expect(container.querySelector('button[aria-label$="Model and reasoning options"]')).toBeNull();
+    expect(buttonNamed("Plan first")).toBeUndefined();
+    expect(container.textContent).not.toContain("Voice and images");
+  });
+
+  it("says so when the channel could not be checked", async () => {
+    const props = composerProps({ channelCheck: "unavailable" });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const message = "Couldn't check this channel. Try again from Messaging.";
+    expect(placeholder()).toBe(message);
+    expect(container.querySelector("#cockpit-chat-send-reason")?.textContent).toBe(message);
+    expect(sendButton().disabled).toBe(true);
+    expect(cockpitSendBlockReason(props)).toBe(message);
   });
 });

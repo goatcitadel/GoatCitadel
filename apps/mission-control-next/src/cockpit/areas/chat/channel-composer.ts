@@ -14,10 +14,24 @@ export interface ChannelReply {
   status: ChatMessagingChannelStatus;
 }
 
+/**
+ * A conversation the session says a channel holds, before its channel is known: the Messaging overview is still
+ * loading (`checking`), failed, or does not list the conversation (`unavailable`). The composer is neutral and cannot
+ * send until the context resolves, rather than falling back to the mission composer and its model and file tools.
+ */
+export type ChannelCheck = "checking" | "unavailable";
+
 /** Why a channel conversation cannot be replied to. Only a removed or switched-off channel blocks. */
 export type ChannelReplyBlock = { kind: "channel-removed"; message: string } | { kind: "channel-off"; message: string };
 
+export type ChannelCheckBlock =
+  | { kind: "channel-checking"; message: string }
+  | { kind: "channel-unavailable"; message: string };
+
 const DEFAULT_PLACEHOLDER = "Message GoatCitadel…";
+const CHECKING_MESSAGE = "Checking this channel…";
+const UNAVAILABLE_MESSAGE = "Couldn't check this channel. Try again from Messaging.";
+const FILES_MESSAGE = "Files aren't sent in channel conversations. Remove them to send.";
 
 /** The composer's channel behavior for an open conversation, or nothing for a mission chat. */
 export function describeChannelReply(channel: ChannelConversationContext | undefined): ChannelReply | undefined {
@@ -30,7 +44,22 @@ export function describeChannelReply(channel: ChannelConversationContext | undef
   };
 }
 
-export function channelReplyPlaceholder(reply: ChannelReply | undefined): string {
+/**
+ * Whether the channel is still unresolved for a conversation a channel holds. Once the context is known there is
+ * nothing to check; before it is, the overview either has not answered yet or cannot say where the conversation is.
+ */
+export function describeChannelCheck(input: {
+  heldByChannel: boolean;
+  resolved: boolean;
+  overviewReady: boolean;
+}): ChannelCheck | undefined {
+  if (!input.heldByChannel || input.resolved) return undefined;
+  return input.overviewReady ? "unavailable" : "checking";
+}
+
+/** What the draft says before anything is typed. An unresolved channel says why it cannot be used yet. */
+export function channelReplyPlaceholder(reply: ChannelReply | undefined, check?: ChannelCheck): string {
+  if (check) return check === "checking" ? CHECKING_MESSAGE : UNAVAILABLE_MESSAGE;
   if (!reply) return DEFAULT_PLACEHOLDER;
   return reply.mode === "ask"
     ? `Ask GoatCitadel. The answer also goes to ${reply.channelLabel}.`
@@ -50,4 +79,22 @@ export function channelReplyBlock(reply: ChannelReply | undefined): ChannelReply
     return { kind: "channel-removed", message: "This channel was removed. Its conversations stay readable." };
   if (reply?.status === "off") return { kind: "channel-off", message: `Turn ${reply.channelLabel} back on to reply.` };
   return null;
+}
+
+/** An unresolved channel cannot send: it is not known where the message would go. */
+export function channelCheckBlock(check: ChannelCheck | undefined): ChannelCheckBlock | null {
+  if (check === "checking") return { kind: "channel-checking", message: CHECKING_MESSAGE };
+  if (check === "unavailable") return { kind: "channel-unavailable", message: UNAVAILABLE_MESSAGE };
+  return null;
+}
+
+/**
+ * A channel conversation takes no files: the composer ignores drops and pastes, but a file can still arrive from the
+ * command palette. It stays visible as a chip so it can be removed, and nothing sends while one is attached.
+ */
+export function channelFilesBlock(
+  reply: ChannelReply | undefined,
+  attachedFiles: number,
+): { kind: "blocked"; message: string } | null {
+  return reply && attachedFiles > 0 ? { kind: "blocked", message: FILES_MESSAGE } : null;
 }

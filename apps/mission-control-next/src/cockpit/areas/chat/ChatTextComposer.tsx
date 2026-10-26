@@ -300,7 +300,7 @@ export function ChatTextComposer({
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={() => setComposing(false)}
             onPaste={props.onComposerPaste}
-            placeholder={channelReplyPlaceholder(props.channelReply)}
+            placeholder={channelReplyPlaceholder(props.channelReply, props.channelCheck)}
             className={`cockpit-chat-draft block min-h-16 resize-none field-sizing-content rounded-md border border-line-control bg-canvas px-3 py-2 text-md text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60 ${phone ? "min-w-0 flex-1" : "mt-2 w-full"}`}
           />
           {phone ? (

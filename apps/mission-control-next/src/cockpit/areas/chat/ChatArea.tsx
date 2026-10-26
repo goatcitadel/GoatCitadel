@@ -210,7 +210,7 @@ export function ChatAreaView({
   const { missionSessions, externalSessions = [] } = input.sessionRail;
   const session = [...missionSessions, ...externalSessions].find((item) => item.sessionId === selectedSessionId);
   const channel = useSelectedChannelConversation(activeWorkspaceId ?? "default", session, selectedSessionId);
-  const composerProps = useChannelComposerProps(active, channel);
+  const composerProps = useChannelComposerProps(active, channel, activeWorkspaceId ?? "default", session);
   const latestTurnId = active?.thread?.turns.filter((turn) => turn.branch.isSelectedPath).at(-1)?.turnId;
   const openInspector = (turnId?: string, tab?: ChatInspectorTab) => {
     if (inspectorView.current !== renderedInspectorView) return;

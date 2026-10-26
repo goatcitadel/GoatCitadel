@@ -106,4 +106,31 @@ describe("composerSendBlock in a channel conversation", () => {
       "historical",
     );
   });
+
+  it("does not send while the channel is still being checked", () => {
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelCheck: "checking" }))).toEqual({
+      kind: "channel-checking",
+      message: "Checking this channel…",
+    });
+  });
+
+  it("does not send when the channel could not be checked", () => {
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelCheck: "unavailable" }))).toEqual({
+      kind: "channel-unavailable",
+      message: "Couldn't check this channel. Try again from Messaging.",
+    });
+  });
+
+  it("does not send files in a channel conversation, alone or with a message", () => {
+    const files = [{ attachmentId: "a", fileName: "a.txt", mimeType: "text/plain", sizeBytes: 1 }];
+    const message = "Files aren't sent in channel conversations. Remove them to send.";
+    expect(composerSendBlock(sendProps({ draft: "", pendingAttachments: files, channelReply: reply("on") }))).toEqual({
+      kind: "blocked",
+      message,
+    });
+    expect(
+      composerSendBlock(sendProps({ draft: "Hello", pendingAttachments: files, channelReply: reply("on") })),
+    ).toEqual({ kind: "blocked", message });
+    expect(composerSendBlock(sendProps({ draft: "", pendingAttachments: files }))).toBeNull();
+  });
 });

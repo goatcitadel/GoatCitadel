@@ -78,8 +78,9 @@ export function ChatComposerTools({
     />
   );
   // A channel conversation answers on its own route and takes no sources or files from here, so the model, mode,
-  // sources and attachment tools stay out of it. Queued messages, route notices and commands remain.
-  const channelConversation = Boolean(props.channelReply);
+  // sources and attachment tools stay out of it, also while its channel is still being resolved. Queued messages,
+  // route notices and commands remain.
+  const channelConversation = Boolean(props.channelReply || props.channelCheck);
   if (!phone)
     return (
       <>

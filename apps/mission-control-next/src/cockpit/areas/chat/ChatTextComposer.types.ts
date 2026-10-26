@@ -1,9 +1,11 @@
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import type { ChatMediaProps } from "./ChatMediaControls";
-import type { ChannelReply } from "./channel-composer";
+import type { ChannelCheck, ChannelReply } from "./channel-composer";
 export type ComposerProps = ChatMediaProps & {
   /** Set when the open conversation is held through a channel; the composer then asks or posts instead of chatting. */
   channelReply?: ChannelReply;
+  /** Set while a channel conversation's channel is not known yet: the composer is neutral and cannot send. */
+  channelCheck?: ChannelCheck;
 } & Pick<
     MissionThreadedActiveSessionSurfaceProps,
     | "queueItems"
