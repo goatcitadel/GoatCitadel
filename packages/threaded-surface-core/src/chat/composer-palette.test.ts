@@ -52,13 +52,28 @@ describe("composer palette", () => {
       entry("help", "/help", "Show the commands you can use."),
       entry("shell", "/shell", "Run one governed command."),
     ];
-    expect(rankComposerPaletteItems(items, "commands", "he").map((entry) => entry.key)).toEqual([
-      "help",
-      "shell",
-      "plan",
-      "new",
-    ]);
+    expect(rankComposerPaletteItems(items, "commands", "he").map((entry) => entry.key)).toEqual(["help", "shell"]);
     expect(rankComposerPaletteItems(items, "commands", "pla").map((entry) => entry.key)[0]).toBe("plan");
+  });
+
+  it("drops description-only hits for a short query and caps them for a longer one", () => {
+    const entry = (key: string, command: string, description: string): ComposerPaletteItem => ({
+      ...item("commands", key, command),
+      description,
+    });
+    const many = Array.from({ length: 8 }, (_, index) =>
+      entry("d" + index, "/cmd" + index, "Mentions the word helper."),
+    );
+    const withName = [entry("help", "/help", "Show the commands."), ...many];
+    // Two characters: only the name match remains, however many descriptions mention it.
+    expect(rankComposerPaletteItems(withName, "commands", "he").map((row) => row.key)).toEqual(["help"]);
+    // Three characters with one name match: the name match first, then at most three description-only rows.
+    const keys = rankComposerPaletteItems(withName, "commands", "hel").map((row) => row.key);
+    expect(keys[0]).toBe("help");
+    expect(keys).toHaveLength(4);
+    // Five or more name matches leave no room for description-only rows.
+    const names = Array.from({ length: 5 }, (_, index) => entry("n" + index, "/helper" + index, "x"));
+    expect(rankComposerPaletteItems([...names, ...many], "commands", "hel")).toHaveLength(5);
   });
 
   it("ignores the availability label and lists a repeated command once", () => {
