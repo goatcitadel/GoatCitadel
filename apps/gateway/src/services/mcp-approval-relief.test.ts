@@ -83,6 +83,7 @@ describe("resolveMcpApprovalRelief", () => {
     ["a non-string target", wrapper({ serverId: ["srv-1"], toolName: "tool.echo" })],
     ["a padded server id", wrapper({ serverId: " srv-1", toolName: "tool.echo" })],
     ["a padded tool name", wrapper({ serverId: "srv-1", toolName: "tool.echo " })],
+    ["a remote A2A peer", { ...wrapper(), policyContext: { authActorSource: "a2a_peer" } }],
   ])("reads nothing for %s", async (_label, request) => {
     const reads = port(server({}, "nothing_asks"));
     expect(await resolveMcpApprovalRelief(reads, request)).toBeUndefined();

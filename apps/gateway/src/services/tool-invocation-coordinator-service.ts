@@ -905,7 +905,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
 
   private async evaluateMcpPolicy(
     input: McpInvokeRequest,
-    options?: { externalRuntime?: boolean },
+    options?: { externalRuntime?: boolean; mcpApprovalRelief?: McpApprovalRelief },
   ): Promise<McpPolicyEvaluation> {
     // Use the same server-owned workspace, Citadel and permission resolution
     // as Chat tool calls before evaluating either MCP policy identity.
@@ -916,8 +916,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       toolName: wrapper.toolName,
       args: wrapper.args,
     };
-    // Server-authored from the saved server setting and stored tool labels only.
-    const mcpApprovalRelief = await resolveMcpApprovalRelief(this.host, wrapper);
+    const mcpApprovalRelief = options?.mcpApprovalRelief;
     const reliefOptions: [] | [{ mcpApprovalRelief: McpApprovalRelief }] = mcpApprovalRelief
       ? [{ mcpApprovalRelief }]
       : [];
@@ -1975,7 +1974,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     const runtimeStartedAt = Date.now();
     // A tool grant does not replace the server's first-use approval or auth,
     // native-tool allowlist, capability scope, and requester-resolution checks.
-    const server = await this.resolveMcpRuntimeTarget(input);
+    // Only a call the server's approval setting relieved skips first use.
+    const server = await this.resolveMcpRuntimeTarget(input, undefined, mcpApprovalRelief !== undefined);
     if (
       nativeBinding &&
       "serverId" in server &&
@@ -2043,7 +2043,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     options: ToolInvocationRuntimeOptions = {},
   ): Promise<McpInvokeResponse> {
     const runtimeStartedAt = Date.now();
-    const server = await this.resolveMcpRuntimeTarget(input);
+    // One server-authored decision for this call, from the saved server setting and stored tool
+    // labels only. It decides both the policy relief and whether first use is skipped.
+    const mcpApprovalRelief = await resolveMcpApprovalRelief(this.host, this.buildMcpPolicyRequest(input));
+    const server = await this.resolveMcpRuntimeTarget(input, undefined, mcpApprovalRelief !== undefined);
     if (!("serverId" in server)) {
       return server;
     }
@@ -2053,13 +2056,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       return autonomyGate;
     }
 
-    const previewEvaluation = await this.evaluateMcpPolicy(input);
+    const previewEvaluation = await this.evaluateMcpPolicy(input, { mcpApprovalRelief });
     const previewFailure = this.buildMcpPolicyFailure(previewEvaluation, autonomyGate.evidence);
     if (previewFailure) {
       return previewFailure;
     }
 
-    const runtimeEvaluation = await this.evaluateMcpPolicy(input, { externalRuntime: true });
+    const runtimeEvaluation = await this.evaluateMcpPolicy(input, { externalRuntime: true, mcpApprovalRelief });
     const runtimeFailure = this.buildMcpPolicyFailure(runtimeEvaluation, autonomyGate.evidence);
     if (runtimeFailure) {
       return runtimeFailure;
@@ -2150,6 +2153,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
   private async resolveMcpRuntimeTarget(
     input: McpInvokeRequest,
     consent?: { approvedInvocation: true },
+    relievedByApprovalSetting = false,
   ): Promise<McpServerRecord | McpInvokeResponse> {
     const server = await this.host.requireMcpServer(input.serverId);
     if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
@@ -2177,7 +2181,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           error: `MCP server ${server.label} is quarantined and cannot execute tools.`,
         };
       }
-      return (await this.checkMcpServerToolPolicy(input, server, consent)) ?? server;
+      return (await this.checkMcpServerToolPolicy(input, server, consent, relievedByApprovalSetting)) ?? server;
     }
     if (!server.enabled || server.status !== "connected") {
       return {
@@ -2211,13 +2215,14 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         error: `MCP tool ${input.toolName} is not enabled on server ${input.serverId}.`,
       };
     }
-    return (await this.checkMcpServerToolPolicy(input, server, consent)) ?? server;
+    return (await this.checkMcpServerToolPolicy(input, server, consent, relievedByApprovalSetting)) ?? server;
   }
 
   private async checkMcpServerToolPolicy(
     input: McpInvokeRequest,
     server: McpServerRecord,
     consent?: { approvedInvocation: true },
+    relievedByApprovalSetting = false,
   ): Promise<McpInvokeResponse | undefined> {
     if (server.policy.blockedToolPatterns.some((pattern) => this.host.matchesWildcard(input.toolName, pattern))) {
       return {
@@ -2234,10 +2239,11 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         error: `MCP policy does not allow tool ${input.toolName} on server ${server.serverId}.`,
       };
     }
-    // Once the operator picks what asks first for this server, that setting (through policy) decides
-    // instead of the legacy first-use check. Blocked and allowed patterns above still apply.
+    // Only a call the server's approval setting relieved (a granted relief) skips the legacy
+    // first-use check; "Everything asks" and every unrelieved call keep it in every approval mode.
+    // Blocked and allowed patterns above still apply.
     if (
-      server.policy.approvalPosture === undefined &&
+      !relievedByApprovalSetting &&
       server.policy.requireFirstToolApproval &&
       !consent?.approvedInvocation &&
       !(await this.host.isMcpToolApproved(input.serverId, input.toolName))

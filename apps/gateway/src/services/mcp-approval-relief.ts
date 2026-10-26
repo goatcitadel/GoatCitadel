@@ -26,12 +26,19 @@ const CANONICAL_MCP_TOOL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$/;
  * transport owner will send. Returns a relief only when the server is a static connector with a saved
  * approval setting and every stored inventory entry for that tool name says the call need not ask.
  * Anything missing (server, inventory, tool, labels or setting) returns undefined, so the call asks.
+ * A remote A2A peer never gets relief (the policy engine refuses it too). A granted relief is also
+ * the only thing that lets a call skip the server's legacy first-use check.
  */
 export async function resolveMcpApprovalRelief(
   port: McpApprovalReliefPort,
-  request: { toolName: string; args?: Record<string, unknown> },
+  request: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    policyContext?: { authActorSource?: string };
+  },
   binding?: McpToolPolicyBinding,
 ): Promise<McpApprovalRelief | undefined> {
+  if (request.policyContext?.authActorSource === "a2a_peer") return undefined;
   const target = readMcpApprovalReliefTarget(request, binding);
   if (!target) return undefined;
   let server: McpServerRecord;

@@ -5021,18 +5021,35 @@ describe("MCP approval setting: server-authored relief through real policy", () 
     expect(f.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
   });
 
-  it("ignores requireFirstToolApproval once a posture is set", async () => {
-    const unset = fixture({ firstUse: true });
-    expect(await unset.coordinator.invokeMcpTool(directCall())).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("First-use approval required"),
-    });
-    const relieved = fixture({ posture: "reads_free", firstUse: true });
-    expect(await relieved.coordinator.invokeMcpTool(directCall())).toMatchObject({ ok: true });
-    expect(relieved.host.invokeMcpRuntimeTool).toHaveBeenCalledTimes(1);
-    // The setting decides: "Everything asks" goes to the ordinary approval, not the first-use refusal.
-    const asks = fixture({ posture: "everything_asks", firstUse: true });
-    expect(await asks.coordinator.invokeMcpTool(directCall())).toMatchObject({ ok: false, approvalRequired: true });
+  const FIRST_USE_REFUSAL = { ok: false, error: expect.stringContaining("First-use approval required") };
+
+  it.each(["approve_risky", "bypass"] as const)(
+    "skips requireFirstToolApproval for a read the setting relieves (%s)",
+    async (approvalMode) => {
+      const relieved = fixture({ posture: "reads_free", firstUse: true, approvalMode });
+      expect(await relieved.coordinator.invokeMcpTool(directCall())).toMatchObject({ ok: true });
+      expect((await relieved.coordinator.invokeTool(wrapperCall())).outcome).toBe("executed");
+      expect(relieved.host.invokeMcpRuntimeTool).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  // Every call the setting does not relieve keeps the first-use check, so no setting asks less than before.
+  const FIRST_USE_KEPT: ReadonlyArray<readonly [string, Parameters<typeof fixture>[0], Partial<ToolInvokeRequest>]> = [
+    ["no setting", {}, {}],
+    ["Everything asks", { posture: "everything_asks" }, {}],
+    ["an unlabelled tool under Reads are free", { posture: "reads_free", tools: [createMcpTool()] }, {}],
+    ["a remote A2A peer", { posture: "reads_free" }, { policyContext: { authActorSource: "a2a_peer" } }],
+  ];
+  it.each(
+    FIRST_USE_KEPT.flatMap(([label, setup, call]) =>
+      (["approve_risky", "bypass"] as const).map((approvalMode) => [label, approvalMode, setup, call] as const),
+    ),
+  )("keeps requireFirstToolApproval for %s (%s)", async (_label, approvalMode, setup, call) => {
+    const f = fixture({ ...setup, firstUse: true, approvalMode });
+    expect(await f.coordinator.invokeMcpTool(directCall(call))).toMatchObject(FIRST_USE_REFUSAL);
+    // Under bypass the policy lets the wrapper call through, so the first-use check is what stops it.
+    expect((await f.coordinator.invokeTool(wrapperCall(call))).outcome).not.toBe("executed");
+    expect(f.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
   });
 
   it.each([
