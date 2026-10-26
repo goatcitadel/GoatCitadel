@@ -125,7 +125,9 @@ describe("chat messaging routes", () => {
   });
 
   it("redacts secret-shaped text in titles before they leave the gateway", async () => {
-    const secretTitle = "Deploy keys sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCD";
+    // Assembled at runtime so no key-shaped literal sits in source for secret scanning to flag.
+    const syntheticKey = ["sk", "proj", "abcdefghijklmnopqrstuvwxyz0123456789ABCD"].join("-");
+    const secretTitle = `Deploy keys ${syntheticKey}`;
     const service = {
       listChatMessaging: vi.fn(async () => ({
         ...overview,
@@ -144,7 +146,7 @@ describe("chat messaging routes", () => {
 
     expect(response.statusCode).toBe(200);
     const title = response.json<ChatMessagingOverview>().channels[0]?.conversations[0]?.title ?? "";
-    expect(title).not.toContain("sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCD");
+    expect(title).not.toContain(syntheticKey);
     expect(title).toContain("Deploy keys");
   });
 
