@@ -699,16 +699,31 @@ function normalizeDiscoveredTools(server: McpServerRecord, response: JsonRpcEnve
     if (!toolName) {
       continue;
     }
+    const annotations = normalizeDiscoveredAnnotations(tool.annotations);
     discovered.push({
       serverId: server.serverId,
       toolName,
       description: typeof tool.description === "string" ? tool.description : undefined,
       inputSchema: isRecord(tool.inputSchema) ? tool.inputSchema : undefined,
+      ...(annotations ? { annotations } : {}),
       enabled: true,
       updatedAt,
     });
   }
   return discovered;
+}
+
+/** Keep only the two hints the approval setting reads, and only when the server sent real booleans. */
+function normalizeDiscoveredAnnotations(value: unknown): McpToolRecord["annotations"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const { readOnlyHint, destructiveHint } = value;
+  const annotations = {
+    ...(typeof readOnlyHint === "boolean" ? { readOnlyHint } : {}),
+    ...(typeof destructiveHint === "boolean" ? { destructiveHint } : {}),
+  };
+  return Object.keys(annotations).length > 0 ? annotations : undefined;
 }
 
 async function performMcpRuntimeToolCall(

@@ -1,3 +1,4 @@
+import { MCP_APPROVAL_POSTURES } from "@goatcitadel/contracts";
 import { z } from "zod";
 
 export const serverParamsSchema = z.object({
@@ -74,7 +75,10 @@ export const connectionReviewSchema = revisionSchema
   .extend({ expectedConnectionRevision: revisionSchema.shape.expectedRevision.nullable() })
   .strict();
 export const updatePolicySchema = policySchema
-  .extend({ expectedRevision: revisionSchema.shape.expectedRevision })
+  .extend({
+    approvalPosture: z.enum(MCP_APPROVAL_POSTURES).optional(),
+    expectedRevision: revisionSchema.shape.expectedRevision,
+  })
   .strict();
 
 export const oauthCompleteSchema = z.object({

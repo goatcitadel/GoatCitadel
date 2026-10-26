@@ -131,6 +131,39 @@ rl.on("line", (line) => {
 });
 `;
 
+const MCP_ANNOTATED_TOOL_LIST_SCRIPT = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function reply(id, result) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    reply(message.id, {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "annotated-mcp", version: "1.0.0" },
+    });
+    return;
+  }
+  if (message.method === "tools/list") {
+    reply(message.id, {
+      tools: [
+        { name: "mixed", annotations: { readOnlyHint: true, destructiveHint: "no" } },
+        { name: "both", annotations: { readOnlyHint: false, destructiveHint: true } },
+        { name: "non_destructive", annotations: { destructiveHint: false, title: "Not kept", idempotentHint: true } },
+        { name: "no_booleans", annotations: { readOnlyHint: "yes", destructiveHint: 1 } },
+        { name: "array_annotations", annotations: [{ readOnlyHint: true }] },
+        { name: "string_annotations", annotations: "readOnlyHint" },
+        { name: "null_annotations", annotations: null },
+        { name: "unlabelled" },
+      ],
+    });
+  }
+});
+`;
+
 const MCP_TOOL_LIST_ERROR_SCRIPT = String.raw`
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -674,6 +707,26 @@ describe("mcp runtime", () => {
     const tools = await discoverMcpTools(server);
 
     expect(tools.map((tool) => tool.toolName)).toEqual(["browser.navigate", "browser.extract"]);
+  });
+
+  it("keeps boolean tool annotations and drops other values", async () => {
+    const tools = await discoverMcpTools(createTestServer(MCP_ANNOTATED_TOOL_LIST_SCRIPT));
+    const annotationsByName = Object.fromEntries(tools.map((tool) => [tool.toolName, tool.annotations]));
+
+    expect(annotationsByName).toEqual({
+      mixed: { readOnlyHint: true },
+      both: { readOnlyHint: false, destructiveHint: true },
+      non_destructive: { destructiveHint: false },
+      no_booleans: undefined,
+      array_annotations: undefined,
+      string_annotations: undefined,
+      null_annotations: undefined,
+      unlabelled: undefined,
+    });
+    // A tool with nothing usable carries no annotations key at all, not an empty object.
+    for (const name of ["no_booleans", "array_annotations", "string_annotations", "null_annotations", "unlabelled"]) {
+      expect(tools.find((tool) => tool.toolName === name)).not.toHaveProperty("annotations");
+    }
   });
 
   it("fails closed when stdio tools/list returns a JSON-RPC error", async () => {

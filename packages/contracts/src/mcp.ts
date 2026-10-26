@@ -243,6 +243,13 @@ export type McpServerCategory =
 export type McpTrustTier = "trusted" | "restricted" | "quarantined";
 export type McpCostTier = "free" | "mixed" | "paid" | "unknown";
 
+/**
+ * What asks the operator first for this server's tool calls. Unset behaves like `everything_asks`.
+ * Whether a tool counts as a read comes from the server's own tool annotations, never from the model.
+ */
+export const MCP_APPROVAL_POSTURES = ["everything_asks", "reads_free", "nothing_asks"] as const;
+export type McpApprovalPosture = (typeof MCP_APPROVAL_POSTURES)[number];
+
 export interface McpServerPolicy {
   requireFirstToolApproval: boolean;
   redactionMode: "off" | "basic" | "strict";
@@ -250,6 +257,8 @@ export interface McpServerPolicy {
   blockedToolPatterns: string[];
   /** Explicit env var keys this server needs passed through (e.g. auth tokens, config). */
   allowedEnvKeys?: string[];
+  /** Which of this server's tool calls skip the tool-level approval prompt. Unset asks for everything. */
+  approvalPosture?: McpApprovalPosture;
   notes?: string;
 }
 
@@ -394,8 +403,27 @@ export interface McpToolRecord {
   toolName: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
+  /** The server's own labels for this tool (MCP tool annotations). Only booleans are kept. */
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
   enabled: boolean;
   updatedAt: string;
+}
+
+/**
+ * Whether a tool call must still ask the operator under a server's approval setting.
+ * Pure and fail-closed: an unset setting, an unknown setting, or a tool with no labels asks.
+ */
+export function mcpCallAsksFirst(
+  posture: McpApprovalPosture | undefined,
+  annotations: McpToolRecord["annotations"],
+): boolean {
+  if (posture === "reads_free") {
+    return annotations?.readOnlyHint !== true;
+  }
+  if (posture === "nothing_asks") {
+    return !(annotations?.readOnlyHint === true || annotations?.destructiveHint === false);
+  }
+  return true;
 }
 
 export interface McpServerCreateInput {
@@ -525,6 +553,7 @@ export function assertMcpServerConnectionConfiguration(input: McpServerConnectio
       [
         "allowedEnvKeys",
         "allowedToolPatterns",
+        "approvalPosture",
         "blockedToolPatterns",
         "notes",
         "redactionMode",
@@ -534,6 +563,7 @@ export function assertMcpServerConnectionConfiguration(input: McpServerConnectio
       [
         "allowedEnvKeys",
         "allowedToolPatterns",
+        "approvalPosture",
         "blockedToolPatterns",
         "notes",
         "redactionMode",

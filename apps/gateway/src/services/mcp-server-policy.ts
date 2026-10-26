@@ -1,5 +1,5 @@
-import type { McpServerCategory, McpServerPolicy, McpServerRecord } from "@goatcitadel/contracts";
-import { redactSecretText } from "@goatcitadel/contracts";
+import type { McpApprovalPosture, McpServerCategory, McpServerPolicy, McpServerRecord } from "@goatcitadel/contracts";
+import { MCP_APPROVAL_POSTURES, redactSecretText } from "@goatcitadel/contracts";
 import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 
 export const DEFAULT_MCP_SERVER_POLICY: McpServerPolicy = {
@@ -19,7 +19,13 @@ export function inferMcpCategory(transport: McpServerRecord["transport"]): McpSe
   return "automation";
 }
 
+/** An unrecognised value is dropped, which leaves the server asking for everything. */
+function normalizeApprovalPosture(value: unknown): McpApprovalPosture | undefined {
+  return MCP_APPROVAL_POSTURES.find((posture) => posture === value);
+}
+
 export function normalizeMcpPolicy(policy?: Partial<McpServerPolicy>): McpServerPolicy {
+  const approvalPosture = normalizeApprovalPosture(policy?.approvalPosture);
   return {
     requireFirstToolApproval: policy?.requireFirstToolApproval ?? DEFAULT_MCP_SERVER_POLICY.requireFirstToolApproval,
     redactionMode: policy?.redactionMode ?? DEFAULT_MCP_SERVER_POLICY.redactionMode,
@@ -30,6 +36,8 @@ export function normalizeMcpPolicy(policy?: Partial<McpServerPolicy>): McpServer
       ? policy.blockedToolPatterns.map((item) => item.trim()).filter(Boolean)
       : [...DEFAULT_MCP_SERVER_POLICY.blockedToolPatterns],
     allowedEnvKeys: normalizeSafeEnvKeyNames(policy?.allowedEnvKeys),
+    // Omitted rather than undefined when unset, so a stored policy keeps the shape it had before this setting.
+    ...(approvalPosture ? { approvalPosture } : {}),
     notes: policy?.notes?.trim() || undefined,
   };
 }
