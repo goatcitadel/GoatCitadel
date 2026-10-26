@@ -64,6 +64,9 @@ export function ConnectorServerControls({
       setRemovalFailure({ message: conflict ? CONNECTOR_CONFLICT_MESSAGE : described.summary, reloadable: conflict });
       setRemoving(false);
       setConfirming(false);
+      // A failed request can still have been committed (a lost reply, a timeout), as with the switch: read the list
+      // again so a removed server doesn't linger and a second Remove doesn't target it.
+      void client.invalidateQueries({ queryKey: queryKeys.capabilityConnectors(workspaceId) });
       return;
     }
     const listKey = queryKeys.capabilityConnectors(workspaceId);

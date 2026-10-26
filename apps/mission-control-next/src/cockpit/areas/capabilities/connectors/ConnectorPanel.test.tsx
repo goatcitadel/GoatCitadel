@@ -655,6 +655,22 @@ describe("Connector panel from the Connectors tab", () => {
     expect(route.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/connectors", { replace: true });
   });
 
+  it("reads the list again after a failed removal, in case the Gateway removed it anyway", async () => {
+    route.search = `?item=${encodeURIComponent(LINEAR.id)}`;
+    connectorsApi.fetchCapabilityConnectors.mockResolvedValue(response([LINEAR, NOTION]));
+    // The reply was lost after the Gateway committed the delete.
+    mcp.deleteMcpServer.mockRejectedValue(new Error("network connection lost"));
+    await renderTab();
+    await vi.waitFor(() => expect(button("Remove")).toBeDefined());
+    expect(connectorsApi.fetchCapabilityConnectors).toHaveBeenCalledTimes(1);
+
+    connectorsApi.fetchCapabilityConnectors.mockResolvedValue(response([NOTION]));
+    await act(async () => button("Remove")?.click());
+    await act(async () => button("Remove Linear")?.click());
+    await vi.waitFor(() => expect(connectorsApi.fetchCapabilityConnectors).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(cached(LINEAR.id)).toBeUndefined());
+  });
+
   it("reads the list again after a switch while the panel is open", async () => {
     route.search = `?item=${encodeURIComponent(LINEAR.id)}`;
     connectorsApi.fetchCapabilityConnectors.mockResolvedValue(response([LINEAR, NOTION]));

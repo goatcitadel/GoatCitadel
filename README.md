@@ -435,7 +435,7 @@ PowerShell note: prefer `goatcitadel` or `goat`. GoatCitadel does not install `g
 
 ```mermaid
 flowchart LR
-  MC["Mission Control<br/>Cockpit · Chat · Inbox · Work · Library · System"] --> GW
+  MC["Mission Control<br/>Cockpit · Chat · Inbox · Work · Capabilities · Library · System"] --> GW
   CH["Channels (14 built-in)<br/>Telegram · Slack · Discord · WhatsApp · Signal · Teams · LINE · … · webhooks"] --> GW
   GW["Gateway control plane<br/>Fastify · runtime APIs · realtime events"] --> POL
   POL["Policy engine<br/>Citadel scope · Wards · deny-wins · path jails · approvals"] --> DUR
