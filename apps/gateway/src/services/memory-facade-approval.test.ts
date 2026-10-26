@@ -140,7 +140,9 @@ it.each([
   expect(JSON.stringify(persisted?.preview)).not.toContain("private-content-value");
   expect(JSON.stringify(persisted?.preview)).not.toContain(input.metadata.password);
   expect(JSON.stringify(persisted?.preview)).toContain("persist");
-  expect(JSON.stringify(persisted?.preview)).toContain("workspace-1");
+  // The scope is bound through the linkage above; the reviewer-facing sentence names it without raw ids.
+  expect(persisted?.preview).toMatchObject({ scopeSummary: expect.stringContaining("Requested from a conversation in this workspace.") });
+  expect(JSON.stringify(persisted?.preview)).not.toContain("workspace-1");
 });
 it("preserves rejection of a canonical memory approval hook that mutates executable content", async () => {
   const harness = createHarness();
@@ -173,5 +175,8 @@ it.each(["docs.ingest", "embeddings.index", "embeddings.query"])("projects exact
   expect(evidence?.changes).toContainEqual({ label: "Knowledge query", content: value.replace("private-query-value", "[REDACTED]") });
   expect(evidence?.changes).toContainEqual({ label: "Knowledge source", content: value.replace("private-query-value", "[REDACTED]") });
   expect(JSON.stringify(evidence)).not.toContain("private-metadata");
-  expect(JSON.stringify(evidence)).toContain("session-1");
+  // The session stays bound in the approval linkage; the reviewer-facing evidence carries no raw ids.
+  expect(persisted?.linkage).toMatchObject({ sessionId: "session-1" });
+  expect(JSON.stringify(evidence)).toContain("Requested from a conversation in this workspace.");
+  expect(JSON.stringify(evidence)).not.toContain("session-1");
 });

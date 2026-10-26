@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
 import { redactSecretText, type ToolInvokeRequest } from "@goatcitadel/contracts";
 
+/**
+ * Plain scope wording for review. Raw workspace and session ids stay out of the sentence: the approval's
+ * linkage (and the preview's own sessionId field) carries them for technical details.
+ */
+function knowledgeScopeSummary(request: ToolInvokeRequest, boundary: string): string {
+  const origin = request.sessionId ? "Requested from a conversation in this workspace." : "Requested in this workspace, outside a conversation.";
+  return `${origin} ${boundary}`;
+}
+
 /** Allowlisted review projection only: never copy executable args or metadata wholesale. */
 export function knowledgeApprovalPreview(request: ToolInvokeRequest): Record<string, unknown> | undefined {
   if (!["memory.write", "memory.upsert", "docs.ingest", "embeddings.index", "embeddings.query"].includes(request.toolName)) return undefined;
@@ -15,7 +24,7 @@ export function knowledgeApprovalPreview(request: ToolInvokeRequest): Record<str
       reviewKind: "knowledge.operation", toolName: request.toolName,
       target: `Knowledge namespace: ${namespace}`,
       title: text(args.title, request.toolName),
-      scopeSummary: `Workspace: ${text(request.workspaceId, "not supplied")}; conversation: ${text(request.sessionId, "not supplied")}. Namespace is a storage selector, not an authorization boundary.`,
+      scopeSummary: knowledgeScopeSummary(request, "Namespace is a storage selector, not an authorization boundary."),
       ...(typeof args.query === "string" ? { query: text(args.query, "Empty query") } : {}),
       ...(typeof args.source === "string" ? { source: text(args.source, "Empty source"), sourceSummary: `Source type: ${text(args.sourceType, "unspecified")}` } : {}),
       ...(typeof args.documentId === "string" ? { documentTarget: text(args.documentId, "unspecified") } : {}),
@@ -29,7 +38,10 @@ export function knowledgeApprovalPreview(request: ToolInvokeRequest): Record<str
     sessionId: text(request.sessionId, "not supplied"),
     target: `Memory namespace: ${namespace}`,
     title: text(args.title, request.toolName),
-    scopeSummary: `Workspace: ${text(request.workspaceId, "not supplied")}; session: ${text(request.sessionId, "not supplied")}. Namespace is the storage target; workspace/session identify the requesting context, not a separate storage boundary.`,
+    scopeSummary: knowledgeScopeSummary(
+      request,
+      "The namespace is the storage target; the workspace and conversation only identify who asked, not a separate storage boundary.",
+    ),
     summary: "Approval permits this exact request to persist a memory document and indexed content. Admission is not proof of a saved document; execution and lifecycle policy still apply. Secret-looking content is redacted for review; arbitrary metadata is not displayed.",
   };
   if (typeof args.content === "string") {
