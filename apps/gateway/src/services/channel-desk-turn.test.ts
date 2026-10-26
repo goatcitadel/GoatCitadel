@@ -8,14 +8,22 @@ import type { ChatSessionBindingRecord, IntegrationConnection } from "@goatcitad
 import {
   acceptOperatorDeskTurn,
   buildDeskDeliveryPrefix,
+  buildDeskLaneKey,
   buildOperatorDeskAcceptance,
   describeBlockedDeskReply,
   recordInboundChannelMessage,
   resolveDeskConversationMode,
+  resolveDeskQuestionGate,
   routeOperatorDeskSend,
 } from "./channel-desk-turn.js";
+import type { DurableInboundChannelAcceptInput } from "./channel-inbound-dispatch.js";
+import { handleDiscordRuntimeInbound, type DiscordRuntimeBridgeHost } from "./discord-runtime-bridge-service.js";
 import { InboundChannelEventService } from "./inbound-channel-event-service.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
+import { normalizeSlackWebhookPayload } from "./slack-webhook.js";
+import { applyTelegramChannelSessionRotation, createTelegramChannelSessionPatch } from "./telegram-channel-sessions.js";
+import { normalizeTelegramWebhookPayload } from "./telegram-webhook.js";
+import { normalizeWhatsAppWebhookPayloads } from "./whatsapp-webhook.js";
 
 const OWNER_ID = "4242";
 
@@ -126,7 +134,7 @@ describe("channel desk turns", () => {
   });
 
   it("accepts a durable desk event with a stable idempotency key", async () => {
-    const service = await createAcceptingService();
+    const { service } = await createAcceptingService();
     const route = { channel: "telegram", account: "telegram-1", peer: "chat:4242" };
     const session = resolveSessionRoute(route);
     const input = {
@@ -150,7 +158,8 @@ describe("channel desk turns", () => {
       transport: "operator_desk",
       dispatchKind: "operator_desk_turn",
       idempotencyKey: `desk:${session.sessionId}:request-1`,
-      laneKey: `session:${session.sessionId}`,
+      // The lane provider ingress gives this conversation, so a phone message and a desk question keep their order.
+      laneKey: "telegram:telegram-1:chat:4242",
       payload: {
         eventType: "operator_desk_turn",
         bindingTarget: "chat:4242",
@@ -354,7 +363,88 @@ describe("channel desk turns", () => {
     expect(buildOperatorDeskAcceptance(validDeskInput()).payload).not.toHaveProperty("responseOptions");
   });
 
-  async function createAcceptingService(): Promise<InboundChannelEventService> {
+  it("answers a queued desk question only against the binding as it is now", () => {
+    const check = (overrides: Partial<Parameters<typeof resolveDeskQuestionGate>[0]> = {}) =>
+      resolveDeskQuestionGate({
+        binding: binding(),
+        connectionId: "telegram-1",
+        bindingTarget: OWNER_ID,
+        connection: connection(),
+        ...overrides,
+      });
+    const suppressed = (reason: RegExp) => ({ action: "suppress", reason: expect.stringMatching(reason) });
+
+    expect(check()).toEqual({ action: "allow" });
+    // The session or its binding is gone, or the conversation is no longer a channel conversation.
+    expect(check({ binding: undefined })).toEqual(suppressed(/no longer bound/));
+    expect(check({ binding: binding({ transport: "llm", connectionId: undefined, target: undefined }) })).toEqual(
+      suppressed(/no longer bound/),
+    );
+    // The operator switched the conversation to read-only while the question waited.
+    expect(check({ binding: binding({ writable: false }) })).toEqual(suppressed(/read-only/));
+    // The binding was re-pointed at another connection or target while the question waited.
+    expect(check({ binding: binding({ connectionId: "telegram-2" }) })).toEqual(suppressed(/somewhere else/));
+    expect(check({ binding: binding({ target: "9999" }) })).toEqual(suppressed(/somewhere else/));
+    expect(check({ bindingTarget: undefined })).toEqual(suppressed(/somewhere else/));
+    // The channel is off or not connected.
+    expect(check({ connection: connection({ enabled: false }) })).toEqual(suppressed(/off or not connected/));
+    expect(check({ connection: connection({ status: "error" }) })).toEqual(suppressed(/off or not connected/));
+    // The conversation is no longer provably the operator's own.
+    expect(check({ connection: connection({ config: { ownerActorIds: [] } }) })).toEqual(suppressed(/your own/));
+    expect(check({ binding: binding({ conversation: { kind: "group" } }) })).toEqual(suppressed(/your own/));
+  });
+
+  it("queues a desk question in the lane provider ingress gives the same conversation", async () => {
+    const { service, storage } = await createAcceptingService();
+    const rotated = createTelegramChannelSessionPatch({ config: {}, chatId: OWNER_ID, actorId: OWNER_ID });
+    const cases: Array<{ name: string; input: DurableInboundChannelAcceptInput }> = [
+      { name: "Telegram private chat", input: telegramPrivateChat({}) },
+      { name: "Telegram private chat after /new", input: telegramPrivateChat(rotated) },
+      { name: "Slack IM", input: slackIm() },
+      { name: "WhatsApp chat", input: whatsAppChat() },
+      { name: "Discord DM", input: await discordDm() },
+    ];
+
+    for (const { name, input } of cases) {
+      const phone = await service.accept(input);
+      const phoneLane = storage.inboundChannelEvents.get(phone.inboundEventId)?.laneKey;
+      // The session this conversation's phone messages land in, which is the session the desk question names.
+      const session = resolveSessionRoute({ channel: input.channel, ...input.message });
+      const desk = await acceptOperatorDeskTurn((acceptance) => service.acceptOperatorDeskEvent(acceptance), {
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        binding: binding({
+          sessionId: session.sessionId,
+          connectionId: input.connectionId,
+          target: input.bindingTarget,
+        }),
+        content: "And where did I park?",
+        idempotencyKey: `desk-${name}`,
+      });
+      const deskEvent = storage.inboundChannelEvents.getByIdentity({
+        channelKey: input.channel,
+        connectionId: input.connectionId,
+        idempotencyKey: `desk:${session.sessionId}:desk-${name}`,
+      });
+      expect({ name, lane: deskEvent?.laneKey }).toEqual({ name, lane: phoneLane });
+      expect(desk.sessionId).toBe(session.sessionId);
+    }
+
+    // A later desk question waits until the earlier phone message in its conversation settles.
+    const due = storage.inboundChannelEvents.claimDue({ ownerId: "lane-probe", leaseDurationMs: 30_000, limit: 50 });
+    expect(due.map((claim) => claim.event.transport)).toEqual(cases.map(() => "provider_webhook"));
+  });
+
+  it("keeps the session's own lane only when its address names no conversation", () => {
+    expect(buildDeskLaneKey({ channel: "telegram", account: "telegram-1" }, "telegram-1", "sess-1")).toBe(
+      "session:sess-1",
+    );
+    expect(
+      buildDeskLaneKey({ channel: "slack", account: "slack-1", room: "C1", threadId: "171.2" }, "slack-1", "sess-2"),
+    ).toBe("slack:slack-1:C1:171.2");
+  });
+
+  async function createAcceptingService(): Promise<{ service: InboundChannelEventService; storage: Storage }> {
     const root = await mkdtemp(path.join(tmpdir(), "channel-desk-turn-"));
     const storage = new Storage({
       dbPath: ":memory:",
@@ -380,6 +470,7 @@ describe("channel desk turns", () => {
       },
       ingestChannelMessage: vi.fn(),
       ensureInboundChatSession: vi.fn(),
+      readChatSessionBinding: vi.fn(),
       hasRunningTurn: async () => false,
       respondToExistingChatMessage: vi.fn(),
       transcribeChannelVoice: vi.fn(),
@@ -393,9 +484,154 @@ describe("channel desk turns", () => {
       storage.close();
       await rm(root, { recursive: true, force: true });
     });
-    return service;
+    return { service, storage };
   }
 });
+
+/**
+ * Each provider event below is built the way its channel's producer builds it: the real webhook normalizer, then
+ * the route's own mapping into the durable acceptance (Telegram, Slack, WhatsApp), or the real Discord producer.
+ */
+function telegramPrivateChat(config: Record<string, unknown>): DurableInboundChannelAcceptInput {
+  const parsed = normalizeTelegramWebhookPayload({
+    connectionId: "telegram-1",
+    payload: {
+      update_id: 1,
+      message: {
+        message_id: 7,
+        from: { id: Number(OWNER_ID), is_bot: false, first_name: "Alex" },
+        chat: { id: Number(OWNER_ID), type: "private" },
+        text: "Parked on level 3.",
+      },
+    },
+  });
+  if (parsed.kind !== "message") {
+    throw new Error(`Telegram fixture was not a message: ${parsed.kind}`);
+  }
+  const routed = applyTelegramChannelSessionRotation(config, {
+    peer: parsed.peer,
+    room: parsed.room,
+    threadId: parsed.threadId,
+  });
+  return {
+    channel: "telegram",
+    connectionId: "telegram-1",
+    idempotencyKey: `telegram:update-1:${Object.keys(config).length}`,
+    eventType: parsed.eventType,
+    bindingTarget: parsed.room ?? parsed.peer,
+    dispatchKind: "agent_turn",
+    message: {
+      eventId: parsed.eventId,
+      account: parsed.account,
+      peer: routed.peer,
+      room: routed.room,
+      threadId: routed.threadId,
+      actorId: parsed.actorId,
+      actorType: parsed.actorType,
+      content: parsed.content,
+    },
+  };
+}
+
+function slackIm(): DurableInboundChannelAcceptInput {
+  const parsed = normalizeSlackWebhookPayload({
+    connectionId: "slack-1",
+    payload: {
+      type: "event_callback",
+      team_id: "T1",
+      event_id: "Ev1",
+      event: { type: "message", channel: "D123", channel_type: "im", user: "U42", text: "Parked.", ts: "171.1" },
+    },
+  });
+  if (parsed.kind !== "message") {
+    throw new Error(`Slack fixture was not a message: ${parsed.kind}`);
+  }
+  return {
+    channel: "slack",
+    connectionId: "slack-1",
+    idempotencyKey: "slack:Ev1",
+    eventType: parsed.eventType,
+    bindingTarget: parsed.room ?? parsed.peer,
+    dispatchKind: "agent_turn",
+    message: {
+      eventId: parsed.eventId,
+      account: parsed.account,
+      peer: parsed.peer,
+      room: parsed.room,
+      threadId: parsed.threadId,
+      actorId: parsed.actorId,
+      actorType: parsed.actorType,
+      content: parsed.content,
+    },
+  };
+}
+
+function whatsAppChat(): DurableInboundChannelAcceptInput {
+  const [parsed] = normalizeWhatsAppWebhookPayloads({
+    connectionId: "whatsapp-1",
+    payload: {
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                contacts: [{ wa_id: "15551234567", profile: { name: "Alex" } }],
+                messages: [{ from: "15551234567", id: "wamid.1", type: "text", text: { body: "Parked." } }],
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  if (parsed?.kind !== "message") {
+    throw new Error(`WhatsApp fixture was not a message: ${parsed?.kind}`);
+  }
+  return {
+    channel: "whatsapp",
+    connectionId: "whatsapp-1",
+    idempotencyKey: "whatsapp:wamid.1",
+    eventType: parsed.eventType,
+    bindingTarget: parsed.peer,
+    dispatchKind: "agent_turn",
+    message: {
+      eventId: parsed.eventId,
+      account: parsed.account,
+      peer: parsed.peer,
+      actorId: parsed.actorId,
+      actorType: parsed.actorType,
+      content: parsed.content,
+    },
+  };
+}
+
+/** What the real Discord producer hands to durable acceptance for a direct message. */
+async function discordDm(): Promise<DurableInboundChannelAcceptInput> {
+  let produced: DurableInboundChannelAcceptInput | undefined;
+  const host = {
+    storage: { systemSettings: { get: async () => undefined } },
+    isFeatureEnabled: async () => false,
+    acceptInboundChannelEvent: async (input: DurableInboundChannelAcceptInput) => {
+      produced = input;
+      return { accepted: true, durableAccepted: true, deduped: false, replied: false, queued: true };
+    },
+  } as unknown as DiscordRuntimeBridgeHost;
+  await handleDiscordRuntimeInbound(host, {
+    connectionId: "discord-1",
+    target: "dm-channel-1",
+    actorId: "u42",
+    content: "Parked.",
+    sourceMessageId: "m1",
+    peer: "u42",
+    room: "dm-channel-1",
+    conversation: { kind: "direct", counterpartActorId: "u42" },
+  });
+  if (!produced) {
+    throw new Error("The Discord producer accepted nothing.");
+  }
+  return produced;
+}
 
 function validDeskInput() {
   const session = resolveSessionRoute({ channel: "telegram", account: "telegram-1", peer: OWNER_ID });

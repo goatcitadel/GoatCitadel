@@ -29,6 +29,7 @@ import {
 } from "@goatcitadel/contracts";
 import { decodeSessionKeySegment, resolveSessionRoute } from "@goatcitadel/gateway-core";
 import type { IngestChannelMessageInput } from "./channel-inbound-dispatch.js";
+import { buildInboundConversationLaneKey } from "./inbound-channel-lane.js";
 
 export const OPERATOR_DESK_DISPATCH_KIND = "operator_desk_turn";
 export const OPERATOR_DESK_TRANSPORT = "operator_desk";
@@ -175,17 +176,60 @@ export function isOperatorDeskEvent(event: { dispatchKind: string; transport: st
   return event.dispatchKind === OPERATOR_DESK_DISPATCH_KIND && event.transport === OPERATOR_DESK_TRANSPORT;
 }
 
+export type DeskQuestionGate = { action: "allow" } | { action: "suppress"; reason: string };
+
 /**
- * The inbound worker's last check before answering a desk question: the binding it just refreshed must still name
- * the operator's own direct conversation on this connection.
+ * The inbound worker's check before it records or answers a queued desk question, including on every retry. It reads
+ * the session's binding as it is now and never refreshes it: the binding must still be a writable channel binding on
+ * the connection and target the question was accepted for, on a channel that is on and connected, in a conversation
+ * that is still provably the operator's own. A binding made read-only, re-pointed or removed while the question
+ * waited stops it.
  */
-export function resolveDeskQuestionGate(
-  conversation: ChatChannelConversation | undefined,
-  connectionConfig: Record<string, unknown>,
-): { action: "allow" } | { action: "suppress"; reason: string } {
-  return isOperatorOwnConversation(conversation, connectionConfig)
+export function resolveDeskQuestionGate(input: {
+  binding: ChatSessionBindingRecord | undefined;
+  connectionId: string;
+  bindingTarget: string | undefined;
+  connection: { enabled?: boolean; status?: string; config: Record<string, unknown> };
+}): DeskQuestionGate {
+  const { binding, connection } = input;
+  const target = input.bindingTarget?.trim();
+  if (binding?.transport !== "integration") {
+    return suppressDeskQuestion("The conversation is no longer bound to this channel");
+  }
+  if (binding.connectionId !== input.connectionId || !target || binding.target?.trim() !== target) {
+    return suppressDeskQuestion("The conversation now points somewhere else");
+  }
+  if (!binding.writable) {
+    return suppressDeskQuestion("The conversation is read-only now");
+  }
+  if (connection.enabled === false || connection.status !== "connected") {
+    return suppressDeskQuestion("The channel is off or not connected");
+  }
+  return isOperatorOwnConversation(binding.conversation, connection.config)
     ? { action: "allow" }
-    : { action: "suppress", reason: "The conversation is no longer your own, so the desk question was not answered." };
+    : suppressDeskQuestion("The conversation is no longer your own");
+}
+
+function suppressDeskQuestion(cause: string): DeskQuestionGate {
+  return { action: "suppress", reason: `${cause}, so the desk question was not answered.` };
+}
+
+/**
+ * A desk question queues in the lane provider ingress gives the same conversation, so it is never answered before an
+ * earlier message from the phone (say, a voice note still being transcribed) is recorded. The lane is built from the
+ * route the session key was derived from, which is the route the channel's producer accepted that conversation's
+ * events under, by the same builder. A route naming no conversation, which no session key has today, keeps the
+ * session's own lane.
+ */
+export function buildDeskLaneKey(
+  route: { channel: string; account: string; peer?: string; room?: string; threadId?: string },
+  connectionId: string,
+  sessionId: string,
+): string {
+  if (!route.room?.trim() && !route.peer?.trim()) {
+    return `session:${sessionId}`;
+  }
+  return buildInboundConversationLaneKey({ channel: route.channel, connectionId, message: route });
 }
 
 /**
@@ -261,7 +305,7 @@ export function buildOperatorDeskAcceptance(input: OperatorDeskTurnInput): Opera
     transport: OPERATOR_DESK_TRANSPORT,
     dispatchKind: OPERATOR_DESK_DISPATCH_KIND,
     idempotencyKey,
-    laneKey: `session:${input.sessionId}`,
+    laneKey: buildDeskLaneKey(route, connectionId, input.sessionId),
     payload: {
       eventType: OPERATOR_DESK_DISPATCH_KIND,
       bindingTarget: target,

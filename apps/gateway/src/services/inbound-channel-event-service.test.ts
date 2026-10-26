@@ -24,8 +24,17 @@ import {
   type InboundChannelDeterministicIdentity,
   type InboundChannelEventServiceDeps,
 } from "./inbound-channel-event-service.js";
-import { VOICE_TRANSCRIPT_CONTENT_PREFIX, type DurableInboundChannelAcceptInput } from "./channel-inbound-dispatch.js";
-import { ensureInboundIntegrationChatSession, type ChatSessionDependencies } from "./chat-session-service.js";
+import {
+  VOICE_TRANSCRIPT_CONTENT_PREFIX,
+  type DurableInboundChannelAcceptInput,
+  type IngestChannelMessageInput,
+} from "./channel-inbound-dispatch.js";
+import {
+  ensureInboundIntegrationChatSession,
+  findChatSessionBinding,
+  setChatSessionBinding,
+  type ChatSessionDependencies,
+} from "./chat-session-service.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 import { buildNewAdapterCases } from "./inbound-channel-event-service.new-adapters.fixtures.js";
 
@@ -516,88 +525,7 @@ describe("InboundChannelEventService", () => {
   });
 
   it("answers an owner's desk question end to end, and suppresses one once the owner is removed", async () => {
-    // The real Chat session ensure and binding repository, the Gateway's own ingest (the desk branch and ingestEvent)
-    // and its reply owner. Only turn admission, model execution and the channel send are doubles.
-    const getStorage = (): Storage => harness.storage;
-    const ingestGateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
-    let eventIngest: EventIngestService | undefined;
-    Object.defineProperty(ingestGateway, "eventIngestService", {
-      get: () => (eventIngest ??= new EventIngestService(createSqliteAsyncStorage(getStorage()))),
-    });
-    ingestGateway.publishRealtime = vi.fn(async () => undefined);
-    ingestGateway.operatorSummaryCache = { invalidate: vi.fn() };
-    const channelIngest = vi.fn(async () => {
-      throw new Error("a desk question is never recorded as channel input");
-    });
-    const chatDeps = (): ChatSessionDependencies => ({
-      storage: createSqliteAsyncStorage(getStorage()),
-      operatorSummaryCache: { invalidate: vi.fn() },
-      normalizeWorkspaceId: (workspaceId) => workspaceId?.trim() || "default",
-      ensureChatSessionRuntimeGrants: vi.fn(async () => undefined),
-      requireChatSession: async () => {
-        throw new Error("not used by inbound binding initialization");
-      },
-      getSession: async (sessionId) => getStorage().sessions.getBySessionId(sessionId),
-      publishRealtime: vi.fn(async () => undefined),
-      clearChatTurnWriteLease: vi.fn(),
-      removeChatSessionStoredFile: vi.fn(async () => undefined),
-      copyChatSessionStoredFile: vi.fn(async (storageRelPath) => storageRelPath),
-      ensureChatSessionModelDefaults: (_sessionId, prefs) => prefs,
-      hydrateChatPrefsWithAutonomy: async (_sessionId, prefs) => prefs,
-      patchSessionAutonomyPrefs: vi.fn(async () => undefined),
-    });
-    // The reply owner reads the binding the real ensure keeps, not a fixed one.
-    const replyGateway = createDeskReplyGateway(getStorage, undefined as never, "completed");
-    replyGateway.storage.chatSessionBindings = {
-      get: async (sessionId: string) => getStorage().chatSessionBindings.get(sessionId),
-    };
-    const harness = await createHarness({
-      getIntegrationConnection: async (connectionId) => getStorage().integrationConnections.get(connectionId),
-      ensureInboundChatSession: async (input) => await ensureInboundIntegrationChatSession(chatDeps(), input),
-      ingestChannelMessage: vi.fn<InboundChannelEventServiceDeps["ingestChannelMessage"]>(
-        async (channel, idempotencyKey, message, origin) =>
-          await recordInboundChannelMessage(
-            { channel, idempotencyKey, message, origin },
-            (key, event, options) => GatewayService.prototype.ingestEvent.call(ingestGateway, key, event, options),
-            channelIngest,
-          ),
-      ),
-      respondToExistingChatMessage: vi.fn<InboundChannelEventServiceDeps["respondToExistingChatMessage"]>(
-        async (sessionId, messageId, options) =>
-          await GatewayService.prototype.respondToExistingChatMessage.call(replyGateway, sessionId, messageId, options),
-      ),
-    });
-    const connection = harness.storage.integrationConnections.create({
-      catalogId: "channel.telegram",
-      kind: "channel",
-      key: "telegram",
-      label: "Telegram",
-      enabled: true,
-      status: "connected",
-      workspaceId: "default",
-      config: { ownerActorIds: ["4242"] },
-    });
-    // The owner wrote to the bot from their phone first: that is what made this their own conversation.
-    const route = { channel: "telegram", account: connection.connectionId, peer: "4242" };
-    const session = await ensureInboundIntegrationChatSession(chatDeps(), {
-      route,
-      connectionId: connection.connectionId,
-      target: "4242",
-      conversation: { kind: "direct", counterpartActorId: "4242", title: "Alex Rivera" },
-    });
-    const binding = harness.storage.chatSessionBindings.get(session.sessionId)!;
-    const ask = async (content: string, idempotencyKey: string) => {
-      const response = await acceptOperatorDeskTurn(
-        (acceptance) => harness.service.acceptOperatorDeskEvent(acceptance),
-        { sessionId: session.sessionId, sessionKey: session.sessionKey, binding, content, idempotencyKey },
-      );
-      const event = harness.storage.inboundChannelEvents.getByIdentity({
-        channelKey: "telegram",
-        connectionId: connection.connectionId,
-        idempotencyKey: `desk:${session.sessionId}:${idempotencyKey}`,
-      });
-      return { response, eventId: event!.eventId };
-    };
+    const { harness, connection, session, replyGateway, channelIngest, ask } = await createEndToEndDeskHarness();
 
     const first = await ask("Where did I park?", "request-1");
     await waitFor(() => harness.storage.inboundChannelEvents.get(first.eventId)?.status === "completed");
@@ -632,10 +560,145 @@ describe("InboundChannelEventService", () => {
     const second = await ask("Is this still me?", "request-2");
     await waitFor(() => harness.storage.inboundChannelEvents.get(second.eventId)?.status === "suppressed");
 
-    expect(harness.storage.chatMessages.get(second.response.userMessage.messageId)?.sourceAuthority).toBe("operator");
+    // Checked before anything is recorded: the question is neither recorded nor answered.
+    expect(harness.storage.chatMessages.get(second.response.userMessage.messageId)).toBeUndefined();
     expect(harness.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
     expect(replyGateway.consumePreparedAgentChatTurn).toHaveBeenCalledTimes(1);
     expect(replyGateway.commsSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("never answers a queued desk question once its binding is read-only, and leaves the binding as set", async () => {
+    const desk = await createEndToEndDeskHarness();
+    const accepted = desk.currentBinding();
+    // The operator switches the conversation to read-only after the desk send was accepted, before it is processed.
+    const readOnly = await setChatSessionBinding(desk.chatDeps(), {
+      sessionId: desk.session.sessionId,
+      transport: "integration",
+      connectionId: desk.connection.connectionId,
+      target: "4242",
+      writable: false,
+    });
+
+    const { response, eventId } = await desk.ask("Still there?", "request-ro", accepted);
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "suppressed");
+
+    expect(desk.harness.storage.inboundChannelEvents.get(eventId)).toMatchObject({
+      status: "suppressed",
+      lastError: expect.stringMatching(/read-only/),
+      sessionId: desk.session.sessionId,
+    });
+    expect(desk.ensureInboundChatSession).not.toHaveBeenCalled();
+    expect(desk.harness.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(desk.harness.storage.chatMessages.get(response.userMessage.messageId)).toBeUndefined();
+    expect(desk.harness.respondToExistingChatMessage).not.toHaveBeenCalled();
+    expect(desk.replyGateway.commsSend).not.toHaveBeenCalled();
+    expect(desk.currentBinding()).toEqual(readOnly);
+  });
+
+  it("never answers a queued desk question after its binding is re-pointed, and keeps the new target", async () => {
+    const desk = await createEndToEndDeskHarness();
+    const accepted = desk.currentBinding();
+    const repointed = await setChatSessionBinding(desk.chatDeps(), {
+      sessionId: desk.session.sessionId,
+      transport: "integration",
+      connectionId: desk.connection.connectionId,
+      target: "9999",
+      writable: true,
+    });
+
+    const { response, eventId } = await desk.ask("Still there?", "request-moved", accepted);
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "suppressed");
+
+    expect(desk.harness.storage.inboundChannelEvents.get(eventId)?.lastError).toMatch(/somewhere else/);
+    expect(desk.ensureInboundChatSession).not.toHaveBeenCalled();
+    expect(desk.harness.storage.chatMessages.get(response.userMessage.messageId)).toBeUndefined();
+    expect(desk.harness.respondToExistingChatMessage).not.toHaveBeenCalled();
+    expect(desk.replyGateway.commsSend).not.toHaveBeenCalled();
+    // The refresh that used to run here would have pointed the binding back at the desk question's target.
+    expect(desk.currentBinding()).toEqual(repointed);
+  });
+
+  it("never answers a queued desk question once its binding is removed, while a phone message still initialises it", async () => {
+    const desk = await createEndToEndDeskHarness();
+    const accepted = desk.currentBinding();
+    desk.harness.storage.db
+      .prepare("DELETE FROM chat_session_bindings WHERE session_id = ?")
+      .run(desk.session.sessionId);
+
+    const { response, eventId } = await desk.ask("Still there?", "request-gone", accepted);
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "suppressed");
+
+    expect(desk.harness.storage.inboundChannelEvents.get(eventId)?.lastError).toMatch(/no longer bound/);
+    expect(desk.ensureInboundChatSession).not.toHaveBeenCalled();
+    expect(desk.harness.storage.chatMessages.get(response.userMessage.messageId)).toBeUndefined();
+    expect(desk.harness.respondToExistingChatMessage).not.toHaveBeenCalled();
+    expect(desk.replyGateway.commsSend).not.toHaveBeenCalled();
+    expect(desk.currentBinding()).toBeUndefined();
+
+    // A message from the phone still runs provider-ingress initialization, exactly as before.
+    const phone = await desk.harness.service.accept(
+      buildInput({
+        channel: "telegram",
+        connectionId: desk.connection.connectionId,
+        idempotencyKey: "telegram:phone-after-removal",
+        bindingTarget: "4242",
+        dispatchKind: "record_only",
+        conversation: { kind: "direct", counterpartActorId: "4242", title: "Alex Rivera" },
+        responseOptions: undefined,
+        message: {
+          eventId: "telegram-message-9",
+          account: desk.connection.connectionId,
+          peer: "4242",
+          actorId: "4242",
+          actorType: "user",
+          content: "Back on the phone.",
+        },
+      }),
+    );
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(phone.inboundEventId)?.status === "completed");
+    expect(desk.ensureInboundChatSession).toHaveBeenCalledExactlyOnceWith({
+      route: { channel: "telegram", account: desk.connection.connectionId, peer: "4242" },
+      connectionId: desk.connection.connectionId,
+      target: "4242",
+      conversation: { kind: "direct", counterpartActorId: "4242", title: "Alex Rivera" },
+    });
+    expect(desk.currentBinding()).toMatchObject({
+      transport: "integration",
+      connectionId: desk.connection.connectionId,
+      target: "4242",
+      writable: true,
+      conversation: { kind: "direct", counterpartActorId: "4242" },
+    });
+  });
+
+  it("checks the binding again when a desk question is retried after its approval wait", async () => {
+    const desk = await createEndToEndDeskHarness("waiting_for_approval");
+
+    const { eventId } = await desk.ask("Book the usual table.", "request-approval");
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "waiting");
+    expect(desk.harness.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+
+    // While the answer waits for approval, the operator makes the conversation read-only, then approves the turn.
+    const readOnly = await setChatSessionBinding(desk.chatDeps(), {
+      sessionId: desk.session.sessionId,
+      transport: "integration",
+      connectionId: desk.connection.connectionId,
+      target: "4242",
+      writable: false,
+    });
+    desk.replyGateway.settleApprovedTurn("Booked for 7pm.");
+    desk.harness.service.close();
+    desk.harness.storage.db
+      .prepare("UPDATE inbound_channel_events SET claim_expires_at = ? WHERE event_id = ?")
+      .run(new Date(0).toISOString(), eventId);
+    await desk.harness.createAdditionalService().drain();
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "suppressed");
+
+    expect(desk.harness.storage.inboundChannelEvents.get(eventId)?.lastError).toMatch(/read-only/);
+    expect(desk.ensureInboundChatSession).not.toHaveBeenCalled();
+    expect(desk.harness.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+    expect(desk.replyGateway.commsSend).not.toHaveBeenCalled();
+    expect(desk.currentBinding()).toEqual(readOnly);
   });
 
   it("decides each desk send from the binding, the connection and the session it names", async () => {
@@ -1443,6 +1506,119 @@ describe("InboundChannelEventService", () => {
   });
 
   /**
+   * The operator's own Telegram conversation with the real Chat session ensure, binding repository and binding read,
+   * the Gateway's own ingest (the desk branch and ingestEvent) and its reply owner. Only turn admission, model
+   * execution and the channel send are doubles. The owner wrote to the bot from their phone first: that is what made
+   * this their own conversation.
+   */
+  async function createEndToEndDeskHarness(answerStatus: "completed" | "waiting_for_approval" = "completed") {
+    const getStorage = (): Storage => harness.storage;
+    const ingestGateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+    let eventIngest: EventIngestService | undefined;
+    const getEventIngest = () => (eventIngest ??= new EventIngestService(createSqliteAsyncStorage(getStorage())));
+    Object.defineProperty(ingestGateway, "eventIngestService", { get: getEventIngest });
+    ingestGateway.publishRealtime = vi.fn(async () => undefined);
+    ingestGateway.operatorSummaryCache = { invalidate: vi.fn() };
+    // Only a message from the phone is recorded as channel input.
+    const channelIngest = vi.fn(async (channel: string, idempotencyKey: string, message: IngestChannelMessageInput) =>
+      getEventIngest().ingest({
+        endpoint: "/api/v1/gateway/events",
+        idempotencyKey,
+        sourceAuthority: "external_channel",
+        payload: {
+          eventId: message.eventId,
+          route: { channel, account: message.account, peer: message.peer },
+          actor: { type: "user", id: message.actorId },
+          message: { role: "user", content: message.content },
+        },
+      }),
+    );
+    const chatDeps = (): ChatSessionDependencies => ({
+      storage: createSqliteAsyncStorage(getStorage()),
+      operatorSummaryCache: { invalidate: vi.fn() },
+      normalizeWorkspaceId: (workspaceId) => workspaceId?.trim() || "default",
+      ensureChatSessionRuntimeGrants: vi.fn(async () => undefined),
+      requireChatSession: async () => {
+        throw new Error("not used by inbound binding initialization");
+      },
+      getSession: async (sessionId) => getStorage().sessions.getBySessionId(sessionId),
+      publishRealtime: vi.fn(async () => undefined),
+      clearChatTurnWriteLease: vi.fn(),
+      removeChatSessionStoredFile: vi.fn(async () => undefined),
+      copyChatSessionStoredFile: vi.fn(async (storageRelPath) => storageRelPath),
+      ensureChatSessionModelDefaults: (_sessionId, prefs) => prefs,
+      hydrateChatPrefsWithAutonomy: async (_sessionId, prefs) => prefs,
+      patchSessionAutonomyPrefs: vi.fn(async () => undefined),
+    });
+    // The reply owner reads the binding as stored, not a fixed one.
+    const replyGateway = createDeskReplyGateway(getStorage, undefined as never, answerStatus);
+    replyGateway.storage.chatSessionBindings = {
+      get: async (sessionId: string) => getStorage().chatSessionBindings.get(sessionId),
+    };
+    const ensureInboundChatSession = vi.fn<InboundChannelEventServiceDeps["ensureInboundChatSession"]>(
+      async (input) => await ensureInboundIntegrationChatSession(chatDeps(), input),
+    );
+    const harness = await createHarness({
+      getIntegrationConnection: async (connectionId) => getStorage().integrationConnections.get(connectionId),
+      ensureInboundChatSession,
+      readChatSessionBinding: async (sessionId) => await findChatSessionBinding(chatDeps(), sessionId),
+      ingestChannelMessage: vi.fn<InboundChannelEventServiceDeps["ingestChannelMessage"]>(
+        async (channel, idempotencyKey, message, origin) =>
+          await recordInboundChannelMessage(
+            { channel, idempotencyKey, message, origin },
+            (key, event, options) => GatewayService.prototype.ingestEvent.call(ingestGateway, key, event, options),
+            channelIngest,
+          ),
+      ),
+      respondToExistingChatMessage: vi.fn<InboundChannelEventServiceDeps["respondToExistingChatMessage"]>(
+        async (sessionId, messageId, options) =>
+          await GatewayService.prototype.respondToExistingChatMessage.call(replyGateway, sessionId, messageId, options),
+      ),
+    });
+    const connection = harness.storage.integrationConnections.create({
+      catalogId: "channel.telegram",
+      kind: "channel",
+      key: "telegram",
+      label: "Telegram",
+      enabled: true,
+      status: "connected",
+      workspaceId: "default",
+      config: { ownerActorIds: ["4242"] },
+    });
+    const session = await ensureInboundIntegrationChatSession(chatDeps(), {
+      route: { channel: "telegram", account: connection.connectionId, peer: "4242" },
+      connectionId: connection.connectionId,
+      target: "4242",
+      conversation: { kind: "direct", counterpartActorId: "4242", title: "Alex Rivera" },
+    });
+    const currentBinding = () => harness.storage.chatSessionBindings.get(session.sessionId);
+    /** Accepts a desk send against the binding the desk saw when it was sent (by default, the binding as stored). */
+    const ask = async (content: string, idempotencyKey: string, binding = currentBinding()!) => {
+      const response = await acceptOperatorDeskTurn(
+        (acceptance) => harness.service.acceptOperatorDeskEvent(acceptance),
+        { sessionId: session.sessionId, sessionKey: session.sessionKey, binding, content, idempotencyKey },
+      );
+      const event = harness.storage.inboundChannelEvents.getByIdentity({
+        channelKey: "telegram",
+        connectionId: connection.connectionId,
+        idempotencyKey: `desk:${session.sessionId}:${idempotencyKey}`,
+      });
+      return { response, eventId: event!.eventId };
+    };
+    return {
+      harness,
+      connection,
+      session,
+      chatDeps,
+      replyGateway,
+      channelIngest,
+      ensureInboundChatSession,
+      currentBinding,
+      ask,
+    };
+  }
+
+  /**
    * A desk question in the operator's own Telegram conversation, run by the real worker, real Chat ingest and the
    * real Gateway reply owner. Only model execution, turn admission and the channel send are doubles.
    */
@@ -1495,10 +1671,10 @@ describe("InboundChannelEventService", () => {
         status: "connected",
         config: { ownerActorIds, ...(parseMode ? { parseMode } : {}) },
       }),
-      ensureInboundChatSession: vi.fn(async (input) => ({
-        ...resolveSessionRoute(input.route),
-        conversation: deskBinding.conversation,
-      })),
+      ensureInboundChatSession: vi.fn(async () => {
+        throw new Error("a desk question never runs provider-ingress initialization");
+      }),
+      readChatSessionBinding: vi.fn(async () => deskBinding),
       ingestChannelMessage: ingest,
       respondToExistingChatMessage: vi.fn<InboundChannelEventServiceDeps["respondToExistingChatMessage"]>(
         async (sessionId, messageId, respondOptions) =>
@@ -1587,6 +1763,7 @@ describe("InboundChannelEventService", () => {
         sessionId: "session-1",
         sessionKey: "channel:test",
       })),
+      readChatSessionBinding: vi.fn(async () => undefined),
       hasRunningTurn: () => false,
       transcribeChannelVoice: vi.fn(async () => ({ ok: false as const, reason: "transcription_failed" })),
       executeInboundCommand: vi.fn(async () => ({ resultText: "Command completed." })),

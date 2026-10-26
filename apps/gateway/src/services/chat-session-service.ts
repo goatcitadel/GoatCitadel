@@ -18,6 +18,7 @@ import {
   ConflictError,
   CHAT_SESSION_FORK_MANIFEST_VERSION,
   isChatTurnTerminalStatus,
+  NotFoundError,
   type ChatChannelConversation,
   type ChatSessionBindingRecord,
   type ChatSessionBulkArchiveInput,
@@ -1197,6 +1198,24 @@ export async function getChatSessionBinding(
 ): Promise<ChatSessionBindingRecord | undefined> {
   await deps.getSession(sessionId);
   return await deps.storage.chatSessionBindings.get(sessionId);
+}
+
+/**
+ * The binding a session holds now, read without initialising or rewriting it; undefined once the session or its
+ * binding is gone. A queued desk question is checked against this, never against a binding refreshed for it.
+ */
+export async function findChatSessionBinding(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+): Promise<ChatSessionBindingRecord | undefined> {
+  try {
+    return await getChatSessionBinding(deps, sessionId);
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 export async function setChatSessionBinding(

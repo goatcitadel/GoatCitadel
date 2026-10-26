@@ -14,6 +14,7 @@ import {
   ensureInboundIntegrationChatSession,
   ensureChatSessionWithStableKey,
   deleteChatSession,
+  findChatSessionBinding,
   getChatSideChat,
   getChatSessionBinding,
   getChatSessionPrefs,
@@ -438,6 +439,42 @@ describe("chat session service", () => {
       ).toMatchObject({ workspace_id: "workspace-a" });
       expect(deps.ensureChatSessionRuntimeGrants).toHaveBeenCalledTimes(2);
       expect(deps.publishRealtime).toHaveBeenCalledTimes(2);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("reads a session's binding as stored without writing it, and nothing once the session is gone", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const connection = storage.integrationConnections.create({
+        catalogId: "channel.telegram",
+        kind: "channel",
+        key: "telegram",
+        label: "Telegram",
+        enabled: true,
+        status: "connected",
+        config: {},
+      });
+      const session = await ensureInboundIntegrationChatSession(deps, {
+        route: { channel: "telegram", account: connection.connectionId, peer: "4242" },
+        connectionId: connection.connectionId,
+        target: "4242",
+      });
+      const readOnly = await setChatSessionBinding(deps, {
+        sessionId: session.sessionId,
+        transport: "integration",
+        connectionId: connection.connectionId,
+        target: "4242",
+        writable: false,
+      });
+      vi.mocked(deps.publishRealtime).mockClear();
+
+      await expect(findChatSessionBinding(deps, session.sessionId)).resolves.toEqual(readOnly);
+      expect(storage.chatSessionBindings.get(session.sessionId)).toEqual(readOnly);
+      expect(deps.publishRealtime).not.toHaveBeenCalled();
+      await expect(findChatSessionBinding(deps, "sess_missing")).resolves.toBeUndefined();
     } finally {
       cleanup();
     }

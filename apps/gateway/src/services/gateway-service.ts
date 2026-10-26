@@ -1371,6 +1371,8 @@ export class GatewayService {
         ),
       ensureInboundChatSession: async (input) =>
         await chatSessionService.ensureInboundIntegrationChatSession(this.buildChatSessionDependencies(), input),
+      readChatSessionBinding: async (sessionId) =>
+        await chatSessionService.findChatSessionBinding(this.buildChatSessionDependencies(), sessionId),
       hasRunningTurn: async (sessionId) => await this.hasRunningTurn(sessionId),
       respondToExistingChatMessage: async (sessionId, eventId, options) =>
         await this.respondToExistingChatMessage(sessionId, eventId, options),

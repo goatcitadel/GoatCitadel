@@ -1,13 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
+import { resolveSessionRoute } from "@goatcitadel/gateway-core";
 import {
   redactSecretText,
   type ChannelActivityInput,
   type ChatChannelConversation,
   type ChatSendMessageResponse,
+  type ChatSessionBindingRecord,
   type InboundChannelEventAcceptInput,
   type InboundChannelEventAcceptResult,
   type InboundChannelEventClaim,
   type InboundChannelEventClaimToken,
+  type InboundChannelEventLinkage,
   type InboundChannelEventRecord,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
@@ -36,6 +39,7 @@ import {
   type OperatorDeskAcceptance,
   type OperatorDeskAccepted,
 } from "./channel-desk-turn.js";
+import { buildInboundConversationLaneKey } from "./inbound-channel-lane.js";
 
 const CLAIM_LEASE_MS = 30_000;
 const CLAIM_HEARTBEAT_MS = 10_000;
@@ -114,6 +118,11 @@ export interface InboundChannelEventServiceDeps {
     /** The conversation details the binding holds after this call. */
     conversation?: ChatChannelConversation;
   }>;
+  /**
+   * The binding a session holds now, read without initialising or rewriting it; undefined once the session or its
+   * binding is gone. A desk question is checked against this, never against a binding refreshed for it.
+   */
+  readChatSessionBinding: (sessionId: string) => Promise<ChatSessionBindingRecord | undefined>;
   hasRunningTurn: (sessionId: string) => Promise<boolean>;
   respondToExistingChatMessage: (
     sessionId: string,
@@ -236,7 +245,7 @@ export class InboundChannelEventService {
           dispatchKind: input.dispatchKind,
           providerSourceId: input.message.eventId,
           idempotencyKey: input.idempotencyKey,
-          laneKey: buildLaneKey(input),
+          laneKey: buildInboundConversationLaneKey(input),
           payload: buildStoredPayload(input),
         },
       };
@@ -493,13 +502,7 @@ export class InboundChannelEventService {
     const payload = parseStoredPayload(claim.event);
     const connection = await this.deps.getIntegrationConnection(claim.event.connectionId);
     if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
-      const suppressed = this.requireTransition(
-        claim,
-        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
-          status: "suppressed",
-          lastError: "Connection was disabled after durable acceptance.",
-        }),
-      );
+      const suppressed = await this.suppressClaim(claim, "Connection was disabled after durable acceptance.");
       if (
         suppressed.sessionId &&
         (suppressed.dispatchKind === "agent_turn" || suppressed.dispatchKind === "voice_agent_turn")
@@ -513,19 +516,28 @@ export class InboundChannelEventService {
     const messageId = stableInboundId("message", claim.event.eventId);
     const content = await this.resolveMessageContent(payload, connection.config);
     assertCurrent();
-    const initializedSession = await this.deps.ensureInboundChatSession({
-      route: {
-        channel: claim.event.channelKey,
-        account: payload.message.account,
-        peer: payload.message.peer,
-        room: payload.message.room,
-        threadId: payload.message.threadId,
-      },
-      connectionId: claim.event.connectionId,
-      target: payload.bindingTarget,
-      displayName: payload.message.displayName,
-      conversation: payload.conversation,
-    });
+    const route = {
+      channel: claim.event.channelKey,
+      account: payload.message.account,
+      peer: payload.message.peer,
+      room: payload.message.room,
+      threadId: payload.message.threadId,
+    };
+    // A desk question never runs provider-ingress initialization: that rewrites the binding (writable, target) and
+    // would undo a read-only switch or re-point made while the question waited. It is checked, on every attempt and
+    // before anything is recorded, against the binding as it is now.
+    const initializedSession = desk
+      ? await this.admitDeskQuestion(claim, payload, connection, resolveSessionRoute(route))
+      : await this.deps.ensureInboundChatSession({
+          route,
+          connectionId: claim.event.connectionId,
+          target: payload.bindingTarget,
+          displayName: payload.message.displayName,
+          conversation: payload.conversation,
+        });
+    if (!initializedSession) {
+      return;
+    }
     assertCurrent();
     const ingestResult = await this.deps.ingestChannelMessage(
       claim.event.channelKey,
@@ -603,20 +615,10 @@ export class InboundChannelEventService {
       return;
     }
 
-    // The operator at the desk is not a bot, so a desk question skips the bot-loop guard. It is answered only while
-    // the conversation is still provably the operator's own: the binding may have changed since the desk send.
-    const guard = desk
-      ? resolveDeskQuestionGate(initializedSession.conversation, connection.config)
-      : await this.resolveBotLoopDecision(claim, payload);
+    // The operator at the desk is not a bot, so a desk question skips the bot-loop guard.
+    const guard = desk ? { action: "allow" as const } : await this.resolveBotLoopDecision(claim, payload);
     if (guard.action === "suppress") {
-      this.requireTransition(
-        claim,
-        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
-          status: "suppressed",
-          lastError: guard.reason,
-          linkage: { sessionId: ingestResult.session.sessionId, messageId },
-        }),
-      );
+      await this.suppressClaim(claim, guard.reason, { sessionId: ingestResult.session.sessionId, messageId });
       return;
     }
 
@@ -721,6 +723,45 @@ export class InboundChannelEventService {
       ingestResult.session.sessionId,
       "clear",
       response.turnId ?? identity.turnId,
+    );
+  }
+
+  /**
+   * The desk question's session, while its binding still lets it be answered; otherwise the question is settled as
+   * suppressed, the way any suppressed event is, and nothing is recorded, answered or delivered.
+   */
+  private async admitDeskQuestion(
+    claim: InboundChannelEventClaim,
+    payload: StoredInboundPayload,
+    connection: { enabled?: boolean; status?: string; config: Record<string, unknown> },
+    session: { sessionId: string; sessionKey: string },
+  ): Promise<{ sessionId: string; sessionKey: string } | undefined> {
+    const gate = resolveDeskQuestionGate({
+      binding: await this.deps.readChatSessionBinding(session.sessionId),
+      connectionId: claim.event.connectionId,
+      bindingTarget: payload.bindingTarget,
+      connection,
+    });
+    if (gate.action === "allow") {
+      return session;
+    }
+    await this.suppressClaim(claim, gate.reason, { sessionId: session.sessionId });
+    return undefined;
+  }
+
+  /** Settles a claimed event as suppressed; the caller decides what activity, if any, follows. */
+  private async suppressClaim(
+    claim: InboundChannelEventClaim,
+    reason: string,
+    linkage?: InboundChannelEventLinkage,
+  ): Promise<InboundChannelEventRecord> {
+    return this.requireTransition(
+      claim,
+      await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+        status: "suppressed",
+        lastError: reason,
+        linkage,
+      }),
     );
   }
 
@@ -892,14 +933,6 @@ export class InboundChannelEventService {
   ): void {
     this.deps.recordDevDiagnostic?.({ level, category: "channels", event, message, context });
   }
-}
-
-function buildLaneKey(input: DurableInboundChannelAcceptInput): string {
-  const conversation = input.message.room ?? input.message.peer ?? input.bindingTarget ?? input.message.account;
-  return [input.channel, input.connectionId, conversation, input.message.threadId]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .map((value) => value.trim())
-    .join(":");
 }
 
 function buildDeterministicIdentity(eventId: string, messageId: string): InboundChannelDeterministicIdentity {
