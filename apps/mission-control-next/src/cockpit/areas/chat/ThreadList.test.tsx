@@ -237,3 +237,43 @@ it.each([0, 1, 99, 100, 1000])(
     expect(rail.onSelectSession).toHaveBeenCalledWith("rail-0");
   },
 );
+
+it("marks a pinned conversation with a Pinned glyph and in its row name", async () => {
+  const rail = {
+    missionSessions: [
+      {
+        sessionId: "p",
+        title: "Pinned one",
+        pinned: true,
+        lifecycleStatus: "active",
+        lastActivityAt: "2026-10-06T01:00:00Z",
+      },
+      {
+        sessionId: "n",
+        title: "Plain one",
+        pinned: false,
+        lifecycleStatus: "active",
+        lastActivityAt: "2026-10-06T01:00:00Z",
+      },
+    ],
+    externalSessions: [],
+    selectedSessionId: null,
+    availableFolders: [],
+    selectedFolderId: "all",
+    search: "",
+    renderSessionLabel: (id: string) => (id === "p" ? "Pinned one" : "Plain one"),
+    onSelectSession: vi.fn(),
+    onSearchChange: vi.fn(),
+    onHistoryViewChange: vi.fn(),
+    onSelectProjectId: vi.fn(),
+    historyView: "active",
+  } as unknown as MissionThreadedSessionRailData;
+  await act(async () => root.render(<ThreadList rail={rail} />));
+  const rows = [...container.querySelectorAll("button")];
+  const pinned = rows.find((button) => button.textContent?.startsWith("Pinned one"))!;
+  const plain = rows.find((button) => button.textContent?.startsWith("Plain one"))!;
+  expect(pinned.querySelector('[aria-label="Pinned"]')).not.toBeNull();
+  expect(pinned.getAttribute("aria-label")).toContain(", Pinned, ");
+  expect(plain.querySelector('[aria-label="Pinned"]')).toBeNull();
+  expect(plain.getAttribute("aria-label")).not.toContain("Pinned,");
+});
