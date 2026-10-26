@@ -93,7 +93,8 @@ const MCP_CORE_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   {
     templateId: "playwright",
     label: "Playwright Browser",
-    description: "Browser automation with reviewed Playwright MCP 0.0.80 packages, verified archive and runtime file hashes, and isolated browser contexts.",
+    description:
+      "Browser automation with reviewed Playwright MCP 0.0.80 packages, verified archive and runtime file hashes, and isolated browser contexts.",
     transport: "stdio",
     command: "npx",
     args: ["-y", "@playwright/mcp@0.0.80", "--isolated", "--headless"],
@@ -246,4 +247,7 @@ const MCP_CORE_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   },
 ];
 
-export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [...MCP_CORE_SERVER_TEMPLATES, ...MCP_VENDOR_SERVER_TEMPLATES];
+export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
+  ...MCP_CORE_SERVER_TEMPLATES,
+  ...MCP_VENDOR_SERVER_TEMPLATES,
+];
