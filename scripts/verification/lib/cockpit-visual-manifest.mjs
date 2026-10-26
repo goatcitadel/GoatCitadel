@@ -1,3 +1,11 @@
+/**
+ * The current view in an area's navigation: a tab link on wider screens, or the phone section picker
+ * (`OverflowTabs` swaps the tab strip for a select when an area has many views) with that view selected.
+ */
+function currentAreaViewSelector(label, href) {
+  return `nav[aria-label="${label}"] a[aria-current="page"][href="${href}"], nav[aria-label="${label}"] select:has(option:checked[value="${href}"])`;
+}
+
 /** Additive cockpit captures. These never reuse a classic route's PNG slug. */
 export const COCKPIT_VISUAL_MANIFEST = [
   {
@@ -12,7 +20,7 @@ export const COCKPIT_VISUAL_MANIFEST = [
   { slug: "cockpit-inbox", href: "/inbox", shell: "cockpit", readyText: "Inbox" },
   ...[
     ["board", "/work", "Work"],
-    ["history", "/work/history", "Work history"],
+    ["history", "/work/history", "History"],
     ["schedules", "/work/schedules", "Schedules"],
   ].map(([slug, href, readyText]) => ({
     slug: `cockpit-work-${slug}`,
@@ -32,7 +40,7 @@ export const COCKPIT_VISUAL_MANIFEST = [
     href,
     shell: "cockpit",
     readyText,
-    readySelector: `nav[aria-label="Library sections"] a[aria-current="page"][href="${href}?shell=cockpit"]`,
+    readySelector: currentAreaViewSelector("Library sections", `${href}?shell=cockpit`),
   })),
   ...[
     ["health", "/system", "System"],
@@ -46,7 +54,7 @@ export const COCKPIT_VISUAL_MANIFEST = [
     href,
     shell: "cockpit",
     readyText,
-    readySelector: `nav[aria-label="System views"] a[aria-current="page"][href="${href}"]`,
+    readySelector: currentAreaViewSelector("System views", href),
   })),
   // These pages print "Loading…" as plain text, not a status region, so wait for a section only loaded data renders.
   {

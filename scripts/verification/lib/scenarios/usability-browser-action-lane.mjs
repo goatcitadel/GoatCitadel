@@ -563,7 +563,7 @@ export function adaptCodeModeStepForCockpit(sourceStep) {
     if (operation.kind === "click" && operation.name === "Open build editor")
       return [
         { kind: "click", name: "Conversation actions", exact: true },
-        { ...operation, name: "Build editor" },
+        { ...operation, name: "Open code workbench" },
       ];
     if (operation.kind === "click-pattern" && operation.namePattern === "Selected turn")
       return [{ kind: "click", name: "Back to conversation", exact: true }];

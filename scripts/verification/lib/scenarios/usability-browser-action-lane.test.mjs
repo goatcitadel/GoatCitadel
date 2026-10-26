@@ -1238,7 +1238,7 @@ test("cockpit Code Mode journey keeps owner probes while using cockpit controls"
   assert.deepEqual(cockpit.operations.slice(returned + 1, returned + 4), [
     { kind: "assert-text", value: "CHAT_CODE_MODE_OK" },
     { kind: "click", name: "Conversation actions", exact: true },
-    { kind: "click", name: "Build editor", exact: true },
+    { kind: "click", name: "Open code workbench", exact: true },
   ]);
   assert.ok(
     cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Open run in Work"),
