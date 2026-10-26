@@ -2499,7 +2499,8 @@ export async function assertGitSourceHostIsPublic(
     throw new Error("Git source must be an https URL.");
   }
   assertHostAllowed(parsed.toString(), ["*"]);
-  const hostname = parsed.hostname.replace(/^[|]$/gu, "");
+  // URL keeps IPv6 literals bracketed ("[2606:4700::1]"); strip them so the literal is checked, not resolved.
+  const hostname = parsed.hostname.replace(/^\[|\]$/gu, "");
   if (isIP(hostname)) {
     return;
   }

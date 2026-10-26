@@ -27,6 +27,13 @@ describe("assertGitSourceHostIsPublic (G2-10)", () => {
     await expect(assertGitSourceHostIsPublic(ref, lookup)).rejects.toThrow(/blocked|Private/i);
   });
 
+  it("accepts a public IPv6 literal without resolving it", async () => {
+    const lookup = async () => {
+      throw new Error("lookup must not run");
+    };
+    await expect(assertGitSourceHostIsPublic("https://[2606:4700::1111]/r.git", lookup)).resolves.toBeUndefined();
+  });
+
   it("blocks a public name that resolves to a private or metadata address", async () => {
     await expect(
       assertGitSourceHostIsPublic("https://evil.example/r.git", resolvesTo("93.184.216.34", "169.254.169.254")),
