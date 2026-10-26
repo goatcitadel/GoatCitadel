@@ -24,6 +24,7 @@ import type {
 } from "@goatcitadel/threaded-surface-core";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
+import { ChatClampedUserMessage } from "./ChatClampedUserMessage";
 import { ChatContinueAction } from "./ChatContinueAction";
 import { ChatRunCard } from "./ChatRunCard";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
@@ -95,7 +96,9 @@ export const Turn = memo(function Turn({
         <p className="mb-1 text-xs font-medium text-fg-muted">
           You · <ActorTimestamp timestamp={turn.userMessage.timestamp ?? ""} />
         </p>
-        <AssistantMessageRenderer role="user" content={capture?.summary ?? turn.userMessage.content} />
+        <ChatClampedUserMessage text={capture?.summary ?? turn.userMessage.content}>
+          <AssistantMessageRenderer role="user" content={capture?.summary ?? turn.userMessage.content} />
+        </ChatClampedUserMessage>
         {capture ? (
           <details>
             <summary>Captured task</summary>
