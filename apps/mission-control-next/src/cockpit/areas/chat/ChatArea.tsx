@@ -25,6 +25,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { ChatOwnerNavigationBoundary } from "./ChatOwnerNavigationBoundary";
 import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
 import { useSelectedChannelConversation } from "./use-channel-conversation";
+import { useChannelComposerProps } from "./use-channel-composer";
 import { ThreadedBtwSideChatPanel } from "../../../features/threaded-surface/ThreadedBtwSideChatPanel";
 import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
@@ -209,6 +210,7 @@ export function ChatAreaView({
   const { missionSessions, externalSessions = [] } = input.sessionRail;
   const session = [...missionSessions, ...externalSessions].find((item) => item.sessionId === selectedSessionId);
   const channel = useSelectedChannelConversation(activeWorkspaceId ?? "default", session, selectedSessionId);
+  const composerProps = useChannelComposerProps(active, channel);
   const latestTurnId = active?.thread?.turns.filter((turn) => turn.branch.isSelectedPath).at(-1)?.turnId;
   const openInspector = (turnId?: string, tab?: ChatInspectorTab) => {
     if (inspectorView.current !== renderedInspectorView) return;
@@ -384,9 +386,9 @@ export function ChatAreaView({
             <ChatSessionStatusPanel panel={active.sessionStatusPanel} />
           </div>
         ) : null}
-        {active && !buildOpen ? (
+        {composerProps && !buildOpen ? (
           <ChatTextComposer
-            props={active}
+            props={composerProps}
             gatewayUnavailable={gatewayUnavailable}
             reasoningEfforts={input.contextDockProps?.selectedModelReasoningEfforts}
             onOpenSchedules={() => navigate("/work/schedules")}

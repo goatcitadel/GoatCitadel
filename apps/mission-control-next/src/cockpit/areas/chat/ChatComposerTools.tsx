@@ -77,26 +77,36 @@ export function ChatComposerTools({
       }
     />
   );
+  // A channel conversation answers on its own route and takes no sources or files from here, so the model, mode,
+  // sources and attachment tools stay out of it. Queued messages, route notices and commands remain.
+  const channelConversation = Boolean(props.channelReply);
   if (!phone)
     return (
       <>
-        {sourcesPanel}
+        {channelConversation ? null : sourcesPanel}
         {queue}
-        {controls}
+        {channelConversation ? <ChatComposerNotices props={controlsProps} /> : controls}
         <ChatUploadStatus upload={props.attachmentUpload} />
-        <ChatMediaControls props={props} />
+        {channelConversation ? null : <ChatMediaControls props={props} />}
       </>
     );
   return (
     <>
       {queue}
-      <ChatComposerNotices props={controlsProps} onChooseModel={() => onOptionsOpenChange(true)} />
+      <ChatComposerNotices
+        props={controlsProps}
+        onChooseModel={channelConversation ? undefined : () => onOptionsOpenChange(true)}
+      />
       <ChatUploadStatus upload={props.attachmentUpload} />
       <Sheet open={optionsOpen} onOpenChange={onOptionsOpenChange} title="Message options">
         <div className="space-y-3">
-          {controls}
-          {sourcesPanel}
-          <ChatMediaControls props={props} />
+          {channelConversation ? null : (
+            <>
+              {controls}
+              {sourcesPanel}
+              <ChatMediaControls props={props} />
+            </>
+          )}
           <Button
             className="h-11"
             disabled={!props.composerPalette?.enabled}

@@ -1,7 +1,10 @@
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import type { ChatMediaProps } from "./ChatMediaControls";
-export type ComposerProps = ChatMediaProps &
-  Pick<
+import type { ChannelReply } from "./channel-composer";
+export type ComposerProps = ChatMediaProps & {
+  /** Set when the open conversation is held through a channel; the composer then asks or posts instead of chatting. */
+  channelReply?: ChannelReply;
+} & Pick<
     MissionThreadedActiveSessionSurfaceProps,
     | "queueItems"
     | "onResumeAll"
