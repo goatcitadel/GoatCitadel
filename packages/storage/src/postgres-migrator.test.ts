@@ -871,7 +871,7 @@ describe("Postgres migration ledger compatibility", () => {
     // feature admissions, context/heartbeat bindings, remote references and cron
     // authority remain intact; approval linkage adds six columns and two indexes;
     // v212 adds mutation_idempotency.dispatched_at; v213/v214 add mail_drafts
-    // (14 columns, one index); v215 is data-only; v216 adds external_side_effect_runs.replay_record_json;
+    // (14 columns, one index); v219 adds idx_chat_turn_traces_user_message; v215 is data-only; v216 adds external_side_effect_runs.replay_record_json;
     // v217/v218 add Vault per-Chamber keys (3 tables, 3 secret columns, 38 columns, 5 indexes).
     // Keep independent drift tripwires for the complete current shape.
     assert.equal(manifest.tables.length, 372);
@@ -879,7 +879,7 @@ describe("Postgres migration ledger compatibility", () => {
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
       5_138,
     );
-    assert.equal(manifest.indexes.length, 774);
+    assert.equal(manifest.indexes.length, 775);
     assert.deepEqual(
       manifest.tables
         .find((table) => table.name === "approval_execution_linkages")
@@ -1087,7 +1087,7 @@ describe("Postgres migration ledger compatibility", () => {
   it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
     const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
     assert.equal(manifest.tables.length, 372);
-    assert.equal(manifest.indexes.length, 791);
+    assert.equal(manifest.indexes.length, 792);
     assert.equal(
       manifest.tables.every((table) => table.columns.length > 0),
       true,
