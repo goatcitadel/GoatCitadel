@@ -31,11 +31,8 @@ const readSchema = z
       .max(200),
   })
   .strict();
-/**
- * Access is enforced first; configured auth mode does not establish identity. Messaging read markers follow
- * the same rule, so they import this helper instead of restating it.
- */
-export function inboxActor(request: FastifyRequest): string | undefined {
+/** Access is enforced first; configured auth mode does not establish identity. */
+function inboxActor(request: FastifyRequest): string | undefined {
   return ["token", "basic"].includes(request.authActorSource) &&
     !request.authPrincipalPurpose &&
     request.authActorId &&

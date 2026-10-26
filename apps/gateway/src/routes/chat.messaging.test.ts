@@ -28,7 +28,7 @@ const overview: ChatMessagingOverview = {
 
 /** A token-authenticated operator, as the auth plugin would resolve one. */
 const OPERATOR = { "x-test-source": "token", "x-test-actor": "operator-1" };
-/** What the Inbox identity rule turns that operator into. */
+/** The reader identity that operator reads as (the same form the Inbox uses). */
 const OPERATOR_IDENTITY = JSON.stringify(["token", "operator-1"]);
 
 function buildApp(chatSessions: Record<string, unknown>): FastifyInstance {
@@ -71,7 +71,7 @@ describe("chat messaging routes", () => {
     expect(service.listChatMessaging).toHaveBeenCalledWith({ workspaceId: "default", actor: OPERATOR_IDENTITY });
   });
 
-  it("binds the operator identity the way the Inbox does: token and basic auth only", async () => {
+  it("reads as the signed-in operator, or as the one local operator when nobody signs in", async () => {
     const service = { listChatMessaging: vi.fn(async () => overview), markChatSessionRead: vi.fn() };
     app = buildApp(service);
     const get = (headers: Record<string, string>) =>
@@ -83,13 +83,22 @@ describe("chat messaging routes", () => {
       actor: JSON.stringify(["basic", "basic:sam"]),
     });
 
-    // Anything that is not an operator credential, or carries no real actor, is "no identity".
+    // Auth mode none (the shipped default) and a trusted loopback request have one operator: the local one.
     for (const headers of [
       {},
-      { "x-test-source": "token", "x-test-actor": "anonymous" },
-      { "x-test-source": "token", "x-test-actor": "" },
       { "x-test-source": "none", "x-test-actor": "auth:none" },
       { "x-test-source": "loopback", "x-test-actor": "loopback:127.0.0.1" },
+      { "x-test-source": "loopback", "x-test-actor": "loopback:[::1]" },
+    ]) {
+      const response = await get(headers);
+      expect(response.statusCode).toBe(200);
+      expect(service.listChatMessaging).toHaveBeenLastCalledWith({ workspaceId: undefined, actor: "local-operator" });
+    }
+
+    // Any other caller (a companion, a paired device, a purpose-bound or anonymous token) has no identity here.
+    for (const headers of [
+      { "x-test-source": "token", "x-test-actor": "anonymous" },
+      { "x-test-source": "token", "x-test-actor": "" },
       { "x-test-source": "device", "x-test-actor": "device:phone" },
       { "x-test-source": "companion", "x-test-actor": "companion:1" },
       { "x-test-source": "sse", "x-test-actor": "sse:abc" },
@@ -204,16 +213,42 @@ describe("chat messaging routes", () => {
     expect(response.statusCode).toBe(404);
   });
 
-  it("refuses to record read state when the request has no operator identity", async () => {
-    const service = { listChatMessaging: vi.fn(), markChatSessionRead: vi.fn() };
+  it("records read state for the local operator under auth mode none and on loopback", async () => {
+    const service = {
+      listChatMessaging: vi.fn(),
+      markChatSessionRead: vi.fn(async () => ({ sessionId: "sess-1", lastReadAt: "2026-03-05T01:00:05.000Z" })),
+    };
     app = buildApp(service);
 
-    // Without any credential, and with a source the Inbox does not accept as an identity.
     for (const headers of [
       {},
       { "x-test-source": "none", "x-test-actor": "auth:none" },
       { "x-test-source": "loopback", "x-test-actor": "loopback:127.0.0.1" },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/chat/sessions/sess-1/read",
+        headers,
+        payload: { readThrough: "2026-03-05T01:00:05.000Z" },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(service.markChatSessionRead).toHaveBeenLastCalledWith({
+        sessionId: "sess-1",
+        actor: "local-operator",
+        readThrough: "2026-03-05T01:00:05.000Z",
+      });
+    }
+  });
+
+  it("refuses to record read state when the request has no operator identity", async () => {
+    const service = { listChatMessaging: vi.fn(), markChatSessionRead: vi.fn() };
+    app = buildApp(service);
+
+    // A companion, a paired device and a purpose-bound token are not the operator reading their conversations.
+    for (const headers of [
       { "x-test-source": "companion", "x-test-actor": "companion:1" },
+      { "x-test-source": "device", "x-test-actor": "device:phone" },
+      { "x-test-source": "token", "x-test-actor": "anonymous" },
       { "x-test-source": "token", "x-test-actor": "operator-1", "x-test-purpose": "session_control_client" },
     ]) {
       const response = await app.inject({

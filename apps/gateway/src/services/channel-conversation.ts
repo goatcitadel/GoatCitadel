@@ -1,4 +1,21 @@
-import type { ChatChannelConversation } from "@goatcitadel/contracts";
+import type { ChatChannelConversation, ChatSessionBindingRecord, SessionMeta } from "@goatcitadel/contracts";
+import { resolveChannelConnectionId } from "./chat-session-utils.js";
+
+/** What a retry or an edit is refused with in a channel conversation. */
+export const CHANNEL_CONVERSATION_RESEND_REFUSED =
+  "Retry and edit aren't available in channel conversations. Ask again instead.";
+
+/**
+ * A Messaging conversation: a session that came from outside (its channel is not "mission") and is held through an
+ * integration binding to a channel connection. A mission chat bound to a channel is not one; it stays an ordinary
+ * chat that also posts through its binding.
+ */
+export function isChannelConversationSession(
+  session: Pick<SessionMeta, "channel"> | undefined,
+  binding: Pick<ChatSessionBindingRecord, "transport" | "connectionId"> | undefined,
+): boolean {
+  return session !== undefined && session.channel !== "mission" && resolveChannelConnectionId(binding) !== undefined;
+}
 
 /**
  * Builds the direct-or-group details a channel binding remembers. Blank values

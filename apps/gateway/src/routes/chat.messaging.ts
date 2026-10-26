@@ -2,8 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ConflictError, redactStructuredSecrets } from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
-// Read markers follow the Inbox's read-state identity rule: only token/basic operator auth is an identity.
-import { inboxActor } from "./inbox.js";
+import { messagingReader } from "./chat-messaging-reader.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 
 const RATE_LIMIT_GENERAL_MAX = 500;
@@ -40,7 +39,7 @@ export function registerChatMessagingRoutes(fastify: FastifyInstance): void {
       try {
         const overview = await fastify.services.chatSessions.listChatMessaging({
           workspaceId: query.data.workspaceId,
-          actor: inboxActor(request),
+          actor: messagingReader(request),
         });
         // Titles come from outside providers: project them like every other public chat text.
         reply.header("Cache-Control", "private, no-store");
@@ -65,7 +64,7 @@ export function registerChatMessagingRoutes(fastify: FastifyInstance): void {
           },
         });
       }
-      const actor = inboxActor(request);
+      const actor = messagingReader(request);
       if (!actor) {
         return sendRouteError(
           reply,

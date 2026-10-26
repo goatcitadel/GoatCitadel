@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { resolveSessionRoute } from "@goatcitadel/gateway-core";
 import { routeOperatorDeskSend } from "../services/channel-desk-turn.js";
 import { chatRoutes } from "./chat.js";
@@ -850,6 +850,50 @@ describe("chat routes additional coverage", () => {
         authActorSource: "loopback",
       });
     }
+  });
+
+  it("answers retry and edit in a channel conversation with 409 before anything is sent or streamed", async () => {
+    const refused = "Retry and edit aren't available in channel conversations. Ask again instead.";
+    const retryChatTurn = vi.fn();
+    const retryChatTurnStream = vi.fn();
+    const editChatTurn = vi.fn();
+    const editChatTurnStream = vi.fn();
+    // The service refuses a channel conversation in the route-decision check the four routes run first.
+    const routePreflight = vi.fn(async () => {
+      throw new ConflictError({ message: refused });
+    });
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    decorateAuthenticatedOperator(app);
+    app.decorate("services", {
+      chatMessages: { retryChatTurn, retryChatTurnStream, editChatTurn, editChatTurnStream, routePreflight },
+    } as never);
+    await app.register(chatRoutes);
+
+    for (const [path, action] of [
+      ["retry", "retry"],
+      ["retry/stream", "retry"],
+      ["edit", "edit"],
+      ["edit/stream", "edit"],
+    ] as const) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/chat/sessions/sess-1/turns/turn-1/${path}`,
+        payload: {
+          content: "edited",
+          providerId: "openai",
+          model: "gpt-5.1",
+          routeDecision: testRouteDecision({ action, turnId: "turn-1" }),
+        },
+      });
+      expect(response.statusCode, path).toBe(409);
+      expect(response.headers["content-type"], path).toContain("application/json");
+      expect(response.json<{ error: string }>().error, path).toBe(refused);
+    }
+    expect(retryChatTurn).not.toHaveBeenCalled();
+    expect(retryChatTurnStream).not.toHaveBeenCalled();
+    expect(editChatTurn).not.toHaveBeenCalled();
+    expect(editChatTurnStream).not.toHaveBeenCalled();
   });
 
   it("exposes chat route preflight through the gateway route stack", async () => {

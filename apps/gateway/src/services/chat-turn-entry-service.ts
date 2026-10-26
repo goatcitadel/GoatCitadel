@@ -33,6 +33,7 @@ import type {
   AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { looksLowConfidenceResponse } from "./learned-memory-utils.js";
+import { CHANNEL_CONVERSATION_RESEND_REFUSED, isChannelConversationSession } from "./channel-conversation.js";
 import {
   preflightChatRoute,
   resolveChatRouteDescriptor,
@@ -93,7 +94,24 @@ type ChatTurnProactiveTriggerInput = {
 
 type ChatTurnEntryStorage = ChatTurnPrepHost["storage"] &
   chatTurnDispatchService.ChatTurnDispatchHost["storage"] &
-  Pick<Storage, "chatReflectionAttempts" | "chatSessionBindings">;
+  Pick<Storage, "chatReflectionAttempts" | "chatSessionBindings" | "sessions">;
+
+/**
+ * Retry and edit send the operator's words again. In a channel conversation they would go out through the channel as
+ * the bot (in a group, to other people), so both are refused before any lease, admission or provider send. A mission
+ * chat bound to a channel keeps them, and so does every session without a channel binding.
+ */
+async function refuseResendInChannelConversation(host: ChatTurnEntryHost, sessionId: string): Promise<void> {
+  const storage = host.storage;
+  const binding = await storage.chatSessionBindings.get(sessionId);
+  if (binding?.transport !== "integration" || !binding.connectionId) {
+    return;
+  }
+  const session = (await storage.sessions.listBySessionIds([sessionId])).get(sessionId);
+  if (isChannelConversationSession(session, binding)) {
+    throw new ConflictError({ message: CHANNEL_CONVERSATION_RESEND_REFUSED });
+  }
+}
 
 export interface AgentChatTurnIdentity {
   turnId: string;
@@ -1490,6 +1508,7 @@ export async function retryChatTurn(
   overrides: Partial<ChatSendMessageRequest> = {},
   options?: OperatorChatTurnRequestOptions,
 ): Promise<ChatSendMessageResponse> {
+  await refuseResendInChannelConversation(host, sessionId);
   return host.withChatTurnWriteLease(sessionId, "retry-turn", async () => {
     const current = await requireEntryChatTurnContext(host, sessionId, turnId);
     const request: ChatSendMessageRequest = {
@@ -1621,6 +1640,7 @@ export async function* retryChatTurnStream(
   overrides: Partial<ChatSendMessageRequest> = {},
   options?: OperatorChatTurnStreamRequestOptions,
 ): AsyncGenerator<ChatStreamChunk> {
+  await refuseResendInChannelConversation(host, sessionId);
   yield* host.withChatTurnWriteLeaseStream(sessionId, "retry-turn/stream", () => {
     return (async function* (): AsyncGenerator<ChatStreamChunk> {
       const current = await requireEntryChatTurnContext(host, sessionId, turnId);
@@ -1803,6 +1823,7 @@ export async function editChatTurn(
   input: ChatSendMessageRequest,
   options?: OperatorChatTurnRequestOptions,
 ): Promise<ChatSendMessageResponse> {
+  await refuseResendInChannelConversation(host, sessionId);
   return host.withChatTurnWriteLease(sessionId, "edit-turn", async () => {
     const current = await requireEntryChatTurnContext(host, sessionId, turnId);
     const request: ChatSendMessageRequest = {
@@ -1913,6 +1934,7 @@ export async function* editChatTurnStream(
   input: ChatSendMessageRequest,
   options?: OperatorChatTurnStreamRequestOptions,
 ): AsyncGenerator<ChatStreamChunk> {
+  await refuseResendInChannelConversation(host, sessionId);
   yield* host.withChatTurnWriteLeaseStream(sessionId, "edit-turn/stream", () => {
     return (async function* (): AsyncGenerator<ChatStreamChunk> {
       const current = await requireEntryChatTurnContext(host, sessionId, turnId);
@@ -2219,6 +2241,11 @@ export async function routePreflight(
   sessionId: string,
   input: RoutingPreflightRequest,
 ): Promise<RoutingPreflightResult> {
+  // The retry and edit routes check their route decision through this preflight before they stream, so a channel
+  // conversation is refused here with its own 409 before any response starts.
+  if (input.action === "retry" || input.action === "edit") {
+    await refuseResendInChannelConversation(host, sessionId);
+  }
   return preflightChatRoute(host, sessionId, input);
 }
 
