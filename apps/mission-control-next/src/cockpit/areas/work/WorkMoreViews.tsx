@@ -6,7 +6,14 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from "../../ui/Menu";
 export const OLDER_KANBAN_VIEW = { id: "kanban", label: "Older Kanban view", href: "/work/kanban" } as const;
 
 /** WK-01: the Work header's overflow menu for views that are kept but are not part of the main tab row. */
-export function WorkMoreViews() {
+export interface WorkPhoneAction {
+  label: string;
+  disabled?: boolean;
+  onSelect: () => void;
+}
+
+/** `phoneActions` are header buttons that fold into this menu below the sm breakpoint so the header stays one row. */
+export function WorkMoreViews({ phoneActions = [] }: { phoneActions?: readonly WorkPhoneAction[] }) {
   const { navigate } = useCockpitRoute();
   return (
     <Menu>
@@ -17,6 +24,16 @@ export function WorkMoreViews() {
         <MoreHorizontal aria-hidden="true" className="size-4" /> More
       </MenuTrigger>
       <MenuContent align="end">
+        {phoneActions.map((action) => (
+          <MenuItem
+            key={action.label}
+            className="min-h-11 sm:hidden"
+            disabled={action.disabled}
+            onSelect={action.onSelect}
+          >
+            {action.label}
+          </MenuItem>
+        ))}
         <MenuItem className="max-sm:min-h-11" onSelect={() => navigate(OLDER_KANBAN_VIEW.href)}>
           {OLDER_KANBAN_VIEW.label}
         </MenuItem>

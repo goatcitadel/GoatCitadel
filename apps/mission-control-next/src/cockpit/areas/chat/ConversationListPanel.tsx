@@ -1,3 +1,4 @@
+import { Pin } from "lucide-react";
 import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { useThreadActivity } from "./use-thread-activity";
 import { ThreadRowStatus } from "./ThreadRowStatus";
@@ -22,6 +23,7 @@ function rowContext(session: RailSession): string | null {
 function rowName(title: string, session: RailSession, activity: ThreadActivityRecord | undefined): string {
   return [
     title,
+    session.pinned ? "Pinned" : null,
     presentTime(session.lastActivityAt)?.text ?? TIME_UNAVAILABLE,
     isNotableThreadActivity(activity) && activity ? threadActivityLabel(activity) : null,
     rowContext(session),
@@ -135,6 +137,9 @@ export function ConversationListPanel({
                       {rail.renderSessionLabel(session.sessionId)}
                     </span>
                     <span className="flex min-w-0 items-center gap-1 text-xs text-fg-muted">
+                      {session.pinned ? (
+                        <Pin role="img" aria-label="Pinned" className="size-3 shrink-0 text-accent" />
+                      ) : null}
                       <TimeText value={session.lastActivityAt} className="shrink-0 text-xs text-fg-muted" />
                       {isNotableThreadActivity(activity[session.sessionId]) ? (
                         <ThreadRowStatus record={activity[session.sessionId]} />

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
+import { requestCockpitToast } from "../../ui/toast-runtime";
 import type { WindowedRecordListHandle } from "../../ui/WindowedRecordList";
+import { inboxItemTitle } from "./inbox-presentation";
 import type { InboxViewGroupId } from "./inbox-triage";
 
 type FocusTarget = { kind: "item"; id: string } | { kind: "empty" } | { kind: "notice" };
@@ -8,6 +10,19 @@ type FocusTarget = { kind: "item"; id: string } | { kind: "empty" } | { kind: "n
 /** The inspector is a modal dialog or phone sheet: focus cannot leave it, so the decision notice inside takes it. */
 function inspectorIsModal() {
   return Boolean(document.querySelector('[role="dialog"] [data-inspector-body="true"]'));
+}
+
+const RECORDED_DECISION = /^Decision recorded: (Approved with edits|Approved|Denied)\.\s*(.*)$/su;
+
+/**
+ * Names the item in the outcome: "Denied Review file write." (plus any follow-on note). A message that is not a
+ * recorded approval decision, such as a changed record, is announced as it is.
+ */
+export function decisionOutcome(title: string, message: string): { verdict: string | null; announcement: string } {
+  const match = RECORDED_DECISION.exec(message);
+  if (!match) return { verdict: null, announcement: message };
+  const verdict = `${match[1]} ${title}.`;
+  return { verdict, announcement: [verdict, match[2]].filter(Boolean).join(" ") };
 }
 
 /**
@@ -34,7 +49,15 @@ export function useInboxDecisionFocus({
 
   const onDecision = useCallback(
     (item: OperatorInboxItem, message: string, settled: boolean) => {
-      announce(message);
+      const outcome = decisionOutcome(inboxItemTitle(item), message);
+      announce(outcome.announcement);
+      // The row leaves the list, so a sighted reader also gets a brief confirmation of what just happened.
+      const verdict = outcome.verdict;
+      if (settled && verdict)
+        requestCockpitToast(
+          (toast) => void toast(verdict, { duration: 4000 }),
+          () => true,
+        );
       if (!settled) {
         pending.current = { kind: "notice" };
         return;

@@ -117,10 +117,28 @@ describe("Chat session controls", () => {
       node.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0 }));
       node.click();
     });
-    await vi.waitFor(() => expect(item("Build editor")).toBeDefined());
+    await vi.waitFor(() => expect(item("Open code workbench")).toBeDefined());
     expect(item("Export conversation")).toBeUndefined();
-    await act(async () => item("Build editor")?.click());
+    await act(async () => item("Open code workbench")?.click());
     expect(onOpenBuildEditor).toHaveBeenCalledOnce();
+  });
+
+  it("offers Unpin for a pinned conversation", async () => {
+    await act(async () =>
+      root.render(<ChatSessionOverflow dock={dock({ selectedSession: { sessionId: "s", pinned: true } as never })} />),
+    );
+    await openWithPointer();
+    expect(item("Unpin conversation")).toBeDefined();
+    expect(item("Pin conversation")).toBeUndefined();
+  });
+
+  it("offers Pin for a conversation that is not pinned", async () => {
+    await act(async () =>
+      root.render(<ChatSessionOverflow dock={dock({ selectedSession: { sessionId: "s", pinned: false } as never })} />),
+    );
+    await openWithPointer();
+    expect(item("Pin conversation")).toBeDefined();
+    expect(item("Unpin conversation")).toBeUndefined();
   });
 
   it("disables fork when the conversation has no turn to fork from", async () => {

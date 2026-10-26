@@ -24,6 +24,7 @@ import type {
 } from "@goatcitadel/threaded-surface-core";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
+import { ChatClampedUserMessage } from "./ChatClampedUserMessage";
 import { ChatContinueAction } from "./ChatContinueAction";
 import { ChatRunCard } from "./ChatRunCard";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
@@ -85,7 +86,7 @@ export const Turn = memo(function Turn({
   const capture = getWorkflowSkillCaptureDisplay(turn.userMessage.content);
   return (
     <article
-      className="mx-auto w-full max-w-3xl space-y-4 px-3 py-5 sm:px-6"
+      className="group/turn mx-auto w-full max-w-3xl space-y-4 px-3 py-5 sm:px-6"
       aria-label={turnAccessibleName(capture?.summary ?? turn.userMessage.content, position)}
       data-turn-id={turn.turnId}
     >
@@ -95,7 +96,9 @@ export const Turn = memo(function Turn({
         <p className="mb-1 text-xs font-medium text-fg-muted">
           You · <ActorTimestamp timestamp={turn.userMessage.timestamp ?? ""} />
         </p>
-        <AssistantMessageRenderer role="user" content={capture?.summary ?? turn.userMessage.content} />
+        <ChatClampedUserMessage text={capture?.summary ?? turn.userMessage.content}>
+          <AssistantMessageRenderer role="user" content={capture?.summary ?? turn.userMessage.content} />
+        </ChatClampedUserMessage>
         {capture ? (
           <details>
             <summary>Captured task</summary>
@@ -184,6 +187,7 @@ export const Turn = memo(function Turn({
           answerContent={assistantText}
           streaming={streaming}
           readOnly={actions.historicalReadOnly}
+          latest={isLatest}
           actions={{
             ...actions,
             onOpenRunDetails: onInspectTurn ?? actions.onOpenRunDetails,

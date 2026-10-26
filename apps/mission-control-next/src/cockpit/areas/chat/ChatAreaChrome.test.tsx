@@ -122,7 +122,7 @@ describe("ChatSessionHeader", () => {
     expect(header.querySelector("select")).toBeNull();
     expect(header.querySelector('button[aria-label="New conversation"]')?.parentElement).toBe(header);
     // A closed build editor lives in the overflow menu, so the header carries no "Build editor" button.
-    expect(header.querySelector('button[aria-label="Build editor"]')).toBeNull();
+    expect(header.querySelector('button[aria-label="Open code workbench"]')).toBeNull();
     expect(header.querySelector('button[aria-label="Conversation actions"]')).not.toBeNull();
     await act(async () => conversations.click());
     expect(onOpenConversations).toHaveBeenCalledOnce();
@@ -156,7 +156,7 @@ describe("ChatSessionHeader", () => {
     expect(onOpenConversations).toHaveBeenCalledOnce();
 
     const items = await openPhoneMenu(buttons[1] as HTMLButtonElement);
-    expect(items.map((item) => item.textContent)).toEqual(["New conversation", "Projects", "Build editor"]);
+    expect(items.map((item) => item.textContent)).toEqual(["New conversation", "Projects", "Open code workbench"]);
     await act(async () => items[1]!.click());
     expect(onOpenProjects).toHaveBeenCalledOnce();
     expect(onToggle).not.toHaveBeenCalled();

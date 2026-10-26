@@ -257,3 +257,29 @@ describe("ChatTurnDetails tool name (#499)", () => {
     expect(container.textContent).not.toContain("documents.create");
   });
 });
+
+describe("ChatTurnDetails older-turn actions", () => {
+  const actionsWrapper = () =>
+    container.querySelector('button[aria-label="More message actions"]')!.parentElement!.parentElement!;
+
+  it("shows the action row fully on the latest turn", () => {
+    render(turnWith([]));
+    expect(actionsWrapper().className).not.toContain("opacity-0");
+  });
+
+  it("keeps an older turn's actions in the page, hidden until hover or keyboard focus", () => {
+    act(() =>
+      root.render(
+        <ChatTurnDetails turn={turnWith([])} streaming={false} readOnly={false} actions={actions} latest={false} />,
+      ),
+    );
+    const wrapper = actionsWrapper();
+    expect(wrapper.className).toContain("opacity-0");
+    expect(wrapper.className).toContain("group-hover/turn:opacity-100");
+    expect(wrapper.className).toContain("group-focus-within/turn:opacity-100");
+    expect(wrapper.hasAttribute("hidden")).toBe(false);
+    expect(wrapper.className).not.toContain("invisible");
+    const buttons = [...wrapper.querySelectorAll("button")].map((button) => button.textContent?.trim());
+    expect(buttons).toEqual(expect.arrayContaining(["Copy answer", "More"]));
+  });
+});
