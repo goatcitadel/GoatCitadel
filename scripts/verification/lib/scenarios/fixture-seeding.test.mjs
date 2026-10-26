@@ -445,5 +445,6 @@ test("an approved Settings plan that never settles stops the fixture after the r
     settleApprovedSettingsChangePlan("http://gateway.test", "plan-1", deps),
     /did not settle after approval/,
   );
-  assert.ok(reads > 1);
+  // The settle loop shares the Settings reconciliation budget (120 attempts).
+  assert.equal(reads, 120);
 });
