@@ -31,6 +31,7 @@ import {
 } from "../../../features/native-routes/settings/sections/integration-editor-receipts";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { REMOVE_CONSEQUENCE, removeChannelTitle } from "../chat/channel-remove-copy";
 
 type Selection =
   | { draft: ChannelSetupDraft; connection?: never }
@@ -178,6 +179,8 @@ export function ChannelLifecycleControls({
       busy.current = false;
     }
   }
+  // Removing a finished connection says what it does to the bot, its keys and its conversations before it asks.
+  const removing = connection && review?.action === "delete" ? connection : undefined;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
@@ -209,11 +212,13 @@ export function ChannelLifecycleControls({
         onOpenChange={(open) => {
           if (!open && !locked) setReview(null);
         }}
-        title="Review channel lifecycle change"
+        title={removing ? removeChannelTitle(removing.label) : "Review channel lifecycle change"}
         description={
-          draft
-            ? "Delete this exact saved draft and its temporary credentials. Finished connections are not affected."
-            : "This affects the saved installation-wide connection and may stop its runtime. External messages and previously completed actions cannot be undone here."
+          removing
+            ? REMOVE_CONSEQUENCE
+            : draft
+              ? "Delete this exact saved draft and its temporary credentials. Finished connections are not affected."
+              : "This affects the saved installation-wide connection and may stop its runtime. External messages and previously completed actions cannot be undone here."
         }
       >
         <p className="break-words text-sm">

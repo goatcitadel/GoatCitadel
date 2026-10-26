@@ -2,7 +2,7 @@ import path from "node:path";
 import { publishIntegrationConnectionCommit } from "./integration-connection-commit-service.js";
 import { randomUUID } from "node:crypto";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
-import { ValidationError } from "@goatcitadel/contracts";
+import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type {
   ChannelActivityEffectResult,
   ChannelActivityInput,
@@ -35,6 +35,7 @@ import type {
   PluginPackageIntegrityResult,
   VerifyIntegrationPluginPackageInput,
 } from "./integration-plugin-package-integrity.js";
+import { parseChannelSecretRef, type ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
 import { emitChannelActivityImpl } from "./integration-channel-activity.js";
@@ -91,6 +92,8 @@ export interface IntegrationChannelPort {
       signal?: AbortSignal,
     ): Promise<ChannelTypingResult>;
   };
+  /** Keychain custody of channel keys; absent where the host has no OS keychain. Removing a channel deletes its keys here. */
+  channelSecrets?: Pick<ChannelSecretCustodyService, "delete">;
   resolveConnectionSecret(
     config: Record<string, unknown>,
     directKey: string,
@@ -563,14 +566,52 @@ function applyChannelInboundAccessDefaults(
   };
 }
 
+/** Where the keychain refs of a channel connection start; the connection id and a colon follow. */
+const CONNECTION_SECRET_REF_PREFIX = "keychain:goatcitadel:channel-connection:";
+
+/**
+ * Every keychain reference this connection owns, anywhere in its config, once each. Only the exact
+ * `<prefix><connectionId>:` form counts, so a draft's key, another connection's key (even one whose id
+ * extends this one) and text that merely mentions a reference are never returned.
+ */
+export function collectConnectionSecretRefs(connectionId: string, config: Record<string, unknown>): string[] {
+  const prefix = `${CONNECTION_SECRET_REF_PREFIX}${connectionId}:`;
+  const found = new Set<string>();
+  const seen = new Set<object>();
+  const queue: unknown[] = [config];
+  for (let index = 0; index < queue.length; index += 1) {
+    const value = queue[index];
+    if (typeof value === "string") {
+      if (value.startsWith(prefix)) found.add(value);
+    } else if (value !== null && typeof value === "object" && !seen.has(value)) {
+      seen.add(value);
+      queue.push(...Object.values(value));
+    }
+  }
+  return [...found];
+}
+
+/**
+ * Removes a channel connection. The connection row, its keys and its Discord pairings go; its sessions,
+ * bindings and transcripts stay, so the conversations remain readable under a removed channel.
+ *
+ * The keys and pairings are released only after the delete committed, and nothing about releasing them can
+ * undo or fail the removal: a failure is logged by field name and the caller still sees the delete.
+ */
 export async function deleteIntegrationConnection(
   deps: IntegrationChannelPort,
   connectionId: string,
   expectedRevision?: string,
   onCommitted?: () => Promise<void>,
 ): Promise<boolean> {
-  const deleted = await deps.storage.integrationConnections.delete(connectionId, expectedRevision);
-  if (deleted) {
+  const connections = deps.storage.integrationConnections;
+  const removed = await readConnectionBeforeRemoval(connections, connectionId);
+  // Pinning the revision read here makes the keys released below exactly the ones of the row that is deleted.
+  const deleted = await connections.delete(connectionId, expectedRevision ?? removed?.revision);
+  if (!deleted) {
+    return false;
+  }
+  try {
     await publishIntegrationConnectionCommit(
       deps,
       {
@@ -579,8 +620,100 @@ export async function deleteIntegrationConnection(
       },
       onCommitted,
     );
+  } finally {
+    if (removed) {
+      await releaseRemovedConnection(deps, removed);
+    }
   }
-  return deleted;
+  return true;
+}
+
+async function readConnectionBeforeRemoval(
+  connections: IntegrationChannelPort["storage"]["integrationConnections"],
+  connectionId: string,
+): Promise<IntegrationConnection | undefined> {
+  try {
+    return await connections.get(connectionId);
+  } catch (error) {
+    // A connection that is already gone has nothing to release; any other failure stops before anything changes.
+    if (error instanceof NotFoundError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/** Deletes the removed connection's keys and Discord pairings. A failure is reported, never thrown: the removal has committed. */
+async function releaseRemovedConnection(deps: IntegrationChannelPort, removed: IntegrationConnection): Promise<void> {
+  const { connectionId } = removed;
+  const refs = collectConnectionSecretRefs(connectionId, removed.config);
+  const custody = deps.channelSecrets;
+  const failedFields: string[] = [];
+  let failure: unknown;
+  for (const ref of refs) {
+    try {
+      if (!custody) {
+        throw new Error("The OS keychain is unavailable.");
+      }
+      custody.delete(ref);
+    } catch (error) {
+      failedFields.push(secretFieldName(ref));
+      failure ??= error;
+    }
+  }
+  if (failedFields.length > 0) {
+    reportReleaseFailure(
+      deps,
+      "channel.connection.secret_cleanup_failed",
+      "A removed channel left keys in the OS keychain.",
+      {
+        connectionId,
+        fields: [...new Set(failedFields)],
+        errorName: errorNameOf(failure),
+      },
+    );
+  }
+  if (removed.kind === "channel" && removed.key === "discord") {
+    try {
+      const pairings = await deps.readDiscordPairings();
+      const kept = pairings.filter((item) => item.connectionId !== connectionId);
+      if (kept.length !== pairings.length) {
+        await deps.writeDiscordPairings(kept);
+      }
+    } catch (error) {
+      reportReleaseFailure(
+        deps,
+        "channel.connection.pairing_cleanup_failed",
+        "A removed channel left Discord pairings behind.",
+        {
+          connectionId,
+          errorName: errorNameOf(error),
+        },
+      );
+    }
+  }
+}
+
+/** The field a keychain reference belongs to (for example `botToken`), or `unknown`; never any other part of it. */
+function secretFieldName(secretRef: string): string {
+  try {
+    return parseChannelSecretRef(secretRef).fieldKey;
+  } catch {
+    return "unknown";
+  }
+}
+
+function errorNameOf(error: unknown): string {
+  return error instanceof Error ? error.name : "unknown";
+}
+
+function reportReleaseFailure(
+  deps: IntegrationChannelPort,
+  event: string,
+  message: string,
+  context: Record<string, unknown>,
+): void {
+  deps.recordDevDiagnostic?.({ level: "warn", category: "channels", event, message, context });
 }
 
 export async function listDiscordPairings(

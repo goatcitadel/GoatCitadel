@@ -14,7 +14,7 @@ import { __resetIntegrationConnectionMutationsForTests } from "../../../features
 import { __resetChannelMutationStateForTests } from "../../../features/native-routes/settings/sections/channel-setup-state";
 import type { Dialog } from "../../ui/Dialog";
 import { ChannelPage } from "./ChannelPage";
-import { REMOVE_CONSEQUENCE } from "./ChannelManageSection";
+import { REMOVE_CONSEQUENCE } from "./channel-remove-copy";
 
 const api = vi.hoisted(() => ({
   fetchIntegrationConnections: vi.fn(),
@@ -618,6 +618,9 @@ describe("ChannelPage turning off and removing", () => {
     await click(button("Remove"));
     const dialog = container.querySelector('section[aria-label="Remove Telegram?"]')!;
     expect(dialog.textContent).toContain(REMOVE_CONSEQUENCE);
+    expect(dialog.textContent).toContain(
+      "This disconnects the bot and deletes its keys. Its conversations stay readable under Messaging until you delete them.",
+    );
     expect(dialog.textContent).not.toContain(REVISION);
     expect(api.deleteIntegrationConnection).not.toHaveBeenCalled();
     const confirm = button("Remove channel", dialog);

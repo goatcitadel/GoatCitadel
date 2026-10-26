@@ -5,11 +5,8 @@ import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { Section } from "../../ui/Section";
 import { ChannelActionNote } from "./ChannelActionNote";
+import { REMOVE_CONSEQUENCE, removeChannelTitle } from "./channel-remove-copy";
 import { useChannelLifecycle } from "./use-channel-lifecycle";
-
-/** What removing a channel does, said before its button. */
-export const REMOVE_CONSEQUENCE =
-  "This affects the saved installation-wide connection and may stop its runtime. External messages and previously completed actions cannot be undone here.";
 
 /**
  * Turn the channel off or on (reversible, so a plain button) or remove it (red, and asked about first), and the way to
@@ -58,7 +55,7 @@ export function ManageSection({
         onOpenChange={(open) => {
           if (!open && lifecycle.busy !== "remove") setConfirming(false);
         }}
-        title={`Remove ${connection.label}?`}
+        title={removeChannelTitle(connection.label)}
         description={REMOVE_CONSEQUENCE}
       >
         <div className="mt-4 flex flex-wrap gap-2">

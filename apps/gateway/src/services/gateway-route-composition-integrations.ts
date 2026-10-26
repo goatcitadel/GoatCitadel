@@ -61,6 +61,7 @@ import {
 import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
 import * as channelSetupService from "./channel-setup-service.js";
 import { composeChannelSetupHost } from "./channel-setup-host-composition.js";
+import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import {
   createExternalSideEffectReplayRecords,
@@ -597,9 +598,11 @@ function createIntegrationChannelPortForGateway(
 ): IntegrationChannelServicePort {
   const storage = gateway.storage;
   const discordRuntimeService = gateway.discordRuntimeService;
+  const secretStore = gateway.secretStore;
   const streams = getChannelStreamRuntime(gateway);
   return {
     storage,
+    ...(secretStore ? { channelSecrets: new ChannelSecretCustodyService(secretStore) } : {}),
     publishRealtime: async (eventType, source, payload, options) => {
       await gateway.publishRealtime(eventType, source, payload, options);
     },
