@@ -83,12 +83,12 @@ function savedServer(overrides: Partial<McpServerRecord> = {}): McpServerRecord 
   } as unknown as McpServerRecord;
 }
 
-function tool(toolName: string, annotations?: McpToolRecord["annotations"]): McpToolRecord {
+function tool(toolName: string, annotations?: McpToolRecord["annotations"], enabled = true): McpToolRecord {
   return {
     serverId: "linear",
     toolName,
     ...(annotations ? { annotations } : {}),
-    enabled: true,
+    enabled,
     updatedAt: "2026-10-01",
   };
 }
@@ -147,7 +147,9 @@ async function renderPanel(item: CapabilityConnectorItem = linear(), tools: McpT
     ),
   );
   // A saved server lists its tools; wait for them so the labels have been drawn.
-  if (item.source === "mcp_server") await vi.waitFor(() => expect(document.body.querySelector("li")).not.toBeNull());
+  if (item.source === "mcp_server" && tools.length > 0) {
+    await vi.waitFor(() => expect(document.body.querySelector("li")).not.toBeNull());
+  }
 }
 
 const choose = (posture: McpApprovalPosture) => act(async () => radio(posture)?.click());
@@ -186,6 +188,43 @@ describe("What asks first", () => {
     expect(toolLine("mystery_tool")).toContain("Asks first");
   });
 
+  it("labels every tool Asks first for a connector whose tools are listed per chat, whatever it saved", async () => {
+    await renderPanel(linear({ requesterScoped: true, approvalPosture: "nothing_asks" }), [
+      tool("list_issues", { readOnlyHint: true }),
+      tool("update_issue", { destructiveHint: false }),
+    ]);
+    expect(toolLine("list_issues")).toContain("Asks first");
+    expect(toolLine("list_issues")).not.toContain("Runs freely");
+    expect(toolLine("update_issue")).toContain("Asks first");
+    expect(toolLine("update_issue")).not.toContain("Runs freely");
+  });
+
+  it("shows only Switched off, with no label, for a tool that is switched off", async () => {
+    await renderPanel(linear({ approvalPosture: "reads_free" }), [
+      tool("list_issues", { readOnlyHint: true }, false),
+      tool("update_issue", undefined, false),
+      tool("get_issue", { readOnlyHint: true }),
+    ]);
+    for (const name of ["list_issues", "update_issue"]) {
+      expect(toolLine(name)).toContain("Switched off");
+      expect(toolLine(name)).not.toContain("Asks first");
+      expect(toolLine(name)).not.toContain("Runs freely");
+    }
+    expect(toolLine("get_issue")).toContain("Runs freely");
+  });
+
+  it("says a per-chat connector's tools are listed per chat when it has no tool list", async () => {
+    await renderPanel(linear({ requesterScoped: true }), []);
+    await vi.waitFor(() => expect(text()).toContain("Its tools are listed per chat."));
+    expect(text()).not.toContain("show up once it connects");
+  });
+
+  it("keeps the usual empty message for a server that has not listed its tools yet", async () => {
+    await renderPanel(linear(), []);
+    await vi.waitFor(() => expect(text()).toContain("No tools listed yet. They show up once it connects."));
+    expect(text()).not.toContain("listed per chat.");
+  });
+
   it.each([
     ["everything_asks", [true, true, true, true]],
     ["reads_free", [false, true, true, true]],
@@ -212,27 +251,26 @@ describe("What asks first", () => {
   it("shows the three choices with their plain-words detail, and the footer", async () => {
     await renderPanel(linear({ approvalPosture: "reads_free" }));
     const radios = [...document.body.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+    // The whole row, title and detail, is the radio's label.
     expect(radios.map((entry) => entry.labels?.[0]?.textContent)).toEqual([
-      "Everything asks",
-      "Reading is free Recommended",
-      "Nothing asks",
+      "Everything asksEvery action asks you first.",
+      "Reading is free RecommendedReads run on their own. Anything that creates or changes something asks you first.",
+      "Nothing asksChanges run on their own. Anything the app marks as destructive, or doesn't label, still asks you first.",
     ]);
-    expect(text()).toContain("Every action asks you first.");
-    expect(text()).toContain("Reads run on their own. Anything that creates or changes something asks you first.");
-    expect(text()).toContain(
-      "Changes run on their own. Anything the app marks as destructive, or doesn't label, still asks you first.",
-    );
     expect(text()).toContain(FOOTER);
     expect(checkedRadios()).toEqual(["reads_free"]);
   });
 
-  it("describes each choice to a screen reader and groups them under the heading", async () => {
+  it("groups the choices under the heading and describes a switched-off group by its explanation", async () => {
     await renderPanel();
     expect(group()?.querySelector("legend")?.textContent).toBe("What asks first");
-    for (const entry of document.body.querySelectorAll<HTMLInputElement>('input[type="radio"]')) {
-      const description = entry.getAttribute("aria-describedby");
-      expect(description && document.getElementById(description)?.textContent).toBeTruthy();
-    }
+    expect(group()?.hasAttribute("aria-describedby")).toBe(false);
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    await renderPanel(linear({ requesterScoped: true }));
+    const explanation = document.getElementById(group()?.getAttribute("aria-describedby") ?? "");
+    expect(explanation?.textContent).toBe(PER_CHAT_LINE);
   });
 
   it("places it between how it connects and the server controls, for saved servers only", async () => {
@@ -279,10 +317,7 @@ describe("What asks first", () => {
     expect(group()?.getAttribute("aria-busy")).toBe("true");
     // The tool labels follow the saved setting, not the choice still in flight.
     expect(toolLine("list_issues")).toContain("Asks first");
-    // A second choice while one is saving is ignored.
-    await choose("reads_free");
     expect(mcp.updateMcpServerPolicy).toHaveBeenCalledTimes(1);
-    expect(checkedRadios()).toEqual(["nothing_asks"]);
 
     await act(async () => saving.resolve(savedServer()));
     expect(group()?.getAttribute("aria-busy")).toBeNull();
@@ -336,6 +371,86 @@ describe("What asks first", () => {
     await choose("nothing_asks");
     expect(alertText()).toBeUndefined();
     expect(checkedRadios()).toEqual(["nothing_asks"]);
+  });
+
+  it("saves a choice made mid-save once the first save settles, so the last choice wins", async () => {
+    const first = deferred<McpServerRecord>();
+    mcp.updateMcpServerPolicy.mockReturnValueOnce(first.promise);
+    mcp.updateMcpServerPolicy.mockResolvedValueOnce(savedServer({ revision: "c".repeat(64) }));
+    await renderPanel();
+    await choose("reads_free");
+    await choose("nothing_asks");
+
+    // Only the first save has gone out, and the group already shows the last choice.
+    expect(mcp.updateMcpServerPolicy).toHaveBeenCalledTimes(1);
+    expect(checkedRadios()).toEqual(["nothing_asks"]);
+    expect(group()?.getAttribute("aria-busy")).toBe("true");
+
+    await act(async () => first.resolve(savedServer({ revision: NEXT_REVISION })));
+
+    // Both are saved in order, and the second starts from the version the first made.
+    expect(mcp.updateMcpServerPolicy).toHaveBeenCalledTimes(2);
+    expect(mcp.updateMcpServerPolicy).toHaveBeenNthCalledWith(1, "linear", {
+      expectedRevision: REVISION,
+      approvalPosture: "reads_free",
+    });
+    expect(mcp.updateMcpServerPolicy).toHaveBeenNthCalledWith(2, "linear", {
+      expectedRevision: NEXT_REVISION,
+      approvalPosture: "nothing_asks",
+    });
+    expect(cached()).toMatchObject({ approvalPosture: "nothing_asks", serverRevision: "c".repeat(64) });
+    await vi.waitFor(() => expect(toolLine("update_issue")).toContain("Runs freely"));
+    expect(checkedRadios()).toEqual(["nothing_asks"]);
+    expect(group()?.getAttribute("aria-busy")).toBeNull();
+    expect(alertText()).toBeUndefined();
+  });
+
+  it("saves only the last of several choices made mid-save", async () => {
+    const first = deferred<McpServerRecord>();
+    mcp.updateMcpServerPolicy.mockReturnValueOnce(first.promise);
+    mcp.updateMcpServerPolicy.mockResolvedValueOnce(savedServer({ revision: "c".repeat(64) }));
+    await renderPanel();
+    await choose("reads_free");
+    await choose("nothing_asks");
+    await choose("everything_asks");
+    await choose("nothing_asks");
+    await act(async () => first.resolve(savedServer({ revision: NEXT_REVISION })));
+
+    expect(mcp.updateMcpServerPolicy).toHaveBeenCalledTimes(2);
+    expect(mcp.updateMcpServerPolicy).toHaveBeenNthCalledWith(2, "linear", {
+      expectedRevision: NEXT_REVISION,
+      approvalPosture: "nothing_asks",
+    });
+  });
+
+  it("drops the remembered choice and rolls back when the first save fails", async () => {
+    const first = deferred<McpServerRecord>();
+    mcp.updateMcpServerPolicy.mockReturnValueOnce(first.promise);
+    await renderPanel();
+    await choose("reads_free");
+    await choose("nothing_asks");
+    await act(async () => first.reject(new Error("The server said no")));
+
+    expect(mcp.updateMcpServerPolicy).toHaveBeenCalledTimes(1);
+    expect(checkedRadios()).toEqual(["everything_asks"]);
+    expect(alertText()).toContain("The server said no");
+    expect(group()?.getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("keeps the first choice and says why when the remembered one fails", async () => {
+    const first = deferred<McpServerRecord>();
+    mcp.updateMcpServerPolicy.mockReturnValueOnce(first.promise);
+    mcp.updateMcpServerPolicy.mockRejectedValueOnce(new Error("The server said no"));
+    await renderPanel();
+    await choose("reads_free");
+    await choose("nothing_asks");
+    await act(async () => first.resolve(savedServer({ revision: NEXT_REVISION })));
+
+    expect(mcp.updateMcpServerPolicy).toHaveBeenCalledTimes(2);
+    // The first choice was saved, so that is what the group goes back to.
+    expect(cached()).toMatchObject({ approvalPosture: "reads_free", serverRevision: NEXT_REVISION });
+    await vi.waitFor(() => expect(checkedRadios()).toEqual(["reads_free"]));
+    expect(alertText()).toContain("The server said no");
   });
 
   it("shows Everything asks, switched off, for a connector whose tools are listed per chat", async () => {

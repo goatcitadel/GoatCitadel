@@ -28,10 +28,19 @@ import {
 } from "./connector-view";
 
 /**
- * The tools a saved server offers, as it last listed them, each marked with whether it asks first under the server's
- * saved setting. Other connectors have no tool list of their own.
+ * The tools a saved server offers, as it last listed them, each switched-on tool marked with whether it asks first under
+ * the server's saved setting. A server whose tools are listed per chat has no list here and never has its setting applied.
+ * Other connectors have no tool list of their own.
  */
-function ConnectorTools({ serverId, posture }: { serverId: string; posture: McpApprovalPosture | undefined }) {
+function ConnectorTools({
+  serverId,
+  perChat,
+  posture,
+}: {
+  serverId: string;
+  perChat: boolean;
+  posture: McpApprovalPosture | undefined;
+}) {
   const query = useQuery({
     queryKey: queryKeys.capabilityConnectorTools(serverId),
     queryFn: () => fetchMcpTools(serverId),
@@ -52,7 +61,11 @@ function ConnectorTools({ serverId, posture }: { serverId: string; posture: McpA
     return <p className="mt-2 text-sm text-fg-muted">Reading its tools…</p>;
   }
   if (tools.length === 0) {
-    return <p className="mt-2 text-sm text-fg-muted">No tools listed yet. They show up once it connects.</p>;
+    return (
+      <p className="mt-2 text-sm text-fg-muted">
+        {perChat ? "Its tools are listed per chat." : "No tools listed yet. They show up once it connects."}
+      </p>
+    );
   }
   return (
     <ul className="mt-2 divide-y divide-line-subtle">
@@ -60,11 +73,15 @@ function ConnectorTools({ serverId, posture }: { serverId: string; posture: McpA
         <li key={tool.toolName} className="py-1.5">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <code className="break-all font-mono text-xs text-fg">{tool.toolName}</code>
-            {tool.enabled ? null : <span className="text-xs text-fg-muted">Switched off</span>}
-            {/* The same rule the Gateway decides with, so what the panel says is what happens. */}
-            <span className="text-xs text-fg-secondary">
-              {mcpCallAsksFirst(posture, tool.annotations) ? "Asks first" : "Runs freely"}
-            </span>
+            {tool.enabled ? (
+              // The rule the Gateway applies to a call, read from the labels the server gave this tool when it last
+              // connected. A tool that is switched off never runs, so it carries no label.
+              <span className="text-xs text-fg-secondary">
+                {mcpCallAsksFirst(posture, tool.annotations) ? "Asks first" : "Runs freely"}
+              </span>
+            ) : (
+              <span className="text-xs text-fg-muted">Switched off</span>
+            )}
           </div>
           {tool.description ? <p className="text-sm text-fg-secondary">{tool.description}</p> : null}
         </li>
@@ -117,7 +134,12 @@ function ConnectorDetails({ item, onRemoved }: { item: CapabilityConnectorItem; 
       <Section title="What it does" headingLevel={3}>
         {item.description ? <p className="text-sm text-fg-secondary">{item.description}</p> : null}
         {savedServer && item.serverId ? (
-          <ConnectorTools serverId={item.serverId} posture={item.approvalPosture} />
+          <ConnectorTools
+            serverId={item.serverId}
+            perChat={item.requesterScoped === true}
+            // The Gateway never relieves a server whose tools are listed per chat, whatever its saved setting says.
+            posture={item.requesterScoped ? undefined : item.approvalPosture}
+          />
         ) : null}
       </Section>
 
