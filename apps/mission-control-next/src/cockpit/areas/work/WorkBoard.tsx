@@ -137,6 +137,22 @@ export function WorkBoard() {
       else next.add(taskId);
       return next;
     });
+  const toggleSelecting = () => {
+    setSelecting((value) => !value);
+    setSelectedIds(new Set());
+    setBulkNotice(undefined);
+  };
+  const refreshBoard = () => {
+    void runs.refetch();
+    void tasks.refetch();
+  };
+  // Below the sm breakpoint the secondary header buttons fold into the "More" menu so the header stays one row.
+  const phoneActions = [
+    ...(boardEmpty && !selecting
+      ? []
+      : [{ label: "Select tasks", disabled: !selecting && !tasks.data, onSelect: toggleSelecting }]),
+    { label: "Refresh", disabled: runs.isFetching || tasks.isFetching, onSelect: refreshBoard },
+  ];
   const open = (path: string) => (event: MouseEvent<HTMLAnchorElement>) => {
     if (isModifiedClick(event)) return;
     event.preventDefault();
@@ -162,28 +178,23 @@ export function WorkBoard() {
             {boardEmpty && !selecting ? null : (
               <Button
                 size="sm"
+                className={selecting ? undefined : "max-sm:hidden"}
                 aria-pressed={selecting}
                 disabled={!selecting && !tasks.data}
-                onClick={() => {
-                  setSelecting((value) => !value);
-                  setSelectedIds(new Set());
-                  setBulkNotice(undefined);
-                }}
+                onClick={toggleSelecting}
               >
                 {selecting ? "Done selecting" : "Select tasks"}
               </Button>
             )}
             <Button
               size="sm"
-              onClick={() => {
-                void runs.refetch();
-                void tasks.refetch();
-              }}
+              className="max-sm:hidden"
+              onClick={refreshBoard}
               disabled={runs.isFetching || tasks.isFetching}
             >
               <RefreshCw aria-hidden="true" className="size-4" /> Refresh
             </Button>
-            <WorkMoreViews />
+            <WorkMoreViews phoneActions={phoneActions} />
           </>
         }
       />
@@ -202,7 +213,7 @@ export function WorkBoard() {
               id={searchId}
               type="search"
               value={search}
-              placeholder="Search loaded tasks and runs"
+              placeholder="Search tasks and runs"
               onChange={(event) => setSearch(event.target.value)}
               className={`${CONTROL} w-full pl-8 pr-2 placeholder:text-fg-muted`}
             />
