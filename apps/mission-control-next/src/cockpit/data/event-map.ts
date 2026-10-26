@@ -63,13 +63,24 @@ const TOOL_KEYS: readonly QueryKey[] = [
   ["settings", "permission-selection"],
   ["approvals", "workspace-tools-profile"],
 ];
+// The Capabilities connector list merges MCP servers, integrations, channels and web search, so each owner refreshes it.
+// The prefix covers every workspace's list.
+const CAPABILITY_CONNECTOR_KEYS: readonly QueryKey[] = [["mcp", "capability-connectors"]];
 const MCP_KEYS: readonly QueryKey[] = [
+  ...CAPABILITY_CONNECTOR_KEYS,
+  // What a connector panel reads about one saved server: its tool list and its own record.
+  ["mcp", "capability-connector-tools"],
+  ["mcp", "capability-connector-server"],
   queryKeys.capabilities(),
   ["settings", "mcp-servers"],
   ["settings", "mcp-inspection"],
   ["settings", "mcp-requests"],
 ];
-const INTEGRATION_KEYS: readonly QueryKey[] = [["settings", "integration-connections"], queryKeys.healthAll()];
+const INTEGRATION_KEYS: readonly QueryKey[] = [
+  ...CAPABILITY_CONNECTOR_KEYS,
+  ["settings", "integration-connections"],
+  queryKeys.healthAll(),
+];
 const CAPABILITY_KEYS: readonly QueryKey[] = [queryKeys.capabilities(), ["capability"], queryKeys.inboxAll()];
 
 const SYSTEM_SOURCE_TYPES = new Map<string, EventEffect | "ignore">([

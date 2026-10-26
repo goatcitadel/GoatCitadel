@@ -42,7 +42,7 @@ test("opens every area in the cockpit shell", () => {
 
 test("covers each cockpit area once", () => {
   assert.equal(new Set(SMOKE_PATHS).size, SMOKE_PATHS.length);
-  for (const area of ["chat", "inbox", "work", "library", "system", "settings"]) {
+  for (const area of ["chat", "inbox", "work", "capabilities", "library", "system", "settings"]) {
     assert.ok(
       SMOKE_PATHS.some((routePath) => routePath.split("/")[1] === area),
       `no smoke path opens ${area}`,

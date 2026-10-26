@@ -608,6 +608,11 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   assertExpectedStatus("mcp server create", mcpServer, [201]);
   const serverId = mcpServer.body.serverId;
   await requestNotServerError(app, "GET", "/api/v1/mcp/servers");
+  await requestNotServerError(
+    app,
+    "GET",
+    `/api/v1/capabilities/connectors?workspaceId=${encodeURIComponent(workspaceId)}`,
+  );
   if (serverId) {
     await requestNotServerError(app, "PATCH", `/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, {
       trustTier: "restricted",

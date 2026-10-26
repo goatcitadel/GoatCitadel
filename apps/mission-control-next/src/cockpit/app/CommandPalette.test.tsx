@@ -341,6 +341,7 @@ describe("CommandPalette", () => {
       "Go to Chat",
       "Go to Inbox",
       "Go to Work",
+      "Go to Capabilities",
       "Go to Library",
       "Go to System",
       "Switch to classic Mission Control",
@@ -351,6 +352,22 @@ describe("CommandPalette", () => {
     expect(body).toContain("Default model: Recorded Model · Local runtime");
     expect(body).toContain("Conversation overrides stay in Chat");
     expect(body).toContain("New chat");
+  });
+
+  it("finds Capabilities by the words people use for it", async () => {
+    act(() => {
+      root.render(<CommandPalette open onOpenChange={() => undefined} />);
+    });
+    await ready();
+    const input = document.querySelector<HTMLInputElement>("[cmdk-input]")!;
+    for (const word of ["plugins", "connectors", "mcp", "integrations", "install"]) {
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, word);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(document.body.textContent, word).toContain("Go to Capabilities");
+      expect(document.body.textContent, word).not.toContain("Go to Work");
+    }
   });
 
   it("dispatches explicit owner actions and preserves the guarded classic handoff", async () => {

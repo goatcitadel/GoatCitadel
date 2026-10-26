@@ -50,9 +50,11 @@ const DESTINATIONS = [
     terms:
       entry.area === "inbox"
         ? "approvals attention decisions"
-        : entry.area === "system"
-          ? "health diagnostics status operations"
-          : entry.label,
+        : entry.area === "capabilities"
+          ? "skills plugins connectors tools mcp integrations apps install"
+          : entry.area === "system"
+            ? "health diagnostics status operations"
+            : entry.label,
   })),
   {
     area: "settings",

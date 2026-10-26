@@ -38,6 +38,8 @@ export function useInboxShortcuts({
 }) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      // A key another handler already acted on (the area shortcut "g then a") must not trigger a second action here.
+      if (event.defaultPrevented) return;
       if (!enabled || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !orderedItems.length) return;
       const target = event.target;
       if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable='true']")) return;

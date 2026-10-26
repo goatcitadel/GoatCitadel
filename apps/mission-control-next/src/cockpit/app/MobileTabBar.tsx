@@ -2,6 +2,7 @@ import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/re
 import { useRef, useState } from "react";
 import {
   Activity,
+  Blocks,
   Inbox,
   LayoutGrid,
   Library,
@@ -121,7 +122,9 @@ export function MobileTabBar({
             type="button"
             aria-label="More areas and settings"
             aria-expanded={moreOpen}
-            aria-current={current === "system" || current === "settings" ? "page" : undefined}
+            aria-current={
+              current === "capabilities" || current === "system" || current === "settings" ? "page" : undefined
+            }
             aria-describedby={attention ? "cockpit-more-attention" : undefined}
             onClick={() => {
               if (!isTransitionPending()) setMoreOpen(true);
@@ -138,7 +141,7 @@ export function MobileTabBar({
                 />
               ) : null}
             </span>
-            {/* Stays "More" so the visible text is part of the accessible name; aria-current marks System/Settings. */}
+            {/* Stays "More" so the visible text is part of the accessible name; aria-current marks Capabilities, System and Settings. */}
             More
           </button>
         </nav>
@@ -174,6 +177,17 @@ export function MobileTabBar({
             className="flex min-h-11 items-center rounded-md px-3 text-left text-fg hover:bg-sunken"
           >
             Change Citadel and workspace
+          </button>
+          <button
+            type="button"
+            onPointerEnter={() => preload("capabilities")}
+            onFocus={() => preload("capabilities")}
+            onPointerDown={() => preload("capabilities")}
+            onClick={() => openArea("/capabilities")}
+            className="flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-fg hover:bg-sunken"
+          >
+            <Blocks aria-hidden="true" className="size-4" />
+            Capabilities
           </button>
           <button
             type="button"

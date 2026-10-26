@@ -93,22 +93,24 @@ Internal architecture words stay in code, logs and `TechnicalDetails`. Operator 
 
 ## Components to reuse
 
-Start from the cockpit primitives in `apps/mission-control-next/src/cockpit/ui` (`Button`, `Field`, `EmptyState`, and their siblings) and the shared components in `packages/mission-control-shared/src/components` before writing a new one. Server state goes through TanStack Query and the shared API clients; realtime events invalidate queries. Keep loading, error, empty, stale, partial, reconnecting, blocked, and unavailable states distinct, and keep dangerous actions explicit with their scope and consequence.
+Start from the cockpit primitives in `apps/mission-control-next/src/cockpit/ui` (`Button`, `Field`, `EmptyState`, and their siblings) and the shared components in `packages/mission-control-shared/src/components` before writing a new one. `ui/Switch` is the standard for new on/off controls; existing ones move to it phase by phase. Server state goes through TanStack Query and the shared API clients; realtime events invalidate queries. Keep loading, error, empty, stale, partial, reconnecting, blocked, and unavailable states distinct, and keep dangerous actions explicit with their scope and consequence.
 
 ## Page anatomy
 
-Every page in Work, Inbox, Library, System and Settings has the same shape, in one centred column (`AREA_COLUMN`, `max-w-5xl`):
+Every page in Inbox, Work, Capabilities, Library, System and Settings has the same shape, in one centred column (`AREA_COLUMN`, `max-w-5xl`):
 
 1. `AreaHeader`: the h1 (the view's name), at most one line of description, and the page's actions on the right (the primary action, then Refresh). The area's tabs follow in one row directly under it, supplied by the area through `AreaTabsProvider`. There is no eyebrow above the title, no second navigation row and no full-bleed panel.
 2. The body: flat `Section` regions separated by hairlines. The page is the only card; a section never sits in a bordered box inside another bordered box. Rows inside a section are hairline-separated, not cards in a list.
 3. Numbers lead with a sentence that says what they mean, then a `MetricList` (an inline definition list), never a row of hero tiles or an invented metric.
 4. Empty is one state: a page with nothing to show renders one `EmptyState` that says what will appear and how, and hides empty groups, filters, bulk actions and paging until there are rows.
 
+Inside the Capabilities area (`src/cockpit/areas/capabilities/`), catalog lists may be a two-column grid of row cards, and the Tools tab may show one row of four cards; no banners or hero images. The page-anatomy guard does not count that area's card surfaces.
+
 Buttons keep their natural width; lists size to the space they have instead of a fixed-height inner scroller. Chat keeps its conversation layout (conversation list, transcript, composer) and follows the same rules for sections and cards inside it. `scripts/check-mission-control-next-page-anatomy.mjs` ratchets raw page titles, bare `rounded`, eyebrows and bordered card surfaces.
 
 ## Craft floor
 
-The cockpit follows the impeccable craft floor (`skills/bundled/impeccable/reference/craft-floor.md`). In addition to the rules above, refuse by default: identical icon-heading-text card grids as page structure, the hero-metric template, numbered section markers, modals for tasks that need no interruption, gradient text, decorative glass and blur, colored side-stripe borders above 1px, zero-blur block shadows, sparklines and progress rings standing in for content, emoji or Unicode glyphs standing in for icons (icons come from one library at one stroke weight), invented metrics, and placeholder copy. Every control has hover, disabled, loading, error, and empty states, visible keyboard focus, and an accessible name. Verify on the built result at desktop and phone widths, in both themes.
+The cockpit follows the impeccable craft floor (`skills/bundled/impeccable/reference/craft-floor.md`). In addition to the rules above, refuse by default: identical icon-heading-text card grids as page structure (except the Capabilities catalog; see Page anatomy), the hero-metric template, numbered section markers, modals for tasks that need no interruption, gradient text, decorative glass and blur, colored side-stripe borders above 1px, zero-blur block shadows, sparklines and progress rings standing in for content, emoji or Unicode glyphs standing in for icons (icons come from one library at one stroke weight), invented metrics, and placeholder copy. Every control has hover, disabled, loading, error, and empty states, visible keyboard focus, and an accessible name. Verify on the built result at desktop and phone widths, in both themes.
 
 ## Decks, documents, and HTML artifacts
 

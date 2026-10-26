@@ -21,7 +21,16 @@ import { ChatContextHandoffNotice } from "./use-cockpit-shell-switch";
 import { IncomingScopeReview } from "./IncomingScopeReview";
 import { useCockpitRoute } from "./use-cockpit-route";
 import type { GatewayReachability } from "./use-gateway-reachability";
-import { SettingsArea, InboxArea, WorkArea, LibraryArea, SystemArea, Gallery, ChatProjects } from "./area-loaders";
+import {
+  SettingsArea,
+  InboxArea,
+  WorkArea,
+  CapabilitiesArea,
+  LibraryArea,
+  SystemArea,
+  Gallery,
+  ChatProjects,
+} from "./area-loaders";
 import { applyCockpitAppearance } from "./cockpit-appearance";
 import { useAreaShortcuts } from "./use-area-shortcuts";
 import { ShortcutHelp } from "./ShortcutHelp";
@@ -223,6 +232,8 @@ function CockpitShellContent({
                       <SystemArea />
                     ) : area === "work" ? (
                       <WorkArea />
+                    ) : area === "capabilities" ? (
+                      <CapabilitiesArea />
                     ) : area === "settings" ? (
                       <SettingsArea />
                     ) : null}

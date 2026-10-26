@@ -11,6 +11,11 @@ export const queryKeys = {
   workspaces: (citadelId?: string): TopicKey => ["system", "directory", "workspaces", citadelId ?? "all"],
   citadels: (): TopicKey => ["system", "directory", "citadels"],
   capabilities: (): TopicKey => ["skills", "capabilities"],
+  capabilityConnectors: (workspaceId: string): TopicKey => ["mcp", "capability-connectors", workspaceId],
+  /** One saved server's own record, read by a connector panel to check it can be switched on. */
+  capabilityConnectorServer: (serverId: string): TopicKey => ["mcp", "capability-connector-server", serverId],
+  /** One saved server's tool list, shown in its connector panel. */
+  capabilityConnectorTools: (serverId: string): TopicKey => ["mcp", "capability-connector-tools", serverId],
   pendingApprovals: (): TopicKey => ["approvals", "pending"],
   inboxAll: (): TopicKey => ["approvals", "operator-inbox"],
   inbox: (workspaceId: string): TopicKey => [
@@ -73,4 +78,6 @@ export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["settings", "continuity", "settings"],
   // The MCP template catalog reads the network allowlist to show which hosts are allowed.
   ["settings", "mcp-template-allowlist"],
+  // The Capabilities connector list shows web search keys and Firecrawl, and whether Chat can reach MCP.
+  ["mcp", "capability-connectors"],
 ];

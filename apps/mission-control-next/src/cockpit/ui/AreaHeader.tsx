@@ -16,7 +16,7 @@ interface AreaTabsValue {
 const AreaTabsContext = createContext<AreaTabsValue | null>(null);
 
 /**
- * An area (Work, Inbox, Library, System, Settings) supplies its view tabs here; the page it renders draws them in its
+ * An area (Inbox, Work, Capabilities, Library, System, Settings) supplies its view tabs here; the page it renders draws them in its
  * AreaHeader, under the page title, so every page reads title row then one tab row in the same column.
  */
 export function AreaTabsProvider({ children, ...value }: AreaTabsValue & { children: ReactNode }) {
