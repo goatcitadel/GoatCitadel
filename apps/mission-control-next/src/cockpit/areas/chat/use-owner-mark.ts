@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
-import { fetchIntegrationConnection } from "@goatcitadel/mission-control-shared/api/client";
 import {
   commitIntegrationConnectionUpdate,
   useIntegrationConnectionMutation,
@@ -11,7 +10,8 @@ import { ownerActorIdsWith } from "./channel-page-model";
 /**
  * Saves which sender is you, as the connection's own accounts. The save carries the version the page was showing, so
  * a change made elsewhere is refused rather than overwritten; the page then reads the connection again and says so
- * with the Settings pages' own conflict note. A lost answer locks further saves until its outcome is checked.
+ * with the Settings pages' own conflict note. A lost answer locks further changes to this connection, which the page
+ * shows once (see `ChannelLockNote`).
  */
 export function useOwnerMark(connection: IntegrationConnection, reload: () => Promise<unknown>) {
   const mutation = useIntegrationConnectionMutation(connection.connectionId);
@@ -42,26 +42,10 @@ export function useOwnerMark(connection: IntegrationConnection, reload: () => Pr
     });
     if (!mounted.current) return;
     setSaving(null);
-    if (result.status !== "saved") setNote(result.message);
+    // A lost or locked answer is said once for the page by ChannelLockNote; only a refused save is said here.
+    if (result.status === "conflict" || result.status === "cancelled") setNote(result.message);
     await reload();
   }
 
-  /** Settles a save whose answer was lost, from what the connection now holds. */
-  async function checkSaved() {
-    const settled = await mutation.checkOutcome(() => fetchIntegrationConnection(connection.connectionId));
-    if (!mounted.current) return;
-    setNote(settled ?? null);
-    await reload();
-  }
-
-  return {
-    mark,
-    checkSaved,
-    saving,
-    busy,
-    uncertain: mutation.phase === "uncertain",
-    note: note ?? (mutation.phase === "uncertain" ? (mutation.message ?? null) : null),
-    /** The note answers something done on this page just now, rather than a lock left from earlier. */
-    fresh: note !== null,
-  };
+  return { mark, saving, busy, note };
 }

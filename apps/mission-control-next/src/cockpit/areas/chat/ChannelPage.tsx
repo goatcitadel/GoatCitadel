@@ -10,7 +10,9 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { botIdentity } from "./channel-page-model";
 import { PeopleSection } from "./ChannelPeopleSection";
-import { ManageSection, PostsSection, WorkingSection } from "./ChannelPageSections";
+import { ChannelLockNote } from "./ChannelLockNote";
+import { ManageSection } from "./ChannelManageSection";
+import { PostsSection, WorkingSection } from "./ChannelPageSections";
 import { useChannelPageData } from "./use-channel-page-data";
 
 /** The page frame: the channel's name, what it says it is connected as, and its status as the Gateway reports it. */
@@ -51,10 +53,8 @@ function PageFrame({
  * that its conversations are still readable.
  */
 export function ChannelPage({ connectionId, workspaceId }: { connectionId: string; workspaceId: string }) {
-  const { connection, channel, connections, overview, runtime, senderRecords, approved, reload } = useChannelPageData(
-    connectionId,
-    workspaceId,
-  );
+  const { connection, channel, connections, overview, runtime, senderRecords, approved, pending, openAccess, reload } =
+    useChannelPageData(connectionId, workspaceId);
   const status = channel?.status;
 
   if (connection) {
@@ -65,10 +65,13 @@ export function ChannelPage({ connectionId, workspaceId }: { connectionId: strin
         status={status}
         workspaceId={workspaceId}
       >
+        <ChannelLockNote connectionId={connection.connectionId} reload={reload} />
         <WorkingSection label={connection.label} runtime={runtime} />
         <PeopleSection
           connection={connection}
           approved={approved}
+          pending={pending}
+          openAccess={openAccess}
           loading={senderRecords.isPending && senderRecords.fetchStatus !== "idle"}
           failed={senderRecords.isError}
           reload={reload}
@@ -92,7 +95,9 @@ export function ChannelPage({ connectionId, workspaceId }: { connectionId: strin
     );
   }
 
-  if (connections.isPending || overview.isPending) {
+  // Just removed: the connection list has caught up before the overview says so, which is not "not found".
+  const catchingUp = channel !== undefined && channel.status !== "removed" && overview.isFetching;
+  if (connections.isPending || overview.isPending || catchingUp) {
     return (
       <PageFrame title="Channel" workspaceId={workspaceId}>
         <p className="text-sm text-fg-muted">Loading channel…</p>

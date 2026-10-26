@@ -162,17 +162,54 @@ export function ownerActorIdsWith(connection: IntegrationConnection, actorId: st
   return unique.has(target) ? [...unique.values()] : [...others, actorId.trim()];
 }
 
+/** The pairing records a channel keeps: Telegram's list, and Discord's records. Other channels keep none. */
+export interface PairingSources {
+  telegram?: Pick<TelegramChannelPairingList, "items" | "allowedSenders">;
+  discord?: readonly Pick<DiscordPairingRecord, "pairingId" | "userId" | "status" | "displayName">[];
+}
+
+/**
+ * A person who messaged the bot and is waiting to be approved. It carries what the approve and deny calls need (a
+ * Telegram request's code, a Discord request's pairing), never shown as text.
+ */
+export type PendingRequest = { key: string; label: string } & (
+  | { kind: "telegram"; actorId: string; code: string | undefined }
+  | { kind: "discord"; pairingId: string; userId: string }
+);
+
+/** The requests waiting for an answer, named by the person's display name or, without one, by their channel. */
+export function pendingRequests(connection: IntegrationConnection, sources: PairingSources): PendingRequest[] {
+  const label = (displayName: string | undefined) => readText(displayName) ?? unnamedSenderLabel(connection);
+  if (connection.key === "telegram" && sources.telegram) {
+    return sources.telegram.items
+      .filter((item) => item.status === "pending")
+      .map((item) => ({
+        kind: "telegram" as const,
+        key: `telegram:${item.actorId}`,
+        label: label(item.displayName),
+        actorId: item.actorId,
+        code: item.code,
+      }));
+  }
+  if (connection.key === "discord" && sources.discord) {
+    return sources.discord
+      .filter((record) => record.status === "pending")
+      .map((record) => ({
+        kind: "discord" as const,
+        key: `discord:${record.pairingId}`,
+        label: label(record.displayName),
+        pairingId: record.pairingId,
+        userId: record.userId,
+      }));
+  }
+  return [];
+}
+
 /**
  * Who is allowed to message the channel, by name. Telegram and Discord keep pairing records with display names; any
  * other channel keeps its allow list, which has ids only.
  */
-export function approvedSenders(
-  connection: IntegrationConnection,
-  sources: {
-    telegram?: Pick<TelegramChannelPairingList, "items" | "allowedSenders">;
-    discord?: readonly Pick<DiscordPairingRecord, "userId" | "status" | "displayName">[];
-  },
-): ApprovedSender[] {
+export function approvedSenders(connection: IntegrationConnection, sources: PairingSources): ApprovedSender[] {
   const found = new Map<string, ApprovedSender>();
   const add = (actorId: string, displayName?: string) => {
     const id = actorId.trim();

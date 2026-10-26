@@ -2,11 +2,9 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type { ChannelRuntimeStatus, IntegrationConnection } from "@goatcitadel/contracts";
 import { Button } from "../../ui/Button";
 import { MetricList } from "../../ui/MetricList";
-import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { Section } from "../../ui/Section";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
-import { ChannelLifecycleControls } from "../settings/ChannelLifecycleControls";
 import { postingTargets } from "./channel-page-model";
 
 /** What the last check says, in words. A check that did not finish never reads as healthy or as broken. */
@@ -76,33 +74,6 @@ export function PostsSection({ connection }: { connection: IntegrationConnection
       ) : (
         <p className="text-sm text-fg-muted">No default place to post is saved for this channel.</p>
       )}
-    </Section>
-  );
-}
-
-/** Turn off or remove, and the way to a new key. Remove stays the only danger action, inside the lifecycle controls. */
-export function ManageSection({
-  connection,
-  workspaceId,
-  reload,
-}: {
-  connection: IntegrationConnection;
-  workspaceId: string;
-  reload: () => Promise<unknown>;
-}) {
-  return (
-    <Section title="Turn off or remove">
-      <div className="space-y-3">
-        <ChannelLifecycleControls
-          key={`lifecycle:${connection.connectionId}`}
-          workspaceId={workspaceId}
-          selection={{ connection }}
-          reload={reload}
-        />
-        <NativeOwnerLink href="/settings/connections#channels" scope={workspaceId} className="block text-sm">
-          Change the key
-        </NativeOwnerLink>
-      </div>
     </Section>
   );
 }

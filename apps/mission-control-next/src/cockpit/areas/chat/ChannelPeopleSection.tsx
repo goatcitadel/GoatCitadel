@@ -1,11 +1,12 @@
-import { useEffect, useRef, type ReactNode } from "react";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
+import { ChannelOutcomeCheck } from "../../../features/native-routes/settings/sections/ChannelOutcomeCheck";
 import { Button } from "../../ui/Button";
-import { Callout } from "../../ui/Callout";
 import { Section } from "../../ui/Section";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { ChannelOperations } from "../settings/ChannelOperations";
-import { ownerCandidates, type ApprovedSender, type OwnerCandidate } from "./channel-page-model";
+import { ChannelActionNote } from "./ChannelActionNote";
+import { PendingRequests } from "./ChannelPendingRequests";
+import { ownerCandidates, type ApprovedSender, type OwnerCandidate, type PendingRequest } from "./channel-page-model";
+import { usePairingDecision } from "./use-pairing-decision";
 import { useOwnerMark } from "./use-owner-mark";
 
 function SenderRow({
@@ -43,44 +44,46 @@ function SenderRow({
   );
 }
 
-/** Outcome text is not a live region (the page's live-region budget is exact), so a fresh failure takes focus to be heard. */
-function SaveNote({ message, fresh, children }: { message: string; fresh: boolean; children?: ReactNode }) {
-  const note = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (fresh) note.current?.focus();
-  }, [message, fresh]);
-  return (
-    <div ref={note} tabIndex={-1} className="space-y-2 outline-none">
-      <Callout announce={false} tone="warning">
-        {message}
-      </Callout>
-      {children}
-    </div>
-  );
-}
-
 /**
- * Who can message the channel: the people already approved, each marked as you or not, and the pending requests with
- * their Approve and Deny, which the existing review owns. Senders are named; their ids stay in Technical details.
+ * Who can message the channel: the people waiting for an answer (Approve or Deny), then the people already approved,
+ * each marked as you or not. Senders are named; their ids and codes stay in Technical details. Everything here writes
+ * through the same owners as Settings, and the page reads its people again after each answer.
  */
 export function PeopleSection({
   connection,
   approved,
+  pending,
+  openAccess,
   loading,
   failed,
   reload,
 }: {
   connection: IntegrationConnection;
   approved: readonly ApprovedSender[];
+  pending: readonly PendingRequest[];
+  openAccess: boolean;
   loading: boolean;
   failed: boolean;
   reload: () => Promise<unknown>;
 }) {
   const owner = useOwnerMark(connection, reload);
+  const decision = usePairingDecision(connection, reload);
   const candidates = ownerCandidates(connection, approved);
+  const empty = !candidates.length && !pending.length;
   return (
     <Section title="Who can message it" description="Approve the people you know. Then mark which one is you.">
       <div className="space-y-4">
+        {openAccess ? (
+          <p className="text-sm text-fg-secondary">
+            Anyone can message this channel right now. Approving someone doesn't change that.
+          </p>
+        ) : null}
+        <PendingRequests
+          requests={pending}
+          busy={decision.busy}
+          locked={decision.locked || owner.busy}
+          onDecide={(request, answer) => void decision.decide(request, answer)}
+        />
         {candidates.length ? (
           <div className="space-y-2">
             <p className="text-sm text-fg-secondary">
@@ -92,7 +95,7 @@ export function PeopleSection({
                   key={candidate.actorId}
                   candidate={candidate}
                   saving={owner.saving === candidate.actorId}
-                  busy={owner.busy}
+                  busy={owner.busy || decision.locked}
                   onMark={(actorId, isOwner) => void owner.mark(actorId, isOwner)}
                 />
               ))}
@@ -107,7 +110,8 @@ export function PeopleSection({
               </ul>
             </TechnicalDetails>
           </div>
-        ) : (
+        ) : null}
+        {empty ? (
           <p className="text-sm text-fg-muted">
             {failed
               ? "Couldn't load who can message it."
@@ -115,17 +119,14 @@ export function PeopleSection({
                 ? "Loading who can message it…"
                 : "No one is approved yet. When someone messages the bot, their request shows up here."}
           </p>
-        )}
-        {owner.note ? (
-          <SaveNote message={owner.note} fresh={owner.fresh}>
-            {owner.uncertain ? (
-              <Button size="sm" onClick={() => void owner.checkSaved()}>
-                Check what was saved
-              </Button>
-            ) : null}
-          </SaveNote>
         ) : null}
-        <ChannelOperations connection={connection} onUpdated={reload} />
+        {decision.note ? <ChannelActionNote message={decision.note} fresh /> : null}
+        {decision.uncertain ? (
+          <ChannelActionNote message={decision.uncertain} fresh={false}>
+            <ChannelOutcomeCheck reload={reload} buttonComponent={Button} />
+          </ChannelActionNote>
+        ) : null}
+        {owner.note ? <ChannelActionNote message={owner.note} fresh /> : null}
       </div>
     </Section>
   );

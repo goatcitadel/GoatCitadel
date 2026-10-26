@@ -1,5 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ChannelRuntimeStatus, IntegrationConnection } from "@goatcitadel/contracts";
+import type {
+  ChannelRuntimeStatus,
+  DiscordPairingRecord,
+  IntegrationConnection,
+  TelegramChannelPairingList,
+} from "@goatcitadel/contracts";
 import {
   fetchChannelRuntimeStatus,
   fetchDiscordPairings,
@@ -7,7 +12,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { fetchTelegramChannelPairings } from "@goatcitadel/mission-control-shared/api/channel-setup-operations";
 import { queryKeys } from "../../data/query-keys";
-import { approvedSenders, type ApprovedSender } from "./channel-page-model";
+import { approvedSenders, pendingRequests, type ApprovedSender, type PendingRequest } from "./channel-page-model";
 import { useMessagingOverview } from "./use-messaging-overview";
 
 /**
@@ -34,14 +39,18 @@ export function useChannelPageData(connectionId: string, workspaceId: string) {
   const key = connection?.key;
   const senderRecords = useQuery({
     queryKey: queryKeys.chatChannelSenders(connectionId, connection?.revision),
-    queryFn: async () => {
+    queryFn: async (): Promise<{ telegram?: TelegramChannelPairingList; discord?: DiscordPairingRecord[] }> => {
       if (key === "telegram") return { telegram: await fetchTelegramChannelPairings(connectionId) };
       if (key === "discord") return { discord: (await fetchDiscordPairings(connectionId)).items };
       return {};
     },
     enabled: present && (key === "telegram" || key === "discord"),
   });
-  const approved: ApprovedSender[] = connection ? approvedSenders(connection, senderRecords.data ?? {}) : [];
+  const pairings = senderRecords.data ?? {};
+  const approved: ApprovedSender[] = connection ? approvedSenders(connection, pairings) : [];
+  const pending: PendingRequest[] = connection ? pendingRequests(connection, pairings) : [];
+  // Telegram says itself when anyone may message the bot, so approving a person does not close it.
+  const openAccess = pairings.telegram?.inboundAccessMode === "open_legacy";
   const queryClient = useQueryClient();
   /** Reads the connection list and every Messaging read again; a read that is switched off stays off. */
   const reload = async () => {
@@ -50,5 +59,5 @@ export function useChannelPageData(connectionId: string, workspaceId: string) {
       queryClient.invalidateQueries({ queryKey: queryKeys.chatMessagingAll() }),
     ]);
   };
-  return { connections, overview, connection, channel, runtime, senderRecords, approved, reload };
+  return { connections, overview, connection, channel, runtime, senderRecords, approved, pending, openAccess, reload };
 }

@@ -1,6 +1,13 @@
 import type { DiscordPairingRecord, IntegrationConnection, TelegramChannelPairingList } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
-import { approvedSenders, botIdentity, ownerActorIdsWith, ownerCandidates, postingTargets } from "./channel-page-model";
+import {
+  approvedSenders,
+  botIdentity,
+  ownerActorIdsWith,
+  ownerCandidates,
+  pendingRequests,
+  postingTargets,
+} from "./channel-page-model";
 
 function connection(key: string, config: Record<string, unknown> = {}, label = "Telegram"): IntegrationConnection {
   return {
@@ -206,6 +213,40 @@ describe("approvedSenders", () => {
   it("reads the saved allow list for a channel without pairing records", () => {
     const slack = connection("slack", { allowedSenders: ["u0abc", "U0ABC", " "] }, "Slack");
     expect(approvedSenders(slack, {})).toEqual([{ actorId: "u0abc", label: "Someone on Slack" }]);
+  });
+});
+
+describe("pendingRequests", () => {
+  it("names a waiting Telegram request by display name, or by its channel, and keeps what approving needs", () => {
+    const pairings = {
+      items: [
+        { actorId: "55", status: "pending", code: "ABC123", displayName: "Eve" },
+        { actorId: "66", status: "pending" },
+        { actorId: "4242", status: "approved", displayName: "Ada" },
+      ],
+      allowedSenders: ["4242"],
+    } as TelegramChannelPairingList;
+    expect(pendingRequests(connection("telegram"), { telegram: pairings })).toEqual([
+      { kind: "telegram", key: "telegram:55", label: "Eve", actorId: "55", code: "ABC123" },
+      { kind: "telegram", key: "telegram:66", label: "Someone on Telegram", actorId: "66", code: undefined },
+    ]);
+  });
+
+  it("lists only pending Discord requests", () => {
+    const records = [
+      { pairingId: "p1", userId: "u1", status: "approved", displayName: "Ada" },
+      { pairingId: "p2", userId: "u2", status: "pending", displayName: "Eve" },
+      { pairingId: "p3", userId: "u3", status: "revoked", displayName: "Mallory" },
+      { pairingId: "p4", userId: "u4", status: "pending" },
+    ] as DiscordPairingRecord[];
+    expect(pendingRequests(connection("discord", {}, "Discord"), { discord: records })).toEqual([
+      { kind: "discord", key: "discord:p2", label: "Eve", pairingId: "p2", userId: "u2" },
+      { kind: "discord", key: "discord:p4", label: "Someone on Discord", pairingId: "p4", userId: "u4" },
+    ]);
+  });
+
+  it("has no requests for a channel without pairing records", () => {
+    expect(pendingRequests(connection("slack", {}, "Slack"), {})).toEqual([]);
   });
 });
 
