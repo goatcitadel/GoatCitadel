@@ -1,7 +1,10 @@
-import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
+
+/** Decides, per cached query, whether an invalidation still applies. Omitted means it always does. */
+export type InvalidationPredicate = (query: Query) => boolean;
 
 export interface InvalidationBatcher {
-  invalidate: (queryKey: QueryKey) => void;
+  invalidate: (queryKey: QueryKey, predicate?: InvalidationPredicate) => void;
   flush: () => void;
   dispose: () => void;
 }
@@ -37,40 +40,49 @@ export function createInvalidationBatcher(
   const delayMs = options.delayMs ?? 120;
   const minIntervalMs = options.minIntervalMs ?? (() => 0);
   const now = options.now ?? Date.now;
-  const pending = new Map<string, QueryKey>();
+  const pending = new Map<string, { queryKey: QueryKey; predicate?: InvalidationPredicate }>();
   const lastRun = new Map<string, number>();
   const trailing = new Map<string, ReturnType<typeof setTimeout>>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
 
-  const run = (id: string, queryKey: QueryKey) => {
+  const run = (id: string, queryKey: QueryKey, predicate?: InvalidationPredicate) => {
     lastRun.set(id, now());
-    void queryClient.invalidateQueries({ queryKey });
+    void queryClient.invalidateQueries(predicate ? { queryKey, predicate } : { queryKey });
   };
   const flush = () => {
     if (timer !== undefined) clearTimeout(timer);
     timer = undefined;
     const entries = [...pending.entries()];
     pending.clear();
-    for (const [id, queryKey] of entries) {
+    for (const [id, { queryKey, predicate }] of entries) {
       const wait = (lastRun.get(id) ?? -Infinity) + minIntervalMs(queryKey) - now();
       if (wait <= 0) {
-        run(id, queryKey);
+        run(id, queryKey, predicate);
       } else if (!trailing.has(id)) {
         trailing.set(
           id,
           setTimeout(() => {
             trailing.delete(id);
-            if (!disposed) run(id, queryKey);
+            if (!disposed) run(id, queryKey, predicate);
           }, wait),
         );
       }
     }
   };
   return {
-    invalidate(queryKey) {
+    invalidate(queryKey, predicate) {
       if (disposed) return;
-      pending.set(JSON.stringify(queryKey), queryKey);
+      const id = JSON.stringify(queryKey);
+      const earlier = pending.get(id);
+      // Two reasons to invalidate one key merge: a query is refreshed if either reason still applies to it.
+      const merged =
+        earlier && (!earlier.predicate || !predicate)
+          ? undefined
+          : earlier?.predicate && predicate
+            ? (query: Query) => earlier.predicate!(query) || predicate(query)
+            : predicate;
+      pending.set(id, { queryKey, predicate: merged });
       if (timer === undefined) timer = setTimeout(flush, delayMs);
     },
     flush,
