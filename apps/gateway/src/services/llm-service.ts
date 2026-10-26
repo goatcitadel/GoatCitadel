@@ -20,6 +20,7 @@ import {
   readBoundedResponseText,
 } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
+import { streamSsePayloads } from "./provider-sse-frames.js";
 import {
   LlmDispatchGuardScope,
   LlmDispatchGuardRejectedError,
@@ -5304,51 +5305,6 @@ function isRedirect(status: number): boolean {
   return status >= 300 && status < 400;
 }
 
-function parseSseFramePayloads(dataLines: string[]): Array<Record<string, unknown> | "[DONE]"> {
-  if (dataLines.length === 0) {
-    return [];
-  }
-
-  const joined = dataLines.join("\n").trim();
-  if (joined === "[DONE]") {
-    return ["[DONE]"];
-  }
-
-  const parsedJoined = tryParseJsonRecord(joined);
-  if (parsedJoined) {
-    return [parsedJoined];
-  }
-
-  const parsedLines: Array<Record<string, unknown> | "[DONE]"> = [];
-  for (const line of dataLines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (trimmed === "[DONE]") {
-      parsedLines.push("[DONE]");
-      continue;
-    }
-    const parsed = tryParseJsonRecord(trimmed);
-    if (parsed) {
-      parsedLines.push(parsed);
-    }
-  }
-  return parsedLines;
-}
-
-function tryParseJsonRecord(payload: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(payload) as unknown;
-    if (parsed && typeof parsed === "object") {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    // ignore malformed provider chunks
-  }
-  return null;
-}
-
 async function* streamJsonSseResponse(
   response: Response,
   options?: { forceSse?: boolean; maxEvents?: number; onDone?: () => void },
@@ -5365,71 +5321,12 @@ async function* streamJsonSseResponse(
     return;
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let receivedBytes = 0;
-  let eventCount = 0;
-  const maxEvents = options?.maxEvents ?? MAX_PROVIDER_SSE_EVENTS;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      receivedBytes += value.byteLength;
-      if (receivedBytes > MAX_PROVIDER_SSE_BYTES) {
-        await reader.cancel();
-        throw new Error(`provider stream exceeded ${MAX_PROVIDER_SSE_BYTES} bytes.`);
-      }
-      buffer += decoder.decode(value, { stream: true });
-      const frames = buffer.split(/\r?\n\r?\n/g);
-      buffer = frames.pop() ?? "";
-      for (const frame of frames) {
-        const dataLines = frame
-          .split(/\r?\n/g)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trimStart())
-          .filter(Boolean);
-        for (const payload of parseSseFramePayloads(dataLines)) {
-          if (payload === "[DONE]") {
-            options?.onDone?.();
-            return;
-          }
-          eventCount += 1;
-          if (eventCount > maxEvents) {
-            await reader.cancel();
-            throw new Error(`provider stream exceeded ${maxEvents} events.`);
-          }
-          yield payload;
-        }
-      }
-    }
-    if (buffer.trim()) {
-      const dataLines = buffer
-        .split(/\r?\n/g)
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .filter(Boolean);
-      for (const payload of parseSseFramePayloads(dataLines)) {
-        if (payload === "[DONE]") {
-          options?.onDone?.();
-          return;
-        }
-        eventCount += 1;
-        if (eventCount > maxEvents) {
-          throw new Error(`provider stream exceeded ${maxEvents} events.`);
-        }
-        yield payload;
-      }
-    }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      // ignore
-    }
-  }
+  yield* streamSsePayloads(response.body, {
+    maxBytes: MAX_PROVIDER_SSE_BYTES,
+    maxEvents: options?.maxEvents ?? MAX_PROVIDER_SSE_EVENTS,
+    label: "provider stream",
+    onDone: options?.onDone,
+  });
 }
 
 /**
