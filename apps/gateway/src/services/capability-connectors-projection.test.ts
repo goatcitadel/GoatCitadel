@@ -297,6 +297,31 @@ describe("buildCapabilityConnectors", () => {
     expect(item.serverConnectionRevision).toBe("c-4");
   });
 
+  it("carries a saved server's approval setting so the panel can show what asks first", () => {
+    const relaxed = only(
+      buildCapabilityConnectors(
+        input({ servers: [server({ policy: { ...policy(), approvalPosture: "nothing_asks" } })] }),
+      ),
+    );
+    const unset = only(buildCapabilityConnectors(input({ servers: [server()] })));
+
+    expect(relaxed.approvalPosture).toBe("nothing_asks");
+    expect(unset.approvalPosture).toBeUndefined();
+    expect("approvalPosture" in unset).toBe(false);
+  });
+
+  it("marks a saved server that lists its tools per chat", () => {
+    const perChat = only(
+      buildCapabilityConnectors(input({ servers: [server({ connectionMode: "requester_scoped" })] })),
+    );
+    const fixed = only(buildCapabilityConnectors(input({ servers: [server({ connectionMode: "static" })] })));
+    const legacy = only(buildCapabilityConnectors(input({ servers: [server()] })));
+
+    expect(perChat.requesterScoped).toBe(true);
+    expect(fixed.requesterScoped).toBeUndefined();
+    expect(legacy.requesterScoped).toBeUndefined();
+  });
+
   it("places unsaved stdio templates on this device with the exact command", () => {
     const item = only(
       buildCapabilityConnectors(

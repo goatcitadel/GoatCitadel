@@ -150,6 +150,8 @@ function serverParts(
     serverId: server.serverId,
     ...(server.revision !== undefined ? { serverRevision: server.revision } : {}),
     ...(server.connectionRevision !== undefined ? { serverConnectionRevision: server.connectionRevision } : {}),
+    ...(server.policy.approvalPosture ? { approvalPosture: server.policy.approvalPosture } : {}),
+    ...(server.connectionMode === "requester_scoped" ? { requesterScoped: true } : {}),
     chat: mcpChat(input.chat),
     ...(server.lastError ? { lastError: server.lastError } : {}),
   };

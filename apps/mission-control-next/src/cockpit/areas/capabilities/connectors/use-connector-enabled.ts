@@ -20,7 +20,7 @@ type RowLook = Pick<CapabilityConnectorItem, "state" | "reason" | "group">;
 const OFF_LOOK: RowLook = { state: "turned_off", reason: "turned_off", group: "turned_off" };
 
 /** A copy of the list with one row changed. Every other row is kept as it is. */
-function withRow(
+export function withRow(
   list: CapabilityConnectorsResponse | undefined,
   id: string,
   change: (row: CapabilityConnectorItem) => CapabilityConnectorItem,

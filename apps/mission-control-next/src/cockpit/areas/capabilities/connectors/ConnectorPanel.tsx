@@ -1,5 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import type { CapabilityConnectorItem, CapabilityConnectorsResponse, McpToolRecord } from "@goatcitadel/contracts";
+import {
+  mcpCallAsksFirst,
+  type CapabilityConnectorItem,
+  type CapabilityConnectorsResponse,
+  type McpApprovalPosture,
+  type McpToolRecord,
+} from "@goatcitadel/contracts";
 import { fetchMcpTools } from "@goatcitadel/mission-control-shared/api/mcp-operations";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { connectorListQuery } from "../../../data/capability-connectors-query";
@@ -11,6 +17,7 @@ import { Section } from "../../../ui/Section";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { ConnectorServerControls } from "./ConnectorServerControls";
+import { WhatAsksFirst } from "./WhatAsksFirst";
 import { CHAT_CONNECTORS_SETTINGS_HREF, connectorSettingsHref, WORKSPACE_CAPABILITIES_HREF } from "./connector-links";
 import {
   chatBlockLine,
@@ -20,8 +27,11 @@ import {
   presentConnectorState,
 } from "./connector-view";
 
-/** The tools a saved server offers, as it last listed them. Other connectors have no tool list of their own. */
-function ConnectorTools({ serverId }: { serverId: string }) {
+/**
+ * The tools a saved server offers, as it last listed them, each marked with whether it asks first under the server's
+ * saved setting. Other connectors have no tool list of their own.
+ */
+function ConnectorTools({ serverId, posture }: { serverId: string; posture: McpApprovalPosture | undefined }) {
   const query = useQuery({
     queryKey: queryKeys.capabilityConnectorTools(serverId),
     queryFn: () => fetchMcpTools(serverId),
@@ -51,6 +61,10 @@ function ConnectorTools({ serverId }: { serverId: string }) {
           <div className="flex flex-wrap items-baseline gap-x-2">
             <code className="break-all font-mono text-xs text-fg">{tool.toolName}</code>
             {tool.enabled ? null : <span className="text-xs text-fg-muted">Switched off</span>}
+            {/* The same rule the Gateway decides with, so what the panel says is what happens. */}
+            <span className="text-xs text-fg-secondary">
+              {mcpCallAsksFirst(posture, tool.annotations) ? "Asks first" : "Runs freely"}
+            </span>
           </div>
           {tool.description ? <p className="text-sm text-fg-secondary">{tool.description}</p> : null}
         </li>
@@ -102,7 +116,9 @@ function ConnectorDetails({ item, onRemoved }: { item: CapabilityConnectorItem; 
 
       <Section title="What it does" headingLevel={3}>
         {item.description ? <p className="text-sm text-fg-secondary">{item.description}</p> : null}
-        {savedServer && item.serverId ? <ConnectorTools serverId={item.serverId} /> : null}
+        {savedServer && item.serverId ? (
+          <ConnectorTools serverId={item.serverId} posture={item.approvalPosture} />
+        ) : null}
       </Section>
 
       <Section title="How it connects" headingLevel={3}>
@@ -118,6 +134,12 @@ function ConnectorDetails({ item, onRemoved }: { item: CapabilityConnectorItem; 
           {connection.warning ? <p>{connection.warning}</p> : null}
         </div>
       </Section>
+
+      {savedServer ? (
+        <Section title="What asks first" headingLevel={3}>
+          <WhatAsksFirst key={item.id} item={item} />
+        </Section>
+      ) : null}
 
       {item.chat.available ? null : (
         <p className="text-sm text-fg-secondary">

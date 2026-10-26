@@ -21,7 +21,8 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // key status load), which announce.
 // 893: the Capabilities Connectors tab announces the one outcome that replaces its whole page, a first read that failed.
 // 894: a connector panel announces why its switch or Remove did not happen (one alert, shared by both).
-export const LIVE_REGION_BUDGET = 894;
+// 895: a connector panel announces why a change to what asks first did not happen.
+export const LIVE_REGION_BUDGET = 895;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;
