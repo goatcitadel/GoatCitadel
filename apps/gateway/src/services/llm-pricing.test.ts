@@ -196,3 +196,22 @@ describe("llm-pricing", () => {
     expect(normalized).toEqual([]);
   });
 });
+
+describe("provider-reported cost sanity", () => {
+  const base = { providerId: "openai", model: "gpt-5.4" };
+
+  it("returns a sane provider cost verbatim", () => {
+    expect(estimateUsageCostUsd({ ...base, usage: { cost_usd: 0.42 } })).toBe(0.42);
+    expect(estimateUsageCostUsd({ ...base, usage: { total_cost_usd: 0 } })).toBe(0);
+  });
+
+  it("ignores negative, non-finite, and absurd provider costs and falls back to the estimate", () => {
+    const tokens = { prompt_tokens: 1000, completion_tokens: 100, cached_prompt_tokens: 0 };
+    const estimate = estimateUsageCostUsd({ ...base, usage: tokens });
+    for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY, "-3", 1e9]) {
+      expect(estimateUsageCostUsd({ ...base, usage: { ...tokens, cost_usd: bad } })).toBe(estimate);
+    }
+    expect(estimateUsageCostUsd({ ...base, usage: { cost_usd: -1 } })).toBeUndefined();
+    expect(estimateUsageCostUsd({ ...base, usage: { total_cost_usd: 1e9 } })).toBeUndefined();
+  });
+});
