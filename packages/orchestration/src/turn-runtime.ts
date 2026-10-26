@@ -51,6 +51,8 @@ export interface TurnRuntimeRequest {
   historyMessages: ChatCompletionRequest["messages"];
   outputMessageId?: string;
   modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
+  /** Which setting chose the model, from the verified route decision; absent when no decision is in scope. */
+  selectionSource?: ChatTurnTraceRecord["routing"]["selectionSource"];
   signal?: AbortSignal;
   canonicalWriteFence?: <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
   /** Immutable server-owned capability upper bound for this admitted Chat turn. */

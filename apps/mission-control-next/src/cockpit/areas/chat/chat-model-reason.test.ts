@@ -44,4 +44,41 @@ describe("presentTurnModelReason", () => {
     );
     expect(presentTurnModelReason(undefined, null, false)).toBe(NEUTRAL_MODEL_REASON);
   });
+
+  it.each([
+    ["manual", "You picked this model"],
+    ["session", "Set for this conversation"],
+    ["global", "Workspace default"],
+    ["citadel_ward_route_local", "Kept on a local model by a Citadel Ward"],
+  ])("names the recorded %s source on a past turn", (selectionSource, text) => {
+    expect(
+      presentTurnModelReason({ primaryModel: "a", effectiveModel: "a", selectionSource } as never, null, true),
+    ).toBe(text);
+  });
+
+  it("stays neutral for an unknown recorded source and keeps fallback wording first", () => {
+    expect(
+      presentTurnModelReason(
+        { primaryModel: "a", effectiveModel: "a", selectionSource: "brand_new_source" } as never,
+        null,
+        true,
+      ),
+    ).toBe(NEUTRAL_MODEL_REASON);
+    expect(presentTurnModelReason({ fallbackUsed: true, selectionSource: "manual" } as never, "Model A", true)).toBe(
+      "Fell back from Model A",
+    );
+    expect(presentTurnModelReason({ usedVisionFallback: true, selectionSource: "manual" } as never, null, true)).toBe(
+      "Switched to a model that can read images",
+    );
+  });
+
+  it("appends the source when routing adjusted the model", () => {
+    expect(
+      presentTurnModelReason(
+        { primaryModel: "a", effectiveModel: "b", selectionSource: "global" } as never,
+        null,
+        true,
+      ),
+    ).toBe("Workspace default; adjusted by routing rules");
+  });
 });

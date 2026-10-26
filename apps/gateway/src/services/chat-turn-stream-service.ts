@@ -86,6 +86,7 @@ import type {
 } from "./chat-turn-runtime-collaborators.js";
 import { PROMPT_LAB_LOCAL_FILE_TOOL_NAMES } from "./chat-tool-families.js";
 import { isDurableControlError } from "./durable-control-error.js";
+import { traceSelectionSource } from "./chat-route-resolution.js";
 
 type ChatTurnStreamStorage = Pick<
   Storage,
@@ -573,6 +574,7 @@ export async function executePreparedModeOrchestration(
   const runTrace = {
     primaryProviderId: input.providerId ?? prepared.prefs.providerId,
     primaryModel: input.model ?? prepared.prefs.model,
+    ...traceSelectionSource(input.routeDecision),
     effectiveProviderId:
       orchestration.orchestrationPlan.steps.at(-1)?.providerId ?? input.providerId ?? prepared.prefs.providerId,
     effectiveModel: orchestration.orchestrationPlan.steps.at(-1)?.model ?? input.model ?? prepared.prefs.model,
@@ -1854,6 +1856,7 @@ export async function* streamPreparedAgentChatTurn(
             routing: {
               primaryProviderId: input.providerId ?? prepared.prefs.providerId,
               primaryModel: input.model ?? prepared.prefs.model,
+              ...traceSelectionSource(input.routeDecision),
               effectiveProviderId:
                 modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
                 input.providerId ??
@@ -1911,6 +1914,7 @@ export async function* streamPreparedAgentChatTurn(
                 routing: {
                   primaryProviderId: input.providerId ?? prepared.prefs.providerId,
                   primaryModel: input.model ?? prepared.prefs.model,
+                  ...traceSelectionSource(input.routeDecision),
                   effectiveProviderId:
                     summary.steps.at(-1)?.providerId ??
                     modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
@@ -2029,6 +2033,7 @@ export async function* streamPreparedAgentChatTurn(
         routing: {
           primaryProviderId: input.providerId ?? prepared.prefs.providerId,
           primaryModel: input.model ?? prepared.prefs.model,
+          ...traceSelectionSource(input.routeDecision),
           effectiveProviderId:
             orchestrationResult.finalStep?.providerId ??
             orchestrationResult.summary.steps.at(-1)?.providerId ??
@@ -2389,6 +2394,7 @@ export async function* streamPreparedAgentChatTurn(
                 fullWebAccess: input.fullWebAccess,
                 historyMessages: historyWithSteers,
                 modelRouter: prepared.modelRouterDecision,
+                selectionSource: input.routeDecision?.selectionSource,
                 runVariableEvidence: input.runVariableEvidence,
                 signal: controller.signal,
                 canonicalWriteFence,

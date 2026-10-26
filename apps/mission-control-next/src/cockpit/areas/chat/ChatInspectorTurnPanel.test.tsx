@@ -137,4 +137,18 @@ describe("ChatInspectorTurnPanel chosen because", () => {
     act(() => root.render(<ChatInspectorTurnPanel selectedTurn={turnWith({ status: "completed", model: "" })} />));
     expect(row("Chosen because")).toBe("Selected by routing rules");
   });
+
+  it("says which setting chose the model when the turn recorded it", () => {
+    act(() =>
+      root.render(
+        <ChatInspectorTurnPanel
+          selectedTurn={turnWith({
+            status: "completed",
+            routing: { primaryModel: "model-a", effectiveModel: "model-a", selectionSource: "global" },
+          })}
+        />,
+      ),
+    );
+    expect(row("Chosen because")).toBe("Workspace default");
+  });
 });

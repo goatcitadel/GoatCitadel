@@ -691,6 +691,8 @@ export interface ChatTurnAgentRunnerInput {
   historyMessages: ChatCompletionRequest["messages"];
   outputMessageId?: string;
   modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
+  /** Which setting chose the model, from the verified route decision; absent when no decision is in scope. */
+  selectionSource?: ChatTurnTraceRecord["routing"]["selectionSource"];
   runVariableEvidence?: import("@goatcitadel/contracts").RunVariableEvidence;
   signal?: AbortSignal;
   canonicalWriteFence?: <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
@@ -2254,6 +2256,7 @@ export class ChatTurnAgentRunner {
     const requestedRouteIdentity = {
       primaryProviderId: input.providerId,
       primaryModel: input.model,
+      ...(input.selectionSource ? { selectionSource: input.selectionSource } : {}),
     } satisfies ChatTurnTraceRecord["routing"];
     const loopGuardState = initializeToolLoopGuardState(this.deps.toolLoopDetection);
     const trace = await this.runCanonicalWrite(

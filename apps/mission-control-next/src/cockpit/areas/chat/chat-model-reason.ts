@@ -36,8 +36,9 @@ export function presentPreflightReason(route: PreflightReasonInput): string {
 type TraceRouting = ChatThreadTurnRecord["trace"]["routing"];
 
 /**
- * Why a finished turn used its model, from what the turn trace recorded. A turn does not record which setting chose
- * the model, so this names a fallback or adjustment when one is recorded and otherwise says the selected model ran.
+ * Why a finished turn used its model, from what the turn trace recorded. A fallback or image switch comes first. When
+ * the turn recorded which setting chose its model, that is named; turns from before it was recorded say only that the
+ * selected model ran.
  */
 export function presentTurnModelReason(
   routing: TraceRouting | undefined,
@@ -58,6 +59,8 @@ export function presentTurnModelReason(
       (routing.primaryProviderId &&
         routing.effectiveProviderId &&
         routing.primaryProviderId !== routing.effectiveProviderId));
-  if (changed) return "Adjusted by routing rules";
+  const source = routing.selectionSource ? presentSelectionSource(routing.selectionSource) : null;
+  if (changed) return source ? `${source}; adjusted by routing rules` : "Adjusted by routing rules";
+  if (source) return source;
   return routing.primaryModel ? "The requested model; no fallback was needed" : NEUTRAL_MODEL_REASON;
 }
