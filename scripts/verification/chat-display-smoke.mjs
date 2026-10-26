@@ -48,7 +48,7 @@ async function prepare(page, { stub }) {
   const created = await createdHttp.json();
   assert.equal(typeof created.sessionId, "string", "fixture chat must be created");
   try {
-  await page.getByRole("heading", { name: created.title ?? `Mission chat - ${created.sessionId.slice(-6)}`, exact: true }).waitFor();
+  await page.getByRole("heading", { name: created.title ?? "New chat", exact: true }).waitFor();
   if (page.viewportSize().width < 700) await page.getByLabel("Threads", { exact: true }).waitFor({ state: "hidden" });
   await page.locator(".mc-next-composer-blocking-prompt").waitFor({ state: "hidden" });
   const composer = page.getByLabel("Message composer", { exact: true });

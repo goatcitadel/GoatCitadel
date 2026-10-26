@@ -130,7 +130,7 @@ export async function runWorkbenchFileRevisionScenario(context, deps) {
           });
           await page.getByRole("textbox", { name: "Message", exact: true }).waitFor({ timeout: 60_000 });
           await page.getByRole("button", { name: "Conversation actions", exact: true }).click();
-          await page.getByRole("menuitem", { name: "Build editor", exact: true }).click();
+          await page.getByRole("menuitem", { name: "Open code workbench", exact: true }).click();
           await page.getByRole("tab", { name: "Files", exact: true }).click();
           const editor = page
             .getByRole("tabpanel", { name: "Files", exact: true })
