@@ -123,7 +123,9 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     )
       ? newChat.attempt
       : undefined;
-  const matches = (text: string) => text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  // Labels such as "Work › Schedules" are compared as plain words, so "work schedules" matches them.
+  const normalizeForMatch = (text: string) => text.replace(/[›»]/gu, " ").replace(/\s+/gu, " ").toLowerCase();
+  const matches = (text: string) => normalizeForMatch(text).includes(normalizeForMatch(query).trim());
   // Static destinations are matched here, synchronously; remote records stream in below them.
   const destinations = [...DESTINATIONS, ...(query.trim() ? TAB_DESTINATIONS : [])].filter((entry) =>
     matches(`Go to ${entry.label} ${entry.terms}`),

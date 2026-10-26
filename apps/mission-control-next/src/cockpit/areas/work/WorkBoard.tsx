@@ -322,7 +322,7 @@ export function WorkBoard() {
             ))}
           </div>
           <p className="text-xs text-fg-muted">
-            {`The Done column shows the latest ${DONE_LIMIT} tasks and ${DONE_LIMIT} runs. `}
+            {`The Done column shows the latest ${kind === "run" ? "" : `${DONE_LIMIT} tasks`}${kind === "all" ? " and " : ""}${kind === "task" ? "" : `${DONE_LIMIT} runs`}. `}
             <NativeOwnerLink href="/work/history" scope={workspaceId}>
               See History
             </NativeOwnerLink>

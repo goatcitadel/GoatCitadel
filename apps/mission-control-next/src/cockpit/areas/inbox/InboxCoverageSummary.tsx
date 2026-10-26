@@ -11,7 +11,7 @@ function summaryLine(projection: OperatorInboxResponse): string {
   const parts = [
     decisions ? `${plural(decisions, "decision")} waiting` : "",
     updates ? plural(updates, "update") : "",
-    other ? `${other} other` : "",
+    other ? plural(other, "other item") : "",
   ].filter(Boolean);
   const counts = parts.length ? `${parts.join(", ")}.` : "Nothing waiting.";
   // The count is honest only when every source was read; a declared scope limit is explained under "What this Inbox covers".

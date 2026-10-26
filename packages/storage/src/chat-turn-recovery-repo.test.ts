@@ -43,6 +43,18 @@ function message(overrides: Partial<ChatMessageRecord> = {}): ChatMessageRecord 
 }
 
 describe("ChatTurnRecoveryRepository", () => {
+  it("indexes chat_turn_traces by user_message_id for the orphan scan", () => {
+    const { db } = createStore();
+
+    const indexes = db.prepare("PRAGMA index_list(chat_turn_traces)").all() as Array<{ name: string }>;
+    assert.ok(indexes.some((index) => index.name === "idx_chat_turn_traces_user_message"));
+
+    const plan = db
+      .prepare("EXPLAIN QUERY PLAN SELECT turn_id FROM chat_turn_traces WHERE user_message_id = ?")
+      .all("msg-x") as Array<{ detail: string }>;
+    assert.ok(plan.some((row) => row.detail.includes("idx_chat_turn_traces_user_message")));
+  });
+
   it("finds the latest user message of a session that has no turn trace", () => {
     const { messages, recovery } = createStore();
     messages.upsert(message({ messageId: "msg-orphan", sessionId: "session-a" }));

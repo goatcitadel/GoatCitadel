@@ -105,6 +105,11 @@ export function LibrarySkillPacks({ workspaceId, search = "" }: { workspaceId: s
     }
   }
 
+  const visiblePacks = SHIPPED_SKILL_PACKS.filter((pack) =>
+    matchesSearchWords(`${pack.label} ${pack.summary} ${pack.requiresCli}`, search),
+  );
+  // A search that matches no pack hides the whole group instead of leaving an empty heading.
+  if (search.trim() && !visiblePacks.length) return null;
   return (
     <section aria-labelledby="library-skill-packs" className="space-y-3">
       <header>
@@ -123,9 +128,7 @@ export function LibrarySkillPacks({ workspaceId, search = "" }: { workspaceId: s
       ) : null}
       {hub.isPending ? <p>Reading Skill Hub…</p> : null}
       <ul className="divide-y divide-line-subtle">
-        {SHIPPED_SKILL_PACKS.filter((pack) =>
-          matchesSearchWords(`${pack.label} ${pack.summary} ${pack.requiresCli}`, search),
-        ).map((pack) => {
+        {visiblePacks.map((pack) => {
           const item = hub.isSuccess ? findSkillPackItem(pack, items) : undefined;
           const step = nextSkillPackStep(item);
           const actionable = hub.isSuccess && (step.kind === "review" || step.kind === "action");

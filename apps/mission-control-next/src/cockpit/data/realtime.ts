@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
 import { createInvalidationBatcher, throttleIntervalFor } from "./invalidation-batcher";
 import { requestCockpitToast } from "../ui/toast-runtime";
 import {
@@ -55,7 +55,7 @@ export function inboxToastDuration(tone: string): number {
 }
 
 export interface RealtimeSink {
-  invalidate: (queryKey: QueryKey) => void;
+  invalidate: (queryKey: QueryKey, predicate?: (query: Query) => boolean) => void;
   refresh: (topic: RefreshTopic, event: RealtimeEvent) => void;
   unmapped: (topic: RefreshTopic, event: RealtimeEvent) => void;
 }
@@ -78,6 +78,28 @@ function invalidateForInboxSignal(event: RealtimeEvent, sink: RealtimeSink): voi
   } else if (event.payload.scope === "all_workspaces" && workspaceId === undefined) {
     sink.invalidate(queryKeys.inboxAll());
   }
+}
+
+/** Margin so a replayed event that raced the snapshot's request is still treated as newer than it. */
+const REPLAY_SNAPSHOT_MARGIN_MS = 2_000;
+
+/**
+ * A stream replay re-sends retained history right after connect. When the Inbox snapshot was generated
+ * after that event happened, refetching only repeats the request the page just made. Both times come
+ * from the Gateway's clock (the snapshot's `generatedAt` and the event's timestamp), so a browser clock
+ * that differs from the Gateway's never decides it. A newer event, a query without data, or a snapshot
+ * without a readable `generatedAt` still refetches; only Inbox queries are ever skipped.
+ */
+function replayedEventNeedsRefetch(event: RealtimeEvent): (query: Query) => boolean {
+  const happenedAt = Date.parse(event.timestamp);
+  const inbox = queryKeys.inboxAll();
+  return (query) => {
+    if (!inbox.every((part, index) => query.queryKey[index] === part)) return true;
+    if (!Number.isFinite(happenedAt) || query.state.status !== "success") return true;
+    const generatedAt = Date.parse(String((query.state.data as { generatedAt?: unknown } | undefined)?.generatedAt));
+    if (!Number.isFinite(generatedAt)) return true;
+    return generatedAt - REPLAY_SNAPSHOT_MARGIN_MS <= happenedAt;
+  };
 }
 
 /** Routes one live event to the query prefixes and refresh topics it changes (see `event-map.ts`). */
@@ -296,7 +318,12 @@ export function useCockpitRealtime(input: {
     const disconnect = connectEventStream(
       (event, delivery) => {
         if (!isCurrent()) return;
-        invalidateForEvent(event, sink);
+        invalidateForEvent(
+          event,
+          delivery.replayed
+            ? { ...sink, invalidate: (queryKey) => sink.invalidate(queryKey, replayedEventNeedsRefetch(event)) }
+            : sink,
+        );
         if (event.eventAuthority !== "durable_history") {
           appendRetainedActivity(queryClient, event, queryKeys.systemActivity());
           appendRetainedActivity(queryClient, event, queryKeys.workActivityAll());

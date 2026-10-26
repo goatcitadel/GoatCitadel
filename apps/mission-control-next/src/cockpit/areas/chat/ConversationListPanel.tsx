@@ -155,7 +155,9 @@ export function ConversationListPanel({
                       {isNotableThreadActivity(activity[session.sessionId]) ? (
                         <ThreadRowStatus record={activity[session.sessionId]} />
                       ) : null}
-                      {rowContext(session) ? <span className="shrink-0">{rowContext(session)}</span> : null}
+                      {rowContext(session) ? (
+                        <span className="min-w-0 max-w-1/3 shrink truncate">{rowContext(session)}</span>
+                      ) : null}
                       {session.lastMessagePreview ? (
                         <span className="min-w-0 truncate text-fg-secondary">{session.lastMessagePreview}</span>
                       ) : null}

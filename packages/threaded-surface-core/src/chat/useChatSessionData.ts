@@ -449,7 +449,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         if (!isCurrent()) return;
         // A stale link still shows the list and opens the first conversation; the host clears the address.
         if (record) nextSessions = { ...nextSessions, items: [...nextSessions.items, record] };
-        else {
+        else if (!renderedRouteSelection.applied) {
           routeSessionUnavailableRef.current?.(
             requestedSessionId,
             routeFallbackSessionId(selectedSessionIdRef.current, nextSessions, options),

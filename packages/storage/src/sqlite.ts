@@ -7498,6 +7498,19 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           db.exec(CITADEL_VAULT_KEYS_SQLITE_SQL);
         },
       },
+      // The boot-time orphan scan joins chat_messages to chat_turn_traces on user_message_id.
+      {
+        version: 270,
+        name: "chat_turn_traces_user_message_index",
+        up: (db) => {
+          if (tableExists(db, "chat_turn_traces")) {
+            db.exec(`
+              CREATE INDEX IF NOT EXISTS idx_chat_turn_traces_user_message
+                ON chat_turn_traces(user_message_id);
+            `);
+          }
+        },
+      },
     ],
   },
 ];

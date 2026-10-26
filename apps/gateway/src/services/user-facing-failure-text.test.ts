@@ -17,6 +17,17 @@ describe("redactLocalHomePaths", () => {
     );
   });
 
+  it("redacts a whole profile name that contains a space", () => {
+    const spaced = ["C:", "Users", "Jane Doe", "AppData", "x"].join("\\");
+    expect(redactLocalHomePaths(`scandir '${spaced}'`)).toBe("scandir '~\\AppData\\x'");
+  });
+
+  it("redacts a spaced profile name that ends the text or a quoted path", () => {
+    const home = ["C:", "Users", "Jane Doe"].join("\\");
+    expect(redactLocalHomePaths(home)).toBe("~");
+    expect(redactLocalHomePaths(`scandir '${home}'`)).toBe("scandir '~'");
+  });
+
   it("leaves text without a home path untouched", () => {
     expect(redactLocalHomePaths("scandir 'workspace/docs'")).toBe("scandir 'workspace/docs'");
   });
