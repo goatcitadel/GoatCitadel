@@ -59,6 +59,34 @@ describe("Chat turn actions", () => {
     expect(labels()).not.toContain("Edit and resend");
   });
 
+  it("names the edit action after what it edits", async () => {
+    await act(async () =>
+      root.render(
+        <ChatTurnActions
+          turn={turn}
+          actions={handlers()}
+          streaming={false}
+          readOnly={false}
+          hasAnswer
+          onCopy={vi.fn()}
+        />,
+      ),
+    );
+    await act(async () => {
+      const more = container.querySelector('button[aria-label="More message actions"]') as HTMLElement;
+      more.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+      more.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0 }));
+      more.click();
+    });
+    const items = await vi.waitFor(() => {
+      const found = [...document.body.querySelectorAll('[role="menuitem"]')].map((node) => node.textContent);
+      expect(found.length).toBeGreaterThan(0);
+      return found;
+    });
+    expect(items).toContain("Edit your message and resend");
+    expect(items).not.toContain("Edit and resend");
+  });
+
   it("keeps Copy visible on phones and moves the rest behind a 44 px More menu", async () => {
     media.phone = true;
     const onCopy = vi.fn();
