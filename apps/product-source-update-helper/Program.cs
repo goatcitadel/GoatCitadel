@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -595,10 +596,25 @@ internal static partial class Program
         try
         {
             process.Kill(entireProcessTree: true);
+            return;
         }
         catch (InvalidOperationException)
         {
             // Already exited.
+            return;
+        }
+        catch (Exception error) when (error is Win32Exception || error is AggregateException)
+        {
+            // Tree termination can fail while git is already exiting. Never let that replace the
+            // process_output_limit error the caller is about to raise; fall back to the root process.
+        }
+        try
+        {
+            process.Kill();
+        }
+        catch (Exception error) when (error is InvalidOperationException || error is Win32Exception)
+        {
+            // Best effort: the bounded ten-minute git timeout still applies if git stays alive.
         }
     }
 
