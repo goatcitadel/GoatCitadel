@@ -93,7 +93,7 @@ Internal architecture words stay in code, logs and `TechnicalDetails`. Operator 
 
 ## Components to reuse
 
-Start from the cockpit primitives in `apps/mission-control-next/src/cockpit/ui` (`Button`, `Field`, `EmptyState`, and their siblings) and the shared components in `packages/mission-control-shared/src/components` before writing a new one. `ui/Switch` is the standard on/off control, so use it wherever something turns on or off. Server state goes through TanStack Query and the shared API clients; realtime events invalidate queries. Keep loading, error, empty, stale, partial, reconnecting, blocked, and unavailable states distinct, and keep dangerous actions explicit with their scope and consequence.
+Start from the cockpit primitives in `apps/mission-control-next/src/cockpit/ui` (`Button`, `Field`, `EmptyState`, and their siblings) and the shared components in `packages/mission-control-shared/src/components` before writing a new one. `ui/Switch` is the standard for new on/off controls; existing ones move to it phase by phase. Server state goes through TanStack Query and the shared API clients; realtime events invalidate queries. Keep loading, error, empty, stale, partial, reconnecting, blocked, and unavailable states distinct, and keep dangerous actions explicit with their scope and consequence.
 
 ## Page anatomy
 

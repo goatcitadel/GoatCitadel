@@ -190,7 +190,7 @@ describe("CockpitShell", () => {
       client.clear();
     },
   );
-  it("renders six areas, preserves the current route, and switches with Ctrl+number", async () => {
+  it("renders the six sidebar areas in order, preserves the current route, and switches with g sequences", async () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={new QueryClient()}>

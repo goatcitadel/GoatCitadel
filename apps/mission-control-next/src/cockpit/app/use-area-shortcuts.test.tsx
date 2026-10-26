@@ -39,11 +39,12 @@ afterEach(() => {
   container.remove();
   vi.useRealTimers();
 });
-it("navigates six areas with g sequences and retains palette and help", () => {
+it("navigates the seven areas with g sequences and retains palette and help", () => {
   for (const [letter, path] of [
     ["c", "chat"],
     ["i", "inbox"],
     ["w", "work"],
+    ["a", "capabilities"],
     ["l", "library"],
     ["s", "system"],
     ["t", "settings"],

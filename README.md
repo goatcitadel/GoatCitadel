@@ -59,7 +59,7 @@ The Gateway and Mission Control run locally; models can run locally or through a
 
 ## Tour The Cockpit
 
-Mission Control opens in the **Cockpit** layout: six areas built around one question, _what needs me right now?_ The sidebar carries **Chat**, **Inbox**, **Work**, **Library**, and **System**, with **Settings** in the gear menu. The switcher at the top of the sidebar picks the active Citadel and workspace; it changes your view, not who owns the work or what it may access.
+Mission Control opens in the **Cockpit** layout: seven areas built around one question, _what needs me right now?_ The sidebar carries **Chat**, **Inbox**, **Work**, **Capabilities**, **Library**, and **System**, with **Settings** in the gear menu. The switcher at the top of the sidebar picks the active Citadel and workspace; it changes your view, not who owns the work or what it may access.
 
 The images are regenerated from a sanitized demo runtime built from shipped defaults (captured 2026-10-11). Every conversation, task, and record in them is fictional demo content, and the seeded Chat answers are labeled as seeded rather than model-generated. Release visual proof is owned by the checked-in visual regression baselines and `pnpm verify:visual:regression`.
 
@@ -145,7 +145,7 @@ A fresh install opens a focused setup: **choose a model**, **set your safety pos
 
 - `Ctrl/Cmd+K` opens the command palette: start a new chat, choose the default model, jump to any area, search conversations, Inbox items, and Library records, or change theme and density.
 - Press `g` then `c`, `i`, `w`, `a`, `l`, `s`, or `t` to jump to Chat, Inbox, Work, Capabilities, Library, System, or Settings. `Ctrl/Cmd+B` toggles the sidebar and `?` lists every shortcut.
-- On phones, a bottom tab bar carries Chat, Inbox, Work, and Library, with System, Settings, search, and scope under More.
+- On phones, a bottom tab bar carries Chat, Inbox, Work, and Library, with Capabilities, System, Settings, search, and scope under More.
 - Prefer the previous layout? Choose **Switch to classic Mission Control** from the gear menu or palette, or open `?shell=classic`; `?shell=cockpit` switches back, and either choice is saved in the browser. A few detailed views still open in Classic and are labeled when they do. See [cockpit implementation status](./docs/MISSION_CONTROL_COCKPIT_PROGRESS.md) for remaining verification boundaries.
 
 [Open the generated screenshot gallery.](./docs/screenshots/mission-control-next/index.html) Regenerate it from a throwaway sanitized runtime:
