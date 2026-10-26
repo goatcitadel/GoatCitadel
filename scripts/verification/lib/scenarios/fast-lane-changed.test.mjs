@@ -45,6 +45,29 @@ describe("verify:fast --changed planning", () => {
     }
   });
 
+  it("the production boot check follows mission-control-next and its workspace dependencies", () => {
+    const packages = [
+      { name: "@goatcitadel/contracts", dir: "packages/contracts", dependencies: [] },
+      { name: "@goatcitadel/threaded-surface-core", dir: "packages/threaded-surface-core", dependencies: ["@goatcitadel/contracts"] },
+      { name: "@goatcitadel/gateway", dir: "apps/gateway", dependencies: [] },
+      {
+        name: "@goatcitadel/mission-control-next",
+        dir: "apps/mission-control-next",
+        dependencies: ["@goatcitadel/threaded-surface-core"],
+      },
+    ];
+    const planFor = (changedPaths) => planChangedFastLane({ changedPaths, packages, commandIds, libraryPackages: [] });
+    for (const file of [
+      "apps/mission-control-next/vite.config.ts",
+      "apps/mission-control-next/config/cockpit-vendor-ownership.ts",
+      "packages/threaded-surface-core/src/index.ts",
+      "packages/contracts/src/index.ts",
+    ]) {
+      assert.ok(planFor([file]).selection.has("fast.mc-next-boot"), `${file} must select the boot check`);
+    }
+    assert.ok(planFor(["apps/gateway/src/a.ts"]).skipped.includes("fast.mc-next-boot"));
+  });
+
   it("a storage change also selects every dependent package's suites", () => {
     const result = plan(["packages/storage/src/repo.ts"]);
     assert.deepEqual(result.affectedPackages, ["@goatcitadel/gateway", "@goatcitadel/storage"]);

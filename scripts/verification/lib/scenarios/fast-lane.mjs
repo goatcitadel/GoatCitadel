@@ -162,6 +162,12 @@ export const FAST_LANE_COMMANDS = Object.freeze([
     env: { GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD: "1" },
   },
   { id: "fast.build", title: "Root build", args: ["build"] },
+  {
+    // Loads the production bundle that fast.build just produced; dev mode and unit tests never execute it.
+    id: "fast.mc-next-boot",
+    title: "Mission Control Next production boot",
+    args: ["verify:mc-next:boot"],
+  },
   { id: "fast.docs", title: "Docs checks", args: ["docs:check"] },
   {
     id: "fast.gateway-async-boundary",
@@ -242,7 +248,7 @@ export const FAST_LANE_STAGES = Object.freeze([
   {
     id: "fast.post-tests",
     mode: "serial",
-    commands: ["fast.smoke", "fast.build", "fast.docs", "fast.gateway-async-boundary"],
+    commands: ["fast.smoke", "fast.build", "fast.mc-next-boot", "fast.docs", "fast.gateway-async-boundary"],
   },
 ]);
 

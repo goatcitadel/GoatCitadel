@@ -730,7 +730,7 @@ test("fast verification stage plan isolates policy and schedules every command e
     {
       id: "fast.post-tests",
       mode: "serial",
-      commands: ["fast.smoke", "fast.build", "fast.docs", "fast.gateway-async-boundary"],
+      commands: ["fast.smoke", "fast.build", "fast.mc-next-boot", "fast.docs", "fast.gateway-async-boundary"],
     },
   ]);
 

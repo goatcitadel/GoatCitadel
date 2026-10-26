@@ -13,6 +13,7 @@ export const FAST_LANE_COMMAND_PACKAGE_PREFIXES = Object.freeze([
   { prefix: "fast.smoke", packages: ["@goatcitadel/gateway"] },
   { prefix: "fast.test.storage.", packages: ["@goatcitadel/storage"] },
   { prefix: "fast.test.mission-control-next", packages: ["@goatcitadel/mission-control-next"] },
+  { prefix: "fast.mc-next-boot", packages: ["@goatcitadel/mission-control-next"] },
   { prefix: "fast.test.policy-engine", packages: ["@goatcitadel/policy-engine"] },
 ]);
 
