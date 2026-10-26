@@ -400,6 +400,68 @@ describe("events stream route", () => {
     expect(text).toContain('"lastSentSequence":13');
   });
 
+  it("records live deliveries on the lease in one write, flushed before the lease closes", async () => {
+    app = Fastify();
+    await app.register(cors, { origin: true });
+    let liveListener: ((event: Record<string, unknown>) => void) | null = null;
+    const touchRealtimeStreamLease = vi.fn();
+    const closeRealtimeStreamLease = vi.fn();
+    decorateRealtimeEvents(app, {
+      listRealtimeEvents: () => [],
+      listRealtimeEventsAfterSequence: () => [],
+      getRealtimeEventSequenceBounds: () => ({ oldestSequence: undefined, newestSequence: undefined }),
+      subscribeRealtime: (listener: (event: Record<string, unknown>) => void) => {
+        liveListener = listener;
+        return () => {
+          liveListener = null;
+        };
+      },
+      openRealtimeStreamLease: () => ({
+        leaseId: "lease-live",
+        clientId: "client-live",
+        gatewayNodeId: "node-live",
+      }),
+      touchRealtimeStreamLease,
+      closeRealtimeStreamLease,
+    });
+    await app.register(eventsRoutes);
+
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/v1/events/stream?replay=0`);
+    expect(response.status).toBe(200);
+
+    let published = false;
+    const text = await readSseUntil(response, (buffer) => {
+      if (!published && buffer.includes("event: stream-ready")) {
+        published = true;
+        for (const sequence of [1, 2, 3]) {
+          liveListener?.({
+            eventId: `event-${sequence}`,
+            sequence,
+            eventType: "system",
+            source: "tests",
+            timestamp: `2026-03-20T10:00:0${sequence}.000Z`,
+            payload: { n: sequence },
+          });
+        }
+      }
+      return buffer.includes('"sequence":3');
+    });
+    expect(occurrences(text, '"eventType":"system"')).toBe(3);
+
+    await vi.waitFor(() => expect(closeRealtimeStreamLease).toHaveBeenCalled());
+    const liveTouches = touchRealtimeStreamLease.mock.calls.filter(
+      ([input]) => (input as { lastSentSequence?: number }).lastSentSequence !== undefined,
+    );
+    // Three deliveries inside one interval become a single lease write of the
+    // newest cursor, written before the lease is closed.
+    expect(liveTouches).toEqual([
+      [{ leaseId: "lease-live", lastSentSequence: 3, lastEventAt: "2026-03-20T10:00:03.000Z" }],
+    ]);
+    const lastTouchOrder = touchRealtimeStreamLease.mock.invocationCallOrder.at(-1)!;
+    expect(lastTouchOrder).toBeLessThan(closeRealtimeStreamLease.mock.invocationCallOrder[0]!);
+  });
+
   it("ends only the hijacked stream when an async replay read fails", async () => {
     app = Fastify();
     const closeRealtimeStreamLease = vi.fn();

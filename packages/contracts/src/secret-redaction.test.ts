@@ -26,6 +26,13 @@ describe("redactSecretText", () => {
     expect(result.redactionCount).toBe(3);
   });
 
+  it("redacts the SSE bridge token from event stream URLs", () => {
+    const result = redactSecretText("GET /api/v1/events/stream?replay=0&sse_token=fake-sse-value&clientId=c1");
+
+    expect(result.value).toBe("GET /api/v1/events/stream?replay=0&sse_token=[REDACTED]&clientId=c1");
+    expect(result.redactionCount).toBe(1);
+  });
+
   it("redacts literal env values without redacting short or whitespace values", () => {
     const result = redactSecretText("custom=fcrl_abcdefghijklmnop short=abc spaced=two words", {
       env: {

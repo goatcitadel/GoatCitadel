@@ -17,6 +17,9 @@ const streamQuerySchema = z.object({
 });
 
 const STREAM_REPLAY_LIMIT = 500;
+// Live deliveries record the lease cursor at most this often instead of once
+// per event, so a busy stream does not do a storage write for every event.
+export const LEASE_TOUCH_INTERVAL_MS = 1000;
 const DEFAULT_MAX_SSE_CONNECTIONS_PER_IP = 25;
 const SEQUENCE_CURSOR_PATTERN = /^\d+$/;
 
@@ -142,6 +145,36 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     // before the keep-alive interval is created — e.g. a replay-gap early return
     // or a disconnect during replay. Assigned after the replay buffer is flushed.
     let keepAlive: ReturnType<typeof setInterval> | undefined = undefined;
+    // The newest delivered cursor not yet written to the lease, and the timer
+    // that writes it. Both are cleared on cleanup, which writes any pending
+    // cursor before closing the lease.
+    let pendingLeaseTouch: { lastSentSequence: number; lastEventAt: string } | undefined;
+    let leaseTouchTimer: ReturnType<typeof setTimeout> | undefined;
+    const flushLeaseTouch = async () => {
+      if (leaseTouchTimer !== undefined) {
+        clearTimeout(leaseTouchTimer);
+        leaseTouchTimer = undefined;
+      }
+      const pending = pendingLeaseTouch;
+      pendingLeaseTouch = undefined;
+      if (pending) {
+        await fastify.services.realtimeEvents.touchRealtimeStreamLease({ leaseId: lease.leaseId, ...pending });
+      }
+    };
+    const recordDeliveredForLease = (event: RealtimeEvent) => {
+      if (closed) {
+        return;
+      }
+      pendingLeaseTouch = { lastSentSequence: event.sequence, lastEventAt: event.timestamp };
+      if (leaseTouchTimer !== undefined) {
+        return;
+      }
+      leaseTouchTimer = setTimeout(() => {
+        leaseTouchTimer = undefined;
+        flushLeaseTouch().catch(() => cleanup("stream_lease_touch_error"));
+      }, LEASE_TOUCH_INTERVAL_MS);
+      leaseTouchTimer.unref?.();
+    };
     function cleanup(closeReason = "client_disconnect") {
       if (closed) {
         return;
@@ -152,12 +185,20 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         clearInterval(keepAlive);
       }
       unsubscribe();
-      void Promise.resolve(
+      const closeLease = () =>
         fastify.services.realtimeEvents.closeRealtimeStreamLease({
           leaseId: lease.leaseId,
           closeReason,
-        }),
-      ).catch(() => undefined);
+        });
+      if (pendingLeaseTouch === undefined && leaseTouchTimer === undefined) {
+        void Promise.resolve(closeLease()).catch(() => undefined);
+      } else {
+        // Write the last delivered cursor before the lease is closed.
+        void flushLeaseTouch()
+          .catch(() => undefined)
+          .then(closeLease)
+          .catch(() => undefined);
+      }
       releaseConnection();
       try {
         raw.end();
@@ -194,11 +235,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
             return;
           }
           lastDeliveredSequence = event.sequence;
-          await fastify.services.realtimeEvents.touchRealtimeStreamLease({
-            leaseId: lease.leaseId,
-            lastSentSequence: event.sequence,
-            lastEventAt: event.timestamp,
-          });
+          recordDeliveredForLease(event);
         })
         .catch(() => cleanup("stream_write_error"));
     };
