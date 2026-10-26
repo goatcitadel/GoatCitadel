@@ -410,3 +410,40 @@ test("an approved Settings plan that failed stops the fixture with its status", 
     /ended as rollback_failed/,
   );
 });
+
+test("an approved Settings plan that is still applying is polled until it completes", async () => {
+  const statuses = ["applying", "applying", "completed"];
+  const delays = [];
+  const deps = {
+    assertOk(response) {
+      assert.equal(response.ok, true);
+    },
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+    requestJson: async (_url, _path, options) => {
+      assert.equal(options?.method ?? "GET", "GET", "an applying plan is never answered");
+      return { ok: true, body: { status: statuses.shift(), revision: 6 } };
+    },
+  };
+  await settleApprovedSettingsChangePlan("http://gateway.test", "plan-1", deps);
+  assert.equal(statuses.length, 0);
+  assert.equal(delays.length, 2);
+});
+
+test("an approved Settings plan that never settles stops the fixture after the retry budget", async () => {
+  let reads = 0;
+  const deps = {
+    assertOk() {},
+    delay: async () => undefined,
+    requestJson: async () => {
+      reads += 1;
+      return { ok: true, body: { status: "applying", revision: 6 } };
+    },
+  };
+  await assert.rejects(
+    settleApprovedSettingsChangePlan("http://gateway.test", "plan-1", deps),
+    /did not settle after approval/,
+  );
+  assert.ok(reads > 1);
+});
