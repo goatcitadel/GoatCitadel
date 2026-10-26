@@ -28,19 +28,23 @@ export function isSafeSvgLinkTarget(value: string): boolean {
   }
 }
 
+const UNCHECKED_SVG_MESSAGE = "The rendered diagram could not be checked for unsafe content, so it was not shown.";
+
 export function hardenMermaidSvg(svg: string): string {
   // Defence-in-depth on top of mermaid's securityLevel: "strict". When a DOM is
   // available, strip scripting vectors from the rendered SVG before it is set via
   // dangerouslySetInnerHTML. When no DOM is available (SSR), fall back to the raw
-  // mermaid-strict output, which is only ever set on the client anyway.
+  // mermaid-strict output, which is only ever set on the client anyway. SVG that
+  // cannot be parsed or cleaned fails closed: the caller shows the render error.
   if (typeof window === "undefined") {
     return svg;
   }
+  let cleaned: string;
   try {
     const parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
     const root = parsed.documentElement;
     if (!root || parsed.getElementsByTagName("parsererror").length > 0) {
-      return svg;
+      throw new Error(UNCHECKED_SVG_MESSAGE);
     }
     root.querySelectorAll("script, foreignObject").forEach((node) => node.remove());
     root.querySelectorAll("*").forEach((element) => {
@@ -59,10 +63,11 @@ export function hardenMermaidSvg(svg: string): string {
         }
       }
     });
-    return new XMLSerializer().serializeToString(root);
+    cleaned = new XMLSerializer().serializeToString(root);
   } catch {
-    return svg;
+    throw new Error(UNCHECKED_SVG_MESSAGE);
   }
+  return cleaned;
 }
 
 function MermaidArtifactRenderer({ source }: { source: string }) {

@@ -3,9 +3,19 @@ import type { DatabaseClient } from "./db.js";
 import { buildMemoryWorkspaceScopeSql } from "./memory-maintenance-repo.js";
 
 export interface MemoryItemEnumerationRow {
-  item_id: string; namespace: string; title: string; content: string; metadata_json: string | null;
-  pinned: number; ttl_override_seconds: number | null; expires_at: string | null;
-  status: MemoryItemRecord["status"]; created_at: string; updated_at: string; forgotten_at: string | null; workspace_id: string | null;
+  item_id: string;
+  namespace: string;
+  title: string;
+  content: string;
+  metadata_json: string | null;
+  pinned: number;
+  ttl_override_seconds: number | null;
+  expires_at: string | null;
+  status: MemoryItemRecord["status"];
+  created_at: string;
+  updated_at: string;
+  forgotten_at: string | null;
+  workspace_id: string | null;
 }
 
 export interface MemoryItemEnumerationContinuation {
@@ -46,67 +56,118 @@ export class MemoryItemEnumerationRepository {
       // PostgreSQL shares this row lock between readers; mutation triggers must
       // acquire its write lock before committing. SQLite's immediate transaction
       // supplies the equivalent writer exclusion for count, clock and page reads.
-      const state = this.db.prepare(`SELECT generation FROM memory_item_enumeration_state
-        WHERE singleton_id = 1${this.db.dialect === "postgres" ? " FOR SHARE" : ""}`)
+      const state = this.db
+        .prepare(
+          `SELECT generation FROM memory_item_enumeration_state
+        WHERE singleton_id = 1${this.db.dialect === "postgres" ? " FOR SHARE" : ""}`,
+        )
         .get<{ generation: string | number }>();
       if (!state) throw new Error("Memory enumeration state is unavailable");
       const generation = String(state.generation);
-      const nowSql = this.db.dialect === "postgres"
-        ? "to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')"
-        : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+      const nowSql =
+        this.db.dialect === "postgres"
+          ? "to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')"
+          : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
       const now = this.db.prepare(`SELECT ${nowSql} AS now`).get<{ now: string }>()!.now;
       const previous = input.continuation;
       if (previous && (previous.generation !== generation || now >= previous.validUntil)) throw staleCursor();
       const snapshotAt = previous?.snapshotAt ?? now;
-      const clauses: string[] = [], params: Record<string, string | number> = {};
+      const clauses: string[] = [],
+        params: Record<string, string | number> = {};
       if (input.workspaceId) {
         clauses.push(buildMemoryWorkspaceScopeSql(this.db.dialect));
         params.workspaceId = input.workspaceId;
       }
-      if (input.namespace) { clauses.push("namespace = @namespace"); params.namespace = input.namespace; }
-      if (input.status !== "all") { clauses.push("status = @status"); params.status = input.status; }
+      if (input.namespace) {
+        clauses.push("namespace = @namespace");
+        params.namespace = input.namespace;
+      }
+      if (input.status !== "all") {
+        clauses.push("status = @status");
+        params.status = input.status;
+      }
       if (input.status === "active") {
-        clauses.push("(expires_at IS NULL OR expires_at > @snapshotAt)"); params.snapshotAt = snapshotAt;
+        clauses.push("(expires_at IS NULL OR expires_at > @snapshotAt)");
+        params.snapshotAt = snapshotAt;
       }
       if (input.query) {
-        clauses.push("(LOWER(title) LIKE @query OR LOWER(content) LIKE @query OR LOWER(namespace) LIKE @query)");
-        params.query = `%${input.query}%`;
+        clauses.push(
+          "(LOWER(title) LIKE @query ESCAPE '\\' OR LOWER(content) LIKE @query ESCAPE '\\'" +
+            " OR LOWER(namespace) LIKE @query ESCAPE '\\')",
+        );
+        params.query = `%${escapeLikePattern(input.query)}%`;
       }
       const where = clauses.length ? clauses.join(" AND ") : "1 = 1";
-      const counts = this.db.prepare(`SELECT COUNT(*) AS total, MIN(expires_at) AS next_expiry FROM memory_items WHERE ${where}`)
+      const counts = this.db
+        .prepare(`SELECT COUNT(*) AS total, MIN(expires_at) AS next_expiry FROM memory_items WHERE ${where}`)
         .get<{ total: number | string; next_expiry: string | null }>(params)!;
       const total = Number(counts.total);
       if (!Number.isSafeInteger(total) || total < 0) throw new Error("Memory enumeration count is invalid");
       let validUntil = previous?.validUntil ?? new Date(Date.parse(now) + snapshotTtlMs).toISOString();
-      if (input.status === "active" && counts.next_expiry && counts.next_expiry < validUntil) validUntil = counts.next_expiry;
+      if (input.status === "active" && counts.next_expiry && counts.next_expiry < validUntil)
+        validUntil = counts.next_expiry;
       const after = previous?.after;
       const position = after ? " AND (updated_at < @updatedAt OR (updated_at = @updatedAt AND item_id < @itemId))" : "";
-      const rows = this.db.prepare(`SELECT ${columns} FROM memory_items WHERE ${where}${position}
-        ORDER BY updated_at DESC, item_id DESC LIMIT @limit`).all<MemoryItemEnumerationRow>({
-        ...params, limit: input.limit + 1, ...(after ? { updatedAt: after.updatedAt, itemId: after.itemId } : {}),
-      });
+      const rows = this.db
+        .prepare(
+          `SELECT ${columns} FROM memory_items WHERE ${where}${position}
+        ORDER BY updated_at DESC, item_id DESC LIMIT @limit`,
+        )
+        .all<MemoryItemEnumerationRow>({
+          ...params,
+          limit: input.limit + 1,
+          ...(after ? { updatedAt: after.updatedAt, itemId: after.itemId } : {}),
+        });
       const hasMore = rows.length > input.limit;
-      const page = rows.slice(0, input.limit), last = page.at(-1);
-      return { rows: page, total, snapshotAt,
-        ...(hasMore && last ? { continuation: { generation, snapshotAt, validUntil,
-          after: { updatedAt: last.updated_at, itemId: last.item_id } } } : {}),
+      const page = rows.slice(0, input.limit),
+        last = page.at(-1);
+      return {
+        rows: page,
+        total,
+        snapshotAt,
+        ...(hasMore && last
+          ? {
+              continuation: {
+                generation,
+                snapshotAt,
+                validUntil,
+                after: { updatedAt: last.updated_at, itemId: last.item_id },
+              },
+            }
+          : {}),
       };
     });
   }
 }
 
+/** Escapes LIKE wildcards and the escape character itself (paired with `ESCAPE '\'`). */
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/gu, (character) => `\\${character}`);
+}
+
 function validateInput(input: MemoryItemEnumerationInput): void {
-  if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 500) throw new TypeError("Memory page limit must be 1-500");
+  if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 500)
+    throw new TypeError("Memory page limit must be 1-500");
   if (!["active", "forgotten", "all"].includes(input.status)) throw new TypeError("Invalid memory status filter");
   for (const value of [input.workspaceId, input.namespace, input.query]) {
-    if (value !== undefined && (typeof value !== "string" || value.length > 2_000)) throw new TypeError("Invalid memory page filter");
+    if (value !== undefined && (typeof value !== "string" || value.length > 2_000))
+      throw new TypeError("Invalid memory page filter");
   }
   const cursor = input.continuation;
   if (!cursor) return;
-  if (!/^\d{1,19}$/.test(cursor.generation) || !isIso(cursor.snapshotAt) || !isIso(cursor.validUntil) ||
-      cursor.validUntil <= cursor.snapshotAt || Date.parse(cursor.validUntil) - Date.parse(cursor.snapshotAt) > snapshotTtlMs ||
-      typeof cursor.after?.updatedAt !== "string" || !cursor.after.updatedAt || cursor.after.updatedAt.length > 64 ||
-      typeof cursor.after?.itemId !== "string" || !cursor.after.itemId || cursor.after.itemId.length > 256) {
+  if (
+    !/^\d{1,19}$/.test(cursor.generation) ||
+    !isIso(cursor.snapshotAt) ||
+    !isIso(cursor.validUntil) ||
+    cursor.validUntil <= cursor.snapshotAt ||
+    Date.parse(cursor.validUntil) - Date.parse(cursor.snapshotAt) > snapshotTtlMs ||
+    typeof cursor.after?.updatedAt !== "string" ||
+    !cursor.after.updatedAt ||
+    cursor.after.updatedAt.length > 64 ||
+    typeof cursor.after?.itemId !== "string" ||
+    !cursor.after.itemId ||
+    cursor.after.itemId.length > 256
+  ) {
     throw new TypeError("Invalid memory page continuation");
   }
 }
