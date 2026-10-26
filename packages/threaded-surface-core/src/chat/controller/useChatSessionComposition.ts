@@ -12,6 +12,7 @@ import { useChatChangePlanState } from "../useChatChangePlanState";
 import { useChatDocuments } from "../useChatDocuments";
 import { useChatSessionControls, type SessionRemovedFromView } from "../useChatSessionControls";
 import { useChatSessionData } from "../useChatSessionData";
+import { useEnsureListedSession } from "../useEnsureListedSession";
 import { useChatSessionStatus } from "../useChatSessionStatus";
 import type { OutboundContextBlock } from "../useChatSurfaceOrchestration";
 import { useChatThreadController } from "../useChatThreadController";
@@ -144,6 +145,15 @@ export function useChatSessionComposition({
     messageMutationVersionRef: coordination.messageMutationVersionRef,
     lastLocalPrefMutationAtRef: coordination.lastLocalPrefMutationAtRef,
     surfaceMode: lockSurface && surface ? surface : undefined,
+  });
+  // A conversation chosen from Messaging can be older than the loaded page; it is read exactly into the list.
+  const ensureSessionListed = useEnsureListedSession({
+    workspaceId,
+    viewIdentity,
+    historyView: selection.historyView,
+    surfaceMode: lockSurface && surface ? surface : undefined,
+    sessions: sessionData.sessions,
+    setSessions: sessionData.setSessions,
   });
   const { loadSidebar } = sessionData;
   const { loadSessionCoreState } = sessionData;
@@ -387,6 +397,7 @@ export function useChatSessionComposition({
   return {
     conversationContext,
     sessionData,
+    ensureSessionListed,
     captureOutboundExternalContextRefs,
     documentContext,
     explicitContextEnabled,

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
+import { resolveSessionRoute } from "@goatcitadel/gateway-core";
+import { routeOperatorDeskSend } from "../services/channel-desk-turn.js";
 import { chatRoutes } from "./chat.js";
 
 function testRouteDecision(overrides: Partial<Record<string, unknown>> = {}) {
@@ -52,12 +54,20 @@ describe("chat routes additional coverage", () => {
     app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatSessions: { listChatSessions } } as never);
     await app.register(chatRoutes);
-    const response = await app.inject({ method: "GET", url: "/api/v1/chat/sessions?workspaceId=workspace-a&sessionId=older%2Fchat&scope=mission&limit=1" });
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions?workspaceId=workspace-a&sessionId=older%2Fchat&scope=mission&limit=1",
+    });
     expect(response.statusCode).toBe(200);
-    expect(listChatSessions).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "workspace-a", sessionId: "older/chat", scope: "mission", limit: 1 }));
+    expect(listChatSessions).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "workspace-a", sessionId: "older/chat", scope: "mission", limit: 1 }),
+    );
     listChatSessions.mockClear();
     for (const value of ["", "x".repeat(257)]) {
-      expect((await app.inject({ method: "GET", url: "/api/v1/chat/sessions?sessionId=" + encodeURIComponent(value) })).statusCode).toBe(400);
+      expect(
+        (await app.inject({ method: "GET", url: "/api/v1/chat/sessions?sessionId=" + encodeURIComponent(value) }))
+          .statusCode,
+      ).toBe(400);
     }
     expect(listChatSessions).not.toHaveBeenCalled();
   });
@@ -840,6 +850,50 @@ describe("chat routes additional coverage", () => {
         authActorSource: "loopback",
       });
     }
+  });
+
+  it("answers retry and edit in a channel conversation with 409 before anything is sent or streamed", async () => {
+    const refused = "Retry and edit aren't available in channel conversations. Ask again instead.";
+    const retryChatTurn = vi.fn();
+    const retryChatTurnStream = vi.fn();
+    const editChatTurn = vi.fn();
+    const editChatTurnStream = vi.fn();
+    // The service refuses a channel conversation in the route-decision check the four routes run first.
+    const routePreflight = vi.fn(async () => {
+      throw new ConflictError({ message: refused });
+    });
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    decorateAuthenticatedOperator(app);
+    app.decorate("services", {
+      chatMessages: { retryChatTurn, retryChatTurnStream, editChatTurn, editChatTurnStream, routePreflight },
+    } as never);
+    await app.register(chatRoutes);
+
+    for (const [path, action] of [
+      ["retry", "retry"],
+      ["retry/stream", "retry"],
+      ["edit", "edit"],
+      ["edit/stream", "edit"],
+    ] as const) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/chat/sessions/sess-1/turns/turn-1/${path}`,
+        payload: {
+          content: "edited",
+          providerId: "openai",
+          model: "gpt-5.1",
+          routeDecision: testRouteDecision({ action, turnId: "turn-1" }),
+        },
+      });
+      expect(response.statusCode, path).toBe(409);
+      expect(response.headers["content-type"], path).toContain("application/json");
+      expect(response.json<{ error: string }>().error, path).toBe(refused);
+    }
+    expect(retryChatTurn).not.toHaveBeenCalled();
+    expect(retryChatTurnStream).not.toHaveBeenCalled();
+    expect(editChatTurn).not.toHaveBeenCalled();
+    expect(editChatTurnStream).not.toHaveBeenCalled();
   });
 
   it("exposes chat route preflight through the gateway route stack", async () => {
@@ -2069,5 +2123,204 @@ describe("chat routes additional coverage", () => {
     expect(response.statusCode).toBe(400);
     expect(response.body).toContain("Check gateway diagnostics and retry");
     expect(response.body).not.toContain("database exploded");
+  });
+
+  describe("desk sends in channel conversations", () => {
+    const deskPayload = {
+      content: "What's on my calendar today?",
+      providerId: "openai",
+      model: "gpt-5.1",
+      routeDecision: testRouteDecision(),
+    };
+
+    async function createDeskApp(sendOperatorDeskMessage: ReturnType<typeof vi.fn>) {
+      const agentSendChatMessage = vi.fn(async () => ({ turnId: "turn-verbatim" }));
+      const agentSendChatMessageStream = vi.fn(async function* () {
+        yield { type: "done" };
+      });
+      const routePreflight = vi.fn(async () => matchingRoutePreflight());
+      app = Fastify();
+      app.decorate("requireOperatorAuth", async () => undefined);
+      decorateAuthenticatedOperator(app);
+      app.decorateRequest("idempotencyKey", "request-key-1");
+      app.decorate("services", {
+        chatMessages: { agentSendChatMessage, agentSendChatMessageStream, routePreflight },
+        integrationWebhooks: { sendOperatorDeskMessage },
+      } as never);
+      await app.register(chatRoutes);
+      return { agentSendChatMessage, agentSendChatMessageStream };
+    }
+
+    it("routes a desk send in the operator's own conversation to a desk turn", async () => {
+      const deskResponse = {
+        sessionId: "sess-1",
+        transport: "integration",
+        turnId: "inbound-turn-1",
+        userMessage: {
+          messageId: "inbound-message-1",
+          sessionId: "sess-1",
+          role: "user",
+          actorType: "user",
+          actorId: "operator",
+          sourceAuthority: "operator",
+          content: "What's on my calendar today?",
+          timestamp: "2026-10-25T10:00:00.000Z",
+        },
+      };
+      const sendOperatorDeskMessage = vi.fn(async () => ({ mode: "ask", response: deskResponse }));
+      const { agentSendChatMessage, agentSendChatMessageStream } = await createDeskApp(sendOperatorDeskMessage);
+
+      const sent = await app!.inject({
+        method: "POST",
+        url: "/api/v1/chat/sessions/sess-1/agent-send",
+        payload: deskPayload,
+      });
+      expect(sent.statusCode).toBe(200);
+      expect(sent.json()).toEqual(deskResponse);
+      // The route's provider and model choice travels with the desk question.
+      expect(sendOperatorDeskMessage).toHaveBeenCalledWith("sess-1", {
+        content: "What's on my calendar today?",
+        idempotencyKey: "request-key-1",
+        providerId: "openai",
+        model: "gpt-5.1",
+      });
+
+      const streamed = await app!.inject({
+        method: "POST",
+        url: "/api/v1/chat/sessions/sess-1/agent-send/stream",
+        payload: deskPayload,
+      });
+      expect(streamed.statusCode).toBe(200);
+      expect(streamed.headers["content-type"]).toContain("text/event-stream");
+      expect(streamed.body).toContain('"type":"done"');
+      expect(streamed.body).toContain('"turnId":"inbound-turn-1"');
+      expect(streamed.body).toContain('"messageId":"inbound-message-1"');
+      expect(sendOperatorDeskMessage).toHaveBeenCalledTimes(2);
+      // The desk text never takes the verbatim path that would post it into the channel.
+      expect(agentSendChatMessage).not.toHaveBeenCalled();
+      expect(agentSendChatMessageStream).not.toHaveBeenCalled();
+    });
+
+    it("refuses a desk send while the channel is off", async () => {
+      const sendOperatorDeskMessage = vi.fn(async () => ({
+        mode: "blocked",
+        message: "Turn Telegram back on to reply.",
+      }));
+      const { agentSendChatMessage, agentSendChatMessageStream } = await createDeskApp(sendOperatorDeskMessage);
+
+      for (const url of ["/api/v1/chat/sessions/sess-1/agent-send", "/api/v1/chat/sessions/sess-1/agent-send/stream"]) {
+        const response = await app!.inject({ method: "POST", url, payload: deskPayload });
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toEqual({ error: "Turn Telegram back on to reply." });
+      }
+      expect(agentSendChatMessage).not.toHaveBeenCalled();
+      expect(agentSendChatMessageStream).not.toHaveBeenCalled();
+    });
+
+    it("refuses files and templates in a desk send to the operator's own conversation", async () => {
+      const session = resolveSessionRoute({ channel: "telegram", account: "telegram-1", peer: "4242" });
+      const accept = vi.fn(async () => {
+        throw new Error("must not accept");
+      });
+      // The real desk decision, on the operator's own Telegram conversation.
+      const sendOperatorDeskMessage = vi.fn(async (sessionId: string, input: Record<string, unknown>) =>
+        routeOperatorDeskSend(
+          {
+            ...(input as { content: string; idempotencyKey: string }),
+            sessionId,
+            sessionKey: session.sessionKey,
+            binding: {
+              sessionId,
+              transport: "integration",
+              connectionId: "telegram-1",
+              target: "4242",
+              conversation: { kind: "direct", counterpartActorId: "4242" },
+              writable: true,
+              createdAt: "2026-10-25T10:00:00.000Z",
+              updatedAt: "2026-10-25T10:00:00.000Z",
+            },
+            connection: {
+              connectionId: "telegram-1",
+              revision: "r1",
+              catalogId: "channel.telegram",
+              kind: "channel",
+              key: "telegram",
+              label: "Telegram",
+              enabled: true,
+              status: "connected",
+              config: { ownerActorIds: ["4242"] },
+              createdAt: "2026-10-25T10:00:00.000Z",
+              updatedAt: "2026-10-25T10:00:00.000Z",
+            },
+          },
+          accept,
+        ),
+      );
+      const { agentSendChatMessage, agentSendChatMessageStream } = await createDeskApp(sendOperatorDeskMessage);
+
+      const extras = [
+        { attachments: ["attachment-1"] },
+        { parts: [{ type: "image_ref", attachmentId: "attachment-1" }] },
+        {
+          templateInvocation: {
+            ownerKind: "prompt_pack",
+            ownerId: "pack-1",
+            ownerRevision: "rev-1",
+            schemaHash: "a".repeat(64),
+            values: {},
+          },
+        },
+        { workspaceSnapshot: { capture: true, requestId: "snapshot-1" } },
+      ];
+      for (const extra of extras) {
+        for (const url of [
+          "/api/v1/chat/sessions/sess-1/agent-send",
+          "/api/v1/chat/sessions/sess-1/agent-send/stream",
+        ]) {
+          const response = await app!.inject({ method: "POST", url, payload: { ...deskPayload, ...extra } });
+          expect(response.statusCode).toBe(400);
+          expect(response.json()).toEqual({ error: "Files and templates aren't sent in channel conversations." });
+        }
+      }
+      expect(sendOperatorDeskMessage).toHaveBeenCalledTimes(extras.length * 2);
+      expect(accept).not.toHaveBeenCalled();
+      expect(agentSendChatMessage).not.toHaveBeenCalled();
+      expect(agentSendChatMessageStream).not.toHaveBeenCalled();
+    });
+
+    it("keeps today's verbatim path for group and other people's conversations", async () => {
+      const sendOperatorDeskMessage = vi.fn(async () => ({ mode: "post" }));
+      const { agentSendChatMessage, agentSendChatMessageStream } = await createDeskApp(sendOperatorDeskMessage);
+
+      const sent = await app!.inject({
+        method: "POST",
+        url: "/api/v1/chat/sessions/sess-1/agent-send",
+        payload: deskPayload,
+      });
+      expect(sent.statusCode).toBe(200);
+      expect(sent.json()).toEqual({ turnId: "turn-verbatim" });
+      const streamed = await app!.inject({
+        method: "POST",
+        url: "/api/v1/chat/sessions/sess-1/agent-send/stream",
+        payload: deskPayload,
+      });
+      expect(streamed.statusCode).toBe(200);
+      expect(agentSendChatMessage).toHaveBeenCalledTimes(1);
+      expect(agentSendChatMessageStream).toHaveBeenCalledTimes(1);
+    });
+
+    it("never checks desk routing before the route decision is fresh", async () => {
+      const sendOperatorDeskMessage = vi.fn(async () => ({ mode: "ask", response: {} }));
+      await createDeskApp(sendOperatorDeskMessage);
+
+      const response = await app!.inject({
+        method: "POST",
+        url: "/api/v1/chat/sessions/sess-1/agent-send",
+        payload: { ...deskPayload, routeDecision: undefined },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error).toMatchObject({ code: "route_changed", reason: "route_decision_required" });
+      expect(sendOperatorDeskMessage).not.toHaveBeenCalled();
+    });
   });
 });

@@ -22,8 +22,13 @@ import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
 import { InspectorSourceContext } from "../../app/inspector-context";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { channelPageConnectionId } from "../../app/routes";
+import { ChatMainColumn } from "./ChatMainColumn";
 import { ChatOwnerNavigationBoundary } from "./ChatOwnerNavigationBoundary";
 import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
+import { useSelectedChannelConversation } from "./use-channel-conversation";
+import { useChannelComposerProps } from "./use-channel-composer";
+import { isChannelConversation } from "./channel-conversation-scope";
 import { ThreadedBtwSideChatPanel } from "../../../features/threaded-surface/ThreadedBtwSideChatPanel";
 import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
@@ -121,7 +126,7 @@ export function ChatAreaView({
   onVisibleSessionChange?: (sessionId: string | undefined) => void;
   gatewayUnavailable?: boolean;
 }) {
-  const { navigate } = useCockpitRoute();
+  const { navigate, rest } = useCockpitRoute();
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
   const onboarding = useQuery({ queryKey: ["system", "onboarding"], queryFn: fetchOnboardingState, staleTime: 60_000 });
   const { open, close, content: inspectorContent, register, closeIfOpen, getDismissalGeneration } = useInspector();
@@ -204,7 +209,11 @@ export function ChatAreaView({
   );
   const codePanel = input.workflowPanel?.kind === "code" ? input.workflowPanel : null;
   const latestLocalNotice = active?.notices.find((notice) => notice.id.startsWith("notice-"));
-  const session = input.sessionRail.missionSessions.find((item) => item.sessionId === selectedSessionId);
+  // A conversation held through a channel is an external session; the header needs it as much as a mission chat.
+  const { missionSessions, externalSessions = [] } = input.sessionRail;
+  const session = [...missionSessions, ...externalSessions].find((item) => item.sessionId === selectedSessionId);
+  const channel = useSelectedChannelConversation(activeWorkspaceId ?? "default", session, selectedSessionId);
+  const composerProps = useChannelComposerProps(active, channel, activeWorkspaceId ?? "default", session);
   const latestTurnId = active?.thread?.turns.filter((turn) => turn.branch.isSelectedPath).at(-1)?.turnId;
   const openInspector = (turnId?: string, tab?: ChatInspectorTab) => {
     if (inspectorView.current !== renderedInspectorView) return;
@@ -224,6 +233,11 @@ export function ChatAreaView({
     });
   };
   const openProjects = () => navigate("/chat/projects");
+  // Messaging lists this workspace's channels under the conversations; a channel row opens that channel's page.
+  const messaging = {
+    workspaceId: activeWorkspaceId ?? "default",
+    onOpenChannel: (connectionId: string) => navigate(`/chat/messaging/${encodeURIComponent(connectionId)}`),
+  };
   useEffect(() => {
     onVisibleSessionChange?.(selectedSessionId);
   }, [onVisibleSessionChange, selectedSessionId]);
@@ -261,6 +275,7 @@ export function ChatAreaView({
         rail={input.sessionRail}
         projectOptions={input.contextDockProps?.projectOptions}
         onOpenProjects={openProjects}
+        messaging={messaging}
       />
       <ChatConversationsSheet
         open={conversationsOpen}
@@ -268,12 +283,17 @@ export function ChatAreaView({
         rail={input.sessionRail}
         projectOptions={input.contextDockProps?.projectOptions}
         onOpenProjects={openProjects}
+        messaging={messaging}
       />
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <ChatMainColumn
+        channelPageId={channelPageConnectionId(rest)}
+        channelConversation={isChannelConversation(session)}
+      >
         <ChatSessionHeader
           input={input}
           active={active}
           session={session}
+          channel={channel}
           selectedSessionId={selectedSessionId}
           buildEditor={
             codePanel
@@ -328,6 +348,7 @@ export function ChatAreaView({
             <ChatTranscript
               gatewayUnavailable={gatewayUnavailable}
               props={active}
+              channel={channel}
               receipt={input.changePlanReceipt}
               onReviewPlan={input.onReviewChangePlan}
               onInspectTurn={(turnId) => openInspector(turnId, "turn")}
@@ -371,9 +392,9 @@ export function ChatAreaView({
             <ChatSessionStatusPanel panel={active.sessionStatusPanel} />
           </div>
         ) : null}
-        {active && !buildOpen ? (
+        {composerProps && !buildOpen ? (
           <ChatTextComposer
-            props={active}
+            props={composerProps}
             gatewayUnavailable={gatewayUnavailable}
             reasoningEfforts={input.contextDockProps?.selectedModelReasoningEfforts}
             onOpenSchedules={() => navigate("/work/schedules")}
@@ -381,7 +402,7 @@ export function ChatAreaView({
         ) : null}
         {input.btwSideChatProps ? <ThreadedBtwSideChatPanel sideChat={input.btwSideChatProps} /> : null}
         {active?.chatTimerPanel ? <ChatTimerPanel panel={active.chatTimerPanel} /> : null}
-      </div>
+      </ChatMainColumn>
     </section>
   );
 }

@@ -4,9 +4,11 @@ import {
   MOBILE_NATIVE_CAPABILITY_IDS,
   NotFoundError,
   type ChatSendMessageRequest,
+  type ChatStreamChunk,
   type RoutingPreflightRequest,
   type RoutingPreflightResult,
 } from "@goatcitadel/contracts";
+import type { OperatorDeskSendResult, OperatorDeskTurnResponse } from "../services/channel-desk-turn.js";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
 import { providerFallbackPreferenceSchema } from "./chat.provider-fallback-schema.js";
@@ -590,6 +592,14 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         if (decisionRejected) {
           return reply;
         }
+        const desk = await resolveDeskSend(fastify, request, params.data.sessionId, body.data);
+        if (desk?.mode === "blocked" || desk?.mode === "refused") {
+          return reply.code(desk.mode === "blocked" ? 409 : 400).send({ error: desk.message });
+        }
+        if (desk?.mode === "ask") {
+          await markMutationCommitted(request);
+          return reply.send(desk.response);
+        }
       }
       const sent = await fastify.services.chatMessages.agentSendChatMessage(
         params.data.sessionId,
@@ -660,6 +670,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         });
       }
       let externalCompanion: ReturnType<typeof resolveExternalCompanionAdmissionContext>;
+      let deskResponse: OperatorDeskTurnResponse | undefined;
       try {
         externalCompanion = resolveExternalCompanionAdmissionContext(request);
         await assertPolicyScope(params.data.sessionId, body.data);
@@ -673,9 +684,24 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
           if (decisionRejected) {
             return reply;
           }
+          const desk = await resolveDeskSend(fastify, request, params.data.sessionId, body.data);
+          if (desk?.mode === "blocked" || desk?.mode === "refused") {
+            return reply.code(desk.mode === "blocked" ? 409 : 400).send({ error: desk.message });
+          }
+          if (desk?.mode === "ask") {
+            await markMutationCommitted(request);
+            deskResponse = desk.response;
+          }
         }
       } catch (error) {
         return sendChatWriteError(reply, error);
+      }
+
+      if (deskResponse) {
+        // The desk question is accepted; its answer arrives with the turn the inbound worker runs for it.
+        return streamSseReply(reply, request, params.data.sessionId, () => streamDeskTurnAccepted(deskResponse), {
+          trackMutation: true,
+        });
       }
 
       return streamSseReply(
@@ -1027,6 +1053,44 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       return sendChatWriteError(reply, error);
     }
   });
+}
+
+/**
+ * In a channel conversation a desk send depends on whose conversation it is: in the operator's own it is a question
+ * for GoatCitadel, a removed or switched-off channel refuses it, and any other conversation keeps the verbatim post.
+ * It is decided before the normal send entry, so a desk question never holds a turn admission of its own. The desk
+ * question answers with the request's checked provider and model; files and templates are refused there, not dropped.
+ */
+async function resolveDeskSend(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  sessionId: string,
+  body: z.infer<typeof sendMessageSchema>,
+): Promise<OperatorDeskSendResult | undefined> {
+  // The composed route port always provides this owner; route test doubles written before desk questions leave it
+  // out and keep the unchanged send path.
+  return (await fastify.services.integrationWebhooks?.sendOperatorDeskMessage?.(sessionId, {
+    content: body.content,
+    idempotencyKey: request.idempotencyKey,
+    providerId: body.providerId,
+    model: body.model,
+    attachments: body.attachments,
+    parts: body.parts,
+    templateInvocation: body.templateInvocation,
+    workspaceSnapshot: body.workspaceSnapshot,
+  })) as OperatorDeskSendResult | undefined;
+}
+
+/** Ends a streamed desk send with its normal terminal event, naming the turn that will answer it. */
+async function* streamDeskTurnAccepted(response: OperatorDeskTurnResponse): AsyncGenerator<ChatStreamChunk> {
+  yield {
+    type: "done",
+    sessionId: response.sessionId,
+    eventId: `${response.turnId}:desk-accepted`,
+    sequence: 1,
+    turnId: response.turnId,
+    messageId: response.userMessage.messageId,
+  };
 }
 
 async function requireFreshRouteDecision(

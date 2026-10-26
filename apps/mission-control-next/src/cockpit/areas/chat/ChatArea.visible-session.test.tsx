@@ -10,7 +10,30 @@ import type {
 import { buildEditorTurnId, ChatAreaView } from "./ChatArea";
 import { InspectorProvider } from "../../app/inspector";
 
+const messaging = vi.hoisted(() => ({
+  overview: undefined as import("@goatcitadel/contracts").ChatMessagingOverview | undefined,
+  requests: [] as Array<{ workspaceId: string; enabled: boolean | undefined }>,
+}));
+
 vi.mock("./ThreadList", () => ({ ThreadList: () => null }));
+// The Conversations sheet mounts Messaging, which reads its own overview; this suite is not about it.
+vi.mock("./MessagingSection", () => ({ MessagingSection: () => null }));
+// The open channel conversation reads the same overview; the tests decide what it says.
+vi.mock("./use-messaging-overview", () => ({
+  useMessagingOverview: (workspaceId: string, options?: { enabled?: boolean }) => {
+    messaging.requests.push({ workspaceId, enabled: options?.enabled });
+    return { data: messaging.overview };
+  },
+}));
+vi.mock("./ChatTranscript", () => ({
+  ChatTranscript: ({ channel }: { channel?: { channelLabel: string; title: string } }) => (
+    <p data-testid="transcript">
+      {channel ? `${channel.channelLabel} conversation: ${channel.title}` : "Conversation"}
+    </p>
+  ),
+}));
+vi.mock("./ChatTextComposer", () => ({ ChatTextComposer: () => null }));
+vi.mock("./ProjectAssignmentReview", () => ({ ProjectAssignmentReview: () => null }));
 vi.mock("./ChatBuildEditor", () => ({ ChatBuildEditor: () => <p>Build editor body</p> }));
 vi.mock("../../ui/Sheet", () => ({
   Sheet: ({ open, title, children }: { open: boolean; title: string; children: ReactNode }) =>
@@ -26,6 +49,8 @@ let container: HTMLDivElement;
 let queryClient: QueryClient;
 
 beforeEach(() => {
+  messaging.overview = undefined;
+  messaging.requests = [];
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -161,6 +186,7 @@ describe("visible Chat session", () => {
     const onSelectSession = vi.fn();
     Object.assign(surface.sessionRail, {
       historyView: "active",
+      search: "",
       onHistoryViewChange,
       onSelectSession,
       availableFolders: [],
@@ -232,6 +258,7 @@ describe("visible Chat session", () => {
       onSelectSession = vi.fn();
     Object.assign(surface.sessionRail, {
       historyView: "active",
+      search: "",
       availableFolders: [],
       hasMoreSessions: true,
       loadingMoreSessions: false,
@@ -249,6 +276,96 @@ describe("visible Chat session", () => {
     await act(async () => root.render(view({ ...surface, sessionRail: { ...surface.sessionRail } })));
     expect(sheetButton("Loading…").disabled).toBe(true);
     await act(async () => root.unmount());
+  });
+
+  describe("a selected channel conversation", () => {
+    const telegramOverview = {
+      workspaceId: "default",
+      channels: [
+        {
+          connectionId: "conn-1",
+          channelKey: "telegram",
+          label: "Telegram",
+          status: "on",
+          conversations: [
+            { sessionId: "channel-1", title: "You", kind: "direct", own: true, lastActivityAt: "2026-10-25T10:00:00Z" },
+          ],
+        },
+      ],
+    } as const;
+
+    function channelSurface(turnIds: string[], onFork = vi.fn()) {
+      const surface = input("channel-1");
+      Object.assign(surface.sessionRail, {
+        missionSessions: [],
+        // An external session is not in the mission list; the header still has to find it.
+        externalSessions: [
+          { sessionId: "channel-1", scope: "external", channelConnectionId: "conn-1", projectName: "Launch" },
+        ],
+      });
+      surface.activeSessionSurfaceProps = {
+        selectedSessionId: "channel-1",
+        sessionTitle: "Telegram chat",
+        notices: [],
+        thread: {
+          sessionId: "channel-1",
+          turns: turnIds.map((turnId) => ({
+            turnId,
+            branch: { isSelectedPath: true },
+            trace: { status: "completed" },
+          })),
+        },
+        onStartNewThreadFromTurn: onFork,
+      } as unknown as MissionThreadedActiveSessionSurfaceProps;
+      return { surface, onFork };
+    }
+
+    it("shows the header for a selected channel conversation", async () => {
+      messaging.overview = telegramOverview as never;
+      const { surface } = channelSurface(["turn-1"]);
+      await act(async () => root.render(view(surface)));
+      const header = container.querySelector("header")!;
+      expect(header.querySelector("h1")?.textContent).toBe("Telegram chat");
+      // Project and channel come from the open conversation's own record, not a mission-only lookup.
+      expect(header.textContent).toContain("Launch");
+      expect(header.textContent).toContain("via Telegram");
+      expect(container.querySelector('[data-testid="transcript"]')?.textContent).toBe("Telegram conversation: You");
+      // The overview is read only for conversations a channel carries.
+      expect(messaging.requests.at(-1)).toEqual({ workspaceId: "default", enabled: true });
+      await act(async () => root.unmount());
+    });
+
+    it("reads no Messaging overview for an ordinary conversation", async () => {
+      const surface = input("session-1");
+      Object.assign(surface.sessionRail, { missionSessions: [{ sessionId: "session-1", scope: "mission" }] });
+      surface.activeSessionSurfaceProps = {
+        selectedSessionId: "session-1",
+        sessionTitle: "Release notes",
+        notices: [],
+        thread: { sessionId: "session-1", turns: [] },
+      } as unknown as MissionThreadedActiveSessionSurfaceProps;
+      await act(async () => root.render(view(surface)));
+      expect(messaging.requests.every((request) => request.enabled === false)).toBe(true);
+      expect(container.querySelector('[data-testid="transcript"]')?.textContent).toBe("Conversation");
+      expect(continueButton()).toBeUndefined();
+      await act(async () => root.unmount());
+    });
+
+    it("offers Continue in a new chat and forks from the latest turn", async () => {
+      messaging.overview = telegramOverview as never;
+      const { surface, onFork } = channelSurface(["turn-1", "turn-2"]);
+      await act(async () => root.render(view(surface)));
+      await act(async () => continueButton()!.click());
+      expect(onFork).toHaveBeenCalledExactlyOnceWith("turn-2");
+      await act(async () => root.unmount());
+    });
+
+    it("hides Continue in a new chat until the conversation has a turn", async () => {
+      messaging.overview = telegramOverview as never;
+      await act(async () => root.render(view(channelSurface([]).surface)));
+      expect(continueButton()).toBeUndefined();
+      await act(async () => root.unmount());
+    });
   });
 
   it("offers the conversations sheet from the empty state below the desktop rail", async () => {
@@ -296,6 +413,12 @@ it("contains native compact side chat in the positioned conversation host with b
   expect(onDraftChange).not.toHaveBeenCalled();
   await act(async () => root.unmount());
 });
+
+function continueButton(): HTMLButtonElement | undefined {
+  return [...document.querySelectorAll<HTMLButtonElement>("header button")].find(
+    (button) => button.textContent === "Continue in a new chat",
+  );
+}
 
 function conversationsButton(): HTMLButtonElement {
   const button = [...document.querySelectorAll("header button")].find((b) => b.textContent === "Conversations");

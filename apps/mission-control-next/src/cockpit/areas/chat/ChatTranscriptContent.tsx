@@ -17,6 +17,9 @@ import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/conte
 import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
 import { CircleAlert, OctagonAlert, TriangleAlert } from "lucide-react";
 import { presentAttachmentType, presentFailureClass } from "./chat-vocabulary";
+import { describeChannelMessageSource, type ChannelConversationContext } from "./channel-conversation";
+import { useInChannelConversation } from "./channel-conversation-scope";
+import { ChannelNewMessagesDivider } from "./ChannelNewMessagesDivider";
 import { useChatStreamingPreviewSnapshot } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import type {
   MissionThreadedActiveSessionSurfaceProps,
@@ -44,6 +47,19 @@ const WorkflowSkillCaptureControl = lazy(() =>
 
 const TURN_NAME_WORDS = 8;
 
+const RUN_DETAILS_HINT = "Use Run details under More, below this message.";
+
+/**
+ * Where a failed or partial answer's note points. A turn that cannot be resent (a channel message, or any turn of a
+ * channel conversation) is not pointed at Retry or at a recovery that says to retry or resend.
+ */
+function recoveryHint(turn: ChatThreadTurnRecord, resendable: boolean): string {
+  if (!resendable) return RUN_DETAILS_HINT;
+  const recommended = turn.trace.failure?.recommendedAction;
+  if (recommended) return getChatTurnRecoveryActionSummary(recommended);
+  return canRetryTurn(turn) ? "Use Retry, or Run details under More, below this message." : RUN_DETAILS_HINT;
+}
+
 /** Names a turn by its position and the start of its prompt so the transcript's articles are distinguishable. */
 function turnAccessibleName(prompt: string, position?: number): string {
   const words = prompt.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
@@ -63,6 +79,8 @@ export const Turn = memo(function Turn({
   previewText,
   streaming,
   actions,
+  channel,
+  newMessageCount,
   onInspectTurn,
   onOpenArtifact,
   onReviewPlan,
@@ -75,6 +93,10 @@ export const Turn = memo(function Turn({
   previewText: string | null;
   streaming: boolean;
   actions: MissionThreadedActiveSessionSurfaceProps;
+  /** Set in a channel conversation, so each message can say where it came from. Callers keep it stable. */
+  channel?: ChannelConversationContext;
+  /** When set, this turn's message is the first new one since the reader was last here. */
+  newMessageCount?: number;
   onInspectTurn?: (turnId: string) => void;
   onOpenArtifact?: (turnId: string, artifactId?: string) => void;
   onReviewPlan?: MissionThreadedRenderSurfaceInput["onReviewChangePlan"];
@@ -84,17 +106,25 @@ export const Turn = memo(function Turn({
   const partial = turn.trace.status === "partial";
   const stopped = turn.trace.status === "cancelled";
   const capture = getWorkflowSkillCaptureDisplay(turn.userMessage.content);
+  // What someone else wrote through a channel is theirs: it is neither retried, edited nor captured as a workflow.
+  const fromChannel = turn.userMessage.sourceAuthority === "external_channel";
+  // In a channel conversation Retry, Edit and Continue would send words through the channel again, even the operator's
+  // own desk question, so no turn offers them. The session says so before the Messaging overview has loaded.
+  const inChannel = useInChannelConversation() || channel !== undefined;
+  const resendable = !fromChannel && !inChannel;
+  const source = channel ? describeChannelMessageSource(channel, turn.userMessage.sourceAuthority) : null;
   return (
     <article
       className="group/turn mx-auto w-full max-w-3xl space-y-4 px-3 py-5 sm:px-6"
       aria-label={turnAccessibleName(capture?.summary ?? turn.userMessage.content, position)}
       data-turn-id={turn.turnId}
     >
+      {newMessageCount ? <ChannelNewMessagesDivider count={newMessageCount} /> : null}
       {/* Heading navigation moves message by message; the visible "You" and "Assistant" labels stay as they are. */}
-      <h2 className="sr-only">You said</h2>
+      <h2 className="sr-only">{source?.heading ?? "You said"}</h2>
       <div className="cockpit-chat-user-bubble ml-auto rounded-lg border border-line-subtle bg-raised p-3">
         <p className="mb-1 text-xs font-medium text-fg-muted">
-          You · <ActorTimestamp timestamp={turn.userMessage.timestamp ?? ""} />
+          {source?.label ?? "You"} · <ActorTimestamp timestamp={turn.userMessage.timestamp ?? ""} />
         </p>
         <ChatClampedUserMessage text={capture?.summary ?? turn.userMessage.content}>
           <AssistantMessageRenderer role="user" content={capture?.summary ?? turn.userMessage.content} />
@@ -144,7 +174,8 @@ export const Turn = memo(function Turn({
               Stopped — partial answer
             </p>
           ) : null}
-          {stopped && assistantText && !streaming ? (
+          {/* Continue sends a message, which a channel conversation would deliver or post to the channel. */}
+          {stopped && assistantText && !streaming && resendable ? (
             <ChatContinueAction turn={turn} isLatest={isLatest} actions={actions} />
           ) : null}
           {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} onInspectTurn={onInspectTurn} /> : null}
@@ -168,11 +199,7 @@ export const Turn = memo(function Turn({
             {turn.trace.failure?.failureClass && turn.trace.failure.failureClass !== "unknown"
               ? ` Cause: ${presentFailureClass(turn.trace.failure.failureClass)}.`
               : ""}{" "}
-            {turn.trace.failure?.recommendedAction
-              ? getChatTurnRecoveryActionSummary(turn.trace.failure.recommendedAction)
-              : canRetryTurn(turn)
-                ? "Use Retry, or Run details under More, below this message."
-                : "Use Run details under More, below this message."}
+            {recoveryHint(turn, resendable)}
           </p>
         </div>
       ) : null}
@@ -187,6 +214,7 @@ export const Turn = memo(function Turn({
           answerContent={assistantText}
           streaming={streaming}
           readOnly={actions.historicalReadOnly}
+          resendBlocked={!resendable}
           latest={isLatest}
           actions={{
             ...actions,
@@ -196,6 +224,7 @@ export const Turn = memo(function Turn({
         />
       ) : null}
       {!actions.historicalReadOnly &&
+      !fromChannel &&
       !streaming &&
       actions.selectedSessionId &&
       turn.trace.status === "completed" &&

@@ -1,12 +1,21 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  ConflictError,
+  NotFoundError,
   evaluateChannelInboundAccess,
+  type DiscordPairingRecord,
   type IntegrationConnection,
   type IntegrationPluginRecord,
 } from "@goatcitadel/contracts";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
+import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
 import {
+  collectConnectionSecretRefs,
   createIntegrationConnection,
+  deleteIntegrationConnection,
   getIntegrationConnectionChannelRuntimeStatus,
   installIntegrationPlugin,
   PluginPackageStorageError,
@@ -798,5 +807,332 @@ describe("integration plugin package integrity at install", () => {
     expect(first.sourceMetadata).toMatchObject({ expectedIntegrity: pin, integritySource: "operator" });
     await installIntegrationPlugin(deps, { source: "npm:goat-plugin", pluginId: "goat-plugin" });
     expect(vi.mocked(deps.verifyIntegrationPluginPackage).mock.calls[1]![0].expectedIntegrity).toBe(pin);
+  });
+});
+
+describe("integration-channel-service removing a channel", () => {
+  const SECRET_VALUE = "synthetic-bot-token-value";
+  const OTHER_CONNECTION = "22222222-2222-2222-2222-222222222222";
+
+  /** A custody service over an in-memory keychain, plus the keys that stay in it. */
+  function createCustody() {
+    const values = new Map<string, string>();
+    const store = {
+      setSecret: vi.fn((account: string, value: string) => void values.set(account, value)),
+      getSecret: vi.fn((account: string) => values.get(account)),
+      deleteSecret: vi.fn((account: string) => void values.delete(account)),
+    };
+    const custody = new ChannelSecretCustodyService(store as never);
+    /** Promotes a draft key the way finalizing a setup does: the connection keeps its own copy. */
+    const keyFor = (connectionId: string, field: string): string => {
+      const temporary = custody.storeTemporary("draft-1", field, SECRET_VALUE);
+      const promoted = custody.copyToConnection(temporary, connectionId, field);
+      custody.deleteTemporary(temporary);
+      store.deleteSecret.mockClear();
+      return promoted;
+    };
+    return { values, store, custody, keyFor };
+  }
+
+  /** Deps whose connection config already carries its keys, with pairings in an array and a diagnostic sink. */
+  async function createRemovalDeps(input: {
+    catalogId: string;
+    config: (keyFor: ReturnType<typeof createCustody>["keyFor"], connectionId: string) => Record<string, unknown>;
+  }) {
+    const keychain = createCustody();
+    const deps = createDeps();
+    const created = await createIntegrationConnection(deps, {
+      catalogId: input.catalogId,
+      label: "Fixture",
+      config: {},
+    });
+    const connection = await updateIntegrationConnection(deps, created.connectionId, {
+      config: input.config(keychain.keyFor, created.connectionId),
+    });
+    let pairings: DiscordPairingRecord[] = [];
+    const recordDevDiagnostic = vi.fn();
+    Object.assign(deps, {
+      channelSecrets: keychain.custody,
+      recordDevDiagnostic,
+      readDiscordPairings: vi.fn(async () => pairings),
+      writeDiscordPairings: vi.fn(async (next: DiscordPairingRecord[]) => {
+        pairings = next;
+      }),
+    });
+    return {
+      ...keychain,
+      deps,
+      connection,
+      recordDevDiagnostic,
+      setPairings: (next: DiscordPairingRecord[]) => {
+        pairings = next;
+      },
+      pairings: () => pairings,
+    };
+  }
+
+  const pairing = (connectionId: string, pairingId: string): DiscordPairingRecord => ({
+    pairingId,
+    connectionId,
+    userId: `user-${pairingId}`,
+    code: "ABC123",
+    status: "approved",
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-01T00:00:00.000Z",
+  });
+
+  it("deletes the connection's stored keys when it is removed", async () => {
+    const fixture = await createRemovalDeps({
+      catalogId: "channel.slack",
+      config: (keyFor, id) => ({ botToken: keyFor(id, "botToken"), signingSecret: keyFor(id, "signingSecret") }),
+    });
+    const { botToken, signingSecret } = fixture.connection.config as { botToken: string; signingSecret: string };
+    const refs = [botToken, signingSecret];
+    expect(fixture.values.size).toBe(2);
+
+    const deleted = await deleteIntegrationConnection(
+      fixture.deps,
+      fixture.connection.connectionId,
+      fixture.connection.revision,
+    );
+
+    expect(deleted).toBe(true);
+    expect(fixture.values.size).toBe(0);
+    expect(fixture.store.deleteSecret).toHaveBeenCalledTimes(2);
+    for (const ref of refs) expect(() => fixture.custody.resolve(ref)).toThrow(/unavailable/);
+  });
+
+  it("removes the connection's Discord pairings", async () => {
+    const fixture = await createRemovalDeps({
+      catalogId: "channel.discord",
+      config: (keyFor, id) => ({ botToken: keyFor(id, "botToken") }),
+    });
+    const id = fixture.connection.connectionId;
+    fixture.setPairings([pairing(id, "mine-1"), pairing(OTHER_CONNECTION, "other"), pairing(id, "mine-2")]);
+
+    await deleteIntegrationConnection(fixture.deps, id, fixture.connection.revision);
+
+    expect(fixture.pairings().map((item) => item.pairingId)).toEqual(["other"]);
+  });
+
+  it("keeps the connection's conversations when it is removed", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-channel-removal-"));
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    try {
+      const connection = storage.integrationConnections.create({
+        catalogId: "channel.telegram",
+        kind: "channel",
+        key: "telegram",
+        label: "Telegram",
+        config: {},
+      });
+      const sessionId = "session-removed-channel";
+      storage.sessions.upsert({
+        sessionId,
+        sessionKey: `agent:main:telegram:${connection.connectionId}:peer:42`,
+        kind: "dm",
+        channel: "telegram",
+        account: connection.connectionId,
+        displayName: "Sam Lee",
+        timestamp: "2026-10-01T00:00:00.000Z",
+      });
+      storage.chatSessionBindings.upsert({
+        sessionId,
+        transport: "integration",
+        connectionId: connection.connectionId,
+        target: "telegram:42",
+        conversation: { kind: "direct", counterpartActorId: "42", title: "Sam Lee" },
+      });
+      storage.chatMessages.upsert({
+        messageId: "message-1",
+        sessionId,
+        role: "user",
+        actorType: "user",
+        actorId: "42",
+        sourceAuthority: "external_channel",
+        content: "Are we still on for Friday?",
+        timestamp: "2026-10-01T00:00:01.000Z",
+      });
+      const deps = {
+        storage: createSqliteAsyncStorage(storage),
+        publishRealtime: vi.fn(async () => undefined),
+        syncChannelRuntimes: vi.fn(async () => undefined),
+      } as unknown as IntegrationChannelPort;
+
+      const deleted = await deleteIntegrationConnection(deps, connection.connectionId, connection.revision);
+
+      expect(deleted).toBe(true);
+      expect(storage.integrationConnections.list().map((item) => item.connectionId)).not.toContain(
+        connection.connectionId,
+      );
+      expect(storage.sessions.getBySessionId(sessionId)).toMatchObject({ sessionId, account: connection.connectionId });
+      expect(storage.chatSessionBindings.get(sessionId)).toMatchObject({
+        connectionId: connection.connectionId,
+        target: "telegram:42",
+        conversation: { title: "Sam Lee" },
+      });
+      expect(storage.chatMessages.list(sessionId).map((item) => item.content)).toEqual(["Are we still on for Friday?"]);
+    } finally {
+      storage.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finishes the removal when deleting a key fails", async () => {
+    const fixture = await createRemovalDeps({
+      catalogId: "channel.slack",
+      config: (keyFor, id) => ({ botToken: keyFor(id, "botToken"), signingSecret: keyFor(id, "signingSecret") }),
+    });
+    const { botToken, signingSecret } = fixture.connection.config as { botToken: string; signingSecret: string };
+    fixture.store.deleteSecret.mockImplementationOnce(() => {
+      throw new Error(`keychain refused ${botToken} ${SECRET_VALUE}`);
+    });
+
+    const deleted = await deleteIntegrationConnection(
+      fixture.deps,
+      fixture.connection.connectionId,
+      fixture.connection.revision,
+    );
+
+    expect(deleted).toBe(true);
+    expect(fixture.deps.storage.integrationConnections.delete).toHaveBeenCalledOnce();
+    expect(fixture.deps.publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "integrations",
+      expect.objectContaining({ type: "integration_connection_deleted" }),
+    );
+    expect(() => fixture.custody.resolve(signingSecret)).toThrow(/unavailable/);
+    expect(fixture.recordDevDiagnostic).toHaveBeenCalledOnce();
+    const logged = JSON.stringify(fixture.recordDevDiagnostic.mock.calls[0]);
+    expect(logged).toContain("botToken");
+    expect(logged).not.toContain(botToken);
+    expect(logged).not.toContain(botToken.split(":").at(-1)!);
+    expect(logged).not.toContain(SECRET_VALUE);
+  });
+
+  it("finishes the removal when removing the Discord pairings fails", async () => {
+    const fixture = await createRemovalDeps({
+      catalogId: "channel.discord",
+      config: (keyFor, id) => ({ botToken: keyFor(id, "botToken") }),
+    });
+    vi.mocked(fixture.deps.readDiscordPairings).mockRejectedValueOnce(new Error("settings unavailable"));
+
+    const deleted = await deleteIntegrationConnection(
+      fixture.deps,
+      fixture.connection.connectionId,
+      fixture.connection.revision,
+    );
+
+    expect(deleted).toBe(true);
+    expect(fixture.values.size).toBe(0);
+    expect(fixture.recordDevDiagnostic).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the keys when the removal is refused", async () => {
+    const fixture = await createRemovalDeps({
+      catalogId: "channel.slack",
+      config: (keyFor, id) => ({ botToken: keyFor(id, "botToken") }),
+    });
+    vi.mocked(fixture.deps.storage.integrationConnections.delete).mockRejectedValueOnce(
+      new ConflictError({ code: "WRITE_CONFLICT", message: "The integration connection changed." }),
+    );
+
+    await expect(
+      deleteIntegrationConnection(fixture.deps, fixture.connection.connectionId, "b".repeat(64)),
+    ).rejects.toThrow(/changed/);
+
+    expect(fixture.values.size).toBe(1);
+    expect(fixture.store.deleteSecret).not.toHaveBeenCalled();
+  });
+
+  it("reports false and deletes nothing when the connection is already gone", async () => {
+    const fixture = await createRemovalDeps({ catalogId: "channel.slack", config: () => ({}) });
+    const { connectionId } = fixture.connection;
+    await deleteIntegrationConnection(fixture.deps, connectionId);
+    // The repository names a missing connection with this error, whether it is read or deleted.
+    vi.mocked(fixture.deps.storage.integrationConnections.get).mockImplementationOnce(() => {
+      throw new NotFoundError({ entity: "Integration connection", id: connectionId });
+    });
+
+    const again = await deleteIntegrationConnection(fixture.deps, connectionId);
+
+    expect(again).toBe(false);
+    expect(fixture.store.deleteSecret).not.toHaveBeenCalled();
+  });
+
+  it("never deletes a draft key or another connection's key", async () => {
+    const keychain = createCustody();
+    const draftRef = keychain.custody.storeTemporary("draft-9", "botToken", SECRET_VALUE);
+    const otherRef = keychain.keyFor(OTHER_CONNECTION, "botToken");
+    const deps = createDeps();
+    const created = await createIntegrationConnection(deps, { catalogId: "channel.slack", label: "Slack", config: {} });
+    const ownRef = keychain.keyFor(created.connectionId, "botToken");
+    const connection = await updateIntegrationConnection(deps, created.connectionId, {
+      config: { botToken: ownRef, staleDraft: draftRef, borrowed: otherRef },
+    });
+    Object.assign(deps, { channelSecrets: keychain.custody });
+
+    await deleteIntegrationConnection(deps, connection.connectionId, connection.revision);
+
+    expect(keychain.store.deleteSecret).toHaveBeenCalledOnce();
+    expect(() => keychain.custody.resolve(ownRef)).toThrow(/unavailable/);
+    expect(keychain.custody.resolve(draftRef)).toBe(SECRET_VALUE);
+    expect(keychain.custody.resolve(otherRef)).toBe(SECRET_VALUE);
+  });
+
+  it("still removes the connection when no keychain is available", async () => {
+    const fixture = await createRemovalDeps({
+      catalogId: "channel.slack",
+      config: (keyFor, id) => ({ botToken: keyFor(id, "botToken") }),
+    });
+    Object.assign(fixture.deps, { channelSecrets: undefined });
+
+    const deleted = await deleteIntegrationConnection(
+      fixture.deps,
+      fixture.connection.connectionId,
+      fixture.connection.revision,
+    );
+
+    expect(deleted).toBe(true);
+    expect(fixture.recordDevDiagnostic).toHaveBeenCalledOnce();
+  });
+
+  describe("collectConnectionSecretRefs", () => {
+    const id = "11111111-1111-1111-1111-000000000001";
+    const own = `keychain:goatcitadel:channel-connection:${id}:botToken:abc-123`;
+
+    it("finds every key reference of the connection at any depth, once each", () => {
+      const legacy = `keychain:goatcitadel:channel-connection:${id}:signingSecret`;
+      const refs = collectConnectionSecretRefs(id, {
+        botToken: own,
+        again: own,
+        nested: { deeper: [{ key: legacy }, "plain text"], count: 3, flag: true, none: null },
+      });
+
+      expect(refs).toEqual([own, legacy]);
+    });
+
+    it("ignores draft keys, other connections' keys and look-alike values", () => {
+      const refs = collectConnectionSecretRefs(id, {
+        draft: `keychain:goatcitadel:channel-draft:${id}:botToken:abc`,
+        longer: `keychain:goatcitadel:channel-connection:${id}0:botToken:abc`,
+        shorter: `keychain:goatcitadel:channel-connection:${id.slice(0, -1)}:botToken:abc`,
+        prose: `see ${own}`,
+        bare: "keychain:goatcitadel:channel-connection:",
+      });
+
+      expect(refs).toEqual([]);
+    });
+
+    it("returns nothing for an empty config and survives a self-referencing one", () => {
+      expect(collectConnectionSecretRefs(id, {})).toEqual([]);
+      const cyclic: Record<string, unknown> = { botToken: own };
+      cyclic.self = cyclic;
+      expect(collectConnectionSecretRefs(id, cyclic)).toEqual([own]);
+    });
   });
 });

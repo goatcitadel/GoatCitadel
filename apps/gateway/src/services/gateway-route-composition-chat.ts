@@ -14,6 +14,7 @@ import { logger } from "@goatcitadel/gateway-core";
 const artifactCritiqueTasks = new Set<Promise<unknown>>();
 const artifactCritiqueLog = logger.child("html-artifact-critique");
 import * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
+import * as chatMessagingService from "./chat-messaging-service.js";
 import * as chatSessionService from "./chat-session-service.js";
 import { inspectAdmittedChatRoutedContext } from "./chat-routed-context-inspection.js";
 import { assertCallerPolicyScopeBound } from "./chat-policy-scope-service.js";
@@ -127,6 +128,10 @@ export function composeChatRouteDependencies(
     ensureChatSessionModelDefaults: (sessionId, prefs) => gateway.ensureChatSessionModelDefaults(sessionId, prefs),
     hydrateChatPrefsWithAutonomy: (sessionId, prefs) => gateway.hydrateChatPrefsWithAutonomy(sessionId, prefs),
     patchSessionAutonomyPrefs: (sessionId, patch) => gateway.patchSessionAutonomyPrefs(sessionId, patch),
+  };
+  const ChatMessagingDependencies: chatMessagingService.ChatMessagingDeps = {
+    ...ChatSessionDependencies,
+    listChatSessions: (query) => chatSessionService.listChatSessions(ChatSessionDependencies, query),
   };
   const ChatGeneratedArtifactDependencies: chatGeneratedArtifactService.ChatGeneratedArtifactDependencies = {
     storage: gateway.storage,
@@ -286,6 +291,13 @@ export function composeChatRouteDependencies(
       await gateway.requireFeatureEnabled("documentEditingV1Enabled");
       return getDocumentEditing().listProposals(input);
     },
+    listChatMessaging: async (input) => {
+      const scope = await resolveChatRuntimeScope(gateway, { workspaceId: input.workspaceId });
+      return chatMessagingService.listChatMessaging(ChatMessagingDependencies, {
+        workspaceId: scope.workspaceId,
+        actor: input.actor,
+      });
+    },
     listChatSessions: async (query) => {
       const { citadelId, ...sessionQuery } = query ?? {};
       const scope = await resolveChatRuntimeScope(gateway, {
@@ -321,6 +333,8 @@ export function composeChatRouteDependencies(
         workspaceId: scope.workspaceId,
       });
     },
+    // The read route names only the session; its workspace is the one its canonical metadata records.
+    markChatSessionRead: (input) => chatMessagingService.markChatSessionRead(ChatMessagingDependencies, input),
     pinChatSession: (sessionId, expectedRevision) =>
       chatSessionService.pinChatSession(ChatSessionDependencies, sessionId, expectedRevision),
     removeChatThreadKnowledgeAttachment: (sessionId, attachmentId) =>

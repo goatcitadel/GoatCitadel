@@ -9,6 +9,7 @@ import { ChatSessionOverflow, ChatSessionTitle } from "./ChatSessionControls";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
 import { useModelLabel } from "../../data/use-model-label";
 import { presentDelegationRunStatus } from "./chat-vocabulary";
+import type { ChannelConversationContext } from "./channel-conversation";
 
 type ActiveSession = MissionThreadedRenderSurfaceInput["activeSessionSurfaceProps"];
 
@@ -21,6 +22,7 @@ export function ChatSessionHeader({
   input,
   active,
   session,
+  channel,
   selectedSessionId,
   buildEditor,
   onOpenProjects,
@@ -33,6 +35,8 @@ export function ChatSessionHeader({
   input: MissionThreadedRenderSurfaceInput;
   active: ActiveSession;
   session?: ChatSessionRecord;
+  /** Set when the open conversation is held through a channel (Telegram, Slack, …). */
+  channel?: ChannelConversationContext;
   selectedSessionId?: string;
   buildEditor: { open: boolean; onToggle: () => void } | null;
   onOpenProjects: () => void;
@@ -88,12 +92,21 @@ export function ChatSessionHeader({
       </span>
     </Button>
   ) : null;
+  // A channel conversation continues in a chat of its own, with its history copied. The action is the header's own
+  // button above the phone width; the phone header keeps one row, so there it is the menu's fork item, renamed.
+  const continueInNewChat =
+    channel && onFork ? (
+      <Button size="sm" className="shrink-0 whitespace-nowrap" onClick={onFork}>
+        Continue in a new chat
+      </Button>
+    ) : null;
   const overflow =
     active || buildEditor || phone ? (
       <ChatSessionOverflow
         key={selectedSessionId}
         dock={active ? input.contextDockProps : null}
         onFork={onFork}
+        forkLabel={phone && channel ? "Continue in a new chat" : undefined}
         onInspect={onInspect}
         onOpenBuildEditor={buildEditor && !buildEditor.open ? buildEditor.onToggle : undefined}
         phoneActions={
@@ -128,11 +141,17 @@ export function ChatSessionHeader({
           <div className="min-w-0">{title}</div>
           <SelectedThreadActivity session={session} active={active} />
         </div>
-        <ChatHeaderSubtitle active={active} projectName={session?.projectName} loading={rail.loading} />
+        <ChatHeaderSubtitle
+          active={active}
+          projectName={session?.projectName}
+          channelLabel={channel?.channelLabel}
+          loading={rail.loading}
+        />
       </div>
       {/* Projects sits with the conversation list's project filter; a phone keeps it in the actions menu. */}
       {conversations}
       {newConversation}
+      {continueInNewChat}
       {active ? (
         <IconButton
           label="Inspect"
@@ -152,10 +171,13 @@ export function ChatSessionHeader({
 export function ChatHeaderSubtitle({
   active,
   projectName,
+  channelLabel,
   loading,
 }: {
   active: ActiveSession;
   projectName?: string | null;
+  /** The channel a conversation is held through, when it is one. */
+  channelLabel?: string;
   loading?: boolean;
 }) {
   const hasModel = Boolean(active?.selectedProviderId && active?.selectedModel);
@@ -163,6 +185,7 @@ export function ChatHeaderSubtitle({
     showIdWhenUnnamed: false,
   });
   const parts = [
+    channelLabel ? `via ${channelLabel}` : null,
     projectName,
     active?.activePersonality?.name,
     hasModel ? modelLabel : null,

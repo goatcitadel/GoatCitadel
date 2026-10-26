@@ -1,12 +1,16 @@
-import { sanitizeMetadata } from "./inbound-channel-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
+import { resolveSessionRoute } from "@goatcitadel/gateway-core";
 import {
   redactSecretText,
-  CHANNEL_INGRESS_ACCEPTED_REVISION_KEY,
   type ChannelActivityInput,
+  type ChatChannelConversation,
   type ChatSendMessageResponse,
+  type ChatSessionBindingRecord,
+  type InboundChannelEventAcceptInput,
+  type InboundChannelEventAcceptResult,
   type InboundChannelEventClaim,
   type InboundChannelEventClaimToken,
+  type InboundChannelEventLinkage,
   type InboundChannelEventRecord,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
@@ -20,6 +24,22 @@ import {
 import type { BotLoopGuardDecision } from "./channel-bot-loop-guard.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
 import { withChannelProgressHeartbeat } from "./channel-progress-heartbeat.js";
+import {
+  buildStoredPayload,
+  normalizeRequiredString,
+  parseStoredPayload,
+  type StoredInboundPayload,
+} from "./inbound-channel-payload.js";
+import {
+  OPERATOR_DESK_DISPATCH_KIND,
+  OPERATOR_DESK_INGEST_ORIGIN,
+  buildDeskDeliveryPrefix,
+  isOperatorDeskEvent,
+  resolveDeskQuestionGate,
+  type OperatorDeskAcceptance,
+  type OperatorDeskAccepted,
+} from "./channel-desk-turn.js";
+import { buildInboundConversationLaneKey } from "./inbound-channel-lane.js";
 
 const CLAIM_LEASE_MS = 30_000;
 const CLAIM_HEARTBEAT_MS = 10_000;
@@ -70,10 +90,12 @@ export interface InboundChannelEventServiceDeps {
     status?: "connected" | "disconnected" | "error" | "paused";
     config: Record<string, unknown>;
   }>;
+  /** `operator_desk` records the message as the operator's own, with operator authority; otherwise it came from the channel. */
   ingestChannelMessage: (
     channel: string,
     idempotencyKey: string,
     message: IngestChannelMessageInput,
+    origin?: typeof OPERATOR_DESK_INGEST_ORIGIN,
   ) => Promise<{
     deduped: boolean;
     session: { sessionId: string; sessionKey?: string };
@@ -89,7 +111,18 @@ export interface InboundChannelEventServiceDeps {
     connectionId: string;
     target?: string;
     displayName?: string;
-  }) => Promise<{ sessionId: string; sessionKey: string }>;
+    conversation?: ChatChannelConversation;
+  }) => Promise<{
+    sessionId: string;
+    sessionKey: string;
+    /** The conversation details the binding holds after this call. */
+    conversation?: ChatChannelConversation;
+  }>;
+  /**
+   * The binding a session holds now, read without initialising or rewriting it; undefined once the session or its
+   * binding is gone. A desk question is checked against this, never against a binding refreshed for it.
+   */
+  readChatSessionBinding: (sessionId: string) => Promise<ChatSessionBindingRecord | undefined>;
   hasRunningTurn: (sessionId: string) => Promise<boolean>;
   respondToExistingChatMessage: (
     sessionId: string,
@@ -97,6 +130,11 @@ export interface InboundChannelEventServiceDeps {
     options: {
       deliveryReplyToMessageId?: string;
       channelSystemInstruction?: string;
+      /** Text delivered to the channel ahead of the answer. */
+      deliveryPrefix?: string;
+      /** A desk question's provider and model choice; provider events never carry one. */
+      providerId?: string;
+      model?: string;
       inboundDurableIdentity: InboundChannelDeterministicIdentity;
     },
   ) => Promise<ChatSendMessageResponse>;
@@ -117,26 +155,6 @@ export interface InboundChannelEventServiceDeps {
     context?: Record<string, unknown>;
   }) => void;
 }
-
-interface StoredInboundPayload {
-  eventType: string;
-  bindingTarget?: string;
-  message: IngestChannelMessageInput;
-  responseOptions?: {
-    deliveryReplyToMessageId?: string;
-    channelSystemInstruction?: string;
-  };
-  voiceRequest?: PersistedVoiceRequest;
-  voiceFallbackContent?: string;
-  voiceCaption?: string;
-}
-
-/** Secret-free voice media reference: every variant minus connectionConfig. */
-type PersistedVoiceRequest =
-  | { channel: "telegram"; fileId: string; mimeType?: string }
-  | { channel: "whatsapp"; mediaId: string; mimeType?: string }
-  | { channel: "slack"; fileId: string; downloadUrl: string; mimeType?: string }
-  | { channel: "discord"; attachmentId: string; url: string; mimeType?: string };
 
 class InboundChannelClaimLostError extends Error {
   public constructor(eventId: string) {
@@ -207,13 +225,15 @@ export class InboundChannelEventService {
   public async acceptMany(
     inputs: readonly DurableInboundChannelAcceptInput[],
   ): Promise<DurableInboundChannelAcceptResult[]> {
-    if (this.closed || this.deps.isClosing()) {
-      throw new Error("Inbound channel acceptance is unavailable while the Gateway is closing.");
-    }
+    this.assertAccepting();
     if (inputs.length === 0) {
       return [];
     }
     const prepared = inputs.map((input) => {
+      // A provider callback can never claim to be the operator at the desk.
+      if ((input.dispatchKind as string) === OPERATOR_DESK_DISPATCH_KIND) {
+        throw new Error("Desk questions are accepted only through the desk path.");
+      }
       const eventId = stableInboundId("event", input.channel, input.connectionId, input.idempotencyKey);
       return {
         input,
@@ -225,15 +245,12 @@ export class InboundChannelEventService {
           dispatchKind: input.dispatchKind,
           providerSourceId: input.message.eventId,
           idempotencyKey: input.idempotencyKey,
-          laneKey: buildLaneKey(input),
+          laneKey: buildInboundConversationLaneKey(input),
           payload: buildStoredPayload(input),
         },
       };
     });
-    const results = await this.deps.storage.inboundChannelEvents.acceptMany(prepared.map((item) => item.acceptance));
-    if (results.some((result) => !isTerminal(result.event.status))) {
-      await this.requestDrain();
-    }
+    const results = await this.commitAcceptances(prepared.map((item) => item.acceptance));
     return results.map((result, index) => ({
       accepted: true,
       durableAccepted: true,
@@ -244,6 +261,43 @@ export class InboundChannelEventService {
       inboundEventId: result.event.eventId,
       commandResultText: result.event.commandResultText,
     }));
+  }
+
+  /**
+   * Accepts a question the operator typed at the desk into their own channel conversation. It runs through the
+   * same durable worker as a message from the channel, so its answer survives restarts and approval waits.
+   */
+  public async acceptOperatorDeskEvent(acceptance: OperatorDeskAcceptance): Promise<OperatorDeskAccepted> {
+    this.assertAccepting();
+    if (!isOperatorDeskEvent(acceptance)) {
+      throw new Error("Only operator desk events are accepted through the desk path.");
+    }
+    const eventId = stableInboundId("event", acceptance.channelKey, acceptance.connectionId, acceptance.idempotencyKey);
+    const [result] = await this.commitAcceptances([{ ...acceptance, eventId }]);
+    if (!result) {
+      throw new Error("Desk question acceptance produced no durable result.");
+    }
+    return {
+      event: result.event,
+      messageId: stableInboundId("message", result.event.eventId),
+      turnId: stableInboundId("turn", result.event.eventId),
+    };
+  }
+
+  private assertAccepting(): void {
+    if (this.closed || this.deps.isClosing()) {
+      throw new Error("Inbound channel acceptance is unavailable while the Gateway is closing.");
+    }
+  }
+
+  private async commitAcceptances(
+    acceptances: readonly InboundChannelEventAcceptInput[],
+  ): Promise<InboundChannelEventAcceptResult[]> {
+    const results = await this.deps.storage.inboundChannelEvents.acceptMany(acceptances);
+    if (results.some((result) => !isTerminal(result.event.status))) {
+      await this.requestDrain();
+    }
+    return results;
   }
 
   public async awaitCommandResult(
@@ -448,13 +502,7 @@ export class InboundChannelEventService {
     const payload = parseStoredPayload(claim.event);
     const connection = await this.deps.getIntegrationConnection(claim.event.connectionId);
     if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
-      const suppressed = this.requireTransition(
-        claim,
-        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
-          status: "suppressed",
-          lastError: "Connection was disabled after durable acceptance.",
-        }),
-      );
+      const suppressed = await this.suppressClaim(claim, "Connection was disabled after durable acceptance.");
       if (
         suppressed.sessionId &&
         (suppressed.dispatchKind === "agent_turn" || suppressed.dispatchKind === "voice_agent_turn")
@@ -464,27 +512,39 @@ export class InboundChannelEventService {
       return;
     }
 
+    const desk = isOperatorDeskEvent(claim.event);
     const messageId = stableInboundId("message", claim.event.eventId);
     const content = await this.resolveMessageContent(payload, connection.config);
     assertCurrent();
-    const initializedSession = await this.deps.ensureInboundChatSession({
-      route: {
-        channel: claim.event.channelKey,
-        account: payload.message.account,
-        peer: payload.message.peer,
-        room: payload.message.room,
-        threadId: payload.message.threadId,
-      },
-      connectionId: claim.event.connectionId,
-      target: payload.bindingTarget,
-      displayName: payload.message.displayName,
-    });
+    const route = {
+      channel: claim.event.channelKey,
+      account: payload.message.account,
+      peer: payload.message.peer,
+      room: payload.message.room,
+      threadId: payload.message.threadId,
+    };
+    // A desk question never runs provider-ingress initialization: that rewrites the binding (writable, target) and
+    // would undo a read-only switch or re-point made while the question waited. It is checked, on every attempt and
+    // before anything is recorded, against the binding as it is now.
+    const initializedSession = desk
+      ? await this.admitDeskQuestion(claim, payload, connection, resolveSessionRoute(route))
+      : await this.deps.ensureInboundChatSession({
+          route,
+          connectionId: claim.event.connectionId,
+          target: payload.bindingTarget,
+          displayName: payload.message.displayName,
+          conversation: payload.conversation,
+        });
+    if (!initializedSession) {
+      return;
+    }
     assertCurrent();
-    const ingestResult = await this.deps.ingestChannelMessage(claim.event.channelKey, claim.event.eventId, {
-      ...payload.message,
-      eventId: messageId,
-      content,
-    });
+    const ingestResult = await this.deps.ingestChannelMessage(
+      claim.event.channelKey,
+      claim.event.eventId,
+      { ...payload.message, eventId: messageId, content },
+      ...(desk ? ([OPERATOR_DESK_INGEST_ORIGIN] as const) : ([] as const)),
+    );
     if (
       ingestResult.session.sessionId !== initializedSession.sessionId ||
       (ingestResult.session.sessionKey !== undefined &&
@@ -555,16 +615,10 @@ export class InboundChannelEventService {
       return;
     }
 
-    const guard = await this.resolveBotLoopDecision(claim, payload);
+    // The operator at the desk is not a bot, so a desk question skips the bot-loop guard.
+    const guard = desk ? { action: "allow" as const } : await this.resolveBotLoopDecision(claim, payload);
     if (guard.action === "suppress") {
-      this.requireTransition(
-        claim,
-        await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
-          status: "suppressed",
-          lastError: guard.reason,
-          linkage: { sessionId: ingestResult.session.sessionId, messageId },
-        }),
-      );
+      await this.suppressClaim(claim, guard.reason, { sessionId: ingestResult.session.sessionId, messageId });
       return;
     }
 
@@ -619,6 +673,7 @@ export class InboundChannelEventService {
     const respond = () =>
       this.deps.respondToExistingChatMessage(ingestResult.session.sessionId, messageId, {
         ...payload.responseOptions,
+        ...(desk ? { deliveryPrefix: buildDeskDeliveryPrefix(content, connection) } : {}),
         inboundDurableIdentity: identity,
       });
     const response = ["telegram", "discord"].includes(claim.event.channelKey)
@@ -668,6 +723,45 @@ export class InboundChannelEventService {
       ingestResult.session.sessionId,
       "clear",
       response.turnId ?? identity.turnId,
+    );
+  }
+
+  /**
+   * The desk question's session, while its binding still lets it be answered; otherwise the question is settled as
+   * suppressed, the way any suppressed event is, and nothing is recorded, answered or delivered.
+   */
+  private async admitDeskQuestion(
+    claim: InboundChannelEventClaim,
+    payload: StoredInboundPayload,
+    connection: { enabled?: boolean; status?: string; config: Record<string, unknown> },
+    session: { sessionId: string; sessionKey: string },
+  ): Promise<{ sessionId: string; sessionKey: string } | undefined> {
+    const gate = resolveDeskQuestionGate({
+      binding: await this.deps.readChatSessionBinding(session.sessionId),
+      connectionId: claim.event.connectionId,
+      bindingTarget: payload.bindingTarget,
+      connection,
+    });
+    if (gate.action === "allow") {
+      return session;
+    }
+    await this.suppressClaim(claim, gate.reason, { sessionId: session.sessionId });
+    return undefined;
+  }
+
+  /** Settles a claimed event as suppressed; the caller decides what activity, if any, follows. */
+  private async suppressClaim(
+    claim: InboundChannelEventClaim,
+    reason: string,
+    linkage?: InboundChannelEventLinkage,
+  ): Promise<InboundChannelEventRecord> {
+    return this.requireTransition(
+      claim,
+      await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+        status: "suppressed",
+        lastError: reason,
+        linkage,
+      }),
     );
   }
 
@@ -806,7 +900,8 @@ export class InboundChannelEventService {
     signal?: AbortSignal,
   ): Promise<void> {
     const target = payload.bindingTarget ?? payload.message.room ?? payload.message.peer ?? payload.message.account;
-    if (!target?.trim()) {
+    // A desk question has no message in the channel to mark seen or react to.
+    if (!target?.trim() || isOperatorDeskEvent(claim.event)) {
       return;
     }
     try {
@@ -838,150 +933,6 @@ export class InboundChannelEventService {
   ): void {
     this.deps.recordDevDiagnostic?.({ level, category: "channels", event, message, context });
   }
-}
-
-function buildStoredPayload(input: DurableInboundChannelAcceptInput): Record<string, unknown> {
-  assertNoApprovalBearerInDurablePayload(input);
-  const message: StoredInboundPayload["message"] = {
-    eventId: normalizeRequiredString(input.message.eventId, "message.eventId"),
-    account: normalizeRequiredString(input.message.account, "message.account"),
-    actorId: normalizeRequiredString(input.message.actorId, "message.actorId"),
-    content: normalizeRequiredString(input.message.content, "message.content"),
-  };
-  assignDefined(message, "peer", normalizeOptionalString(input.message.peer));
-  assignDefined(message, "room", normalizeOptionalString(input.message.room));
-  assignDefined(message, "threadId", normalizeOptionalString(input.message.threadId));
-  assignDefined(message, "actorType", input.message.actorType);
-  assignDefined(message, "displayName", normalizeOptionalString(input.message.displayName));
-  assignDefined(message, "metadata", sanitizeMetadata(input.message.metadata));
-
-  const payload: StoredInboundPayload = {
-    eventType: normalizeRequiredString(input.eventType, "eventType"),
-    message,
-  };
-  assignDefined(payload, "bindingTarget", normalizeOptionalString(input.bindingTarget));
-  if (input.responseOptions) {
-    const responseOptions: NonNullable<StoredInboundPayload["responseOptions"]> = {};
-    assignDefined(
-      responseOptions,
-      "deliveryReplyToMessageId",
-      normalizeOptionalString(input.responseOptions.deliveryReplyToMessageId),
-    );
-    assignDefined(
-      responseOptions,
-      "channelSystemInstruction",
-      normalizeOptionalString(input.responseOptions.channelSystemInstruction),
-    );
-    if (Object.keys(responseOptions).length > 0) {
-      payload.responseOptions = responseOptions;
-    }
-  }
-  assignDefined(payload, "voiceRequest", input.voiceRequest ? persistVoiceRequest(input.voiceRequest) : undefined);
-  assignDefined(payload, "voiceFallbackContent", normalizeOptionalString(input.voiceFallbackContent));
-  if (input.voiceRequest) {
-    assignDefined(payload, "voiceCaption", normalizeOptionalString(input.voiceCaption));
-  }
-  if (input.acceptedConnectionRevision && /^[a-f0-9]{64}$/.test(input.acceptedConnectionRevision)) {
-    (payload as unknown as Record<string, unknown>)[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY] =
-      input.acceptedConnectionRevision;
-  }
-  return payload as unknown as Record<string, unknown>;
-}
-
-function assertNoApprovalBearerInDurablePayload(input: DurableInboundChannelAcceptInput): void {
-  if (
-    (input.channel === "telegram" || input.channel === "discord") &&
-    /^\/(?:approve|deny|reject)(?:@[^\s]+)?\s+\S+/i.test(input.message.content.trim())
-  ) {
-    throw new Error("Approval bearer commands must be converted to opaque action ids before durable acceptance.");
-  }
-}
-
-function parseStoredPayload(event: InboundChannelEventRecord): StoredInboundPayload {
-  const value = event.payload;
-  if (!isRecord(value) || !isRecord(value.message)) {
-    throw new Error(`Inbound channel event ${event.eventId} has an invalid normalized payload.`);
-  }
-  const message = value.message;
-  const payload: StoredInboundPayload = {
-    eventType: readRequiredString(value.eventType, "eventType"),
-    bindingTarget: readOptionalString(value.bindingTarget),
-    message: {
-      eventId: readRequiredString(message.eventId, "message.eventId"),
-      account: readRequiredString(message.account, "message.account"),
-      peer: readOptionalString(message.peer),
-      room: readOptionalString(message.room),
-      threadId: readOptionalString(message.threadId),
-      actorId: readRequiredString(message.actorId, "message.actorId"),
-      actorType:
-        message.actorType === "agent" || message.actorType === "system" || message.actorType === "user"
-          ? message.actorType
-          : undefined,
-      displayName: readOptionalString(message.displayName),
-      content: readRequiredString(message.content, "message.content"),
-      metadata: isRecord(message.metadata) ? message.metadata : undefined,
-    },
-    responseOptions: isRecord(value.responseOptions)
-      ? {
-          deliveryReplyToMessageId: readOptionalString(value.responseOptions.deliveryReplyToMessageId),
-          channelSystemInstruction: readOptionalString(value.responseOptions.channelSystemInstruction),
-        }
-      : undefined,
-    voiceRequest: parsePersistedVoiceRequest(value.voiceRequest),
-    voiceFallbackContent: readOptionalString(value.voiceFallbackContent),
-    voiceCaption: readOptionalString(value.voiceCaption),
-  };
-  return payload;
-}
-
-/**
- * The media-reference fields each voice channel persists. connectionConfig is
- * deliberately absent: the worker re-reads current connection config at
- * transcription time, so credentials never cross the durable boundary.
- */
-const PERSISTED_VOICE_REFERENCE_FIELDS = {
-  telegram: ["fileId"],
-  whatsapp: ["mediaId"],
-  slack: ["fileId", "downloadUrl"],
-  discord: ["attachmentId", "url"],
-} as const satisfies Record<ChannelVoiceInboundRequest["channel"], readonly string[]>;
-
-function isPersistedVoiceChannel(value: unknown): value is ChannelVoiceInboundRequest["channel"] {
-  return typeof value === "string" && Object.hasOwn(PERSISTED_VOICE_REFERENCE_FIELDS, value);
-}
-
-function persistVoiceRequest(request: ChannelVoiceInboundRequest): PersistedVoiceRequest {
-  const source = request as unknown as Record<string, unknown>;
-  const persisted: Record<string, unknown> = { channel: request.channel };
-  for (const field of PERSISTED_VOICE_REFERENCE_FIELDS[request.channel]) {
-    const raw = source[field];
-    persisted[field] = normalizeRequiredString(typeof raw === "string" ? raw : "", `voiceRequest.${field}`);
-  }
-  assignDefined(persisted, "mimeType", normalizeOptionalString(request.mimeType));
-  return persisted as PersistedVoiceRequest;
-}
-
-function parsePersistedVoiceRequest(value: unknown): PersistedVoiceRequest | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  if (!isPersistedVoiceChannel(value.channel)) {
-    throw new Error("Inbound voice payload has an unsupported channel.");
-  }
-  const parsed: Record<string, unknown> = { channel: value.channel };
-  for (const field of PERSISTED_VOICE_REFERENCE_FIELDS[value.channel]) {
-    parsed[field] = readRequiredString(value[field], `voiceRequest.${field}`);
-  }
-  parsed.mimeType = readOptionalString(value.mimeType);
-  return parsed as PersistedVoiceRequest;
-}
-
-function buildLaneKey(input: DurableInboundChannelAcceptInput): string {
-  const conversation = input.message.room ?? input.message.peer ?? input.bindingTarget ?? input.message.account;
-  return [input.channel, input.connectionId, conversation, input.message.threadId]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .map((value) => value.trim())
-    .join(":");
 }
 
 function buildDeterministicIdentity(eventId: string, messageId: string): InboundChannelDeterministicIdentity {
@@ -1042,43 +993,9 @@ function normalizeError(error: unknown): string {
   return redactSecretText(message).value.slice(0, MAX_DIAGNOSTIC_TEXT);
 }
 
-function normalizeRequiredString(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) {
-    throw new Error(`${field} is required.`);
-  }
-  return normalized;
-}
-
 function normalizePositiveInteger(value: number, field: string, maximum: number): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
     throw new TypeError(`${field} must be an integer from 1 through ${maximum}.`);
   }
   return value;
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized || undefined;
-}
-
-function readRequiredString(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`${field} is missing from the durable inbound payload.`);
-  }
-  return value;
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function assignDefined<T extends object, K extends keyof T>(target: T, key: K, value: T[K] | undefined): void {
-  if (value !== undefined) {
-    target[key] = value;
-  }
 }

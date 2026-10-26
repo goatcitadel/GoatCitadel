@@ -1,6 +1,15 @@
 import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { resolveChatRouteReadiness } from "../../../features/threaded-surface/chat-route-readiness";
+import {
+  channelCheckBlock,
+  channelFilesBlock,
+  channelReplyBlock,
+  type ChannelCheck,
+  type ChannelCheckBlock,
+  type ChannelReply,
+  type ChannelReplyBlock,
+} from "./channel-composer";
 
 type SendBlockProps = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -24,17 +33,20 @@ type SendBlockProps = Pick<
   | "selectedProviderId"
   | "selectedModel"
   | "commandSuggestions"
->;
+> & { channelReply?: ChannelReply; channelCheck?: ChannelCheck };
 
 /**
  * Why the composer will not send right now. `route-checking` is the only transient kind:
  * an explicit send may still start, because the controller runs its own fresh preflight
- * before dispatch.
+ * before dispatch. A channel conversation adds `channel-removed` and `channel-off`, and one whose channel is not
+ * known yet adds `channel-checking` and `channel-unavailable`; none of these sends.
  */
 export type ComposerSendBlock =
   | { kind: "route-checking"; message: string }
   | { kind: "historical"; message: string }
-  | { kind: "blocked"; message: string };
+  | { kind: "blocked"; message: string }
+  | ChannelReplyBlock
+  | ChannelCheckBlock;
 
 export const ROUTE_CHECKING_MESSAGE = "Checking the selected model… Send waits until the check finishes.";
 
@@ -65,6 +77,11 @@ export function composerSendBlock(props: SendBlockProps): ComposerSendBlock | nu
       kind: "blocked",
       message: `Sending is paused while another client (${props.sessionControlBanner.model.ownerLabel}) controls this conversation.`,
     };
+  const channelBlock =
+    channelCheckBlock(props.channelCheck) ??
+    channelReplyBlock(props.channelReply) ??
+    channelFilesBlock(props.channelReply, props.pendingAttachments.length);
+  if (channelBlock) return channelBlock;
   if (props.pendingApproval || (props.pendingUserInput && !isBackgroundChatUserInputPrompt(props.pendingUserInput)))
     return { kind: "blocked", message: "A decision is waiting above. Resolve it to keep going." };
   if (props.runVariablePanel?.open)

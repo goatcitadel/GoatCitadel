@@ -58,7 +58,7 @@ form controls.
 | Matrix | Homeserver URL, bot account access token and joined room; whoami and joined-room checks plus a sandbox notice. Opt-in `/sync` inbound stays allowlist-only and resumes from a persisted sync token (a homeserver-rejected token re-primes and skips the gap). Outbound is text-only. |
 | QQBot | AppID, AppSecret in an environment variable and the QQ hosts in the network allowlist; token mint and bot-identity checks plus an optional active sandbox message. The signed (ed25519) webhook is default-deny by QQ openid, replies are passive replies to the inbound message id, and outbound is text-only. |
 | WeCom | CorpID, AgentId and application Secret, with the gateway IP on the application's trusted IP list; token and application checks plus a sandbox text. The encrypted callback (Token and EncodingAESKey) is optional, default-deny by WeCom userid, and outbound is text-only. |
-| Signal | Existing bridge/account/recipient and outbound receipt. Receive remains prohibited until the bridge provides durable acknowledgement and replay. |
+| Signal | Existing bridge/account/recipient and outbound receipt. Receiving is available when you turn on `receiveEvents`; see `COMMUNICATION_CHANNEL_SETUP_GUIDE.md`. |
 | iMessage | Callable BlueBubbles bridge, chat/handle and action-specific Private API requirements. Photon/Spectrum remains diagnostics-only. |
 | Zalo OA | Official Account token and eligible recipient; narrow outbound receipt and separate human confirmation. |
 | Zalo User | Authenticated zca bridge, existing linked profile and supported target/media limits; credential aliases remain supported. |

@@ -1765,6 +1765,83 @@ describe("agentSendChatMessage", () => {
   });
 });
 
+describe("retry and edit in channel conversations", () => {
+  const REFUSED = "Retry and edit aren't available in channel conversations. Ask again instead.";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** A session whose words would go out through a Telegram binding: external, or a mission chat bound to it. */
+  function boundHost(channel: "telegram" | "mission") {
+    const host = createHost({});
+    const storage = host.storage as unknown as Record<string, unknown>;
+    storage.chatSessionBindings = {
+      get: vi.fn(async () => ({
+        sessionId: "session-1",
+        workspaceId: "default",
+        transport: "integration",
+        connectionId: "conn-telegram",
+        target: "4242",
+        writable: true,
+      })),
+    };
+    storage.sessions = {
+      listBySessionIds: vi.fn(async () => new Map([["session-1", { sessionId: "session-1", channel }]])),
+    };
+    return host;
+  }
+
+  async function refusal(run: () => Promise<unknown>): Promise<unknown> {
+    try {
+      await run();
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected the request to be refused");
+  }
+
+  it("refuses retry and edit before any admission or send in a channel conversation", async () => {
+    const host = boundHost("telegram");
+    const attempts = [
+      () => retryChatTurn(host, "session-1", "turn-original", { mode: "chat" }),
+      () => editChatTurn(host, "session-1", "turn-original", { content: "edited" }),
+      () => collectChunks(retryChatTurnStream(host, "session-1", "turn-original", { mode: "chat" })),
+      () => collectChunks(editChatTurnStream(host, "session-1", "turn-original", { content: "edited" })),
+      () => routePreflight(host, "session-1", { action: "retry", turnId: "turn-original" }),
+      () => routePreflight(host, "session-1", { action: "edit", turnId: "turn-original", content: "edited" }),
+    ];
+    for (const attempt of attempts) {
+      const error = await refusal(attempt);
+      expect(error).toBeInstanceOf(ConflictError);
+      expect((error as ConflictError).httpStatus).toBe(409);
+      expect((error as ConflictError).message).toBe(REFUSED);
+    }
+
+    expect(host.withChatTurnWriteLease).not.toHaveBeenCalled();
+    expect(host.withChatTurnWriteLeaseStream).not.toHaveBeenCalled();
+    expect(host.sessionControlRuntimeOwner.admitOperatorChatTurn).not.toHaveBeenCalled();
+    expect(host.prepareAgentChatTurn).not.toHaveBeenCalled();
+    expect(dispatchMocks.sendPreparedIntegrationChatTurn).not.toHaveBeenCalled();
+    expect(dispatchMocks.streamPreparedIntegrationChatTurn).not.toHaveBeenCalled();
+    expect(dispatchMocks.consumePreparedAgentChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("keeps retry, edit and a send preflight working for a mission chat bound to a channel", async () => {
+    const host = boundHost("mission");
+
+    const retried = await retryChatTurn(host, "session-1", "turn-original", { mode: "chat" });
+    const edited = await editChatTurn(host, "session-1", "turn-original", { content: "edited prompt" });
+
+    expect(retried.transport).toBe("integration");
+    expect(edited.transport).toBe("integration");
+    expect(dispatchMocks.sendPreparedIntegrationChatTurn).toHaveBeenCalledTimes(2);
+    // A new message in a channel conversation is not a retry or an edit: its preflight is not refused here.
+    const channelHost = boundHost("telegram");
+    await expect(routePreflight(channelHost, "session-1", { action: "send", content: "hi" })).resolves.toBeDefined();
+  });
+});
+
 describe("agentSendChatMessage external companion pipeline (HX-411)", () => {
   const externalCompanion = createExternalCompanionAdmissionContext({
     companionSessionId: "companion-session-1",

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import type { PersonalityCatalogResponse } from "@goatcitadel/contracts";
+import type { ChatChannelConversation, PersonalityCatalogResponse } from "@goatcitadel/contracts";
+import { buildChannelConversation } from "../services/channel-conversation.js";
 import { listPersonalityPresets } from "../services/channel-personalities.js";
 import { normalizeChannelCommandInput } from "../services/channel-command-contract.js";
 import { buildChannelPersonalitySystemOverlay } from "../services/telegram-channel-commands.js";
@@ -80,6 +81,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
       },
       dispatch: async ({ connectionId, connection, request, rawBody, parsed }) => {
         const target = parsed.room ?? parsed.peer;
+        const conversation = resolveTelegramConversation(parsed.actorId, parsed.metadata);
         if (parsed.kind === "callback") {
           const approval = parseTelegramApprovalCallback(parsed.content);
           if (!approval) {
@@ -124,6 +126,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
             idempotencyKey: callbackIdempotencyKey,
             eventType: TELEGRAM_APPROVAL_CALLBACK_EVENT_TYPE,
             bindingTarget: target,
+            conversation,
             inboundAccessConfig: connection.config,
             acceptedConnectionRevision: connection.revision,
             message: {
@@ -137,7 +140,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
               actorId: parsed.actorId,
               actorType: parsed.actorType,
               content: `/${approval.decision}`,
-              displayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
+              displayName: resolveTelegramConversationName(parsed.metadata),
               metadata: {
                 ...withoutTelegramEphemeralCallbackMetadata(parsed.metadata),
                 approvalActionId,
@@ -200,6 +203,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
             idempotencyKey: deriveTelegramWebhookIdempotencyKey(connectionId, request.body, rawBody),
             eventType: TELEGRAM_CHANNEL_COMMAND_EVENT_TYPE,
             bindingTarget: commandEligible,
+            conversation,
             inboundAccessConfig: connection.config,
             acceptedConnectionRevision: connection.revision,
             message: {
@@ -211,7 +215,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
               actorId: parsed.actorId,
               actorType: parsed.actorType,
               content: approvalCommand ? `/${normalizedCommand.name}` : parsed.content,
-              displayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
+              displayName: resolveTelegramConversationName(parsed.metadata),
               metadata: {
                 ...withoutTelegramEphemeralCallbackMetadata(parsed.metadata),
                 approvalActionId,
@@ -237,6 +241,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           idempotencyKey: deriveTelegramWebhookIdempotencyKey(connectionId, request.body, rawBody),
           eventType: parsed.eventType,
           bindingTarget: target,
+          conversation,
           inboundAccessConfig: connection.config,
           acceptedConnectionRevision: connection.revision,
           message: {
@@ -247,6 +252,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
             threadId: routedTelegramMessage.threadId,
             actorId: parsed.actorId,
             actorType: parsed.actorType,
+            displayName: resolveTelegramConversationName(parsed.metadata),
             content: parsed.content,
             metadata: parsed.metadata,
           },
@@ -300,6 +306,27 @@ async function resolveRoutePersonalityCatalog(
 function readTelegramMetadataString(metadata: Record<string, unknown>, key: string): string | undefined {
   const value = metadata[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+// A private chat is named after the person; a group or channel after its title.
+function resolveTelegramConversationName(metadata: Record<string, unknown>): string | undefined {
+  const actorDisplayName = readTelegramMetadataString(metadata, "actorDisplayName");
+  if (readTelegramMetadataString(metadata, "chatType") === "private") {
+    return actorDisplayName;
+  }
+  return readTelegramMetadataString(metadata, "chatTitle") ?? actorDisplayName;
+}
+
+// A private chat is a direct conversation with the sender; anything else is a group or channel.
+function resolveTelegramConversation(actorId: string, metadata: Record<string, unknown>): ChatChannelConversation {
+  if (readTelegramMetadataString(metadata, "chatType") === "private") {
+    return buildChannelConversation({
+      kind: "direct",
+      counterpartActorId: actorId,
+      title: readTelegramMetadataString(metadata, "actorDisplayName"),
+    });
+  }
+  return buildChannelConversation({ kind: "group", title: readTelegramMetadataString(metadata, "chatTitle") });
 }
 
 function withoutTelegramEphemeralCallbackMetadata(metadata: Record<string, unknown>): Record<string, unknown> {

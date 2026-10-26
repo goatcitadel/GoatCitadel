@@ -37,6 +37,9 @@ vi.mock("./use-thread-activity", () => ({
   useThreadActivity: () => ({}),
 }));
 
+// Messaging reads its own overview (covered by MessagingSection.test.tsx); here it only needs to be present.
+vi.mock("./MessagingSection", () => ({ MessagingSection: () => <section data-testid="messaging" /> }));
+
 let root: Root;
 let container: HTMLDivElement;
 
@@ -237,6 +240,85 @@ it.each([0, 1, 99, 100, 1000])(
     expect(rail.onSelectSession).toHaveBeenCalledWith("rail-0");
   },
 );
+
+describe("channel conversations and the conversation list", () => {
+  const messaging = { workspaceId: "default", onOpenChannel: vi.fn() };
+  const session = (sessionId: string, extra: Record<string, unknown> = {}) => ({
+    sessionId,
+    lifecycleStatus: "active",
+    lastActivityAt: "2026-10-25T00:00:00Z",
+    ...extra,
+  });
+  const railWith = (overrides: Record<string, unknown> = {}) =>
+    ({
+      missionSessions: [session("mission-1")],
+      externalSessions: [
+        session("channel-1", { scope: "external", channelConnectionId: "conn-1" }),
+        session("channel-2", { scope: "external", channelConnectionId: "conn-2" }),
+        session("external-1", { scope: "external" }),
+      ],
+      availableFolders: [],
+      selectedSessionId: null,
+      selectedFolderId: "all",
+      selectedProjectId: "all",
+      search: "",
+      historyView: "active",
+      renderSessionLabel: (id: string) => `Title of ${id}`,
+      onSelectSession: vi.fn(),
+      onSearchChange: vi.fn(),
+      onHistoryViewChange: vi.fn(),
+      onSelectProjectId: vi.fn(),
+      onCreateSession: vi.fn(),
+      ...overrides,
+    }) as unknown as MissionThreadedSessionRailData;
+  const listedTitles = () =>
+    [...container.querySelectorAll("nav[aria-label='Conversations'] button")].map(
+      (row) => row.getAttribute("aria-label")?.split(", ")[0],
+    );
+
+  it("does not repeat channel conversations in the conversation list", async () => {
+    await act(async () => root.render(<ThreadList rail={railWith()} messaging={messaging} />));
+    // Mission sessions and external sessions without a channel stay; channel conversations belong to Messaging.
+    expect(listedTitles()).toEqual(["Title of mission-1", "Title of external-1"]);
+    expect(container.querySelector('[data-testid="messaging"]')).not.toBeNull();
+  });
+
+  it("lists channel conversations in the Archived view, which Messaging does not show", async () => {
+    await act(async () =>
+      root.render(<ThreadList rail={railWith({ historyView: "archived" })} messaging={messaging} />),
+    );
+    expect(listedTitles()).toEqual([
+      "Title of mission-1",
+      "Title of channel-1",
+      "Title of channel-2",
+      "Title of external-1",
+    ]);
+  });
+
+  it("lists channel conversations that a search finds, which Messaging does not filter", async () => {
+    await act(async () => root.render(<ThreadList rail={railWith({ search: "channel" })} messaging={messaging} />));
+    expect(listedTitles()).toEqual([
+      "Title of mission-1",
+      "Title of channel-1",
+      "Title of channel-2",
+      "Title of external-1",
+    ]);
+    // A search that is only spaces is no search.
+    await act(async () => root.render(<ThreadList rail={railWith({ search: "  " })} messaging={messaging} />));
+    expect(listedTitles()).toEqual(["Title of mission-1", "Title of external-1"]);
+  });
+
+  it("keeps channel conversations listed when Messaging is not shown", async () => {
+    await act(async () => root.render(<ThreadList rail={railWith()} />));
+    expect(listedTitles()).toEqual([
+      "Title of mission-1",
+      "Title of channel-1",
+      "Title of channel-2",
+      "Title of external-1",
+    ]);
+    expect(container.querySelector('[data-testid="messaging"]')).toBeNull();
+  });
+});
 
 it("marks a pinned conversation with a Pinned glyph and in its row name", async () => {
   const rail = {

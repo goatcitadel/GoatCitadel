@@ -64,6 +64,7 @@ export function ChatTurnDetails({
   answerContent = turn.assistantMessage?.content,
   streaming,
   readOnly,
+  resendBlocked = false,
   actions,
   latest = true,
 }: {
@@ -71,6 +72,8 @@ export function ChatTurnDetails({
   answerContent?: string;
   streaming: boolean;
   readOnly: boolean;
+  /** Not retried or edited from here: it arrived through a channel, or the turn is in a channel conversation. */
+  resendBlocked?: boolean;
   actions: TurnActions;
   /** Older turns keep their actions in the page but show them on hover or keyboard focus only. */
   latest?: boolean;
@@ -248,6 +251,7 @@ export function ChatTurnDetails({
           actions={actions}
           streaming={streaming}
           readOnly={readOnly}
+          resendBlocked={resendBlocked}
           hasAnswer={Boolean(answerContent)}
           copied={copy.copied}
           onCopy={() => void copyAnswer()}

@@ -61,6 +61,7 @@ import {
 import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
 import * as channelSetupService from "./channel-setup-service.js";
 import { composeChannelSetupHost } from "./channel-setup-host-composition.js";
+import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import {
   createExternalSideEffectReplayRecords,
@@ -350,6 +351,8 @@ export function composeIntegrationChannelRouteDependencies(
         gateway.respondToExistingChatMessage(sessionId, messageId, input),
       resolveApprovalWithRemoteToken: (input) => gateway.resolveApprovalWithRemoteToken(input),
       resolveApprovalWithRemoteTokenId: (input) => gateway.resolveApprovalWithRemoteTokenId(input),
+      // A desk send into a channel conversation; the durable desk question is an inbound channel event.
+      sendOperatorDeskMessage: (sessionId, input) => gateway.sendOperatorDeskMessage(sessionId, input),
       setChatSessionBinding: (input) => gateway.setChatSessionBinding(input),
       updateIntegrationConnection: (connectionId, patch) =>
         integrationChannel.updateIntegrationConnection(connectionId, patch),
@@ -595,9 +598,11 @@ function createIntegrationChannelPortForGateway(
 ): IntegrationChannelServicePort {
   const storage = gateway.storage;
   const discordRuntimeService = gateway.discordRuntimeService;
+  const secretStore = gateway.secretStore;
   const streams = getChannelStreamRuntime(gateway);
   return {
     storage,
+    ...(secretStore ? { channelSecrets: new ChannelSecretCustodyService(secretStore) } : {}),
     publishRealtime: async (eventType, source, payload, options) => {
       await gateway.publishRealtime(eventType, source, payload, options);
     },

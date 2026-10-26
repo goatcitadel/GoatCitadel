@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { buildChannelConversation } from "../services/channel-conversation.js";
 import {
   deriveSlackWebhookIdempotencyKey,
   normalizeSlackWebhookPayload,
@@ -118,6 +119,12 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
           idempotencyKey: deriveSlackWebhookIdempotencyKey(connectionId, request.body, rawBody),
           eventType: parsed.eventType,
           bindingTarget: parsed.room ?? parsed.peer,
+          // Slack events carry ids but no names, so neither kind gets a title here.
+          conversation: buildChannelConversation(
+            parsed.metadata.channelType === "im"
+              ? { kind: "direct", counterpartActorId: parsed.actorId }
+              : { kind: "group" },
+          ),
           inboundAccessConfig: connection.config,
           acceptedConnectionRevision: connection.revision,
           message: {

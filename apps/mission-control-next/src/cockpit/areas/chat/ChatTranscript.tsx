@@ -1,5 +1,7 @@
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Turn, ChatTranscriptEmpty, ChatTranscriptFooter, type TranscriptFooterContext } from "./ChatTranscriptContent";
+import type { ChannelConversationContext } from "./channel-conversation";
+import { useChannelReading } from "./use-channel-conversation";
 import {
   hasUnsettledChatContextMutation,
   CHAT_CONTEXT_RELOAD_NOTE,
@@ -25,6 +27,7 @@ const READING_GESTURE_TAIL_MS = 400;
 
 export function ChatTranscript({
   props,
+  channel,
   gatewayUnavailable,
   receipt,
   onInspectTurn,
@@ -33,6 +36,8 @@ export function ChatTranscript({
   onReviewPlan,
 }: {
   props: MissionThreadedActiveSessionSurfaceProps;
+  /** Set when the open conversation is held through a channel; callers keep the object stable. */
+  channel?: ChannelConversationContext;
   gatewayUnavailable?: boolean;
   receipt?: MissionThreadedRenderSurfaceInput["changePlanReceipt"];
   onInspectTurn?: (turnId: string) => void;
@@ -50,6 +55,7 @@ export function ChatTranscript({
   const pendingTurnId = preview?.turnId ?? props.activeStreamingTurnId;
   const hasPreviewTurn = visibleTurns.some((turn) => turn.turnId === pendingTurnId);
   const latestTurn = visibleTurns.at(-1);
+  const newChannelMessages = useChannelReading(channel, visibleTurns, props);
   const lifecycle = useRef<{ session: string | null; running: boolean }>({
     session: props.selectedSessionId,
     running: false,
@@ -349,6 +355,8 @@ export function ChatTranscript({
                   previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
                   streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
                   actions={props}
+                  channel={channel}
+                  newMessageCount={newChannelMessages?.turnId === turn.turnId ? newChannelMessages.count : undefined}
                   onInspectTurn={onInspectTurn}
                   onOpenArtifact={onOpenArtifact}
                   onReviewPlan={onReviewPlan}
@@ -366,6 +374,8 @@ export function ChatTranscript({
                     previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
                     streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
                     actions={props}
+                    channel={channel}
+                    newMessageCount={newChannelMessages?.turnId === turn.turnId ? newChannelMessages.count : undefined}
                     onInspectTurn={onInspectTurn}
                     onOpenArtifact={onOpenArtifact}
                     onReviewPlan={onReviewPlan}

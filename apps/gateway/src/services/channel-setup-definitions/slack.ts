@@ -31,7 +31,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       introSummary:
         "Connect Slack with OAuth first, then choose one or more workspace channel targets for GoatCitadel to use.",
       prerequisites: [
-        "A Slack workspace where you can approve the GoatCitadel Slack app.",
+        "A Slack workspace where you can approve your Slack app.",
         "Permission to install apps or ask an admin to approve the install.",
         "At least one sandbox channel for the first test post.",
       ],
@@ -57,7 +57,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           checklist: [
             check("workspace", "Choose the Slack workspace"),
             check("sandbox", "Pick at least one sandbox channel for the first target"),
-            check("permissions", "Confirm you can approve or request the GoatCitadel Slack app"),
+            check("permissions", "Confirm you can approve or request your Slack app"),
           ],
         },
         {
@@ -66,13 +66,13 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           title: "Connect Slack with OAuth",
           body: [
             paragraph(
-              "Use Connect Slack from Mission Control to approve the hosted GoatCitadel Slack app. After approval, return here and choose the channels GoatCitadel should use.",
+              "Use Connect Slack from Mission Control to approve your Slack app. After approval, return here and choose the channels GoatCitadel should use.",
             ),
             linkBlock("Slack OAuth v2", "https://api.slack.com/authentication/oauth-v2"),
           ],
           checklist: [
             check("connect", "Click Connect Slack"),
-            check("approve", "Approve the GoatCitadel Slack app"),
+            check("approve", "Approve your Slack app"),
             check("workspace", "Confirm Mission Control shows the connected workspace"),
           ],
         },
@@ -256,7 +256,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       lastReviewedAt: "2026-05-02",
       volatility: "medium",
       deprecationRisk: "low",
-      preferredPathLabel: "Hosted Slack OAuth install",
+      preferredPathLabel: "Slack OAuth install with your Slack app",
       legacyPathLabel: "Manual bot token or incoming webhook fallback",
     },
   };
@@ -314,7 +314,8 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       const defaultTarget = targets.find((target) => target.default) ?? targets[0];
       return compactRecord({
         authMode: readString(draft.draft, "authMode") ?? readLegacyString(draft, "authMode"),
-        slackInstallerUserId: readString(draft.draft, "slackInstallerUserId") ?? readLegacyString(draft, "slackInstallerUserId"),
+        slackInstallerUserId:
+          readString(draft.draft, "slackInstallerUserId") ?? readLegacyString(draft, "slackInstallerUserId"),
         oauthConnectedAt: readString(draft.draft, "oauthConnectedAt") ?? readLegacyString(draft, "oauthConnectedAt"),
         slackInstallId: readString(draft.draft, "slackInstallId") ?? readLegacyString(draft, "slackInstallId"),
         slackTeamId: readString(draft.draft, "slackTeamId") ?? readLegacyString(draft, "slackTeamId"),

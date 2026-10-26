@@ -32,6 +32,7 @@ export function ChatTurnActions({
   actions,
   streaming,
   readOnly,
+  resendBlocked = false,
   hasAnswer,
   copied = false,
   onCopy,
@@ -40,6 +41,11 @@ export function ChatTurnActions({
   actions: TurnActionHandlers;
   streaming: boolean;
   readOnly: boolean;
+  /**
+   * No Retry and no Edit and resend: the message arrived through a channel (they would speak for someone else), or the
+   * turn is in a channel conversation (they would send the words through the channel again).
+   */
+  resendBlocked?: boolean;
   hasAnswer: boolean;
   /** The answer was just copied; the button briefly reads "Copied". */
   copied?: boolean;
@@ -47,7 +53,7 @@ export function ChatTurnActions({
 }) {
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const [confirmRetry, setConfirmRetry] = useState(false);
-  const canRetry = canRetryTurn(turn) && !streaming && !readOnly;
+  const canRetry = canRetryTurn(turn) && !streaming && !readOnly && !resendBlocked;
   // Only a tool recorded as a read ("none") retries without asking. One that may write ("unknown"), has no recorded
   // potential, or did or might have changed something can change things again on retry, so that retry is confirmed.
   const effectfulTools = (turn.toolRuns ?? []).filter(
@@ -63,7 +69,9 @@ export function ChatTurnActions({
     canBranch
       ? { label: "New conversation from here", run: () => actions.onStartNewThreadFromTurn(turn.turnId) }
       : null,
-    canBranch ? { label: "Edit your message and resend", run: () => actions.onEditTurn(turn.turnId) } : null,
+    canBranch && !resendBlocked
+      ? { label: "Edit your message and resend", run: () => actions.onEditTurn(turn.turnId) }
+      : null,
     { label: "Run details", run: () => actions.onOpenRunDetails(turn.turnId) },
     canSave ? { label: "Save answer", run: () => actions.onCreateGeneratedArtifact(turn.turnId) } : null,
   ].filter((item): item is { label: string; run: () => void } => Boolean(item));

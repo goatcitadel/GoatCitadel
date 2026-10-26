@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { registerChatProjectRoutes } from "./chat.projects.js";
 import { registerChatSessionRoutes } from "./chat.sessions.js";
+import { registerChatMessagingRoutes } from "./chat.messaging.js";
 import { registerChatAttachmentRoutes } from "./chat.attachments.js";
 import { registerChatArtifactRenderRoutes } from "./chat.artifact-render.js";
 import { registerChatMessageRoutes } from "./chat.messages.js";
@@ -16,6 +17,7 @@ import { registerWorkflowSkillCaptureRoutes } from "./chat.skill-capture.js";
 export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   registerChatProjectRoutes(fastify);
   registerChatSessionRoutes(fastify);
+  registerChatMessagingRoutes(fastify);
   registerChatMessageRoutes(fastify);
   registerSessionControlRoutes(fastify);
   registerChatDelegateRoutes(fastify);

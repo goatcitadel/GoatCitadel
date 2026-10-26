@@ -276,6 +276,8 @@ export interface ChatSessionRecord {
   forkRelationships?: import("./chat-fork.js").ChatSessionForkRelationship[];
   channel: string;
   account: string;
+  /** The channel connection carrying this session; set when its binding transport is "integration". */
+  channelConnectionId?: string;
   updatedAt: string;
   lastActivityAt: string;
   tokenTotal: number;
@@ -381,11 +383,25 @@ export interface ChatSessionBulkArchiveResult {
   failures: ChatSessionBulkArchiveFailure[];
 }
 
+/**
+ * What kind of conversation a channel binding points at. Stored next to the
+ * binding target so a channel conversation can be grouped and named without
+ * asking the provider again.
+ */
+export interface ChatChannelConversation {
+  kind: "direct" | "group";
+  /** Provider user id of the other person; direct conversations only. */
+  counterpartActorId?: string;
+  /** The person's name (direct) or the group or channel title. */
+  title?: string;
+}
+
 export interface ChatSessionBindingRecord {
   sessionId: string;
   transport: ChatBindingTransport;
   connectionId?: string;
   target?: string;
+  conversation?: ChatChannelConversation;
   writable: boolean;
   createdAt: string;
   updatedAt: string;

@@ -4,6 +4,7 @@ import {
   presentApprovalOutcome,
   presentApprovalStatus,
   presentChangePlanStatus,
+  presentChannelStatus,
   presentChatTurnStatus,
   presentEventClass,
   presentEventType,
@@ -52,5 +53,14 @@ describe("presentTaskStatus", () => {
     expect(presentTaskStatus("blocked")).toEqual({ label: "Blocked", tone: "failed" });
     expect(presentTaskStatus("inbox")).toEqual({ label: "Not started", tone: "neutral" });
     expect(presentTaskStatus("archived_soon")).toEqual({ label: "Archived soon", tone: "neutral" });
+  });
+});
+
+describe("presentChannelStatus", () => {
+  it("presents channel statuses with the agreed labels", () => {
+    expect(presentChannelStatus("on")).toEqual({ label: "On", tone: "done" });
+    expect(presentChannelStatus("off")).toEqual({ label: "Off", tone: "neutral" });
+    expect(presentChannelStatus("needs_attention")).toEqual({ label: "Needs you", tone: "waiting" });
+    expect(presentChannelStatus("removed")).toEqual({ label: "Removed", tone: "neutral" });
   });
 });

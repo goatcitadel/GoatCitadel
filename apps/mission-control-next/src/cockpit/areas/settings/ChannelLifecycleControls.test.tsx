@@ -21,8 +21,13 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
   ...api,
 }));
 vi.mock("../../ui/Dialog", () => ({
-  Dialog: ({ open, title, children }: ComponentProps<typeof Dialog>) =>
-    open ? <section aria-label={title}>{children}</section> : null,
+  Dialog: ({ open, title, description, children }: ComponentProps<typeof Dialog>) =>
+    open ? (
+      <section aria-label={title}>
+        {description ? <p>{description}</p> : null}
+        {children}
+      </section>
+    ) : null,
 }));
 let root: Root, container: HTMLDivElement;
 const reload = vi.fn();
@@ -153,4 +158,46 @@ it.each(["disable", "delete"])("reviews and canonically confirms channel connect
       connection.revision,
     );
   expect(reload).toHaveBeenCalledOnce();
+});
+
+const REMOVE_COPY =
+  "This disconnects the bot and deletes its keys. Its conversations stay readable under Messaging until you delete them.";
+const fixtureConnection = {
+  connectionId: "connection-1",
+  catalogId: "channel.telegram",
+  key: "telegram",
+  kind: "channel",
+  label: "Fixture",
+  enabled: true,
+  status: "connected",
+  revision: "a".repeat(64),
+  config: {},
+  createdAt: "2026-10-06",
+} as IntegrationConnection;
+async function renderConnection() {
+  await act(async () =>
+    root.render(
+      <ChannelLifecycleControls workspaceId="a" selection={{ connection: fixtureConnection }} reload={reload} />,
+    ),
+  );
+}
+
+it("says the conversations stay readable before removing", async () => {
+  await renderConnection();
+
+  await click("Remove channel connection");
+
+  const dialog = container.querySelector('section[aria-label="Remove Fixture?"]')!;
+  expect(dialog).not.toBeNull();
+  expect(dialog.textContent).toContain(REMOVE_COPY);
+  expect(api.deleteIntegrationConnection).not.toHaveBeenCalled();
+});
+
+it("does not claim the keys are deleted when only disabling", async () => {
+  await renderConnection();
+
+  await click("Review disable channel");
+
+  expect(container.textContent).not.toContain("deletes its keys");
+  expect(container.querySelector('section[aria-label="Remove Fixture?"]')).toBeNull();
 });

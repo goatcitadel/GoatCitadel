@@ -33,6 +33,7 @@ import type {
   ChatHistoryContinuationResponse,
   ChatMessageRecord,
   ChatMessagePageResponse,
+  ChatMessagingOverview,
   ChatMode,
   ChatProjectRecord,
   ChatProjectImportResult,
@@ -51,6 +52,7 @@ import type {
   ChatSessionOrigin,
   ChatSessionPrefsPatch,
   ChatSessionPrefsRecord,
+  ChatSessionReadResponse,
   ChatSessionRecord,
   ChatSessionForkRequest,
   ChatSessionForkResponse,
@@ -445,6 +447,29 @@ export async function fetchChatSessionStatus(
   return request<ChatSessionStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/status`, {
     cache: "no-store",
     signal,
+  });
+}
+
+/**
+ * The Messaging overview: channel conversations grouped by their connection, with status and new-message counts.
+ * The Gateway builds it per operator, so it is never served from a cache.
+ */
+export async function fetchChatMessaging(
+  workspaceId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<ChatMessagingOverview> {
+  const query = new URLSearchParams({ workspaceId });
+  return request<ChatMessagingOverview>(`/api/v1/chat/messaging?${query.toString()}`, {
+    cache: "no-store",
+    signal: options.signal,
+  });
+}
+
+/** Moves this operator's read marker for a conversation forward to `readThrough` (an ISO 8601 timestamp). */
+export async function markChatSessionRead(sessionId: string, readThrough: string): Promise<ChatSessionReadResponse> {
+  return request<ChatSessionReadResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/read`, {
+    method: "POST",
+    body: JSON.stringify({ readThrough }),
   });
 }
 

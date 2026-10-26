@@ -110,6 +110,47 @@ describe("SessionRepository", () => {
     assert.equal(row.routingHints, undefined);
   });
 
+  it("keeps the saved display name and routing hints when a later upsert omits them", () => {
+    const repo = createRepo();
+
+    repo.upsert({
+      sessionId: "session-named",
+      sessionKey: "telegram:me:named",
+      kind: "dm",
+      channel: "telegram",
+      account: "me",
+      displayName: "Sam Lee",
+      routingHints: { a: "1" },
+      timestamp: "2026-02-27T10:00:00.000Z",
+    });
+    const afterLaterMessage = repo.upsert({
+      sessionId: "session-named",
+      sessionKey: "telegram:me:named",
+      kind: "dm",
+      channel: "telegram",
+      account: "me",
+      timestamp: "2026-02-27T10:05:00.000Z",
+    });
+
+    assert.equal(afterLaterMessage.displayName, "Sam Lee");
+    assert.deepEqual(afterLaterMessage.routingHints, { a: "1" });
+    assert.equal(afterLaterMessage.lastActivityAt, "2026-02-27T10:05:00.000Z");
+
+    const renamed = repo.upsert({
+      sessionId: "session-named",
+      sessionKey: "telegram:me:named",
+      kind: "dm",
+      channel: "telegram",
+      account: "me",
+      displayName: "Samuel Lee",
+      routingHints: { a: "2" },
+      timestamp: "2026-02-27T10:10:00.000Z",
+    });
+
+    assert.equal(renamed.displayName, "Samuel Lee");
+    assert.deepEqual(renamed.routingHints, { a: "2" });
+  });
+
   it("applies usage deltas without relying on untyped arithmetic parameters", () => {
     const repo = createRepo();
     const now = "2026-02-27T10:00:00.000Z";

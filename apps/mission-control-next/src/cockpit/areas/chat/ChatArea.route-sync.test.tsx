@@ -192,11 +192,16 @@ describe("cockpit controller route publication", () => {
   });
 
   it("drops late retained Chat selection after returning an exact setup plan to Channels", async () => {
-    window.history.replaceState(null, "", "/chat?channelPlan=plan-a&channelDraft=draft-a&channelRevision=1&channelWorkspace=workspace-a&shell=cockpit");
+    window.history.replaceState(
+      null,
+      "",
+      "/chat?channelPlan=plan-a&channelDraft=draft-a&channelRevision=1&channelWorkspace=workspace-a&shell=cockpit",
+    );
     await render();
     const lateRequest = controller.request;
     await act(async () => controller.request("chat", { sessionId: "session-b" }));
-    const returned = "/settings/channels?channelPlan=plan-a&channelDraft=draft-a&channelWorkspace=workspace-a&shell=cockpit";
+    const returned =
+      "/settings/channels?channelPlan=plan-a&channelDraft=draft-a&channelWorkspace=workspace-a&shell=cockpit";
     await act(async () => navigateOwner(returned));
     expect(window.location.pathname + window.location.search).toBe(returned);
     await act(async () => {
@@ -311,25 +316,76 @@ it("publishes a legacy message destination only after its exact scoped history a
   const selection = { sessionId: "s", messageId: "legacy/1", sequence: 7 };
   const bound = evidence({ sessionId: "s" });
   expect(chatSelectionMatches(selection, bound, "workspace-a")).toBe(false);
-  const anchor = { workspaceId: "workspace-a", sessionId: "s", messageId: "legacy/1", sequence: 7, state: "found" as const };
-  const active = { ...bound.active!, historicalWindow: { anchor, items: [], hasOlder: false, hasNewer: false, truncated: false, droppedItems: 0, byteLength: 0 } };
+  const anchor = {
+    workspaceId: "workspace-a",
+    sessionId: "s",
+    messageId: "legacy/1",
+    sequence: 7,
+    state: "found" as const,
+  };
+  const active = {
+    ...bound.active!,
+    historicalWindow: {
+      anchor,
+      items: [],
+      hasOlder: false,
+      hasNewer: false,
+      truncated: false,
+      droppedItems: 0,
+      byteLength: 0,
+    },
+  };
   expect(chatSelectionMatches(selection, { ...bound, active }, "workspace-a")).toBe(true);
   expect(chatSelectionHref(selection)).toBe("/chat?shell=cockpit&sessionId=s&messageId=legacy%2F1&sequence=7");
-  for (const patch of [{ messageId: "other" }, { sequence: 8 }, { workspaceId: "foreign" }, { state: "unavailable" as const }]) {
-    expect(chatSelectionMatches(selection, { ...bound, active: { ...active, historicalWindow: { ...active.historicalWindow, anchor: { ...anchor, ...patch } } } }, "workspace-a")).toBe(false);
+  for (const patch of [
+    { messageId: "other" },
+    { sequence: 8 },
+    { workspaceId: "foreign" },
+    { state: "unavailable" as const },
+  ]) {
+    expect(
+      chatSelectionMatches(
+        selection,
+        {
+          ...bound,
+          active: { ...active, historicalWindow: { ...active.historicalWindow, anchor: { ...anchor, ...patch } } },
+        },
+        "workspace-a",
+      ),
+    ).toBe(false);
   }
 });
-
 
 it("does not publish a retained conversation selection over an exact Projects destination", async () => {
   await render();
   await act(async () => controller.request("chat", { sessionId: "session-b" }));
-  await act(async () => { commitCockpitNavigation("/chat/projects/project-a?workspaceId=workspace-a#context"); });
+  await act(async () => {
+    commitCockpitNavigation("/chat/projects/project-a?workspaceId=workspace-a#context");
+  });
   await act(async () => publishSelection({ sessionId: "session-b" }));
   expect(window.location.pathname).toBe("/chat/projects/project-a");
   expect(window.location.hash).toBe("#context");
   expect(new URLSearchParams(window.location.search).get("sessionId")).toBeNull();
   expect(new URLSearchParams(window.location.search).get("workspaceId")).toBe("workspace-a");
+});
+
+it("publishes the conversation picked on a channel page, but not one requested before arriving there", async () => {
+  window.history.replaceState(null, "", "/chat/messaging/conn-1?workspaceId=workspace-a&shell=cockpit");
+  await render();
+  await act(async () => publishSelection({ sessionId: "session-b" }));
+  expect(window.location.pathname).toBe("/chat/messaging/conn-1");
+  await act(async () => controller.request("chat", { sessionId: "session-c" }));
+  await act(async () => publishSelection({ sessionId: "session-c" }));
+  expect(window.location.pathname).toBe("/chat");
+  expect(new URLSearchParams(window.location.search).get("sessionId")).toBe("session-c");
+
+  await act(async () => controller.request("chat", { sessionId: "session-d" }));
+  await act(async () => {
+    commitCockpitNavigation("/chat/messaging/conn-1?workspaceId=workspace-a");
+  });
+  await act(async () => publishSelection({ sessionId: "session-d" }));
+  expect(window.location.pathname).toBe("/chat/messaging/conn-1");
+  expect(new URLSearchParams(window.location.search).get("sessionId")).toBeNull();
 });
 
 it("preserves the requested assignment only while publishing the same conversation", async () => {

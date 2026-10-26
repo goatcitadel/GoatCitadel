@@ -163,6 +163,7 @@ export function buildSafePostgresSearchQuery(rawQuery: string): string | null {
 export class ChatMessageRepository {
   private readonly upsertStmt;
   private readonly countStmt;
+  private readonly countChannelMessagesAfterStmt;
   private readonly listLatestStmt;
   private readonly listAtOrBeforeSeqStmt;
   private readonly listAtOrBeforeSeqOffsetStmt;
@@ -222,6 +223,14 @@ export class ChatMessageRepository {
       SELECT COUNT(1) AS count
       FROM chat_messages
       WHERE session_id = ?
+    `);
+    this.countChannelMessagesAfterStmt = db.prepare(`
+      SELECT COUNT(1) AS count
+      FROM chat_messages
+      WHERE session_id = ?
+        AND role = 'user'
+        AND source_authority = 'external_channel'
+        AND timestamp > ?
     `);
     this.listLatestStmt = db.prepare(`
       SELECT *
@@ -604,6 +613,16 @@ export class ChatMessageRepository {
 
   public countBySession(sessionId: string): number {
     const row = toCountRow(this.countStmt.get(sessionId));
+    return Number(row?.count ?? 0);
+  }
+
+  /**
+   * Counts the messages a person sent through a channel after `after` (an ISO timestamp): role
+   * `user` with source authority `external_channel`. Replies, operator messages and system
+   * notes never count, so the number matches "new messages waiting" in a channel conversation.
+   */
+  public countAfter(sessionId: string, after: string): number {
+    const row = toCountRow(this.countChannelMessagesAfterStmt.get(sessionId, after));
     return Number(row?.count ?? 0);
   }
 

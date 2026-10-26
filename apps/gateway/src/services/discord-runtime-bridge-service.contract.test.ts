@@ -672,6 +672,35 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     );
   });
 
+  it("carries the conversation details onto durably accepted Discord messages and slash commands", async () => {
+    const host = createHost();
+    const conversation = { kind: "direct" as const, counterpartActorId: "user-1", title: "Goat User" };
+    await handleDiscordRuntimeInbound(host, {
+      connectionId: "discord-1",
+      target: "dm_1",
+      actorId: "user-1",
+      content: "hello",
+      sourceMessageId: "msg-conversation",
+      peer: "user-1",
+      room: "dm_1",
+      conversation,
+    });
+    await acceptDiscordRuntimeSlashCommand(host, {
+      connectionId: "discord-1",
+      target: "channel-1",
+      actorId: "user-1",
+      commandText: "/status",
+      sourceCommandId: "interaction-conversation",
+      room: "channel-1",
+      conversation: { kind: "group", title: "#general" },
+    });
+
+    expect(host.acceptMock.mock.calls.map(([input]) => [input.dispatchKind, input.conversation])).toEqual([
+      ["agent_turn", conversation],
+      ["command", { kind: "group", title: "#general" }],
+    ]);
+  });
+
   it("replaces raw approval bearer values with an opaque action id before durable acceptance", async () => {
     const host = createHost();
     await acceptDiscordRuntimeSlashCommand(host, {

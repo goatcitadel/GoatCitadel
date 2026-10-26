@@ -4,6 +4,7 @@ import type {
   ApprovalResolveInput,
   ChannelActivityInput,
   ChannelActivityResult,
+  ChatChannelConversation,
   ChatSendMessageResponse,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
@@ -317,6 +318,7 @@ export async function acceptDiscordRuntimeSlashCommand(
     sourceCommandId: string;
     peer?: string;
     room?: string;
+    conversation?: ChatChannelConversation;
     threadId?: string;
     metadata?: Record<string, unknown>;
   },
@@ -330,6 +332,7 @@ export async function acceptDiscordRuntimeSlashCommand(
     idempotencyKey: `discord:${input.connectionId}:interaction:${input.sourceCommandId}`,
     eventType: "discord-gateway-slash-command",
     bindingTarget: input.target,
+    conversation: input.conversation,
     dispatchKind: "command",
     message: {
       eventId: input.sourceCommandId,
@@ -770,6 +773,7 @@ export async function handleDiscordRuntimeInbound(
     sourceMessageId: string;
     peer?: string;
     room?: string;
+    conversation?: ChatChannelConversation;
     threadId?: string;
     metadata?: Record<string, unknown>;
     voiceAttachment?: { attachmentId: string; url: string; mimeType?: string };
@@ -796,6 +800,7 @@ export async function handleDiscordRuntimeInbound(
     idempotencyKey: `discord:${input.connectionId}:${input.sourceMessageId}`,
     eventType: "discord-gateway-message",
     bindingTarget: input.target,
+    conversation: input.conversation,
     message: {
       eventId: input.sourceMessageId,
       account: input.connectionId,

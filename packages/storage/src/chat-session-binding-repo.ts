@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "./db.js";
-import type { ChatSessionBindingRecord } from "@goatcitadel/contracts";
+import type { ChatChannelConversation, ChatSessionBindingRecord } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -20,6 +20,14 @@ export interface ChatSessionBindingUpsertInput {
   transport: "llm" | "integration";
   connectionId?: string;
   target?: string;
+  /**
+   * Direct-or-group details for an integration binding. Omitting it keeps the
+   * stored details only while the connection and target are unchanged; they are
+   * cleared when the binding stops being an integration binding or is re-pointed
+   * at another connection or target, so details never outlive the conversation
+   * they described.
+   */
+  conversation?: ChatChannelConversation;
   writable?: boolean;
 }
 
@@ -53,6 +61,11 @@ export class ChatSessionBindingRepository {
   public upsert(input: ChatSessionBindingUpsertInput, now = new Date().toISOString()): ChatSessionBindingRecord {
     const existingRow = toChatSessionBindingRow(this.getStmt.get(input.sessionId));
     const existing = existingRow ? mapRow(existingRow) : undefined;
+    const sameConversation = existing?.connectionId === input.connectionId && existing?.target === input.target;
+    const conversation =
+      input.transport === "integration"
+        ? (parseConversation(input.conversation) ?? (sameConversation ? existing?.conversation : undefined))
+        : undefined;
     this.upsertStmt.run({
       sessionId: input.sessionId,
       workspaceId: input.workspaceId
@@ -60,7 +73,7 @@ export class ChatSessionBindingRepository {
         : (existingRow?.workspace_id ?? "default"),
       transport: input.transport,
       connectionId: input.connectionId ?? null,
-      targetJson: input.target ? JSON.stringify({ target: input.target }) : null,
+      targetJson: serializeTargetJson(input.target, conversation),
       writable: input.writable === undefined ? (existing?.writable === false ? 0 : 1) : input.writable ? 1 : 0,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -129,23 +142,64 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function mapRow(row: ChatSessionBindingRow): ChatSessionBindingRecord {
+  const { target, conversation } = parseTargetJson(row.target_json);
   return {
     sessionId: row.session_id,
     transport: row.transport,
     connectionId: row.connection_id ?? undefined,
-    target: parseTarget(row.target_json),
+    target,
+    ...(conversation ? { conversation } : {}),
     writable: row.writable === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-function parseTarget(targetJson: string | null): string | undefined {
+// The target and the conversation details share the existing target_json
+// column: `{ "target": "...", "conversation": { ... } }`.
+function parseTargetJson(targetJson: string | null): {
+  target?: string;
+  conversation?: ChatChannelConversation;
+} {
   if (!targetJson) {
+    return {};
+  }
+  const parsed = safeJsonParse<unknown>(targetJson, {});
+  if (!isRecord(parsed)) {
+    return {};
+  }
+  return {
+    target: typeof parsed.target === "string" ? parsed.target : undefined,
+    conversation: parseConversation(parsed.conversation),
+  };
+}
+
+function serializeTargetJson(
+  target: string | undefined,
+  conversation: ChatChannelConversation | undefined,
+): string | null {
+  if (!target && !conversation) {
+    return null;
+  }
+  return JSON.stringify({ ...(target ? { target } : {}), ...(conversation ? { conversation } : {}) });
+}
+
+/** Accepts only the documented shape, so stored or caller-supplied junk never reaches the record. */
+function parseConversation(value: unknown): ChatChannelConversation | undefined {
+  if (!isRecord(value) || (value.kind !== "direct" && value.kind !== "group")) {
     return undefined;
   }
-  const parsed = safeJsonParse<{ target?: unknown }>(targetJson, {});
-  return typeof parsed.target === "string" ? parsed.target : undefined;
+  const counterpartActorId = value.kind === "direct" ? readTrimmedString(value.counterpartActorId) : undefined;
+  const title = readTrimmedString(value.title);
+  return {
+    kind: value.kind,
+    ...(counterpartActorId ? { counterpartActorId } : {}),
+    ...(title ? { title } : {}),
+  };
+}
+
+function readTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function sanitizeWorkspaceId(value: string): string {

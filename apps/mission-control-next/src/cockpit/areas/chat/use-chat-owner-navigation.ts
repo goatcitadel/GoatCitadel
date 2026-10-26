@@ -4,9 +4,14 @@ import { canonicalJsonString, type ChatMode } from "@goatcitadel/contracts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { CockpitNavigationContext } from "../../app/cockpit-navigation-context";
 import { cockpitHref, commitCockpitNavigation, readCockpitHistory } from "../../app/cockpit-history";
-import { chatSelectionHref, chatSelectionMatches, type ChatLocationSelection, type ChatSelectionEvidence } from "./chat-selection-evidence";
+import {
+  chatSelectionHref,
+  chatSelectionMatches,
+  type ChatLocationSelection,
+  type ChatSelectionEvidence,
+} from "./chat-selection-evidence";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { isCockpitConversationLocation } from "../../app/cockpit-compatibility";
+import { isChannelPageLocation, isCockpitConversationLocation } from "../../app/cockpit-compatibility";
 
 /** Review before invoking the controller; cancellation cannot change selection or create a session. */
 export function useChatSelectionReview(identity: string) {
@@ -15,11 +20,26 @@ export function useChatSelectionReview(identity: string) {
   if (selection.current.identity !== identity) selection.current = { identity };
   const renderedSelection = selection.current;
   const mounted = useRef(true);
-  useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  return (action: () => Promise<void> | void) => requestTransition(async ({ isCurrent }) => {
-    if (!isCurrent() || !mounted.current || selection.current !== renderedSelection) return;
-    await action();
-  });
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  return (action: () => Promise<void> | void) =>
+    requestTransition(async ({ isCurrent }) => {
+      if (!isCurrent() || !mounted.current || selection.current !== renderedSelection) return;
+      await action();
+    });
+}
+
+/**
+ * Chat owns the address on a conversation and on a channel page. Only a selection or new chat the operator asked for
+ * (`request`) publishes, so choosing a conversation beside a channel page leaves the page for it, while a retained
+ * selection never takes the page over. Projects stays outside this: it hides Chat.
+ */
+function isOwnedChatLocation(location: string) {
+  return isCockpitConversationLocation(location) || isChannelPageLocation(location);
 }
 
 /**
@@ -36,39 +56,57 @@ export function useChatOwnerNavigation(workspaceId: string, citadelId?: string) 
   if (scope.current.identity !== identity) scope.current = { identity };
   const renderedScope = scope.current;
   const mounted = useRef(true);
-  const pending = useRef<{ selection: ChatLocationSelection; href: string; history: string; scope: object } | null>(null);
+  const pending = useRef<{ selection: ChatLocationSelection; href: string; history: string; scope: object } | null>(
+    null,
+  );
   const [, changed] = useState(0);
   useLayoutEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; pending.current = null; };
-  }, []);
-  const current = useCallback(() => available && mounted.current && scope.current === renderedScope &&
-    getGatewayApiBaseUrl() === installation && isCockpitConversationLocation(window.location.pathname + window.location.search + window.location.hash), [available, installation, renderedScope]);
-  const request = useCallback((_surface: ChatMode, selection: ChatLocationSelection = {}) => {
-    if (!current()) return;
-    const destination = new URL(
-      preserveChannelPlanReviewHref(chatSelectionHref(selection), window.location.search, workspaceId),
-      window.location.origin,
-    );
-    const incoming = new URLSearchParams(window.location.search);
-    if (incoming.get("sessionId") === selection.sessionId && incoming.has("assignProjectId")) destination.searchParams.set("assignProjectId", incoming.get("assignProjectId")!);
-    const href = destination.pathname + destination.search + destination.hash;
-    if (cockpitHref(window.location.pathname + window.location.search + window.location.hash) === href) return;
-    pending.current = { selection: { ...selection }, href, history: readCockpitHistory(), scope: renderedScope };
-    changed((version) => version + 1);
-  }, [current, renderedScope, workspaceId]);
-  const publish = useCallback((evidence: ChatSelectionEvidence) => {
-    const request = pending.current;
-    if (!request) return;
-    if (!current() || request.scope !== renderedScope || request.history !== readCockpitHistory()) {
+    return () => {
+      mounted.current = false;
       pending.current = null;
-      return;
-    }
-    if (!chatSelectionMatches(request.selection, evidence, workspaceId)) return;
-    pending.current = null;
-    // No arbitrary href is accepted: the only destination is the bound current Chat selection.
-    commitCockpitNavigation(request.href, undefined,
-      () => current() && request.history === readCockpitHistory());
-  }, [current, renderedScope, workspaceId]);
+    };
+  }, []);
+  const current = useCallback(
+    () =>
+      available &&
+      mounted.current &&
+      scope.current === renderedScope &&
+      getGatewayApiBaseUrl() === installation &&
+      isOwnedChatLocation(window.location.pathname + window.location.search + window.location.hash),
+    [available, installation, renderedScope],
+  );
+  const request = useCallback(
+    (_surface: ChatMode, selection: ChatLocationSelection = {}) => {
+      if (!current()) return;
+      const destination = new URL(
+        preserveChannelPlanReviewHref(chatSelectionHref(selection), window.location.search, workspaceId),
+        window.location.origin,
+      );
+      const incoming = new URLSearchParams(window.location.search);
+      if (incoming.get("sessionId") === selection.sessionId && incoming.has("assignProjectId"))
+        destination.searchParams.set("assignProjectId", incoming.get("assignProjectId")!);
+      const href = destination.pathname + destination.search + destination.hash;
+      if (cockpitHref(window.location.pathname + window.location.search + window.location.hash) === href) return;
+      pending.current = { selection: { ...selection }, href, history: readCockpitHistory(), scope: renderedScope };
+      changed((version) => version + 1);
+    },
+    [current, renderedScope, workspaceId],
+  );
+  const publish = useCallback(
+    (evidence: ChatSelectionEvidence) => {
+      const request = pending.current;
+      if (!request) return;
+      if (!current() || request.scope !== renderedScope || request.history !== readCockpitHistory()) {
+        pending.current = null;
+        return;
+      }
+      if (!chatSelectionMatches(request.selection, evidence, workspaceId)) return;
+      pending.current = null;
+      // No arbitrary href is accepted: the only destination is the bound current Chat selection.
+      commitCockpitNavigation(request.href, undefined, () => current() && request.history === readCockpitHistory());
+    },
+    [current, renderedScope, workspaceId],
+  );
   return { request, publish };
 }

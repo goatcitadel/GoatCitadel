@@ -9,6 +9,7 @@ import {
   ROUTE_CHECK_HINT_DELAY_MS,
   type ComposerProps,
 } from "./ChatTextComposer";
+import { withoutFileInput } from "./channel-file-input";
 // Catalog labels read the query cache; these tests exercise the controls, so the model id stands in for its name.
 vi.mock("../../data/use-model-label", () => ({
   useModelLabel: (_providerId?: string, modelId?: string) => modelId ?? "Unknown model",
@@ -798,5 +799,197 @@ describe("touch and phone composer", () => {
     await act(async () => row.querySelector<HTMLButtonElement>('button[aria-label="Stop response"]')!.click());
     expect(props.onStopActiveTurn).toHaveBeenCalledOnce();
     expect([...row.querySelectorAll("button")].some((button) => button.textContent === "Queue message")).toBe(true);
+  });
+});
+
+describe("channel conversation composer", () => {
+  const ask = { mode: "ask", channelLabel: "Telegram", targetTitle: "You", status: "on" } as const;
+  const post = { mode: "post", channelLabel: "Telegram", targetTitle: "Maya", status: "on" } as const;
+  const buttonNamed = (label: string) =>
+    [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === label);
+  const placeholder = () => container.querySelector("textarea")?.getAttribute("placeholder");
+
+  it("asks GoatCitadel in the operator's own conversation", async () => {
+    const props = composerProps({ channelReply: ask });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(placeholder()).toBe("Ask GoatCitadel. The answer also goes to Telegram.");
+    expect(sendButton().disabled).toBe(false);
+    await act(async () => sendButton().click());
+    expect(props.onSend).toHaveBeenCalledOnce();
+  });
+
+  it("posts verbatim in someone else's or a group conversation", async () => {
+    const props = composerProps({ channelReply: post });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(placeholder()).toBe("Posts to Maya on Telegram as your bot");
+    expect(buttonNamed("Send")).toBeUndefined();
+    await act(async () => buttonNamed("Post to Maya")!.click());
+    expect(props.onSend).toHaveBeenCalledOnce();
+    const group = { ...post, targetTitle: "Family group" };
+    await act(async () => root.render(<ChatTextComposer props={{ ...props, channelReply: group }} />));
+    expect(placeholder()).toBe("Posts to Family group on Telegram as your bot");
+    expect(buttonNamed("Post to Family group")).toBeDefined();
+  });
+
+  it("keeps the submit label for a running turn, an edit and a send in flight", async () => {
+    await act(async () =>
+      root.render(
+        <ChatTextComposer
+          props={composerProps({ channelReply: post, hasActiveStream: true, canSendWhileRunning: true })}
+        />,
+      ),
+    );
+    expect(buttonNamed("Queue message")).toBeDefined();
+    await act(async () =>
+      root.render(<ChatTextComposer props={composerProps({ channelReply: post, editingTurnId: "turn-1" })} />),
+    );
+    expect(buttonNamed("Send edited message")).toBeDefined();
+    await act(async () =>
+      root.render(<ChatTextComposer props={composerProps({ channelReply: post, sending: true })} />),
+    );
+    expect(buttonNamed("Sending…")).toBeDefined();
+  });
+
+  it("hides model and attachment tools in channel conversations", async () => {
+    for (const channelReply of [ask, post]) {
+      await act(async () => root.render(<ChatTextComposer props={composerProps({ channelReply })} />));
+      expect(container.querySelector('button[aria-label="Attach files"]')).toBeNull();
+      expect(container.querySelector('button[aria-label$="Model and reasoning options"]')).toBeNull();
+      expect(container.querySelector('select[aria-label="Web search"]')).toBeNull();
+      expect(buttonNamed("Plan first")).toBeUndefined();
+      expect(buttonNamed("Review answer")).toBeUndefined();
+      expect(container.textContent).not.toContain("Voice and images");
+    }
+    await act(async () => root.render(<ChatTextComposer props={composerProps()} />));
+    expect(container.querySelector('button[aria-label="Attach files"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label$="Model and reasoning options"]')).not.toBeNull();
+  });
+
+  it("keeps the queue, the route notices and the way to a command beside the draft", async () => {
+    const props = composerProps({ channelReply: post, routeBoundaryAckRequired: true });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(buttonNamed("Acknowledge fallback")).toBeDefined();
+    // The model tools are hidden, so the notice cannot send the operator to a model picker.
+    expect(buttonNamed("Choose another model")).toBeUndefined();
+    expect(buttonNamed("Commands and context")).toBeDefined();
+  });
+
+  it("hides the Options sheet's model and attachment tools on a phone", async () => {
+    media.phone = true;
+    media.coarse = true;
+    const props = composerProps({ channelReply: post });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(placeholder()).toBe("Posts to Maya on Telegram as your bot");
+    // The icon button keeps the full label as its accessible name.
+    await act(async () => buttonNamed("Post to Maya")!.click());
+    expect(props.onSend).toHaveBeenCalledOnce();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Composer controls"] button[aria-label="Options"]')!
+        .click(),
+    );
+    const sheet = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Message options"]')!;
+    expect(sheet.querySelector('button[aria-label="Attach files"]')).toBeNull();
+    expect(sheet.querySelector('button[aria-label$="Model and reasoning options"]')).toBeNull();
+    expect(sheet.textContent).not.toContain("Voice and images");
+    expect(sheet.textContent).toContain("Commands and context");
+  });
+
+  it("explains a removed channel beside Send and does not send", async () => {
+    const props = composerProps({ channelReply: { ...post, status: "removed" } });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const reason = container.querySelector("#cockpit-chat-send-reason");
+    expect(reason?.textContent).toBe("This channel was removed. Its conversations stay readable.");
+    expect(container.querySelector("textarea")?.getAttribute("aria-describedby")).toBe("cockpit-chat-send-reason");
+    expect((buttonNamed("Post to Maya") as HTMLButtonElement).disabled).toBe(true);
+    // Nothing invites typing a message that cannot go anywhere: the box is off and says why instead of "Posts to".
+    const draft = container.querySelector("textarea")!;
+    expect(draft.disabled).toBe(true);
+    expect(draft.placeholder).toBe("This channel was removed. Its conversations stay readable.");
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => container.querySelector("textarea")!.dispatchEvent(enter));
+    expect(props.onSend).not.toHaveBeenCalled();
+  });
+
+  it("asks for the channel to be turned back on while it is off", async () => {
+    const props = composerProps({ channelReply: { ...ask, status: "off" } });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(container.querySelector("#cockpit-chat-send-reason")?.textContent).toBe("Turn Telegram back on to reply.");
+    expect(sendButton().disabled).toBe(true);
+    expect(cockpitSendBlockReason(props)).toBe("Turn Telegram back on to reply.");
+    const draft = container.querySelector("textarea")!;
+    expect(draft.disabled).toBe(true);
+    expect(draft.placeholder).toBe("Turn Telegram back on to reply.");
+  });
+
+  it("stays sendable while the channel needs attention", async () => {
+    const props = composerProps({ channelReply: { ...post, status: "needs_attention" } });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(container.querySelector("#cockpit-chat-send-reason")).toBeNull();
+    expect(container.querySelector("textarea")!.disabled).toBe(false);
+    expect(container.querySelector("textarea")!.placeholder).toBe("Posts to Maya on Telegram as your bot");
+    await act(async () => buttonNamed("Post to Maya")!.click());
+    expect(props.onSend).toHaveBeenCalledOnce();
+  });
+
+  it("adds no file from a drop or a paste, and still pastes text", async () => {
+    const base = composerProps({ channelReply: post, onDrop: vi.fn(), onComposerPaste: vi.fn() });
+    await act(async () => root.render(<ChatTextComposer props={withoutFileInput(base)} />));
+    const file = new File(["x"], "a.txt", { type: "text/plain" });
+    const fire = (target: Element, type: string, extra: Record<string, unknown>) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      for (const [key, value] of Object.entries(extra)) Object.defineProperty(event, key, { value });
+      act(() => void target.dispatchEvent(event));
+      return event;
+    };
+    const drop = fire(container.querySelector("form")!, "drop", { dataTransfer: { types: ["Files"], files: [file] } });
+    expect(base.onDrop).not.toHaveBeenCalled();
+    expect(drop.defaultPrevented).toBe(true);
+    const textarea = container.querySelector("textarea")!;
+    const image = fire(textarea, "paste", { clipboardData: { types: ["Files"], files: [file], items: [] } });
+    expect(base.onComposerPaste).not.toHaveBeenCalled();
+    expect(image.defaultPrevented).toBe(true);
+    const text = fire(textarea, "paste", { clipboardData: { types: ["text/plain"], files: [], items: [] } });
+    expect(base.onComposerPaste).toHaveBeenCalledOnce();
+    expect(text.defaultPrevented).toBe(false);
+  });
+
+  it("does not send a file that is attached, with or without a message", async () => {
+    const pendingAttachments = [{ attachmentId: "a", fileName: "a.txt", mimeType: "text/plain", sizeBytes: 1 }];
+    const reason = "Files aren't sent in channel conversations. Remove them to send.";
+    for (const draft of ["", "Hello"]) {
+      const props = composerProps({ channelReply: post, pendingAttachments, draft });
+      await act(async () => root.render(<ChatTextComposer props={props} />));
+      expect((buttonNamed("Post to Maya") as HTMLButtonElement).disabled).toBe(true);
+      expect(container.querySelector("#cockpit-chat-send-reason")?.textContent).toBe(reason);
+      // The chip stays so the operator can remove the file.
+      expect(container.textContent).toContain("a.txt");
+      expect(props.onSend).not.toHaveBeenCalled();
+    }
+  });
+
+  it("shows a neutral, unsendable composer while the channel is being checked", async () => {
+    const props = composerProps({ channelCheck: "checking" });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(placeholder()).toBe("Checking this channel…");
+    expect(container.querySelector("#cockpit-chat-send-reason")?.textContent).toBe("Checking this channel…");
+    expect(sendButton().disabled).toBe(true);
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => container.querySelector("textarea")!.dispatchEvent(enter));
+    expect(props.onSend).not.toHaveBeenCalled();
+    expect(container.querySelector('button[aria-label="Attach files"]')).toBeNull();
+    expect(container.querySelector('button[aria-label$="Model and reasoning options"]')).toBeNull();
+    expect(buttonNamed("Plan first")).toBeUndefined();
+    expect(container.textContent).not.toContain("Voice and images");
+  });
+
+  it("says so when the channel could not be checked", async () => {
+    const props = composerProps({ channelCheck: "unavailable" });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const message = "Couldn't check this channel. Try again from Messaging.";
+    expect(placeholder()).toBe(message);
+    expect(container.querySelector("#cockpit-chat-send-reason")?.textContent).toBe(message);
+    expect(sendButton().disabled).toBe(true);
+    expect(cockpitSendBlockReason(props)).toBe(message);
   });
 });

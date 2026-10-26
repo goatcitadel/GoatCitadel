@@ -67,12 +67,15 @@ export function ChatSessionTitle({ title, dock }: { title: string; dock: Mission
 export function ChatSessionOverflow({
   dock,
   onFork,
+  forkLabel,
   onInspect,
   onOpenBuildEditor,
   phoneActions,
 }: {
   dock: MissionThreadedContextDockProps | null;
   onFork?: () => void;
+  /** Names the fork item when the header names that action differently (a channel conversation continues in a new chat). */
+  forkLabel?: string;
   onInspect?: () => void;
   /** Present while the build editor is available and closed; the way back stays a visible header button. */
   onOpenBuildEditor?: () => void;
@@ -120,6 +123,7 @@ export function ChatSessionOverflow({
             <ChatSessionMenuItems
               dock={dock}
               onFork={onFork}
+              forkLabel={forkLabel}
               onArchive={() => void dock.onToggleArchiveSession().catch(() => undefined)}
             />
           ) : null}
@@ -132,19 +136,24 @@ export function ChatSessionOverflow({
 function ChatSessionMenuItems({
   dock,
   onFork,
+  forkLabel,
   onArchive,
 }: {
   dock: MissionThreadedContextDockProps;
   onFork?: () => void;
+  forkLabel?: string;
   onArchive: () => void;
 }) {
   const archived = Boolean(dock.selectedSession.archivedAt);
   const archivePending = dock.sessionControlPending === "archive";
   return (
     <>
-      <MenuItem className="max-sm:min-h-11" disabled={!onFork} onSelect={() => onFork?.()}>
-        New conversation from latest message
-      </MenuItem>
+      {/* A renamed fork item (a channel conversation's "Continue in a new chat") waits for a turn instead of dimming. */}
+      {forkLabel && !onFork ? null : (
+        <MenuItem className="max-sm:min-h-11" disabled={!onFork} onSelect={() => onFork?.()}>
+          {forkLabel ?? "New conversation from latest message"}
+        </MenuItem>
+      )}
       <MenuItem
         className="max-sm:min-h-11"
         disabled={Boolean(dock.sessionControlPending)}

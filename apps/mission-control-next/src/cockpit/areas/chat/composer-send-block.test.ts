@@ -73,3 +73,64 @@ describe("composerSendBlock with command suggestions", () => {
     ).toBe("blocked");
   });
 });
+
+describe("composerSendBlock in a channel conversation", () => {
+  const reply = (status: "on" | "off" | "needs_attention" | "removed") => ({
+    mode: "post" as const,
+    channelLabel: "Telegram",
+    targetTitle: "Maya",
+    status,
+  });
+
+  it("blocks replies in a removed channel's conversation", () => {
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelReply: reply("removed") }))).toEqual({
+      kind: "channel-removed",
+      message: "This channel was removed. Its conversations stay readable.",
+    });
+  });
+
+  it("blocks replies while the channel is off", () => {
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelReply: reply("off") }))).toEqual({
+      kind: "channel-off",
+      message: "Turn Telegram back on to reply.",
+    });
+  });
+
+  it("leaves a channel that is on or needs attention sendable", () => {
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelReply: reply("on") }))).toBeNull();
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelReply: reply("needs_attention") }))).toBeNull();
+  });
+
+  it("still shows the read-only earlier version first", () => {
+    expect(composerSendBlock(sendProps({ historicalReadOnly: true, channelReply: reply("removed") }))?.kind).toBe(
+      "historical",
+    );
+  });
+
+  it("does not send while the channel is still being checked", () => {
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelCheck: "checking" }))).toEqual({
+      kind: "channel-checking",
+      message: "Checking this channel…",
+    });
+  });
+
+  it("does not send when the channel could not be checked", () => {
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelCheck: "unavailable" }))).toEqual({
+      kind: "channel-unavailable",
+      message: "Couldn't check this channel. Try again from Messaging.",
+    });
+  });
+
+  it("does not send files in a channel conversation, alone or with a message", () => {
+    const files = [{ attachmentId: "a", fileName: "a.txt", mimeType: "text/plain", sizeBytes: 1 }];
+    const message = "Files aren't sent in channel conversations. Remove them to send.";
+    expect(composerSendBlock(sendProps({ draft: "", pendingAttachments: files, channelReply: reply("on") }))).toEqual({
+      kind: "blocked",
+      message,
+    });
+    expect(
+      composerSendBlock(sendProps({ draft: "Hello", pendingAttachments: files, channelReply: reply("on") })),
+    ).toEqual({ kind: "blocked", message });
+    expect(composerSendBlock(sendProps({ draft: "", pendingAttachments: files }))).toBeNull();
+  });
+});

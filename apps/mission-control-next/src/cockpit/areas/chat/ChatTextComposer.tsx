@@ -5,6 +5,7 @@ import { useEffect, useId, useState, type FormEvent, type KeyboardEvent } from "
 import { Button } from "../../ui/Button";
 import { ChatComposerPhoneActions, ChatComposerTools } from "./ChatComposerTools";
 import { ChatComposerPalette } from "./ChatComposerPalette";
+import { channelReplyBlock, channelReplyPlaceholder, channelReplySubmitLabel } from "./channel-composer";
 import { ChatRunVariables } from "./ChatRunVariables";
 import { committedCommandDraft, composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
 import { isImeEnter } from "./ime";
@@ -145,7 +146,7 @@ export function ChatTextComposer({
         ? "Sending…"
         : props.editingTurnId
           ? "Send edited message"
-          : "Send";
+          : channelReplySubmitLabel(props.channelReply);
   // On wider layouts a plain "why not" sits beside Send, where the eye already is; the long form keeps its own line.
   const reasonBesideSend = !phone && visibleReason !== null && visibleReason.kind !== "historical";
   const reasonNode = visibleReason ? (
@@ -291,7 +292,12 @@ export function ChatTextComposer({
             }
             value={capture?.summary ?? props.draft}
             readOnly={Boolean(capture)}
-            disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
+            // A removed or switched-off channel takes no reply, so its box is off and its placeholder says why.
+            disabled={
+              props.historicalReadOnly ||
+              Boolean(props.sessionControlBanner) ||
+              channelReplyBlock(props.channelReply) !== null
+            }
             aria-describedby={visibleReason ? REASON_ID : undefined}
             onChange={(event) => {
               setDismissedDraft(null);
@@ -301,7 +307,7 @@ export function ChatTextComposer({
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={() => setComposing(false)}
             onPaste={props.onComposerPaste}
-            placeholder="Message GoatCitadel…"
+            placeholder={channelReplyPlaceholder(props.channelReply, props.channelCheck)}
             className={`cockpit-chat-draft block min-h-16 resize-none field-sizing-content rounded-md border border-line-control bg-canvas px-3 py-2 text-md text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60 ${phone ? "min-w-0 flex-1" : "mt-2 w-full"}`}
           />
           {phone ? (
@@ -376,10 +382,10 @@ export function ChatTextComposer({
                 type="submit"
                 variant="primary"
                 size="sm"
-                className="max-sm:h-11 max-sm:px-4"
+                className="max-w-64 max-sm:h-11 max-sm:px-4"
                 disabled={!canSubmit}
               >
-                {submitLabel}
+                <span className="truncate">{submitLabel}</span>
               </Button>
             )}
           </div>

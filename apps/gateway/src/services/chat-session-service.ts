@@ -18,6 +18,8 @@ import {
   ConflictError,
   CHAT_SESSION_FORK_MANIFEST_VERSION,
   isChatTurnTerminalStatus,
+  NotFoundError,
+  type ChatChannelConversation,
   type ChatSessionBindingRecord,
   type ChatSessionBulkArchiveInput,
   type ChatSessionBulkArchiveResult,
@@ -42,6 +44,7 @@ import {
   buildChatSessionActivity,
   buildChatSessionUpdatedPayload,
   deriveChatSessionTitleFromContent,
+  resolveChannelConnectionId,
   splitChatPrefsPatch,
   toChatSessionRecord,
 } from "./chat-session-utils.js";
@@ -86,10 +89,18 @@ export async function listChatSessions(
   const scope = query.scope ?? "all";
   const view = query.view ?? "active";
   const includeHidden = query.includeHidden ?? false;
-  if (query.sessionIds !== undefined && (!query.sessionIds.length || query.sessionIds.length > 100 || query.sessionId !== undefined || query.cursor !== undefined)) {
+  if (
+    query.sessionIds !== undefined &&
+    (!query.sessionIds.length ||
+      query.sessionIds.length > 100 ||
+      query.sessionId !== undefined ||
+      query.cursor !== undefined)
+  ) {
     throw new Error("Session membership requires 1 to 100 IDs and no sessionId or cursor");
   }
-  const limit = query.sessionIds?.length ?? (query.sessionId !== undefined ? 1 : Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200))));
+  const limit =
+    query.sessionIds?.length ??
+    (query.sessionId !== undefined ? 1 : Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200))));
   const candidates = await storage.chatSessionLists.listCandidates({
     workspaceId,
     sessionId: query.sessionId,
@@ -126,6 +137,7 @@ export async function listChatSessions(
     sessionIds,
     workspaceId,
   );
+  const bindingsBySessionId = await storage.chatSessionBindings.listBySessionIds(sessionIds);
 
   let records = sessionIds.flatMap((sessionId) => {
     const session = sessionsById.get(sessionId);
@@ -152,6 +164,7 @@ export async function listChatSessions(
           .slice(0, 6)
           .map(buildGeneratedArtifactReference),
         forkRelationships: forkRelationshipsBySessionId.get(session.sessionId),
+        channelConnectionId: resolveChannelConnectionId(bindingsBySessionId.get(session.sessionId)),
       },
     );
   });
@@ -1187,6 +1200,24 @@ export async function getChatSessionBinding(
   return await deps.storage.chatSessionBindings.get(sessionId);
 }
 
+/**
+ * The binding a session holds now, read without initialising or rewriting it; undefined once the session or its
+ * binding is gone. A queued desk question is checked against this, never against a binding refreshed for it.
+ */
+export async function findChatSessionBinding(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+): Promise<ChatSessionBindingRecord | undefined> {
+  try {
+    return await getChatSessionBinding(deps, sessionId);
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 export async function setChatSessionBinding(
   deps: ChatSessionDependencies,
   input: {
@@ -1239,8 +1270,10 @@ export async function ensureInboundIntegrationChatSession(
     connectionId: string;
     target?: string;
     displayName?: string;
+    /** Written on every call, not only when the session is created, so renamed groups stay current. */
+    conversation?: ChatChannelConversation;
   },
-): Promise<{ sessionId: string; sessionKey: string }> {
+): Promise<{ sessionId: string; sessionKey: string; conversation?: ChatChannelConversation }> {
   const connectionId = input.connectionId.trim();
   const target = input.target?.trim();
   if (!connectionId || !target) {
@@ -1248,6 +1281,8 @@ export async function ensureInboundIntegrationChatSession(
   }
   const resolution = resolveSessionRoute(input.route);
   const now = new Date().toISOString();
+  // What the binding holds afterwards: the details just written, or the stored ones this call kept.
+  let conversation: ChatChannelConversation | undefined;
 
   await deps.storage.runImmediateTransaction(async () => {
     const connection = await deps.storage.integrationConnections.get(connectionId);
@@ -1273,17 +1308,19 @@ export async function ensureInboundIntegrationChatSession(
     }
     await deps.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
     await deps.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
-    await deps.storage.chatSessionBindings.upsert(
+    const binding = await deps.storage.chatSessionBindings.upsert(
       {
         sessionId: resolution.sessionId,
         workspaceId,
         transport: "integration",
         connectionId,
         target,
+        conversation: input.conversation,
         writable: true,
       },
       now,
     );
+    conversation = binding.conversation;
   });
 
   await deps.ensureChatSessionRuntimeGrants(resolution.sessionId);
@@ -1293,7 +1330,7 @@ export async function ensureInboundIntegrationChatSession(
     sessionId: resolution.sessionId,
     transport: "integration",
   });
-  return resolution;
+  return conversation ? { ...resolution, conversation } : resolution;
 }
 
 export async function getChatSessionPrefs(

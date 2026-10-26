@@ -1027,7 +1027,7 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "Discord",
     "Discord bot integration with gateway mode by default and an advanced bridge fallback.",
     "beta",
-    ["oauth", "bot-token"],
+    ["bot-token"],
     ["chat", "threads", "attachments", "reactions", "unsend", "inbound"],
   ),
   entry(
@@ -1036,7 +1036,7 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "Signal",
     "Signal messenger bridge with optional inbound from the signal-cli daemon event stream.",
     "beta",
-    ["device-link"],
+    ["bridge"],
     ["chat", "groups", "inbound"],
   ),
   entry(
@@ -1045,8 +1045,8 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "WhatsApp",
     "WhatsApp business bridge.",
     "beta",
-    ["oauth", "token"],
-    ["chat", "attachments", "direct", "reactions"],
+    ["token"],
+    ["chat", "attachments", "direct", "reactions", "inbound"],
   ),
   entry(
     "channel",
@@ -1055,7 +1055,7 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "Telegram bot integration.",
     "beta",
     ["bot-token"],
-    ["chat", "threads", "attachments", "reactions", "unsend", "typing"],
+    ["chat", "threads", "attachments", "reactions", "unsend", "typing", "inbound"],
   ),
   entry(
     "channel",
@@ -1100,7 +1100,7 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "Slack app/bot integration.",
     "beta",
     ["oauth"],
-    ["chat", "threads", "mentions", "attachments", "reactions", "unsend"],
+    ["chat", "threads", "mentions", "attachments", "reactions", "unsend", "inbound"],
   ),
   entry(
     "channel",
@@ -1108,7 +1108,7 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "Google Chat",
     "Google Chat app and webhook integration.",
     "beta",
-    ["oauth", "token"],
+    ["webhook", "service-account"],
     ["chat", "spaces", "threads", "attachments"],
     { pluginId: "googlechat" },
   ),
@@ -1136,7 +1136,7 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "Microsoft Teams",
     "Teams bot/webhook integration.",
     "beta",
-    ["oauth", "webhook"],
+    ["webhook"],
     ["chat", "threads", "attachments"],
     { pluginId: "msteams" },
   ),
@@ -1156,7 +1156,7 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "LINE Messaging API integration.",
     "beta",
     ["token"],
-    ["chat", "groups", "rooms", "direct"],
+    ["chat", "groups", "rooms", "direct", "inbound"],
   ),
   entry(
     "channel",

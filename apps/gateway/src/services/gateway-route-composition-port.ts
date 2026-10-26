@@ -257,6 +257,7 @@ export interface GatewayRouteCompositionPort {
   runChatResearch: RouteDependencyMethod<"chatSupport", "research">["runChatResearch"];
   runDatabaseCutover: RouteDependencyMethod<"authAdmin", "runDatabaseCutover">;
   runOrchestrationPlan: RouteDependencyMethod<"orchestration", "runOrchestrationPlan">;
+  sendOperatorDeskMessage: RouteDependencyMethod<"integrationWebhooks", "sendOperatorDeskMessage">;
   setChatSessionBinding: RouteDependencyMethod<"chatSessions", "setChatSessionBinding">;
   setSkillState: RouteDependencyMethod<"skills", "setSkillState">;
   suggestChatDelegation: RouteDependencyMethod<"chatDelegate", "suggestChatDelegation">;
@@ -485,6 +486,7 @@ export function createGatewayRouteCompositionPort(
     runChatResearch: gateway.runChatResearch.bind(gateway),
     runDatabaseCutover: gateway.runDatabaseCutover.bind(gateway),
     runOrchestrationPlan: gateway.runOrchestrationPlan.bind(gateway),
+    sendOperatorDeskMessage: gateway.sendOperatorDeskMessage.bind(gateway),
     setChatSessionBinding: gateway.setChatSessionBinding.bind(gateway),
     setSkillState: gateway.setSkillState.bind(gateway),
     suggestChatDelegation: gateway.suggestChatDelegation.bind(gateway),

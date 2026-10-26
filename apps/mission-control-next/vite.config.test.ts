@@ -243,7 +243,7 @@ it.each([
   expect(select(optional.replaceAll("/", "\\"), graph)).toBeUndefined();
 });
 
-it.each(["tooltip", "tabs"])(
+it.each(["tooltip", "tabs", "switch"])(
   "leaves lazy-only Radix %s placement to actual imports and keeps mandatory native Dialog ownership",
   (name) => {
     const optional = "C:/repo/node_modules/@radix-ui/react-" + name + "/dist/index.mjs";

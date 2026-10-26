@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as chat from "./chat";
 import * as integrations from "./integrations";
 import * as memory from "./memory";
 import * as opsQuality from "./ops-quality";
@@ -44,8 +45,21 @@ describe("shared API wrappers", () => {
       "/api/v1/channels/drafts?catalogId=slack&connectionId=conn+1&limit=25",
     );
     await expectCall(integrations.fetchChannelSetupDrafts(), "/api/v1/channels/drafts");
-    await expectCall(integrations.fetchChannelSetupDraft("draft/1"), "/api/v1/channels/drafts/draft%2F1", { cache: "no-store" });
-    await expectCall(integrations.reviewChannelSetupConnection("draft/1", { expectedRevision: 3, expectedConnectionRevision: "a".repeat(64) }), "/api/v1/channels/drafts/draft%2F1/connection-review", { method: "POST", cache: "no-store", body: JSON.stringify({ expectedRevision: 3, expectedConnectionRevision: "a".repeat(64) }) });
+    await expectCall(integrations.fetchChannelSetupDraft("draft/1"), "/api/v1/channels/drafts/draft%2F1", {
+      cache: "no-store",
+    });
+    await expectCall(
+      integrations.reviewChannelSetupConnection("draft/1", {
+        expectedRevision: 3,
+        expectedConnectionRevision: "a".repeat(64),
+      }),
+      "/api/v1/channels/drafts/draft%2F1/connection-review",
+      {
+        method: "POST",
+        cache: "no-store",
+        body: JSON.stringify({ expectedRevision: 3, expectedConnectionRevision: "a".repeat(64) }),
+      },
+    );
     await expectCall(integrations.createChannelSetupDraft({ catalogId: "slack" } as never), "/api/v1/channels/drafts", {
       method: "POST",
       body: JSON.stringify({ catalogId: "slack" }),
@@ -160,10 +174,14 @@ describe("shared API wrappers", () => {
       { method: "PATCH", body: JSON.stringify({ enabled: false, expectedRevision: "a".repeat(64) }) },
     );
     await expectCall(integrations.fetchIntegrationConnection("conn/1"), "/api/v1/integrations/connections/conn%2F1");
-    await expectCall(integrations.deleteIntegrationConnection("conn/1", "a".repeat(64)), "/api/v1/integrations/connections/conn%2F1", {
-      method: "DELETE",
-      body: JSON.stringify({ expectedRevision: "a".repeat(64) }),
-    });
+    await expectCall(
+      integrations.deleteIntegrationConnection("conn/1", "a".repeat(64)),
+      "/api/v1/integrations/connections/conn%2F1",
+      {
+        method: "DELETE",
+        body: JSON.stringify({ expectedRevision: "a".repeat(64) }),
+      },
+    );
     await expectCall(
       integrations.fetchIntegrationConnectionDiagnostics("conn/1"),
       "/api/v1/integrations/connections/conn%2F1/diagnostics",
@@ -383,9 +401,15 @@ describe("shared API wrappers", () => {
       "/api/v1/memory/maintenance/recommendations?workspaceId=workspace&limit=1",
     );
     await expectCall(
-      memory.acceptMemoryMaintenanceRecommendation("rec/1", { expectedRevision: "a".repeat(64), expectedPolicyRevision: "b".repeat(64) }),
+      memory.acceptMemoryMaintenanceRecommendation("rec/1", {
+        expectedRevision: "a".repeat(64),
+        expectedPolicyRevision: "b".repeat(64),
+      }),
       "/api/v1/memory/maintenance/recommendations/rec%2F1/accept",
-      { method: "POST", body: JSON.stringify({ expectedRevision: "a".repeat(64), expectedPolicyRevision: "b".repeat(64) }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision: "a".repeat(64), expectedPolicyRevision: "b".repeat(64) }),
+      },
     );
     await expectCall(
       memory.rejectMemoryMaintenanceRecommendation("rec/1", { expectedRevision: "a".repeat(64) }),
@@ -935,6 +959,25 @@ describe("shared API wrappers", () => {
       {
         method: "POST",
       },
+    );
+  });
+
+  it("fetches the Messaging overview for a workspace", async () => {
+    await expectCall(chat.fetchChatMessaging("default"), "/api/v1/chat/messaging?workspaceId=default", {
+      cache: "no-store",
+    });
+    const signal = new AbortController().signal;
+    await expectCall(chat.fetchChatMessaging("team/one", { signal }), "/api/v1/chat/messaging?workspaceId=team%2Fone", {
+      cache: "no-store",
+      signal,
+    });
+  });
+
+  it("marks a session read through a timestamp", async () => {
+    await expectCall(
+      chat.markChatSessionRead("session/1", "2026-10-25T10:00:00.000Z"),
+      "/api/v1/chat/sessions/session%2F1/read",
+      { method: "POST", body: JSON.stringify({ readThrough: "2026-10-25T10:00:00.000Z" }) },
     );
   });
 

@@ -819,3 +819,22 @@ it("retains Chat state but suspends its effects while native Projects owns the d
   await vi.waitFor(() => expect(window.location.pathname).toBe("/chat/projects/project-a"));
   expect(chatArea.effects).toBe(0);
 });
+
+it("opens /chat/messaging/<connectionId> as a channel page, not a conversation", async () => {
+  window.history.replaceState(null, "", "/chat/messaging/conn-1?shell=cockpit");
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CockpitNavigationProvider>
+          <CockpitShell />
+        </CockpitNavigationProvider>
+      </QueryClientProvider>,
+    ),
+  );
+  // Chat hosts the page beside its Messaging list, so it keeps running instead of being suspended like Projects.
+  expect(container.textContent).toContain("Chat content");
+  expect(chatArea.effects).toBe(1);
+  expect(container.textContent).not.toContain("Page not found");
+  expect(container.textContent).not.toContain("Native projects content");
+  expect(window.location.pathname).toBe("/chat/messaging/conn-1");
+});

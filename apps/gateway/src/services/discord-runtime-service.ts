@@ -10,6 +10,7 @@ import {
   type ChatInputCommandInteraction,
   type Message,
   type RESTPostAPIApplicationCommandsJSONBody,
+  type User,
 } from "discord.js";
 import { logger } from "@goatcitadel/gateway-core";
 import {
@@ -18,6 +19,7 @@ import {
 } from "./shared-host-lifecycle-service.js";
 import type {
   ChannelTypingResult,
+  ChatChannelConversation,
   DiscordGuildAccessRule,
   DiscordInboundDmPolicy,
   DiscordPairingRecord,
@@ -30,6 +32,7 @@ import {
   findSharedChannelCommand,
   normalizeChannelApprovalToken,
 } from "./channel-command-contract.js";
+import { buildChannelConversation } from "./channel-conversation.js";
 
 const log = logger.child("discord-runtime-service");
 
@@ -43,6 +46,8 @@ type DiscordInboundEnvelope = {
   sourceMessageId: string;
   peer?: string;
   room?: string;
+  /** Whether this is a DM or a server channel, so the session binding can remember it. */
+  conversation?: ChatChannelConversation;
   threadId?: string;
   metadata?: Record<string, unknown>;
   /** Audio attachment reference; the bridge decides (voice flag) whether it becomes a voice turn. */
@@ -845,6 +850,7 @@ export class DiscordRuntimeService {
         sourceMessageId: message.id,
         peer: message.author.id,
         room: message.channelId,
+        conversation: buildDiscordGuildConversation(message.channel.name),
         threadId: message.channel.isThread() ? message.channel.id : undefined,
         metadata: {
           guildId: message.guildId,
@@ -892,6 +898,7 @@ export class DiscordRuntimeService {
       sourceCommandId: interaction.id,
       peer: interaction.user.id,
       room: interaction.channelId,
+      conversation: buildDiscordGuildConversation(interaction.channel?.name),
       threadId: interaction.channel?.isThread() ? interaction.channel.id : undefined,
       metadata: {
         guildId: interaction.guildId,
@@ -939,6 +946,7 @@ export class DiscordRuntimeService {
       return false;
     }
     const voiceAttachment = readDiscordVoiceAttachment(message);
+    const conversation = buildDiscordDirectConversation(message.author);
     const approved = await this.callbacks.findApprovedPairing(connection.connectionId, message.author.id);
     if (approved) {
       await this.callbacks.touchPairing(approved.pairingId);
@@ -953,6 +961,7 @@ export class DiscordRuntimeService {
           sourceMessageId: message.id,
           peer: message.author.id,
           room: message.channelId,
+          conversation,
           metadata: {
             dm: true,
             runtimeMode: "gateway",
@@ -974,6 +983,7 @@ export class DiscordRuntimeService {
           sourceMessageId: message.id,
           peer: message.author.id,
           room: message.channelId,
+          conversation,
           metadata: {
             dm: true,
             runtimeMode: "gateway",
@@ -1008,6 +1018,7 @@ export class DiscordRuntimeService {
     }
     const approved = await this.callbacks.findApprovedPairing(connection.connectionId, interaction.user.id);
     const commandText = buildCommandTextFromInteraction(interaction);
+    const conversation = buildDiscordDirectConversation(interaction.user);
     if (approved) {
       await this.callbacks.touchPairing(approved.pairingId);
       await this.handleAcceptedCommand(interaction, {
@@ -1020,6 +1031,7 @@ export class DiscordRuntimeService {
         sourceCommandId: interaction.id,
         peer: interaction.user.id,
         room: interaction.channelId,
+        conversation,
         metadata: {
           dm: true,
           runtimeMode: "gateway",
@@ -1039,6 +1051,7 @@ export class DiscordRuntimeService {
         sourceCommandId: interaction.id,
         peer: interaction.user.id,
         room: interaction.channelId,
+        conversation,
         metadata: {
           dm: true,
           runtimeMode: "gateway",
@@ -1121,6 +1134,22 @@ function readDiscordSecret(config: Record<string, unknown>, key: string, envKey:
 function readConfigString(config: Record<string, unknown>, key: string): string | undefined {
   const value = config[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+// A DM is a conversation with the author, named the way inbound messages name them.
+function buildDiscordDirectConversation(
+  user: Pick<User, "id" | "globalName" | "displayName" | "username">,
+): ChatChannelConversation {
+  return buildChannelConversation({
+    kind: "direct",
+    counterpartActorId: user.id,
+    title: user.globalName ?? user.displayName ?? user.username,
+  });
+}
+
+// A server channel (or thread) is a group, titled after the channel when Discord names it.
+function buildDiscordGuildConversation(channelName: string | null | undefined): ChatChannelConversation {
+  return buildChannelConversation({ kind: "group", title: channelName ? `#${channelName}` : undefined });
 }
 
 function supportsTyping(channel: Channel): channel is Channel & { sendTyping: () => Promise<unknown> } {
