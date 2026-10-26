@@ -183,6 +183,61 @@ describe("buildCapabilityConnectors", () => {
     expect(item.name).toBe("Linear");
   });
 
+  it("reports a saved remote server's own endpoint host, not the template's", () => {
+    const stripe = template({
+      templateId: "stripe",
+      label: "Stripe",
+      url: "https://mcp.stripe.com",
+      networkHosts: ["mcp.stripe.com"],
+    });
+    const proxied = only(
+      buildCapabilityConnectors(
+        input({
+          templates: [stripe],
+          servers: [server({ label: "Stripe", url: "https://proxy.example.test:8443/mcp" })],
+        }),
+      ),
+    );
+    expect(proxied.networkHosts).toEqual(["proxy.example.test:8443"]);
+
+    // An endpoint that can't be read names no host rather than the template's.
+    const unreadable = only(
+      buildCapabilityConnectors(
+        input({ templates: [stripe], servers: [server({ label: "Stripe", url: "not a url" })] }),
+      ),
+    );
+    expect(unreadable.networkHosts).toEqual([]);
+  });
+
+  it("keeps the template's hosts for a saved server that runs on this computer", () => {
+    const local = template({
+      templateId: "context7",
+      label: "Context7",
+      transport: "stdio",
+      url: undefined,
+      command: "npx",
+      args: ["-y", "@upstash/context7-mcp@1.0.31"],
+      networkHosts: ["context7.com"],
+    });
+    const item = only(
+      buildCapabilityConnectors(
+        input({
+          templates: [local],
+          servers: [
+            server({
+              label: "Context7",
+              transport: "stdio",
+              url: undefined,
+              command: "npx",
+              args: ["-y", "@upstash/context7-mcp@1.0.31"],
+            }),
+          ],
+        }),
+      ),
+    );
+    expect(item.networkHosts).toEqual(["context7.com"]);
+  });
+
   it("names saved servers by their own label when several match one template", () => {
     const items = buildCapabilityConnectors(
       input({

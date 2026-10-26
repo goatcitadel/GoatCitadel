@@ -145,7 +145,7 @@ function serverParts(
     auth: mcpAuth(server.authType),
     runsOnThisDevice: server.transport === "stdio",
     ...(command ? { command } : {}),
-    networkHosts: [...(template?.networkHosts ?? [])],
+    networkHosts: savedServerHosts(server, template),
     ...(template ? { templateId: template.templateId } : {}),
     serverId: server.serverId,
     ...(server.revision !== undefined ? { serverRevision: server.revision } : {}),
@@ -153,6 +153,21 @@ function serverParts(
     chat: mcpChat(input.chat),
     ...(server.lastError ? { lastError: server.lastError } : {}),
   };
+}
+
+/**
+ * Where a saved server connects. A remote server names the host of its own saved endpoint, which the operator may have
+ * pointed away from the template's (a proxy, a self-hosted copy); an endpoint that can't be read names none rather than
+ * the template's. A server that runs on this computer has no endpoint, so it keeps the hosts its template declares.
+ */
+function savedServerHosts(server: McpServerRecord, template: McpServerTemplateRecord | undefined): string[] {
+  if (server.transport === "stdio") return [...(template?.networkHosts ?? [])];
+  if (!server.url) return [];
+  try {
+    return [new URL(server.url).host];
+  } catch {
+    return [];
+  }
 }
 
 function integrationParts(input: CapabilityConnectorsProjectionInput): ItemParts[] {
