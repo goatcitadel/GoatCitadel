@@ -1185,3 +1185,54 @@ function count(storage: Storage, table: string, where: string): number {
   const row = storage.db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${where}`).get<{ count: number }>();
   return Number(row?.count ?? 0);
 }
+
+describe("chat deletion keeps spend history", () => {
+  it("re-keys usage and cost rows to a tombstone so totals do not drop", () => {
+    const storage = createStorage();
+    const range = ["2026-07-13T00:00:00.000Z", "2026-07-13T23:59:59.999Z"] as const;
+    for (const [index, sessionId] of ["session-a", "session-b"].entries()) {
+      seedSession(storage, sessionId);
+      const eventId = `usage-event-${index}`;
+      storage.modelUsageEvents.begin(
+        beginInput({
+          eventId,
+          idempotencyKey: `usage-key-${index}`,
+          operationId: `turn-${index}:call-0`,
+          sessionId,
+          turnId: `turn-${index}`,
+          inputRateUsdPerMillion: 1000,
+          outputRateUsdPerMillion: 3000,
+        }),
+      );
+      storage.modelUsageEvents.acceptTransport(eventId, "gateway-owner-a", "2999-01-01T00:00:00.000Z");
+      storage.modelUsageEvents.finalize(
+        eventId,
+        zeroFinal({ inputTokens: 100, outputTokens: 50, cachedInputTokens: 0, costUsd: 0.25 }),
+      );
+    }
+    const totalBefore = storage.costLedger.summary("day", ...range).reduce((sum, row) => sum + row.costUsd, 0);
+    assert.equal(totalBefore, 0.5);
+
+    for (const sessionId of ["session-a", "session-b"]) {
+      assert.equal(storage.deleteChatSessionData(sessionId).deleted, true);
+    }
+
+    const rows = storage.db
+      .prepare("SELECT session_id, workspace_id, input_tokens, output_tokens, cost_usd FROM model_usage_events")
+      .all() as Array<Record<string, unknown>>;
+    assert.equal(rows.length, 2);
+    for (const row of rows) {
+      assert.equal(row.session_id, "deleted-session");
+      assert.equal(row.workspace_id, "workspace-a");
+      assert.equal(row.input_tokens, 100);
+      assert.equal(row.output_tokens, 50);
+      assert.equal(row.cost_usd, 0.25);
+    }
+    const totalAfter = storage.costLedger.summary("day", ...range).reduce((sum, row) => sum + row.costUsd, 0);
+    assert.equal(totalAfter, totalBefore);
+    const remainingCost = storage.db
+      .prepare("SELECT COUNT(1) AS count FROM cost_ledger WHERE session_id NOT IN ('deleted-session')")
+      .get() as { count: number };
+    assert.equal(remainingCost.count, 0);
+  });
+});

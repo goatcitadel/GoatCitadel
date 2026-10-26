@@ -95,7 +95,9 @@ describe("Storage.deleteChatSessionData", () => {
     assert.equal(countRows(storage, "tool_access_decisions", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "tool_invocations", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "policy_blocks", "session_id = 'sess-1'"), 0);
+    // Spend history is kept, detached from the deleted chat.
     assert.equal(countRows(storage, "cost_ledger", "session_id = 'sess-1'"), 0);
+    assert.equal(countRows(storage, "cost_ledger", "session_id = 'deleted-session'"), 1);
     assert.equal(countRows(storage, "voice_sessions", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "mesh_session_owners", "session_id = 'sess-1'"), 0);
 
