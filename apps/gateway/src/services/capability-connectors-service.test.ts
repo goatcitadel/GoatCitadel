@@ -223,6 +223,33 @@ describe("CapabilityConnectorsService", () => {
     expect(response.issues).toHaveLength(1);
   });
 
+  it("lists issues by source, then message, whatever order the reads finish in", async () => {
+    const later = async (): Promise<never> => {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      throw new Error("slow source failed");
+    };
+    const service = new CapabilityConnectorsService(
+      sources({
+        // The slowest read fails last, and the fastest ones fail in the reverse of the sorted order.
+        listMcpServers: vi.fn(later),
+        readChatAvailability: vi.fn(async () => Promise.reject(new Error("settings unreadable"))),
+        listWebSearchStatuses: vi.fn(() => {
+          throw new Error("keychain locked");
+        }),
+        listIntegrationCatalog: vi.fn(async () => Promise.reject(new Error("catalog exploded"))),
+      }),
+    );
+
+    const response = await service.list("default");
+
+    expect(response.issues).toEqual([
+      { source: "integration", message: "Couldn't read your connected services." },
+      { source: "mcp_server", message: "Couldn't check whether the AI can use these apps in Chat." },
+      { source: "mcp_server", message: "Couldn't read your saved apps." },
+      { source: "web_search", message: "Couldn't read your web search keys." },
+    ]);
+  });
+
   it("leaves Gateway-owned servers out of the list", async () => {
     const service = new CapabilityConnectorsService(
       sources({

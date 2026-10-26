@@ -152,8 +152,19 @@ export class CapabilityConnectorsService {
       chat,
     });
 
+    // The reads finish in whatever order they like; the lines the operator sees should not shuffle between refreshes.
+    issues.sort(compareIssues);
+
     return { workspaceId, items, issues, generatedAt: new Date().toISOString() };
   }
+}
+
+/** Source first, then message. Plain code-unit order, so the result does not depend on the machine's locale. */
+function compareIssues(a: CapabilityConnectorsIssue, b: CapabilityConnectorsIssue): number {
+  if (a.source !== b.source) {
+    return a.source < b.source ? -1 : 1;
+  }
+  return a.message === b.message ? 0 : a.message < b.message ? -1 : 1;
 }
 
 /**

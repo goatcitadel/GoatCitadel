@@ -77,13 +77,23 @@ export function buildCapabilityConnectors(input: CapabilityConnectorsProjectionI
       templatesByLabel.set(key, template);
     }
   }
-  const savedLabels = new Set(input.servers.map((server) => labelKey(server.label)));
+  const serversPerLabel = new Map<string, number>();
+  for (const server of input.servers) {
+    const key = labelKey(server.label);
+    serversPerLabel.set(key, (serversPerLabel.get(key) ?? 0) + 1);
+  }
+  const savedLabels = new Set(serversPerLabel.keys());
 
   const parts: ItemParts[] = [
     ...templates
       .filter((template) => !savedLabels.has(labelKey(template.label)))
       .map((template) => templateParts(template, input)),
-    ...input.servers.map((server) => serverParts(server, templatesByLabel.get(labelKey(server.label)), input)),
+    ...input.servers.map((server) => {
+      const key = labelKey(server.label);
+      // Several servers saved from one template share its label; each is then told apart by its own.
+      const sharesTemplateLabel = templatesByLabel.has(key) && (serversPerLabel.get(key) ?? 0) > 1;
+      return serverParts(server, templatesByLabel.get(key), input, sharesTemplateLabel);
+    }),
     ...integrationParts(input),
     ...input.webSearch.map((status) => webSearchParts(status, input)),
   ];
@@ -119,12 +129,14 @@ function serverParts(
   server: McpServerRecord,
   template: McpServerTemplateRecord | undefined,
   input: CapabilityConnectorsProjectionInput,
+  shareTemplateLabel: boolean,
 ): ItemParts {
   const verdict = serverVerdict(server);
   const command = stdioCommand(server);
   return {
     id: `mcp-server:${server.serverId}`,
-    name: template?.label ?? server.label,
+    // The template's label names a server only when it is the one server that matches it.
+    name: shareTemplateLabel ? server.label : (template?.label ?? server.label),
     description: template?.description ?? "",
     kind: "mcp",
     source: "mcp_server",

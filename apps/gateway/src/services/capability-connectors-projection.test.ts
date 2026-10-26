@@ -183,6 +183,26 @@ describe("buildCapabilityConnectors", () => {
     expect(item.name).toBe("Linear");
   });
 
+  it("names saved servers by their own label when several match one template", () => {
+    const items = buildCapabilityConnectors(
+      input({
+        templates: [template({ templateId: "linear", label: "Linear", description: "From the template." })],
+        servers: [server({ serverId: "srv-work", label: "Linear" }), server({ serverId: "srv-home", label: "linear" })],
+      }),
+    );
+
+    const saved = items.filter((item) => item.source === "mcp_server");
+    expect(Object.fromEntries(saved.map((item) => [item.serverId, item.name]))).toEqual({
+      "srv-work": "Linear",
+      "srv-home": "linear",
+    });
+    // The template still lends both servers its description and id.
+    expect(saved.map((item) => [item.templateId, item.description])).toEqual([
+      ["linear", "From the template."],
+      ["linear", "From the template."],
+    ]);
+  });
+
   it("does not merge a saved server into an excluded template", () => {
     const items = buildCapabilityConnectors(
       input({
