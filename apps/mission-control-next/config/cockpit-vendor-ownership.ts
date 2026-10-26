@@ -159,6 +159,9 @@ const AUTOMATIC_OPTIONAL_SDK_LEAVES = [
   "react-use-size",
   "react-arrow",
   "react-direction",
+  // Only the lazy Capabilities area imports it. The umbrella package keeps it reachable from boot code, and boot
+  // ownership would pull react-use-size (above) into a chunk that cannot load before the React vendor chunk.
+  "react-switch",
 ].map((name) => "/node_modules/@radix-ui/" + name + "/dist/index.mjs");
 
 /** Exact build owners only; unknown files and ordinary Native primitives keep existing grouping. */
