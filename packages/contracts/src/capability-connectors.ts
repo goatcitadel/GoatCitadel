@@ -58,6 +58,8 @@ export interface CapabilityConnectorItem {
   approvalPosture?: McpApprovalPosture;
   /** Set on a saved server whose tools are listed per chat, so its approval setting never applies and every call asks. */
   requesterScoped?: boolean;
+  /** Set on an app that can move or spend money, or reach bank data; its changes can't be set to run on their own. */
+  movesMoney?: boolean;
   catalogId?: string;
   connectionId?: string;
   chat: { available: boolean; blockedBy?: CapabilityConnectorChatBlock };
@@ -75,6 +77,11 @@ export interface CapabilityConnectorsResponse {
   workspaceId: string;
   items: CapabilityConnectorItem[];
   issues: CapabilityConnectorsIssue[];
+  /**
+   * Whether a saved server's "what asks first" setting can let any call run on its own on this install. False on a
+   * remote_hardened install, where every MCP call asks whatever the setting says.
+   */
+  approvalReliefAvailable: boolean;
   generatedAt: string;
 }
 

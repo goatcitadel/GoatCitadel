@@ -12,6 +12,7 @@ import {
   type AutonomousActivationGrantEvaluationResult,
   type AutonomousActivationRiskLevel,
   type AutonomousActivationRuntimeEvidence,
+  type DeploymentProfile,
   resolveMcpServerConnectionMode,
   type McpInvokeRequest,
   type McpInvokeResponse,
@@ -633,6 +634,8 @@ export interface ToolInvocationCoordinatorHost {
     payload: Record<string, unknown>,
     options?: RealtimePublishOptions,
   ): Promise<unknown>;
+  /** The install's deployment profile, read per call; a remote_hardened install never relaxes an MCP approval. */
+  getDeploymentProfile(): DeploymentProfile;
   requireMcpServer(serverId: string): Promise<McpServerRecord>;
   listMcpTools(serverId: string): Promise<McpToolRecord[]>;
   matchesWildcard(value: string, pattern: string): boolean;

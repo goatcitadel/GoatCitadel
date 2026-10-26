@@ -33,6 +33,8 @@ export interface CapabilityConnectorsSources {
   listWebSearchStatuses(): MaybePromise<readonly WebSearchCredentialStatus[]>;
   readFirecrawlSettings(): Promise<{ enabled: boolean; baseUrl: string }>;
   readChatAvailability(): Promise<{ staticMcp: boolean; durableExecution: boolean }>;
+  /** Whether a saved server's approval setting can let a call run on its own on this install (never on remote_hardened). */
+  isApprovalReliefAvailable(): boolean;
   /** The refs the workspace can use once its own selection and its Citadel's are both applied. */
   getWorkspaceScope(
     workspaceId: string,
@@ -155,7 +157,13 @@ export class CapabilityConnectorsService {
     // The reads finish in whatever order they like; the lines the operator sees should not shuffle between refreshes.
     issues.sort(compareIssues);
 
-    return { workspaceId, items, issues, generatedAt: new Date().toISOString() };
+    return {
+      workspaceId,
+      items,
+      issues,
+      approvalReliefAvailable: this.sources.isApprovalReliefAvailable(),
+      generatedAt: new Date().toISOString(),
+    };
   }
 }
 

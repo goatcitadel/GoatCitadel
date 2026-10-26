@@ -131,6 +131,24 @@ describe("GatewayService access probes report the MCP approval setting", () => {
     }
   });
 
+  // R49: the probes read the install's profile per call, so a remote_hardened install reports every relaxed call asking.
+  it("reports a relaxed read-only tool asking on a remote_hardened install", async () => {
+    const service = gateway!;
+    const previous = service.config.assistant.deploymentProfile;
+    service.config.assistant.deploymentProfile = "remote_hardened";
+    try {
+      for (const access of await probe("nothing_asks", { readOnlyHint: true })) {
+        expect(access).toMatchObject({ allowed: true, requiresApproval: true });
+        expect(access.reasonCodes).not.toContain("mcp_approval_relief");
+      }
+    } finally {
+      service.config.assistant.deploymentProfile = previous;
+    }
+    for (const access of await probe("nothing_asks", { readOnlyHint: true })) {
+      expect(access.reasonCodes).toContain("mcp_approval_relief");
+    }
+  });
+
   // R46: the connector's own setting overrides the default Safe profile's ask-for-everything for its relieved calls.
   it.each([
     ["a relaxed read-only tool", "nothing_asks", { readOnlyHint: true }, false],

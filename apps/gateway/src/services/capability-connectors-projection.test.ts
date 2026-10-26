@@ -310,6 +310,36 @@ describe("buildCapabilityConnectors", () => {
     expect("approvalPosture" in unset).toBe(false);
   });
 
+  it("marks the apps that can move money, as templates and as saved servers found by host or label", () => {
+    const pay = template({
+      templateId: "paypal",
+      label: "PayPal",
+      url: "https://mcp.paypal.com/sse",
+      transport: "sse",
+      networkHosts: ["mcp.paypal.com"],
+      movesMoney: true,
+    });
+    const listed = only(buildCapabilityConnectors(input({ templates: [pay] })));
+    const renamed = only(
+      buildCapabilityConnectors(
+        input({ templates: [pay], servers: [server({ label: "Team wallet", url: "https://mcp.paypal.com/sse" })] }),
+      ).filter((item) => item.source === "mcp_server"),
+    );
+    const sameLabel = only(
+      buildCapabilityConnectors(
+        input({ templates: [pay], servers: [server({ label: "PayPal", url: "https://proxy.example/mcp" })] }),
+      ),
+    );
+    const other = buildCapabilityConnectors(input({ templates: [pay, template()], servers: [server()] }));
+
+    expect(listed.movesMoney).toBe(true);
+    expect(renamed.movesMoney).toBe(true);
+    expect(sameLabel.movesMoney).toBe(true);
+    expect(other.find((item) => item.id === "mcp-server:server-linear")?.movesMoney).toBeUndefined();
+    expect("movesMoney" in other.find((item) => item.id === "mcp-server:server-linear")!).toBe(false);
+    expect(other.find((item) => item.id === "mcp-template:paypal")?.movesMoney).toBe(true);
+  });
+
   it("marks a saved server that lists its tools per chat", () => {
     const perChat = only(
       buildCapabilityConnectors(input({ servers: [server({ connectionMode: "requester_scoped" })] })),

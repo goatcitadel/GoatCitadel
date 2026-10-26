@@ -202,6 +202,7 @@ export function composeToolsMcpRouteDependencies(
           onCommitted,
         });
       },
+      appendApprovalsAudit: (event) => gateway.storage.audit.append("approvals", event),
     },
     secrets: {
       deleteProviderSecret: (providerId, expectedRevision, storage) =>

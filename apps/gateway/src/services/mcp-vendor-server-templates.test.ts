@@ -41,6 +41,15 @@ describe("vendor MCP server templates", () => {
     }
   });
 
+  it("marks exactly the money-moving servers, so their changes can't be set to run on their own", () => {
+    const marked = MCP_SERVER_TEMPLATES.filter((template) => template.movesMoney === true).map(
+      (template) => template.templateId,
+    );
+    expect(marked.sort()).toEqual(["paypal", "plaid", "rentahuman", "robinhood", "square", "stripe"]);
+    // The flag is only ever true; every other template leaves it out.
+    expect(MCP_SERVER_TEMPLATES.filter((template) => "movesMoney" in template)).toHaveLength(marked.length);
+  });
+
   it("does not ship any xAI or X surface", () => {
     const text = JSON.stringify(MCP_SERVER_TEMPLATES).toLowerCase();
     expect(text).not.toMatch(/\bxai\b|\bgrok\b|api\.x\.com|twitter/u);

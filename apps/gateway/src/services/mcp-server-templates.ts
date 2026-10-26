@@ -150,6 +150,7 @@ const MCP_CORE_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     networkHosts: ["mcp.stripe.com"],
     provenance: { ...MCP_VENDOR_CATALOG_PROVENANCE, documentationUrl: "https://docs.stripe.com/mcp" },
     riskNotes: ["Can create charges, refunds and subscriptions. Review every write before approving it."],
+    movesMoney: true,
   },
   {
     templateId: "context7",

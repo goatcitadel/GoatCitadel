@@ -2774,6 +2774,7 @@ export class GatewayService {
       scheduleApprovalExplanationById: async (approvalId) => await this.scheduleApprovalExplanationById(approvalId),
       publishRealtime: async (eventType, source, payload, options) =>
         await this.publishRealtime(eventType, source, payload, options),
+      getDeploymentProfile: () => this.config.assistant.deploymentProfile,
       requireMcpServer: (serverId) => this.requireMcpServer(serverId),
       listMcpTools: (serverId) => this.listMcpTools(serverId),
       matchesWildcard: (value, pattern) => wildcardMatch(value, pattern),
@@ -3901,6 +3902,7 @@ export class GatewayService {
         webSearchCredentials: this.webSearchCredentials,
         settings: this,
         capabilityScope: composed.capabilityScope,
+        deploymentProfile: () => this.config.assistant.deploymentProfile,
         recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       }),
     };
@@ -9572,7 +9574,15 @@ export class GatewayService {
     request: ToolAccessEvaluateRequest,
     mcpToolBinding: McpToolPolicyBinding | undefined,
   ): Promise<ToolPolicyEvaluateOptions | undefined> {
-    const mcpApprovalRelief = await resolveMcpApprovalRelief(this, request, mcpToolBinding);
+    const mcpApprovalRelief = await resolveMcpApprovalRelief(
+      {
+        getDeploymentProfile: () => this.config.assistant.deploymentProfile,
+        requireMcpServer: (serverId) => this.requireMcpServer(serverId),
+        listMcpTools: (serverId) => this.listMcpTools(serverId),
+      },
+      request,
+      mcpToolBinding,
+    );
     if (!mcpToolBinding && !mcpApprovalRelief) return undefined;
     return {
       ...(mcpToolBinding ? { mcpToolBinding } : {}),

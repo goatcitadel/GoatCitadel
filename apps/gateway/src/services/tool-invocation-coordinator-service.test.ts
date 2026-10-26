@@ -159,6 +159,7 @@ function createHost(overrides: Partial<ToolInvocationCoordinatorHost> = {}): Too
     },
     respondToMcpElicitation: vi.fn(),
     listMcpElicitations: vi.fn(() => []),
+    getDeploymentProfile: vi.fn(() => "trusted_local" as const),
     requireMcpServer: vi.fn(() => createMcpServer()),
     listMcpTools: vi.fn(() => [createMcpTool()]),
     matchesWildcard: vi.fn((value: string, pattern: string) => value === pattern),
@@ -5033,6 +5034,34 @@ describe("MCP approval setting: server-authored relief through real policy", () 
     expect(f.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
   });
 
+  // Under bypass the policy lets every call through, so only the quarantine check can stop it.
+  it.each([
+    ["the mcp.invoke wrapper", {}, () => wrapperCall()],
+    ["a named Chat binding", nativeBindingHost(), () => wrapperCall({ toolName: "mcp.srv-1.tool.echo", args: {} })],
+  ] as const)("gives a relaxed, quarantined server no relief through %s and blocks it", async (_label, host, call) => {
+    const f = fixture({ posture: "nothing_asks", approvalMode: "bypass", server: { trustTier: "quarantined" }, host });
+    const result = await f.coordinator.invokeTool(call());
+    expect(f.policyInvoke).toHaveBeenCalled();
+    expect(f.policyInvoke.mock.calls.every(([, options]) => options?.mcpApprovalRelief === undefined)).toBe(true);
+    expect(result.outcome).not.toBe("executed");
+    expect(JSON.stringify(result)).toContain("quarantined");
+    expect(f.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
+    expect(f.host.staticMcpChatDispatch?.invoke ?? vi.fn()).not.toHaveBeenCalled();
+  });
+
+  // R49: a remote_hardened install never relaxes an approval, whatever the connector's setting and labels say.
+  const HARDENED = { getDeploymentProfile: vi.fn(() => "remote_hardened" as const) };
+  it.each(["approve_risky", "approve_all"] as const)(
+    "asks for a relaxed read on a remote_hardened install (%s)",
+    async (approvalMode) => {
+      const f = fixture({ posture: "nothing_asks", approvalMode, host: HARDENED });
+      expect((await f.coordinator.invokeTool(wrapperCall())).outcome).toBe("approval_required");
+      expect(f.policyInvoke.mock.calls[0]?.[1]).toBeUndefined();
+      expect(await f.coordinator.invokeMcpTool(directCall())).toMatchObject({ ok: false, approvalRequired: true });
+      expect(f.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
+    },
+  );
+
   const FIRST_USE_REFUSAL = { ok: false, error: expect.stringContaining("First-use approval required") };
 
   it.each(["approve_risky", "bypass"] as const)(
@@ -5051,6 +5080,7 @@ describe("MCP approval setting: server-authored relief through real policy", () 
     ["Everything asks", { posture: "everything_asks" }, {}],
     ["an unlabelled tool under Reads are free", { posture: "reads_free", tools: [createMcpTool()] }, {}],
     ["a remote A2A peer", { posture: "reads_free" }, { policyContext: { authActorSource: "a2a_peer" } }],
+    ["a remote_hardened install", { posture: "reads_free", host: HARDENED }, {}],
   ];
   it.each(
     FIRST_USE_KEPT.flatMap(([label, setup, call]) =>

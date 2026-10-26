@@ -361,6 +361,8 @@ export interface McpServerTemplateRecord {
   provenance?: McpServerTemplateProvenance;
   /** Operator-facing risk notes shown before the server is created. */
   riskNotes?: string[];
+  /** It can move or spend money, or reach bank data, so a server saved from it can't be set to `nothing_asks`. */
+  movesMoney?: boolean;
 }
 
 export interface McpServerTemplateProvenance {
@@ -411,12 +413,16 @@ export interface McpToolRecord {
 
 /**
  * Whether a tool call must still ask the operator under a server's approval setting.
- * Pure and fail-closed: an unset setting, an unknown setting, or a tool with no labels asks.
+ * Pure and fail-closed: an unset setting, an unknown setting, or a tool with no labels asks, and a tool marked
+ * destructive asks under every setting, whatever else it is marked.
  */
 export function mcpCallAsksFirst(
   posture: McpApprovalPosture | undefined,
   annotations: McpToolRecord["annotations"],
 ): boolean {
+  if (annotations?.destructiveHint === true) {
+    return true;
+  }
   if (posture === "reads_free") {
     return annotations?.readOnlyHint !== true;
   }
@@ -424,6 +430,17 @@ export function mcpCallAsksFirst(
     return !(annotations?.readOnlyHint === true || annotations?.destructiveHint === false);
   }
   return true;
+}
+
+/**
+ * The setting a server's calls are decided by. A server that can move money never lets changes run on their own, so
+ * a saved `nothing_asks` there counts as `reads_free`.
+ */
+export function capMcpApprovalPosture(
+  posture: McpApprovalPosture | undefined,
+  movesMoney: boolean,
+): McpApprovalPosture | undefined {
+  return movesMoney && posture === "nothing_asks" ? "reads_free" : posture;
 }
 
 export interface McpServerCreateInput {

@@ -157,6 +157,7 @@ function createGateway() {
     },
     storage: {
       approvalInbox: { list: fn(() => []) },
+      audit: { append: fn(async () => undefined) },
       chatSessionMeta: {
         get: fn((sessionId: string) =>
           sessionId === "missing" ? undefined : { sessionId, workspaceId: "workspace-a" },
@@ -531,6 +532,11 @@ describe("route composition loop 15 delegates", () => {
     });
     await expect(deps.mcp.updateMcpServerPolicy("server-1", { allowed: true })).resolves.toMatchObject({
       method: "updateMcpServerPolicy",
+    });
+    await deps.mcp.appendApprovalsAudit({ event: "mcp_server_approval_posture_changed", serverId: "server-1" });
+    expect(gateway.storage.audit.append).toHaveBeenCalledWith("approvals", {
+      event: "mcp_server_approval_posture_changed",
+      serverId: "server-1",
     });
 
     await expect(deps.secrets.deleteProviderSecret("openai", 8, "all")).resolves.toEqual({

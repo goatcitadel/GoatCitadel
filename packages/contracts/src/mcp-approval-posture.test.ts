@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertMcpServerConnectionConfiguration,
+  capMcpApprovalPosture,
   mcpCallAsksFirst,
   type McpApprovalPosture,
   type McpServerConnectionConfiguration,
@@ -85,9 +86,21 @@ describe("mcpCallAsksFirst", () => {
       asks: false,
     },
     {
-      name: "nothing_asks asks when a read-only tool is also marked destructive",
+      name: "nothing_asks asks for a tool marked destructive",
       posture: "nothing_asks",
       annotations: { readOnlyHint: false, destructiveHint: true },
+      asks: true,
+    },
+    {
+      name: "reads_free asks for a tool marked both read-only and destructive",
+      posture: "reads_free",
+      annotations: { readOnlyHint: true, destructiveHint: true },
+      asks: true,
+    },
+    {
+      name: "nothing_asks asks for a tool marked both read-only and destructive",
+      posture: "nothing_asks",
+      annotations: { readOnlyHint: true, destructiveHint: true },
       asks: true,
     },
   ];
@@ -98,6 +111,25 @@ describe("mcpCallAsksFirst", () => {
 
   it("treats an unrecognised setting as asking, so a damaged record never loosens approvals", () => {
     expect(mcpCallAsksFirst("sometimes" as McpApprovalPosture, { readOnlyHint: true })).toBe(true);
+  });
+});
+
+describe("capMcpApprovalPosture", () => {
+  it.each([
+    [undefined, false, undefined],
+    [undefined, true, undefined],
+    ["everything_asks", true, "everything_asks"],
+    ["reads_free", true, "reads_free"],
+    ["nothing_asks", false, "nothing_asks"],
+    ["nothing_asks", true, "reads_free"],
+  ] as const)("keeps %s for a server where moving money is %s as %s", (posture, movesMoney, capped) => {
+    expect(capMcpApprovalPosture(posture, movesMoney)).toBe(capped);
+  });
+
+  it("never lets a money-moving server's non-destructive change run on its own", () => {
+    const capped = capMcpApprovalPosture("nothing_asks", true);
+    expect(mcpCallAsksFirst(capped, { destructiveHint: false })).toBe(true);
+    expect(mcpCallAsksFirst(capped, { readOnlyHint: true })).toBe(false);
   });
 });
 

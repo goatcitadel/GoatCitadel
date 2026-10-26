@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   NotFoundError,
+  type DeploymentProfile,
   type McpApprovalPosture,
   type McpServerRecord,
   type McpToolRecord,
@@ -43,8 +44,13 @@ function tool(annotations?: McpToolRecord["annotations"], toolName = "tool.echo"
   };
 }
 
-function port(record: McpServerRecord | Error, tools: McpToolRecord[] = [tool({ readOnlyHint: true })]) {
+function port(
+  record: McpServerRecord | Error,
+  tools: McpToolRecord[] = [tool({ readOnlyHint: true })],
+  deploymentProfile: DeploymentProfile = "trusted_local",
+) {
   return {
+    getDeploymentProfile: vi.fn(() => deploymentProfile),
     requireMcpServer: vi.fn(async () => {
       if (record instanceof Error) throw record;
       return record;
@@ -98,6 +104,44 @@ describe("resolveMcpApprovalRelief", () => {
     await expect(resolveMcpApprovalRelief(port(new Error("registry unreadable")), wrapper())).rejects.toThrow(
       "registry unreadable",
     );
+  });
+
+  // R49: a remote_hardened install never relaxes an approval, like every other operator relaxation.
+  it.each(["reads_free", "nothing_asks"] as const)(
+    "never relieves a call on a remote_hardened install, even when %s and the labels would allow it",
+    async (posture) => {
+      const hardened = port(server({}, posture), [tool({ readOnlyHint: true })], "remote_hardened");
+      expect(await resolveMcpApprovalRelief(hardened, wrapper())).toBeUndefined();
+      for (const profile of ["local_dev", "trusted_local"] as const) {
+        expect(await resolveMcpApprovalRelief(port(server({}, posture), undefined, profile), wrapper())).toBeDefined();
+      }
+    },
+  );
+
+  // R52: a money-moving server's saved nothing_asks is decided as reads_free.
+  it.each([
+    ["its host", { url: "https://mcp.paypal.com/sse", label: "Team wallet" }],
+    ["its label", { label: "PayPal" }],
+  ] as const)(
+    "caps nothing_asks to reads_free on a server that moves money, found by %s",
+    async (_label, overrides) => {
+      const money = (annotations: McpToolRecord["annotations"]) =>
+        port(server({ transport: "sse", ...overrides }, "nothing_asks"), [tool(annotations)]);
+      expect(await resolveMcpApprovalRelief(money({ destructiveHint: false }), wrapper())).toBeUndefined();
+      expect(await resolveMcpApprovalRelief(money({ readOnlyHint: true }), wrapper())).toBeDefined();
+      // The same non-destructive change still runs on its own on a connector that doesn't move money.
+      const other = port(server({ url: "https://mcp.docs.example/mcp" }, "nothing_asks"), [
+        tool({ destructiveHint: false }),
+      ]);
+      expect(await resolveMcpApprovalRelief(other, wrapper())).toBeDefined();
+    },
+  );
+
+  it("asks for a tool marked destructive under every setting, even when it is also marked read-only", async () => {
+    for (const posture of ["reads_free", "nothing_asks"] as const) {
+      const reads = port(server({}, posture), [tool({ readOnlyHint: true, destructiveHint: true })]);
+      expect(await resolveMcpApprovalRelief(reads, wrapper())).toBeUndefined();
+    }
   });
 
   it("takes a named call's target from its trusted binding, including dotted server ids", async () => {

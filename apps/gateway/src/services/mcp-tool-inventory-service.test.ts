@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -14,9 +14,10 @@ const UPDATED_AT = "2026-10-25T00:00:00.000Z";
 describe("MCP tool inventory annotations", () => {
   let storage: AsyncStorage;
   let store: McpServerStore;
+  let directory: string;
 
   beforeAll(() => {
-    const directory = mkdtempSync(path.join(os.tmpdir(), "gc-mcp-tool-inventory-"));
+    directory = mkdtempSync(path.join(os.tmpdir(), "gc-mcp-tool-inventory-"));
     storage = createSqliteAsyncStorage(
       new Storage({
         dbPath: ":memory:",
@@ -37,6 +38,8 @@ describe("MCP tool inventory annotations", () => {
 
   afterAll(async () => {
     await storage?.close();
+    // Closed first, so nothing still holds a file inside it.
+    if (directory) rmSync(directory, { recursive: true, force: true });
   });
 
   const serverTools = async () => (await store.readTools()).filter((tool) => tool.serverId === "server-1");

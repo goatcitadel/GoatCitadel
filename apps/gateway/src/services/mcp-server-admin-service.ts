@@ -4,6 +4,7 @@ import {
 } from "./mcp-oauth-handshake-service.js";
 import { randomUUID } from "node:crypto";
 import type {
+  McpApprovalPosture,
   McpToolRecord,
   McpOAuthConfig,
   McpServerCreateInput,
@@ -28,6 +29,8 @@ import type { McpConnectionFence } from "./mcp-static-environment-service.js";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
+import { isMoneyMovingMcpServer } from "./mcp-money-moving.js";
+import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { discoverMcpTools } from "./mcp-runtime.js";
 import {
   mcpOAuthPkceStore,
@@ -172,6 +175,7 @@ export async function createMcpServer(
     createdAt: now,
     updatedAt: now,
   };
+  assertMcpApprovalPostureAllowed(created, created.policy.approvalPosture);
   const previous = await host.readMcpServers();
   const servers = [created, ...previous];
   const committed = await host.writeMcpServers(servers, previous);
@@ -231,6 +235,8 @@ export async function updateMcpServer(
       verifiedAt: input.verifiedAt ?? item.verifiedAt,
       updatedAt: now,
     };
+    // Checked against the record as it would be saved, so a rename or new endpoint in the same edit counts too.
+    assertMcpApprovalPostureAllowed(updated, input.policy?.approvalPosture);
     return updated;
   });
   if (!updated) {
@@ -460,6 +466,19 @@ export async function deleteMcpServer(
     });
   }
   return { deleted };
+}
+
+/**
+ * A server that can move money can't be set to let changes run on their own. Every create and policy write checks it
+ * before saving, whichever caller asked. The relief helper also caps a saved value, in case one slipped past.
+ */
+function assertMcpApprovalPostureAllowed(server: McpServerRecord, requested: McpApprovalPosture | undefined): void {
+  // The shipped catalog is the one `listMcpTemplates` lists from; every money template in it counts here.
+  if (requested === "nothing_asks" && isMoneyMovingMcpServer(server, MCP_SERVER_TEMPLATES)) {
+    throw new ValidationError({
+      message: "This connector can move money, so changes can't be set to run on their own.",
+    });
+  }
 }
 
 async function afterMcpCommit(

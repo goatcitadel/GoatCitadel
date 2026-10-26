@@ -1980,6 +1980,8 @@ describe("mcp routes", () => {
         expectedRevision: "a".repeat(64),
       },
       expect.any(Function),
+      // With no signed-in actor on the request, the change is recorded as the operator's.
+      { actorId: "operator" },
     );
     expect(toolsResponse.json()).toEqual({ items: [{ serverId: "srv-1", toolName: "tool.echo" }] });
     expect(policyResponse.json()).toMatchObject({
@@ -2006,6 +2008,7 @@ describe("mcp routes", () => {
       "srv-1",
       { approvalPosture: "nothing_asks", expectedRevision: "a".repeat(64) },
       expect.any(Function),
+      { actorId: "operator" },
     );
 
     service.updateMcpServerPolicy.mockClear();

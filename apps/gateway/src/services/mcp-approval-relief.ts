@@ -1,7 +1,9 @@
 import {
   NotFoundError,
+  capMcpApprovalPosture,
   mcpCallAsksFirst,
   resolveMcpServerConnectionMode,
+  type DeploymentProfile,
   type McpServerRecord,
   type McpToolRecord,
 } from "@goatcitadel/contracts";
@@ -11,9 +13,16 @@ import {
   type McpApprovalRelief,
   type McpToolPolicyBinding,
 } from "@goatcitadel/policy-engine";
+import { isMoneyMovingMcpServer } from "./mcp-money-moving.js";
+import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 
-/** Server-owned state only: the saved server record and the stored `mcp_tools_v1` inventory. */
+/**
+ * Server-owned state only: the install's deployment profile, the saved server record and the stored
+ * `mcp_tools_v1` inventory.
+ */
 export interface McpApprovalReliefPort {
+  /** Read per call, so a profile change applies to the next call. */
+  getDeploymentProfile(): DeploymentProfile;
   requireMcpServer(serverId: string): Promise<McpServerRecord>;
   listMcpTools(serverId: string): Promise<McpToolRecord[]>;
 }
@@ -21,14 +30,25 @@ export interface McpApprovalReliefPort {
 const CANONICAL_MCP_TOOL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$/;
 
 /**
+ * Whether a connector's approval setting can let any call run on its own on this install. A remote_hardened install
+ * never relaxes an approval, matching every other operator relaxation there (the Settings approval skip, bypass,
+ * local overrides).
+ */
+export function isMcpApprovalReliefAvailable(deploymentProfile: DeploymentProfile): boolean {
+  return deploymentProfile !== "remote_hardened";
+}
+
+/**
  * Decide, from server-owned state, whether one MCP call may skip the approval mode's ask (the
  * connector's own setting overrides even an ask-for-everything profile for that call).
  * The target comes from the trusted named binding, or from the exact `mcp.invoke` wrapper fields the
  * transport owner will send. Returns a relief only when the server is a static connector with a saved
  * approval setting and every stored inventory entry for that tool name says the call need not ask.
+ * A server that can move money has a saved `nothing_asks` decided as `reads_free`.
  * Anything missing (server, inventory, tool, labels or setting) returns undefined, so the call asks.
- * A remote A2A peer never gets relief (the policy engine refuses it too). A granted relief is also
- * the only thing that lets a call skip the server's legacy first-use check.
+ * A remote A2A peer never gets relief (the policy engine refuses it too), and neither does any call on
+ * a remote_hardened install. A granted relief is also the only thing that lets a call skip the
+ * server's legacy first-use check.
  */
 export async function resolveMcpApprovalRelief(
   port: McpApprovalReliefPort,
@@ -50,7 +70,11 @@ export async function resolveMcpApprovalRelief(
     if (error instanceof NotFoundError) return undefined;
     throw error;
   }
-  const posture = server.policy.approvalPosture;
+  // The shipped catalog is the one `listMcpTemplates` lists from; every money template in it counts here.
+  const posture = capMcpApprovalPosture(
+    server.policy.approvalPosture,
+    isMoneyMovingMcpServer(server, MCP_SERVER_TEMPLATES),
+  );
   if (
     posture === undefined ||
     !server.enabled ||
@@ -66,6 +90,8 @@ export async function resolveMcpApprovalRelief(
   if (entries.length === 0 || entries.some((tool) => mcpCallAsksFirst(posture, tool.annotations))) {
     return undefined;
   }
+  // Read last and at the moment of minting, so a hardened install never gets a relief whatever else allowed it.
+  if (!isMcpApprovalReliefAvailable(port.getDeploymentProfile())) return undefined;
   return createMcpApprovalRelief({ canonicalName: target.canonicalName });
 }
 

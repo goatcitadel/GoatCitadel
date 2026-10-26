@@ -611,8 +611,11 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const saved = await fastify.services.mcp.updateMcpServerPolicy(params.data.serverId, body.data, () =>
-        markMutationCommitted(request),
+      const saved = await fastify.services.mcp.updateMcpServerPolicy(
+        params.data.serverId,
+        body.data,
+        () => markMutationCommitted(request),
+        { actorId: request.authActorId?.trim() || "operator" },
       );
       await markMutationCommitted(request);
       return reply.send(projectMcpPublicValue(saved));
