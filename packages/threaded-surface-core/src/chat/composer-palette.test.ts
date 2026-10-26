@@ -76,6 +76,21 @@ describe("composer palette", () => {
     expect(rankComposerPaletteItems([...names, ...many], "commands", "hel")).toHaveLength(5);
   });
 
+  it("applies the description cap after source priority, not registration order", () => {
+    const described = (source: ComposerPaletteItem["source"], key: string): ComposerPaletteItem => ({
+      ...item(source, key, "/" + key),
+      description: "Mentions history.",
+    });
+    // Commands are registered before skills; in skills mode the skill must still survive the three-row cap.
+    const rows = [
+      described("commands", "recall"),
+      described("commands", "search"),
+      described("commands", "learn"),
+      described("skills", "timeline"),
+    ];
+    expect(rankComposerPaletteItems(rows, "skills", "history").map((row) => row.key)).toContain("timeline");
+  });
+
   it("ignores the availability label and lists a repeated command once", () => {
     const first = { ...item("commands", "skill-list", "/skill"), applyValue: "/skill", description: "List skills." };
     const second = { ...item("commands", "skill-enable", "/skill"), applyValue: "/skill", description: "Enable one." };

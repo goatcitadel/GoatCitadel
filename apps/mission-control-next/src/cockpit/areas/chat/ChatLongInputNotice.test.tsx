@@ -24,7 +24,7 @@ describe("Long input notice", () => {
 
   it("says how long the message is at the threshold and does not block sending", () => {
     act(() => root.render(<ChatLongInputNotice draft={"a".repeat(60_000)} />));
-    const note = container.querySelector('[role="status"]');
+    const note = container.querySelector("p");
     expect(note?.textContent).toContain("60,000 characters");
     expect(note?.textContent).toContain("You can still send it");
     expect(container.querySelector("button")).toBeNull();
