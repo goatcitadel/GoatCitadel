@@ -13,6 +13,7 @@ import { absorbCompletionStreamChunk, createCompletionStreamAggregate } from "./
 import { isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { parseTransformLlmOutputHookPatch } from "./hook-patch-helpers.js";
 import { StreamIdleTimeoutError } from "./stream-idle-watchdog.js";
+import { MAX_PROVIDER_RETRY_DELAY_MS, readRetryAfterMs } from "./provider-retry-after.js";
 import type { HooksService } from "./hooks-service.js";
 
 export const CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT = 3;
@@ -378,17 +379,25 @@ export function buildProviderRetryCooldownExhaustedError(
   return wrapped;
 }
 
+export interface ChatCompletionRetryDelayOptions {
+  /** Provider Retry-After for the failure being retried; a longer wait than the cap skips the retry. */
+  retryAfterMs?: number;
+  /** Injectable for tests; defaults to Math.random. */
+  random?: () => number;
+}
+
 export async function delayChatCompletionRetry(
   deadline: number | undefined,
   _timeoutMs: number | undefined,
   retryIndex: number,
   signal?: AbortSignal,
+  options: ChatCompletionRetryDelayOptions = {},
 ): Promise<boolean> {
   if (signal?.aborted) {
     return false;
   }
-  const delayMs = chatCompletionRetryDelayMs(retryIndex);
-  if (!hasChatCompletionSecondaryAttemptBudget(deadline, retryIndex)) {
+  const delayMs = chatCompletionRetryDelayWithJitterMs(retryIndex, options);
+  if (delayMs === undefined || !hasChatCompletionDelayBudget(deadline, delayMs)) {
     return false;
   }
   await new Promise<void>((resolve) => {
@@ -417,11 +426,33 @@ export function getRemainingChatCompletionBudgetMs(deadline: number | undefined)
 }
 
 export function hasChatCompletionSecondaryAttemptBudget(deadline: number | undefined, retryIndex: number): boolean {
+  return hasChatCompletionDelayBudget(deadline, chatCompletionRetryDelayMs(retryIndex));
+}
+
+function hasChatCompletionDelayBudget(deadline: number | undefined, delayMs: number): boolean {
   const remainingBudgetMs = getRemainingChatCompletionBudgetMs(deadline);
   return (
-    remainingBudgetMs === undefined ||
-    remainingBudgetMs >= chatCompletionRetryDelayMs(retryIndex) + CHAT_COMPLETION_MIN_SECONDARY_ATTEMPT_WINDOW_MS
+    remainingBudgetMs === undefined || remainingBudgetMs >= delayMs + CHAT_COMPLETION_MIN_SECONDARY_ATTEMPT_WINDOW_MS
   );
+}
+
+/**
+ * Backoff for a same-provider retry: the larger of the fixed step and the provider's Retry-After, plus
+ * up to 20% jitter, capped. Undefined when Retry-After is longer than the cap (retrying early would only
+ * be rejected again), so the caller moves on instead.
+ */
+function chatCompletionRetryDelayWithJitterMs(
+  retryIndex: number,
+  options: ChatCompletionRetryDelayOptions,
+): number | undefined {
+  const retryAfterMs = options.retryAfterMs;
+  if (retryAfterMs !== undefined && retryAfterMs > MAX_PROVIDER_RETRY_DELAY_MS) {
+    return undefined;
+  }
+  const waitMs = Math.max(retryAfterMs ?? 0, chatCompletionRetryDelayMs(retryIndex));
+  const random = options.random ?? Math.random;
+  const jitterMs = Math.floor(Math.min(1, Math.max(0, random())) * waitMs * 0.2);
+  return Math.min(MAX_PROVIDER_RETRY_DELAY_MS, waitMs + jitterMs);
 }
 
 function chatCompletionRetryDelayMs(retryIndex: number): number {
@@ -551,6 +582,11 @@ export function normalizeChatCompletionAttemptError(error: unknown, timeoutMs: n
   const name = normalized.name.toLowerCase();
   const message = normalized.message.toLowerCase();
   if (name.includes("cancel") || message.includes("cancelled")) {
+    return normalized;
+  }
+  if (readRetryAfterMs(normalized) !== undefined || parseParenthesizedHttpStatus(normalized.message) !== undefined) {
+    // A provider HTTP error (e.g. 429 with Retry-After) whose body merely mentions "timeout" must keep its
+    // status and retry delay, or it is no longer classified as transient.
     return normalized;
   }
   if (

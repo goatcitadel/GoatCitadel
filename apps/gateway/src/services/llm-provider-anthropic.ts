@@ -13,6 +13,8 @@ import {
 } from "./llm-pricing.js";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
+import { attachRetryAfter } from "./provider-retry-after.js";
+import { streamSsePayloads } from "./provider-sse-frames.js";
 import { extractProviderOwnedOutputCapErrorText, parseProviderOutputCapEvidence } from "./llm-output-cap-recovery.js";
 import {
   assertAnthropicThinkingFitsMaxTokens,
@@ -64,7 +66,10 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
           throw new Error(`messages request blocked redirect (${dispatched.response.status})`);
         }
         if (!dispatched.response.ok) {
-          throw new Error(await buildHttpError("messages request", dispatched.response));
+          throw attachRetryAfter(
+            new Error(await buildHttpError("messages request", dispatched.response)),
+            dispatched.response,
+          );
         }
 
         const json = await parseProviderJsonResponse<Record<string, unknown>>("messages request", dispatched.response);
@@ -156,7 +161,10 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
           throw new Error(`messages request blocked redirect (${dispatched.response.status})`);
         }
         if (!dispatched.response.ok) {
-          throw new Error(await buildHttpError("messages request", dispatched.response));
+          throw attachRetryAfter(
+            new Error(await buildHttpError("messages request", dispatched.response)),
+            dispatched.response,
+          );
         }
 
         const contentType = dispatched.response.headers.get("content-type")?.toLowerCase() ?? "";
@@ -1032,10 +1040,14 @@ export function normalizeAnthropicUsage(
   const cacheRead = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : undefined;
   const cacheCreation =
     typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : undefined;
+  // OpenAI semantics: prompt_tokens is the TOTAL input, so Anthropic's separate cache read/write counts are
+  // folded in. The cache fields stay exposed because the pricing code reads cache_read_input_tokens as the
+  // cached subset of prompt_tokens.
+  const promptTokens = inputTokens !== undefined ? inputTokens + (cacheRead ?? 0) + (cacheCreation ?? 0) : undefined;
   return {
-    ...(inputTokens !== undefined ? { prompt_tokens: inputTokens } : {}),
+    ...(promptTokens !== undefined ? { prompt_tokens: promptTokens } : {}),
     ...(outputTokens !== undefined ? { completion_tokens: outputTokens } : {}),
-    ...(inputTokens !== undefined && outputTokens !== undefined ? { total_tokens: inputTokens + outputTokens } : {}),
+    ...(promptTokens !== undefined && outputTokens !== undefined ? { total_tokens: promptTokens + outputTokens } : {}),
     ...(cacheRead !== undefined ? { cache_read_input_tokens: cacheRead } : {}),
     ...(cacheCreation !== undefined ? { cache_creation_input_tokens: cacheCreation } : {}),
   };
@@ -1124,51 +1136,6 @@ function randomToolCallId(): string {
   return `call_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function parseSseFramePayloads(dataLines: string[]): Array<Record<string, unknown> | "[DONE]"> {
-  if (dataLines.length === 0) {
-    return [];
-  }
-
-  const joined = dataLines.join("\n").trim();
-  if (joined === "[DONE]") {
-    return ["[DONE]"];
-  }
-
-  const parsedJoined = tryParseJsonRecord(joined);
-  if (parsedJoined) {
-    return [parsedJoined];
-  }
-
-  const parsedLines: Array<Record<string, unknown> | "[DONE]"> = [];
-  for (const line of dataLines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (trimmed === "[DONE]") {
-      parsedLines.push("[DONE]");
-      continue;
-    }
-    const parsed = tryParseJsonRecord(trimmed);
-    if (parsed) {
-      parsedLines.push(parsed);
-    }
-  }
-  return parsedLines;
-}
-
-function tryParseJsonRecord(payload: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(payload) as unknown;
-    if (parsed && typeof parsed === "object") {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    // ignore malformed provider chunks
-  }
-  return null;
-}
-
 async function* streamJsonSseResponse(response: Response): AsyncGenerator<Record<string, unknown>> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!response.body) {
@@ -1182,66 +1149,9 @@ async function* streamJsonSseResponse(response: Response): AsyncGenerator<Record
     return;
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let receivedBytes = 0;
-  let eventCount = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      receivedBytes += value.byteLength;
-      if (receivedBytes > MAX_ANTHROPIC_SSE_BYTES) {
-        await reader.cancel();
-        throw new Error(`messages stream exceeded ${MAX_ANTHROPIC_SSE_BYTES} bytes.`);
-      }
-      buffer += decoder.decode(value, { stream: true });
-      const frames = buffer.split(/\r?\n\r?\n/g);
-      buffer = frames.pop() ?? "";
-      for (const frame of frames) {
-        const dataLines = frame
-          .split(/\r?\n/g)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trimStart())
-          .filter(Boolean);
-        for (const payload of parseSseFramePayloads(dataLines)) {
-          if (payload === "[DONE]") {
-            return;
-          }
-          eventCount += 1;
-          if (eventCount > MAX_ANTHROPIC_SSE_EVENTS) {
-            await reader.cancel();
-            throw new Error(`messages stream exceeded ${MAX_ANTHROPIC_SSE_EVENTS} events.`);
-          }
-          yield payload;
-        }
-      }
-    }
-    if (buffer.trim()) {
-      const dataLines = buffer
-        .split(/\r?\n/g)
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .filter(Boolean);
-      for (const payload of parseSseFramePayloads(dataLines)) {
-        if (payload === "[DONE]") {
-          return;
-        }
-        eventCount += 1;
-        if (eventCount > MAX_ANTHROPIC_SSE_EVENTS) {
-          throw new Error(`messages stream exceeded ${MAX_ANTHROPIC_SSE_EVENTS} events.`);
-        }
-        yield payload;
-      }
-    }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      // ignore
-    }
-  }
+  yield* streamSsePayloads(response.body, {
+    maxBytes: MAX_ANTHROPIC_SSE_BYTES,
+    maxEvents: MAX_ANTHROPIC_SSE_EVENTS,
+    label: "messages stream",
+  });
 }

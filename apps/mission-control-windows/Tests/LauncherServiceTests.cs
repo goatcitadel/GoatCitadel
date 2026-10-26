@@ -178,6 +178,10 @@ public sealed class LauncherServiceTests
         Assert.AreEqual("\"a&b\"", LauncherService.QuoteWindowsCommandArg("a&b"));
         Assert.AreEqual("\"\"", LauncherService.QuoteWindowsCommandArg(""));
         Assert.ThrowsException<ArgumentException>(() => LauncherService.QuoteWindowsCommandArg("value\"quoted"));
+        // The shell wrapper passes one raw string so spaced install paths keep their quotes for cmd.exe /s.
+        Assert.AreEqual(
+            "/d /s /c \"\"C:/Program Files/GoatCitadel/bin/goatcitadel.cmd\" status\"",
+            LauncherService.BuildWindowsShellArguments(new[] { "C:/Program Files/GoatCitadel/bin/goatcitadel.cmd", "status" }));
         Assert.ThrowsException<ArgumentException>(() => LauncherService.QuoteWindowsCommandArg("%PATH%"));
         Assert.ThrowsException<ArgumentException>(() => LauncherService.QuoteWindowsCommandArg("line\nbreak"));
     }
