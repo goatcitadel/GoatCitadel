@@ -5,7 +5,7 @@ import type {
   ChatCompletionResponse,
   ChatSessionPrefsRecord,
 } from "@goatcitadel/contracts";
-import { executeOrchestrationPlan } from "./engine.js";
+import { executeOrchestrationPlan, mapWithConcurrency } from "./engine.js";
 import type { OrchestrationPlan, OrchestrationTaskInput } from "./types.js";
 
 const NOW = "2026-03-08T20:15:00.000Z";
@@ -1212,3 +1212,31 @@ function createPlanWorkSynthesizePlan(): OrchestrationPlan {
     ],
   };
 }
+
+describe("mapWithConcurrency", () => {
+  it("preserves result order across workers", async () => {
+    const results = await mapWithConcurrency([1, 2, 3, 4, 5], 2, async (item) => item * 10);
+    expect(results).toEqual([10, 20, 30, 40, 50]);
+  });
+
+  it("stops starting new items after one mapper rejects, letting in-flight ones finish", async () => {
+    const started: number[] = [];
+    let slowFinished = false;
+    const run = mapWithConcurrency([0, 1, 2, 3, 4, 5], 2, async (item) => {
+      started.push(item);
+      if (item === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        slowFinished = true;
+        return item;
+      }
+      if (item === 1) {
+        throw new Error("mapper failed");
+      }
+      return item;
+    });
+    await expect(run).rejects.toThrow("mapper failed");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(started).toEqual([0, 1]);
+    expect(slowFinished).toBe(true);
+  });
+});
