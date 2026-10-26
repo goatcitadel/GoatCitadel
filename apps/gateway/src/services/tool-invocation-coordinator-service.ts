@@ -29,10 +29,12 @@ import {
 } from "@goatcitadel/contracts";
 import {
   ToolExecutionPreconditionError,
+  type McpApprovalRelief,
   type McpToolPolicyBinding,
   type MeshToolPolicyBinding,
   type ToolProcessSpawnBoundary,
 } from "@goatcitadel/policy-engine";
+import { resolveMcpApprovalRelief } from "./mcp-approval-relief.js";
 import type { HooksService } from "./hooks-service.js";
 import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
 import {
@@ -578,19 +580,23 @@ export interface ToolInvocationCoordinatorHost {
         externalSideEffect?: ToolExternalSideEffectBoundary;
         mcpToolBinding?: McpToolPolicyBinding;
         meshToolBinding?: MeshToolPolicyBinding;
+        mcpApprovalRelief?: McpApprovalRelief;
       },
     ): Promise<ToolInvokeResult>;
-    evaluateAccess(request: {
-      toolName: "mcp.invoke";
-      args: {
-        serverId: string;
-        toolName: string;
-        arguments: Record<string, unknown>;
-      };
-      agentId: string;
-      sessionId: string;
-      taskId?: string;
-    }): Promise<ToolPolicyAccessResult>;
+    evaluateAccess(
+      request: {
+        toolName: "mcp.invoke";
+        args: {
+          serverId: string;
+          toolName: string;
+          arguments: Record<string, unknown>;
+        };
+        agentId: string;
+        sessionId: string;
+        taskId?: string;
+      },
+      options?: { mcpApprovalRelief?: McpApprovalRelief },
+    ): Promise<ToolPolicyAccessResult>;
   };
   readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
   normalizeToolInvokeRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest>;
@@ -910,18 +916,26 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       toolName: wrapper.toolName,
       args: wrapper.args,
     };
+    // Server-authored from the saved server setting and stored tool labels only.
+    const mcpApprovalRelief = await resolveMcpApprovalRelief(this.host, wrapper);
+    const reliefOptions: [] | [{ mcpApprovalRelief: McpApprovalRelief }] = mcpApprovalRelief
+      ? [{ mcpApprovalRelief }]
+      : [];
     return {
-      access: await this.host.policyEngine.evaluateAccess(request),
-      decision: await this.host.policyEngine.invoke({
-        ...request,
-        dryRun: options?.externalRuntime === true ? undefined : true,
-        externalRuntime: options?.externalRuntime === true ? true : undefined,
-        consentContext: {
-          ...(request.consentContext ?? {}),
-          source: "agent",
-          reason: `MCP tool invoke ${input.serverId}/${input.toolName}`,
+      access: await this.host.policyEngine.evaluateAccess(request, ...reliefOptions),
+      decision: await this.host.policyEngine.invoke(
+        {
+          ...request,
+          dryRun: options?.externalRuntime === true ? undefined : true,
+          externalRuntime: options?.externalRuntime === true ? true : undefined,
+          consentContext: {
+            ...(request.consentContext ?? {}),
+            source: "agent",
+            reason: `MCP tool invoke ${input.serverId}/${input.toolName}`,
+          },
         },
-      }),
+        ...reliefOptions,
+      ),
     };
   }
 
@@ -1926,9 +1940,16 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     // its own transport owner; the ordinary built-in executor cannot run it.
     const nativeBinding = await this.resolveNativeMcpBinding(request, options);
     const policyRequest = { ...request, externalRuntime: true };
-    const policyResult = nativeBinding
-      ? await this.host.policyEngine.invoke(policyRequest, { mcpToolBinding: nativeBinding.policyBinding })
-      : await this.host.policyEngine.invoke(policyRequest);
+    // Server-authored from the saved server setting and stored tool labels only.
+    const mcpApprovalRelief = await resolveMcpApprovalRelief(this.host, request, nativeBinding?.policyBinding);
+    const policyOptions = {
+      ...(nativeBinding ? { mcpToolBinding: nativeBinding.policyBinding } : {}),
+      ...(mcpApprovalRelief ? { mcpApprovalRelief } : {}),
+    };
+    const policyResult =
+      nativeBinding || mcpApprovalRelief
+        ? await this.host.policyEngine.invoke(policyRequest, policyOptions)
+        : await this.host.policyEngine.invoke(policyRequest);
     const failure = buildExternalRuntimePolicyFailure(policyResult, "MCP runtime");
     if (failure) return failure;
     const approvalId = extractVerifiedApprovalReplayId(policyResult, request);
@@ -2213,7 +2234,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         error: `MCP policy does not allow tool ${input.toolName} on server ${server.serverId}.`,
       };
     }
+    // Once the operator picks what asks first for this server, that setting (through policy) decides
+    // instead of the legacy first-use check. Blocked and allowed patterns above still apply.
     if (
+      server.policy.approvalPosture === undefined &&
       server.policy.requireFirstToolApproval &&
       !consent?.approvedInvocation &&
       !(await this.host.isMcpToolApproved(input.serverId, input.toolName))

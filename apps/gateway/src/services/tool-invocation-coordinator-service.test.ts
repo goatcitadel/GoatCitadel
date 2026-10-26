@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type {
   ApprovalRequest,
+  McpApprovalPosture,
+  McpInvokeRequest,
   McpServerRecord,
+  McpStaticToolBinding,
   McpToolRecord,
   ToolInvokeRequest,
   ToolInvokeResult,
@@ -4821,5 +4824,263 @@ describe("requester-scoped MCP target-resolution precondition routing (HX-415)",
     expect(response.ok).toBe(false);
     expect(response.error).toContain("quarantined");
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("MCP approval setting: server-authored relief through real policy", () => {
+  // Posture × the server's own tool labels → whether the call still asks (the Capabilities hub plan's table).
+  const POSTURE_ROWS: ReadonlyArray<readonly [McpApprovalPosture, NonNullable<McpToolRecord["annotations"]>, boolean]> =
+    [
+      ["everything_asks", { readOnlyHint: true }, true],
+      ["reads_free", { readOnlyHint: true }, false],
+      ["reads_free", { destructiveHint: false }, true],
+      ["reads_free", {}, true],
+      ["nothing_asks", { destructiveHint: false }, false],
+      ["nothing_asks", {}, true],
+      ["nothing_asks", { destructiveHint: true }, true],
+      ["nothing_asks", { readOnlyHint: true }, false],
+    ];
+  const READ_ONLY = createMcpTool({ annotations: { readOnlyHint: true } });
+  // One database for the block (the per-test temp-root cleanup above would delete it while open).
+  let root: string;
+  let storage: Storage;
+
+  beforeAll(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-mcp-approval-relief-"));
+    storage = new Storage({
+      dbPath: path.join(root, "gateway.sqlite"),
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+  }, 30_000);
+  afterAll(async () => {
+    storage.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  function fixture(
+    input: {
+      posture?: McpApprovalPosture;
+      tools?: McpToolRecord[];
+      approvalMode?: "approve_risky" | "approve_all" | "bypass";
+      server?: Partial<McpServerRecord>;
+      firstUse?: boolean;
+      host?: Partial<ToolInvocationCoordinatorHost>;
+    } = {},
+  ) {
+    const policyEngine = new ToolPolicyEngine(
+      {
+        tools: { approvalMode: input.approvalMode ?? "approve_risky", allow: ["*"], deny: [] },
+        agents: {},
+        sandbox: {
+          writeJailRoots: [],
+          readOnlyRoots: [],
+          networkAllowlist: [],
+          riskyShellPatterns: [],
+          requireApprovalForRiskyShell: true,
+        },
+      },
+      createSqliteAsyncStorage(storage),
+    );
+    const server = createMcpServer({
+      ...input.server,
+      policy: {
+        ...createMcpServer().policy,
+        requireFirstToolApproval: input.firstUse === true,
+        ...(input.posture ? { approvalPosture: input.posture } : {}),
+      },
+    });
+    const host = createHost({
+      policyEngine,
+      requireMcpServer: vi.fn(async () => server),
+      listMcpTools: vi.fn(async () => input.tools ?? [READ_ONLY]),
+      isMcpToolApproved: vi.fn(async () => false),
+      ...input.host,
+    });
+    return {
+      host,
+      policyInvoke: vi.spyOn(policyEngine, "invoke"),
+      policyEvaluate: vi.spyOn(policyEngine, "evaluateAccess"),
+      coordinator: new ToolInvocationCoordinatorService(host),
+    };
+  }
+
+  // Each call gets its own session so grants and first-mutation counts never leak between cases.
+  let sessionSequence = 0;
+  function wrapperCall(overrides: Partial<ToolInvokeRequest> = {}): ToolInvokeRequest {
+    sessionSequence += 1;
+    return createToolRequest({
+      toolName: "mcp.invoke",
+      args: { serverId: "srv-1", toolName: "tool.echo", arguments: { value: "hello" } },
+      sessionId: `relief-session-${sessionSequence}`,
+      workspaceId: "workspace-1",
+      turnId: "turn-mcp",
+      toolRunId: `tool-run-mcp-${sessionSequence}`,
+      ...overrides,
+    });
+  }
+  function directCall(overrides: Record<string, unknown> = {}): McpInvokeRequest {
+    sessionSequence += 1;
+    return {
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      arguments: { value: "hello" },
+      agentId: "agent-1",
+      sessionId: `relief-session-${sessionSequence}`,
+      workspaceId: "workspace-1",
+      ...overrides,
+    };
+  }
+  // A frozen static Chat binding: its identity is all the coordinator reads before dispatch.
+  const nativeBindingHost = (): Partial<ToolInvocationCoordinatorHost> => ({
+    resolveNativeMcpChatToolBinding: vi.fn(async () => ({
+      serverId: "srv-1",
+      nativeToolName: "tool.echo",
+      staticBinding: {} as McpStaticToolBinding,
+      policyBinding: createMcpToolPolicyBinding({
+        canonicalName: "mcp.srv-1.tool.echo",
+        serverId: "srv-1",
+        nativeToolName: "tool.echo",
+      }),
+    })),
+    staticMcpChatDispatch: {
+      invoke: vi.fn(async (_input, options) => {
+        await options.effectDispatch();
+        return { ok: true, output: { value: "static native MCP" } };
+      }),
+    },
+  });
+  async function firstResult<T>(spy: { mock: { results: Array<{ value: unknown }> } }): Promise<T> {
+    return (await spy.mock.results[0]!.value) as T;
+  }
+
+  it.each(POSTURE_ROWS)("posture %s with %j asks: %s", async (posture, annotations, asks) => {
+    const f = fixture({ posture, tools: [createMcpTool({ annotations })] });
+    const result = await f.coordinator.invokeTool(wrapperCall());
+    expect(result.outcome).toBe(asks ? "approval_required" : "executed");
+    expect(f.host.invokeMcpRuntimeTool).toHaveBeenCalledTimes(asks ? 0 : 1);
+    expect(f.policyInvoke.mock.calls[0]?.[1]?.mcpApprovalRelief !== undefined).toBe(!asks);
+  });
+
+  it.each([
+    ["reads_free", { readOnlyHint: true }, false],
+    ["reads_free", {}, true],
+  ] as const)("decides a named Chat MCP tool the same way (%s, %j)", async (posture, annotations, asks) => {
+    const f = fixture({ posture, tools: [createMcpTool({ annotations })], host: nativeBindingHost() });
+    const result = await f.coordinator.invokeTool(
+      wrapperCall({ toolName: "mcp.srv-1.tool.echo", args: { value: "hello" } }),
+    );
+    expect(result.outcome).toBe(asks ? "approval_required" : "executed");
+    expect(f.host.staticMcpChatDispatch?.invoke).toHaveBeenCalledTimes(asks ? 0 : 1);
+    expect(f.policyInvoke.mock.calls[0]?.[1]?.mcpToolBinding).toBeDefined();
+  });
+
+  it("decides the direct MCP invoke path from the same setting and records why", async () => {
+    const relieved = fixture({ posture: "reads_free" });
+    expect(await relieved.coordinator.invokeMcpTool(directCall())).toMatchObject({ ok: true });
+    const access = await firstResult<{ reasonCodes: string[] }>(relieved.policyEvaluate);
+    expect(access.reasonCodes).toContain("mcp_approval_relief");
+    expect(relieved.host.invokeMcpRuntimeTool).toHaveBeenCalledTimes(1);
+
+    const unset = fixture();
+    expect(await unset.coordinator.invokeMcpTool(directCall())).toMatchObject({ ok: false, approvalRequired: true });
+    expect(unset.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("leaves approve_all asking and gives a remote A2A peer no relief", async () => {
+    const strict = fixture({ posture: "nothing_asks", approvalMode: "approve_all" });
+    expect((await strict.coordinator.invokeTool(wrapperCall())).outcome).toBe("approval_required");
+    const peer = fixture({ posture: "nothing_asks" });
+    const result = await peer.coordinator.invokeTool(wrapperCall({ policyContext: { authActorSource: "a2a_peer" } }));
+    expect(result.outcome).toBe("approval_required");
+    expect(peer.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("still denies under nothing_asks when a deny grant matches", async () => {
+    const call = wrapperCall();
+    storage.toolGrants.create({
+      toolPattern: "mcp.srv-1.tool.echo",
+      scope: "session",
+      scopeRef: call.sessionId,
+      decision: "deny",
+      grantType: "persistent",
+      createdBy: "operator",
+    });
+    const f = fixture({ posture: "nothing_asks" });
+    expect((await f.coordinator.invokeTool(call)).outcome).toBe("blocked");
+    expect(f.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("still blocks a quarantined server under nothing_asks", async () => {
+    const f = fixture({ posture: "nothing_asks", server: { trustTier: "quarantined" } });
+    expect(await f.coordinator.invokeMcpTool(directCall())).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("quarantined"),
+    });
+    expect((await f.coordinator.invokeTool(wrapperCall())).outcome).not.toBe("executed");
+    expect(f.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("ignores requireFirstToolApproval once a posture is set", async () => {
+    const unset = fixture({ firstUse: true });
+    expect(await unset.coordinator.invokeMcpTool(directCall())).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("First-use approval required"),
+    });
+    const relieved = fixture({ posture: "reads_free", firstUse: true });
+    expect(await relieved.coordinator.invokeMcpTool(directCall())).toMatchObject({ ok: true });
+    expect(relieved.host.invokeMcpRuntimeTool).toHaveBeenCalledTimes(1);
+    // The setting decides: "Everything asks" goes to the ordinary approval, not the first-use refusal.
+    const asks = fixture({ posture: "everything_asks", firstUse: true });
+    expect(await asks.coordinator.invokeMcpTool(directCall())).toMatchObject({ ok: false, approvalRequired: true });
+  });
+
+  it.each([
+    ["one unlabelled duplicate", [READ_ONLY, createMcpTool()], true],
+    ["one disagreeing duplicate", [READ_ONLY, createMcpTool({ annotations: { readOnlyHint: false } })], true],
+    ["every duplicate labelled read-only", [READ_ONLY, READ_ONLY], false],
+  ] as const)("relieves a duplicated tool name only when each entry agrees (%s)", async (_label, tools, asks) => {
+    const f = fixture({ posture: "reads_free", tools: [...tools] });
+    expect((await f.coordinator.invokeTool(wrapperCall())).outcome).toBe(asks ? "approval_required" : "executed");
+  });
+
+  it.each([
+    ["no stored inventory", { tools: [] }, {}],
+    [
+      "no stored entry for that tool",
+      { tools: [createMcpTool({ toolName: "tool.other", annotations: { readOnlyHint: true } })] },
+      {},
+    ],
+    ["a requester-scoped server", { server: { connectionMode: "requester_scoped" as const } }, {}],
+    ["padded wrapper fields", {}, { args: { serverId: "srv-1", toolName: " tool.echo", arguments: {} } }],
+  ] as const)("gives no relief with %s", async (_label, setup, overrides) => {
+    const f = fixture({ posture: "nothing_asks", ...setup, tools: "tools" in setup ? [...setup.tools] : undefined });
+    const result = await f.coordinator.invokeTool(wrapperCall(overrides as Partial<ToolInvokeRequest>));
+    expect(result.outcome).not.toBe("executed");
+    expect(f.policyInvoke.mock.calls[0]?.[1]).toBeUndefined();
+    expect((await firstResult<ToolInvokeResult>(f.policyInvoke)).outcome).toBe("approval_required");
+  });
+
+  it("cannot be injected through the request, its arguments, or the direct invoke body", async () => {
+    const f = fixture();
+    const smuggled = {
+      ...wrapperCall({
+        args: {
+          serverId: "srv-1",
+          toolName: "tool.echo",
+          arguments: { mcpApprovalRelief: true },
+          mcpApprovalRelief: true,
+        },
+        policyContext: { mcpApprovalRelief: true } as ToolInvokeRequest["policyContext"],
+      }),
+      mcpApprovalRelief: true,
+    } as ToolInvokeRequest;
+    expect((await f.coordinator.invokeTool(smuggled)).outcome).toBe("approval_required");
+    expect(f.policyInvoke.mock.calls[0]?.[1]).toBeUndefined();
+    expect(await f.coordinator.invokeMcpTool(directCall({ mcpApprovalRelief: true }))).toMatchObject({
+      ok: false,
+      approvalRequired: true,
+    });
+    expect(f.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
   });
 });
