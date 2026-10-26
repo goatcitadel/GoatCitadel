@@ -111,6 +111,16 @@ describe("channel desk turns", () => {
     expect(describeBlockedDeskReply(connection({ status: "error", label: "Family bot" }))).toBe(
       "Family bot isn't connected right now. Check its channel page.",
     );
+    // Like Messaging's status, only a switched-off channel asks to be turned back on: an enabled channel that is
+    // paused or disconnected shows "Turn off" on its page, so it is pointed there instead.
+    for (const status of ["paused", "disconnected"] as const) {
+      expect(describeBlockedDeskReply(connection({ status, label: "Family bot" }))).toBe(
+        "Family bot isn't connected right now. Check its channel page.",
+      );
+    }
+    expect(describeBlockedDeskReply(connection({ enabled: false, status: "paused", label: "Family bot" }))).toBe(
+      "Turn Family bot back on to reply.",
+    );
     expect(describeBlockedDeskReply(undefined)).toBe("This channel was removed. Its conversations stay readable.");
   });
 

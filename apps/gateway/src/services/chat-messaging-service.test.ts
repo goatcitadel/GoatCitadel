@@ -315,16 +315,23 @@ describe("chat messaging service", () => {
 
       const overview = await listChatMessaging(fixture.deps, { workspaceId: "default" });
 
+      // Only a switched-off connection is "off": an enabled one that is paused or disconnected needs a look, so the
+      // conversation never asks the operator to turn on a channel its page shows as on.
       expect(overview.channels.map((channel) => [channel.channelKey, channel.status])).toEqual([
+        ["bravo", "needs_attention"],
+        ["charlie", "needs_attention"],
         ["echo", "needs_attention"],
         ["foxtrot", "on"],
         ["alpha", "off"],
-        ["bravo", "off"],
-        ["charlie", "off"],
         ["delta", "off"],
         ["golf", "removed"],
       ]);
-      expect(overview.channels.map((channel) => channel.label).slice(0, 2)).toEqual(["echo (error)", "Foxtrot (on)"]);
+      expect(overview.channels.map((channel) => channel.label).slice(0, 4)).toEqual([
+        "Bravo (paused)",
+        "Charlie (disconnected)",
+        "echo (error)",
+        "Foxtrot (on)",
+      ]);
     } finally {
       fixture.cleanup();
     }
@@ -619,6 +626,13 @@ describe("chat messaging service", () => {
           status: "needs_attention",
           conversations: [],
         },
+        {
+          connectionId: paused.connectionId,
+          channelKey: "line",
+          label: "Line",
+          status: "needs_attention",
+          conversations: [],
+        },
         { connectionId: unbound.connectionId, channelKey: "matrix", label: "Matrix", status: "on", conversations: [] },
         { connectionId: idle.connectionId, channelKey: "signal", label: "Signal", status: "on", conversations: [] },
         {
@@ -628,7 +642,6 @@ describe("chat messaging service", () => {
           status: "on",
           conversations: [expect.objectContaining({ sessionId: session })],
         },
-        { connectionId: paused.connectionId, channelKey: "line", label: "Line", status: "off", conversations: [] },
         {
           connectionId: disabled.connectionId,
           channelKey: "wechat",
@@ -642,6 +655,28 @@ describe("chat messaging service", () => {
       expect(other.channels.map((channel) => channel.connectionId).sort()).toEqual(
         [elsewhere.connectionId, unbound.connectionId].sort(),
       );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("leaves the local webchat and terminal surfaces out of Messaging", async () => {
+    const fixture = createFixture();
+    try {
+      const telegram = fixture.addConnection({ label: "Telegram" });
+      const telegramChat = await fixture.addConversation(telegram, { peer: "42" });
+      const webchat = fixture.addConnection({ key: "webchat", label: "Webchat" });
+      fixture.addConnection({ key: "tui", label: "Terminal/TUI" });
+      await fixture.addConversation(webchat, { peer: "browser-1" });
+      // A removed webchat connection leaves its conversations behind; they are still not a channel row.
+      const oldWebchat = fixture.addConnection({ key: "webchat", label: "Old webchat" });
+      await fixture.addConversation(oldWebchat, { peer: "browser-2" });
+      fixture.storage.integrationConnections.delete(oldWebchat.connectionId);
+
+      const overview = await listChatMessaging(fixture.deps, { workspaceId: "default" });
+
+      expect(overview.channels.map((channel) => channel.channelKey)).toEqual(["telegram"]);
+      expect(overview.channels[0]?.conversations.map((conversation) => conversation.sessionId)).toEqual([telegramChat]);
     } finally {
       fixture.cleanup();
     }

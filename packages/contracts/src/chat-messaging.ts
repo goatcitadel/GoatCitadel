@@ -8,9 +8,10 @@
 // derive channel status, conversation titles or unread counts themselves.
 
 /**
- * `on` the connection is enabled and connected. `off` it is disabled, paused or
- * disconnected. `needs_attention` it is enabled but reports an error. `removed`
- * the connection no longer exists; its conversations are kept for reference.
+ * `on` the connection is enabled and connected. `off` it is switched off
+ * (disabled). `needs_attention` it is enabled but not connected: paused,
+ * disconnected or in error. `removed` the connection no longer exists; its
+ * conversations are kept for reference.
  */
 export type ChatMessagingChannelStatus = "on" | "off" | "needs_attention" | "removed";
 

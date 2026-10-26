@@ -39,6 +39,12 @@ const CHANNEL_LABELS_BY_KEY: ReadonlyMap<string, string> = new Map(
   INTEGRATION_CATALOG.filter((entry) => entry.kind === "channel").map((entry) => [entry.key, entry.label]),
 );
 
+/**
+ * Catalog channel keys that are GoatCitadel's own local surfaces (the embedded web chat and the terminal), not
+ * messaging channels: they never get a Messaging row, so they get no channel page either.
+ */
+const LOCAL_SURFACE_KEYS: ReadonlySet<string> = new Set(["webchat", "tui"]);
+
 /** Channels that need a look come first, then switched-off ones, then channels whose connection is gone. */
 const STATUS_ORDER: Readonly<Record<ChatMessagingChannelStatus, number>> = {
   on: 0,
@@ -79,19 +85,26 @@ export async function listChatMessaging(
     view: "active",
     limit: MESSAGING_SESSION_LIMIT,
   });
-  // A channel connection is named only by an integration binding; mission sessions are never Messaging.
-  const channelRecords = records.filter((record) => record.scope === "external" && record.channelConnectionId);
+  const allConnections = await deps.storage.integrationConnections.list(undefined, CONNECTION_LIMIT);
+  const connections = new Map(allConnections.map((connection) => [connection.connectionId, connection]));
+  // A channel connection is named only by an integration binding; mission sessions are never Messaging, and neither
+  // is a local surface's conversation, whether or not its connection still exists.
+  const channelRecords = records.filter(
+    (record) =>
+      record.scope === "external" &&
+      record.channelConnectionId &&
+      !LOCAL_SURFACE_KEYS.has(connections.get(record.channelConnectionId)?.key ?? record.channel),
+  );
   const sessionIds = channelRecords.map((record) => record.sessionId);
   const bindings = await deps.storage.chatSessionBindings.listBySessionIds(sessionIds);
   const sessions = await deps.storage.sessions.listBySessionIds(sessionIds);
-  const allConnections = await deps.storage.integrationConnections.list(undefined, CONNECTION_LIMIT);
-  const connections = new Map(allConnections.map((connection) => [connection.connectionId, connection]));
   // Every channel connection of the workspace is a channel row, with or without conversations yet. A
   // connection that names no workspace belongs to all of them.
   const workspaceChannelIds = allConnections
     .filter(
       (connection) =>
         connection.kind === "channel" &&
+        !LOCAL_SURFACE_KEYS.has(connection.key) &&
         (!connection.workspaceId || normalizeWorkspaceId(connection.workspaceId) === workspaceId),
     )
     .map((connection) => connection.connectionId);
@@ -228,7 +241,11 @@ async function buildConversation(
   return { ...conversation, ...(lastReadAt ? { lastReadAt } : {}), newMessageCount };
 }
 
-/** Enabled and connected is on; a disabled, paused or disconnected connection is off; an enabled error needs attention. */
+/**
+ * Enabled and connected is on; only a switched-off (disabled) connection is off; an enabled one that is paused,
+ * disconnected or in error needs attention. "Off" asks the operator to turn the channel back on, which an enabled
+ * connection's page could not offer (it shows "Turn off").
+ */
 function resolveChannelStatus(connection: IntegrationConnection | undefined): ChatMessagingChannelStatus {
   if (!connection) {
     return "removed";
@@ -236,15 +253,7 @@ function resolveChannelStatus(connection: IntegrationConnection | undefined): Ch
   if (!connection.enabled) {
     return "off";
   }
-  switch (connection.status) {
-    case "connected":
-      return "on";
-    case "error":
-      return "needs_attention";
-    case "paused":
-    case "disconnected":
-      return "off";
-  }
+  return connection.status === "connected" ? "on" : "needs_attention";
 }
 
 function compareChannels(left: ChatMessagingChannel, right: ChatMessagingChannel): number {
