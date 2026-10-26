@@ -210,6 +210,7 @@ describe("ChatSessionHeader for a channel conversation", () => {
     kind: "direct",
     own: true,
     status: "on",
+    tracksReading: true,
   };
   // Enough of the conversation to count as open; the title and menu need only these.
   const active = { thread: { turns: [] }, sessionTitle: "Release notes" } as unknown as NonNullable<

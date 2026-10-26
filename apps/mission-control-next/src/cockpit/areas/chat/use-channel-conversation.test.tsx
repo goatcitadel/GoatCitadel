@@ -32,7 +32,7 @@ let client: QueryClient;
 let seen: Array<ChannelConversationContext | undefined>;
 
 function Probe(props: {
-  session?: { scope?: "mission" | "external"; channelConnectionId?: string };
+  session?: { scope: "mission" | "external"; channelConnectionId?: string };
   selectedSessionId?: string;
 }) {
   seen.push(useSelectedChannelConversation("default", props.session, props.selectedSessionId));
@@ -75,7 +75,7 @@ describe("useSelectedChannelConversation", () => {
   });
 
   it("does not fetch the overview for an ordinary conversation", async () => {
-    await mount({ session: {}, selectedSessionId: "session-1" });
+    await mount({ session: { scope: "mission" }, selectedSessionId: "session-1" });
     expect(api.fetchChatMessaging).not.toHaveBeenCalled();
     expect(seen.at(-1)).toBeUndefined();
   });

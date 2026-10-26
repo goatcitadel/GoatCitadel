@@ -164,7 +164,7 @@ describe("useChannelComposerProps", () => {
   function Probe(props: {
     active: Active | null;
     channel?: ChannelConversationContext;
-    session?: { scope?: "mission" | "external"; channelConnectionId?: string };
+    session?: { scope: "mission" | "external"; channelConnectionId?: string };
   }) {
     seen.push(useChannelComposerProps(props.active, props.channel, "default", props.session));
     return null;
@@ -200,7 +200,7 @@ describe("useChannelComposerProps", () => {
 
   it("hands back the same props object for a mission chat and reads no overview", async () => {
     const active = activeProps();
-    await mount({ active, session: {} });
+    await mount({ active, session: { scope: "mission" } });
     expect(seen.at(-1)).toBe(active);
     await mount({ active: null, session: undefined });
     expect(seen.at(-1)).toBeNull();
