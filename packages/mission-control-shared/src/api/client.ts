@@ -1137,6 +1137,8 @@ export interface RealtimeEventDelivery {
 }
 
 export const STREAM_READY_FALLBACK_MS = 5_000;
+/** An open connection must survive this long (without a stream-ready) before reconnect backoff resets. */
+export const STREAM_STABLE_OPEN_MS = 10_000;
 
 interface EventStreamSubscriber {
   onEvent: (event: RealtimeEvent, delivery: RealtimeEventDelivery) => void;
@@ -1160,6 +1162,7 @@ let pendingRealtimeCursor: number | undefined;
 let realtimeCursorFlushTimer: number | null = null;
 let realtimeCursorFlushListenersRegistered = false;
 let eventStreamLiveFallbackTimer: number | null = null;
+let eventStreamStableOpenTimer: number | null = null;
 
 export function connectEventStream(
   onEvent: (event: RealtimeEvent, delivery: RealtimeEventDelivery) => void,
@@ -1282,7 +1285,15 @@ async function ensureEventStreamConnected(): Promise<void> {
       return;
     }
     clearReconnectTimer();
-    reconnectAttempts = 0;
+    // Do not reset backoff merely because the socket opened: a gateway that accepts and then drops would
+    // otherwise be retried at the minimum delay forever. Reset on stream-ready or after a stable period.
+    clearEventStreamStableOpenTimer();
+    eventStreamStableOpenTimer = window.setTimeout(() => {
+      eventStreamStableOpenTimer = null;
+      if (sharedEventSource === source) {
+        reconnectAttempts = 0;
+      }
+    }, STREAM_STABLE_OPEN_MS);
     setEventConnectionState("open");
     recordClientDiagnostic({
       level: "info",
@@ -1349,6 +1360,8 @@ async function ensureEventStreamConnected(): Promise<void> {
       return;
     }
     markStreamLive();
+    reconnectAttempts = 0;
+    clearEventStreamStableOpenTimer();
     try {
       const payload = JSON.parse(evt.data) as {
         leaseId?: string;
@@ -1411,8 +1424,16 @@ function scheduleReconnect(): void {
   }, delay);
 }
 
+function clearEventStreamStableOpenTimer(): void {
+  if (eventStreamStableOpenTimer !== null && typeof window !== "undefined") {
+    window.clearTimeout(eventStreamStableOpenTimer);
+  }
+  eventStreamStableOpenTimer = null;
+}
+
 function closeSharedEventSource(): void {
   eventConnectInFlight = false;
+  clearEventStreamStableOpenTimer();
   if (eventStreamLiveFallbackTimer !== null && typeof window !== "undefined") {
     window.clearTimeout(eventStreamLiveFallbackTimer);
     eventStreamLiveFallbackTimer = null;

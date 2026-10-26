@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { STREAM_READY_FALLBACK_MS, connectEventStream, runUiAction } from "./client";
+import { STREAM_READY_FALLBACK_MS, STREAM_STABLE_OPEN_MS, connectEventStream, runUiAction } from "./client";
 
 class MemoryStorage implements Storage {
   private readonly items = new Map<string, string>();
@@ -218,6 +218,53 @@ describe("client event stream", () => {
     expect(FakeEventSource.instances.at(-1)?.close).toHaveBeenCalled();
   });
 
+  it("keeps backing off when the gateway accepts the stream and then drops it", async () => {
+    const cleanup = connectEventStream(() => undefined);
+    await waitForEventSourceCount(1);
+
+    // Accept then drop, three times: delays must grow 1s, 2s, 4s instead of resetting to 1s on open.
+    for (const [index, delayMs] of [1000, 2000, 4000].entries()) {
+      const source = FakeEventSource.instances[index]!;
+      source.onopen?.();
+      source.onerror?.();
+      await vi.advanceTimersByTimeAsync(delayMs - 1);
+      await flushAsync();
+      expect(FakeEventSource.instances).toHaveLength(index + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      await waitForEventSourceCount(index + 2);
+    }
+
+    cleanup();
+  });
+
+  it("resets backoff after stream-ready or a stable open period", async () => {
+    const cleanup = connectEventStream(() => undefined);
+    await waitForEventSourceCount(1);
+
+    FakeEventSource.instances[0]!.onerror?.();
+    await vi.advanceTimersByTimeAsync(1000);
+    await waitForEventSourceCount(2);
+    FakeEventSource.instances[1]!.onerror?.();
+    await vi.advanceTimersByTimeAsync(2000);
+    await waitForEventSourceCount(3);
+
+    // Stable open: the next failure retries at the base delay again.
+    FakeEventSource.instances[2]!.onopen?.();
+    await vi.advanceTimersByTimeAsync(STREAM_STABLE_OPEN_MS);
+    FakeEventSource.instances[2]!.onerror?.();
+    await vi.advanceTimersByTimeAsync(1000);
+    await waitForEventSourceCount(4);
+
+    // stream-ready resets immediately.
+    FakeEventSource.instances[3]!.onopen?.();
+    FakeEventSource.instances[3]!.emit("stream-ready", { leaseId: "lease" });
+    FakeEventSource.instances[3]!.onerror?.();
+    await vi.advanceTimersByTimeAsync(1000);
+    await waitForEventSourceCount(5);
+
+    cleanup();
+  });
+
   it("reuses stored client ids and cursors when building stream URLs", async () => {
     window.localStorage.setItem("goatcitadel.events.client.v1", "client-existing");
     window.localStorage.setItem("goatcitadel.events.cursor.v1", "9");
@@ -245,7 +292,14 @@ describe("client event stream", () => {
     const source = FakeEventSource.instances[0]!;
 
     source.onmessage?.({
-      data: JSON.stringify({ eventId: "e1", eventType: "chat", source: "gateway", sequence: 5, timestamp: "t", payload: {} }),
+      data: JSON.stringify({
+        eventId: "e1",
+        eventType: "chat",
+        source: "gateway",
+        sequence: 5,
+        timestamp: "t",
+        payload: {},
+      }),
     });
     expect(received).toEqual(["chat"]);
 
@@ -278,7 +332,14 @@ describe("client event stream", () => {
     expect(url.searchParams.has("afterCursor")).toBe(false);
 
     source.onmessage?.({
-      data: JSON.stringify({ eventId: "e1", eventType: "chat", source: "gateway", sequence: 7, timestamp: "t", payload: {} }),
+      data: JSON.stringify({
+        eventId: "e1",
+        eventType: "chat",
+        source: "gateway",
+        sequence: 7,
+        timestamp: "t",
+        payload: {},
+      }),
     });
     await vi.advanceTimersByTimeAsync(5_000);
     source.emit("replay-gap", { oldestCursor: 10 });
@@ -538,7 +599,10 @@ describe("client event stream", () => {
     source.onmessage?.({ data: JSON.stringify(frame(1)) });
     source.emit("stream-ready", { leaseId: "lease-1" });
     source.onmessage?.({ data: JSON.stringify(frame(2)) });
-    expect(received).toEqual([[1, true], [2, false]]);
+    expect(received).toEqual([
+      [1, true],
+      [2, false],
+    ]);
     cleanup();
   });
 
