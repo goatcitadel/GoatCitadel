@@ -11,6 +11,7 @@ import {
   connectorCategoryLabel,
   connectorCategoryOptions,
   connectorKindLabel,
+  connectorSearchSuggestion,
   describeConnection,
   filterConnectors,
   groupConnectors,
@@ -203,6 +204,64 @@ describe("presentConnectorState", () => {
     expect(shown.tone).toBe("neutral");
   });
 
+  it("keeps the state word on a hidden row that is not connected", () => {
+    // A hidden row that is broken must not read as merely hidden: the problem is still there when it is unhidden.
+    const broken = presentConnectorState(item({ state: "broken", reason: "error", hiddenInWorkspace: true }));
+    expect(broken.label).toBe("Not working · hidden in this workspace");
+    expect(broken.tone).toBe("failed");
+    expect(broken.reason).toBe("The AI can't use it in this workspace");
+    expect(
+      presentConnectorState(item({ state: "sign_in_expired", reason: "sign_in_expired", hiddenInWorkspace: true })),
+    ).toMatchObject({ label: "Sign-in expired · hidden in this workspace", tone: "waiting" });
+    expect(
+      presentConnectorState(item({ state: "needs_sign_in", reason: "sign_in_needed", hiddenInWorkspace: true })),
+    ).toMatchObject({ label: "Needs sign-in · hidden in this workspace", tone: "waiting" });
+    expect(
+      presentConnectorState(item({ state: "turned_off", reason: "turned_off", hiddenInWorkspace: true })),
+    ).toMatchObject({ label: "Turned off · hidden in this workspace", tone: "neutral" });
+    expect(presentConnectorState(item({ state: "available", hiddenInWorkspace: true }))).toMatchObject({
+      label: "Available · hidden in this workspace",
+      tone: "neutral",
+    });
+  });
+
+  it("keeps the plain hidden label and a neutral tone on a connected row", () => {
+    const hidden = presentConnectorState(
+      item({ state: "connected", reason: "ready", hiddenInWorkspace: true, chat: { available: false } }),
+    );
+    expect(hidden).toEqual({
+      label: "Hidden in this workspace",
+      tone: "neutral",
+      reason: "The AI can't use it in this workspace",
+    });
+  });
+
+  it("points the panel, not the row, at Technical details for a broken connector", () => {
+    const broken = item({ state: "broken", reason: "error", lastError: "spawn ENOENT" });
+    // The row's line sends the reader to the panel; the panel itself must not send them back to it.
+    expect(presentConnectorState(broken).reason).toBe("Stopped working; open it to see why");
+    expect(presentConnectorState(broken, "row").reason).toBe("Stopped working; open it to see why");
+    expect(presentConnectorState(broken, "panel").reason).toBe(
+      "Stopped working. The last error is under Technical details.",
+    );
+  });
+
+  it("words every other reason the same in the panel as on the row", () => {
+    const reasons: CapabilityConnectorReason[] = [
+      "ready",
+      "not_connected",
+      "sign_in_needed",
+      "sign_in_expired",
+      "turned_off",
+      "not_installed",
+      "needs_api_key",
+      "missing_sign_in_setup",
+    ];
+    for (const reason of reasons) {
+      expect(presentConnectorState(item({ reason }), "panel")).toEqual(presentConnectorState(item({ reason }), "row"));
+    }
+  });
+
   it("gives a hidden row's own reason line instead of the state's", () => {
     // "Ready to use" beside "Hidden in this workspace" would say the AI can use it.
     const hidden = presentConnectorState(item({ state: "connected", reason: "ready", hiddenInWorkspace: true }));
@@ -245,6 +304,34 @@ describe("describeConnection", () => {
     expect(shown.warning).toContain("isn't limited by GoatCitadel's allowed sites");
   });
 
+  it.each<[CapabilityConnectorState, CapabilityConnectorReason]>([
+    ["connected", "ready"],
+    ["turned_off", "turned_off"],
+    ["broken", "error"],
+  ])("sends a %s web search row to the web search settings, not to a key it may not need", (state, reason) => {
+    // Self-hosted Firecrawl works without a key, so "Needs an API key" would be wrong for a row that already works.
+    const shown = describeConnection(item({ source: "web_search", kind: "built_in", auth: "api_key", state, reason }));
+    expect(shown.lines).toEqual(["Uses your web search settings"]);
+    expect(shown.command).toBeUndefined();
+    expect(shown.warning).toBeUndefined();
+  });
+
+  it("says a web search row that is only available needs an API key", () => {
+    const available = item({
+      source: "web_search",
+      kind: "built_in",
+      auth: "api_key",
+      state: "available",
+      reason: "needs_api_key",
+    });
+    expect(describeConnection(available).lines).toEqual(["Needs an API key"]);
+  });
+
+  it("still says a connected saved server with a key needs one", () => {
+    const saved = item({ source: "mcp_server", auth: "api_key", state: "connected", reason: "ready" });
+    expect(describeConnection(saved).lines).toEqual(["Needs an API key"]);
+  });
+
   it.each<[Partial<CapabilityConnectorItem>, string[]]>([
     [{ auth: "api_key" }, ["Needs an API key"]],
     [{ auth: "bot_token" }, ["Needs a bot token"]],
@@ -258,6 +345,36 @@ describe("describeConnection", () => {
     expect(shown.lines).toEqual(lines);
     expect(shown.command).toBeUndefined();
     expect(shown.warning).toBeUndefined();
+  });
+});
+
+describe("connectorSearchSuggestion", () => {
+  const connected = { state: "connected", reason: "ready", group: "connected" } as const;
+
+  it("names the category of the first connected row", () => {
+    expect(
+      connectorSearchSuggestion([
+        item({ category: "data" }),
+        item({ ...connected, category: "messaging" }),
+        item({ ...connected, category: "development" }),
+      ]),
+    ).toBe("Messaging");
+  });
+
+  it('skips connected rows in the Search category, since "Search" is no hint in a search box', () => {
+    expect(
+      connectorSearchSuggestion([
+        item({ ...connected, category: "search" }),
+        item({ ...connected, category: "search" }),
+        item({ ...connected, category: "development" }),
+      ]),
+    ).toBe("Development");
+  });
+
+  it("falls back to automation when nothing else is connected", () => {
+    expect(connectorSearchSuggestion([])).toBe("automation");
+    expect(connectorSearchSuggestion([item({ category: "development" })])).toBe("automation");
+    expect(connectorSearchSuggestion([item({ ...connected, category: "search" })])).toBe("automation");
   });
 });
 

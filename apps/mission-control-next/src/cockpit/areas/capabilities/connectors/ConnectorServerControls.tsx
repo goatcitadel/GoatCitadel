@@ -14,8 +14,10 @@ import { CONNECTOR_CONFLICT_MESSAGE, useConnectorEnabled } from "./use-connector
 
 interface Failure {
   message: string;
-  /** The server changed somewhere else, so reloading is the way forward. */
-  conflict: boolean;
+  /** Reloading is the way forward: the server changed somewhere else, or the change was saved but not confirmed. */
+  reloadable: boolean;
+  /** The change did go through, so the line is a caution, not a failure. */
+  saved?: boolean;
 }
 
 /**
@@ -41,7 +43,14 @@ export function ConnectorServerControls({
 
   const { serverId, serverRevision } = item;
   const failure: Failure | undefined =
-    removalFailure ?? (switchState.error ? { message: switchState.error, conflict: switchState.conflict } : undefined);
+    removalFailure ??
+    (switchState.error
+      ? {
+          message: switchState.error,
+          reloadable: switchState.conflict || switchState.unconfirmed,
+          ...(switchState.unconfirmed ? { saved: true } : {}),
+        }
+      : undefined);
 
   async function remove() {
     if (removing || !serverId || !serverRevision) return;
@@ -52,7 +61,7 @@ export function ConnectorServerControls({
     } catch (error) {
       const described = describeApiError(error);
       const conflict = described.category === "conflict";
-      setRemovalFailure({ message: conflict ? CONNECTOR_CONFLICT_MESSAGE : described.summary, conflict });
+      setRemovalFailure({ message: conflict ? CONNECTOR_CONFLICT_MESSAGE : described.summary, reloadable: conflict });
       setRemoving(false);
       setConfirming(false);
       return;
@@ -102,10 +111,10 @@ export function ConnectorServerControls({
       ) : null}
       {failure ? (
         <div className="space-y-2">
-          <p role="alert" className="text-sm text-status-failed">
+          <p role="alert" className={failure.saved ? "text-sm text-fg-secondary" : "text-sm text-status-failed"}>
             {failure.message}
           </p>
-          {failure.conflict ? (
+          {failure.reloadable ? (
             <Button
               size="sm"
               onClick={() => {

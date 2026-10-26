@@ -158,7 +158,7 @@ describe("useConnectorEnabled", () => {
     expect(latest.error).toBeUndefined();
     // The next switch must use the version the save produced.
     expect(cached(LINEAR.id)?.serverRevision).toBe(NEXT_REVISION);
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: KEY });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: KEY }, { throwOnError: true });
   });
 
   describe("switching on", () => {
@@ -223,8 +223,77 @@ describe("useConnectorEnabled", () => {
       await vi.waitFor(() => expect(latest.error).toBe("The server said no"));
       expect(latest.enabled).toBe(false);
       expect(cached(LINEAR.id)).toEqual(OFF_LINEAR);
-      // No confirming read for a save that did not happen.
-      expect(listApi.fetchCapabilityConnectors).toHaveBeenCalledTimes(1);
+      // A failed request can still have been committed, so the list is read again (and here it still says off).
+      await vi.waitFor(() => expect(listApi.fetchCapabilityConnectors).toHaveBeenCalledTimes(2));
+    });
+
+    it("shows a save that did commit when the request itself reported a failure", async () => {
+      // The reply was lost on the way back, but the Gateway had already switched the server on.
+      api.updateMcpServer.mockRejectedValue(new Error("The reply never came"));
+      listApi.fetchCapabilityConnectors.mockResolvedValueOnce(
+        response([{ ...OFF_LINEAR, state: "connected", reason: "ready", group: "connected" }, NOTION]),
+      );
+      await ready();
+      await act(async () => latest.setEnabled(true));
+      await vi.waitFor(() => expect(cached(LINEAR.id)?.state).toBe("connected"));
+      await vi.waitFor(() => expect(latest.enabled).toBe(true));
+      expect(latest.pending).toBe(false);
+      expect(latest.error).toBe("The reply never came");
+    });
+
+    describe("when the confirming read fails after a save that went through", () => {
+      const connected = { ...OFF_LINEAR, state: "connected", reason: "ready", group: "connected" } as const;
+
+      async function saveThenFailToConfirm() {
+        api.updateMcpServer.mockResolvedValue(savedServer({ revision: NEXT_REVISION, enabled: true }));
+        listApi.fetchCapabilityConnectors.mockRejectedValueOnce(new Error("offline"));
+        await ready();
+        await act(async () => latest.setEnabled(true));
+        await vi.waitFor(() => expect(latest.unconfirmed).toBe(true));
+        await vi.waitFor(() => expect(latest.pending).toBe(false));
+      }
+
+      it("keeps showing the saved choice instead of the stale row, and says it could not confirm", async () => {
+        await saveThenFailToConfirm();
+        // The cached row is still the old "turned off" one, but the Gateway did save "on".
+        expect(cached(LINEAR.id)?.state).toBe("turned_off");
+        expect(latest.enabled).toBe(true);
+        expect(latest.error).toBe("Saved, but couldn't confirm. Reload to check.");
+        expect(latest.conflict).toBe(false);
+      });
+
+      it("reloads on request and goes back to the row's own state once the list answers", async () => {
+        await saveThenFailToConfirm();
+        listApi.fetchCapabilityConnectors.mockResolvedValueOnce(response([connected, NOTION]));
+        await act(async () => latest.reload());
+        // Until the list is read again the switch keeps the saved choice.
+        expect(latest.enabled).toBe(true);
+        await vi.waitFor(() => expect(latest.unconfirmed).toBe(false));
+        expect(latest.error).toBeUndefined();
+        expect(latest.enabled).toBe(true);
+        expect(cached(LINEAR.id)?.state).toBe("connected");
+      });
+
+      it("keeps the line and the saved choice when the reload fails too", async () => {
+        await saveThenFailToConfirm();
+        listApi.fetchCapabilityConnectors.mockRejectedValueOnce(new Error("still offline"));
+        await act(async () => latest.reload());
+        await vi.waitFor(() => expect(listApi.fetchCapabilityConnectors).toHaveBeenCalledTimes(3));
+        expect(latest.unconfirmed).toBe(true);
+        expect(latest.error).toBe("Saved, but couldn't confirm. Reload to check.");
+        expect(latest.enabled).toBe(true);
+      });
+
+      it("drops the line when the next change is made", async () => {
+        await saveThenFailToConfirm();
+        api.updateMcpServer.mockResolvedValue(savedServer({ revision: "c".repeat(64), enabled: false }));
+        listApi.fetchCapabilityConnectors.mockResolvedValueOnce(response([OFF_LINEAR, NOTION]));
+        await act(async () => latest.setEnabled(false));
+        await vi.waitFor(() => expect(latest.pending).toBe(false));
+        expect(latest.unconfirmed).toBe(false);
+        expect(latest.error).toBeUndefined();
+        expect(latest.enabled).toBe(false);
+      });
     });
 
     it("keeps the server check usable after a save, so the server can be switched off and on again", async () => {
@@ -268,6 +337,25 @@ describe("useConnectorEnabled", () => {
     expect(cached(NOTION.id)).toEqual(newerNotion);
   });
 
+  it("reads the list again after a failed save, once the row is back, so a commit that did happen shows", async () => {
+    api.updateMcpServer.mockRejectedValue(new Error("The reply never came"));
+    const seenWhenRead: (CapabilityConnectorItem | undefined)[] = [];
+    const real = client.invalidateQueries.bind(client);
+    const invalidate = vi.spyOn(client, "invalidateQueries").mockImplementation((...args) => {
+      if (JSON.stringify(args[0]?.queryKey) === JSON.stringify(KEY)) seenWhenRead.push(cached(LINEAR.id));
+      return real(...args);
+    });
+    await render();
+    await act(async () => latest.setEnabled(false));
+    await vi.waitFor(() => expect(latest.error).toBe("The reply never came"));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: KEY });
+    // The optimistic "turned off" look had already been undone when the read was asked for.
+    expect(seenWhenRead).toEqual([
+      expect.objectContaining({ state: "connected", reason: "ready", group: "connected" }),
+    ]);
+    expect(latest.enabled).toBe(true);
+  });
+
   it("explains a conflict and reloads on request", async () => {
     api.updateMcpServer.mockRejectedValue(
       new ApiRequestError("conflict", {
@@ -285,6 +373,8 @@ describe("useConnectorEnabled", () => {
     expect(latest.error).toBe("Changed elsewhere. Reload to see the latest.");
     expect(latest.enabled).toBe(true);
 
+    // The failed save already asked for a fresh list; the Reload button asks again.
+    invalidate.mockClear();
     await act(async () => latest.reload());
     expect(invalidate).toHaveBeenCalledWith({ queryKey: KEY });
     expect(latest.conflict).toBe(false);

@@ -19,7 +19,9 @@ vi.mock("../../../app/inspector", () => ({ useInspector: () => inspector }));
 vi.mock("../../settings/McpServerCreate", () => ({
   McpServerCreate: ({ onClose }: { onClose: () => void }) => (
     <div role="dialog" aria-label="Register MCP server">
-      <button onClick={onClose}>Close registration</button>
+      <button type="button" onClick={onClose}>
+        Close registration
+      </button>
     </div>
   ),
 }));
@@ -284,6 +286,41 @@ describe("Connectors tab", () => {
     await render();
     await vi.waitFor(() => expect(text()).toContain("Notion"));
     expect(searchBox().placeholder).toBe('Try "Messaging"');
+  });
+
+  it('never suggests "Search" from a connected search row', async () => {
+    const firecrawl = item({
+      id: "web-search:search.firecrawl",
+      name: "Firecrawl",
+      description: "Search the web and read pages",
+      kind: "built_in",
+      source: "web_search",
+      category: "search",
+      state: "connected",
+      reason: "ready",
+      group: "connected",
+    });
+    api.fetchCapabilityConnectors.mockResolvedValue(response([firecrawl, SLACK, NOTION]));
+    await render();
+    await vi.waitFor(() => expect(text()).toContain("Notion"));
+    expect(searchBox().placeholder).toBe('Try "Messaging"');
+  });
+
+  it("suggests automation when the only connected row is a search row", async () => {
+    const firecrawl = item({
+      id: "web-search:search.firecrawl",
+      name: "Firecrawl",
+      kind: "built_in",
+      source: "web_search",
+      category: "search",
+      state: "connected",
+      reason: "ready",
+      group: "connected",
+    });
+    api.fetchCapabilityConnectors.mockResolvedValue(response([firecrawl, NOTION]));
+    await render();
+    await vi.waitFor(() => expect(text()).toContain("Notion"));
+    expect(searchBox().placeholder).toBe('Try "automation"');
   });
 
   it("suggests automation when nothing is connected", async () => {

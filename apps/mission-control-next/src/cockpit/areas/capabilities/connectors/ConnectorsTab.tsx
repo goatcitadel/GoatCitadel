@@ -12,16 +12,18 @@ import { Section } from "../../../ui/Section";
 import { CapabilitySearch } from "../CapabilitySearch";
 import { CategoryFilter } from "../CategoryFilter";
 import { ConnectorRow } from "./ConnectorRow";
-import { connectorCategoryLabel, connectorCategoryOptions, filterConnectors, groupConnectors } from "./connector-view";
+import {
+  connectorCategoryOptions,
+  connectorSearchSuggestion,
+  filterConnectors,
+  groupConnectors,
+} from "./connector-view";
 import { useConnectorPanel } from "./use-connector-panel";
 
 // The custom server form belongs to Settings and is large; it loads only when someone asks to add their own.
 const McpServerCreate = lazy(async () => ({
   default: (await import("../../settings/McpServerCreate")).McpServerCreate,
 }));
-
-/** The search suggestion when nothing is connected yet. */
-const FALLBACK_SUGGESTION = "automation";
 
 /** One plain line of caution above the list: a source that failed, or a recheck that did. Not announced. */
 function NoticeLine({ children }: { children: ReactNode }) {
@@ -86,8 +88,7 @@ export function ConnectorsTab() {
   const categories = chosenCategories.filter((id) => options.some((option) => option.id === id));
   const shown = filterConnectors(items, { query: search, categories });
   const groups = groupConnectors(shown);
-  const firstConnected = items.find((entry) => entry.state === "connected");
-  const suggestion = firstConnected ? connectorCategoryLabel(firstConnected.category) : FALLBACK_SUGGESTION;
+  const suggestion = connectorSearchSuggestion(items);
   const lastVersion = lastVersionNote(view);
 
   const addYourOwn = <Button onClick={() => setAdding(true)}>Add your own</Button>;

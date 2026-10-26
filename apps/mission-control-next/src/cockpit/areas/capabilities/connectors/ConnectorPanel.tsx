@@ -13,6 +13,7 @@ import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { ConnectorServerControls } from "./ConnectorServerControls";
 import { CHAT_CONNECTORS_SETTINGS_HREF, connectorSettingsHref, WORKSPACE_CAPABILITIES_HREF } from "./connector-links";
 import {
+  chatBlockLine,
   connectorCategoryLabel,
   connectorKindLabel,
   describeConnection,
@@ -64,6 +65,7 @@ function TechnicalRows({ item }: { item: CapabilityConnectorItem }) {
     ["Server", item.serverId],
     ["Connection", item.connectionId],
     ["Template", item.templateId],
+    ["Catalog", item.catalogId],
     ["Hosts", item.networkHosts.join(", ")],
     ["Saved version", item.serverRevision],
     ["Last error", item.lastError],
@@ -82,7 +84,7 @@ function TechnicalRows({ item }: { item: CapabilityConnectorItem }) {
 }
 
 function ConnectorDetails({ item, onRemoved }: { item: CapabilityConnectorItem; onRemoved?: () => void }) {
-  const state = presentConnectorState(item);
+  const state = presentConnectorState(item, "panel");
   const connection = describeConnection(item);
   const savedServer = item.source === "mcp_server" && Boolean(item.serverId);
   return (
@@ -118,7 +120,7 @@ function ConnectorDetails({ item, onRemoved }: { item: CapabilityConnectorItem; 
 
       {item.chat.available ? null : (
         <p className="text-sm text-fg-secondary">
-          Chat can't use connectors yet.{" "}
+          {chatBlockLine(item.chat.blockedBy)}{" "}
           <NativeOwnerLink scope={item.id} href={CHAT_CONNECTORS_SETTINGS_HREF}>
             See Chat access in Settings
           </NativeOwnerLink>

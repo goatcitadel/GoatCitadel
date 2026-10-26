@@ -1,6 +1,7 @@
 import {
   CAPABILITY_CONNECTOR_GROUP_ORDER,
   type CapabilityConnectorCategory,
+  type CapabilityConnectorChatBlock,
   type CapabilityConnectorGroup,
   type CapabilityConnectorItem,
   type CapabilityConnectorKind,
@@ -52,6 +53,9 @@ const CATEGORY_ORDER: readonly CapabilityConnectorCategory[] = [
   "other",
 ];
 
+/** The search suggestion when nothing is connected yet. */
+const FALLBACK_SUGGESTION = "automation";
+
 const STATE_LABELS: Readonly<Record<CapabilityConnectorState, string>> = {
   connected: "Connected",
   needs_sign_in: "Needs sign-in",
@@ -82,6 +86,21 @@ const REASON_LINES: Readonly<Record<CapabilityConnectorReason, string>> = {
   missing_sign_in_setup: "Sign-in isn't set up for this app yet",
 };
 
+/** What the panel says instead of the row's line. The row's "open it to see why" would send the panel back to itself. */
+const PANEL_REASON_LINES: Readonly<Partial<Record<CapabilityConnectorReason, string>>> = {
+  error: "Stopped working. The last error is under Technical details.",
+};
+
+const CHAT_BLOCK_LINES: Readonly<Record<CapabilityConnectorChatBlock, string>> = {
+  mcp_in_chat_off: "Chat can't use connectors yet.",
+  background_runs_off: "Chat can't use connectors while background runs are off.",
+};
+
+/** Why Chat can't use connectors, as a sentence. Without a named cause it is the general one. */
+export function chatBlockLine(blockedBy: CapabilityConnectorChatBlock | undefined): string {
+  return CHAT_BLOCK_LINES[blockedBy ?? "mcp_in_chat_off"];
+}
+
 export function connectorKindLabel(kind: CapabilityConnectorKind): string {
   return KIND_LABELS[kind];
 }
@@ -97,6 +116,13 @@ export function connectorCategoryOptions(items: readonly CapabilityConnectorItem
     id: category,
     label: CATEGORY_LABELS[category],
   }));
+}
+
+/** What the search box suggests: the first connected row's category, or "automation" when there is none. */
+export function connectorSearchSuggestion(items: readonly CapabilityConnectorItem[]): string {
+  // A connected search row (Firecrawl) would suggest "Search", which says nothing about what to type.
+  const first = items.find((entry) => entry.state === "connected" && entry.category !== "search");
+  return first ? CATEGORY_LABELS[first.category] : FALLBACK_SUGGESTION;
 }
 
 /**
@@ -131,19 +157,30 @@ export function groupConnectors(
 
 /**
  * The state badge and the reason line under it. A row never reads as plainly usable when the AI can't use it: a
- * connected MCP row that Chat can't reach says so, and a row hidden in this workspace says that instead of its state
- * and of its reason ("Ready to use" beside "Hidden in this workspace" would contradict itself).
+ * connected MCP row that Chat can't reach says so, and a row hidden in this workspace says that instead of its reason
+ * ("Ready to use" beside "Hidden in this workspace" would contradict itself). A hidden row that is connected reads as
+ * hidden alone; one that is not connected keeps its state word beside the note, so "Not working" is not lost.
+ * `where` is the surface: the panel words the broken reason without pointing at itself.
  */
-export function presentConnectorState(item: CapabilityConnectorItem): StatusPresentation & { reason: string } {
+export function presentConnectorState(
+  item: CapabilityConnectorItem,
+  where: "row" | "panel" = "row",
+): StatusPresentation & { reason: string } {
   const chatBlocked = item.state === "connected" && !item.chat.available;
-  const label = item.hiddenInWorkspace ? "Hidden in this workspace" : STATE_LABELS[item.state];
-  // Green says "usable". A connection Chat can't use yet asks for a look, and a hidden row is neither good nor bad.
-  const tone: StatusTone = item.hiddenInWorkspace ? "neutral" : chatBlocked ? "waiting" : STATE_TONES[item.state];
+  const hiddenOnly = item.hiddenInWorkspace && item.state === "connected";
+  const label = hiddenOnly
+    ? "Hidden in this workspace"
+    : item.hiddenInWorkspace
+      ? `${STATE_LABELS[item.state]} · hidden in this workspace`
+      : STATE_LABELS[item.state];
+  // Green says "usable". A connection Chat can't use yet asks for a look, and a hidden connected row is neither good
+  // nor bad. Any other state keeps its own tone.
+  const tone: StatusTone = hiddenOnly ? "neutral" : chatBlocked ? "waiting" : STATE_TONES[item.state];
   const reason = item.hiddenInWorkspace
     ? "The AI can't use it in this workspace"
     : chatBlocked
       ? "Connected · not available in Chat"
-      : REASON_LINES[item.reason];
+      : ((where === "panel" ? PANEL_REASON_LINES[item.reason] : undefined) ?? REASON_LINES[item.reason]);
   return { label, tone, reason };
 }
 
@@ -170,6 +207,11 @@ export function describeConnection(item: CapabilityConnectorItem): ConnectionDes
       ...(item.command ? { command: item.command } : {}),
       warning: ON_DEVICE_NETWORK_WARNING,
     };
+  }
+  // A web search row that is on, off or failing is set up in the web search settings. Self-hosted Firecrawl works with
+  // no key, so "Needs an API key" is true only for the row that is still waiting on one.
+  if (item.source === "web_search" && item.state !== "available") {
+    return { lines: ["Uses your web search settings"] };
   }
   const host = item.networkHosts[0];
   switch (item.auth) {

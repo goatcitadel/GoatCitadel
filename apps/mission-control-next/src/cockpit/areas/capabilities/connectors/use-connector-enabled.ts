@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { isCancelledError, useQuery, useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import type { CapabilityConnectorItem, CapabilityConnectorsResponse, McpServerRecord } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { fetchMcpServer, updateMcpServer } from "@goatcitadel/mission-control-shared/api/mcp-operations";
@@ -8,6 +8,7 @@ import { mcpToggleUnavailableReason } from "../../../../features/native-routes/s
 import { queryKeys } from "../../../data/query-keys";
 
 export const CONNECTOR_CONFLICT_MESSAGE = "Changed elsewhere. Reload to see the latest.";
+export const CONNECTOR_UNCONFIRMED_MESSAGE = "Saved, but couldn't confirm. Reload to check.";
 const NO_BINDING_REASON = "This server's saved version isn't available, so it can't be switched here.";
 const CHECK_FAILED_REASON = "Couldn't check whether it can be switched on.";
 
@@ -27,21 +28,46 @@ function withRow(
   return list ? { ...list, items: list.items.map((row) => (row.id === id ? change(row) : row)) } : list;
 }
 
+interface Failure {
+  message: string;
+  conflict: boolean;
+  /** Set when the save went through but the read that confirms it failed: the choice that was saved. */
+  saved?: boolean;
+}
+
+/**
+ * Reads the list again and says whether that worked. Cancelled reads do not count as failures: another read took over.
+ * The cached rows are the last good ones, so a failed read leaves them stale rather than empty.
+ */
+async function readListAgain(client: QueryClient, listKey: QueryKey): Promise<boolean> {
+  try {
+    await client.invalidateQueries({ queryKey: listKey }, { throwOnError: true });
+    return true;
+  } catch (error) {
+    return isCancelledError(error);
+  }
+}
+
 export interface ConnectorEnabled {
   /** What the switch shows: the choice just made while it saves, otherwise the connector's own state. */
   enabled: boolean;
   /** A save, or the read that confirms it, is running; or the check that decides whether a switched-off server can be switched on. */
   pending: boolean;
-  /** Plain words about why the last change did not happen. */
+  /** Plain words about why the last change did not happen, or that it could not be confirmed. */
   error?: string;
   /** The last change was refused because the server changed somewhere else. `reload` is the way forward. */
   conflict: boolean;
+  /**
+   * The last change was saved, but the list could not be read to confirm it, so the rows may be stale. `enabled` keeps
+   * the saved choice, and `reload` is the way forward.
+   */
+  unconfirmed: boolean;
   /** Why the switch can't be used. */
   unavailableReason?: string;
   /** Present when the check behind `unavailableReason` failed: run it again. */
   checkRetry?: { run(): void; running: boolean };
   setEnabled(next: boolean): void;
-  /** Reads the list again and drops the last error. */
+  /** Reads the list again and drops the last error. An unconfirmed save keeps its line until the list reads. */
   reload(): void;
 }
 
@@ -58,12 +84,13 @@ export function useConnectorEnabled(item: CapabilityConnectorItem): ConnectorEna
   const [saving, setSaving] = useState(false);
   // The choice the switch shows from the click until the confirming read lands.
   const [shown, setShown] = useState<boolean | undefined>();
-  const [failure, setFailure] = useState<{ message: string; conflict: boolean } | undefined>();
+  const [failure, setFailure] = useState<Failure | undefined>();
   // State is one render behind a second click in the same tick; this is not.
   const busy = useRef(false);
 
   const { serverId, serverRevision } = item;
-  const enabled = shown ?? item.state !== "turned_off";
+  // When the confirming read failed, the cached row is the one from before the save, so the saved choice is shown.
+  const enabled = shown ?? failure?.saved ?? item.state !== "turned_off";
   // A server that is on can always be switched off. A switched-off one is checked before it is switched on, with the
   // same rule Settings uses. The check is off (not a missing `queryFn`) when nothing needs it, so a re-read of the
   // server after a save is skipped instead of failing.
@@ -114,6 +141,9 @@ export function useConnectorEnabled(item: CapabilityConnectorItem): ConnectorEna
         const described = describeApiError(error);
         const conflict = described.category === "conflict";
         setFailure({ message: conflict ? CONNECTOR_CONFLICT_MESSAGE : described.summary, conflict });
+        // A request that reported a failure can still have been committed (a lost reply, a timeout), so the list is
+        // read again now that this row is back, and shows whatever the Gateway really holds.
+        void client.invalidateQueries({ queryKey: listKey });
         return;
       }
       // The next switch has to start from the version this save made. This is not a claim about the connector's state.
@@ -126,8 +156,11 @@ export function useConnectorEnabled(item: CapabilityConnectorItem): ConnectorEna
       );
       void client.invalidateQueries({ queryKey: queryKeys.capabilityConnectorServer(serverId) });
       void client.invalidateQueries({ queryKey: ["settings", "mcp-servers"] });
-      // The switch holds its choice until the Gateway's own answer is in the list.
-      await client.invalidateQueries({ queryKey: listKey });
+      // The switch holds its choice until the Gateway's own answer is in the list. If that read fails the rows are
+      // stale, so the switch keeps the saved choice and the failure says so.
+      if (!(await readListAgain(client, listKey))) {
+        setFailure({ message: CONNECTOR_UNCONFIRMED_MESSAGE, conflict: false, saved: next });
+      }
     } finally {
       busy.current = false;
       setShown(undefined);
@@ -140,12 +173,20 @@ export function useConnectorEnabled(item: CapabilityConnectorItem): ConnectorEna
     pending: saving || checking,
     ...(failure ? { error: failure.message } : {}),
     conflict: failure?.conflict ?? false,
+    unconfirmed: failure?.saved !== undefined,
     ...(unavailableReason ? { unavailableReason } : {}),
     ...(checkFailed ? { checkRetry: { run: () => void check.refetch(), running: check.isFetching } } : {}),
     setEnabled: (next) => void save(next),
     reload: () => {
-      setFailure(undefined);
-      void client.invalidateQueries({ queryKey: listKey });
+      if (failure?.saved === undefined) {
+        setFailure(undefined);
+        void client.invalidateQueries({ queryKey: listKey });
+        return;
+      }
+      // The saved choice stays on the switch until the list can be read; a read that fails again keeps the line.
+      void readListAgain(client, listKey).then((read) => {
+        if (read) setFailure((current) => (current?.saved === undefined ? current : undefined));
+      });
     },
   };
 }

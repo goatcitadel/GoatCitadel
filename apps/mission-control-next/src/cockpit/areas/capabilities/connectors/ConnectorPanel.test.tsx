@@ -234,9 +234,71 @@ describe("Connector panel", () => {
     expect(target.pathname + target.hash).toBe("/settings/connections#mcp-servers");
   });
 
+  it("says why Chat can't use connectors when background runs are off, with the same link", async () => {
+    const blocked = { ...LINEAR, chat: { available: false, blockedBy: "background_runs_off" } } as const;
+    await renderPanel(LINEAR.id, [blocked]);
+    expect(text()).toContain("Chat can't use connectors while background runs are off");
+    // The other cause's sentence would send the operator to the wrong switch.
+    expect(text()).not.toContain("Chat can't use connectors yet");
+    const target = new URL(link("See Chat access in Settings")!.getAttribute("href")!, "http://cockpit.invalid");
+    expect(target.pathname + target.hash).toBe("/settings/connections#mcp-servers");
+  });
+
+  it("keeps the general Chat sentence when the Gateway names no cause", async () => {
+    const blocked = { ...LINEAR, chat: { available: false } } as const;
+    await renderPanel(LINEAR.id, [blocked]);
+    expect(text()).toContain("Chat can't use connectors yet");
+    expect(link("See Chat access in Settings")).toBeDefined();
+  });
+
   it("stays quiet about Chat when Chat can use it", async () => {
     await renderPanel(LINEAR.id);
     expect(text()).not.toContain("Chat can't use connectors yet");
+    expect(text()).not.toContain("background runs are off");
+  });
+
+  it("points a broken connector's reason at technical details instead of back at itself", async () => {
+    const failing = { ...LINEAR, state: "broken", reason: "error", lastError: "spawn ENOENT" } as const;
+    await renderPanel(LINEAR.id, [failing]);
+    expect(text()).toContain("Stopped working. The last error is under Technical details.");
+    // The row's line sends the reader here; here it must not send them back.
+    expect(text()).not.toContain("open it to see why");
+  });
+
+  it("does not claim a connected web search row needs a key", async () => {
+    // Firecrawl can run on the operator's own server, with no key.
+    const firecrawl = item({
+      id: "web-search:search.firecrawl",
+      name: "Firecrawl",
+      description: "Search the web and read pages",
+      kind: "built_in",
+      source: "web_search",
+      category: "search",
+      state: "connected",
+      reason: "ready",
+      group: "connected",
+      auth: "api_key",
+    });
+    await renderPanel(firecrawl.id, [firecrawl]);
+    expect(text()).toContain("Uses your web search settings");
+    expect(text()).not.toContain("Needs an API key");
+  });
+
+  it("still says a web search row that has no key needs one", async () => {
+    const brave = item({
+      id: "web-search:search.brave",
+      name: "Brave Search",
+      kind: "built_in",
+      source: "web_search",
+      category: "search",
+      state: "available",
+      reason: "needs_api_key",
+      group: "available",
+      auth: "api_key",
+    });
+    await renderPanel(brave.id, [brave]);
+    expect(text()).toContain("Needs an API key");
+    expect(text()).not.toContain("Uses your web search settings");
   });
 
   it("says a hidden connector is hidden here, with a link to the workspace's capabilities", async () => {
@@ -259,6 +321,36 @@ describe("Connector panel", () => {
     expect(details.textContent).toContain("mcp-server:linear");
     expect(details.textContent).toContain("mcp.linear.app");
     expect(details.textContent).toContain(REVISION);
+  });
+
+  it("lists the catalog entry in technical details for a connected service", async () => {
+    prefs.showTechnicalDetails = true;
+    const gmail = item({
+      id: "integration:conn-gmail",
+      name: "Gmail",
+      kind: "built_in",
+      source: "integration",
+      state: "connected",
+      reason: "ready",
+      group: "connected",
+      auth: "google",
+      catalogId: "automation.gmail",
+      connectionId: "conn-gmail",
+    });
+    await renderPanel(gmail.id, [gmail]);
+    const details = body().querySelector("details")!;
+    expect(details.textContent).toContain("Catalog");
+    expect(details.textContent).toContain("automation.gmail");
+    // Outside technical details the id stays hidden.
+    prefs.showTechnicalDetails = false;
+    await renderPanel(gmail.id, [gmail]);
+    expect(text()).not.toContain("automation.gmail");
+  });
+
+  it("leaves the catalog row out when the connector has no catalog entry", async () => {
+    prefs.showTechnicalDetails = true;
+    await renderPanel(LINEAR.id);
+    expect(body().querySelector("details")!.textContent).not.toContain("Catalog");
   });
 });
 
@@ -384,9 +476,36 @@ describe("Connector panel switch", () => {
       "Changed elsewhere. Reload to see the latest.",
     );
     expect(switchControl()?.getAttribute("aria-checked")).toBe("true");
+    // The failed save already asked for a fresh list; the Reload button asks again.
+    invalidate.mockClear();
     await act(async () => button("Reload")?.click());
     expect(invalidate).toHaveBeenCalledWith({ queryKey: KEY });
     expect(body().querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("says when a save could not be confirmed, keeps the switch where it was saved, and reloads on request", async () => {
+    route.search = `?item=${encodeURIComponent(LINEAR.id)}`;
+    connectorsApi.fetchCapabilityConnectors.mockResolvedValueOnce(response([OFF_LINEAR, NOTION]));
+    mcp.updateMcpServer.mockResolvedValue(savedServer({ revision: "b".repeat(64), enabled: true }));
+    await renderTab();
+    await vi.waitFor(() => expect(switchControl()).not.toBeNull());
+    await vi.waitFor(() => expect(switchControl()?.getAttribute("aria-busy")).toBeNull());
+
+    // The save goes through, but the read that would confirm it fails.
+    connectorsApi.fetchCapabilityConnectors.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => switchControl()?.click());
+    await vi.waitFor(() => expect(text()).toContain("Saved, but couldn't confirm. Reload to check."));
+    // The row in the list is still the old "turned off" one; the switch must not go back to it.
+    expect(cached(LINEAR.id)).toMatchObject({ state: "turned_off" });
+    expect(switchControl()?.getAttribute("aria-checked")).toBe("true");
+    expect(body().querySelector('[role="alert"]')?.textContent).toContain("Saved, but couldn't confirm");
+
+    const connected = { ...OFF_LINEAR, state: "connected", reason: "ready", group: "connected" } as const;
+    connectorsApi.fetchCapabilityConnectors.mockResolvedValueOnce(response([connected, NOTION]));
+    await act(async () => button("Reload")?.click());
+    await vi.waitFor(() => expect(text()).not.toContain("Saved, but couldn't confirm"));
+    expect(switchControl()?.getAttribute("aria-checked")).toBe("true");
+    expect(cached(LINEAR.id)).toMatchObject({ state: "connected" });
   });
 
   it("disables the switch with the reason when the server can't run yet", async () => {
