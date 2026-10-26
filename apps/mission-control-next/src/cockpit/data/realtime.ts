@@ -84,9 +84,11 @@ function invalidateForInboxSignal(event: RealtimeEvent, sink: RealtimeSink): voi
 const REPLAY_SNAPSHOT_MARGIN_MS = 2_000;
 
 /**
- * A stream replay re-sends retained history right after connect. When the Inbox snapshot was fetched
- * after that event happened, refetching only repeats the request the page just made. A newer event,
- * or a query without data yet, still refetches; only Inbox queries are ever skipped.
+ * A stream replay re-sends retained history right after connect. When the Inbox snapshot was generated
+ * after that event happened, refetching only repeats the request the page just made. Both times come
+ * from the Gateway's clock (the snapshot's `generatedAt` and the event's timestamp), so a browser clock
+ * that differs from the Gateway's never decides it. A newer event, a query without data, or a snapshot
+ * without a readable `generatedAt` still refetches; only Inbox queries are ever skipped.
  */
 function replayedEventNeedsRefetch(event: RealtimeEvent): (query: Query) => boolean {
   const happenedAt = Date.parse(event.timestamp);
@@ -94,7 +96,9 @@ function replayedEventNeedsRefetch(event: RealtimeEvent): (query: Query) => bool
   return (query) => {
     if (!inbox.every((part, index) => query.queryKey[index] === part)) return true;
     if (!Number.isFinite(happenedAt) || query.state.status !== "success") return true;
-    return query.state.dataUpdatedAt - REPLAY_SNAPSHOT_MARGIN_MS <= happenedAt;
+    const generatedAt = Date.parse(String((query.state.data as { generatedAt?: unknown } | undefined)?.generatedAt));
+    if (!Number.isFinite(generatedAt)) return true;
+    return generatedAt - REPLAY_SNAPSHOT_MARGIN_MS <= happenedAt;
   };
 }
 

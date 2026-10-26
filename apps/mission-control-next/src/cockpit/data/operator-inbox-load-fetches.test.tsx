@@ -15,7 +15,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/shell-client", () => ({ connect
 vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({ fetchOperatorInbox: mocks.read }));
 vi.mock("../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: vi.fn() }) }));
 
-const projection = { authority: "derived_projection", workspaceId: "w", items: [] } as unknown as OperatorInboxResponse;
+/** `generatedAt` is the Gateway clock time the snapshot was built, the reference for replayed events. */
+const projectionAt = (generatedAt: string) =>
+  ({ authority: "derived_projection", workspaceId: "w", items: [], generatedAt }) as unknown as OperatorInboxResponse;
+const projection = projectionAt(new Date().toISOString());
 const preferences: UiNotificationPreferences = {
   toastsEnabled: true,
   soundMode: "off",
@@ -60,7 +63,7 @@ beforeEach(() => {
     onEvent = callback;
     return () => undefined;
   });
-  mocks.read.mockResolvedValue(projection);
+  mocks.read.mockImplementation(async () => projectionAt(new Date().toISOString()));
   client = createCockpitQueryClient();
   container = document.createElement("div");
   document.body.append(container);
@@ -130,6 +133,32 @@ describe("Inbox route load", () => {
     await settle(50);
     await act(async () => {
       onEvent(replayedEvent("later", new Date(Date.now() + 60_000).toISOString()), { replayed: true });
+    });
+    await settle();
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+  });
+
+  it("compares a replayed event with the snapshot's Gateway time, not the browser clock", async () => {
+    // The browser fetched just now, but the Gateway (another machine) stamped the snapshot an hour earlier.
+    const gatewaySnapshot = new Date(Date.now() - 3_600_000);
+    mocks.read.mockImplementation(async () => projectionAt(gatewaySnapshot.toISOString()));
+    await mount();
+    await settle(50);
+    // On the Gateway clock this event is newer than the snapshot, though it is older than the browser fetch.
+    const eventAt = new Date(gatewaySnapshot.getTime() + 5_000).toISOString();
+    await act(async () => {
+      onEvent(replayedEvent("skewed", eventAt), { replayed: true });
+    });
+    await settle();
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+  });
+
+  it("refetches for replayed history when the snapshot carries no Gateway time", async () => {
+    mocks.read.mockImplementation(async () => ({ authority: "derived_projection", workspaceId: "w", items: [] }));
+    await mount();
+    await settle(50);
+    await act(async () => {
+      onEvent(replayedEvent("old", new Date(Date.now() - 60_000).toISOString()), { replayed: true });
     });
     await settle();
     expect(mocks.read).toHaveBeenCalledTimes(2);
