@@ -212,6 +212,8 @@ describe("provider-reported cost sanity", () => {
       expect(estimateUsageCostUsd({ ...base, usage: { ...tokens, cost_usd: bad } })).toBe(estimate);
     }
     expect(estimateUsageCostUsd({ ...base, usage: { cost_usd: -1 } })).toBeUndefined();
+    expect(estimateUsageCostUsd({ ...base, usage: { cost_usd: -1, total_cost_usd: 0.42 } })).toBe(0.42);
+    expect(estimateUsageCostUsd({ ...base, usage: { cost_usd: 1e9, total_cost_usd: 0.42 } })).toBe(0.42);
     expect(estimateUsageCostUsd({ ...base, usage: { total_cost_usd: 1e9 } })).toBeUndefined();
   });
 });

@@ -449,15 +449,18 @@ function normalizeModelId(value: string | undefined): string | undefined {
  * Anything else is ignored so the gateway falls back to its own estimate (or records the cost as unknown).
  */
 function readProviderReportedCostUsd(usage: Record<string, unknown>): number | undefined {
-  const value = readUsageNumber(usage.cost_usd) ?? readUsageNumber(usage.total_cost_usd);
-  if (value === undefined || value < 0) {
-    return undefined;
+  for (const candidate of [usage.cost_usd, usage.total_cost_usd]) {
+    const value = readUsageNumber(candidate);
+    if (value === undefined || value < 0) {
+      continue;
+    }
+    if (value > MAX_PROVIDER_REPORTED_COST_USD) {
+      log.warn("ignoring implausible provider-reported cost", { costUsd: value });
+      continue;
+    }
+    return value;
   }
-  if (value > MAX_PROVIDER_REPORTED_COST_USD) {
-    log.warn("ignoring implausible provider-reported cost", { costUsd: value });
-    return undefined;
-  }
-  return value;
+  return undefined;
 }
 
 function readUsageNumber(value: unknown): number | undefined {
