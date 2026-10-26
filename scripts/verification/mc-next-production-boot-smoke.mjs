@@ -164,13 +164,16 @@ export async function runBootSmoke({ dist, timeoutMs }) {
   const server = createDistServer(dist);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const browser = await chromium.launch();
+  // The listening server must close even when Chromium never launches (for example, a missing browser
+  // binary); otherwise it keeps Node alive and the check hangs instead of failing.
+  let browser;
   try {
+    browser = await chromium.launch();
     const results = [];
     for (const route of BOOT_ROUTES) results.push(await probeRoute(browser, origin, route, timeoutMs));
     return results;
   } finally {
-    await browser.close();
+    await browser?.close();
     await new Promise((resolve) => server.close(resolve));
   }
 }
