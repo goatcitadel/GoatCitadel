@@ -566,14 +566,23 @@ internal static partial class Program
         }
         foreach (var arg in args) info.ArgumentList.Add(arg);
         using var process = Process.Start(info) ?? throw new HelperException("git_launch_failed", "Git process did not start.");
-        var stdoutTask = ReadBoundedProcessStreamAsync(process.StandardOutput, MaxProcessOutputBytes);
-        var stderrTask = ReadBoundedProcessStreamAsync(process.StandardError, MaxProcessOutputBytes);
+        // Hitting the output bound kills git at once; otherwise a stopped reader leaves git blocked on a full
+        // pipe until the ten-minute timeout.
+        var stdoutTask = ReadBoundedProcessStreamAsync(process.StandardOutput, MaxProcessOutputBytes, () => KillProcessTree(process));
+        var stderrTask = ReadBoundedProcessStreamAsync(process.StandardError, MaxProcessOutputBytes, () => KillProcessTree(process));
         if (!process.WaitForExit(10 * 60_000))
         {
             process.Kill(entireProcessTree: true);
             throw new HelperException("git_timeout", "Git operation exceeded its bounded timeout.");
         }
-        Task.WaitAll(stdoutTask, stderrTask);
+        try
+        {
+            Task.WaitAll(stdoutTask, stderrTask);
+        }
+        catch (AggregateException error) when (error.InnerExceptions.OfType<HelperException>().FirstOrDefault() is { } limit)
+        {
+            throw limit;
+        }
         if (process.ExitCode != 0)
         {
             throw new HelperException("git_operation_failed", $"Git exited {process.ExitCode}: {SanitizeDiagnostic(stderrTask.Result)}");
@@ -581,19 +590,34 @@ internal static partial class Program
         return stdoutTask.Result.Trim();
     }
 
-    private static async Task<string> ReadBoundedProcessStreamAsync(StreamReader reader, int maxBytes)
+    private static void KillProcessTree(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // Already exited.
+        }
+    }
+
+    private static async Task<string> ReadBoundedProcessStreamAsync(StreamReader reader, int maxBytes, Action onLimitExceeded)
     {
         var buffer = new char[4096];
         var output = new StringBuilder();
+        long totalBytes = 0;
         while (true)
         {
             var count = await reader.ReadAsync(buffer);
             if (count == 0) return output.ToString();
-            output.Append(buffer, 0, count);
-            if (Encoding.UTF8.GetByteCount(output.ToString()) > maxBytes)
+            totalBytes += Encoding.UTF8.GetByteCount(buffer, 0, count);
+            if (totalBytes > maxBytes)
             {
+                onLimitExceeded();
                 throw new HelperException("process_output_limit", "Child process output exceeded its bound.");
             }
+            output.Append(buffer, 0, count);
         }
     }
 
