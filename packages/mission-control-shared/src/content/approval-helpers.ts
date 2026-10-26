@@ -135,6 +135,17 @@ function truncateEvidence(value: string, limit: number): string {
   return value.length > limit ? `${value.slice(0, limit).trimEnd()}\n...` : value;
 }
 
+/**
+ * Shortens a one-line preview at a word boundary so a reviewer never reads a half word ("a separate s…").
+ * Text with no break in the second half of the window (an id or a long token) is cut at the limit.
+ */
+function truncateLine(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  const window = value.slice(0, limit);
+  const lastBreak = window.search(/\s\S*$/u);
+  return `${(lastBreak > limit / 2 ? window.slice(0, lastBreak) : window).trimEnd()}…`;
+}
+
 function pushEvidenceBlock(
   codeBlocks: ApprovalEvidenceBlock[],
   seenBlocks: Set<string>,
@@ -254,7 +265,7 @@ function collectApprovalEvidence(
       }
       if (typeof value === "string") {
         if (isMemoryLifecycleSummaryKey(record.reviewKind, key)) {
-          collector.supporting.add(collector.exact ? value : truncateEvidence(value, 180));
+          collector.supporting.add(collector.exact ? value : truncateLine(value, 180));
         } else if (
           record.reviewKind === "memory.lifecycle.patch" &&
           (key === "requestedContent" || key === "requestedTitle")
@@ -279,14 +290,14 @@ function collectApprovalEvidence(
         } else if (isFilesystemKey(key) || /^(candidateId|versionId|subjectId|subjectKind|scopeKind)$/.test(key)) {
           addTarget(collector, humanizeKey(key), value);
         } else if (isLikelyCommandKey(key) && value.trim()) {
-          collector.commands.add(`${humanizeKey(key)}: ${collector.exact ? value : truncateEvidence(value, 140)}`);
+          collector.commands.add(`${humanizeKey(key)}: ${collector.exact ? value : truncateLine(value, 140)}`);
         } else if (key === "content" && (record.toolName === "memory.write" || record.toolName === "memory.upsert")) {
           // The server's allowlisted, redacted memory body is review evidence even on one line.
           pushEvidenceBlock(collector.changes, collector.seenBlocks, "Memory content", value, collector.exact, true);
         } else if (isLikelyCodeKey(key) && value.includes("\n")) {
           pushEvidenceBlock(collector.changes, collector.seenBlocks, humanizeKey(key), value, collector.exact);
         } else if (isLikelySupportKey(key)) {
-          collector.supporting.add(`${humanizeKey(key)}: ${collector.exact ? value : truncateEvidence(value, 180)}`);
+          collector.supporting.add(`${humanizeKey(key)}: ${collector.exact ? value : truncateLine(value, 180)}`);
         }
       } else if (Array.isArray(value)) {
         if (value.every((item) => typeof item === "string")) {

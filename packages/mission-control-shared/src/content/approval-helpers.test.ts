@@ -268,3 +268,14 @@ it("shows memory review summaries as the Gateway wrote them and pairs each targe
   expect(model?.supporting).toEqual(expect.arrayContaining(["Workspace: ws-1; namespace: notes", "Requested content: 41 UTF-8 bytes before redaction.", "Requested pinned state: unpinned", "Requested TTL: 600 seconds", "Secret-looking values are redacted."]));
   expect(model?.supporting.some((line) => /Summary: /.test(line))).toBe(false);
 });
+
+it("shortens one-line preview text at a word boundary instead of mid-word", () => {
+  const reason = "Namespace is the storage target; workspace and session identify the requesting context, not a separate storage boundary. ".repeat(3);
+  const line = buildApprovalEvidenceModel({ reason })!.supporting.find((entry) => entry.startsWith("Reason: "))!;
+  expect(line.endsWith("…")).toBe(true);
+  expect(line).not.toContain("\n...");
+  const lastWord = line.slice(0, -1).split(" ").at(-1)!;
+  expect(reason.split(/\s+/u)).toContain(lastWord);
+  const command = "run " + "x".repeat(2000);
+  expect(buildApprovalEvidenceModel({ command })!.commands[0]!.endsWith("…")).toBe(true);
+});
