@@ -3498,6 +3498,11 @@ export class LlmService {
     }
   }
 
+  /** Resolves once every queued model-catalog cache write has settled (used by tests; writes never reject). */
+  async flushModelCatalogWrites(): Promise<void> {
+    await this.modelCatalogWriteQueue;
+  }
+
   private persistModelDiscoverySnapshot(
     provider: LlmProviderConfig,
     result: ModelDiscoveryResult,

@@ -1215,7 +1215,12 @@ function createPlanWorkSynthesizePlan(): OrchestrationPlan {
 
 describe("mapWithConcurrency", () => {
   it("preserves result order across workers", async () => {
-    const results = await mapWithConcurrency([1, 2, 3, 4, 5], 2, async (item) => item * 10);
+    const results = await mapWithConcurrency([1, 2, 3, 4, 5], 2, async (item) => {
+      if (item === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return item * 10;
+    });
     expect(results).toEqual([10, 20, 30, 40, 50]);
   });
 

@@ -412,7 +412,7 @@ describe("LlmService model catalog cache", () => {
     await svc.listModelsWithSource("openai");
 
     expect(fetchMock).toHaveBeenCalled();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await svc.flushModelCatalogWrites();
     expect(await fs.readFile(cachePath, "utf8")).toBe(corrupt);
     expect(await fs.readdir(tempDir)).toEqual(["llm-model-catalog.json"]);
   });
