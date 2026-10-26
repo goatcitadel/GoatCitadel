@@ -36,7 +36,16 @@ export type InboundChannelEventTerminalStatus = Exclude<
   | "retry_wait"
 >;
 
-export type InboundChannelDispatchKind = "agent_turn" | "voice_agent_turn" | "record_only" | "command";
+/**
+ * `operator_desk_turn` is a question the operator typed at the desk into their own channel conversation. Only the
+ * Gateway's desk path accepts it (transport `operator_desk`); a provider callback can never produce one.
+ */
+export type InboundChannelDispatchKind =
+  | "agent_turn"
+  | "voice_agent_turn"
+  | "record_only"
+  | "command"
+  | "operator_desk_turn";
 
 /**
  * Durable admission state for the process-local bot-loop guard.

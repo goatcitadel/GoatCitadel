@@ -907,6 +907,12 @@ import {
 } from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { isTelegramApprovalActionConnectorReady } from "./channel-secret-resolution.js";
+import {
+  OPERATOR_DESK_INGEST_ORIGIN,
+  buildOperatorDeskGatewayEvent,
+  routeOperatorDeskSend,
+  type OperatorDeskSendResult,
+} from "./channel-desk-turn.js";
 import { enqueueApprovalRemoteTokenConnectorDelivery } from "./approval-connector-delivery.js";
 import {
   commsActivity as commsActivityImpl,
@@ -1355,8 +1361,13 @@ export class GatewayService {
       registerBackgroundTask: (task) => this.registerBackgroundTask(task),
       sharedHostLifecycle: this.sharedHostLifecycle,
       getIntegrationConnection: async (connectionId) => await this.storage.integrationConnections.get(connectionId),
-      ingestChannelMessage: async (channel, idempotencyKey, message) =>
-        await this.ingestChannelMessage(channel, idempotencyKey, message),
+      // A desk question is the operator's own words, so it is recorded with operator authority, never as channel input.
+      ingestChannelMessage: async (channel, idempotencyKey, message, origin) =>
+        origin === OPERATOR_DESK_INGEST_ORIGIN
+          ? await this.ingestEvent(idempotencyKey, buildOperatorDeskGatewayEvent(channel, message), {
+              sourceAuthority: "operator",
+            })
+          : await this.ingestChannelMessage(channel, idempotencyKey, message),
       ensureInboundChatSession: async (input) =>
         await chatSessionService.ensureInboundIntegrationChatSession(this.buildChatSessionDependencies(), input),
       hasRunningTurn: async (sessionId) => await this.hasRunningTurn(sessionId),
@@ -4842,12 +4853,37 @@ export class GatewayService {
     return await chatSessionService.setChatSessionBinding(this.buildChatSessionDependencies(), input);
   }
 
+  /**
+   * A desk send into a channel conversation: in the operator's own conversation it becomes a durable desk question
+   * (answered like a message from the phone); a blocked channel refuses it; anything else keeps the verbatim path.
+   */
+  public async sendOperatorDeskMessage(
+    sessionId: string,
+    input: { content: string; idempotencyKey: string },
+  ): Promise<OperatorDeskSendResult> {
+    const binding = await this.storage.chatSessionBindings.get(sessionId);
+    if (binding?.transport !== "integration" || !binding.connectionId) {
+      return { mode: "post" };
+    }
+    const connection = await this.storage.integrationConnections.get(binding.connectionId).catch((error: unknown) => {
+      if (error instanceof NotFoundError) return undefined;
+      throw error;
+    });
+    const session = await this.storage.sessions.getBySessionId(sessionId);
+    return await routeOperatorDeskSend(
+      { sessionId, sessionKey: session.sessionKey, binding, connection, ...input },
+      (acceptance) => this.inboundChannelEventService.acceptOperatorDeskEvent(acceptance),
+    );
+  }
+
   public async respondToExistingChatMessage(
     sessionId: string,
     userMessageId: string,
     input: Partial<ChatSendMessageRequest> & {
       deliveryReplyToMessageId?: string;
       channelSystemInstruction?: string;
+      /** Delivered to the channel ahead of the answer, such as the quoted desk question. */
+      deliveryPrefix?: string;
       inboundDurableIdentity?: InboundChannelDeterministicIdentity;
     } = {},
   ): Promise<ChatSendMessageResponse> {
@@ -4867,7 +4903,13 @@ export class GatewayService {
         throw new Error("session binding is not writable");
       }
 
-      const { deliveryReplyToMessageId, channelSystemInstruction, inboundDurableIdentity, ...chatInput } = input;
+      const {
+        deliveryReplyToMessageId,
+        channelSystemInstruction,
+        deliveryPrefix,
+        inboundDurableIdentity,
+        ...chatInput
+      } = input;
       const request: ChatSendMessageRequest = {
         content: userMessage.content,
         ...chatInput,
@@ -5010,9 +5052,12 @@ export class GatewayService {
         const deliveryInput = {
           connectionId: binding.connectionId,
           target: binding.target,
-          message: assistantContent,
+          message: deliveryPrefix ? `${deliveryPrefix}${assistantContent}` : assistantContent,
           attachments: voiceReplyAttachment ? [voiceReplyAttachment] : undefined,
-          replyToMessageId: deliveryReplyToMessageId?.trim() || deliveryFallbackMessageId,
+          // An operator-authored message never reached the channel, so there is no channel message to reply to.
+          replyToMessageId:
+            deliveryReplyToMessageId?.trim() ||
+            (userMessage.sourceAuthority === "operator" ? undefined : deliveryFallbackMessageId),
           sessionId,
           agentId: "assistant",
           ...(inboundDurableIdentity ? { idempotencyKey: inboundDurableIdentity.deliveryIdempotencyKey } : {}),

@@ -6,6 +6,9 @@ import {
   normalizeLeaseDuration,
   normalizeLimit,
   isPlainRecord,
+  normalizeDispatchKind,
+  normalizeInboundStatus,
+  normalizeBotLoopDecision,
 } from "./inbound-channel-normalization.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -350,11 +353,12 @@ export class InboundChannelEventRepository {
   }
 
   /** Durable ingress evidence, without loading message bodies or claiming delivery. */
+  /** Latest message the channel itself delivered; a question typed at the desk is not channel traffic. */
   public latestAcceptedAt(channelKey: string, connectionId: string): string | undefined {
     const row = this.db
       .prepare(
         `SELECT MAX(accepted_at) AS accepted_at FROM inbound_channel_events
-      WHERE channel_key = ? AND connection_id = ?`,
+      WHERE channel_key = ? AND connection_id = ? AND transport <> 'operator_desk'`,
       )
       .get(normalizeRequired(channelKey, "channelKey"), normalizeRequired(connectionId, "connectionId")) as
       | { accepted_at: string | null }
@@ -374,22 +378,30 @@ export class InboundChannelEventRepository {
 
   /** Bounded private input to the Gateway's redacted journey projection. */
   public listByConnection(input: {
-    connectionId: string; channelKey?: string; since?: string; limit?: number;
+    connectionId: string;
+    channelKey?: string;
+    since?: string;
+    limit?: number;
   }): InboundChannelEventRecord[] {
     const limit = input.limit ?? 50;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
       throw new ValidationError({ field: "limit", message: "Journey limit must be from 1 through 100." });
     }
-    const rows = this.db.prepare(`
+    const rows = this.db
+      .prepare(
+        `
       SELECT * FROM inbound_channel_events WHERE connection_id = @connectionId
         AND (CAST(@channelKey AS TEXT) IS NULL OR channel_key = @channelKey)
         AND (CAST(@since AS TEXT) IS NULL OR accepted_at >= @since)
       ORDER BY sequence DESC LIMIT @limit
-    `).all({
-      connectionId: normalizeRequired(input.connectionId, "connectionId"),
-      channelKey: input.channelKey === undefined ? null : normalizeRequired(input.channelKey, "channelKey"),
-      since: input.since === undefined ? null : normalizeTimestamp(input.since, "since"), limit,
-    }) as InboundChannelEventRow[];
+    `,
+      )
+      .all({
+        connectionId: normalizeRequired(input.connectionId, "connectionId"),
+        channelKey: input.channelKey === undefined ? null : normalizeRequired(input.channelKey, "channelKey"),
+        since: input.since === undefined ? null : normalizeTimestamp(input.since, "since"),
+        limit,
+      }) as InboundChannelEventRow[];
     return rows.map(mapRow);
   }
 
@@ -855,43 +867,6 @@ function normalizeIdentity(input: { channelKey: string; connectionId: string; id
     connectionId: normalizeRequired(input.connectionId, "connectionId"),
     idempotencyKey: normalizeRequired(input.idempotencyKey, "idempotencyKey"),
   };
-}
-
-function normalizeDispatchKind(value: unknown): InboundChannelEventRecord["dispatchKind"] {
-  if (value === "agent_turn" || value === "voice_agent_turn" || value === "record_only" || value === "command") {
-    return value;
-  }
-  throw new ValidationError({ field: "dispatchKind", message: "dispatchKind is not supported." });
-}
-
-function normalizeInboundStatus(value: string): InboundChannelEventStatus {
-  if (
-    value === "accepted" ||
-    value === "processing" ||
-    value === "message_recorded" ||
-    value === "command_execution_started" ||
-    value === "turn_admitted" ||
-    value === "waiting" ||
-    value === "reply_enqueued" ||
-    value === "retry_wait" ||
-    value === "completed" ||
-    value === "suppressed" ||
-    value === "failed" ||
-    value === "manual_reconciliation_required"
-  ) {
-    return value;
-  }
-  throw new TypeError(`inbound_channel_events status is not supported: ${value}`);
-}
-
-function normalizeBotLoopDecision(value: string | null): InboundChannelBotLoopDecision | undefined {
-  if (value === null) {
-    return undefined;
-  }
-  if (value === "evaluating" || value === "allow" || value === "suppress") {
-    return value;
-  }
-  throw new TypeError(`inbound_channel_events bot_loop_decision is not supported: ${value}`);
 }
 
 function normalizeCompletedBotLoopDecision(

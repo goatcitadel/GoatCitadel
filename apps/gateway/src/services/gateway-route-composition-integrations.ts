@@ -350,6 +350,8 @@ export function composeIntegrationChannelRouteDependencies(
         gateway.respondToExistingChatMessage(sessionId, messageId, input),
       resolveApprovalWithRemoteToken: (input) => gateway.resolveApprovalWithRemoteToken(input),
       resolveApprovalWithRemoteTokenId: (input) => gateway.resolveApprovalWithRemoteTokenId(input),
+      // A desk send into a channel conversation; the durable desk question is an inbound channel event.
+      sendOperatorDeskMessage: (sessionId, input) => gateway.sendOperatorDeskMessage(sessionId, input),
       setChatSessionBinding: (input) => gateway.setChatSessionBinding(input),
       updateIntegrationConnection: (connectionId, patch) =>
         integrationChannel.updateIntegrationConnection(connectionId, patch),

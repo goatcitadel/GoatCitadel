@@ -1,4 +1,11 @@
-import { ValidationError } from "@goatcitadel/contracts";
+import {
+  ValidationError,
+  type InboundChannelBotLoopDecision,
+  type InboundChannelEventRecord,
+  type InboundChannelEventStatus,
+} from "@goatcitadel/contracts";
+
+const DISPATCH_KINDS = new Set(["agent_turn", "voice_agent_turn", "record_only", "command", "operator_desk_turn"]);
 
 export function normalizeRequired(value: string, field: string): string {
   const normalized = value.trim();
@@ -54,4 +61,41 @@ export function isPlainRecord(value: unknown): value is Record<string, unknown> 
   }
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+export function normalizeDispatchKind(value: unknown): InboundChannelEventRecord["dispatchKind"] {
+  if (typeof value === "string" && DISPATCH_KINDS.has(value)) {
+    return value as InboundChannelEventRecord["dispatchKind"];
+  }
+  throw new ValidationError({ field: "dispatchKind", message: "dispatchKind is not supported." });
+}
+
+export function normalizeInboundStatus(value: string): InboundChannelEventStatus {
+  if (
+    value === "accepted" ||
+    value === "processing" ||
+    value === "message_recorded" ||
+    value === "command_execution_started" ||
+    value === "turn_admitted" ||
+    value === "waiting" ||
+    value === "reply_enqueued" ||
+    value === "retry_wait" ||
+    value === "completed" ||
+    value === "suppressed" ||
+    value === "failed" ||
+    value === "manual_reconciliation_required"
+  ) {
+    return value;
+  }
+  throw new TypeError(`inbound_channel_events status is not supported: ${value}`);
+}
+
+export function normalizeBotLoopDecision(value: string | null): InboundChannelBotLoopDecision | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  if (value === "evaluating" || value === "allow" || value === "suppress") {
+    return value;
+  }
+  throw new TypeError(`inbound_channel_events bot_loop_decision is not supported: ${value}`);
 }

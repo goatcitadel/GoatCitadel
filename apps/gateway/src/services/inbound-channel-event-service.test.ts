@@ -5,8 +5,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventIngestService, resolveSessionRoute } from "@goatcitadel/gateway-core";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
-import { CHANNEL_INGRESS_ACCEPTED_REVISION_KEY } from "@goatcitadel/contracts";
-import type { ChatChannelConversation, ChatMessageRecord, ChatSendMessageResponse } from "@goatcitadel/contracts";
+import { CHANNEL_INGRESS_ACCEPTED_REVISION_KEY, NotFoundError } from "@goatcitadel/contracts";
+import type {
+  ChatChannelConversation,
+  ChatMessageRecord,
+  ChatSendMessageResponse,
+  ChatSessionBindingRecord,
+} from "@goatcitadel/contracts";
+import { acceptOperatorDeskTurn, buildOperatorDeskGatewayEvent } from "./channel-desk-turn.js";
+import { GatewayService } from "./gateway-service.js";
 import {
   InboundChannelEventService,
   InboundChannelTurnTerminalError,
@@ -356,6 +363,173 @@ describe("InboundChannelEventService", () => {
     const unchanged = await acceptAndSettle(3);
     expect(unchanged?.conversation).toEqual(renamed);
     expect(unchanged?.target).toBe("42");
+  });
+
+  it("records a desk message with operator authority and skips the bot-loop guard", async () => {
+    const decideBotLoop = vi.fn<InboundChannelEventServiceDeps["decideBotLoop"]>(() => ({
+      action: "suppress",
+      reason: "rate-cap",
+      cooldownExpiresAt: new Date().toISOString(),
+    }));
+    const activity = vi.fn<InboundChannelEventServiceDeps["emitChannelActivity"]>(async () => undefined);
+    const desk = await createDeskHarness({ decideBotLoop, emitChannelActivity: activity });
+
+    const { response, eventId } = await desk.ask("What's on my calendar today?");
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "completed");
+
+    const message = desk.harness.storage.chatMessages.get(response.userMessage.messageId);
+    expect(message).toMatchObject({
+      sessionId: desk.session.sessionId,
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      sourceAuthority: "operator",
+      content: "What's on my calendar today?",
+    });
+    expect(desk.ingest).toHaveBeenCalledWith(
+      "telegram",
+      eventId,
+      expect.objectContaining({ actorId: "operator", actorType: "user" }),
+      "operator_desk",
+    );
+    expect(decideBotLoop).not.toHaveBeenCalled();
+    expect(desk.harness.storage.inboundChannelEvents.get(eventId)?.botLoopDecision).toBeUndefined();
+    // The desk message never arrived through the channel, so nothing is marked seen or typed on it there.
+    expect(activity).not.toHaveBeenCalled();
+    expect(desk.gateway.commsSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers the answer with the desk prefix", async () => {
+    const desk = await createDeskHarness();
+
+    const { eventId, response } = await desk.ask("Where did I park?");
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "completed");
+
+    expect(desk.gateway.commsSend).toHaveBeenCalledTimes(1);
+    const delivery = desk.gateway.commsSend.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(String(delivery.message).startsWith('From your desk: "')).toBe(true);
+    expect(delivery).toMatchObject({
+      connectionId: "telegram-1",
+      target: "4242",
+      message: 'From your desk: "Where did I park?"\n\nLevel 3, near the lifts.',
+      sessionId: desk.session.sessionId,
+    });
+    // The desk question has no message in the channel to reply to, so the answer is a plain post.
+    expect(delivery.replyToMessageId).toBeUndefined();
+    expect(desk.harness.storage.inboundChannelEvents.get(eventId)).toMatchObject({
+      status: "completed",
+      messageId: response.userMessage.messageId,
+      turnId: response.turnId,
+      deliveryId: "desk-delivery-1",
+    });
+  });
+
+  it("keeps a desk turn retryable while its answer waits for approval", async () => {
+    const desk = await createDeskHarness({ answerStatus: "waiting_for_approval" });
+
+    const { eventId } = await desk.ask("Book the usual table for Friday.");
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "waiting");
+    expect(desk.harness.storage.inboundChannelEvents.get(eventId)).toMatchObject({
+      status: "waiting",
+      deliveryId: undefined,
+      terminalAt: undefined,
+    });
+    expect(desk.gateway.commsSend).not.toHaveBeenCalled();
+
+    // The operator approves; the durable run settles the turn with its answer.
+    desk.settleApprovedTurn("Booked for 7pm.");
+    desk.harness.service.close();
+    desk.harness.storage.db
+      .prepare("UPDATE inbound_channel_events SET claim_expires_at = ? WHERE event_id = ?")
+      .run(new Date(0).toISOString(), eventId);
+    const restarted = desk.harness.createAdditionalService();
+    await restarted.drain();
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "completed");
+
+    expect(desk.gateway.consumePreparedAgentChatTurn).toHaveBeenCalledTimes(1);
+    expect(desk.gateway.commsSend).toHaveBeenCalledTimes(1);
+    expect(desk.gateway.commsSend.mock.calls[0]?.[0]).toMatchObject({
+      message: 'From your desk: "Book the usual table for Friday."\n\nBooked for 7pm.',
+    });
+    expect(desk.harness.storage.inboundChannelEvents.get(eventId)?.deliveryId).toBe("desk-delivery-1");
+  });
+
+  it("never answers a desk question once the conversation is no longer the operator's own", async () => {
+    const desk = await createDeskHarness({ ownerActorIds: ["someone-else"] });
+
+    const { eventId } = await desk.ask("Is this still me?");
+    await waitFor(() => desk.harness.storage.inboundChannelEvents.get(eventId)?.status === "suppressed");
+
+    expect(desk.harness.respondToExistingChatMessage).not.toHaveBeenCalled();
+    expect(desk.gateway.commsSend).not.toHaveBeenCalled();
+  });
+
+  it("decides each desk send from the binding, the connection and the session it names", async () => {
+    const desk = await createDeskHarness();
+    const connection = {
+      connectionId: "telegram-1",
+      key: "telegram",
+      label: "Telegram",
+      enabled: true,
+      status: "connected",
+      config: { ownerActorIds: ["4242"] },
+    };
+    const deskBinding = {
+      sessionId: desk.session.sessionId,
+      transport: "integration",
+      connectionId: "telegram-1",
+      target: "4242",
+      conversation: { kind: "direct", counterpartActorId: "4242" },
+      writable: true,
+    };
+    let binding: Record<string, unknown> | undefined = deskBinding;
+    let connectionExists = true;
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+    gateway.inboundChannelEventService = desk.harness.service;
+    gateway.storage = {
+      chatSessionBindings: { get: async () => binding },
+      integrationConnections: {
+        get: async (connectionId: string) => {
+          if (!connectionExists) {
+            throw new NotFoundError({ entity: "Integration connection", id: connectionId });
+          }
+          return connection;
+        },
+      },
+      sessions: { getBySessionId: async () => ({ sessionKey: desk.session.sessionKey }) },
+    };
+    const send = () =>
+      gateway.sendOperatorDeskMessage(desk.session.sessionId, { content: "Any news?", idempotencyKey: "request-9" });
+
+    const asked = await send();
+    expect(asked).toMatchObject({ mode: "ask", response: { userMessage: { sourceAuthority: "operator" } } });
+    expect(
+      desk.harness.storage.inboundChannelEvents.getByIdentity({
+        channelKey: "telegram",
+        connectionId: "telegram-1",
+        idempotencyKey: `desk:${desk.session.sessionId}:request-9`,
+      }),
+    ).toMatchObject({ dispatchKind: "operator_desk_turn", transport: "operator_desk" });
+
+    connectionExists = false;
+    await expect(send()).resolves.toEqual({
+      mode: "blocked",
+      message: "This channel was removed. Its conversations stay readable.",
+    });
+    binding = { ...deskBinding, transport: "llm", connectionId: undefined, target: undefined };
+    await expect(send()).resolves.toEqual({ mode: "post" });
+    binding = undefined;
+    await expect(send()).resolves.toEqual({ mode: "post" });
+  });
+
+  it("refuses desk events through the provider acceptance path", async () => {
+    const harness = await createHarness();
+    await expect(
+      harness.service.accept({
+        ...buildInput(),
+        dispatchKind: "operator_desk_turn" as never,
+      }),
+    ).rejects.toThrow();
   });
 
   it("does not recover or claim inbound work after shared-host admission closes", async () => {
@@ -1094,6 +1268,95 @@ describe("InboundChannelEventService", () => {
     expect(executeInboundCommand).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * A desk question in the operator's own Telegram conversation, run by the real worker, real Chat ingest and the
+   * real Gateway reply owner. Only model execution, turn admission and the channel send are doubles.
+   */
+  async function createDeskHarness(
+    options: Partial<InboundChannelEventServiceDeps> & {
+      answerStatus?: "completed" | "waiting_for_approval";
+      ownerActorIds?: string[];
+    } = {},
+  ) {
+    const { answerStatus = "completed", ownerActorIds = ["4242"], ...overrides } = options;
+    const session = resolveSessionRoute({ channel: "telegram", account: "telegram-1", peer: "4242" });
+    const deskBinding: ChatSessionBindingRecord = {
+      sessionId: session.sessionId,
+      transport: "integration",
+      connectionId: "telegram-1",
+      target: "4242",
+      conversation: { kind: "direct", counterpartActorId: "4242", title: "You" },
+      writable: true,
+      createdAt: "2026-10-25T10:00:00.000Z",
+      updatedAt: "2026-10-25T10:00:00.000Z",
+    };
+    // The harness owns the storage; these closures only run once it exists.
+    const getStorage = (): Storage => harness.storage;
+    let eventIngest: EventIngestService | undefined;
+    const ingest = vi.fn<InboundChannelEventServiceDeps["ingestChannelMessage"]>(
+      async (channel, idempotencyKey, message, origin) => {
+        eventIngest ??= new EventIngestService(createSqliteAsyncStorage(getStorage()));
+        const fromDesk = origin === "operator_desk";
+        return await eventIngest.ingest({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey,
+          sourceAuthority: fromDesk ? "operator" : "external_channel",
+          payload: fromDesk
+            ? buildOperatorDeskGatewayEvent(channel, message)
+            : {
+                eventId: message.eventId,
+                route: { channel, account: message.account, peer: message.peer },
+                actor: { type: "user", id: message.actorId },
+                message: { role: "user", content: message.content },
+              },
+        });
+      },
+    );
+    const gateway = createDeskReplyGateway(getStorage, deskBinding, answerStatus);
+    const harness = await createHarness({
+      getIntegrationConnection: () => ({
+        key: "telegram",
+        enabled: true,
+        status: "connected",
+        config: { ownerActorIds },
+      }),
+      ensureInboundChatSession: vi.fn(async (input) => ({
+        ...resolveSessionRoute(input.route),
+        conversation: deskBinding.conversation,
+      })),
+      ingestChannelMessage: ingest,
+      respondToExistingChatMessage: vi.fn<InboundChannelEventServiceDeps["respondToExistingChatMessage"]>(
+        async (sessionId, messageId, respondOptions) =>
+          await GatewayService.prototype.respondToExistingChatMessage.call(
+            gateway,
+            sessionId,
+            messageId,
+            respondOptions,
+          ),
+      ),
+      ...overrides,
+    });
+    const ask = async (content: string, idempotencyKey = "request-1") => {
+      const response = await acceptOperatorDeskTurn(
+        (acceptance) => harness.service.acceptOperatorDeskEvent(acceptance),
+        {
+          sessionId: session.sessionId,
+          sessionKey: session.sessionKey,
+          binding: deskBinding,
+          content,
+          idempotencyKey,
+        },
+      );
+      const event = harness.storage.inboundChannelEvents.getByIdentity({
+        channelKey: "telegram",
+        connectionId: "telegram-1",
+        idempotencyKey: `desk:${session.sessionId}:${idempotencyKey}`,
+      });
+      return { response, eventId: event!.eventId };
+    };
+    return { harness, session, ingest, gateway, ask, settleApprovedTurn: gateway.settleApprovedTurn };
+  }
+
   async function createHarness(overrides: Partial<InboundChannelEventServiceDeps> = {}): Promise<{
     storage: Storage;
     service: InboundChannelEventService;
@@ -1233,6 +1496,107 @@ function buildResponse(
     transport: "integration",
     turnId: identity.turnId,
   };
+}
+
+/**
+ * A Gateway double for the shipped `respondToExistingChatMessage`: turn admission, model execution and the channel
+ * send are stubs, while the reply owner's own replay, approval-wait and delivery logic runs unchanged.
+ */
+function createDeskReplyGateway(
+  getStorage: () => Storage,
+  binding: ChatSessionBindingRecord,
+  answerStatus: "completed" | "waiting_for_approval",
+) {
+  const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+  let admission: { requestClaim?: unknown } | undefined;
+  let identity: Record<string, string> = {};
+  let settledTrace: Record<string, unknown> | undefined;
+  let settledAnswer: ChatMessageRecord | undefined;
+  gateway.config = { assistant: { deploymentProfile: "local_dev", features: {} } };
+  gateway.runtimeDecisionRecorder = { record: vi.fn() };
+  gateway.isFeatureEnabled = vi.fn(async () => false);
+  gateway.recordDevDiagnostic = vi.fn();
+  gateway.withChatTurnWriteLease = vi.fn(
+    async (_sessionId: string, _operation: string, work: () => Promise<unknown>) => await work(),
+  );
+  gateway.sessionControlRuntimeOwner = {
+    admitSystemChatTurn: vi.fn(async () => {
+      admission = { requestClaim: { runtimeOwnerId: "runtime-desk", leaseRevision: 1 } };
+      return admission;
+    }),
+    renewRequestLease: vi.fn(async () => admission),
+    startRequestLeaseHeartbeat: vi.fn(() => ({ assertHealthy: vi.fn(), stop: vi.fn() })),
+    closeTurnWrite: vi.fn(),
+  };
+  gateway.prepareAgentChatTurn = vi.fn(
+    async (sessionId: string, _request: unknown, prepare: Record<string, string>) => {
+      identity = {
+        sessionId,
+        turnId: prepare.turnId!,
+        userMessageId: prepare.userMessageId!,
+        assistantMessageId: prepare.assistantMessageId!,
+      };
+      return { userEventId: prepare.userMessageId, turnId: prepare.turnId };
+    },
+  );
+  gateway.consumePreparedAgentChatTurn = vi.fn(
+    async (sessionId: string, _request: unknown, prepared: { turnId: string }, ...rest: unknown[]) => {
+      identity.durableRunId = (rest[2] as { durableRunId: string }).durableRunId;
+      // The real durable launch transfers request authority before returning.
+      admission!.requestClaim = undefined;
+      return answerStatus === "completed"
+        ? {
+            sessionId,
+            turnId: prepared.turnId,
+            assistantMessage: { messageId: identity.assistantMessageId, content: "Level 3, near the lifts." },
+            trace: { status: "completed" },
+          }
+        : { sessionId, turnId: prepared.turnId, trace: { status: "waiting_for_approval" } };
+    },
+  );
+  gateway.ensureSessionInternalToolGrant = vi.fn();
+  gateway.commsSend = vi.fn(async () => ({ status: "queued", deliveryId: "desk-delivery-1" }));
+  gateway.requireExecutedToolResult = vi.fn(() => ({
+    deliveryId: "desk-delivery-1",
+    providerMessageId: "telegram-reply-1",
+  }));
+  gateway.storage = {
+    chatMessages: {
+      get: async (messageId: string) =>
+        messageId === settledAnswer?.messageId ? settledAnswer : getStorage().chatMessages.get(messageId),
+    },
+    chatSessionBindings: { get: async () => binding },
+    chatTurnTraces: {
+      get: async (turnId: string) => {
+        if (settledTrace?.turnId !== turnId) {
+          throw new NotFoundError({ entity: "Chat turn trace", id: turnId });
+        }
+        return settledTrace;
+      },
+    },
+  };
+  /** Stands in for the durable run finishing after the operator approves. */
+  const settleApprovedTurn = (content: string): void => {
+    settledAnswer = {
+      messageId: identity.assistantMessageId!,
+      sessionId: identity.sessionId!,
+      role: "assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      sourceAuthority: "agent_proposed",
+      content,
+      timestamp: new Date().toISOString(),
+    };
+    settledTrace = {
+      turnId: identity.turnId,
+      sessionId: identity.sessionId,
+      userMessageId: identity.userMessageId,
+      assistantMessageId: identity.assistantMessageId,
+      durable: { runId: identity.durableRunId },
+      status: "completed",
+    };
+  };
+  return Object.assign(gateway, { settleApprovedTurn });
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } {

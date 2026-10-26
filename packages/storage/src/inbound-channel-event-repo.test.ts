@@ -81,6 +81,45 @@ describe("InboundChannelEventRepository", () => {
     }
   });
 
+  it("accepts the operator desk dispatch kind", () => {
+    const { repo, close } = createRepo();
+    try {
+      const provider = repo.accept(
+        {
+          eventId: "provider-event",
+          channelKey: "telegram",
+          connectionId: "connection-1",
+          transport: "provider_webhook",
+          dispatchKind: "agent_turn",
+          idempotencyKey: "telegram:update-1",
+          laneKey: "telegram:connection-1:42",
+          payload: { text: "from the phone" },
+        },
+        "2026-10-25T10:00:00.000Z",
+      );
+      const desk = repo.accept(
+        {
+          eventId: "desk-event",
+          channelKey: "telegram",
+          connectionId: "connection-1",
+          transport: "operator_desk",
+          dispatchKind: "operator_desk_turn",
+          idempotencyKey: "desk:sess-1:request-1",
+          laneKey: "session:sess-1",
+          payload: { text: "from the desk" },
+        },
+        "2026-10-25T10:05:00.000Z",
+      );
+      assert.equal(desk.outcome, "accepted");
+      assert.equal(repo.get("desk-event")?.dispatchKind, "operator_desk_turn");
+      assert.equal(repo.get("desk-event")?.transport, "operator_desk");
+      // A desk question is not something the channel sent, so it never counts as the channel's latest inbound message.
+      assert.equal(repo.latestAcceptedAt("telegram", "connection-1"), provider.event.acceptedAt);
+    } finally {
+      close();
+    }
+  });
+
   it("makes acceptMany atomic when a later item conflicts", () => {
     const { repo, close } = createRepo();
     try {

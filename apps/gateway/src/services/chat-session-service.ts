@@ -1254,7 +1254,7 @@ export async function ensureInboundIntegrationChatSession(
     /** Written on every call, not only when the session is created, so renamed groups stay current. */
     conversation?: ChatChannelConversation;
   },
-): Promise<{ sessionId: string; sessionKey: string }> {
+): Promise<{ sessionId: string; sessionKey: string; conversation?: ChatChannelConversation }> {
   const connectionId = input.connectionId.trim();
   const target = input.target?.trim();
   if (!connectionId || !target) {
@@ -1262,6 +1262,8 @@ export async function ensureInboundIntegrationChatSession(
   }
   const resolution = resolveSessionRoute(input.route);
   const now = new Date().toISOString();
+  // What the binding holds afterwards: the details just written, or the stored ones this call kept.
+  let conversation: ChatChannelConversation | undefined;
 
   await deps.storage.runImmediateTransaction(async () => {
     const connection = await deps.storage.integrationConnections.get(connectionId);
@@ -1287,7 +1289,7 @@ export async function ensureInboundIntegrationChatSession(
     }
     await deps.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
     await deps.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
-    await deps.storage.chatSessionBindings.upsert(
+    const binding = await deps.storage.chatSessionBindings.upsert(
       {
         sessionId: resolution.sessionId,
         workspaceId,
@@ -1299,6 +1301,7 @@ export async function ensureInboundIntegrationChatSession(
       },
       now,
     );
+    conversation = binding.conversation;
   });
 
   await deps.ensureChatSessionRuntimeGrants(resolution.sessionId);
@@ -1308,7 +1311,7 @@ export async function ensureInboundIntegrationChatSession(
     sessionId: resolution.sessionId,
     transport: "integration",
   });
-  return resolution;
+  return conversation ? { ...resolution, conversation } : resolution;
 }
 
 export async function getChatSessionPrefs(
