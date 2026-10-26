@@ -20,6 +20,7 @@ import {
   readBoundedResponseText,
 } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
+import { attachRetryAfter } from "./provider-retry-after.js";
 import { streamSsePayloads } from "./provider-sse-frames.js";
 import {
   LlmDispatchGuardScope,
@@ -2373,16 +2374,22 @@ export class LlmService {
             throw new Error(`chat completion blocked redirect (${dispatched.response.status})`);
           }
           if (!dispatched.response.ok) {
-            throw new Error(await buildHttpError("chat completion", dispatched.response));
+            throw attachRetryAfter(
+              new Error(await buildHttpError("chat completion", dispatched.response)),
+              dispatched.response,
+            );
           }
         } else {
-          throw new Error(
-            buildHttpErrorFromText(
-              "chat completion",
-              dispatched.response.status,
-              dispatched.response.statusText,
-              errorText,
+          throw attachRetryAfter(
+            new Error(
+              buildHttpErrorFromText(
+                "chat completion",
+                dispatched.response.status,
+                dispatched.response.statusText,
+                errorText,
+              ),
             ),
+            dispatched.response,
           );
         }
       }
@@ -2515,16 +2522,22 @@ export class LlmService {
               throw new Error(`chat completion blocked redirect (${dispatched.response.status})`);
             }
             if (!dispatched.response.ok) {
-              throw new Error(await buildHttpError("chat completion", dispatched.response));
+              throw attachRetryAfter(
+                new Error(await buildHttpError("chat completion", dispatched.response)),
+                dispatched.response,
+              );
             }
           } else {
-            throw new Error(
-              buildHttpErrorFromText(
-                "chat completion",
-                dispatched.response.status,
-                dispatched.response.statusText,
-                errorText,
+            throw attachRetryAfter(
+              new Error(
+                buildHttpErrorFromText(
+                  "chat completion",
+                  dispatched.response.status,
+                  dispatched.response.statusText,
+                  errorText,
+                ),
               ),
+              dispatched.response,
             );
           }
         }
@@ -2630,7 +2643,10 @@ export class LlmService {
           throw new Error(`responses request blocked redirect (${dispatched.response.status})`);
         }
         if (!dispatched.response.ok) {
-          throw new Error(await buildHttpError("responses request", dispatched.response));
+          throw attachRetryAfter(
+            new Error(await buildHttpError("responses request", dispatched.response)),
+            dispatched.response,
+          );
         }
 
         let rawCompletion: ChatCompletionResponse;
@@ -2766,7 +2782,10 @@ export class LlmService {
           throw new Error(`responses request blocked redirect (${dispatched.response.status})`);
         }
         if (!dispatched.response.ok) {
-          throw new Error(await buildHttpError("responses request", dispatched.response));
+          throw attachRetryAfter(
+            new Error(await buildHttpError("responses request", dispatched.response)),
+            dispatched.response,
+          );
         }
 
         const contentType = dispatched.response.headers.get("content-type")?.toLowerCase() ?? "";

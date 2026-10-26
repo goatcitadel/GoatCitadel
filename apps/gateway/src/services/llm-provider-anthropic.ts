@@ -13,6 +13,7 @@ import {
 } from "./llm-pricing.js";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
+import { attachRetryAfter } from "./provider-retry-after.js";
 import { streamSsePayloads } from "./provider-sse-frames.js";
 import { extractProviderOwnedOutputCapErrorText, parseProviderOutputCapEvidence } from "./llm-output-cap-recovery.js";
 import {
@@ -65,7 +66,10 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
           throw new Error(`messages request blocked redirect (${dispatched.response.status})`);
         }
         if (!dispatched.response.ok) {
-          throw new Error(await buildHttpError("messages request", dispatched.response));
+          throw attachRetryAfter(
+            new Error(await buildHttpError("messages request", dispatched.response)),
+            dispatched.response,
+          );
         }
 
         const json = await parseProviderJsonResponse<Record<string, unknown>>("messages request", dispatched.response);
@@ -157,7 +161,10 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
           throw new Error(`messages request blocked redirect (${dispatched.response.status})`);
         }
         if (!dispatched.response.ok) {
-          throw new Error(await buildHttpError("messages request", dispatched.response));
+          throw attachRetryAfter(
+            new Error(await buildHttpError("messages request", dispatched.response)),
+            dispatched.response,
+          );
         }
 
         const contentType = dispatched.response.headers.get("content-type")?.toLowerCase() ?? "";
