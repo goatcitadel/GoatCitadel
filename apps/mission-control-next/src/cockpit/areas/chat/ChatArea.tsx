@@ -22,6 +22,8 @@ import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
 import { InspectorSourceContext } from "../../app/inspector-context";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { channelPageConnectionId } from "../../app/routes";
+import { ChatMainColumn } from "./ChatMainColumn";
 import { ChatOwnerNavigationBoundary } from "./ChatOwnerNavigationBoundary";
 import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
 import { useSelectedChannelConversation } from "./use-channel-conversation";
@@ -123,7 +125,7 @@ export function ChatAreaView({
   onVisibleSessionChange?: (sessionId: string | undefined) => void;
   gatewayUnavailable?: boolean;
 }) {
-  const { navigate } = useCockpitRoute();
+  const { navigate, rest } = useCockpitRoute();
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
   const onboarding = useQuery({ queryKey: ["system", "onboarding"], queryFn: fetchOnboardingState, staleTime: 60_000 });
   const { open, close, content: inspectorContent, register, closeIfOpen, getDismissalGeneration } = useInspector();
@@ -282,7 +284,7 @@ export function ChatAreaView({
         onOpenProjects={openProjects}
         messaging={messaging}
       />
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <ChatMainColumn channelPageId={channelPageConnectionId(rest)}>
         <ChatSessionHeader
           input={input}
           active={active}
@@ -396,7 +398,7 @@ export function ChatAreaView({
         ) : null}
         {input.btwSideChatProps ? <ThreadedBtwSideChatPanel sideChat={input.btwSideChatProps} /> : null}
         {active?.chatTimerPanel ? <ChatTimerPanel panel={active.chatTimerPanel} /> : null}
-      </div>
+      </ChatMainColumn>
     </section>
   );
 }

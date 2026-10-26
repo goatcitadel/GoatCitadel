@@ -133,3 +133,21 @@ it.each(["/chat/projects", "/chat/projects/project-a", "/projects/project-a"])(
     expect(new URLSearchParams(window.location.search).get("sessionId")).toBeNull();
   },
 );
+it("leaves a channel page for the conversation the operator picks, and only for that", async () => {
+  await render("/chat/messaging/conn-a?workspaceId=workspace-a&shell=cockpit");
+  // A selection nobody asked to publish never takes the page over.
+  await act(async () => select("existing/one"));
+  expect(window.location.pathname).toBe("/chat/messaging/conn-a");
+  await act(async () => select("prior"));
+  await act(async () => navigation.request("chat", { sessionId: "existing/one" }));
+  expect(window.location.pathname).toBe("/chat/messaging/conn-a");
+  await act(async () => select("existing/one"));
+  expect(window.location.pathname).toBe("/chat");
+  expect(new URLSearchParams(window.location.search).get("sessionId")).toBe("existing/one");
+});
+it("leaves a channel page for the new chat made from it", async () => {
+  await render("/chat/messaging/conn-a?workspaceId=workspace-a&shell=cockpit");
+  await act(async () => creation.create("chat"));
+  expect(window.location.pathname).toBe("/chat");
+  expect(new URLSearchParams(window.location.search).get("sessionId")).toBe("created/one");
+});

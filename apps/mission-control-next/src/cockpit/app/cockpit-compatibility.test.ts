@@ -1,7 +1,11 @@
 import { catalogHref } from "../areas/library/capability-catalog-route";
 import { describe, expect, it } from "vitest";
 import { RAIL_ITEMS } from "../../app/route-model";
-import { resolveCockpitCompatibility } from "./cockpit-compatibility";
+import {
+  isChannelPageLocation,
+  isCockpitConversationLocation,
+  resolveCockpitCompatibility,
+} from "./cockpit-compatibility";
 
 describe("Cockpit compatibility coverage", () => {
   it.each([
@@ -14,6 +18,29 @@ describe("Cockpit compatibility coverage", () => {
     ["/chat/projects/p%2Fone?workspaceId=w#context", "/chat/projects/p%2Fone?workspaceId=w#context"],
   ])("resolves native Projects preserving exact identity: %s", (input, href) => {
     expect(resolveCockpitCompatibility(input)).toEqual({ kind: "native", href });
+  });
+  it("opens /chat/messaging/<connectionId> as a channel page, not a conversation", () => {
+    expect(resolveCockpitCompatibility("/chat/messaging/conn%2F1?workspaceId=w&extra=keep#top")).toEqual({
+      kind: "native",
+      href: "/chat/messaging/conn%2F1?workspaceId=w&extra=keep#top",
+    });
+    // A channel page is not a conversation, so retained Chat never publishes a selection over it by itself.
+    expect(isCockpitConversationLocation("/chat/messaging/conn-1")).toBe(false);
+    expect(isCockpitConversationLocation("/chat")).toBe(true);
+    expect(isChannelPageLocation("/chat/messaging/conn-1?workspaceId=w")).toBe(true);
+    expect(isChannelPageLocation("/chat")).toBe(false);
+    expect(isChannelPageLocation("/chat/projects/p-1")).toBe(false);
+  });
+  it.each([
+    "/chat/messaging",
+    "/chat/messaging/",
+    "/chat/messaging/a/b",
+    "/chat/messaging/%E0%A4%A",
+    "/chat/messaging/%20",
+    "/chat/messaging/a%0Ab",
+    "/messaging/conn-1",
+  ])("keeps %s unavailable: a channel page needs exactly one readable connection id", (input) => {
+    expect(resolveCockpitCompatibility(input)).toEqual({ kind: "missing" });
   });
   it("retains explicit Classic Projects rollback", () => {
     expect(resolveCockpitCompatibility("/projects/p?shell=classic&workspaceId=w#context")).toMatchObject({

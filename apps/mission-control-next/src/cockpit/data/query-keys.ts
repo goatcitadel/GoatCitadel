@@ -39,6 +39,15 @@ export const queryKeys = {
   /** Chat's Messaging area: channel conversations by connection. Every workspace's overview shares the prefix. */
   chatMessagingAll: (): TopicKey => ["chat", "messaging"],
   chatMessaging: (workspaceId: string): TopicKey => ["chat", "messaging", workspaceId],
+  /** A channel page's live reads share the Messaging prefix, so connection and channel events refresh them too. */
+  chatChannelRuntime: (connectionId: string): TopicKey => ["chat", "messaging", "runtime", connectionId],
+  chatChannelSenders: (connectionId: string, revision: string | undefined): TopicKey => [
+    "chat",
+    "messaging",
+    "senders",
+    connectionId,
+    revision ?? "",
+  ],
   workActivityAll: (): TopicKey => ["system", "work-activity"],
   workActivity: (workspaceId: string): TopicKey => ["system", "work-activity", workspaceId],
   schedules: (): TopicKey => ["tasks", "schedules"],
