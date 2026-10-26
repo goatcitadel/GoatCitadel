@@ -359,10 +359,61 @@ describe("LlmService model catalog cache", () => {
 
     await svc.listModelsWithSource("openai");
 
+    // The snapshot is written in the background, off the request path.
+    await vi.waitFor(async () => {
+      expect(await fs.readFile(cachePath, "utf8")).toContain("m1");
+    });
     const persisted = await fs.readFile(cachePath, "utf8");
-    expect(persisted).toContain("m1");
     expect(persisted).toContain("catalogHash");
     expect(persisted).not.toContain("sk-test");
     expect(persisted).not.toContain("Authorization");
+  });
+
+  it("writes the catalog atomically and leaves no temp files behind", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-model-cache-atomic-"));
+    tempDirs.push(tempDir);
+    const cachePath = path.join(tempDir, "llm-model-catalog.json");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ data: [{ id: "m1" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const svc = buildService({ modelCatalogCachePath: cachePath });
+
+    await svc.listModelsWithSource("openai");
+
+    await vi.waitFor(async () => {
+      expect(JSON.parse(await fs.readFile(cachePath, "utf8")).snapshots).toHaveLength(1);
+    });
+    expect(await fs.readdir(tempDir)).toEqual(["llm-model-catalog.json"]);
+  });
+
+  it("does not overwrite an unreadable catalog file that may hold other providers", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-model-cache-corrupt-"));
+    tempDirs.push(tempDir);
+    const cachePath = path.join(tempDir, "llm-model-catalog.json");
+    const corrupt = '{"version":1,"snapshots":[{"providerId":"other"';
+    await fs.writeFile(cachePath, corrupt, "utf8");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: [{ id: "m1" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = buildService({ modelCatalogCachePath: cachePath });
+
+    await svc.listModelsWithSource("openai");
+
+    expect(fetchMock).toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await fs.readFile(cachePath, "utf8")).toBe(corrupt);
+    expect(await fs.readdir(tempDir)).toEqual(["llm-model-catalog.json"]);
   });
 });

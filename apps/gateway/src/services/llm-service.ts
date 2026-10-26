@@ -2,7 +2,8 @@ import { dispatchTrackedMultipartRequest } from "./llm-multipart-dispatch.js";
 /* eslint-disable max-lines -- LLM transport and provider normalization are intentionally centralized until provider seams are split further. */
 import { createHash, randomUUID } from "node:crypto";
 import { lookup as nodeDnsLookup, type LookupAddress, type LookupOptions } from "node:dns";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import path from "node:path";
 import {
@@ -379,6 +380,7 @@ export class LlmService {
   private utilityModel: string;
   private readonly modelMetadata: LlmModelMetadataManifest;
   private readonly modelCatalogCachePath: string | undefined;
+  private modelCatalogWriteQueue: Promise<void> = Promise.resolve();
   private readonly localServiceLeaseAcquirer: LlmLocalServiceLeaseAcquirer | undefined;
   private readonly modelUsageAccounting: ModelUsageAccountingService | undefined;
   private readonly dispatchGuardScope = new LlmDispatchGuardScope();
@@ -3471,7 +3473,7 @@ export class LlmService {
   }
 
   private hydrateModelDiscoveryCacheFromDisk(): void {
-    const snapshots = this.readPersistedModelCatalogSnapshots();
+    const snapshots = this.readPersistedModelCatalogSnapshots() ?? [];
     if (snapshots.length === 0) {
       return;
     }
@@ -3501,49 +3503,41 @@ export class LlmService {
     result: ModelDiscoveryResult,
     cachedAt: number,
   ): void {
+    const cachePath = this.modelCatalogCachePath;
     if (
-      !this.modelCatalogCachePath ||
+      !cachePath ||
       isOpenAICodexProvider(provider) ||
       result.source === "error_fallback" ||
       result.items.length === 0
     ) {
       return;
     }
-    try {
-      const existing = this.readPersistedModelCatalogSnapshots().filter(
-        (snapshot) => !(snapshot.providerId === provider.providerId && snapshot.baseUrl === provider.baseUrl),
-      );
-      const snapshot = buildProviderModelCatalogSnapshot(provider, result, cachedAt);
-      const payload: PersistedModelCatalogFile = {
-        version: 1,
-        snapshots: [...existing, snapshot],
-      };
-      mkdirSync(path.dirname(this.modelCatalogCachePath), { recursive: true });
-      writeFileSync(this.modelCatalogCachePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    } catch (error) {
-      log.warn("failed to persist model catalog cache", {
-        providerId: provider.providerId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    // Serialized so two providers refreshing together cannot read-modify-write over each other.
+    this.modelCatalogWriteQueue = this.modelCatalogWriteQueue.then(async () => {
+      try {
+        await writeModelCatalogSnapshotAtomically(cachePath, provider, result, cachedAt);
+      } catch (error) {
+        log.warn("failed to persist model catalog cache", {
+          providerId: provider.providerId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
   }
 
-  private readPersistedModelCatalogSnapshots(): ProviderModelCatalogSnapshot[] {
+  /** Undefined when the file exists but cannot be read or parsed (distinct from an empty/absent cache). */
+  private readPersistedModelCatalogSnapshots(): ProviderModelCatalogSnapshot[] | undefined {
     if (!this.modelCatalogCachePath || !existsSync(this.modelCatalogCachePath)) {
       return [];
     }
     try {
-      const parsed = JSON.parse(readFileSync(this.modelCatalogCachePath, "utf8")) as Partial<PersistedModelCatalogFile>;
-      if (parsed.version !== 1 || !Array.isArray(parsed.snapshots)) {
-        return [];
-      }
-      return parsed.snapshots.filter(isProviderModelCatalogSnapshot);
+      return parsePersistedModelCatalog(readFileSync(this.modelCatalogCachePath, "utf8"), this.modelCatalogCachePath);
     } catch (error) {
       log.warn("failed to read model catalog cache", {
         path: this.modelCatalogCachePath,
         error: error instanceof Error ? error.message : String(error),
       });
-      return [];
+      return undefined;
     }
   }
 
@@ -4464,6 +4458,83 @@ function shouldAppendV1(providerId: string, baseUrl: string): boolean {
   }
 
   return true;
+}
+
+function parsePersistedModelCatalog(text: string, cachePath: string): ProviderModelCatalogSnapshot[] | undefined {
+  const parsed = JSON.parse(text) as Partial<PersistedModelCatalogFile>;
+  if (parsed.version !== 1 || !Array.isArray(parsed.snapshots)) {
+    log.warn("model catalog cache has an unexpected shape", { path: cachePath });
+    return undefined;
+  }
+  return parsed.snapshots.filter(isProviderModelCatalogSnapshot);
+}
+
+/**
+ * Read-modify-write of the shared catalog file. Writes a temp file and renames it into place, and refuses to
+ * replace a file it cannot parse (it may still hold other providers' snapshots).
+ */
+async function writeModelCatalogSnapshotAtomically(
+  cachePath: string,
+  provider: LlmProviderConfig,
+  result: ModelDiscoveryResult,
+  cachedAt: number,
+): Promise<void> {
+  let persisted: ProviderModelCatalogSnapshot[] | undefined = [];
+  try {
+    persisted = parsePersistedModelCatalog(await readFile(cachePath, "utf8"), cachePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      persisted = undefined;
+      log.warn("failed to read model catalog cache", {
+        path: cachePath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  if (persisted === undefined) {
+    log.warn("skipping model catalog cache write because the existing file is unreadable", {
+      path: cachePath,
+      providerId: provider.providerId,
+    });
+    return;
+  }
+  const existing = persisted.filter(
+    (snapshot) => !(snapshot.providerId === provider.providerId && snapshot.baseUrl === provider.baseUrl),
+  );
+  const payload: PersistedModelCatalogFile = {
+    version: 1,
+    snapshots: [...existing, buildProviderModelCatalogSnapshot(provider, result, cachedAt)],
+  };
+  await mkdir(path.dirname(cachePath), { recursive: true });
+  const tempPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(
+      tempPath,
+      `${JSON.stringify(payload, null, 2)}
+`,
+      "utf8",
+    );
+    await renameWithShortRetry(tempPath, cachePath);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** Windows rejects rename-over with EPERM/EBUSY while a reader briefly holds the target open. */
+async function renameWithShortRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 5 || (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+    }
+  }
 }
 
 async function buildHttpError(action: string, response: Response): Promise<string> {
