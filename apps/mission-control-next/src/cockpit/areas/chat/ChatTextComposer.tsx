@@ -5,7 +5,7 @@ import { useEffect, useId, useState, type FormEvent, type KeyboardEvent } from "
 import { Button } from "../../ui/Button";
 import { ChatComposerPhoneActions, ChatComposerTools } from "./ChatComposerTools";
 import { ChatComposerPalette } from "./ChatComposerPalette";
-import { channelReplyPlaceholder, channelReplySubmitLabel } from "./channel-composer";
+import { channelReplyBlock, channelReplyPlaceholder, channelReplySubmitLabel } from "./channel-composer";
 import { ChatRunVariables } from "./ChatRunVariables";
 import { committedCommandDraft, composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
 import { isImeEnter } from "./ime";
@@ -292,7 +292,12 @@ export function ChatTextComposer({
             }
             value={capture?.summary ?? props.draft}
             readOnly={Boolean(capture)}
-            disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
+            // A removed or switched-off channel takes no reply, so its box is off and its placeholder says why.
+            disabled={
+              props.historicalReadOnly ||
+              Boolean(props.sessionControlBanner) ||
+              channelReplyBlock(props.channelReply) !== null
+            }
             aria-describedby={visibleReason ? REASON_ID : undefined}
             onChange={(event) => {
               setDismissedDraft(null);

@@ -57,10 +57,15 @@ export function describeChannelCheck(input: {
   return input.overviewReady ? "unavailable" : "checking";
 }
 
-/** What the draft says before anything is typed. An unresolved channel says why it cannot be used yet. */
+/**
+ * What the draft says before anything is typed. An unresolved channel says why it cannot be used yet, and a removed or
+ * switched-off one says why it cannot take a reply, instead of promising where the message would go.
+ */
 export function channelReplyPlaceholder(reply: ChannelReply | undefined, check?: ChannelCheck): string {
   if (check) return check === "checking" ? CHECKING_MESSAGE : UNAVAILABLE_MESSAGE;
   if (!reply) return DEFAULT_PLACEHOLDER;
+  const block = channelReplyBlock(reply);
+  if (block) return block.message;
   return reply.mode === "ask"
     ? `Ask GoatCitadel. The answer also goes to ${reply.channelLabel}.`
     : `Posts to ${reply.targetTitle} on ${reply.channelLabel} as your bot`;

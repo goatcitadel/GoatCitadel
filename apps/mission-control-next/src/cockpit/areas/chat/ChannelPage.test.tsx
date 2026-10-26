@@ -11,7 +11,10 @@ import type {
 } from "@goatcitadel/contracts";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { __resetIntegrationConnectionMutationsForTests } from "../../../features/native-routes/settings/integration-connection-mutation";
-import { __resetChannelMutationStateForTests } from "../../../features/native-routes/settings/sections/channel-setup-state";
+import {
+  __resetChannelMutationStateForTests,
+  beginChannelOperation,
+} from "../../../features/native-routes/settings/sections/channel-setup-state";
 import type { Dialog } from "../../ui/Dialog";
 import { ChannelPage } from "./ChannelPage";
 import { REMOVE_CONSEQUENCE } from "./channel-remove-copy";
@@ -648,6 +651,38 @@ describe("ChannelPage turning off and removing", () => {
       "This channel was removed. Its conversations stay readable under Messaging.",
     );
     expect(container.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("keeps the Remove dialog open and says why when a channel change starts just before confirming", async () => {
+    load({});
+    await mount();
+    await click(button("Remove"));
+    const confirm = button("Remove channel", container.querySelector('section[aria-label="Remove Telegram?"]')!);
+
+    // A pairing answer starts after the dialog last rendered, so the confirm button is still enabled when clicked.
+    let operation: ReturnType<typeof beginChannelOperation>;
+    await act(async () => {
+      operation = beginChannelOperation();
+      confirm.click();
+    });
+    await settle();
+
+    const dialog = container.querySelector('section[aria-label="Remove Telegram?"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.textContent).toContain(
+      "Another channel change is still being sent, so nothing was removed. Try again once it finishes.",
+    );
+    expect(api.deleteIntegrationConnection).not.toHaveBeenCalled();
+    // The note is said once, in the dialog that is open, not again behind it.
+    expect(container.textContent?.split("nothing was removed").length).toBe(2);
+
+    // Once the other change finishes, the same dialog can remove the channel.
+    await act(async () => operation?.finish());
+    api.fetchIntegrationConnection.mockResolvedValueOnce(connection()).mockRejectedValueOnce(notFound());
+    api.deleteIntegrationConnection.mockResolvedValue({ deleted: true });
+    await click(button("Remove channel", container.querySelector('section[aria-label="Remove Telegram?"]')!));
+    expect(api.deleteIntegrationConnection).toHaveBeenCalledExactlyOnceWith("conn-1", REVISION);
+    expect(container.querySelector('section[aria-label="Remove Telegram?"]')).toBeNull();
   });
 
   it("does not remove a channel that changed since it was shown", async () => {

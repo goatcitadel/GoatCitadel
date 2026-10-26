@@ -62,7 +62,10 @@ function ConversationRow({
         className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-sunken aria-[current=page]:bg-sunken ${ROW_TARGET}`}
       >
         <span className="min-w-0 flex-1">
-          <span className="block min-w-0 truncate text-sm text-fg">{conversation.title}</span>
+          {/* The operator's own conversation with the bot reads "You", whatever their name on the channel. */}
+          <span className="block min-w-0 truncate text-sm text-fg">
+            {conversation.own ? "You" : conversation.title}
+          </span>
           <TimeText value={conversation.lastActivityAt} className="text-xs text-fg-muted" />
         </span>
         <NewMessageCount count={conversation.newMessageCount} />

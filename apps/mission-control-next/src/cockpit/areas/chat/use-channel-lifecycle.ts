@@ -23,6 +23,8 @@ import {
 /** The Settings pages' own note for a connection that changed, or was deleted, under a reviewed action. */
 const CHANGED = "The connection changed or was deleted. Review its current saved state before retrying.";
 const NOT_CHECKED = "Couldn't check this channel first, so nothing was removed. Try again.";
+/** A channel change elsewhere (a pairing answer) began after the confirmation last showed, so Remove held back. */
+const STILL_SENDING = "Another channel change is still being sent, so nothing was removed. Try again once it finishes.";
 
 /** Raised before any write when the saved connection no longer matches the one reviewed. */
 class ChangedUnderReview extends Error {}
@@ -69,11 +71,23 @@ export function useChannelLifecycle(connection: IntegrationConnection, reload: (
     await reload();
   }
 
-  /** Settles before the page reads again; the caller closes its confirmation and the page says what happened. */
-  async function remove(): Promise<void> {
-    if (busy || channelLocked()) return;
+  /** Why a removal cannot start now, read live so a change that began after the last render still holds it back. */
+  const removalHeldBack = (): string | null => {
+    if (busy) return STILL_SENDING;
+    const state = readChannelMutationState();
+    return state.pending || state.uncertain ? (state.uncertain ?? STILL_SENDING) : null;
+  };
+
+  /**
+   * Settles before the page reads again. Answers null when the removal went ahead (whatever it answered): the caller
+   * closes its confirmation and the page says what happened. Answers why when it held back because another change is
+   * in flight: nothing was sent, and the caller keeps its confirmation open with that note.
+   */
+  async function remove(): Promise<string | null> {
+    const heldBack = removalHeldBack();
+    if (heldBack) return heldBack;
     const operation = beginIntegrationMutation(connection.connectionId);
-    if (!operation) return;
+    if (!operation) return mutation.message ?? STILL_SENDING;
     setBusy("remove");
     setNote(null);
     let dispatched = false;
@@ -97,9 +111,10 @@ export function useChannelLifecycle(connection: IntegrationConnection, reload: (
     } finally {
       operation.finish();
     }
-    if (!mounted.current) return;
+    if (!mounted.current) return null;
     setBusy(null);
     await reload();
+    return null;
   }
 
   const locked = busy !== null || mutation.locked || channel.pending || Boolean(channel.uncertain);

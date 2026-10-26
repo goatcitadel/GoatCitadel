@@ -23,6 +23,12 @@ export function ManageSection({
 }) {
   const lifecycle = useChannelLifecycle(connection, reload);
   const [confirming, setConfirming] = useState(false);
+  // Why the last Remove in this confirmation held back; shown in the dialog, which stays open for another try.
+  const [heldBack, setHeldBack] = useState<string | null>(null);
+  const confirm = (open: boolean) => {
+    setHeldBack(null);
+    setConfirming(open);
+  };
   const turningOff = connection.enabled;
   return (
     <Section title="Turn off or remove">
@@ -40,7 +46,7 @@ export function ManageSection({
             variant="danger"
             aria-label={`Remove ${connection.label}`}
             disabled={lifecycle.locked}
-            onClick={() => setConfirming(true)}
+            onClick={() => confirm(true)}
           >
             Remove
           </Button>
@@ -53,22 +59,33 @@ export function ManageSection({
       <Dialog
         open={confirming}
         onOpenChange={(open) => {
-          if (!open && lifecycle.busy !== "remove") setConfirming(false);
+          if (!open && lifecycle.busy !== "remove") confirm(false);
         }}
         title={removeChannelTitle(connection.label)}
         description={REMOVE_CONSEQUENCE}
       >
+        {heldBack ? (
+          <div className="mt-4">
+            <ChannelActionNote message={heldBack} fresh />
+          </div>
+        ) : null}
         <div className="mt-4 flex flex-wrap gap-2">
           <Button
             variant="danger"
             disabled={lifecycle.locked && lifecycle.busy !== "remove"}
             loading={lifecycle.busy === "remove"}
             loadingLabel="Removing…"
-            onClick={() => void lifecycle.remove().then(() => setConfirming(false))}
+            // A removal that held back for another change in flight sent nothing: the dialog stays open and says why.
+            onClick={() =>
+              void lifecycle.remove().then((held) => {
+                if (held) setHeldBack(held);
+                else confirm(false);
+              })
+            }
           >
             Remove channel
           </Button>
-          <Button disabled={lifecycle.busy === "remove"} onClick={() => setConfirming(false)}>
+          <Button disabled={lifecycle.busy === "remove"} onClick={() => confirm(false)}>
             Keep channel
           </Button>
         </div>

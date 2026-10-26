@@ -902,6 +902,10 @@ describe("channel conversation composer", () => {
     expect(reason?.textContent).toBe("This channel was removed. Its conversations stay readable.");
     expect(container.querySelector("textarea")?.getAttribute("aria-describedby")).toBe("cockpit-chat-send-reason");
     expect((buttonNamed("Post to Maya") as HTMLButtonElement).disabled).toBe(true);
+    // Nothing invites typing a message that cannot go anywhere: the box is off and says why instead of "Posts to".
+    const draft = container.querySelector("textarea")!;
+    expect(draft.disabled).toBe(true);
+    expect(draft.placeholder).toBe("This channel was removed. Its conversations stay readable.");
     const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     await act(async () => container.querySelector("textarea")!.dispatchEvent(enter));
     expect(props.onSend).not.toHaveBeenCalled();
@@ -913,12 +917,17 @@ describe("channel conversation composer", () => {
     expect(container.querySelector("#cockpit-chat-send-reason")?.textContent).toBe("Turn Telegram back on to reply.");
     expect(sendButton().disabled).toBe(true);
     expect(cockpitSendBlockReason(props)).toBe("Turn Telegram back on to reply.");
+    const draft = container.querySelector("textarea")!;
+    expect(draft.disabled).toBe(true);
+    expect(draft.placeholder).toBe("Turn Telegram back on to reply.");
   });
 
   it("stays sendable while the channel needs attention", async () => {
     const props = composerProps({ channelReply: { ...post, status: "needs_attention" } });
     await act(async () => root.render(<ChatTextComposer props={props} />));
     expect(container.querySelector("#cockpit-chat-send-reason")).toBeNull();
+    expect(container.querySelector("textarea")!.disabled).toBe(false);
+    expect(container.querySelector("textarea")!.placeholder).toBe("Posts to Maya on Telegram as your bot");
     await act(async () => buttonNamed("Post to Maya")!.click());
     expect(props.onSend).toHaveBeenCalledOnce();
   });

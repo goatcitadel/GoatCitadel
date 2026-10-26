@@ -113,6 +113,26 @@ describe("MessagingSection", () => {
     expect(telegram.querySelector("time")?.dateTime).toBe("2026-10-25T10:00:00.000Z");
   });
 
+  it("names the operator's own conversation You, whatever the person's name on the channel", async () => {
+    const { onSelectSession } = await mount(
+      overviewOf([
+        channel({
+          conversations: [
+            conversation({ sessionId: "own-1", title: "Alex Rivera", kind: "direct", own: true }),
+            conversation({ sessionId: "sess-2", title: "Sam Lee", kind: "direct" }),
+          ],
+        }),
+      ]),
+    );
+    const rows = [...container.querySelectorAll("li li button")].map(
+      (row) => row.querySelector("span span")?.textContent,
+    );
+    expect(rows).toEqual(["You", "Sam Lee"]);
+    expect(container.textContent).not.toContain("Alex Rivera");
+    await act(async () => button("You").click());
+    expect(onSelectSession).toHaveBeenCalledWith("own-1");
+  });
+
   it("opens the channel page from the channel row", async () => {
     const { onOpenChannel, onSelectSession } = await mount(overviewOf([channel()]));
     await act(async () => button("Telegram").click());

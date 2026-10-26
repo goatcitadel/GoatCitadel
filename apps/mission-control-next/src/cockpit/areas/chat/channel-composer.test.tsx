@@ -70,6 +70,17 @@ describe("channel reply copy", () => {
     expect(channelReplySubmitLabel(post)).toBe("Post to Maya");
   });
 
+  it("says why a removed or switched-off channel cannot take a reply instead of promising a destination", () => {
+    expect(channelReplyPlaceholder({ ...post, status: "removed" })).toBe(
+      "This channel was removed. Its conversations stay readable.",
+    );
+    expect(channelReplyPlaceholder({ ...ask, status: "off" })).toBe("Turn Telegram back on to reply.");
+    // A channel that needs a look can still be tried: the Gateway says so if it cannot deliver.
+    expect(channelReplyPlaceholder({ ...post, status: "needs_attention" })).toBe(
+      "Posts to Maya on Telegram as your bot",
+    );
+  });
+
   it("falls back to the ordinary composer copy outside a channel conversation", () => {
     expect(channelReplyPlaceholder(undefined)).toBe("Message GoatCitadel…");
     expect(channelReplySubmitLabel(undefined)).toBe("Send");
