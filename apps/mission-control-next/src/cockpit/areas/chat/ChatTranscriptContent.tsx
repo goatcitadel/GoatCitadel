@@ -24,6 +24,7 @@ import type {
 } from "@goatcitadel/threaded-surface-core";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
+import { ChatContinueAction } from "./ChatContinueAction";
 import { ChatRunCard } from "./ChatRunCard";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatNoticeText } from "./ChatNoticeText";
@@ -57,6 +58,7 @@ function turnAccessibleName(prompt: string, position?: number): string {
 export const Turn = memo(function Turn({
   turn,
   position,
+  isLatest = false,
   previewText,
   streaming,
   actions,
@@ -67,6 +69,8 @@ export const Turn = memo(function Turn({
   turn: ChatThreadTurnRecord;
   /** One-based position in the conversation, when known. */
   position?: number;
+  /** The newest turn in the conversation; only it can offer Continue. */
+  isLatest?: boolean;
   previewText: string | null;
   streaming: boolean;
   actions: MissionThreadedActiveSessionSurfaceProps;
@@ -136,6 +140,9 @@ export const Turn = memo(function Turn({
             <p className="mt-1 text-xs text-fg-muted" role="note">
               Stopped — partial answer
             </p>
+          ) : null}
+          {stopped && assistantText && !streaming ? (
+            <ChatContinueAction turn={turn} isLatest={isLatest} actions={actions} />
           ) : null}
           {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} onInspectTurn={onInspectTurn} /> : null}
         </div>
