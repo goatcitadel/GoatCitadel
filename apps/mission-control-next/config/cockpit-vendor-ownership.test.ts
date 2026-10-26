@@ -281,7 +281,7 @@ it.each([
 const remainingOptionalOwners = [
   "C:/repo/packages/contracts/dist/workspace-path-bridge.js",
   "C:/repo/packages/contracts/dist/durable-chat-turn-payload.js",
-  ...["react-roving-focus", "react-collection", "react-use-size", "react-arrow", "react-direction"].map(
+  ...["react-roving-focus", "react-collection", "react-use-size", "react-arrow", "react-direction", "react-switch"].map(
     (name) => "C:/repo/node_modules/@radix-ui/" + name + "/dist/index.mjs",
   ),
 ];
