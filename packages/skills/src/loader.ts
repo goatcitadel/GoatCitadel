@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { LoadedSkill, SkillResolveInput, SkillActivationDecision } from "@goatcitadel/contracts";
@@ -73,14 +74,58 @@ async function loadSourceSkills(source: SkillSource, logger: SkillsLogger): Prom
     return [];
   }
 
+  const childDirs = await Promise.all(entries.map((entry) => resolveSkillChildDir(source, entry, logger)));
+
   const loaded = await Promise.all([
     loadSkillFromDir(source, source.dir, logger),
-    ...entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => loadSkillFromDir(source, path.join(source.dir, entry.name), logger)),
+    ...childDirs.filter((dir): dir is string => dir !== undefined).map((dir) => loadSkillFromDir(source, dir, logger)),
   ]);
 
   return loaded.filter((skill): skill is LoadedSkill => skill !== undefined);
+}
+
+// Symlinks and Windows junctions report isDirectory() === false on a Dirent, so
+// they used to vanish silently. A link is accepted only when it resolves to a
+// directory that stays inside the (real) source root: a skill source is a
+// trust boundary, and a link must not let it pull in content from elsewhere.
+// Anything else is skipped with a warning so the operator can see why.
+async function resolveSkillChildDir(
+  source: SkillSource,
+  entry: Dirent,
+  logger: SkillsLogger,
+): Promise<string | undefined> {
+  const entryPath = path.join(source.dir, entry.name);
+  if (entry.isDirectory()) {
+    return entryPath;
+  }
+  if (!entry.isSymbolicLink()) {
+    return undefined;
+  }
+  try {
+    const [realTarget, realRoot, targetStat] = await Promise.all([
+      fs.realpath(entryPath),
+      fs.realpath(source.dir),
+      fs.stat(entryPath),
+    ]);
+    if (!targetStat.isDirectory()) {
+      return undefined;
+    }
+    const relative = path.relative(realRoot, realTarget);
+    if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      logger.warn(`Skipping skill link that resolves outside its source root: ${entryPath}`, {
+        source: source.source,
+        reason: "link target escapes the skill source directory",
+      });
+      return undefined;
+    }
+    return entryPath;
+  } catch (error) {
+    logger.warn(`Skipping unreadable or broken skill link: ${entryPath}`, {
+      source: source.source,
+      error: (error as Error).message,
+    });
+    return undefined;
+  }
 }
 
 async function loadSkillFromDir(

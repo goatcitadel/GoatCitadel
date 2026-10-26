@@ -922,7 +922,84 @@ function isBlockedIpv6(host: string): boolean {
   if (mapped) {
     return isPrivateOrReservedIpv4(mapped);
   }
+  const groups = parseIpv6Groups(lower);
+  if (!groups) {
+    return false;
+  }
+  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0, g7 = 0] = groups;
+  // ff00::/8 multicast.
+  if ((g0 & 0xff00) === 0xff00) {
+    return true;
+  }
+  const embedded = (high: number, low: number) =>
+    [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff].join(".");
+  // 64:ff9b::/96 NAT64 (RFC 6052): the low 32 bits are an IPv4 address.
+  if (g0 === 0x64 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) {
+    return isPrivateOrReservedIpv4(embedded(g6, g7));
+  }
+  // 64:ff9b:1::/48 local-use NAT64 (RFC 8215) is reserved, never public.
+  if (g0 === 0x64 && g1 === 0xff9b && g2 === 1) {
+    return true;
+  }
+  // 2002::/16 6to4 (RFC 3056): bits 16..47 are an IPv4 address.
+  if (g0 === 0x2002) {
+    return isPrivateOrReservedIpv4(embedded(g1, g2));
+  }
+  // Deprecated IPv4-compatible ::a.b.c.d (URL parsers emit ::7f00:1).
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) {
+    return isPrivateOrReservedIpv4(embedded(g6, g7));
+  }
   return false;
+}
+
+// Expands an IPv6 literal (compressed, uncompressed, optional dotted-quad tail)
+// into eight 16-bit groups, or undefined when it is not a well-formed literal.
+function parseIpv6Groups(ipv6Lower: string): number[] | undefined {
+  let text = ipv6Lower;
+  const zone = text.indexOf("%");
+  if (zone >= 0) {
+    text = text.slice(0, zone);
+  }
+  const dotted = /^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text);
+  if (dotted) {
+    const octets = dotted.slice(2, 6).map(Number);
+    if (octets.some((octet) => octet > 255)) {
+      return undefined;
+    }
+    const hi = ((octets[0] ?? 0) << 8) | (octets[1] ?? 0);
+    const lo = ((octets[2] ?? 0) << 8) | (octets[3] ?? 0);
+    text = `${dotted[1]}${hi.toString(16)}:${lo.toString(16)}`;
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) {
+    return undefined;
+  }
+  const parseSide = (side: string): number[] | undefined => {
+    if (side === "") {
+      return [];
+    }
+    const out: number[] = [];
+    for (const part of side.split(":")) {
+      if (!/^[0-9a-f]{1,4}$/.test(part)) {
+        return undefined;
+      }
+      out.push(Number.parseInt(part, 16));
+    }
+    return out;
+  };
+  const head = parseSide(halves[0] ?? "");
+  const tail = halves.length === 2 ? parseSide(halves[1] ?? "") : [];
+  if (!head || !tail) {
+    return undefined;
+  }
+  if (halves.length === 1) {
+    return head.length === 8 ? head : undefined;
+  }
+  const fill = 8 - head.length - tail.length;
+  if (fill < 1) {
+    return undefined;
+  }
+  return [...head, ...new Array<number>(fill).fill(0), ...tail];
 }
 
 function extractIpv4MappedAddress(ipv6Lower: string): string | undefined {

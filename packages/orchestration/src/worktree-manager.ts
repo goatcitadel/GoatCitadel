@@ -29,6 +29,19 @@ export type WorktreeChanges =
 /** How much of a git failure a change report carries. */
 const MAX_GIT_ERROR_CHARACTERS = 500;
 
+// True when `candidate` is a descendant of `root` (never the root itself). A
+// leading ".." is only an escape as a whole path segment, so names such as
+// "..cache" stay valid.
+function isStrictlyInside(root: string, candidate: string): boolean {
+  const relativePath = path.relative(root, candidate);
+  return (
+    relativePath !== "" &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath)
+  );
+}
+
 export class WorktreeManager {
   public constructor(private readonly options: WorktreeOptions) {}
 
@@ -48,8 +61,7 @@ export class WorktreeManager {
   public async create(worktreeId: string, baseRef = "HEAD"): Promise<string> {
     const worktreesRoot = path.resolve(this.options.worktreesRoot);
     const worktreePath = path.resolve(worktreesRoot, worktreeId);
-    const relativePath = path.relative(worktreesRoot, worktreePath);
-    if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    if (!isStrictlyInside(worktreesRoot, worktreePath)) {
       throw new Error(`Worktree id resolves outside worktrees root: ${worktreeId}`);
     }
     await execFileAsync("git", ["worktree", "add", "--detach", worktreePath, baseRef], {
@@ -61,6 +73,10 @@ export class WorktreeManager {
 
   public async remove(worktreePath: string): Promise<void> {
     const resolvedPath = path.resolve(worktreePath);
+    // Same containment as create(): never force-remove a path outside the root.
+    if (!isStrictlyInside(path.resolve(this.options.worktreesRoot), resolvedPath)) {
+      throw new Error(`Worktree path resolves outside worktrees root: ${worktreePath}`);
+    }
     // Callers decide with `listChanges`, which reads the worktree through its
     // registration. Without --force, git re-checks by running `git status` with
     // GIT_DIR set to the worktree's own `.git` file, read again after git has

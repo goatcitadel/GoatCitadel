@@ -36,6 +36,8 @@ export async function prepareCodeModeDockerLaunch(
   input: CodeModeSandboxLaunchInput,
   options: CodeModeDockerLaunchOptions,
 ): Promise<CodeModeSandboxLaunchSpec> {
+  // Validate before touching the filesystem so an unsafe path creates nothing.
+  assertMountSafePath(input.runTempRoot);
   await fs.mkdir(input.runTempRoot, { recursive: true });
   const image = normalizeDockerImageRef(options.image);
   if (options.requireDigestPin && !isDigestPinnedImageRef(image)) {
@@ -122,8 +124,20 @@ export function toContainerRunPath(runTempRoot: string, hostPath: string): strin
   return path.posix.join(CODE_MODE_DOCKER_CONTAINER_WORKDIR, ...relative.split(path.sep));
 }
 
+function assertMountSafePath(runTempRoot: string): void {
+  // Docker parses the --mount value as CSV: a comma would start a new option
+  // (e.g. `,readonly=false` or a second `src=`) and a double quote changes
+  // the CSV quoting. Refuse rather than attempt to quote.
+  if (runTempRoot.includes(",") || runTempRoot.includes('"')) {
+    throw new Error(
+      "Docker Code Mode run temp root must not contain commas or double quotes (Docker --mount is CSV-parsed).",
+    );
+  }
+}
+
 function buildRunMountSpec(runTempRoot: string): string {
   rejectUnsafeProfilePath(runTempRoot);
+  assertMountSafePath(runTempRoot);
   // Bind mounts are read-write by default; Docker rejects a bare `rw` field in --mount ("must be a key=value pair").
   return `type=bind,src=${runTempRoot},dst=${CODE_MODE_DOCKER_CONTAINER_WORKDIR}`;
 }
