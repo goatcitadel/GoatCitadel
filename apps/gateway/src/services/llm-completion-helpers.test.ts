@@ -431,6 +431,13 @@ describe("llm-completion-helpers", () => {
       new Error("Chat completion timed out after 250ms."),
     );
     expect(normalizeChatCompletionAttemptError("plain failure", undefined)).toEqual(new Error("plain failure"));
+
+    const rateLimited = Object.assign(new Error("Provider request failed (429): upstream timeout, try later"), {
+      retryAfterMs: 2000,
+    });
+    const kept = normalizeChatCompletionAttemptError(rateLimited, 250);
+    expect(kept).toBe(rateLimited);
+    expect(shouldRetryTransientProviderError(kept)).toBe(true);
   });
 
   it("delays retries only when backoff leaves a five-second secondary attempt window", async () => {

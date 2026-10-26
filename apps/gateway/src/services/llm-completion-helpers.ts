@@ -13,7 +13,7 @@ import { absorbCompletionStreamChunk, createCompletionStreamAggregate } from "./
 import { isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { parseTransformLlmOutputHookPatch } from "./hook-patch-helpers.js";
 import { StreamIdleTimeoutError } from "./stream-idle-watchdog.js";
-import { MAX_PROVIDER_RETRY_DELAY_MS } from "./provider-retry-after.js";
+import { MAX_PROVIDER_RETRY_DELAY_MS, readRetryAfterMs } from "./provider-retry-after.js";
 import type { HooksService } from "./hooks-service.js";
 
 export const CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT = 3;
@@ -582,6 +582,11 @@ export function normalizeChatCompletionAttemptError(error: unknown, timeoutMs: n
   const name = normalized.name.toLowerCase();
   const message = normalized.message.toLowerCase();
   if (name.includes("cancel") || message.includes("cancelled")) {
+    return normalized;
+  }
+  if (readRetryAfterMs(normalized) !== undefined || parseParenthesizedHttpStatus(normalized.message) !== undefined) {
+    // A provider HTTP error (e.g. 429 with Retry-After) whose body merely mentions "timeout" must keep its
+    // status and retry delay, or it is no longer classified as transient.
     return normalized;
   }
   if (
