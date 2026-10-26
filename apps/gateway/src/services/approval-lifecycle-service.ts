@@ -576,6 +576,17 @@ export async function resolveApprovalsBulk(
   const results: ApprovalBulkResolveResult["items"] = [];
 
   for (const approval of items) {
+    // A blanket bulk approve must never green-light high-risk work the operator
+    // has not looked at one by one. Bulk reject stays unrestricted.
+    if (input.decision === "approve" && (approval.riskLevel === "danger" || approval.riskLevel === "nuclear")) {
+      results.push({
+        approvalId: approval.approvalId,
+        outcome: "skipped",
+        status: approval.status,
+        error: `${approval.riskLevel}-risk approvals cannot be approved in bulk. Review and approve it individually.`,
+      });
+      continue;
+    }
     try {
       const result = await host.resolveApproval(approval.approvalId, {
         decision: input.decision,

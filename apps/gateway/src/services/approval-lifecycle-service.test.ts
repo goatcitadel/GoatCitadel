@@ -2566,7 +2566,9 @@ describe("approval lifecycle service", () => {
       expiresAt: "2020-04-11T00:00:00.000Z",
     });
     host.resolveApproval = vi.fn((approvalId, input) => resolveApproval(host, approvalId, input));
-    host.storage.approvals.list = vi.fn(() => [host.storage.approvals.get("approval-1")]);
+    host.storage.approvals.list = vi.fn(() => [
+      { ...host.storage.approvals.get("approval-1"), riskLevel: "caution" as const },
+    ]);
 
     const result = await resolveApprovalsBulk(host, {
       decision: "approve",
@@ -2590,6 +2592,34 @@ describe("approval lifecycle service", () => {
       expect.objectContaining({ decision: "reject" }),
       { allowExpired: true, outcome: "expired" },
     );
+  });
+
+  it("skips danger and nuclear approvals on bulk approve but still bulk-rejects them", async () => {
+    const host = createApprovalHarness();
+    const base = host.storage.approvals.get("approval-1");
+    const rows = [
+      { ...base, approvalId: "a-safe", riskLevel: "caution" as const },
+      { ...base, approvalId: "a-danger", riskLevel: "danger" as const },
+      { ...base, approvalId: "a-nuclear", riskLevel: "nuclear" as const },
+    ];
+    host.storage.approvals.list = vi.fn(() => rows);
+    host.resolveApproval = vi.fn(async (approvalId: string) => ({
+      approval: { ...base, approvalId, status: "approved" as const },
+    })) as never;
+
+    const approved = await resolveApprovalsBulk(host, { decision: "approve", resolvedBy: "operator" });
+    expect(host.resolveApproval).toHaveBeenCalledTimes(1);
+    expect(host.resolveApproval).toHaveBeenCalledWith("a-safe", expect.objectContaining({ decision: "approve" }));
+    expect(approved).toMatchObject({ resolvedCount: 1, skippedCount: 2, failedCount: 0 });
+    expect(approved.items.filter((item) => item.outcome === "skipped")).toEqual([
+      expect.objectContaining({ approvalId: "a-danger", error: expect.stringMatching(/danger-risk.*individually/i) }),
+      expect.objectContaining({ approvalId: "a-nuclear", error: expect.stringMatching(/nuclear-risk.*individually/i) }),
+    ]);
+
+    vi.mocked(host.resolveApproval).mockClear();
+    const rejected = await resolveApprovalsBulk(host, { decision: "reject", resolvedBy: "operator" });
+    expect(host.resolveApproval).toHaveBeenCalledTimes(3);
+    expect(rejected).toMatchObject({ resolvedCount: 3, skippedCount: 0 });
   });
 
   it("resolves approvals through effect enqueue and durable-run wake processing", async () => {
