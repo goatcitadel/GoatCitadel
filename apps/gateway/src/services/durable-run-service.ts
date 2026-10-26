@@ -1358,8 +1358,10 @@ export class DurableRunService {
                   );
                 }
               } catch (error) {
-                await this.reportDurableRunRecoveryFailure(claim.run.runId, error);
+                // Abort first and do not await the reporter: a stalled reporter must neither keep
+                // claim-owned work running past claim expiry nor hold the in-flight guard.
                 postCommitAbort.abort(error);
+                void this.reportDurableRunRecoveryFailure(claim.run.runId, error).catch(() => undefined);
               }
             })()
               .catch((error) => postCommitAbort.abort(error))
@@ -4739,8 +4741,9 @@ export class DurableRunService {
               );
             }
           } catch (error) {
-            await this.reportDurableRunRecoveryFailure(claim.run.runId, error);
+            // Abort first and do not await the reporter (see the post-commit heartbeat).
             finalizationAbort.abort(error);
+            void this.reportDurableRunRecoveryFailure(claim.run.runId, error).catch(() => undefined);
           }
         })()
           .catch((error) => finalizationAbort.abort(error))
