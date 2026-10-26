@@ -909,8 +909,7 @@ import {
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { isTelegramApprovalActionConnectorReady } from "./channel-secret-resolution.js";
 import {
-  OPERATOR_DESK_INGEST_ORIGIN,
-  buildOperatorDeskGatewayEvent,
+  recordInboundChannelMessage,
   routeOperatorDeskSend,
   type OperatorDeskSendInput,
   type OperatorDeskSendResult,
@@ -1365,11 +1364,11 @@ export class GatewayService {
       getIntegrationConnection: async (connectionId) => await this.storage.integrationConnections.get(connectionId),
       // A desk question is the operator's own words, so it is recorded with operator authority, never as channel input.
       ingestChannelMessage: async (channel, idempotencyKey, message, origin) =>
-        origin === OPERATOR_DESK_INGEST_ORIGIN
-          ? await this.ingestEvent(idempotencyKey, buildOperatorDeskGatewayEvent(channel, message), {
-              sourceAuthority: "operator",
-            })
-          : await this.ingestChannelMessage(channel, idempotencyKey, message),
+        await recordInboundChannelMessage(
+          { channel, idempotencyKey, message, origin },
+          (key, event, options) => this.ingestEvent(key, event, options),
+          (channelKey, key, input) => this.ingestChannelMessage(channelKey, key, input),
+        ),
       ensureInboundChatSession: async (input) =>
         await chatSessionService.ensureInboundIntegrationChatSession(this.buildChatSessionDependencies(), input),
       hasRunningTurn: async (sessionId) => await this.hasRunningTurn(sessionId),

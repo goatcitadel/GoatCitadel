@@ -12,7 +12,11 @@ import type {
   ChatSendMessageResponse,
   ChatSessionBindingRecord,
 } from "@goatcitadel/contracts";
-import { acceptOperatorDeskTurn, buildOperatorDeskGatewayEvent } from "./channel-desk-turn.js";
+import {
+  acceptOperatorDeskTurn,
+  buildOperatorDeskGatewayEvent,
+  recordInboundChannelMessage,
+} from "./channel-desk-turn.js";
 import { GatewayService } from "./gateway-service.js";
 import {
   InboundChannelEventService,
@@ -509,6 +513,129 @@ describe("InboundChannelEventService", () => {
 
     expect(desk.harness.respondToExistingChatMessage).not.toHaveBeenCalled();
     expect(desk.gateway.commsSend).not.toHaveBeenCalled();
+  });
+
+  it("answers an owner's desk question end to end, and suppresses one once the owner is removed", async () => {
+    // The real Chat session ensure and binding repository, the Gateway's own ingest (the desk branch and ingestEvent)
+    // and its reply owner. Only turn admission, model execution and the channel send are doubles.
+    const getStorage = (): Storage => harness.storage;
+    const ingestGateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+    let eventIngest: EventIngestService | undefined;
+    Object.defineProperty(ingestGateway, "eventIngestService", {
+      get: () => (eventIngest ??= new EventIngestService(createSqliteAsyncStorage(getStorage()))),
+    });
+    ingestGateway.publishRealtime = vi.fn(async () => undefined);
+    ingestGateway.operatorSummaryCache = { invalidate: vi.fn() };
+    const channelIngest = vi.fn(async () => {
+      throw new Error("a desk question is never recorded as channel input");
+    });
+    const chatDeps = (): ChatSessionDependencies => ({
+      storage: createSqliteAsyncStorage(getStorage()),
+      operatorSummaryCache: { invalidate: vi.fn() },
+      normalizeWorkspaceId: (workspaceId) => workspaceId?.trim() || "default",
+      ensureChatSessionRuntimeGrants: vi.fn(async () => undefined),
+      requireChatSession: async () => {
+        throw new Error("not used by inbound binding initialization");
+      },
+      getSession: async (sessionId) => getStorage().sessions.getBySessionId(sessionId),
+      publishRealtime: vi.fn(async () => undefined),
+      clearChatTurnWriteLease: vi.fn(),
+      removeChatSessionStoredFile: vi.fn(async () => undefined),
+      copyChatSessionStoredFile: vi.fn(async (storageRelPath) => storageRelPath),
+      ensureChatSessionModelDefaults: (_sessionId, prefs) => prefs,
+      hydrateChatPrefsWithAutonomy: async (_sessionId, prefs) => prefs,
+      patchSessionAutonomyPrefs: vi.fn(async () => undefined),
+    });
+    // The reply owner reads the binding the real ensure keeps, not a fixed one.
+    const replyGateway = createDeskReplyGateway(getStorage, undefined as never, "completed");
+    replyGateway.storage.chatSessionBindings = {
+      get: async (sessionId: string) => getStorage().chatSessionBindings.get(sessionId),
+    };
+    const harness = await createHarness({
+      getIntegrationConnection: async (connectionId) => getStorage().integrationConnections.get(connectionId),
+      ensureInboundChatSession: async (input) => await ensureInboundIntegrationChatSession(chatDeps(), input),
+      ingestChannelMessage: vi.fn<InboundChannelEventServiceDeps["ingestChannelMessage"]>(
+        async (channel, idempotencyKey, message, origin) =>
+          await recordInboundChannelMessage(
+            { channel, idempotencyKey, message, origin },
+            (key, event, options) => GatewayService.prototype.ingestEvent.call(ingestGateway, key, event, options),
+            channelIngest,
+          ),
+      ),
+      respondToExistingChatMessage: vi.fn<InboundChannelEventServiceDeps["respondToExistingChatMessage"]>(
+        async (sessionId, messageId, options) =>
+          await GatewayService.prototype.respondToExistingChatMessage.call(replyGateway, sessionId, messageId, options),
+      ),
+    });
+    const connection = harness.storage.integrationConnections.create({
+      catalogId: "channel.telegram",
+      kind: "channel",
+      key: "telegram",
+      label: "Telegram",
+      enabled: true,
+      status: "connected",
+      workspaceId: "default",
+      config: { ownerActorIds: ["4242"] },
+    });
+    // The owner wrote to the bot from their phone first: that is what made this their own conversation.
+    const route = { channel: "telegram", account: connection.connectionId, peer: "4242" };
+    const session = await ensureInboundIntegrationChatSession(chatDeps(), {
+      route,
+      connectionId: connection.connectionId,
+      target: "4242",
+      conversation: { kind: "direct", counterpartActorId: "4242", title: "Alex Rivera" },
+    });
+    const binding = harness.storage.chatSessionBindings.get(session.sessionId)!;
+    const ask = async (content: string, idempotencyKey: string) => {
+      const response = await acceptOperatorDeskTurn(
+        (acceptance) => harness.service.acceptOperatorDeskEvent(acceptance),
+        { sessionId: session.sessionId, sessionKey: session.sessionKey, binding, content, idempotencyKey },
+      );
+      const event = harness.storage.inboundChannelEvents.getByIdentity({
+        channelKey: "telegram",
+        connectionId: connection.connectionId,
+        idempotencyKey: `desk:${session.sessionId}:${idempotencyKey}`,
+      });
+      return { response, eventId: event!.eventId };
+    };
+
+    const first = await ask("Where did I park?", "request-1");
+    await waitFor(() => harness.storage.inboundChannelEvents.get(first.eventId)?.status === "completed");
+
+    expect(harness.storage.chatMessages.get(first.response.userMessage.messageId)).toMatchObject({
+      sessionId: session.sessionId,
+      actorId: "operator",
+      sourceAuthority: "operator",
+      content: "Where did I park?",
+    });
+    expect(channelIngest).not.toHaveBeenCalled();
+    expect(harness.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+    expect(replyGateway.consumePreparedAgentChatTurn).toHaveBeenCalledTimes(1);
+    expect(replyGateway.commsSend).toHaveBeenCalledTimes(1);
+    expect(replyGateway.commsSend.mock.calls[0]?.[0]).toMatchObject({
+      connectionId: connection.connectionId,
+      target: "4242",
+      message: 'From your desk: "Where did I park?"\n\nLevel 3, near the lifts.',
+    });
+    // The real ensure kept the conversation the phone message recorded.
+    expect(harness.storage.chatSessionBindings.get(session.sessionId)?.conversation).toMatchObject({
+      kind: "direct",
+      counterpartActorId: "4242",
+    });
+
+    // The owner is taken off the connection while a desk question is already accepted: it is never answered.
+    const current = harness.storage.integrationConnections.get(connection.connectionId);
+    harness.storage.integrationConnections.update(connection.connectionId, {
+      expectedRevision: current.revision,
+      config: { ownerActorIds: [] },
+    });
+    const second = await ask("Is this still me?", "request-2");
+    await waitFor(() => harness.storage.inboundChannelEvents.get(second.eventId)?.status === "suppressed");
+
+    expect(harness.storage.chatMessages.get(second.response.userMessage.messageId)?.sourceAuthority).toBe("operator");
+    expect(harness.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+    expect(replyGateway.consumePreparedAgentChatTurn).toHaveBeenCalledTimes(1);
+    expect(replyGateway.commsSend).toHaveBeenCalledTimes(1);
   });
 
   it("decides each desk send from the binding, the connection and the session it names", async () => {

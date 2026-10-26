@@ -10,6 +10,7 @@ import {
   buildDeskDeliveryPrefix,
   buildOperatorDeskAcceptance,
   describeBlockedDeskReply,
+  recordInboundChannelMessage,
   resolveDeskConversationMode,
   routeOperatorDeskSend,
 } from "./channel-desk-turn.js";
@@ -235,6 +236,36 @@ describe("channel desk turns", () => {
     ).rejects.toThrow();
     await expect(acceptOperatorDeskTurn(host, { ...validDeskInput(), idempotencyKey: " " })).rejects.toThrow();
     expect(host).not.toHaveBeenCalled();
+  });
+
+  it("records a desk question as the operator with operator authority, and anything else as channel input", async () => {
+    const ingestEvent = vi.fn(async () => "operator-recorded");
+    const ingestChannelMessage = vi.fn(async () => "channel-recorded");
+    const message = { eventId: "message-1", account: "telegram-1", peer: OWNER_ID, actorId: "someone", content: "hi" };
+
+    await expect(
+      recordInboundChannelMessage(
+        { channel: "telegram", idempotencyKey: "event-1", message, origin: "operator_desk" },
+        ingestEvent,
+        ingestChannelMessage,
+      ),
+    ).resolves.toBe("operator-recorded");
+    expect(ingestEvent).toHaveBeenCalledExactlyOnceWith(
+      "event-1",
+      expect.objectContaining({ actor: { type: "user", id: "operator" }, message: { role: "user", content: "hi" } }),
+      { sourceAuthority: "operator" },
+    );
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+
+    await expect(
+      recordInboundChannelMessage(
+        { channel: "telegram", idempotencyKey: "event-2", message },
+        ingestEvent,
+        ingestChannelMessage,
+      ),
+    ).resolves.toBe("channel-recorded");
+    expect(ingestChannelMessage).toHaveBeenCalledExactlyOnceWith("telegram", "event-2", message);
+    expect(ingestEvent).toHaveBeenCalledOnce();
   });
 
   it("quotes at most the first 200 characters of the desk question", () => {

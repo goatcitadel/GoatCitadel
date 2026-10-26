@@ -189,6 +189,31 @@ export function resolveDeskQuestionGate(
 }
 
 /**
+ * How the inbound worker records one message in Chat. A desk question is the operator's own words, so it is recorded
+ * as the operator with operator authority, never as channel input; any other message is recorded as channel input.
+ */
+export async function recordInboundChannelMessage<Result>(
+  inbound: { channel: string; idempotencyKey: string; message: IngestChannelMessageInput; origin?: string },
+  ingestEvent: (
+    idempotencyKey: string,
+    event: GatewayEventInput,
+    options: { sourceAuthority: "operator" },
+  ) => Promise<Result>,
+  ingestChannelMessage: (
+    channel: string,
+    idempotencyKey: string,
+    message: IngestChannelMessageInput,
+  ) => Promise<Result>,
+): Promise<Result> {
+  const { channel, idempotencyKey, message, origin } = inbound;
+  return origin === OPERATOR_DESK_INGEST_ORIGIN
+    ? await ingestEvent(idempotencyKey, buildOperatorDeskGatewayEvent(channel, message), {
+        sourceAuthority: "operator",
+      })
+    : await ingestChannelMessage(channel, idempotencyKey, message);
+}
+
+/**
  * The Chat event that records a desk question: always the operator, whatever the stored message names. The caller
  * ingests it with operator authority.
  */
