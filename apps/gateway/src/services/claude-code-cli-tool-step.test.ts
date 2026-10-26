@@ -242,9 +242,9 @@ describe("bridged Claude Code CLI step mapping", () => {
       messageStop,
     ]);
     const expected = {
-      prompt_tokens: 2,
+      prompt_tokens: 1593,
       completion_tokens: 117,
-      total_tokens: 119,
+      total_tokens: 1710,
       cache_read_input_tokens: 0,
       cache_creation_input_tokens: 1591,
     };

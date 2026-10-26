@@ -1032,10 +1032,14 @@ export function normalizeAnthropicUsage(
   const cacheRead = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : undefined;
   const cacheCreation =
     typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : undefined;
+  // OpenAI semantics: prompt_tokens is the TOTAL input, so Anthropic's separate cache read/write counts are
+  // folded in. The cache fields stay exposed because the pricing code reads cache_read_input_tokens as the
+  // cached subset of prompt_tokens.
+  const promptTokens = inputTokens !== undefined ? inputTokens + (cacheRead ?? 0) + (cacheCreation ?? 0) : undefined;
   return {
-    ...(inputTokens !== undefined ? { prompt_tokens: inputTokens } : {}),
+    ...(promptTokens !== undefined ? { prompt_tokens: promptTokens } : {}),
     ...(outputTokens !== undefined ? { completion_tokens: outputTokens } : {}),
-    ...(inputTokens !== undefined && outputTokens !== undefined ? { total_tokens: inputTokens + outputTokens } : {}),
+    ...(promptTokens !== undefined && outputTokens !== undefined ? { total_tokens: promptTokens + outputTokens } : {}),
     ...(cacheRead !== undefined ? { cache_read_input_tokens: cacheRead } : {}),
     ...(cacheCreation !== undefined ? { cache_creation_input_tokens: cacheCreation } : {}),
   };

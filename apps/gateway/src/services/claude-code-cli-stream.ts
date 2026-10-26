@@ -19,7 +19,7 @@ export { claudeCliUserMessage } from "./claude-code-cli-output.js";
  * OpenAI-shaped chunks every GoatCitadel provider adapter yields.
  */
 
-/** Anthropic-shaped usage (prompt_tokens = uncached input; cache fields passed through), like the Messages adapter. */
+/** Anthropic-shaped usage (prompt_tokens = total input incl. cache read/write; cache fields passed through), like the Messages adapter. */
 export type ClaudeCliUsage = Record<string, unknown>;
 
 export interface ClaudeCliStreamOutcome {

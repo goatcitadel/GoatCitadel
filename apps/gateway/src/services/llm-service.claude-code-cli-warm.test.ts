@@ -74,9 +74,16 @@ function readDelta(chunk: Record<string, unknown>): Record<string, unknown> | un
 function settledUsage(n: number): Record<string, number> {
   const usage = fakeWarmCallUsage(n);
   return {
-    prompt_tokens: usage.input_tokens as number,
+    prompt_tokens:
+      (usage.input_tokens as number) +
+      (usage.cache_read_input_tokens as number) +
+      (usage.cache_creation_input_tokens as number),
     completion_tokens: usage.output_tokens as number,
-    total_tokens: (usage.input_tokens as number) + (usage.output_tokens as number),
+    total_tokens:
+      (usage.input_tokens as number) +
+      (usage.cache_read_input_tokens as number) +
+      (usage.cache_creation_input_tokens as number) +
+      (usage.output_tokens as number),
     cache_read_input_tokens: usage.cache_read_input_tokens as number,
     cache_creation_input_tokens: usage.cache_creation_input_tokens as number,
   };
