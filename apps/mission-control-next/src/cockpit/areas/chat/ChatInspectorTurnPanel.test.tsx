@@ -99,3 +99,42 @@ describe("ChatInspectorTurnPanel cost (#499)", () => {
     expect(row("Cost")).toBe("Unknown");
   });
 });
+
+describe("ChatInspectorTurnPanel chosen because", () => {
+  it("says a recorded fallback was a fallback, without printing ids", () => {
+    act(() =>
+      root.render(
+        <ChatInspectorTurnPanel
+          selectedTurn={turnWith({
+            status: "completed",
+            routing: {
+              primaryProviderId: "p1",
+              primaryModel: "model-a",
+              effectiveProviderId: "p2",
+              effectiveModel: "model-b",
+              fallbackUsed: true,
+              fallbackReason: "The provider was unavailable",
+            },
+          })}
+        />,
+      ),
+    );
+    expect(row("Chosen because")).toBe("Fell back from model-a because the provider was unavailable");
+  });
+
+  it("names the selected model when nothing changed and stays neutral when nothing is recorded", () => {
+    act(() =>
+      root.render(
+        <ChatInspectorTurnPanel
+          selectedTurn={turnWith({
+            status: "completed",
+            routing: { primaryModel: "model-a", effectiveModel: "model-a" },
+          })}
+        />,
+      ),
+    );
+    expect(row("Chosen because")).toBe("The model selected for this conversation");
+    act(() => root.render(<ChatInspectorTurnPanel selectedTurn={turnWith({ status: "completed", model: "" })} />));
+    expect(row("Chosen because")).toBe("Selected by routing rules");
+  });
+});
