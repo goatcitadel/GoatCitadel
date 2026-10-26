@@ -1292,6 +1292,7 @@ async function ensureEventStreamConnected(): Promise<void> {
       eventStreamStableOpenTimer = null;
       if (sharedEventSource === source) {
         reconnectAttempts = 0;
+        notifyEventStreamStatusToAll();
       }
     }, STREAM_STABLE_OPEN_MS);
     setEventConnectionState("open");

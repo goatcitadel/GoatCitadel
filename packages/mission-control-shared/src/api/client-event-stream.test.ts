@@ -265,6 +265,26 @@ describe("client event stream", () => {
     cleanup();
   });
 
+  it("tells subscribers the retry count was cleared after a stable open", async () => {
+    const statuses: Array<{ reconnectAttempts: number }> = [];
+    const cleanup = connectEventStream(
+      () => undefined,
+      undefined,
+      (status) => statuses.push({ reconnectAttempts: status.reconnectAttempts }),
+    );
+    await waitForEventSourceCount(1);
+    FakeEventSource.instances[0]!.onerror?.();
+    await vi.advanceTimersByTimeAsync(1000);
+    await waitForEventSourceCount(2);
+    expect(statuses.at(-1)?.reconnectAttempts).toBe(1);
+
+    FakeEventSource.instances[1]!.onopen?.();
+    await vi.advanceTimersByTimeAsync(STREAM_STABLE_OPEN_MS);
+    expect(statuses.at(-1)?.reconnectAttempts).toBe(0);
+
+    cleanup();
+  });
+
   it("reuses stored client ids and cursors when building stream URLs", async () => {
     window.localStorage.setItem("goatcitadel.events.client.v1", "client-existing");
     window.localStorage.setItem("goatcitadel.events.cursor.v1", "9");
