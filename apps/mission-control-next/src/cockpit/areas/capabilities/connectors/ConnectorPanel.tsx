@@ -84,7 +84,8 @@ function TechnicalRows({ item }: { item: CapabilityConnectorItem }) {
 }
 
 function ConnectorDetails({ item, onRemoved }: { item: CapabilityConnectorItem; onRemoved?: () => void }) {
-  const state = presentConnectorState(item, "panel");
+  const { showTechnicalDetails } = useUiPreferences();
+  const state = presentConnectorState(item, "panel", { technicalDetailsShown: showTechnicalDetails });
   const connection = describeConnection(item);
   const savedServer = item.source === "mcp_server" && Boolean(item.serverId);
   return (

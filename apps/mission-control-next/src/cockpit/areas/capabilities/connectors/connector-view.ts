@@ -88,8 +88,11 @@ const REASON_LINES: Readonly<Record<CapabilityConnectorReason, string>> = {
 
 /** What the panel says instead of the row's line. The row's "open it to see why" would send the panel back to itself. */
 const PANEL_REASON_LINES: Readonly<Partial<Record<CapabilityConnectorReason, string>>> = {
-  error: "Stopped working. The last error is under Technical details.",
+  error: "Stopped working.",
 };
+
+/** Added to the panel's broken line only when Technical details is on the page and holds the error. */
+const LAST_ERROR_POINTER = " The last error is under Technical details.";
 
 const CHAT_BLOCK_LINES: Readonly<Record<CapabilityConnectorChatBlock, string>> = {
   mcp_in_chat_off: "Chat can't use connectors yet.",
@@ -160,11 +163,13 @@ export function groupConnectors(
  * connected MCP row that Chat can't reach says so, and a row hidden in this workspace says that instead of its reason
  * ("Ready to use" beside "Hidden in this workspace" would contradict itself). A hidden row that is connected reads as
  * hidden alone; one that is not connected keeps its state word beside the note, so "Not working" is not lost.
- * `where` is the surface: the panel words the broken reason without pointing at itself.
+ * `where` is the surface: the panel words the broken reason without pointing at itself, and points at Technical details
+ * only when the operator shows them (`technicalDetailsShown`) and there is an error to read there.
  */
 export function presentConnectorState(
   item: CapabilityConnectorItem,
   where: "row" | "panel" = "row",
+  { technicalDetailsShown = false }: { technicalDetailsShown?: boolean } = {},
 ): StatusPresentation & { reason: string } {
   const chatBlocked = item.state === "connected" && !item.chat.available;
   const hiddenOnly = item.hiddenInWorkspace && item.state === "connected";
@@ -176,11 +181,15 @@ export function presentConnectorState(
   // Green says "usable". A connection Chat can't use yet asks for a look, and a hidden connected row is neither good
   // nor bad. Any other state keeps its own tone.
   const tone: StatusTone = hiddenOnly ? "neutral" : chatBlocked ? "waiting" : STATE_TONES[item.state];
+  const panelLine = where === "panel" ? PANEL_REASON_LINES[item.reason] : undefined;
+  const pointer = panelLine && technicalDetailsShown && item.lastError ? LAST_ERROR_POINTER : "";
   const reason = item.hiddenInWorkspace
     ? "The AI can't use it in this workspace"
     : chatBlocked
       ? "Connected · not available in Chat"
-      : ((where === "panel" ? PANEL_REASON_LINES[item.reason] : undefined) ?? REASON_LINES[item.reason]);
+      : panelLine
+        ? `${panelLine}${pointer}`
+        : REASON_LINES[item.reason];
   return { label, tone, reason };
 }
 

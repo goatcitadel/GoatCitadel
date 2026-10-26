@@ -258,11 +258,23 @@ describe("Connector panel", () => {
   });
 
   it("points a broken connector's reason at technical details instead of back at itself", async () => {
+    prefs.showTechnicalDetails = true;
     const failing = { ...LINEAR, state: "broken", reason: "error", lastError: "spawn ENOENT" } as const;
     await renderPanel(LINEAR.id, [failing]);
     expect(text()).toContain("Stopped working. The last error is under Technical details.");
+    // The pointer leads somewhere: the section is on the page and holds the error.
+    expect(body().querySelector("details summary")?.textContent).toBe("Technical details");
+    expect(text()).toContain("spawn ENOENT");
     // The row's line sends the reader here; here it must not send them back.
     expect(text()).not.toContain("open it to see why");
+  });
+
+  it("does not point at technical details while they are hidden", async () => {
+    const failing = { ...LINEAR, state: "broken", reason: "error", lastError: "spawn ENOENT" } as const;
+    await renderPanel(LINEAR.id, [failing]);
+    expect(text()).toContain("Stopped working.");
+    expect(text()).not.toContain("under Technical details");
+    expect(body().querySelector("details")).toBeNull();
   });
 
   it("does not claim a connected web search row needs a key", async () => {
