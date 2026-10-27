@@ -71,7 +71,7 @@ import {
 import { createCitadelWardRequestVault, type CitadelWardRequestVault } from "./citadel-ward-approval.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { readChatAttachmentContentForGateway } from "./gateway-route-composition-shared.js";
-import { getChannelStreamRuntime } from "./channel-stream-runtime-registry.js";
+import { getChannelStreamRuntime, provideTelegramUpdateDeps } from "./channel-stream-runtime-registry.js";
 import { verifyIntegrationPluginPackage } from "./integration-plugin-package-integrity.js";
 
 export function composeIntegrationChannelRouteDependencies(
@@ -316,6 +316,38 @@ export function composeIntegrationChannelRouteDependencies(
     },
   });
 
+  const integrationWebhooks = createIntegrationWebhookRoutePort({
+    acceptInboundChannelEvent: (input) => gateway.acceptInboundChannelEvent(input),
+    acceptInboundChannelEvents: (inputs) => gateway.acceptInboundChannelEvents(inputs),
+    awaitInboundChannelCommandResult: (eventId) => gateway.awaitInboundChannelCommandResult(eventId),
+    findRemoteActionTokenId: (token) => gateway.findRemoteActionTokenId(token),
+    getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
+    cancelLatestActiveChatTurnForSession: (sessionId, cancelledBy) =>
+      gateway.cancelLatestActiveChatTurnForSession(sessionId, cancelledBy),
+    hasRunningTurn: (sessionId) => gateway.hasRunningTurn(sessionId),
+    ingestChannelMessage: (channel, idempotencyKey, input) =>
+      gateway.ingestChannelMessage(channel, idempotencyKey, input),
+    isVoiceInboundEnabled: async () => (await gateway.isFeatureEnabled("channelVoiceInboundV1Enabled")) === true,
+    transcribeChannelVoice: (input) => channelVoiceInbound.transcribe(input),
+    parseChatCommand: (sessionId, commandText, options) => gateway.parseChatCommand(sessionId, commandText, options),
+    recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
+    emitChannelActivity: (input) => gateway.commsActivity(input),
+    respondToExistingChatMessage: (sessionId, messageId, input) =>
+      gateway.respondToExistingChatMessage(sessionId, messageId, input),
+    resolveApprovalWithRemoteToken: (input) => gateway.resolveApprovalWithRemoteToken(input),
+    resolveApprovalWithRemoteTokenId: (input) => gateway.resolveApprovalWithRemoteTokenId(input),
+    // A desk send into a channel conversation; the durable desk question is an inbound channel event.
+    sendOperatorDeskMessage: (sessionId, input) => gateway.sendOperatorDeskMessage(sessionId, input),
+    setChatSessionBinding: (input) => gateway.setChatSessionBinding(input),
+    updateIntegrationConnection: (connectionId, patch) =>
+      integrationChannel.updateIntegrationConnection(connectionId, patch),
+  });
+  // Telegram polling handles an update exactly as the webhook route does, through this same port.
+  provideTelegramUpdateDeps(gateway, {
+    webhooks: integrationWebhooks,
+    readPersonalityCatalog: async () => gateway.personalityCatalogService.getCatalog(),
+  });
+
   return {
     channelSetup,
     comms,
@@ -331,32 +363,7 @@ export function composeIntegrationChannelRouteDependencies(
         ),
     },
     integrations,
-    integrationWebhooks: createIntegrationWebhookRoutePort({
-      acceptInboundChannelEvent: (input) => gateway.acceptInboundChannelEvent(input),
-      acceptInboundChannelEvents: (inputs) => gateway.acceptInboundChannelEvents(inputs),
-      awaitInboundChannelCommandResult: (eventId) => gateway.awaitInboundChannelCommandResult(eventId),
-      findRemoteActionTokenId: (token) => gateway.findRemoteActionTokenId(token),
-      getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
-      cancelLatestActiveChatTurnForSession: (sessionId, cancelledBy) =>
-        gateway.cancelLatestActiveChatTurnForSession(sessionId, cancelledBy),
-      hasRunningTurn: (sessionId) => gateway.hasRunningTurn(sessionId),
-      ingestChannelMessage: (channel, idempotencyKey, input) =>
-        gateway.ingestChannelMessage(channel, idempotencyKey, input),
-      isVoiceInboundEnabled: async () => (await gateway.isFeatureEnabled("channelVoiceInboundV1Enabled")) === true,
-      transcribeChannelVoice: (input) => channelVoiceInbound.transcribe(input),
-      parseChatCommand: (sessionId, commandText, options) => gateway.parseChatCommand(sessionId, commandText, options),
-      recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
-      emitChannelActivity: (input) => gateway.commsActivity(input),
-      respondToExistingChatMessage: (sessionId, messageId, input) =>
-        gateway.respondToExistingChatMessage(sessionId, messageId, input),
-      resolveApprovalWithRemoteToken: (input) => gateway.resolveApprovalWithRemoteToken(input),
-      resolveApprovalWithRemoteTokenId: (input) => gateway.resolveApprovalWithRemoteTokenId(input),
-      // A desk send into a channel conversation; the durable desk question is an inbound channel event.
-      sendOperatorDeskMessage: (sessionId, input) => gateway.sendOperatorDeskMessage(sessionId, input),
-      setChatSessionBinding: (input) => gateway.setChatSessionBinding(input),
-      updateIntegrationConnection: (connectionId, patch) =>
-        integrationChannel.updateIntegrationConnection(connectionId, patch),
-    }),
+    integrationWebhooks,
     obsidian,
   };
 }

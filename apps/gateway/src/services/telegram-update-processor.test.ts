@@ -17,6 +17,7 @@ const CONNECTION_ID = "11111111-1111-1111-1111-111111111111";
 const APPROVED_CONFIG = {
   botToken: "telegram-bot-token",
   webhookSecret: "telegram-webhook-secret",
+  receiveMode: "poll",
   telegramPairing: {
     approved: [{ actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Ada Lovelace" }],
     pending: [],
@@ -171,6 +172,62 @@ describe("telegram update processor", () => {
 
       expect(result).toBeUndefined();
       expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+    }
+  });
+
+  it("runTelegramUpdate does nothing for a connection that is not Telegram", async () => {
+    const acceptInboundChannelEvent = vi.fn();
+    const updateIntegrationConnection = vi.fn();
+    const webhooks = createFakeWebhooks({
+      getIntegrationConnection: async () => ({
+        connectionId: CONNECTION_ID,
+        revision: "rev-1",
+        key: "discord",
+        enabled: true,
+        status: "connected",
+        config: APPROVED_CONFIG,
+      }),
+      acceptInboundChannelEvent,
+      updateIntegrationConnection,
+    });
+
+    const result = await runTelegramUpdate(
+      createDeps(webhooks),
+      CONNECTION_ID,
+      privateTextUpdate({ updateId: 9010, actorId: 4242 }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+    expect(updateIntegrationConnection).not.toHaveBeenCalled();
+  });
+
+  it("runTelegramUpdate does nothing for a Telegram connection that does not poll", async () => {
+    for (const receiveMode of [undefined, "off", "webhook"]) {
+      const acceptInboundChannelEvent = vi.fn();
+      const updateIntegrationConnection = vi.fn();
+      const webhooks = createFakeWebhooks({
+        getIntegrationConnection: async () => ({
+          connectionId: CONNECTION_ID,
+          revision: "rev-1",
+          key: "telegram",
+          enabled: true,
+          status: "connected",
+          config: { ...APPROVED_CONFIG, receiveMode },
+        }),
+        acceptInboundChannelEvent,
+        updateIntegrationConnection,
+      });
+
+      const result = await runTelegramUpdate(
+        createDeps(webhooks),
+        CONNECTION_ID,
+        privateTextUpdate({ updateId: 9011, actorId: 4242 }),
+      );
+
+      expect(result).toBeUndefined();
+      expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+      expect(updateIntegrationConnection).not.toHaveBeenCalled();
     }
   });
 

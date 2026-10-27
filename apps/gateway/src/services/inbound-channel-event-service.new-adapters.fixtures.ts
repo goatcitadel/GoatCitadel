@@ -48,6 +48,9 @@ function recordingCtx(conn: IntegrationConnection, emitted: ChannelStreamEvent[]
     emit: async (event: ChannelStreamEvent) => {
       emitted.push(event);
     },
+    handle: async (work: () => Promise<unknown>) => {
+      await work();
+    },
     diagnostic: () => undefined,
   } as ChannelStreamRunContext;
 }

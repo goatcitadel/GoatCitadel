@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
-import { getChannelStreamRuntime, type ChannelStreamRuntimeHost } from "./channel-stream-runtime-registry.js";
+import {
+  getChannelStreamRuntime,
+  provideTelegramUpdateDeps,
+  type ChannelStreamRuntimeHost,
+} from "./channel-stream-runtime-registry.js";
+import {
+  integrationWebhookRouteMethods,
+  type IntegrationWebhookRouteMethod,
+  type IntegrationWebhookRoutePort,
+} from "./integration-webhook-route-service.js";
 
 function ntfyConnection(): IntegrationConnection {
   return {
@@ -65,6 +74,83 @@ function host() {
     isConnectionUrlAllowlisted: vi.fn(() => true),
   } as unknown as ChannelStreamRuntimeHost;
   return { value, acceptInboundChannelEvent };
+}
+
+function telegramConnection(): IntegrationConnection {
+  return {
+    connectionId: "conn-tg",
+    revision: "r1",
+    catalogId: "channel.telegram",
+    kind: "channel",
+    key: "telegram",
+    label: "Telegram",
+    enabled: true,
+    status: "connected",
+    config: { botTokenEnv: "TELEGRAM_BOT_TOKEN", receiveMode: "poll" },
+    createdAt: "2026-10-26T00:00:00.000Z",
+    updatedAt: "2026-10-26T00:00:00.000Z",
+  };
+}
+
+function telegramTextUpdate(updateId: number) {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      from: { id: 777, is_bot: false, first_name: "Ada" },
+      chat: { id: 777, type: "private" },
+      text: "hello",
+    },
+  };
+}
+
+function telegramHost() {
+  const settings = new Map<string, unknown>();
+  const value = {
+    storage: {
+      integrationConnections: { list: vi.fn(async () => [telegramConnection()]) },
+      systemSettings: {
+        get: vi.fn(async (key: string) =>
+          settings.has(key) ? { key, value: settings.get(key), updatedAt: "2026-10-26T00:00:00.000Z" } : undefined,
+        ),
+        set: vi.fn(async (key: string, next: unknown) => {
+          settings.set(key, next);
+        }),
+      },
+    },
+    acceptInboundChannelEvent: vi.fn(),
+    recordDevDiagnostic: vi.fn(),
+    resolveConnectionSecret: vi.fn(() => "123:abc"),
+    isConnectionUrlAllowlisted: vi.fn(() => true),
+  } as unknown as ChannelStreamRuntimeHost;
+  return { value, settings };
+}
+
+/** A Bot API stand-in: getUpdates honours offset; with nothing pending it holds the long poll until aborted. */
+function telegramFetch(pending: Array<{ update_id: number }>) {
+  return vi.fn(async (input: string | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/getUpdates")) {
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      const result = offset === -1 ? [] : pending.filter((update) => update.update_id >= offset);
+      if (result.length > 0 || offset === -1) return new Response(JSON.stringify({ ok: true, result }));
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+          { once: true },
+        );
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, result: {} }));
+  });
+}
+
+function fakeWebhooks(
+  overrides: Partial<Record<IntegrationWebhookRouteMethod, (...args: never[]) => unknown>>,
+): IntegrationWebhookRoutePort {
+  const port = Object.fromEntries(integrationWebhookRouteMethods.map((method) => [method, vi.fn()]));
+  return { ...port, ...overrides } as unknown as IntegrationWebhookRoutePort;
 }
 
 class FakeMattermostSocket extends EventTarget {
@@ -188,6 +274,69 @@ describe("getChannelStreamRuntime", () => {
       });
       expect(accepted).not.toHaveProperty("inboundAccessConfig");
       expect(JSON.stringify(accepted)).not.toContain("secret");
+    } finally {
+      await runtime.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("has a telegram adapter whose updates wait until the Telegram handler is provided", async () => {
+    const h = telegramHost();
+    vi.stubGlobal("fetch", telegramFetch([telegramTextUpdate(5)]));
+    const runtime = getChannelStreamRuntime(h.value);
+    try {
+      await runtime.sync();
+      await vi.waitFor(() =>
+        expect(runtime.getStatus("conn-tg")?.lastError).toBe("Telegram receiving isn't ready yet."),
+      );
+      expect(runtime.getStatus("conn-tg")?.channelKey).toBe("telegram");
+      expect(h.value.acceptInboundChannelEvent).not.toHaveBeenCalled();
+    } finally {
+      await runtime.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("routes polled Telegram updates through the provided handler and stores the cursor", async () => {
+    const h = telegramHost();
+    const getIntegrationConnection = vi.fn(async () => ({
+      ...telegramConnection(),
+      config: {
+        ...telegramConnection().config,
+        telegramPairing: { approved: [{ actorId: "777", approvedAt: "2026-10-26T00:00:00.000Z" }], pending: [] },
+      },
+    }));
+    const acceptInboundChannelEvent = vi.fn(async (input: { eventType: string }) => ({
+      accepted: true,
+      durableAccepted: true,
+      deduped: false,
+      replied: false,
+      queued: true,
+      eventType: input.eventType,
+      inboundEventId: "e1",
+    }));
+    provideTelegramUpdateDeps(h.value, {
+      webhooks: fakeWebhooks({ getIntegrationConnection, acceptInboundChannelEvent }),
+      readPersonalityCatalog: async () => ({ items: [], defaultPersonalityId: "default" }),
+    });
+    const fetchMock = telegramFetch([telegramTextUpdate(5)]);
+    vi.stubGlobal("fetch", fetchMock);
+    const runtime = getChannelStreamRuntime(h.value);
+    try {
+      await runtime.sync();
+      await vi.waitFor(() =>
+        expect(h.settings.get("channel_stream_cursor_v1:telegram:conn-tg")).toMatchObject({
+          cursor: "6",
+          scope: "123",
+        }),
+      );
+      expect(getIntegrationConnection).toHaveBeenCalledWith("conn-tg");
+      expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "telegram", idempotencyKey: "telegram:conn-tg:5" }),
+      );
+      expect(h.value.acceptInboundChannelEvent).not.toHaveBeenCalled();
+      expect(runtime.getStatus("conn-tg")).toMatchObject({ ready: true });
+      expect(runtime.getStatus("conn-tg")?.lastInboundAt).toBeTruthy();
     } finally {
       await runtime.close();
       vi.unstubAllGlobals();

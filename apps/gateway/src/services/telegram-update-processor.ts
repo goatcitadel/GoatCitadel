@@ -3,6 +3,7 @@ import type {
   IntegrationConnection,
   PersonalityCatalogResponse,
 } from "@goatcitadel/contracts";
+import { readTelegramReceiveMode } from "@goatcitadel/gateway-core";
 import { buildChannelConversation } from "./channel-conversation.js";
 import { normalizeChannelCommandInput } from "./channel-command-contract.js";
 import {
@@ -272,6 +273,11 @@ export async function runTelegramUpdate(
   const connection = await deps.webhooks.getIntegrationConnection(connectionId);
   // Same kill switch as the webhook handler: a disabled or disconnected connection must not ingest anything.
   if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
+    return undefined;
+  }
+  // Only a Telegram connection that still polls may act on a polled update; one switched to a webhook or to
+  // receiving nothing since the poll began must not.
+  if (connection.key !== "telegram" || readTelegramReceiveMode(connection.config) !== "poll") {
     return undefined;
   }
   const normalized = normalizeTelegramWebhookPayload({
