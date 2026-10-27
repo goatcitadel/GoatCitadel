@@ -192,6 +192,41 @@ describe("turnOnChannelDraft", () => {
     expect(api.createChangePlan).toHaveBeenCalledOnce();
   });
 
+  it("sends an open change it didn't make to Inbox, without confirming or approving it", async () => {
+    const origins: ChangePlanRecord["origin"][] = [
+      { surface: "chat", workspaceId: "w-1" },
+      { surface: "chat", workspaceId: "w-1", sessionId: "s-1" },
+      { surface: "settings", workspaceId: "w-1", sessionId: "s-1" },
+      { surface: "settings", workspaceId: "w-1", turnId: "t-1" },
+      { surface: "system", workspaceId: "w-1" },
+    ];
+    for (const origin of origins) {
+      for (const mock of Object.values(api)) mock.mockClear();
+      const open = plan({ planId: "p-chat", origin, requiredAction: approvalAction });
+      api.fetchChangePlans.mockResolvedValue({ items: [open] });
+
+      const outcome = await turnOnChannelDraft(input);
+
+      // Its review stays in Inbox, on the approval it waits for.
+      expect(outcome).toEqual({ kind: "elsewhere", plan: open, inInbox: true, approvalId: "ap-1" });
+      expect(api.fetchChangePlan).not.toHaveBeenCalled();
+      expect(api.confirmChangePlan).not.toHaveBeenCalled();
+      expect(api.fetchApproval).not.toHaveBeenCalled();
+      expect(api.resolveApproval).not.toHaveBeenCalled();
+      expect(api.respondToChangePlan).not.toHaveBeenCalled();
+      expect(api.createChangePlan).not.toHaveBeenCalled();
+      expect(api.testChannelSetupDraft).not.toHaveBeenCalled();
+    }
+  });
+
+  it("sends a change bound to a chat session to Inbox even on its compatibility field", async () => {
+    const open = plan({ planId: "p-session", sessionId: "s-1", requiredAction: confirmation });
+    api.fetchChangePlans.mockResolvedValue({ items: [open] });
+
+    expect(await turnOnChannelDraft(input)).toEqual({ kind: "elsewhere", plan: open, inInbox: true });
+    expect(api.confirmChangePlan).not.toHaveBeenCalled();
+  });
+
   it("runs in order: resume lookup, hosts, validate, test, create, approve in place", async () => {
     arrangeEndToEnd();
 

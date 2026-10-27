@@ -54,7 +54,8 @@ export async function turnOnChannelDraft(
 ): Promise<TurnOnOutcome> {
   try {
     const open = await findOpenChange(input);
-    if (open) return await approvePlanInPlace(open.planId, input.workspaceId);
+    // Only a change this page made is approved in place; one from Chat or a model keeps its own review in Inbox.
+    if (open) return madeHere(open) ? await approvePlanInPlace(open.planId, input.workspaceId) : elsewhere(open);
     const hosts = await ensureHostsAllowed(input.requiredHosts, input.workspaceId);
     if (hosts.kind !== "allowed") return hosts;
     const checked = await checkSetup(input.draftId);
@@ -89,6 +90,22 @@ export async function acknowledgeCleanupAndTurnOn(input: DraftRef & { evidenceId
   } catch (error) {
     return failed(error);
   }
+}
+
+/**
+ * A change this page could have made: created from the settings surface and bound to no chat session or turn. The
+ * record does not carry the idempotency key, so a change Settings made for the same draft also passes; one a model
+ * proposed or Chat started never does.
+ */
+function madeHere({ origin, sessionId }: ChangePlanRecord): boolean {
+  return origin.surface === "settings" && !origin.sessionId && !origin.turnId && !sessionId;
+}
+
+/** A change this page didn't make is reviewed in Inbox: on the approval it waits for, when it waits for one. */
+function elsewhere(plan: ChangePlanRecord): TurnOnOutcome {
+  const action = plan.requiredAction;
+  const approvalId = action?.kind === "approval" ? action.approvalId : undefined;
+  return { kind: "elsewhere", plan, inInbox: true, ...(approvalId ? { approvalId } : {}) };
 }
 
 /** An open channel change for this very draft, if an earlier click or Settings already started one. */

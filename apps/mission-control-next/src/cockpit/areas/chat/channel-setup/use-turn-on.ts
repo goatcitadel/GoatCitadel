@@ -16,6 +16,8 @@ export interface TurnOnState {
   message?: string;
   /** The approval to decide in Inbox, when that is the next step. */
   approvalId?: string;
+  /** The change to review in Inbox, when this page didn't make it and it waits on no approval. */
+  reviewPlanId?: string;
   /** What stops the setup being turned on, one reason each. */
   reasons: readonly string[];
   turnOn(input: TurnOnInput): Promise<void>;
@@ -23,7 +25,7 @@ export interface TurnOnState {
   acknowledgeCleanup(): Promise<void>;
 }
 
-type Shown = Pick<TurnOnState, "state" | "message" | "approvalId" | "reasons">;
+type Shown = Pick<TurnOnState, "state" | "message" | "approvalId" | "reviewPlanId" | "reasons">;
 type Target = Pick<TurnOnInput, "draftId" | "catalogId">;
 
 const IDLE: Shown = { state: "idle", reasons: [] };
@@ -36,7 +38,8 @@ function shown(outcome: Exclude<TurnOnOutcome, { kind: "needs_cleanup_ack" }>): 
     case "completed":
       return { state: "done", reasons: [] };
     case "elsewhere":
-      return { state: "elsewhere", reasons: [], ...(outcome.approvalId ? { approvalId: outcome.approvalId } : {}) };
+      if (outcome.approvalId) return { state: "elsewhere", reasons: [], approvalId: outcome.approvalId };
+      return { state: "elsewhere", reasons: [], ...(outcome.inInbox ? { reviewPlanId: outcome.plan.planId } : {}) };
     case "failed":
       return { state: "failed", message: outcome.message, reasons: [] };
     case "blocked":

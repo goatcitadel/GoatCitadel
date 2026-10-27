@@ -191,6 +191,17 @@ describe("TurnOnStep", () => {
     expect(link("Approve it in Inbox")).toBeUndefined();
   });
 
+  it("sends the operator to a change it didn't make in Inbox", async () => {
+    await show(turnOnState({ state: "elsewhere", reviewPlanId: "plan-7" }));
+    const review = link("Review it in Inbox");
+    expect(review).toBeDefined();
+    const target = new URL(review!.getAttribute("href")!, "http://cockpit.invalid");
+    expect(target.pathname).toBe("/inbox");
+    expect(target.searchParams.get("item")).toBe("change_plan:plan-7");
+    expect(target.searchParams.get("workspaceId")).toBe("default");
+    expect(link("Finish this in Settings")).toBeUndefined();
+  });
+
   it("adds no live region of its own, in any state", async () => {
     const states: TurnOn[] = [
       turnOnState(),

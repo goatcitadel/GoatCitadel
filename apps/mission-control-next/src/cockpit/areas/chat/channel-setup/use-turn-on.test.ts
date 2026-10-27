@@ -202,6 +202,27 @@ describe("useTurnOn", () => {
     await run(() => current.turnOn(INPUT));
     expect(current.state).toBe("elsewhere");
     expect(current.approvalId).toBeUndefined();
+    expect(current.reviewPlanId).toBeUndefined();
+  });
+
+  it("keeps the change to review in Inbox when this page didn't make it and it waits on no approval", async () => {
+    turnOnModule.turnOnChannelDraft.mockResolvedValueOnce({ kind: "elsewhere", plan, inInbox: true });
+    await mount();
+    await run(() => current.turnOn(INPUT));
+    expect(current.state).toBe("elsewhere");
+    expect(current.reviewPlanId).toBe("plan-1");
+    expect(current.approvalId).toBeUndefined();
+
+    // One that waits on an approval goes to that approval instead.
+    turnOnModule.turnOnChannelDraft.mockResolvedValueOnce({
+      kind: "elsewhere",
+      plan,
+      inInbox: true,
+      approvalId: "a-2",
+    });
+    await run(() => current.turnOn(INPUT));
+    expect(current.approvalId).toBe("a-2");
+    expect(current.reviewPlanId).toBeUndefined();
   });
 
   it("can be tried again after a failure, and forgets the old failure when it starts", async () => {

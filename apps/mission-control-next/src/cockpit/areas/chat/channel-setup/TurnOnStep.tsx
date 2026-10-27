@@ -66,7 +66,8 @@ export function turnOnStatus(turnOn: TurnOnState, wording: TurnOnWording = TURN_
     case "blocked":
       return turnOn.reasons.join(" ");
     case "elsewhere":
-      return turnOn.approvalId ? "Approve it in Inbox" : "Finish this in Settings";
+      if (turnOn.approvalId) return "Approve it in Inbox";
+      return turnOn.reviewPlanId ? "Review it in Inbox" : "Finish this in Settings";
     default:
       return undefined;
   }
@@ -75,6 +76,11 @@ export function turnOnStatus(turnOn: TurnOnState, wording: TurnOnWording = TURN_
 /** The Inbox page for one approval, in the workspace the change was made in. */
 function inboxApprovalHref(approvalId: string, workspaceId: string): string {
   return `/inbox?approvalId=${encodeURIComponent(approvalId)}&workspaceId=${encodeURIComponent(workspaceId)}`;
+}
+
+/** The Inbox item for one change, in the workspace the change was made in. */
+function inboxPlanHref(planId: string, workspaceId: string): string {
+  return `/inbox?${new URLSearchParams({ item: `change_plan:${planId}`, workspaceId })}`;
 }
 
 /** Where the last click left things, when it did not finish: the reasons, the failure, or where to go next. */
@@ -122,6 +128,13 @@ function Outcome({
               scope={[workspaceId, turnOn.approvalId]}
             >
               Approve it in Inbox
+            </NativeOwnerLink>
+          ) : turnOn.reviewPlanId ? (
+            <NativeOwnerLink
+              href={inboxPlanHref(turnOn.reviewPlanId, workspaceId)}
+              scope={[workspaceId, turnOn.reviewPlanId]}
+            >
+              Review it in Inbox
             </NativeOwnerLink>
           ) : (
             <NativeOwnerLink href={settingsHref} scope={workspaceId}>

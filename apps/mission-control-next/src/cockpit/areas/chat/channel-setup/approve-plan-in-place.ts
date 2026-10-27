@@ -16,11 +16,12 @@ import { isBaseUrlAllowlisted } from "../../settings/web-search-state";
  * Where a change ended up after the page did all it may.
  * - completed: the change is applied.
  * - elsewhere: the next step belongs to Settings or Inbox (a form, a secret, an approval this sign-in can't give).
+ *   `inInbox` marks a change the page did not make, whose review stays in Inbox.
  * - failed: it stopped for good, or a call failed; the message is plain words.
  */
 export type InPlaceOutcome =
   | { kind: "completed"; plan: ChangePlanRecord }
-  | { kind: "elsewhere"; plan: ChangePlanRecord; approvalId?: string }
+  | { kind: "elsewhere"; plan: ChangePlanRecord; approvalId?: string; inInbox?: true }
   | { kind: "failed"; message: string };
 
 type ApprovalAction = Extract<ChangePlanRequiredAction, { kind: "approval" }>;
