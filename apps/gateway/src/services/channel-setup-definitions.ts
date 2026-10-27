@@ -16,7 +16,6 @@ import { createIMessageDefinition } from "./channel-setup-definitions/imessage.j
 import { createNextcloudTalkDefinition } from "./channel-setup-definitions/nextcloud-talk.js";
 import { createLineDefinition } from "./channel-setup-definitions/line.js";
 import { createZaloDefinition } from "./channel-setup-definitions/zalo.js";
-import { createZaloUserDefinition } from "./channel-setup-definitions/zalouser.js";
 import type { ChannelSetupRuntimeDefinition } from "./channel-setup-definitions/common.js";
 import { withPickerHints } from "./channel-setup-definitions/picker-hints.js";
 
@@ -39,7 +38,6 @@ const GUIDED_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = {
   "channel.nextcloud-talk": withGuidedJourney(createNextcloudTalkDefinition()),
   "channel.line": withGuidedJourney(createLineDefinition()),
   "channel.zalo": withGuidedJourney(createZaloDefinition()),
-  "channel.zalouser": withGuidedJourney(createZaloUserDefinition()),
 };
 
 const RUNTIME_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = Object.fromEntries(

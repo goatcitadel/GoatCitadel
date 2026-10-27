@@ -39,16 +39,9 @@ function definitionByKey(key: string) {
 }
 
 describe("channel setup picker hints", () => {
-  it("offers every channel except the Zalo personal bridge", () => {
-    const definitions = listChannelSetupDefinitions();
-
-    expect(definitions).toHaveLength(17);
-    for (const definition of definitions) {
-      if (definition.catalog.key === "zalouser") {
-        expect(definition.wizard.picker).toBeUndefined();
-      } else {
-        expect(definition.wizard.picker, `${definition.catalog.key} has no picker hint`).toBeDefined();
-      }
+  it("offers every channel in the picker", () => {
+    for (const definition of listChannelSetupDefinitions()) {
+      expect(definition.wizard.picker, `${definition.catalog.key} has no picker hint`).toBeDefined();
     }
   });
 
@@ -112,7 +105,6 @@ describe("channel setup picker hints", () => {
     expect(requireChannelSetupDefinition("channel.telegram").definition.wizard.requiredHosts).toEqual([
       "api.telegram.org",
     ]);
-    expect(requireChannelSetupDefinition("channel.zalouser").definition.wizard.picker).toBeUndefined();
   });
 
   it("only hints channels that have a setup definition", () => {
@@ -124,10 +116,14 @@ describe("channel setup picker hints", () => {
   });
 
   it("returns new objects and leaves the source definition untouched", () => {
-    const base = requireChannelSetupDefinition("channel.zalouser");
+    const base = requireChannelSetupDefinition("channel.ntfy");
+    // A source definition as the registry holds it before hints are applied.
+    const wizard = { ...base.definition.wizard };
+    delete wizard.picker;
+    delete wizard.requiredHosts;
     const source = {
       ...base,
-      definition: { ...base.definition, catalog: { ...base.definition.catalog, key: "telegram" } },
+      definition: { ...base.definition, wizard, catalog: { ...base.definition.catalog, key: "telegram" } },
     };
     const before = JSON.stringify(source.definition);
 

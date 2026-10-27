@@ -67,6 +67,12 @@ describe("hardenMermaidSvg", () => {
     expect(hardened).toContain('href="https://example.com/docs"');
     expect(hardened).toContain('href="#shape"');
   });
+
+  it("fails closed when the rendered SVG cannot be parsed", () => {
+    expect(() => hardenMermaidSvg('<svg xmlns="http://www.w3.org/2000/svg"><a onclick="x()">')).toThrow(
+      /could not be checked/,
+    );
+  });
 });
 
 vi.mock("mermaid", () => ({

@@ -75,6 +75,7 @@ import {
   readMcpPolicyTargetFromWrapper,
   type McpToolPolicyBinding,
 } from "./mcp-tool-policy-binding.js";
+import { readMcpApprovalRelief, type McpApprovalRelief } from "./mcp-approval-relief.js";
 import {
   readMeshToolPolicyBinding,
   MESH_TOOL_POLICY_DEFINITION,
@@ -343,6 +344,11 @@ export interface ToolPolicyEvaluateOptions {
   /** Trusted runtime mapping, never read from ToolInvokeRequest or policyContext. */
   mcpToolBinding?: McpToolPolicyBinding;
   meshToolBinding?: MeshToolPolicyBinding;
+  /**
+   * Gateway-authored from the MCP server's saved approval setting and the tool's stored labels, never
+   * read from ToolInvokeRequest or policyContext. It must name this call's exact MCP target.
+   */
+  mcpApprovalRelief?: McpApprovalRelief;
 }
 
 export interface ToolPolicyInvokeOptions extends ToolPolicyEvaluateOptions {
@@ -1139,6 +1145,11 @@ export class ToolPolicyEngine {
     if (meshBinding && this.registry.get(meshBinding.policyToolName)) {
       throw new ToolExecutionPreconditionError("Mesh policy template collides with a registered tool");
     }
+    // Relief applies only to the exact MCP target it was minted for, named or through the wrapper.
+    const mcpApprovalRelief = readMcpApprovalRelief(
+      options.mcpApprovalRelief,
+      meshBinding ? undefined : mappedTarget?.canonicalName,
+    );
     const policyToolName = mappedTarget?.policyToolName ?? request.toolName;
     const toolDef = meshBinding ? MESH_TOOL_POLICY_DEFINITION : this.registry.get(policyToolName);
     const accountingToolName = mappedTarget?.canonicalName ?? request.toolName;
@@ -1160,6 +1171,7 @@ export class ToolPolicyEngine {
       toolDef,
       accountingToolName,
       evaluationRequest,
+      mcpApprovalRelief,
       capabilityPolicy: deriveToolCapabilityPolicy(policyToolName, toolDef),
     };
   }
@@ -1175,12 +1187,14 @@ export class ToolPolicyEngine {
       toolDef,
       capabilityPolicy,
       evaluationRequest: request,
+      mcpApprovalRelief,
     } = nativeInstallation
       ? {
           mappedTarget: undefined,
           toolDef: NATIVE_INSTALLATION_POLICY,
           capabilityPolicy: deriveToolCapabilityPolicy(NATIVE_INSTALLATION_POLICY.name, NATIVE_INSTALLATION_POLICY),
           evaluationRequest: input,
+          mcpApprovalRelief: false,
         }
       : this.resolveInvocationPolicy(input, options);
     const toolNames = mappedTarget ? [request.toolName, mappedTarget.policyToolName] : [request.toolName];
@@ -1318,9 +1332,20 @@ export class ToolPolicyEngine {
       return withWard(withPolicy(deny(riskLevel, "policy_disallow", "tool not available in resolved policy")));
     }
 
+    // A remote A2A peer (lowest-trust inbound actor) never rides the local
+    // operator's blanket bypass mode or a connector's approval setting.
+    const isRemoteA2APeer = request.policyContext?.authActorSource === "a2a_peer";
+    // The Gateway's relief is the connector's own setting for this one call: it
+    // replaces the approval-mode asks (approve_all, the tool-level ask, and the
+    // approve_risky danger-tier ask). Wards, deny rules, the profile ceiling,
+    // risky shell/arguments, outside-root access, nuclear risk, official-search
+    // consent and the first-mutation check below all still apply.
+    const mcpApprovalReliefApplied = mcpApprovalRelief && !isRemoteA2APeer;
     let requiresApproval =
       wardRequiresApproval ||
-      (!hasAllowGrant && (policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval)));
+      (!hasAllowGrant &&
+        !mcpApprovalReliefApplied &&
+        (policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval)));
     const outsideRootsReadRequiresApproval = await this.requiresApprovalForOutsideRootsRead(
       request,
       policy,
@@ -1359,7 +1384,12 @@ export class ToolPolicyEngine {
     if (outsideRootWriteRequiresApproval) {
       requiresApproval = true;
     }
-    if (policy.approvalMode === "approve_risky" && riskLevel !== "safe" && !hasAllowGrant) {
+    if (
+      policy.approvalMode === "approve_risky" &&
+      riskLevel !== "safe" &&
+      !hasAllowGrant &&
+      !mcpApprovalReliefApplied
+    ) {
       requiresApproval = true;
     }
     const codeModeRunPreapproved = Boolean(request.policyContext?.approvedCodeModeRunId);
@@ -1374,10 +1404,9 @@ export class ToolPolicyEngine {
     ) {
       requiresApproval = false;
     }
-    // A remote A2A peer (lowest-trust inbound actor) must not ride the local
-    // operator's blanket bypass mode to auto-execute risky/danger tools. Approval
-    // (or an explicit scoped allow-grant, handled above) is still required.
-    const isRemoteA2APeer = request.policyContext?.authActorSource === "a2a_peer";
+    // A remote A2A peer must not ride the local operator's blanket bypass mode
+    // to auto-execute risky/danger tools. Approval (or an explicit scoped
+    // allow-grant, handled above) is still required.
     if (
       policy.approvalMode === "bypass" &&
       !wardRequiresApproval &&
@@ -1411,6 +1440,7 @@ export class ToolPolicyEngine {
       shellRisk,
       argumentRisk,
       outsideRootsReadRequiresApproval,
+      mcpApprovalReliefApplied,
     });
     if (officialSearchConsentRequired) {
       accessReason.reasonCodes.push("official_search_provider_consent_required");
@@ -1486,6 +1516,7 @@ export class ToolPolicyEngine {
     shellRisk: { risky: true; matchedPattern: string } | undefined;
     argumentRisk: { risky: true; matchedPattern: string } | undefined;
     outsideRootsReadRequiresApproval: boolean;
+    mcpApprovalReliefApplied: boolean;
   }): { reasonCodes: string[]; policyReason: string } {
     const {
       policy,
@@ -1499,6 +1530,7 @@ export class ToolPolicyEngine {
       shellRisk,
       argumentRisk,
       outsideRootsReadRequiresApproval,
+      mcpApprovalReliefApplied,
     } = input;
     const reasonCodes = ["allowed"];
     if (policy.permissionProfileId) {
@@ -1529,6 +1561,12 @@ export class ToolPolicyEngine {
       if (riskLevel === "nuclear") {
         reasonCodes.push("nuclear_risk_requires_approval");
       }
+    } else if (mcpApprovalReliefApplied && !hasAllowGrant) {
+      // The connector's setting replaced the approval mode's ask. Name it only when the call
+      // ends up not asking, so an audit never credits relief for a call something else gated.
+      if (!requiresApproval) {
+        reasonCodes.push("mcp_approval_relief");
+      }
     } else if (policy.approvalMode === "approve_all" && !hasAllowGrant) {
       reasonCodes.push("approval_mode_all");
     } else if (riskLevel !== "safe" && !hasAllowGrant) {
@@ -1545,6 +1583,8 @@ export class ToolPolicyEngine {
       policyReason = "allowed by bypass approval mode";
     } else if (requiresApproval) {
       policyReason = "approval required by approval mode";
+    } else if (reasonCodes.includes("mcp_approval_relief")) {
+      policyReason = "allowed by the MCP server's approval setting";
     }
     if (shellRisk?.risky) {
       reasonCodes.push("shell_risky_requires_approval");

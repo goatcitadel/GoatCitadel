@@ -1,5 +1,6 @@
 import type {
   CapabilityScopeView,
+  DeploymentProfile,
   GoogleWorkspaceOAuthStatus,
   IntegrationCatalogEntry,
   IntegrationConnection,
@@ -9,6 +10,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { GatewayDevDiagnosticsService } from "../dev-diagnostics/service.js";
 import { CapabilityConnectorsService } from "./capability-connectors-service.js";
+import { isMcpApprovalReliefAvailable } from "./mcp-approval-relief.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 
 /** Bounds the integration connections read; the workspace selection registry reads the same number. */
@@ -34,6 +36,8 @@ export interface CapabilityConnectorsOwners {
       resourceType: "mcp_server" | "integration",
     ): Promise<CapabilityScopeView>;
   };
+  /** The install's deployment profile, read on every list. */
+  deploymentProfile(): DeploymentProfile;
   recordDevDiagnostic(input: Parameters<GatewayDevDiagnosticsService["record"]>[0]): void;
 }
 
@@ -44,6 +48,7 @@ export function composeCapabilityConnectors({
   webSearchCredentials,
   settings,
   capabilityScope,
+  deploymentProfile,
   recordDevDiagnostic,
 }: CapabilityConnectorsOwners): CapabilityConnectorsService {
   return new CapabilityConnectorsService(
@@ -58,6 +63,7 @@ export function composeCapabilityConnectors({
       readChatAvailability: async () =>
         (await settings.getSettings()).chatFeatureAvailability ?? { staticMcp: false, durableExecution: false },
       getWorkspaceScope: (workspaceId, resourceType) => capabilityScope.getView("workspace", workspaceId, resourceType),
+      isApprovalReliefAvailable: () => isMcpApprovalReliefAvailable(deploymentProfile()),
     },
     (source, error) =>
       recordDevDiagnostic({

@@ -126,6 +126,7 @@ function sources(overrides: Partial<CapabilityConnectorsSources> = {}): Capabili
     listWebSearchStatuses: vi.fn(() => [searchStatus("search.brave")]),
     readFirecrawlSettings: vi.fn(async () => ({ enabled: true, baseUrl: "https://api.firecrawl.dev" })),
     readChatAvailability: vi.fn(async () => ({ staticMcp: true, durableExecution: true })),
+    isApprovalReliefAvailable: vi.fn(() => true),
     getWorkspaceScope: vi.fn(async (_workspaceId, resourceType) => ({
       effectiveRefs: resourceType === "mcp_server" ? ["server-notes"] : ["conn-gmail"],
     })),
@@ -161,6 +162,17 @@ describe("CapabilityConnectorsService", () => {
     expect(JSON.stringify(response)).not.toContain("sk-live-secret-value");
     expect(Number.isNaN(Date.parse(response.generatedAt))).toBe(false);
   });
+
+  it.each([true, false])(
+    "says whether a connector's approval setting can apply on this install (%s)",
+    async (available) => {
+      const response = await new CapabilityConnectorsService(
+        sources({ isApprovalReliefAvailable: vi.fn(() => available) }),
+      ).list("default");
+
+      expect(response.approvalReliefAvailable).toBe(available);
+    },
+  );
 
   it("reports a failed source to the server log with the real error", async () => {
     const failure = new Error("catalog exploded");

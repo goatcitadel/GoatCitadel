@@ -9,7 +9,7 @@ Let an operator connect the common third-party services through paths that alrea
 - vendor-hosted remote MCP servers (the reviewed list Hermes Agent ships in `optional-mcps/`), and
 - for services with no vendor MCP server, the CLI-backed skills OpenClaw and Hermes Agent ship (`himalaya`, `github`; `gog` is not shipped, see E).
 
-Everything stays under the existing Gateway governance: deny-wins policy, the network allowlist, connection reviews, first-tool approval, approval-gated `shell.exec`, and governed skill activation.
+Everything stays under the existing Gateway governance: deny-wins policy, the network allowlist, connection reviews, first-tool approval (except where the operator sets a connector to let reads or changes run on their own), approval-gated `shell.exec`, and governed skill activation.
 
 ## Sources
 
@@ -45,7 +45,7 @@ Everything stays under the existing Gateway governance: deny-wins policy, the ne
 
 - 61 Hermes catalog entries become `McpServerTemplateRecord`s (`mcp-vendor-server-templates.ts`), alongside the existing templates. Left out: n8n self-hosted and Unreal Engine (both need an operator-supplied URL) and Stripe, Context7 and Microsoft Learn (already templates; Stripe moves to discovery). Every vendor template is `trustTier: "restricted"`, `requireFirstToolApproval: true`, `redactionMode: "strict"` and `enabledByDefault: false`.
 - New optional template fields: `networkHosts` (the hosts the operator must allowlist), `provenance` (catalog source, upstream commit, vendor documentation URL) and `riskNotes`.
-- Money-moving servers (Robinhood trading, PayPal, Square, Plaid) carry a `riskNotes` warning and still require first-tool approval.
+- Money-moving servers (Stripe, Robinhood trading, PayPal, Square, Plaid, RentAHuman) carry a `riskNotes` warning and `movesMoney: true`. They still require first-tool approval unless the operator sets them to let reads run on their own, and they can't be set to "Nothing asks": the Gateway refuses that setting and decides a saved one as "Reading is free".
 - GitHub keeps its existing template. Hermes leaves GitHub's hosted MCP server out because generic dynamic registration does not work there; the template states that a configured OAuth app or token is required.
 
 ### D. Cockpit configuration and management (Mission Control Next)

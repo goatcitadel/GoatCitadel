@@ -598,25 +598,20 @@ describe("describeChannelCapabilities", () => {
     ]);
   });
 
-  it("recognizes every already supported Zalo User credential alias without enabling inbound routing", () => {
-    for (const key of [
-      "authToken",
-      "authTokenEnv",
-      "authorization",
-      "authorizationEnv",
-      "accessToken",
-      "accessTokenEnv",
-      "basicAuth",
-      "basicAuthEnv",
-    ]) {
-      const capabilities = describeChannelCapabilities("zalouser", {
-        baseUrl: "https://zca.example.test",
-        [key]: "configured",
-      });
-      expect(capabilities.setupReady, key).toBe(true);
-      expect(capabilities.inboundModes).toEqual(["none"]);
-    }
-    expect(describeChannelCapabilities("zalouser", { baseUrl: "https://zca.example.test" }).setupReady).toBe(false);
+  it("reports a saved Zalo Personal connection as retired, with every action and readiness flag off", () => {
+    const capabilities = describeChannelCapabilities("zalouser", {
+      baseUrl: "https://zca.example.test",
+      authToken: "configured",
+    });
+    expect(capabilities.supportedActions).toEqual([]);
+    expect(capabilities.supportedDeliveryActions).toEqual([]);
+    expect(capabilities.supportedAttachmentSources).toEqual([]);
+    expect(capabilities.inboundModes).toEqual(["none"]);
+    expect(capabilities.activityCapabilities.supported).toBe(false);
+    expect(capabilities.setupReady).toBe(false);
+    expect(capabilities.setupDiagnostics).toEqual([expect.stringMatching(/^Zalo Personal is not supported anymore/)]);
+    expect(capabilities.runtimePosture.operatorSummary).toMatch(/unofficial personal-account client/);
+    expect(listChannelRuleKeys()).not.toContain("zalouser");
   });
 
   it("describes static channel rules and setup diagnostics", () => {
@@ -629,7 +624,6 @@ describe("describeChannelCapabilities", () => {
       ["nextcloud-talk", { baseUrl: "https://cloud.test", token: "token" }],
       ["ntfy", { baseUrl: "https://ntfy.test", topic: "ops" }],
       ["zalo", { token: "token" }],
-      ["zalouser", { bridgeUrl: "http://127.0.0.1:4545", authToken: "token" }],
     ] as const;
 
     for (const [channelKey, config] of staticChannels) {
@@ -1038,7 +1032,6 @@ describe("channel action matrix (#354)", () => {
     "nextcloud-talk": [{ baseUrl: "https://cloud.example.test", tokenEnv: "NC_TOKEN" }],
     line: [{ channelAccessTokenEnv: "LINE_TOKEN" }],
     zalo: [{ accessTokenEnv: "ZALO_TOKEN" }],
-    zalouser: [{ bridgeUrl: "http://127.0.0.1:3000" }],
   };
 
   /**
@@ -1053,11 +1046,6 @@ describe("channel action matrix (#354)", () => {
     wecom: { "channel.react": NOT_BY_ADAPTER, "channel.unsend": NOT_BY_ADAPTER },
     line: { "channel.react": SCOPE_EXCLUDED, "channel.unsend": SCOPE_EXCLUDED, "channel.typing": SCOPE_EXCLUDED },
     zalo: { "channel.react": SCOPE_EXCLUDED, "channel.unsend": SCOPE_EXCLUDED, "channel.typing": SCOPE_EXCLUDED },
-    zalouser: {
-      "channel.react": SCOPE_EXCLUDED,
-      "channel.unsend": SCOPE_EXCLUDED,
-      "channel.typing": SCOPE_EXCLUDED,
-    },
   };
 
   it("has representative configs for every channel rule", () => {

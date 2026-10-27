@@ -46,7 +46,7 @@ describe("channel setup definition loop28 tails", () => {
     ]);
   });
 
-  it("normalizes secret alias families for WhatsApp, iMessage, Mattermost, Nextcloud Talk, and Zalo user", () => {
+  it("normalizes secret alias families for WhatsApp, iMessage, Mattermost, and Nextcloud Talk", () => {
     const cases = [
       {
         catalogId: "channel.whatsapp",
@@ -111,22 +111,6 @@ describe("channel setup definition loop28 tails", () => {
           defaultRoomId: "room-1",
         },
       },
-      {
-        catalogId: "channel.zalouser",
-        key: "zalouser",
-        config: {
-          bridgeUrl: "http://zalo-bridge.local",
-          authorizationEnv: "ZALO_AUTH",
-          profile: "default",
-          defaultTarget: "zalo-recipient",
-        },
-        expected: {
-          baseUrl: "http://zalo-bridge.local",
-          authTokenEnv: "ZALO_AUTH",
-          profile: "default",
-          defaultTarget: "zalo-recipient",
-        },
-      },
     ] as const;
 
     for (const item of cases) {
@@ -174,11 +158,6 @@ describe("channel setup definition loop28 tails", () => {
         catalogId: "channel.nextcloud-talk",
         draft: { baseUrl: "nextcloud.local", tokenEnv: "NEXTCLOUD_TOKEN" },
         keys: ["baseUrl_malformed", "defaultRoomId_required"],
-      },
-      {
-        catalogId: "channel.zalouser",
-        draft: { baseUrl: "zalo-bridge.local" },
-        keys: ["baseUrl_malformed", "authToken_required", "defaultTarget_required"],
       },
     ];
 

@@ -101,8 +101,8 @@ const LIFECYCLE_ACTION: Record<"promote" | "revoke" | "rollback", string> = {
 export const lifecycleActionLabel = (value: "promote" | "revoke" | "rollback") => LIFECYCLE_ACTION[value];
 
 const APPROVAL_MODE: Record<ToolApprovalMode, string> = {
-  approve_all: "Every tool call needs approval",
-  approve_risky: "Risky tool calls need approval",
+  approve_all: "Every tool call needs approval, except connectors set to let reads or changes run on their own",
+  approve_risky: "Risky tool calls need approval, except connectors set to let reads or changes run on their own",
   bypass: "Approvals bypassed",
 };
 export const approvalModeLabel = (value: string) => lookup(APPROVAL_MODE, value, "Approval setting unknown");

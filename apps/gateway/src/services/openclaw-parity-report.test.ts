@@ -422,7 +422,7 @@ describe("buildOpenclawParityProgramReport", () => {
     expect(report.openEpicIds).not.toContain("GC-P0-06");
     expect(report.completionOrder).not.toContain("GC-P0-06");
     expect(report.unsafeClaims).not.toContain(
-      "Signal, Zalo OA, Zalo Personal, browser, and packaging still require additional work or fresh evidence before parity can be called complete.",
+      "Signal, Zalo OA, browser, and packaging still require additional work or fresh evidence before parity can be called complete.",
     );
   });
 });

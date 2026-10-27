@@ -12,7 +12,7 @@ import type {
   ChannelThreadCapabilities,
 } from "@goatcitadel/contracts";
 
-import { CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS } from "@goatcitadel/contracts";
+import { CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS, describeRetiredChannel } from "@goatcitadel/contracts";
 
 type ChannelRule = {
   supportedActions?: ChannelActionName[];
@@ -874,38 +874,6 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     },
     requiredAnyOf: [["accessTokenEnv", "accessToken", "tokenEnv", "token"]],
   },
-  zalouser: {
-    supportedActions: ["channel.send"],
-    supportedAttachmentSources: ["url"],
-    inboundModes: ["none"],
-    threadCapabilities: {
-      direct: true,
-      groups: true,
-    },
-    chunkingMode: "fallback",
-    supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "Zalo user bridge delivery is normalized as a stateless outbound path and currently requires URL-backed rich attachments. Inbound routing is not available in the current runtime.",
-    },
-    supportNotes: ["Rich media sends currently require URL-backed attachments for the zca bridge."],
-    requiredAnyOf: [
-      ["baseUrl", "bridgeUrl", "serverUrl"],
-      [
-        "authToken",
-        "authTokenEnv",
-        "authorization",
-        "authorizationEnv",
-        "accessToken",
-        "accessTokenEnv",
-        "basicAuth",
-        "basicAuthEnv",
-      ],
-    ],
-  },
 };
 
 /** Channel keys that have an explicit capability rule (every other key gets the send-only fallback). */
@@ -914,6 +882,10 @@ export function listChannelRuleKeys(): string[] {
 }
 
 export function describeChannelCapabilities(channelKey: string, config: Record<string, unknown>): ChannelCapabilities {
+  const retiredReason = describeRetiredChannel(channelKey);
+  if (retiredReason) {
+    return describeRetiredChannelCapabilities(channelKey, retiredReason);
+  }
   const rule = CHANNEL_RULES[channelKey] ?? {
     supportedActions: ["channel.send"],
     inboundModes: ["none"],
@@ -973,6 +945,38 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
     supportNotes: [...(rule.resolveSupportNotes?.(config) ?? rule.supportNotes ?? [])],
     setupDiagnostics,
     setupReady: setupDiagnostics.length === 0,
+  };
+}
+
+/** A retired channel's saved connection stays readable, but it can do nothing, so every action and readiness flag is off. */
+function describeRetiredChannelCapabilities(channelKey: string, reason: string): ChannelCapabilities {
+  return {
+    channelKey,
+    supportedActions: [],
+    supportedDeliveryActions: [],
+    platformUnsupportedActions: {},
+    supportedAttachmentSources: [],
+    inboundModes: ["none"],
+    threadCapabilities: { ...DEFAULT_THREAD_CAPABILITIES },
+    runtimePolicy: { ...DEFAULT_RUNTIME_POLICY },
+    activityCapabilities: {
+      supported: false,
+      phases: [],
+      nativeEffects: [],
+      clearOnTerminal: false,
+      activityEmoji: {},
+    },
+    runtimePosture: {
+      outboundTransport: "api",
+      lifecycle: "stateless",
+      inboundReadiness: "unsupported",
+      operatorSummary: reason,
+    },
+    chunkingMode: "unsupported",
+    supportsStreaming: false,
+    supportNotes: [reason],
+    setupDiagnostics: [reason],
+    setupReady: false,
   };
 }
 

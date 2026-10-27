@@ -101,7 +101,6 @@
     "apps/gateway/src/services/channel-setup-definitions/telegram.ts",
     "apps/gateway/src/services/channel-setup-definitions/whatsapp.ts",
     "apps/gateway/src/services/channel-setup-definitions/zalo.ts",
-    "apps/gateway/src/services/channel-setup-definitions/zalouser.ts",
     "apps/gateway/src/services/channel-setup-helpers.ts",
     "apps/gateway/src/services/channel-setup-public-projection.ts",
     "apps/gateway/src/services/channel-setup-route-service.ts",

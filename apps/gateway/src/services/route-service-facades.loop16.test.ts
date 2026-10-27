@@ -113,11 +113,16 @@ describe("gateway route service facades", () => {
       serverId: "server-1",
       input: { label: "Local" },
     });
-    await expect(service.updateMcpServer("server-1", { label: "Renamed", expectedRevision: "a".repeat(64) })).resolves.toEqual({
+    await expect(
+      service.updateMcpServer("server-1", { label: "Renamed", expectedRevision: "a".repeat(64) }),
+    ).resolves.toEqual({
       serverId: "server-1",
       input: { label: "Renamed", expectedRevision: "a".repeat(64) },
     });
-    await expect(service.deleteMcpServer("server-1", "a".repeat(64))).resolves.toEqual({ serverId: "server-1", deleted: true });
+    await expect(service.deleteMcpServer("server-1", "a".repeat(64))).resolves.toEqual({
+      serverId: "server-1",
+      deleted: true,
+    });
     await expect(service.connectMcpServer("server-1")).resolves.toEqual({ serverId: "server-1", status: "connected" });
     await expect(service.disconnectMcpServer("server-1")).resolves.toEqual({
       serverId: "server-1",
@@ -137,7 +142,9 @@ describe("gateway route service facades", () => {
       ok: true,
       input: { serverId: "server-1", toolName: "tool-1" },
     });
-    await expect(service.updateMcpServerPolicy("server-1", { grants: [], expectedRevision: "a".repeat(64) } as never)).resolves.toEqual({
+    await expect(
+      service.updateMcpServerPolicy("server-1", { grants: [], expectedRevision: "a".repeat(64) } as never),
+    ).resolves.toEqual({
       serverId: "server-1",
       policy: { grants: [], expectedRevision: "a".repeat(64) },
     });
@@ -202,19 +209,27 @@ describe("gateway route service facades", () => {
     );
     expect(rawServer.args[2]).toBe("short-pass");
 
-    await service.updateMcpServerPolicy(rawServer.serverId, {
-      expectedRevision: rawServer.revision,
-      ...projected.policy,
-      redactionMode: "basic",
-    });
+    const onCommitted = vi.fn();
+    await service.updateMcpServerPolicy(
+      rawServer.serverId,
+      {
+        expectedRevision: rawServer.revision,
+        ...projected.policy,
+        redactionMode: "basic",
+      },
+      onCommitted,
+      { actorId: "token:ab12" },
+    );
 
+    // The commit callback and the actor go to the raw admin port untouched: the write owner audits from them.
     expect(updateMcpServerPolicy).toHaveBeenCalledWith(
       rawServer.serverId,
       expect.objectContaining({
         notes: rawServer.policy.notes,
         redactionMode: "basic",
       }),
-      undefined,
+      onCommitted,
+      { actorId: "token:ab12" },
     );
   });
 

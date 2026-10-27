@@ -7,9 +7,9 @@ This guide walks through GoatCitadel channel setup in the order that makes the m
 
 For parity status and tranche tracking, see [OPENCLAW_PARITY_STATUS.md](./OPENCLAW_PARITY_STATUS.md).
 
-Guided Mission Control setup is currently available for `channel.discord`, `channel.slack`, `channel.telegram`, `channel.google-chat`, `channel.teams`, `channel.whatsapp`, `channel.signal`, `channel.mattermost`, `channel.matrix`, `channel.qqbot`, `channel.wecom`, `channel.imessage`, `channel.nextcloud-talk`, `channel.line`, `channel.zalo`, and `channel.zalouser`.
+Guided Mission Control setup is currently available for `channel.discord`, `channel.slack`, `channel.telegram`, `channel.google-chat`, `channel.teams`, `channel.whatsapp`, `channel.signal`, `channel.mattermost`, `channel.matrix`, `channel.qqbot`, `channel.wecom`, `channel.imessage`, `channel.nextcloud-talk`, `channel.line`, and `channel.zalo`.
 
-Discord, Slack, Telegram, Google Chat, Teams, Mattermost, Matrix, QQBot, WeCom, WhatsApp, Signal, LINE, iMessage, Zalo OA, and Zalo Personal guided test/retest flows now run live probe coverage before finalize. WhatsApp, Signal, Zalo OA, and Zalo Personal still rely on operator-controlled sandbox targets or bridge-native delivery confirmation for pre-finalize send checks.
+Discord, Slack, Telegram, Google Chat, Teams, Mattermost, Matrix, QQBot, WeCom, WhatsApp, Signal, LINE, iMessage, and Zalo OA guided test/retest flows now run live probe coverage before finalize. WhatsApp, Signal, and Zalo OA still rely on operator-controlled sandbox targets or bridge-native delivery confirmation for pre-finalize send checks.
 
 ## Guided Channel Setup At A Glance
 
@@ -30,14 +30,15 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, Matrix, QQBot, WeCom, 
 | `channel.nextcloud-talk` | Base URL + Talk token | structural and semantic validation | yes |
 | `channel.line` | Channel access token | token auth plus sandbox push send; signed inbound webhook runtime when channel secret is configured | yes |
 | `channel.zalo` | Official Account access token | sandbox send through the OA send path | yes |
-| `channel.zalouser` | zca bridge URL + optional bearer token | sandbox send through the bridge text-send path | yes |
+
+Zalo Personal (`channel.zalouser`) was removed on 2026-10-26. It sent through an unofficial personal-account client (a zca bridge), and that kind of client can get the account banned. A saved Zalo Personal connection stays listed so you can delete it, but it cannot send. Zalo OA is the supported Zalo channel.
 
 ### Inbound Posture At A Glance
 
 Inbound capability is derived from the runtime capability rules (`packages/gateway-core/src/channel-core.ts`), not from this doc:
 
 - **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook), ntfy (opt-in persistent subscription to a topic's JSON stream; the topic is the sender, so allow `ntfy-topic:<topic>`, and GoatCitadel's own publishes are tagged and ignored on the way back in. The token gates reading the topic; anyone able to publish to the subscribed topic can start turns, so use a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped: no history is fetched on reconnect after a restart or a connection edit. A stream silent for 2 minutes is reconnected), Mattermost (opt-in persistent bot WebSocket for `posted` events; allow the Mattermost user ids that may start turns, and the bot's own and system posts are ignored; Mattermost has no replay, so posts sent while the socket is disconnected or that fail acceptance are not recovered; the bot pings the socket every 30 seconds and reconnects one that answers nothing for 90 seconds), QQBot (signed webhook; the app secret verifies every request, and you allow the QQ openids that may start turns; see below), WeCom (encrypted callback when the Token and EncodingAESKey are set; you allow the WeCom userids that may start turns; see below), Matrix (opt-in `/sync` long-poll; allow the Matrix user ids such as `@alice:example.com` that may start turns; the bot's own messages are ignored and the `since` token is persisted, so a restart resumes where it stopped; if the homeserver rejects the stored token the runtime re-primes and messages in that gap are skipped; see below), Signal (opt-in `receiveEvents` subscription to a `signal-cli daemon --http` event stream; see below), Google Chat (Chat app mode only: a service-account key plus `audienceType`/`audience`; see below).
-- **Outbound delivery today:** iMessage (bridge), Microsoft Teams, Google Chat webhook mode, Zalo OA, Zalo Personal.
+- **Outbound delivery today:** iMessage (bridge), Microsoft Teams, Google Chat webhook mode, Zalo OA.
 
 The BlueBubbles server authenticates every iMessage bridge request with a `?password=` URL query parameter, so the password travels inside the request URL. Use an `https://` bridge URL, or a bridge on the same machine (`127.0.0.1`, `localhost`, or `[::1]`). A bridge URL without a scheme uses `http://` only for those loopback hosts and `https://` for every other host. Plain `http://` to a remote host is used only when you enter it explicitly, and it exposes the password to anyone who can observe that network path.
 

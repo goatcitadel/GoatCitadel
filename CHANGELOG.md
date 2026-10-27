@@ -4,6 +4,10 @@ All notable changes to GoatCitadel are documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- The Zalo Personal channel (`channel.zalouser`) and its `zalouser.send` tool. It sent through an unofficial personal-account client (a zca bridge), and that kind of client can get the account banned. A saved Zalo Personal connection stays listed so you can delete it, but sends, approval deliveries and live probes through it are refused with that reason. Zalo OA (`channel.zalo`) is the supported Zalo channel.
+
 ### Security
 
 - The example tool policies (`config/tool-policy.example.json` and `config/goatcitadel.example.json`) now also deny `fs.patch` and `shell.exec_background`. Deny patterns match tool names exactly, so denying `fs.write` and `shell.exec` never covered these sibling tools. Operators who copied an earlier example should add both entries to `tools.deny` in their own config if they want the same posture.

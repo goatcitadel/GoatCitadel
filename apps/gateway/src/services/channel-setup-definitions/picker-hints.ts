@@ -9,9 +9,8 @@ type ChannelPickerHintEntry = Omit<ChannelSetupPickerHint, "order">;
  * Property order is the agreed picker order: groups run quickest, team chat, then phone apps, and
  * each group lists its channels in order. `withPickerHints` turns a channel's position within its
  * group into the hint's `order`, so the order is written once, here. It is not the order of the
- * setup-definitions list, which keeps its own ranking. `zalouser` is left out on purpose. It is an
- * unofficial personal-session bridge, so the picker never offers it. Only Telegram sets `minutes`;
- * the rest show their wizard's `estimatedMinutes`.
+ * setup-definitions list, which keeps its own ranking. Only Telegram sets `minutes`; the rest show
+ * their wizard's `estimatedMinutes`.
  *
  * Each note must stay within what the channel's `prerequisites` say (see `guided-journey.ts`).
  */

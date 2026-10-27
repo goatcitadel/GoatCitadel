@@ -113,16 +113,6 @@ interface ZaloProbeInput {
   checkedAt?: string;
 }
 
-interface ZalouserProbeInput {
-  baseUrl: string;
-  authorizationHeader?: string;
-  profile?: string;
-  defaultTarget?: string;
-  includeSandboxSend: boolean;
-  fetcher: (url: string, init?: RequestInit) => Promise<Response>;
-  checkedAt?: string;
-}
-
 type MattermostProbeTarget =
   | { kind: "channel"; id: string }
   | { kind: "channel-name"; name: string }
@@ -1401,97 +1391,6 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
   }
 }
 
-export async function runZaloUserBridgeLiveChecks(input: ZalouserProbeInput): Promise<BotProbeChecks> {
-  const checkedAt = input.checkedAt ?? new Date().toISOString();
-  const baseUrl = normalizeBridgeProbeBaseUrl(input.baseUrl);
-  const probe: ChannelProbeReport = {
-    kind: "zalouser_bridge",
-    mode: "zca",
-    checkedAt,
-    steps: [],
-  };
-
-  if (!input.authorizationHeader?.trim()) {
-    probe.steps.push({
-      key: "zalouser_auth",
-      label: "Bridge authentication",
-      status: "fail",
-      disposition: "blocking",
-      message: "An authenticated zca bridge credential is required before probing.",
-      failureCategory: "missing_input",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  if (!input.includeSandboxSend) {
-    probe.steps.push({
-      key: "zalouser_sandbox_send",
-      label: "Sandbox send",
-      status: "skipped",
-      message: "Sandbox send skipped for non-destructive probe mode.",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  const target = parseZalouserProbeTarget(input.defaultTarget);
-  if (!target) {
-    probe.steps.push({
-      key: "zalouser_sandbox_send",
-      label: "Sandbox send",
-      status: "fail",
-      message: "Default Zalo User recipient is missing.",
-      failureCategory: "missing_input",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  const headers = new Headers({ "Content-Type": "application/json" });
-  if (input.authorizationHeader) {
-    headers.set("Authorization", input.authorizationHeader);
-  }
-  const profilePrefix = input.profile ? `/${encodeURIComponent(input.profile)}` : "";
-  try {
-    const send = await readJsonResponse(
-      await input.fetcher(`${baseUrl}${profilePrefix}/messages/text`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          threadId: target.threadId,
-          message: `[GoatCitadel Zalo User probe ${checkedAt}] Channel setup smoke check.`,
-          isGroup: target.isGroup,
-        }),
-      }),
-    );
-    if (send.status < 200 || send.status >= 300) {
-      probe.steps.push({
-        key: "zalouser_sandbox_send",
-        label: "Sandbox send",
-        status: send.status >= 500 ? "warn" : "fail",
-        message: send.detail ?? `Zalo User bridge returned HTTP ${send.status}.`,
-        failureCategory: inferFailureCategory(send.status),
-      });
-      return { checks: mapProbeStepsToChecks(probe.steps), probe };
-    }
-    probe.steps.push({
-      key: "zalouser_sandbox_send",
-      label: "Sandbox send",
-      status: "pass",
-      providerMessageId: asString(asRecord(send.payload.data).messageId) ?? asString(send.payload.messageId),
-      message: "Sandbox personal-session send succeeded.",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  } catch (error) {
-    probe.steps.push({
-      key: "zalouser_sandbox_send",
-      label: "Sandbox send",
-      status: "warn",
-      message: `Probe failed before Zalo User bridge responded: ${(error as Error).message}`,
-      failureCategory: "platform_unavailable",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-}
-
 async function readJsonResponse(response: Response): Promise<ProbeResponse> {
   const text = await readBoundedResponseText(response, {
     maxBytes: 128 * 1024,
@@ -1870,34 +1769,6 @@ function parseMattermostProbeTarget(target: string): MattermostProbeTarget {
   return looksLikeMattermostProbeId(trimmed)
     ? { kind: "channel", id: trimmed }
     : { kind: "channel-name", name: trimmed };
-}
-
-function parseZalouserProbeTarget(target: string | undefined): { threadId: string; isGroup: boolean } | undefined {
-  const trimmed = asString(target);
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed
-    .replace(/^zalouser:/i, "")
-    .replace(/^zca:/i, "")
-    .trim();
-  const lowered = normalized.toLowerCase();
-  if (lowered.startsWith("group:")) {
-    return {
-      threadId: normalized.slice("group:".length).trim(),
-      isGroup: true,
-    };
-  }
-  if (lowered.startsWith("user:")) {
-    return {
-      threadId: normalized.slice("user:".length).trim(),
-      isGroup: false,
-    };
-  }
-  return {
-    threadId: normalized,
-    isGroup: false,
-  };
 }
 
 function looksLikeMattermostProbeId(value: string): boolean {

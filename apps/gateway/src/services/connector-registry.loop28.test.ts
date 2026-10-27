@@ -154,7 +154,6 @@ describe("connector registry loop28 coverage", () => {
         "Set config.defaultTarget (or config.defaultUserId / config.defaultGroupId / config.defaultRoomId) to enable approval delivery.",
       ],
       ["zalo", "Set config.defaultRecipientId or config.defaultTarget to enable approval delivery."],
-      ["zalouser", "Set config.defaultRecipientId or config.defaultTarget to enable approval delivery."],
       ["custom-channel", "Set config.target or config.defaultTarget to enable approval delivery."],
     ] as const;
 
@@ -180,6 +179,38 @@ describe("connector registry loop28 coverage", () => {
         },
       });
     }
+  });
+
+  it("keeps a saved Zalo Personal connection listed but unable to send, receive or deliver approvals", () => {
+    const records = buildGatewayConnectorRecords({
+      mcpServers: [],
+      mcpTools: [],
+      integrationConnections: [
+        channelConnection({
+          connectionId: "conn-zalouser",
+          key: "zalouser",
+          enabled: true,
+          status: "connected",
+          config: { defaultTarget: "group:ops" },
+        }),
+      ],
+    });
+    const record = records.find((item) => item.connectorId === "integration:conn-zalouser");
+
+    expect(record).toMatchObject({
+      status: "active",
+      metadata: {
+        approvalDeliveryReady: false,
+        approvalDeliveryReason: expect.stringMatching(/^Zalo Personal is not supported anymore/),
+        supportedDeliveryActions: [],
+        setupReady: false,
+      },
+    });
+    const enabled = (id: string) => record?.capabilities.find((capability) => capability.id === id)?.enabled;
+    expect(enabled("outbound_messages")).toBe(false);
+    expect(enabled("inbound_messages")).toBe(false);
+    expect(enabled("interactive_actions")).toBe(false);
+    expect(enabled("approvals")).toBe(false);
   });
 });
 

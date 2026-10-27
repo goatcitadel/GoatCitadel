@@ -20,7 +20,6 @@ export const REQUIRED_CHANNEL_FAMILIES = Object.freeze([
   "nextcloud-talk",
   "line",
   "zalo",
-  "zalouser",
 ]);
 
 /**
@@ -569,25 +568,6 @@ export const ADVERTISED_CHANNEL_PARITY_MATRIX = Object.freeze([
     config: { accessTokenEnv: "ZALO_ACCESS_TOKEN" },
     inboundMode: "none",
     expected: { outboundTransport: "api", lifecycle: "stateless", attachmentSources: [] },
-    proof: {
-      outboundAdapter: "packages/policy-engine/src/tool-executor.test.ts",
-      diagnostics: "apps/gateway/src/services/channel-bot-live-probes.test.ts",
-    },
-  }),
-  adapterRow({
-    id: "zalouser.zca-bridge",
-    family: "zalouser",
-    catalogId: "channel.zalouser",
-    channelKey: "zalouser",
-    variant: "Zalo user zca bridge",
-    callability: "callable",
-    config: {
-      baseUrl: "http://127.0.0.1:4545",
-      authTokenEnv: "ZALOUSER_AUTH_TOKEN",
-      defaultTarget: "user:123",
-    },
-    inboundMode: "none",
-    expected: { outboundTransport: "api", lifecycle: "stateless", attachmentSources: ["url"] },
     proof: {
       outboundAdapter: "packages/policy-engine/src/tool-executor.test.ts",
       diagnostics: "apps/gateway/src/services/channel-bot-live-probes.test.ts",

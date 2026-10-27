@@ -4,6 +4,7 @@ import {
 } from "./mcp-oauth-handshake-service.js";
 import { randomUUID } from "node:crypto";
 import type {
+  McpApprovalPosture,
   McpToolRecord,
   McpOAuthConfig,
   McpServerCreateInput,
@@ -14,7 +15,12 @@ import type {
 import { resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
 import { ValidationError, NotFoundError } from "@goatcitadel/contracts";
 import { assertMcpServerReview, mcpServerRevision, type McpServerWriteReview } from "./mcp-server-revision.js";
-import { assertReviewedStaticServer, assertReviewedMcpOAuth, type McpConnectionActionReview, type McpOAuthExchangeReview } from "./mcp-reviewed-connection.js";
+import {
+  assertReviewedStaticServer,
+  assertReviewedMcpOAuth,
+  type McpConnectionActionReview,
+  type McpOAuthExchangeReview,
+} from "./mcp-reviewed-connection.js";
 import { assertMcpConnectionReview } from "./mcp-server-revision.js";
 import { sameConfiguration } from "./mcp-server-state-helpers.js";
 import { buildPublicMcpAuthState } from "./mcp-oauth-token-service.js";
@@ -23,6 +29,7 @@ import type { McpConnectionFence } from "./mcp-static-environment-service.js";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
+import { isMoneyMovingCatalogServer } from "./mcp-money-moving.js";
 import { discoverMcpTools } from "./mcp-runtime.js";
 import {
   mcpOAuthPkceStore,
@@ -85,7 +92,11 @@ export interface McpServerAdminHost {
     approvalInbox: Pick<Storage["approvalInbox"], "deleteByReceiver">;
   };
   readMcpServers(): Promise<McpServerRecord[]>;
-  writeMcpServers(servers: McpServerRecord[], expectedServers: McpServerRecord[], review?: McpServerWriteReview): Promise<McpServerRecord[]>;
+  writeMcpServers(
+    servers: McpServerRecord[],
+    expectedServers: McpServerRecord[],
+    review?: McpServerWriteReview,
+  ): Promise<McpServerRecord[]>;
   captureMcpServerSessionCloser?(serverId: string): () => void;
   prepareMcpStaticEnvironment?(server: McpServerRecord, fence?: McpConnectionFence): Promise<McpServerRecord>;
   resolveMcpOAuthClientId?(server: McpServerRecord, fence?: McpConnectionFence): Promise<string | undefined>;
@@ -93,11 +104,19 @@ export interface McpServerAdminHost {
     server: McpServerRecord,
     input: { redirectUri: string; scopes?: string[]; configuredClientId?: string },
   ): Promise<DiscoveredMcpAuthorization>;
-  patchMcpServerState(serverId: string, patch: Partial<McpServerRecord>, expected: McpServerRecord): Promise<McpServerRecord>;
+  patchMcpServerState(
+    serverId: string,
+    patch: Partial<McpServerRecord>,
+    expected: McpServerRecord,
+  ): Promise<McpServerRecord>;
   completeMcpServerConnection(expected: McpServerRecord, tools: McpToolRecord[]): Promise<McpServerRecord>;
   readMcpTools(): Promise<McpToolRecord[]>;
   writeMcpTools(tools: McpToolRecord[]): Promise<void>;
-  resolveConnectedMcpTools(server: McpServerRecord, existing: McpToolRecord[], fence?: McpConnectionFence): Promise<McpToolRecord[]>;
+  resolveConnectedMcpTools(
+    server: McpServerRecord,
+    existing: McpToolRecord[],
+    fence?: McpConnectionFence,
+  ): Promise<McpToolRecord[]>;
   exchangeMcpOAuthCode?(
     server: McpServerRecord,
     code: string,
@@ -108,6 +127,15 @@ export interface McpServerAdminHost {
   readMcpAuthState(): Promise<Record<string, McpAuthStateRecord>>;
   writeMcpAuthState(update: McpAuthStateUpdate): Promise<void>;
   publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
+  /** Appends one operator record to the approvals audit stream. */
+  appendApprovalsAudit(event: Record<string, unknown>): Promise<void>;
+}
+
+/** A write bound to the revision the operator reviewed. `actorId` names who made it, for the audit record. */
+export interface McpServerEditReview {
+  expectedRevision: string;
+  onCommitted?: () => void | Promise<void>;
+  actorId?: string;
 }
 
 export async function createMcpServer(
@@ -133,9 +161,11 @@ export async function createMcpServer(
   }
   const created: McpServerRecord = {
     serverId: ownerServerId ?? randomUUID(),
-    ...(ownerServerId && ownerPlanId ? {
-      packChange: { planId: ownerPlanId, revision: 1, phase: "apply" as const, created: true },
-    } : {}),
+    ...(ownerServerId && ownerPlanId
+      ? {
+          packChange: { planId: ownerPlanId, revision: 1, phase: "apply" as const, created: true },
+        }
+      : {}),
     label: input.label.trim(),
     transport: input.transport,
     command: input.command?.trim() || undefined,
@@ -153,15 +183,18 @@ export async function createMcpServer(
     createdAt: now,
     updatedAt: now,
   };
+  assertMcpApprovalPostureAllowed(created, created.policy.approvalPosture, undefined);
   const previous = await host.readMcpServers();
   const servers = [created, ...previous];
   const committed = await host.writeMcpServers(servers, previous);
   const acknowledgement = committed.find((server) => server.serverId === created.serverId)!;
-  await afterMcpCommit(onCommitted, async () => { await host.publishRealtime("system", "mcp", {
-    type: "mcp_server_created",
-    serverId: created.serverId,
-    transport: created.transport,
-  }); });
+  await afterMcpCommit(onCommitted, async () => {
+    await host.publishRealtime("system", "mcp", {
+      type: "mcp_server_created",
+      serverId: created.serverId,
+      transport: created.transport,
+    });
+  });
   return acknowledgement;
 }
 
@@ -170,7 +203,7 @@ export async function updateMcpServer(
   serverId: string,
   input: McpServerUpdateInput,
   packOwner?: { planId: string; phase: "apply" | "compensate" },
-  review?: { expectedRevision: string; onCommitted?: () => void | Promise<void> },
+  review?: McpServerEditReview,
 ): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
     throw new ValidationError({ message: buildInternalMcpServerCreateBlockedMessage() });
@@ -188,12 +221,14 @@ export async function updateMcpServer(
     }
     updated = {
       ...item,
-      packChange: packOwner ? {
-        planId: packOwner.planId,
-        revision: item.packChange?.planId === packOwner.planId ? item.packChange.revision + 1 : 1,
-        phase: packOwner.phase,
-        created: item.packChange?.planId === packOwner.planId && item.packChange.created,
-      } : undefined,
+      packChange: packOwner
+        ? {
+            planId: packOwner.planId,
+            revision: item.packChange?.planId === packOwner.planId ? item.packChange.revision + 1 : 1,
+            phase: packOwner.phase,
+            created: item.packChange?.planId === packOwner.planId && item.packChange.created,
+          }
+        : undefined,
       label: input.label?.trim() || item.label,
       command: input.command === undefined ? item.command : input.command.trim() || undefined,
       args: input.args === undefined ? item.args : input.args.map((entry) => entry.trim()).filter(Boolean),
@@ -208,14 +243,28 @@ export async function updateMcpServer(
       verifiedAt: input.verifiedAt ?? item.verifiedAt,
       updatedAt: now,
     };
+    // Checked against the record as it would be saved, so a rename or new endpoint in the same edit counts too.
+    assertMcpApprovalPostureAllowed(updated, input.policy?.approvalPosture, item);
     return updated;
   });
   if (!updated) {
     throw new Error(`Unknown MCP server: ${serverId}`);
   }
-  const committed = await host.writeMcpServers(servers, previous, { serverId, expectedRevision: review?.expectedRevision ?? mcpServerRevision(original) });
+  const committed = await host.writeMcpServers(servers, previous, {
+    serverId,
+    expectedRevision: review?.expectedRevision ?? mcpServerRevision(original),
+  });
   const acknowledgement = committed.find((server) => server.serverId === serverId)!;
-  await afterMcpCommit(review?.onCommitted, () => { closeOwnedSessions?.(); });
+  await afterMcpCommit(review?.onCommitted, async () => {
+    // A change to what asks first is audited once the write has committed, before any follow-up work that could fail.
+    // A refused or conflicting write never gets here, so it records nothing. The edit has committed either way, so
+    // sessions on the old configuration still close if the audit write fails.
+    try {
+      await auditApprovalPostureChange(host, original, acknowledgement, input.policy?.approvalPosture, review?.actorId);
+    } finally {
+      closeOwnedSessions?.();
+    }
+  });
   return acknowledgement;
 }
 
@@ -223,65 +272,111 @@ export async function updateMcpServerPolicy(
   host: McpServerAdminHost,
   serverId: string,
   policy: Partial<McpServerPolicy>,
-  review?: { expectedRevision: string; onCommitted?: () => void | Promise<void> },
+  review?: McpServerEditReview,
 ): Promise<McpServerRecord> {
   return await updateMcpServer(host, serverId, { policy }, undefined, review);
 }
 
-export async function connectMcpServer(host: McpServerAdminHost, serverId: string, review?: McpConnectionActionReview): Promise<McpServerRecord> {
-  const expected = review ? { expectedRevision: review.expectedRevision, expectedConnectionRevision: review.expectedConnectionRevision } : undefined;
+export async function connectMcpServer(
+  host: McpServerAdminHost,
+  serverId: string,
+  review?: McpConnectionActionReview,
+): Promise<McpServerRecord> {
+  const expected = review
+    ? { expectedRevision: review.expectedRevision, expectedConnectionRevision: review.expectedConnectionRevision }
+    : undefined;
   let server = await host.requireMcpServer(serverId);
   if (expected) assertReviewedStaticServer(server, expected);
   // Requester-scoped transports never mutate global connection state or inventory.
-  if (resolveMcpServerConnectionMode(server) === "requester_scoped") throw new Error("Requester-scoped MCP servers require an authenticated requester context and cannot be connected or discovered globally.");
+  if (resolveMcpServerConnectionMode(server) === "requester_scoped")
+    throw new Error(
+      "Requester-scoped MCP servers require an authenticated requester context and cannot be connected or discovered globally.",
+    );
   if (!isRuntimeSupportedMcpDefinition(server)) throw new Error(buildUnsupportedMcpTransportMessage(server.transport));
-  const claim = (observed: McpServerRecord) => host.patchMcpServerState(serverId, { status: "connecting", lastError: undefined }, observed);
+  const claim = (observed: McpServerRecord) =>
+    host.patchMcpServerState(serverId, { status: "connecting", lastError: undefined }, observed);
   // The guarded path consumes review before environment work. Legacy enrollment order is retained.
   let connecting = expected ? await claim(server) : undefined;
-  const fence = connecting?.connectionRevision ? Object.freeze({ expectedConnectionRevision: connecting.connectionRevision }) : undefined;
+  const fence = connecting?.connectionRevision
+    ? Object.freeze({ expectedConnectionRevision: connecting.connectionRevision })
+    : undefined;
   try {
     if (expected) {
       await review?.onCommitted?.();
       if (!fence) throw new Error("MCP connection admission did not return its generation.");
       server = connecting!;
     }
-    if (host.prepareMcpStaticEnvironment) server = fence ? await host.prepareMcpStaticEnvironment(server, fence) : await host.prepareMcpStaticEnvironment(server);
+    if (host.prepareMcpStaticEnvironment)
+      server = fence
+        ? await host.prepareMcpStaticEnvironment(server, fence)
+        : await host.prepareMcpStaticEnvironment(server);
     // Enrollment may rotate configuration authority; it must never adopt a replacement connection attempt.
-    if (fence && server.connectionRevision !== fence.expectedConnectionRevision) throw new Error("MCP connection admission was superseded.");
+    if (fence && server.connectionRevision !== fence.expectedConnectionRevision)
+      throw new Error("MCP connection admission was superseded.");
     connecting = connecting ? server : await claim(server);
-    const existing = (await host.readMcpTools()).filter(item => item.serverId === serverId);
-    const tools = fence ? await host.resolveConnectedMcpTools(connecting, existing, fence) : await host.resolveConnectedMcpTools(connecting, existing);
+    const existing = (await host.readMcpTools()).filter((item) => item.serverId === serverId);
+    const tools = fence
+      ? await host.resolveConnectedMcpTools(connecting, existing, fence)
+      : await host.resolveConnectedMcpTools(connecting, existing);
     return await host.completeMcpServerConnection(connecting, tools);
   } catch (cause) {
     if (!connecting) throw cause;
-    const patchFailure = () => host.patchMcpServerState(serverId, { status: "error", lastError: expected
-      ? "Reviewed MCP connection did not complete. Inspect the current server before retrying."
-      : (cause as Error).message }, connecting!);
-    if (!expected) { await patchFailure(); throw cause; }
+    const patchFailure = () =>
+      host.patchMcpServerState(
+        serverId,
+        {
+          status: "error",
+          lastError: expected
+            ? "Reviewed MCP connection did not complete. Inspect the current server before retrying."
+            : (cause as Error).message,
+        },
+        connecting!,
+      );
+    if (!expected) {
+      await patchFailure();
+      throw cause;
+    }
     // Own admission is canonical. A replacement generation must never receive this late result.
-    try { await patchFailure(); } catch { /* Preserve the committed failure; the replacement owns its state. */ }
+    try {
+      await patchFailure();
+    } catch {
+      /* Preserve the committed failure; the replacement owns its state. */
+    }
     const error = cause instanceof Error ? cause : new Error("MCP connection outcome requires inspection.");
     Object.assign(error, { mutationCommitted: true });
     throw error;
   }
 }
 
-export async function disconnectMcpServer(host: McpServerAdminHost, serverId: string, review?: McpConnectionActionReview, validateBeforeAdmission?: (server: McpServerRecord) => void): Promise<McpServerRecord> {
-  const expected = review ? { expectedRevision: review.expectedRevision, expectedConnectionRevision: review.expectedConnectionRevision } : undefined;
+export async function disconnectMcpServer(
+  host: McpServerAdminHost,
+  serverId: string,
+  review?: McpConnectionActionReview,
+  validateBeforeAdmission?: (server: McpServerRecord) => void,
+): Promise<McpServerRecord> {
+  const expected = review
+    ? { expectedRevision: review.expectedRevision, expectedConnectionRevision: review.expectedConnectionRevision }
+    : undefined;
   const previous = await host.requireMcpServer(serverId);
   if (expected) assertReviewedStaticServer(previous, expected);
   validateBeforeAdmission?.(previous);
   // Capture before publication; a replacement session must never be looked up after await.
   const closeOwnedSessions = host.captureMcpServerSessionCloser?.(serverId);
   const server = await host.patchMcpServerState(serverId, { status: "disconnected" }, previous);
-  if (expected) await afterMcpCommit(review?.onCommitted, () => { closeOwnedSessions?.(); });
+  if (expected)
+    await afterMcpCommit(review?.onCommitted, () => {
+      closeOwnedSessions?.();
+    });
   else closeOwnedSessions?.();
   return server;
 }
 
 export async function startMcpOAuth(host: McpServerAdminHost, serverId: string, review?: McpConnectionActionReview) {
   if (!review) return startMcpOAuthHandshake(host, serverId);
-  const expected = { expectedRevision: review.expectedRevision, expectedConnectionRevision: review.expectedConnectionRevision };
+  const expected = {
+    expectedRevision: review.expectedRevision,
+    expectedConnectionRevision: review.expectedConnectionRevision,
+  };
   // Metadata discovery reads only, so it runs before the review commits; a blocked host changes nothing.
   const prepared = await prepareReviewedMcpOAuthDiscovery(host, serverId, expected);
   // Explicit OAuth review closes the captured old connection before replacing its grant.
@@ -290,7 +385,8 @@ export async function startMcpOAuth(host: McpServerAdminHost, serverId: string, 
     return await startMcpOAuthHandshake(host, serverId, { server: admitted, reviewed: expected, prepared });
   } catch (cause) {
     const error = cause instanceof Error ? cause : new Error("Reviewed OAuth initialization requires inspection.");
-    Object.assign(error, { mutationCommitted: true }); throw error;
+    Object.assign(error, { mutationCommitted: true });
+    throw error;
   }
 }
 
@@ -321,7 +417,10 @@ export async function completeMcpOAuth(
     });
   }
   const server = await host.requireMcpServer(serverId);
-  if (review) { assertReviewedStaticServer(server, review); assertReviewedMcpOAuth(server); }
+  if (review) {
+    assertReviewedStaticServer(server, review);
+    assertReviewedMcpOAuth(server);
+  }
   const exchange = host.exchangeMcpOAuthCode;
   if (!exchange) {
     throw new Error("MCP OAuth token exchange is not available in this Gateway runtime.");
@@ -330,21 +429,36 @@ export async function completeMcpOAuth(
   if (review) {
     if (!server.connectionRevision) throw new Error("Reviewed OAuth requires its original connection generation.");
     const published = await exchange.call(host, server, code, authRow, {
-      fence: { expectedConnectionRevision: server.connectionRevision }, onCommitted: review.onCommitted,
+      fence: { expectedConnectionRevision: server.connectionRevision },
+      onCommitted: review.onCommitted,
     });
     try {
       const current = await host.requireMcpServer(serverId);
-      assertMcpConnectionReview(current, { expectedRevision: mcpServerRevision(current), expectedConnectionRevision: server.connectionRevision });
-      if (!sameConfiguration(current, server) || !isDeepStrictEqual(current.authState, buildPublicMcpAuthState(current, published)))
+      assertMcpConnectionReview(current, {
+        expectedRevision: mcpServerRevision(current),
+        expectedConnectionRevision: server.connectionRevision,
+      });
+      if (
+        !sameConfiguration(current, server) ||
+        !isDeepStrictEqual(current.authState, buildPublicMcpAuthState(current, published))
+      )
         throw new Error("OAuth publication changed before acknowledgement.");
       return current; // Guarded completion never starts a process or discovers tools.
-    } catch (cause) { const error = cause instanceof Error ? cause : new Error("OAuth readback requires inspection."); Object.assign(error, { mutationCommitted: true }); throw error; }
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error("OAuth readback requires inspection.");
+      Object.assign(error, { mutationCommitted: true });
+      throw error;
+    }
   }
   await exchange.call(host, server, code, authRow);
   return await connectMcpServer(host, serverId);
 }
 
-export async function deleteMcpServer(host: McpServerAdminHost, serverId: string, review?: { expectedRevision: string; onCommitted?: () => void | Promise<void> }): Promise<{ deleted: boolean }> {
+export async function deleteMcpServer(
+  host: McpServerAdminHost,
+  serverId: string,
+  review?: { expectedRevision: string; onCommitted?: () => void | Promise<void> },
+): Promise<{ deleted: boolean }> {
   const previous = await host.readMcpServers();
   const original = previous.find((server) => server.serverId === serverId);
   if (review && !original) throw new NotFoundError(`Unknown MCP server: ${serverId}`);
@@ -353,21 +467,79 @@ export async function deleteMcpServer(host: McpServerAdminHost, serverId: string
   const next = previous.filter((item) => item.serverId !== serverId);
   const deleted = next.length !== previous.length;
   if (deleted) {
-    await host.writeMcpServers(next, previous, { serverId, expectedRevision: review?.expectedRevision ?? mcpServerRevision(original!) });
-    await afterMcpCommit(review?.onCommitted, async () => {
-    closeOwnedSessions?.();
-    // The registry removes credentials, tool inventory and approvals in the delete transaction.
-    await host.publishRealtime("system", "mcp", {
-      type: "mcp_server_deleted",
+    await host.writeMcpServers(next, previous, {
       serverId,
-    }); });
+      expectedRevision: review?.expectedRevision ?? mcpServerRevision(original!),
+    });
+    await afterMcpCommit(review?.onCommitted, async () => {
+      closeOwnedSessions?.();
+      // The registry removes credentials, tool inventory and approvals in the delete transaction.
+      await host.publishRealtime("system", "mcp", {
+        type: "mcp_server_deleted",
+        serverId,
+      });
+    });
   }
   return { deleted };
 }
 
-async function afterMcpCommit(onCommitted: (() => void | Promise<void>) | undefined, followUp: () => void | Promise<void>): Promise<void> {
-  try { await onCommitted?.(); await followUp(); }
-  catch (cause) {
+/**
+ * A server that can move money can't be set to let changes run on their own. Every create and policy write checks it
+ * before saving, whichever caller asked. The relief helper also caps a saved value, in case one slipped past.
+ *
+ * `server` is the record as it would be saved, so a rename or new endpoint in the same edit counts. An edit that asks
+ * for the setting is refused on a money server. An edit that doesn't is refused only when it is the edit that turns the
+ * record into a money server while it keeps the setting (a label or address change pointing a non-money server at
+ * PayPal). A record that already held both, saved earlier or re-marked by a later catalog, can still be switched off or
+ * edited otherwise.
+ */
+function assertMcpApprovalPostureAllowed(
+  server: McpServerRecord,
+  requested: McpApprovalPosture | undefined,
+  before: McpServerRecord | undefined,
+): void {
+  const asksForIt = requested === "nothing_asks";
+  const keepsItOnNewMoneyServer =
+    before !== undefined && server.policy.approvalPosture === "nothing_asks" && !isMoneyMovingCatalogServer(before);
+  if ((asksForIt || keepsItOnNewMoneyServer) && isMoneyMovingCatalogServer(server)) {
+    throw new ValidationError({
+      message: "This connector can move money, so changes can't be set to run on their own.",
+    });
+  }
+}
+
+/**
+ * Records a change to what a connector asks first, as the write owner: the edit set the value, and it differs from the
+ * saved value it replaced (`from` is null when none was saved). The same value, or an edit that doesn't mention it,
+ * records nothing.
+ */
+async function auditApprovalPostureChange(
+  host: McpServerAdminHost,
+  replaced: McpServerRecord,
+  saved: McpServerRecord,
+  requested: McpApprovalPosture | undefined,
+  actorId: string | undefined,
+): Promise<void> {
+  const to = saved.policy.approvalPosture;
+  const from = replaced.policy.approvalPosture ?? null;
+  if (requested === undefined || to === undefined || to === from) return;
+  await host.appendApprovalsAudit({
+    event: "mcp_server_approval_posture_changed",
+    serverId: saved.serverId,
+    from,
+    to,
+    actorId: actorId ?? "operator",
+  });
+}
+
+async function afterMcpCommit(
+  onCommitted: (() => void | Promise<void>) | undefined,
+  followUp: () => void | Promise<void>,
+): Promise<void> {
+  try {
+    await onCommitted?.();
+    await followUp();
+  } catch (cause) {
     const error = cause instanceof Error ? cause : new Error("MCP configuration committed but follow-up work failed.");
     Object.assign(error, { mutationCommitted: true });
     throw error;
@@ -392,8 +564,6 @@ function normalizeMcpOAuthConfig(input?: McpOAuthConfig): McpOAuthConfig | undef
     ? normalized
     : undefined;
 }
-
-
 
 /** Deps for connected-tool discovery (B5b): sandbox network policy + per-server OAuth token minting. */
 export interface ResolveConnectedMcpToolsDeps {
@@ -430,7 +600,9 @@ export async function resolveConnectedMcpTools(
   }
   if (server.transport === "stdio") {
     return discoverMcpTools(server, undefined, {
-      actorContext, packageRoot: deps.packageRoot, networkAllowlist: deps.networkAllowlist,
+      actorContext,
+      packageRoot: deps.packageRoot,
+      networkAllowlist: deps.networkAllowlist,
       staticEnvironmentResolver: deps.staticEnvironmentResolver,
     });
   }

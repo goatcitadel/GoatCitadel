@@ -26,12 +26,9 @@ describe("integration-catalog", () => {
     expect(getIntegrationFormSchema("automation.imap-smtp")?.description).toContain("not available yet");
   });
 
-  it("requires visible authenticated Zalo User setup and separates Talk server from Gateway callbacks", () => {
-    const zalo = getIntegrationFormSchema("channel.zalouser");
-    expect(zalo?.description).toContain("authenticated");
-    const auth = zalo?.fields.find((field) => field.key === "authTokenEnv");
-    expect(auth).toMatchObject({ required: true });
-    expect(auth?.advanced).not.toBe(true);
+  it("leaves out the retired Zalo Personal channel and separates Talk server from Gateway callbacks", () => {
+    expect(INTEGRATION_CATALOG.some((entry) => entry.key === "zalouser")).toBe(false);
+    expect(getIntegrationFormSchema("channel.zalouser")).toBeUndefined();
     const nextcloud = getIntegrationFormSchema("channel.nextcloud-talk");
     expect(nextcloud?.fields.find((field) => field.key === "baseUrl")?.description).toContain("different host");
   });
@@ -44,7 +41,6 @@ describe("integration-catalog", () => {
       "channel.mattermost",
       "channel.nextcloud-talk",
       "channel.zalo",
-      "channel.zalouser",
       "channel.matrix",
       "channel.qqbot",
       "channel.wecom",
@@ -196,22 +192,6 @@ describe("integration-catalog", () => {
     });
   });
 
-  it("requires a zca bridge URL in the Zalo Personal guided setup form", () => {
-    const zalouserForm = getIntegrationFormSchema("channel.zalouser");
-    const baseUrlField = zalouserForm?.fields.find((field) => field.key === "baseUrl");
-    const defaultTargetField = zalouserForm?.fields.find((field) => field.key === "defaultTarget");
-
-    expect(baseUrlField).toMatchObject({
-      key: "baseUrl",
-      type: "url",
-      required: true,
-    });
-    expect(defaultTargetField).toMatchObject({
-      key: "defaultTarget",
-      required: true,
-    });
-  });
-
   it("keeps planned aliases disabled until they are explicitly modeled as plugin entries", () => {
     const whatsapp = requireCatalogEntry("channel.whatsapp");
     const plannedAliasEntry: IntegrationCatalogEntry = {
@@ -312,7 +292,6 @@ describe("integration-catalog", () => {
     const betaBuiltInChannels = [
       "channel.signal",
       "channel.zalo",
-      "channel.zalouser",
       "channel.whatsapp",
       "channel.mattermost",
       "channel.matrix",
@@ -359,9 +338,6 @@ describe("integration-catalog", () => {
 
     const whatsapp = requireCatalogEntry("channel.whatsapp");
     expect(whatsapp.capabilities).toEqual(expect.arrayContaining(["attachments", "direct", "reactions"]));
-
-    const zalouser = requireCatalogEntry("channel.zalouser");
-    expect(zalouser.capabilities).toEqual(expect.arrayContaining(["attachments", "direct"]));
   });
 
   it("marks the local-first voice runtime surface as beta", () => {

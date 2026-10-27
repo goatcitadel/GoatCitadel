@@ -49,6 +49,9 @@ export function PermissionProfileFields({
             Skip normal prompts
           </option>
         </select>
+        <span className="text-xs text-fg-muted">
+          Connectors set to let reads or changes run on their own are the exception.
+        </span>
       </label>
       {(["toolPatterns", "allow", "deny"] as const).map((key) => (
         <label key={key} className="block">
