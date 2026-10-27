@@ -327,6 +327,19 @@ describe("What asks first", () => {
     expect(alertText()).toBeUndefined();
   });
 
+  it("reads the tool list again after a save, because a saved edit disconnects the server and clears its tools", async () => {
+    mcp.updateMcpServerPolicy.mockResolvedValue(
+      savedServer({ policy: { approvalPosture: "reads_free" } as McpServerRecord["policy"] }),
+    );
+    await renderPanel();
+    await vi.waitFor(() => expect(toolLine("list_issues")).toContain("Asks first"));
+    mcp.fetchMcpTools.mockResolvedValue({ items: [] });
+    await choose("reads_free");
+
+    // The Gateway no longer holds those tools, so the panel must not keep labelling them.
+    await vi.waitFor(() => expect(toolLines("list_issues")).toEqual([]));
+  });
+
   it("is busy while saving and keeps the labels on the saved setting until the save lands", async () => {
     const saving = deferred<McpServerRecord>();
     mcp.updateMcpServerPolicy.mockReturnValue(saving.promise);

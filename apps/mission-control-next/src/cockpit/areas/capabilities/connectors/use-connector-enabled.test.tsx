@@ -165,6 +165,8 @@ describe("useConnectorEnabled", () => {
     // The next switch must use the version the save produced.
     expect(cached(LINEAR.id)?.serverRevision).toBe(NEXT_REVISION);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: KEY }, { throwOnError: true });
+    // A saved edit disconnects the server and clears its stored tools, so the panel's tool list is read again too.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.capabilityConnectorTools("linear") });
   });
 
   describe("switching on", () => {

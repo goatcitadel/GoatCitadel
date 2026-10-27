@@ -155,6 +155,8 @@ export function useConnectorEnabled(item: CapabilityConnectorItem): ConnectorEna
         })),
       );
       void client.invalidateQueries({ queryKey: queryKeys.capabilityConnectorServer(serverId) });
+      // A saved edit disconnects the server and clears its stored tools, so the tool list is read again too.
+      void client.invalidateQueries({ queryKey: queryKeys.capabilityConnectorTools(serverId) });
       void client.invalidateQueries({ queryKey: ["settings", "mcp-servers"] });
       // The switch holds its choice until the Gateway's own answer is in the list. If that read fails the rows are
       // stale, so the switch keeps the saved choice and the failure says so.
