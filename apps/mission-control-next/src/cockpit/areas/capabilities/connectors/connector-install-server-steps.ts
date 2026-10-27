@@ -17,6 +17,7 @@ import {
   failInstallFlow,
   isCurrent,
   patchRun,
+  readInstallFlow,
   readRun,
   runName,
   settleInstallFlow,
@@ -32,6 +33,7 @@ import { CONNECTOR_CONFLICT_MESSAGE } from "./use-connector-enabled";
 type ServerStep = "sign_in" | "finish_sign_in" | "switch_on" | "connect";
 
 const NOT_GRANTED = "The app didn't grant access.";
+const MANUAL_MISMATCH = "That doesn't match this sign-in. Paste the code and state from the sign-in page again.";
 const STEP_FAILED: Readonly<Record<ServerStep, (name: string) => string>> = {
   sign_in: (name) => `Couldn't start signing in to ${name}.`,
   finish_sign_in: (name) => `Couldn't finish signing in to ${name}.`,
@@ -94,7 +96,22 @@ export async function startSignIn(id: number, token: number, serverId: string) {
   });
 }
 
-/** A provider return (or a pasted code). One for another sign-in request is dropped without a word. */
+/**
+ * A code pasted from the provider's page. Unlike a return, which may belong to another tab's sign-in, a state that
+ * doesn't match was typed here, so the flow says so and keeps waiting (R82).
+ */
+export function submitSignInCode(id: number, code: string, state: string) {
+  const run = readRun(id);
+  const current = readInstallFlow(id)?.state;
+  if (!run?.signIn || current?.phase !== "signing_in") return;
+  if (state !== run.signIn.state) {
+    updateInstallFlow(id, { state: { ...current, manualError: MANUAL_MISMATCH } });
+    return;
+  }
+  receiveSignIn(id, { state, code });
+}
+
+/** A provider return. One for another sign-in request is dropped without a word. */
 export function receiveSignIn(id: number, returned: McpOAuthReturn) {
   const run = readRun(id);
   if (!run?.signIn || returned.state !== run.signIn.state) return;

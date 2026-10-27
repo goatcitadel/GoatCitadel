@@ -14,7 +14,14 @@ export type ConnectorInstallState =
   | { phase: "idle" }
   | { phase: "working"; step: ConnectorInstallStep }
   | { phase: "waiting_inbox"; approvalId: string; planId: string }
-  | { phase: "signing_in"; authorizeUrl: string; signInHost: string; scopes: string }
+  | {
+      phase: "signing_in";
+      authorizeUrl: string;
+      signInHost: string;
+      scopes: string;
+      /** Set when a pasted code's state doesn't match this sign-in (R82); gone once the phase moves on. */
+      manualError?: string;
+    }
   | { phase: "done"; serverId: string }
   | { phase: "failed"; step: ConnectorInstallStep; message: string; changed: string[]; detail?: string }
   | { phase: "stopped"; message: string; changed: string[] };

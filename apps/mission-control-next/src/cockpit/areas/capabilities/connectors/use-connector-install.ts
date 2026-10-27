@@ -13,7 +13,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../../data/query-keys";
-import { connectServer, receiveSignIn, startSignIn, switchOn } from "./connector-install-server-steps";
+import { connectServer, startSignIn, submitSignInCode, switchOn } from "./connector-install-server-steps";
 import {
   __resetConnectorInstallFlowsForTests,
   beginRun,
@@ -307,7 +307,7 @@ export function useConnectorInstall(item: CapabilityConnectorItem): ConnectorIns
     start: (options) => startInstall(item, options.enableChatConnectors, context),
     resume: (from) => resumeServer(item, from, context),
     submitManualCode: (code, state) => {
-      if (id !== undefined && code.trim()) receiveSignIn(id, { state: state.trim(), code: code.trim() });
+      if (id !== undefined && code.trim()) submitSignInCode(id, code.trim(), state.trim());
     },
     cancel: () => {
       if (id !== undefined) cancelFlow(id);

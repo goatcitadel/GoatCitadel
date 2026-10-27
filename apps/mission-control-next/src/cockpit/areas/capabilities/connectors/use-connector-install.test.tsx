@@ -326,8 +326,35 @@ describe("useConnectorInstall", () => {
     await returnFromProvider("another-state");
 
     expect(latest.state).toMatchObject({ phase: "signing_in" });
+    // It may be another tab's sign-in, so nothing is said about it (R82).
+    expect(latest.state).not.toHaveProperty("manualError");
     expect(wrappers.commitMcpOAuth).toHaveBeenCalledTimes(1);
     expect(wrappers.commitMcpOAuth).not.toHaveBeenCalledWith(expect.objectContaining({ action: "complete" }));
+  });
+
+  it("says so when a pasted code's state doesn't match, and goes on once it does", async () => {
+    await startInstall();
+    await render(SAVED);
+    await act(async () => latest.submitManualCode("pasted-code", "typo-state"));
+    await flush();
+
+    expect(latest.state).toEqual({
+      phase: "signing_in",
+      authorizeUrl: AUTHORIZE_URL,
+      signInHost: "https://auth.linear.app",
+      scopes: "read, write",
+      manualError: "That doesn't match this sign-in. Paste the code and state from the sign-in page again.",
+    });
+    expect(wrappers.commitMcpOAuth).toHaveBeenCalledTimes(1);
+    expect(wrappers.commitMcpOAuth).not.toHaveBeenCalledWith(expect.objectContaining({ action: "complete" }));
+
+    await act(async () => latest.submitManualCode("pasted-code", "state-1"));
+    await flush();
+
+    expect(latest.state).toEqual({ phase: "done", serverId: "srv-1" });
+    expect(wrappers.commitMcpOAuth).toHaveBeenLastCalledWith(
+      expect.objectContaining({ action: "complete", code: "pasted-code", state: "state-1" }),
+    );
   });
 
   it("finishes sign-in from a pasted code with the matching state", async () => {
