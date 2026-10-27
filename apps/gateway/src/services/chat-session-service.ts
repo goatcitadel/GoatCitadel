@@ -39,7 +39,7 @@ import {
   type RecentCrossProjectSession,
   type SessionMeta,
 } from "@goatcitadel/contracts";
-import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import { encodeChatSessionListCursor, type AsyncStorage as Storage } from "@goatcitadel/storage";
 import {
   buildChatSessionActivity,
   buildChatSessionUpdatedPayload,
@@ -639,7 +639,7 @@ export async function searchChatSessions(
   const last = items.at(-1)?.session;
   return {
     items,
-    nextCursor: candidates.length > limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined,
+    nextCursor: candidates.length > limit && last ? encodeChatSessionListCursor(last) : undefined,
     query,
     mode,
     generatedAt: new Date().toISOString(),

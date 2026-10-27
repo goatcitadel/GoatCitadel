@@ -64,7 +64,8 @@ export class ChatSessionListRepository {
       params.push(sessionId);
     }
     if (input.sessionIds !== undefined) {
-      if (!input.sessionIds.length || input.sessionIds.length > 100) throw new Error("Session membership requires 1 to 100 IDs");
+      if (!input.sessionIds.length || input.sessionIds.length > 100)
+        throw new Error("Session membership requires 1 to 100 IDs");
       clauses.push(`s.session_id IN (${input.sessionIds.map(() => "?").join(",")})`);
       params.push(...input.sessionIds);
     }
@@ -171,7 +172,9 @@ export class ChatSessionListRepository {
 
     const parsedCursor = parseCompositeCursor(input.cursor);
     if (parsedCursor) {
-      const cursorPinned = this.resolveCursorPinned(parsedCursor.key);
+      // Cursors carry the pinned flag they were issued with. Older cursors without it fall back to the
+      // session's current flag, which is lost if that session was deleted or re-pinned between pages.
+      const cursorPinned = parsedCursor.pinned ?? this.resolveCursorPinned(parsedCursor.key);
       if (cursorPinned === undefined) {
         clauses.push(`
           (
@@ -248,21 +251,32 @@ export class ChatSessionListRepository {
 }
 
 interface CompositeCursor {
+  pinned?: number;
   timestamp: string;
   key: string;
 }
 
-function parseCompositeCursor(cursor?: string): CompositeCursor | undefined {
-  if (!cursor) {
+/** The chat list's next-page cursor: `p<0|1>|<updatedAt>|<sessionId>`, read back by `listCandidates`. */
+export function encodeChatSessionListCursor(
+  item: Pick<ChatSessionListCandidate, "updatedAt" | "sessionId" | "pinned">,
+): string {
+  return `p${item.pinned ? 1 : 0}|${item.updatedAt}|${item.sessionId}`;
+}
+
+function parseCompositeCursor(rawCursor?: string): CompositeCursor | undefined {
+  if (!rawCursor) {
     return undefined;
   }
+  const pinnedPrefix = /^p([01])\|/u.exec(rawCursor);
+  const pinned = pinnedPrefix ? Number(pinnedPrefix[1]) : undefined;
+  const cursor = pinnedPrefix ? rawCursor.slice(pinnedPrefix[0].length) : rawCursor;
   const separator = cursor.lastIndexOf("|");
   if (separator <= 0) {
     return undefined;
   }
   const timestamp = cursor.slice(0, separator);
   const key = cursor.slice(separator + 1);
-  return timestamp && key ? { timestamp, key } : undefined;
+  return timestamp && key ? { pinned, timestamp, key } : undefined;
 }
 
 function escapeLike(value: string): string {

@@ -81,6 +81,7 @@ describe("chat routes additional coverage", () => {
       {
         sessionId: "sess-1",
         updatedAt: "2026-03-05T10:00:01.000Z",
+        pinned: true,
       },
     ]);
     const createChatSession = vi.fn(() => ({
@@ -98,7 +99,7 @@ describe("chat routes additional coverage", () => {
     });
     expect(listResponse.statusCode).toBe(200);
     expect(listResponse.json()).toMatchObject({
-      nextCursor: "2026-03-05T10:00:01.000Z|sess-1",
+      nextCursor: "p1|2026-03-05T10:00:01.000Z|sess-1",
     });
     expect(listChatSessions).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Storage } from "./index.js";
-import { ChatSessionListRepository } from "./chat-session-list-repo.js";
+import { ChatSessionListRepository, encodeChatSessionListCursor } from "./chat-session-list-repo.js";
 import type { DatabaseClient } from "./db.js";
 
 const createdRoots: string[] = [];
@@ -48,12 +48,26 @@ describe("ChatSessionListRepository", () => {
         storage.chatSessionMeta.ensure(sessionId, undefined, "default");
       }
       assert.equal(storage.chatSessionLists.listCandidates({ workspaceId: "default", limit: 100 }).length, 100);
-      assert.deepEqual(storage.chatSessionLists.listCandidates({ workspaceId: "default", sessionId: "paged-0", limit: 1 }).map(item => item.sessionId), ["paged-0"]);
-      for (const sessionId of ["paged-", "missing", "' OR 1=1 --", ""]) assert.deepEqual(storage.chatSessionLists.listCandidates({ workspaceId: "default", sessionId, limit: 1 }), []);
-      assert.deepEqual(storage.chatSessionLists.listCandidates({ workspaceId: "foreign", sessionId: "paged-0", limit: 1 }), []);
+      assert.deepEqual(
+        storage.chatSessionLists
+          .listCandidates({ workspaceId: "default", sessionId: "paged-0", limit: 1 })
+          .map((item) => item.sessionId),
+        ["paged-0"],
+      );
+      for (const sessionId of ["paged-", "missing", "' OR 1=1 --", ""])
+        assert.deepEqual(storage.chatSessionLists.listCandidates({ workspaceId: "default", sessionId, limit: 1 }), []);
+      assert.deepEqual(
+        storage.chatSessionLists.listCandidates({ workspaceId: "foreign", sessionId: "paged-0", limit: 1 }),
+        [],
+      );
       storage.chatSessionMeta.patch("paged-0", { includeInHistory: false });
-      assert.deepEqual(storage.chatSessionLists.listCandidates({ workspaceId: "default", sessionId: "paged-0", limit: 1 }), []);
-    } finally { storage.close(); }
+      assert.deepEqual(
+        storage.chatSessionLists.listCandidates({ workspaceId: "default", sessionId: "paged-0", limit: 1 }),
+        [],
+      );
+    } finally {
+      storage.close();
+    }
   });
 
   it("applies cheap session filters before gateway hydration", () => {
@@ -178,6 +192,49 @@ describe("ChatSessionListRepository", () => {
     }
   });
 
+  it("does not repeat pinned sessions when the cursor's session is pinned between pages", () => {
+    const storage = createStorage();
+    try {
+      const sessions = [
+        { sessionId: "pinned-new", timestamp: "2026-05-03T14:00:00.000Z", pinned: true },
+        { sessionId: "pinned-old", timestamp: "2026-05-03T12:00:00.000Z", pinned: true },
+        { sessionId: "unpinned-new", timestamp: "2026-05-03T15:00:00.000Z", pinned: false },
+        { sessionId: "unpinned-old", timestamp: "2026-05-03T13:00:00.000Z", pinned: false },
+      ];
+      for (const session of sessions) {
+        createSession(storage, session);
+        storage.chatSessionMeta.ensure(session.sessionId, "2026-05-03T11:00:00.000Z", "default");
+        if (session.pinned) storage.chatSessionMeta.patch(session.sessionId, { pinned: true });
+      }
+
+      const first = storage.chatSessionLists.listCandidates({ workspaceId: "default", limit: 3 });
+      assert.deepEqual(
+        first.map((item) => item.sessionId),
+        ["pinned-new", "pinned-old", "unpinned-new"],
+      );
+      const cursor = encodeChatSessionListCursor(first[2]!);
+      assert.equal(cursor, "p0|2026-05-03T15:00:00.000Z|unpinned-new");
+      storage.chatSessionMeta.patch("unpinned-new", { pinned: true });
+
+      // Looking up the cursor session's current flag would serve pinned-new and pinned-old again.
+      assert.deepEqual(
+        storage.chatSessionLists
+          .listCandidates({ workspaceId: "default", limit: 10, cursor })
+          .map((item) => item.sessionId),
+        ["unpinned-old"],
+      );
+      // Cursors issued before the pinned flag was added still page by the session's current flag.
+      assert.deepEqual(
+        storage.chatSessionLists
+          .listCandidates({ workspaceId: "default", limit: 10, cursor: "2026-05-03T14:00:00.000Z|pinned-new" })
+          .map((item) => item.sessionId),
+        ["pinned-old", "unpinned-old"],
+      );
+    } finally {
+      storage.close();
+    }
+  });
+
   it("applies canonical Chat mode normalization before the bounded candidate limit", () => {
     const storage = createStorage();
     try {
@@ -216,13 +273,27 @@ describe("ChatSessionListRepository", () => {
   });
 });
 
-
 it("bounds explicit membership and keeps IDs parameterized for both SQL dialects", () => {
   for (const dialect of ["sqlite", "postgres"] as const) {
     const statements: Array<{ sql: string; params: unknown[] }> = [];
-    const db = { dialect, prepare(sql: string) { return { all(...params: unknown[]) { statements.push({ sql, params }); return []; } }; } } as unknown as DatabaseClient;
+    const db = {
+      dialect,
+      prepare(sql: string) {
+        return {
+          all(...params: unknown[]) {
+            statements.push({ sql, params });
+            return [];
+          },
+        };
+      },
+    } as unknown as DatabaseClient;
     const repo = new ChatSessionListRepository(db);
-    repo.listCandidates({ workspaceId: "current", sessionIds: ["retained", "' OR 1=1 --"], q: "needle", view: "active" });
+    repo.listCandidates({
+      workspaceId: "current",
+      sessionIds: ["retained", "' OR 1=1 --"],
+      q: "needle",
+      view: "active",
+    });
     const statement = statements[0]!;
     assert.match(statement.sql, /s.session_id IN \(\?,\?\)/);
     assert.match(statement.sql, /m.workspace_id = \?/);
@@ -230,6 +301,9 @@ it("bounds explicit membership and keeps IDs parameterized for both SQL dialects
     assert.deepEqual(statement.params.slice(0, 4), ["current", "retained", "' OR 1=1 --", "active"]);
     assert.match(statement.sql, dialect === "postgres" ? /content_search_vector/ : /chat_messages_fts/);
     assert.throws(() => repo.listCandidates({ workspaceId: "current", sessionIds: [] }), /1 to 100/);
-    assert.throws(() => repo.listCandidates({ workspaceId: "current", sessionIds: Array(101).fill("one") }), /1 to 100/);
+    assert.throws(
+      () => repo.listCandidates({ workspaceId: "current", sessionIds: Array(101).fill("one") }),
+      /1 to 100/,
+    );
   }
 });

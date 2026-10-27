@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Chat session route registration stays centralized so revision, fork, timer, variable, and document-editing admission rules remain auditable together. */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { encodeChatSessionListCursor } from "@goatcitadel/storage";
 import { sendRouteError } from "./_error-handler.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import {
@@ -13,32 +14,44 @@ import {
 
 const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
 
-const listChatSessionsSchema = z.object({
-  sessionIds: z.preprocess((value) => {
-    if (typeof value !== "string") return value;
-    try { return JSON.parse(value); } catch { return null; }
-  }, z.array(z.string().trim().min(1).max(256)).min(1).max(100).optional()),
-  sessionId: z.string().trim().min(1).max(256).optional(),
-  scope: z.enum(["mission", "external", "all"]).optional(),
-  citadelId: z.string().min(1).optional(),
-  workspaceId: z.string().min(1).optional(),
-  projectId: z.string().min(1).optional(),
-  folderId: z.string().min(1).optional(),
-  tag: z.string().min(1).optional(),
-  q: z.string().max(512).optional(),
-  view: z.enum(["active", "archived", "all"]).optional(),
-  mode: chatOnlyModeSchema.optional(),
-  limit: z.coerce.number().int().positive().max(1000).default(200),
-  cursor: z.string().optional(),
-  includeHidden: z
-    .enum(["true", "false", "1", "0"])
-    .transform((value) => value === "true" || value === "1")
-    .optional(),
-  includeActivity: z
-    .enum(["true", "false", "1", "0"])
-    .transform((value) => value === "true" || value === "1")
-    .optional(),
-}).refine((query) => !query.sessionIds || (query.sessionId === undefined && query.cursor === undefined), "Batch membership cannot use sessionId or cursor");
+const listChatSessionsSchema = z
+  .object({
+    sessionIds: z.preprocess(
+      (value) => {
+        if (typeof value !== "string") return value;
+        try {
+          return JSON.parse(value);
+        } catch {
+          return null;
+        }
+      },
+      z.array(z.string().trim().min(1).max(256)).min(1).max(100).optional(),
+    ),
+    sessionId: z.string().trim().min(1).max(256).optional(),
+    scope: z.enum(["mission", "external", "all"]).optional(),
+    citadelId: z.string().min(1).optional(),
+    workspaceId: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
+    folderId: z.string().min(1).optional(),
+    tag: z.string().min(1).optional(),
+    q: z.string().max(512).optional(),
+    view: z.enum(["active", "archived", "all"]).optional(),
+    mode: chatOnlyModeSchema.optional(),
+    limit: z.coerce.number().int().positive().max(1000).default(200),
+    cursor: z.string().optional(),
+    includeHidden: z
+      .enum(["true", "false", "1", "0"])
+      .transform((value) => value === "true" || value === "1")
+      .optional(),
+    includeActivity: z
+      .enum(["true", "false", "1", "0"])
+      .transform((value) => value === "true" || value === "1")
+      .optional(),
+  })
+  .refine(
+    (query) => !query.sessionIds || (query.sessionId === undefined && query.cursor === undefined),
+    "Batch membership cannot use sessionId or cursor",
+  );
 
 const searchChatSessionsSchema = z.object({
   query: z.string().trim().min(1).max(512),
@@ -365,8 +378,15 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       const items = await fastify.services.chatSessions.listChatSessions(parsed.data);
       const last = items.at(-1);
-      const nextCursor = !parsed.data.sessionIds && items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
-      return reply.send({ items: items.map(projectChatSessionForPublic), nextCursor, ...(parsed.data.sessionIds ? { membership: { sessionIds: parsed.data.sessionIds, complete: true } } : {}) });
+      const nextCursor =
+        !parsed.data.sessionIds && items.length === parsed.data.limit && last
+          ? encodeChatSessionListCursor(last)
+          : undefined;
+      return reply.send({
+        items: items.map(projectChatSessionForPublic),
+        nextCursor,
+        ...(parsed.data.sessionIds ? { membership: { sessionIds: parsed.data.sessionIds, complete: true } } : {}),
+      });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
