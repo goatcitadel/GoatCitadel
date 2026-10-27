@@ -21,6 +21,7 @@ const api = vi.hoisted(() => ({
   submitChannelSetupDraftSecrets: vi.fn(),
   discoverTelegramSetupTargets: vi.fn(),
   updateChannelSetupDraft: vi.fn(),
+  fetchSettings: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
 
@@ -177,6 +178,7 @@ beforeEach(() => {
   api.fetchIntegrationConnections.mockResolvedValue({ items: [connection()] });
   api.fetchChannelSetupDefinitions.mockResolvedValue({ items: [telegramDefinition()] });
   api.fetchChannelSetupDrafts.mockResolvedValue({ items: [] });
+  api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: ["api.telegram.org"] });
   api.fetchChannelSetupDraft.mockResolvedValue(rotateDraft());
   // The gateway keeps whatever draft it is sent, one version on.
   api.updateChannelSetupDraft.mockImplementation(
@@ -470,6 +472,54 @@ describe("TelegramKeyChange", () => {
         draftId: "rotate-1",
         catalogId: "channel.telegram",
         requiredHosts: ["api.telegram.org"],
+      });
+    });
+
+    describe("the hosts it may have to add", () => {
+      const TEST_MESSAGE = "GoatCitadel sends a test message to your chat and then removes it";
+      const HOST_LINE = "api.telegram.org is added to the hosts GoatCitadel may reach";
+      const lines = () => [...steps()[1]!.querySelectorAll("li")].map((item) => item.textContent);
+
+      it("lists the host as a change when the allowlist does not have it", async () => {
+        api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: ["example.com"] });
+        await toKeyChecked();
+        expect(lines()).toEqual([TEST_MESSAGE, HOST_LINE]);
+      });
+
+      it("lists only the test message when the host is already allowed", async () => {
+        await toKeyChecked();
+        expect(lines()).toEqual([TEST_MESSAGE]);
+        expect(container.textContent).not.toContain("hosts GoatCitadel may reach");
+      });
+
+      it("treats a wildcard entry as allowing the host", async () => {
+        api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: ["*.telegram.org"] });
+        await toKeyChecked();
+        expect(lines()).toEqual([TEST_MESSAGE]);
+      });
+
+      it("makes no claim about hosts when the settings cannot be read, and can still save", async () => {
+        api.fetchSettings.mockRejectedValue(new Error("offline"));
+        await toKeyChecked();
+        expect(lines()).toEqual([TEST_MESSAGE]);
+        expect(button("Save key")?.disabled).toBe(false);
+      });
+
+      it("reads the settings only once there is a step to save", async () => {
+        arrangeCheck();
+        await mount();
+        // Long enough for the catalogue to have loaded: a read would have started by now if it were going to.
+        await settle();
+        await settle();
+        expect(api.fetchChannelSetupDefinitions).toHaveBeenCalled();
+        expect(api.fetchSettings).not.toHaveBeenCalled();
+        await checkKey();
+        expect(api.fetchSettings).toHaveBeenCalledTimes(1);
+      });
+
+      it("reads no settings while the new bot is blocked", async () => {
+        await toKeyChecked(discovery({ webhookActive: true }));
+        expect(api.fetchSettings).not.toHaveBeenCalled();
       });
     });
 

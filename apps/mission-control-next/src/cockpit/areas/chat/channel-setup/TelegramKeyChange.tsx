@@ -11,8 +11,9 @@ import { BotKeyField, keyWorks, OTHER_APP_NOTE } from "./BotKeyField";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
 import { botChangeNote, whatIsInTheWay, type InTheWay } from "./telegram-key-change-model";
-import { TEST_MESSAGE_CHANGE, TurnOnStep, turnOnStatus, type TurnOnWording } from "./TurnOnStep";
+import { hostChange, TEST_MESSAGE_CHANGE, TurnOnStep, turnOnStatus, type TurnOnWording } from "./TurnOnStep";
 import { useChannelRequiredHosts } from "./use-channel-picker-groups";
+import { useMissingHosts } from "./use-missing-hosts";
 import { useTelegramKeyChange, type TelegramKeyChangeState } from "./use-telegram-key-change";
 import { TELEGRAM_CATALOG_ID } from "./use-telegram-setup";
 import { useTurnOn, type TurnOnState } from "./use-turn-on";
@@ -74,6 +75,8 @@ function KeyChangeSteps({ connection, workspaceId }: { connection: IntegrationCo
   const ready = bot !== null && inTheWay === null;
   const saved = turnOn.state === "done";
   const botChange = bot && ready ? botChangeNote(config, bot.username) : undefined;
+  // Read once there is a step to save, as on the setup page. A host it cannot see is not claimed either way.
+  const missing = useMissingHosts(requiredHosts, ready);
 
   // The key is stored securely once checked, so what was typed is dropped. A key that failed stays, to fix.
   useEffect(() => {
@@ -92,7 +95,7 @@ function KeyChangeSteps({ connection, workspaceId }: { connection: IntegrationCo
     <div className="space-y-3">
       {botChange && !saved ? <Warning>{botChange}</Warning> : null}
       <TurnOnStep
-        changes={[TEST_MESSAGE_CHANGE]}
+        changes={[TEST_MESSAGE_CHANGE, ...missing.map(hostChange)]}
         turnOn={turnOn}
         wording={SAVE_KEY_WORDING}
         onTurnOn={() => {

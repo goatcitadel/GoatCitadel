@@ -8,6 +8,9 @@ export const CLEANUP_NOTE = "GoatCitadel couldn't remove its test message. Delet
 /** The one thing every turn-on does that the operator can see in their chat. */
 export const TEST_MESSAGE_CHANGE = "GoatCitadel sends a test message to your chat and then removes it";
 
+/** The line for a host that is not yet allowed and will be added when the change is made. */
+export const hostChange = (host: string) => `${host} is added to the hosts GoatCitadel may reach`;
+
 /** The words of the step's button and its ending, so a page that applies a different change can say its own. */
 export interface TurnOnWording {
   button: string;
@@ -45,7 +48,7 @@ export function turnOnChanges({
     `Where it posts: your chat with @${botUsername.replace(/^@/u, "")}`,
     "How it gets messages: GoatCitadel asks Telegram for new ones, so no public web address is needed",
     TEST_MESSAGE_CHANGE,
-    ...missingHosts.map((host) => `${host} is added to the hosts GoatCitadel may reach`),
+    ...missingHosts.map(hostChange),
   ];
 }
 
