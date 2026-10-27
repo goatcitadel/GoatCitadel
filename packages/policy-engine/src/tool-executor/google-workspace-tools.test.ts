@@ -56,6 +56,26 @@ describe("Gmail and Calendar tools on the Google sign-in", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("sends with the Google sign-in and never reads saved channel keys from the connection config", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "gmail-msg-1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const resolveChannelConnectionSecret = vi.fn(() => "unused");
+    // A secure-storage reference a channel send would refuse: Gmail never uses the config's keys, so it must not care.
+    const { store } = storage({
+      legacyKey: "keychain:goatcitadel:mcp:other:token:00000000-0000-4000-8000-000000000000",
+    });
+    const result = await executeCommsTool(
+      request("gmail.send", { to: ["ops@example.com"], subject: "Hi", bodyText: "Body" }),
+      config,
+      store,
+      undefined,
+      { resolveGoogleWorkspaceAccessToken: async () => "google-token", resolveChannelConnectionSecret },
+    );
+    expect(result).toMatchObject({ status: "sent" });
+    expect(resolveChannelConnectionSecret).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a refused scope or turned-off capability before the boundary, so a write is never marked as possibly sent", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

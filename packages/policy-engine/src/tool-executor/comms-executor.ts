@@ -167,7 +167,10 @@ async function executeCommsToolWithBoundaryTracking(
       ? await resolveGoogleWorkspaceToken(approvalActionSecrets, connectionId, toolName)
       : undefined;
     // Held only for this provider call; the stored connection and everything recorded below keep the references.
-    const providerConfig = resolveSavedChannelSecrets(connection, connectionConfig, approvalActionSecrets);
+    // Gmail and Calendar writes use the Google sign-in above and never read the config's saved keys.
+    const providerConfig = googleAccessToken
+      ? connectionConfig
+      : resolveSavedChannelSecrets(connection, connectionConfig, approvalActionSecrets);
     providerMessageId = await executeCommsProviderTool(
       toolName,
       connection.key,

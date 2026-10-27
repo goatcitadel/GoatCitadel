@@ -852,6 +852,7 @@ Each entry: write the failing test first, then fix.
 
 ### C1. Saved (pasted) secrets are sent as the literal keychain reference
 
+- Status: fixed by PR 1 (#611). This entry describes the code before that fix.
 - Claim: a secret typed into any wizard secret field is saved in the connection config as
   `keychain:goatcitadel:channel-connection:<connectionId>:<field>:<uuid>`. The setup test resolves it, so the test
   passes; every real send and every inbound signature check uses the reference text itself as the secret.

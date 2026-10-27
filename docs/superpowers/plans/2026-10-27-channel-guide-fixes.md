@@ -96,8 +96,8 @@ Each has a recommended default; the plan follows it unless the operator says oth
 - Produces: `resolveChannelConnectionSecret?: (secretRef: string) => string | undefined` on the comms runtime hooks.
 - Behavior:
   - Before the provider call, every string value in the connection config that starts with `keychain:goatcitadel:channel-connection:<this connectionId>:` is replaced, in a copy held in memory only, by the hook's result.
-  - A value naming another connection is left as is; the send then fails as an unresolved reference.
-  - A reference with no hook or no stored value fails the send with `The saved <channel label> credential is unavailable from secure storage.`
+  - A value naming another connection, or any other `keychain:goatcitadel:` reference, is never sent and never resolved: the send fails before any request with `The saved <channel label> credential is unavailable from secure storage.`
+  - A reference with no hook or no stored value fails the same way, before any request.
   - Config values that aren't references are untouched.
 
 - [ ] **Step 1: Write the failing tests.**
