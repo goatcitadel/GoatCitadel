@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { isAllowedGatewayOrigin } from "../cors-origin-guard.js";
+import { type GatewayAuthMode, isAllowedGatewayOrigin } from "../cors-origin-guard.js";
 
 function readRequestOrigin(request: FastifyRequest): string | undefined {
   const raw = request.headers.origin || request.headers.referer;
@@ -11,12 +11,18 @@ function readRequestOrigin(request: FastifyRequest): string | undefined {
   }
 }
 
+/** Unknown when config has not loaded, which keeps loopback dev origins untrusted. */
+function readAuthMode(request: FastifyRequest): GatewayAuthMode | undefined {
+  const server = request.server as Partial<Pick<FastifyRequest["server"], "gatewayConfig">> | undefined;
+  return server?.gatewayConfig?.assistant.auth.mode;
+}
+
 /** The caller's Mission Control origin, only when the Gateway's shared origin policy allows it. */
 export function allowedRequestOrigin(request: FastifyRequest): string | undefined {
   const origin = readRequestOrigin(request);
   if (!origin) return undefined;
   try {
-    return isAllowedGatewayOrigin(origin) ? origin : undefined;
+    return isAllowedGatewayOrigin(origin, readAuthMode(request)) ? origin : undefined;
   } catch {
     return undefined;
   }
