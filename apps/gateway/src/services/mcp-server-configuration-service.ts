@@ -16,6 +16,7 @@ import {
   callerOwnedServers,
   assertUniqueServers,
   sameConfiguration,
+  onlyApprovalPostureChanged,
   assertConfigurationSnapshot,
 } from "./mcp-server-state-helpers.js";
 import { buildGatewayOwnedInternalMcpServers } from "./mcp-server-read-service.js";
@@ -85,21 +86,27 @@ export async function writeMcpServerConfiguration(
         delete saved.configurationBindingId;
         const changed = !previous || !sameConfiguration(previous, server);
         const edited = changed || review?.serverId === server.serverId;
+        // A change to only what asks first takes a new revision but not a new connection: nothing about how the
+        // server connects moved. A server mid-connection is still fenced, or its late result would be refused
+        // against the pre-edit record and leave it stuck connecting.
+        const keepsConnection =
+          previous !== undefined && previous.status !== "connecting" && onlyApprovalPostureChanged(previous, server);
         saved.revision = edited || !previous?.revision ? newMcpServerRevision() : previous.revision;
         saved.connectionRevision = previous?.connectionRevision;
         if (resolveMcpServerConnectionMode(saved) === "static") {
           saved.configurationBindingId =
-            previous && sameConfiguration(previous, server)
+            previous && (keepsConnection || sameConfiguration(previous, server))
               ? (previous.configurationBindingId ?? randomUUID())
               : randomUUID();
         }
         // Untouched servers keep concurrent runtime updates. An edited configuration
         // starts disconnected and fences every outstanding discovery attempt.
         if (previous) {
-          saved.status = edited ? "disconnected" : previous.status;
+          const disconnects = edited && !keepsConnection;
+          saved.status = disconnects ? "disconnected" : previous.status;
           saved.lastConnectedAt = previous.lastConnectedAt;
-          saved.lastError = edited ? undefined : previous.lastError;
-          if (edited) {
+          saved.lastError = disconnects ? undefined : previous.lastError;
+          if (disconnects) {
             saved.connectionRevision = newMcpServerRevision();
             disconnected.push(previous.serverId);
           }

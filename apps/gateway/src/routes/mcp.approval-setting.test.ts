@@ -4,7 +4,7 @@ import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
-import { ValidationError, type McpServerPolicyUpdateRequest } from "@goatcitadel/contracts";
+import { ValidationError, type McpServerPolicyUpdateRequest, type McpServerRecord } from "@goatcitadel/contracts";
 import { McpServerStore } from "../services/mcp-server-store.js";
 import * as admin from "../services/mcp-server-admin-service.js";
 import { McpRouteService } from "../services/mcp-route-service.js";
@@ -48,9 +48,10 @@ async function fixture() {
   });
   await storage.systemSettings.set("mcp_servers_v1", []);
   const appendApprovalsAudit = vi.fn(async (_event: Record<string, unknown>) => undefined);
+  const closeSessions = vi.fn();
   const host = composeMcpAdministration(store, {
     storage,
-    captureMcpServerSessionCloser: () => () => undefined,
+    captureMcpServerSessionCloser: () => closeSessions,
     resolveConnectedMcpTools: vi.fn(async () => []),
     publishRealtime: vi.fn(async () => undefined),
     appendApprovalsAudit,
@@ -102,7 +103,18 @@ async function fixture() {
       payload,
     });
   const revision = async (serverId: string) => (await store.requireServer(serverId)).revision;
-  return { store, host, appendApprovalsAudit, patchPolicy, revision };
+  /** Finishes a connection the way the Gateway does, so the server holds a tool and a first-tool approval. */
+  const connect = async (server: McpServerRecord) => {
+    const attempt = await store.patchServerState(server.serverId, { status: "connecting" }, server);
+    const settled = await store.completeConnection(attempt, [
+      { serverId: server.serverId, toolName: "read", enabled: true, updatedAt: server.updatedAt },
+    ]);
+    await storage.systemSettings.set("mcp_tool_first_approval_v1", { [server.serverId]: ["read"] });
+    return settled;
+  };
+  const toolNames = async (serverId: string) =>
+    (await store.readTools()).filter((tool) => tool.serverId === serverId).map((tool) => tool.toolName);
+  return { store, host, appendApprovalsAudit, closeSessions, patchPolicy, revision, connect, toolNames };
 }
 
 describe("what asks first on the MCP policy route", () => {
@@ -212,5 +224,85 @@ describe("what asks first on the MCP policy route", () => {
     const stale = await f.patchPolicy(id, { approvalPosture: "nothing_asks", expectedRevision: server.revision });
     expect(stale.statusCode).toBe(409);
     expect(f.appendApprovalsAudit).toHaveBeenCalledTimes(2);
+  });
+
+  // R55: changing only what asks first is a reviewed edit that keeps the connection it was made on.
+  describe("on a connected server", () => {
+    it("keeps it connected with its tools, first-tool approvals and live sessions, and still audits the change", async () => {
+      const f = await fixture();
+      const created = await admin.createMcpServer(f.host, { label: "Docs", transport: "stdio", command: "node" });
+      const before = await f.connect(await f.store.requireServer(created.serverId));
+      expect(before.status).toBe("connected");
+
+      const response = await f.patchPolicy(before.serverId, {
+        approvalPosture: "reads_free",
+        expectedRevision: before.revision,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const after = await f.store.requireServer(before.serverId);
+      expect(after.policy.approvalPosture).toBe("reads_free");
+      expect(after.revision).not.toBe(before.revision);
+      expect(after).toMatchObject({
+        status: "connected",
+        connectionRevision: before.connectionRevision,
+        configurationBindingId: before.configurationBindingId,
+      });
+      expect(await f.toolNames(before.serverId)).toEqual(["read"]);
+      expect(await f.store.readFirstApprovals()).toMatchObject({ [before.serverId]: ["read"] });
+      expect(f.closeSessions).not.toHaveBeenCalled();
+      expect(f.appendApprovalsAudit).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ serverId: before.serverId, from: null, to: "reads_free" }),
+      );
+    });
+
+    it("disconnects it, clears its tools and closes its sessions when another field changes in the same edit", async () => {
+      const f = await fixture();
+      const created = await admin.createMcpServer(f.host, { label: "Docs", transport: "stdio", command: "node" });
+      const before = await f.connect(await f.store.requireServer(created.serverId));
+
+      await admin.updateMcpServer(
+        f.host,
+        before.serverId,
+        { args: ["other.mjs"], policy: { approvalPosture: "reads_free" } as never },
+        undefined,
+        { expectedRevision: before.revision },
+      );
+
+      expect(await f.store.requireServer(before.serverId)).toMatchObject({ status: "disconnected" });
+      expect(await f.toolNames(before.serverId)).toEqual([]);
+      expect(await f.store.readFirstApprovals()).not.toHaveProperty(before.serverId);
+      expect(f.closeSessions).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a capability pack's server connected, though the edit clears the pack bookkeeping", async () => {
+      const f = await fixture();
+      const created = await admin.createMcpServer(
+        f.host,
+        { label: "Pack docs", transport: "stdio", command: "node" },
+        `pack-${"1".repeat(40)}`,
+        "plan-1",
+      );
+      expect(created.packChange).toBeDefined();
+      const before = await f.connect(await f.store.requireServer(created.serverId));
+
+      await admin.updateMcpServer(
+        f.host,
+        before.serverId,
+        { policy: { approvalPosture: "reads_free" } as never },
+        undefined,
+        { expectedRevision: before.revision },
+      );
+
+      const after = await f.store.requireServer(before.serverId);
+      expect(after.packChange).toBeUndefined();
+      expect(after).toMatchObject({
+        status: "connected",
+        connectionRevision: before.connectionRevision,
+        configurationBindingId: before.configurationBindingId,
+      });
+      expect(await f.toolNames(before.serverId)).toEqual(["read"]);
+      expect(f.closeSessions).not.toHaveBeenCalled();
+    });
   });
 });
