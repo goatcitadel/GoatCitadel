@@ -354,10 +354,12 @@ describe("mcp-server-admin-service", () => {
       expect(host.appendApprovalsAudit).not.toHaveBeenCalled();
     });
 
-    it("reports a failed audit as a committed change, and still reaches the caller's commit callback first", async () => {
+    it("reports a failed audit as a committed change, still reaching the commit callback first and closing the server's sessions", async () => {
       const existing = createServer();
       const host = createHost({ servers: [existing] });
       const onCommitted = vi.fn();
+      const closeSessions = vi.fn();
+      host.captureMcpServerSessionCloser = () => closeSessions;
       host.appendApprovalsAudit.mockRejectedValueOnce(new Error("audit store is down"));
 
       await expect(
@@ -369,6 +371,8 @@ describe("mcp-server-admin-service", () => {
         ),
       ).rejects.toMatchObject({ message: "audit store is down", mutationCommitted: true });
       expect(onCommitted).toHaveBeenCalledTimes(1);
+      // The edit committed, so sessions on the old configuration still close even though the audit write failed.
+      expect(closeSessions).toHaveBeenCalledTimes(1);
     });
   });
 
