@@ -78,6 +78,8 @@ const CHANNEL_CONNECTION_SECRET_REF_PREFIX = `${KEYCHAIN_REF_PREFIX}channel-conn
 /** A stored key with one of these cannot travel in a header, and the request layer would quote it in its error. */
 // eslint-disable-next-line no-control-regex -- matching control characters is the point.
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+/** Saved keys that are documents read on this machine (a Google service-account JSON), never sent as a header. */
+const STRUCTURED_SECRET_FIELDS: ReadonlySet<string> = new Set(["serviceAccountKey"]);
 
 export async function executeCommsTool(
   request: ToolInvokeRequest,
@@ -385,7 +387,8 @@ async function resolveGoogleWorkspaceToken(
  * key. Setup saves every secret field as a top-level reference, so only top-level strings are read. A reference
  * to another connection or to a draft, one nobody can read, a missing reader and a stored value that holds a control
  * character all fail the send before any request: reference text is never a credential, and no part of a stored
- * key is sent, quoted or recorded (the request layer quotes a rejected header value in its error).
+ * key is sent, quoted or recorded (the request layer quotes a rejected header value in its error). A structured key
+ * (a service-account JSON) may hold line breaks: it is parsed and signed here, never put in a header.
  */
 function resolveSavedChannelSecrets(
   connection: { connectionId: string; key: string; label?: string },
@@ -393,18 +396,18 @@ function resolveSavedChannelSecrets(
   runtime: ApprovalActionSecretRuntime,
 ): Record<string, unknown> {
   const ownPrefix = `${CHANNEL_CONNECTION_SECRET_REF_PREFIX}${connection.connectionId}:`;
-  const resolveValue = (value: unknown): unknown => {
+  const resolveValue = (field: string, value: unknown): unknown => {
     const reference = typeof value === "string" ? value.trim() : "";
     if (!reference.startsWith(KEYCHAIN_REF_PREFIX)) return value;
     const secret = reference.startsWith(ownPrefix) ? runtime.resolveChannelConnectionSecret?.(reference)?.trim() : "";
-    if (!secret || CONTROL_CHARACTER_PATTERN.test(secret)) {
+    if (!secret || (!STRUCTURED_SECRET_FIELDS.has(field) && CONTROL_CHARACTER_PATTERN.test(secret))) {
       throw new Error(
         `The saved ${asString(connection.label) ?? connection.key} credential is unavailable from secure storage.`,
       );
     }
     return secret;
   };
-  return Object.fromEntries(Object.entries(config).map(([field, value]) => [field, resolveValue(value)]));
+  return Object.fromEntries(Object.entries(config).map(([field, value]) => [field, resolveValue(field, value)]));
 }
 
 function classifyChannelDeliveryFailure(message: string): ChannelDeliveryStatus {

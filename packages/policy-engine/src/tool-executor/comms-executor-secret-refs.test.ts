@@ -1,7 +1,9 @@
+import { generateKeyPairSync } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeCommsTool } from "./comms-executor.js";
+import { resetGoogleChatAccessTokenCache } from "./google-chat-service-account.js";
 
 const KEYCHAIN_PREFIX = "keychain:goatcitadel:";
 const REF_PREFIX = `${KEYCHAIN_PREFIX}channel-connection:`;
@@ -326,6 +328,50 @@ describe("a stored key that cannot be sent safely", () => {
 
     expect(result).toMatchObject({ status: "sent" });
     expect(calls[0]?.headers.access_token).toBe(REAL_TOKEN);
+  });
+
+  it("sends with a saved Google service-account key whose JSON has line breaks: it is read here, not sent", async () => {
+    resetGoogleChatAccessTokenCache();
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const prettyKey = JSON.stringify(
+      {
+        client_email: "bot@example.iam.gserviceaccount.com",
+        private_key: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      },
+      null,
+      2,
+    );
+    const keyRef = `${REF_PREFIX}conn-1:serviceAccountKey:00000000-0000-4000-8000-000000000002`;
+    const calls: FetchCall[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({
+          url,
+          headers: Object.fromEntries(new Headers(init?.headers).entries()),
+          body: String(init?.body),
+        });
+        const body = url.startsWith("https://oauth2.googleapis.com/")
+          ? { access_token: "ya29.test", expires_in: 3600 }
+          : { name: "spaces/S/messages/R" };
+        return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+    const { storage } = createChannelStorage("google-chat", { serviceAccountKey: keyRef, defaultSpace: "spaces/S" });
+
+    const result = await executeCommsTool(
+      channelSend(),
+      policyConfig(["chat.googleapis.com", "oauth2.googleapis.com"]),
+      storage,
+      undefined,
+      { resolveChannelConnectionSecret: (ref) => (ref === keyRef ? prettyKey : undefined) },
+    );
+
+    expect(result).toMatchObject({ status: "sent" });
+    expect(calls.some((call) => call.url.startsWith("https://oauth2.googleapis.com/"))).toBe(true);
+    expect(everythingSent(calls)).not.toContain("keychain:");
+    expect(everythingSent(calls)).not.toContain("BEGIN PRIVATE KEY");
   });
 });
 
