@@ -180,7 +180,7 @@ Authority:
 - Detailed contract: [docs/EVOLUTION_CONTROL_PLANE.md](./EVOLUTION_CONTROL_PLANE.md)
 
 Notes:
-- One singleton Control Plane serves Chat, Settings, compatibility routes, startup reconciliation, and local observers. Mission Control never writes canonical owner state directly.
+- One singleton Control Plane serves Chat, Settings, the Capabilities connector install, compatibility routes, startup reconciliation, and local observers. Mission Control never writes canonical owner state directly.
 - The model-facing `change.request` tool creates only a bounded, secret-free plan. Confirmation, canonical approval, apply, activation, rollback, restart, and external-effect authority remain server-owned.
 - Every transition uses revision CAS. Effectful actions additionally bind an action nonce, immutable form snapshot, target revision or hash, idempotency key, expiry, and one active target claim.
 - Provider/channel credentials, OAuth values, and native paths use dedicated owner routes. Plans and model context retain only sanitized state and opaque owner links.

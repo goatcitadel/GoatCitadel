@@ -23,6 +23,14 @@ export const EVOLUTION_GOVERNED_MUTATION_INVENTORY: readonly GovernedMutationInv
     mutationBoundary: "CapabilityPackChangePlanAdapter.apply",
   },
   {
+    kind: "connector_install",
+    owner: "capability_connector_install",
+    // The operator's own install only: the generic create route and `change.request` refuse this kind.
+    canonicalEntryPoints: ["POST /api/v1/capabilities/connectors/install"],
+    compatibilityEntryPoints: [],
+    mutationBoundary: "ConnectorInstallChangePlanAdapter.apply",
+  },
+  {
     kind: "session_model",
     owner: "chat_session_prefs",
     canonicalEntryPoints: ["POST /api/v1/change-plans", "change.request"],

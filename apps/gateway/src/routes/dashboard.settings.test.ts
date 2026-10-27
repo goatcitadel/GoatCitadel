@@ -86,7 +86,8 @@ describe("dashboard settings routes", () => {
       "plan-settings-budget",
       1,
       "nonce-settings-budget-1234",
-      // The Settings save is the only caller that may ask for the operator's opt-in approval skip.
+      // The Settings save is an operator save route, so it may ask for the opt-in approval skip (as the Capabilities
+      // install does); the generic Change Plan confirmation never can.
       { operatorSettingsSave: true },
     );
     expect(updateSettings).not.toHaveBeenCalled();

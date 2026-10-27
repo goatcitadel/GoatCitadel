@@ -12,7 +12,10 @@ export interface Dependencies {
 
 /** Options for `EvolutionControlPlaneService.confirm`. */
 export interface ConfirmOptions {
-  /** Set only by a server-owned operator save route, such as the Settings save; never accepted from a request body. */
+  /**
+   * Set only by a server-owned operator save route (the Settings save, the Capabilities install); never accepted from
+   * a request body.
+   */
   readonly operatorSettingsSave?: boolean;
 }
 

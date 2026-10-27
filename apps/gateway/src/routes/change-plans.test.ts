@@ -81,6 +81,27 @@ describe("Change Plan resource routes", () => {
     await app.close();
   });
 
+  // Only the operator's Capabilities install route may start one; the adapter also refuses any other origin.
+  it("refuses a connector install on the generic create route", async () => {
+    const create = vi.fn(async () => ({ planId: "plan-1", status: "awaiting_confirmation", revision: 1 }));
+    const app = build({ create });
+
+    for (const surface of ["chat", "settings"]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/change-plans",
+        payload: {
+          workspaceId: "default",
+          surface,
+          request: { kind: "connector_install", templateId: "linear", enableChatConnectors: true },
+        },
+      });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(create).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("rejects paths, patches, arbitrary settings, and secret-like extra fields before service entry", async () => {
     const create = vi.fn();
     const app = build({ create });

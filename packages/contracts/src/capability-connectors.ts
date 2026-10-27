@@ -1,3 +1,4 @@
+import type { ChangePlanReceipt } from "./change-plan.js";
 import type { McpApprovalPosture, McpServerCategory } from "./mcp.js";
 
 /** One merged list of connectors (apps the AI can use), returned by the Gateway for the Capabilities area. */
@@ -83,6 +84,23 @@ export interface CapabilityConnectorsResponse {
    */
   approvalReliefAvailable: boolean;
   generatedAt: string;
+}
+
+/**
+ * `POST /api/v1/capabilities/connectors/install`: install a connector from its template through one Change Plan. It
+ * allows the template's hosts, saves the connector switched off with "Reading is free" and, when asked, lets Chat use
+ * connectors.
+ */
+export interface ConnectorInstallRequest {
+  templateId: string;
+  /** Also turn on connectors in Chat when they are off. */
+  enableChatConnectors: boolean;
+}
+
+/** The plan either finished, or waits for your approval in the Inbox; its receipt says which. */
+export interface ConnectorInstallResponse {
+  templateId: string;
+  changePlanReceipt: ChangePlanReceipt;
 }
 
 /** Display order of the connector groups in the Capabilities list. */
