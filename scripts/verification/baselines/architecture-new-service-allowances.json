@@ -2642,11 +2642,19 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/evolution-control-plane-operator-approval-skip.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 1,
+      "reason": "Operator-approved scope exception (2026-10-26) for C0 gate reconciliation of the Settings approval skip added in #572 (a4ffeb1da), absent from the pinned baseline inventory. Decides whether a confirmed caution or danger plan that the server-owned Settings save route confirmed may skip its separate approval, and returns the operator_approval_skipped apply-start event when it does. Its one read is the optional allowsOperatorApprovalSkip owner callback. Original baseline, inventory and existing-owner caps are unchanged.",
+      "evidence": "2026-10-26: evolution-control-plane-service.test.ts covers the skip for a Settings-save confirmation the owner allows, and keeps the approval when the owner refuses, when the confirmation did not come from the Settings save and when the plan started outside Settings; repository counters measure 0 host callbacks and 1 dependency access."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/mcp-approval-relief.ts",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 3,
-      "reason": "Reviewed new owner for the per-connector approval setting (Capabilities hub PR 1b, #601, operator clarification 2026-10-26): the only place that mints an MCP approval relief, decided from server-owned state alone. It reads one narrow port (the deployment profile, the saved server record and the stored tool inventory), once per member, so it cannot be consolidated further; keeping it separate keeps relief minting out of GatewayService and the tool-invocation coordinator, which call it.",
-      "evidence": "2026-10-26: mcp-approval-relief.test.ts covers every setting against tool labels, money-moving caps, remote_hardened, A2A peers, requester-scoped, disabled and quarantined servers and unlabelled or disagreeing duplicates; mcp-approval-relief-mint-guard.test.ts fails if anything else mints a relief; repository counters measure 0 host callbacks and 3 dependency accesses (getDeploymentProfile, requireMcpServer and listMcpTools, one each)."
+      "reason": "Operator-approved scope exception (2026-10-26) for C0 gate reconciliation of the per-connector What asks first setting added in #601 (cd7314f98), absent from the pinned baseline inventory. The only Gateway file that mints an MCP approval relief: from the saved server record, the stored mcp_tools_v1 inventory and the install's deployment profile it decides whether one MCP call may skip the approval mode's ask, and it assembles the MCP policy options both GatewayService access probes pass to the policy engine. Its three reads are one per port member (requireMcpServer, listMcpTools, getDeploymentProfile). GatewayService returns within its original line limit by sharing one relief port with the tool invocation coordinator and one native MCP probe path between evaluateToolAccess and inspectToolAccess. Original baseline, inventory and existing-owner caps are unchanged.",
+      "evidence": "2026-10-26: mcp-approval-relief.test.ts covers wrapper and named-binding targets, the refusals (disabled, quarantined and requester-scoped servers, unknown servers, unlabelled or disagreeing entries, destructive tools, A2A peers, remote_hardened installs) and the money-connector cap from nothing_asks to reads_free; mcp-approval-relief-mint-guard.test.ts pins createMcpApprovalRelief to this file; gateway-service.mcp-approval-relief.test.ts drives evaluateToolAccess, inspectToolAccess and the catalog inspection path on a real GatewayService; repository counters measure 0 host callbacks and 3 dependency accesses, and GatewayService 13130 lines (limit 13132)."
     }
   ]
 }
