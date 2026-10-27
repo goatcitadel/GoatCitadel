@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
+import { REVIEWED_PLAYWRIGHT_PACKAGE } from "./reviewed-mcp-package-manifest.js";
 
 // `@modelcontextprotocol/server-fetch` does not exist on npm (the reference fetch server is a
 // Python package), so there is no version to pin yet. Remove this entry once the template is fixed.
@@ -44,5 +45,27 @@ describe("mcp server templates", () => {
     const playwright = MCP_SERVER_TEMPLATES.find((template) => template.templateId === "playwright");
 
     expect(packageArgument(playwright?.args)).toBe("@playwright/mcp@0.0.80");
+  });
+
+  // A Capabilities install allows a template's network hosts and nothing else, and the connection goes through the
+  // allowlist, so a host left out here leaves the installed connector unable to connect.
+  it("lists every remote template's endpoint host among its network hosts", () => {
+    const uncovered = MCP_SERVER_TEMPLATES.filter(
+      (template) => template.url?.startsWith("https://") && !/[<>]/.test(template.url),
+    )
+      .map((template) => ({ templateId: template.templateId, host: new URL(template.url!).hostname }))
+      .filter(({ templateId, host }) => {
+        const listed = MCP_SERVER_TEMPLATES.find((template) => template.templateId === templateId)?.networkHosts ?? [];
+        return !listed.includes(host);
+      });
+
+    expect(uncovered).toEqual([]);
+  });
+
+  it("lists the hosts the reviewed playwright packages download from", () => {
+    const playwright = MCP_SERVER_TEMPLATES.find((template) => template.templateId === "playwright");
+    const downloadHosts = [...new Set(REVIEWED_PLAYWRIGHT_PACKAGE.packages.map((pkg) => new URL(pkg.url).hostname))];
+
+    expect(playwright?.networkHosts).toEqual(expect.arrayContaining(downloadHosts));
   });
 });

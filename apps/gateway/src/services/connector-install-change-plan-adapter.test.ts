@@ -24,6 +24,7 @@ import { isAutoResumeOnApprovalPlan } from "./evolution-control-plane-approval-r
 import { EvolutionControlPlaneAdapterRegistry } from "./evolution-control-plane-adapter.js";
 import { EvolutionControlPlaneService, type EvolutionControlPlaneActor } from "./evolution-control-plane-service.js";
 import type { McpServerAdminHost } from "./mcp-server-admin-service.js";
+import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 
 const databases: Array<ReturnType<typeof createDatabase>> = [];
 
@@ -112,15 +113,22 @@ function savedServer(label: string, overrides: Partial<McpServerRecord> = {}): M
     costTier: "unknown",
     policy: POLICY,
     status: "disconnected",
-    createdAt: "2026-10-27T00:00:00.000Z",
-    updatedAt: "2026-10-27T00:00:00.000Z",
+    // Saved now, so a server a test saves after making its plan counts as saved after it.
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     ...overrides,
   };
 }
 
 /** In-memory owners. Settings writes are fenced by revision, as the real settings owner fences them. */
 function owners(
-  input: { servers?: McpServerRecord[]; allowlist?: string[]; chat?: boolean; profile?: DeploymentProfile } = {},
+  input: {
+    servers?: McpServerRecord[];
+    allowlist?: string[];
+    chat?: boolean;
+    profile?: DeploymentProfile;
+    templates?: readonly McpServerTemplateRecord[];
+  } = {},
 ) {
   const state = {
     servers: [...(input.servers ?? [])],
@@ -131,7 +139,7 @@ function owners(
     },
   };
   const deps = {
-    templates: TEMPLATES,
+    templates: input.templates ?? TEMPLATES,
     readMcpServers: vi.fn(async () => [...state.servers]),
     readSettings: vi.fn(async () => ({
       revision: state.settings.revision,
@@ -309,6 +317,16 @@ describe("installing a connector through one Change Plan", () => {
     expect(plan.summary).toBe("Save Example, switched off. On this install every action it takes asks you first.");
     expect(plan.requiredAction).toMatchObject({ kind: "confirmation", confirmationText: plan.summary });
     expect(plan.requiredAction).not.toMatchObject({ confirmationText: expect.stringContaining("Reading is free") });
+  });
+
+  // The connection goes through the allowlist, so an install that left its endpoint out couldn't connect.
+  it("allows a shipped remote template's own endpoint", async () => {
+    const h = harness({ templates: MCP_SERVER_TEMPLATES });
+    const plan = await h.service.create({ actor: OPERATOR, request: installRequest("microsoft-learn") });
+
+    expect(plan.summary).toContain("Allow learn.microsoft.com.");
+    await h.confirm(plan);
+    expect(h.state.settings.networkAllowlist).toEqual(["learn.microsoft.com"]);
   });
 
   it("writes no allowed host when a wildcard already covers every one", async () => {
@@ -664,6 +682,58 @@ describe("reconciling an interrupted install", () => {
       result: { summary: "Saved Example, switched off." },
     });
     expect(h.writes()).toEqual([]);
+  });
+
+  // A matching label is no authority: a server saved some other way would otherwise be reported as this install's
+  // effect, and Capabilities would switch it on and connect it.
+  it.each([
+    ["a different endpoint", { url: "https://elsewhere.test/mcp" }],
+    ["a different command", { transport: "stdio" as const, url: undefined, command: "npx", args: ["-y", "other"] }],
+    ["a different sign-in kind", { authType: "none" as const }],
+    ["a save from before the plan was made", { createdAt: "2026-01-01T00:00:00.000Z" }],
+  ])("doesn't take a same-named server with %s as this install's", async (_name, overrides) => {
+    const h = harness({ allowlist: ["*.example.test"], chat: true });
+    const plan = await h.service.create({ actor: OPERATOR, request: installRequest("example") });
+    h.state.servers = [savedServer("example", { ...overrides, policy: { ...POLICY, approvalPosture: "reads_free" } })];
+
+    const settled = await h.adapter.reconcile({} as never, plan);
+
+    expect(settled).toMatchObject({ effectObserved: false, status: "manual_required" });
+    expect(settled.result?.summary).toBe(
+      "The install stopped before it finished. Another connector named Example is saved, so this install didn't save one.",
+    );
+    expect(settled.evidenceRefs).toBeUndefined();
+    expect(h.writes()).toEqual([]);
+  });
+
+  it("takes a server saved with the template's configuration, however a save trims it", async () => {
+    const h = harness({ allowlist: ["*.example.test"] });
+    const plan = await h.service.create({ actor: OPERATOR, request: installRequest("example") });
+    h.state.servers = [
+      savedServer("EXAMPLE", { serverId: "ours", policy: { ...POLICY, approvalPosture: "reads_free" }, args: [] }),
+    ];
+
+    expect(await h.adapter.reconcile({} as never, plan)).toMatchObject({
+      effectObserved: true,
+      status: "completed",
+      evidenceRefs: ["mcp_template:example", "mcp_server:ours"],
+    });
+  });
+
+  it("names no server after a failed save when only someone else's same-named server is there", async () => {
+    const h = harness({ allowlist: ["*.example.test"] });
+    h.deps.createMcpServer.mockImplementationOnce(async () => {
+      h.state.servers = [savedServer("Example", { url: "https://elsewhere.test/mcp" })];
+      throw new Error("Realtime publish failed.");
+    });
+
+    const settled = await h.install(installRequest("example"));
+
+    expect(settled.result).toMatchObject({
+      summary: "Couldn't save Example. Trying again is safe.",
+      failureCode: "connector_install_save_failed",
+    });
+    expect(settled.evidenceRefs).toEqual(["mcp_template:example"]);
   });
 });
 

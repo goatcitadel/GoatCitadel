@@ -63,8 +63,10 @@ type InstallStep = "allowlist" | "save" | "posture" | "chat_flag";
 
 /** What the owners hold for a template now. */
 interface InstallObservation {
-  /** The saved server paired with the template by label, ignoring case. */
+  /** This install's own saved server (see `isThisInstall`). */
   readonly server: McpServerRecord | undefined;
+  /** Whether a server with the template's label is saved that isn't this install's. */
+  readonly labelTakenElsewhere: boolean;
   readonly relaxed: boolean;
   /** The template's hosts the allowed list doesn't cover. */
   readonly missing: readonly string[];
@@ -168,7 +170,7 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
       const observed =
         step === "allowlist"
           ? undefined
-          : await this.observe(template).catch(() => undefined /* the step tracker stands in */);
+          : await this.observe(template, plan).catch(() => undefined /* the step tracker stands in */);
       const outcome = stopped({ template, request, step, pending, allowed, observed, error });
       // A saved server is named (M3), so Capabilities hands its panel over to it instead of offering an Install that
       // would be refused as already saved.
@@ -188,7 +190,7 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
         result: { summary: "The install stopped before it finished.", failureCode: "connector_install_interrupted" },
       };
     }
-    const { server, relaxed, missing, chatOn } = await this.observe(template);
+    const { server, labelTakenElsewhere, relaxed, missing, chatOn } = await this.observe(template, plan);
     if (server && relaxed && (!request.enableChatConnectors || chatOn) && missing.length === 0) {
       return {
         effectObserved: true,
@@ -197,11 +199,13 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
         result: { summary: `Saved ${template.label}, switched off.` },
       };
     }
-    const found = !server
-      ? `${template.label} isn't saved.`
-      : relaxed
+    const found = server
+      ? relaxed
         ? `${template.label} is saved, switched off.`
-        : `${template.label} is saved, switched off, and everything it does asks you first.`;
+        : `${template.label} is saved, switched off, and everything it does asks you first.`
+      : labelTakenElsewhere
+        ? `Another connector named ${template.label} is saved, so this install didn't save one.`
+        : `${template.label} isn't saved.`;
     return {
       effectObserved: false,
       status: "manual_required" as const,
@@ -214,11 +218,13 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
     };
   }
 
-  private async observe(template: McpServerTemplateRecord): Promise<InstallObservation> {
+  private async observe(template: McpServerTemplateRecord, plan: ChangePlanRecord): Promise<InstallObservation> {
     const [servers, settings] = await Promise.all([this.deps.readMcpServers(), this.deps.readSettings()]);
-    const server = servers.find((item) => mcpServerLabelKey(item.label) === mcpServerLabelKey(template.label));
+    const named = servers.filter((item) => mcpServerLabelKey(item.label) === mcpServerLabelKey(template.label));
+    const server = named.find((item) => isThisInstall(item, template, plan));
     return {
       server,
+      labelTakenElsewhere: !server && named.length > 0,
       relaxed: server?.policy.approvalPosture === "reads_free",
       missing: missingHosts(template, settings.networkAllowlist),
       chatOn: settings.features.chatStaticMcpV1Enabled === true,
@@ -305,6 +311,29 @@ function missingHosts(template: McpServerTemplateRecord, allowlist: readonly str
   const hosts = [...new Set((template.networkHosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean))];
   return hosts.filter((host) => !isHostAllowlistedInList(host, [...allowlist]));
 }
+
+/**
+ * Whether a saved server is this install's own effect, for recovery and for naming it after a failure: the template's
+ * label, its exact command or endpoint as a save stores them (trimmed, empty arguments dropped), and saved no earlier
+ * than the plan was made. A matching label alone is no authority to report the install done, because Capabilities
+ * then switches the server on and connects it.
+ */
+function isThisInstall(server: McpServerRecord, template: McpServerTemplateRecord, plan: ChangePlanRecord): boolean {
+  const saved = Date.parse(server.createdAt);
+  return (
+    server.transport === template.transport &&
+    savedText(server.command) === savedText(template.command) &&
+    savedText(server.url) === savedText(template.url) &&
+    savedArgs(server.args).join("\u0000") === savedArgs(template.args).join("\u0000") &&
+    server.authType === template.authType &&
+    Number.isFinite(saved) &&
+    saved >= Date.parse(plan.createdAt)
+  );
+}
+
+const savedText = (value: string | undefined): string | undefined => value?.trim() || undefined;
+const savedArgs = (args: readonly string[] | undefined): string[] =>
+  (args ?? []).map((item) => item.trim()).filter(Boolean);
 
 /** The template's own configuration and policy, switched off; "Reading is free" is set by the audited policy write. */
 function createInput(template: McpServerTemplateRecord): McpServerCreateInput {
