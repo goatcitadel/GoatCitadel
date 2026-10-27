@@ -1,21 +1,38 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { ChannelSetupDiscoveryResult, ChannelSetupDraft } from "@goatcitadel/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type {
+  ChannelSetupCodeSender,
+  ChannelSetupDefinition,
+  ChannelSetupDiscoveryResult,
+  ChannelSetupDraft,
+} from "@goatcitadel/contracts";
+import type { IntegrationConnection } from "@goatcitadel/mission-control-shared/api/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetCredentialInputsForTests } from "../../../../features/native-routes/settings/credential-input-owner";
+import { SAY_HI_POLL_MS, SETUP_CODE_TTL_MS } from "./setup-code";
 import { TelegramSetupPage } from "./TelegramSetupPage";
 
 const api = vi.hoisted(() => ({
   fetchChannelSetupDrafts: vi.fn(),
   fetchChannelSetupDraft: vi.fn(),
+  fetchChannelSetupDefinitions: vi.fn(),
   createChannelSetupDraft: vi.fn(),
   submitChannelSetupDraftSecrets: vi.fn(),
   discoverTelegramSetupTargets: vi.fn(),
   updateChannelSetupDraft: vi.fn(),
   discardChannelSetupDraft: vi.fn(),
+  fetchSettings: vi.fn(),
+  fetchIntegrationConnections: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
+
+const turnOnApi = vi.hoisted(() => ({
+  turnOnChannelDraft: vi.fn(),
+  acknowledgeCleanupAndTurnOn: vi.fn(),
+}));
+vi.mock("./turn-on-channel", () => turnOnApi);
 
 const TOKEN = "123456:SECRET-TOKEN";
 const KEY_FAILED =
@@ -66,16 +83,30 @@ function arrangeCheck(result: ChannelSetupDiscoveryResult = discovery()) {
 
 let root: Root;
 let container: HTMLDivElement;
+let client: QueryClient;
+
+/** The catalogue as the gateway sends it: Telegram needs one host reached. */
+function telegramDefinition(requiredHosts: string[] = ["api.telegram.org"]): ChannelSetupDefinition {
+  return {
+    catalog: { catalogId: "channel.telegram", key: "telegram", label: "Telegram" },
+    wizard: { estimatedMinutes: 5, requiredHosts, picker: { group: "quickest", order: 0 } },
+  } as unknown as ChannelSetupDefinition;
+}
 
 async function settle() {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+    else await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
 
 async function mount() {
   await act(async () => {
-    root.render(<TelegramSetupPage workspaceId="default" />);
+    root.render(
+      <QueryClientProvider client={client}>
+        <TelegramSetupPage workspaceId="default" />
+      </QueryClientProvider>,
+    );
   });
   await settle();
 }
@@ -121,17 +152,28 @@ async function checkKey(token = TOKEN) {
 }
 
 beforeEach(() => {
-  for (const fn of Object.values(api)) fn.mockReset();
+  for (const fn of [...Object.values(api), ...Object.values(turnOnApi)]) fn.mockReset();
   api.fetchChannelSetupDrafts.mockResolvedValue({ items: [] });
+  api.fetchChannelSetupDefinitions.mockResolvedValue({ items: [telegramDefinition()] });
+  api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: [] });
+  api.fetchIntegrationConnections.mockResolvedValue({ items: [] });
   api.discardChannelSetupDraft.mockResolvedValue({ draftId: "draft-1", deleted: true });
+  // The gateway keeps whatever draft it is sent, one version on.
+  api.updateChannelSetupDraft.mockImplementation(
+    async (_id: string, input: { expectedRevision: number; draft: Record<string, unknown> }) =>
+      draft({ revision: input.expectedRevision + 1, draft: input.draft, secretState: KEY_STORED }),
+  );
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   act(() => root.unmount());
   container.remove();
+  client.clear();
   __resetCredentialInputsForTests();
 });
 
@@ -201,7 +243,8 @@ describe("TelegramSetupPage", () => {
       values: { botToken: TOKEN },
     });
     expect(steps()[1]!.textContent).toContain("Key works. Your bot is @MyGoatBot.");
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Key works. Your bot is @MyGoatBot.");
+    // The status line moves on to the latest thing: step 3 is already waiting to hear hi.
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Waiting for your hi…");
   });
 
   it("never shows the key back, once checked", async () => {
@@ -299,7 +342,8 @@ describe("TelegramSetupPage", () => {
     expect(keyField()).toBeNull();
 
     await click(button("Start over"));
-    expect(api.discardChannelSetupDraft).toHaveBeenCalledWith("draft-1", 3);
+    // Version 3 after the check, 4 once the code for saying hi was saved.
+    expect(api.discardChannelSetupDraft).toHaveBeenCalledWith("draft-1", 4);
     expect(container.textContent).not.toContain("Key works.");
     expect(keyField()).not.toBeNull();
     expect(steps()[0]!.querySelector("svg")).not.toBeNull();
@@ -385,5 +429,434 @@ describe("TelegramSetupPage", () => {
     await mount();
     await checkKey();
     expect(container.querySelectorAll('[role="status"], [role="alert"], [aria-live]')).toHaveLength(1);
+  });
+});
+
+describe("TelegramSetupPage: say hi, turn on, done", () => {
+  const ADA: ChannelSetupCodeSender = { actorId: "777", chatId: "777", displayName: "Ada Lovelace", username: "ada" };
+  const CODE = /^[A-HJ-NP-Za-km-z2-9]{10}$/;
+  const DONE = "Telegram is on. Send your bot a message to try it.";
+  const plan = { planId: "plan-1" };
+  const status = () => container.querySelector('[role="status"]')?.textContent;
+  const liveRegions = () => container.querySelectorAll('[role="status"], [role="alert"], [aria-live]').length;
+
+  /** Checks the key with the clock stopped, so the listening can be moved on by hand. */
+  async function toSayHi(result: ChannelSetupDiscoveryResult = discovery()) {
+    vi.useFakeTimers();
+    arrangeCheck(result);
+    await mount();
+    await checkKey();
+    await settle();
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  /** The code the page saved on the draft for the operator to send. */
+  function savedCode(): string | undefined {
+    const withCode = api.updateChannelSetupDraft.mock.calls.filter(
+      ([, input]) => (input as { draft: Record<string, unknown> }).draft.setupCode,
+    );
+    return (withCode.at(-1)?.[1] as { draft: { setupCode: string } } | undefined)?.draft.setupCode;
+  }
+
+  async function someoneSaysHi(sender: ChannelSetupCodeSender = ADA) {
+    api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ codeSender: sender }));
+    await advance(SAY_HI_POLL_MS);
+    await settle();
+  }
+
+  function connection(overrides: Partial<IntegrationConnection> & { botUsername?: string }): IntegrationConnection {
+    const { botUsername, ...rest } = overrides;
+    return {
+      connectionId: "conn-1",
+      revision: "1",
+      catalogId: "channel.telegram",
+      kind: "channel",
+      key: "telegram",
+      label: "Telegram",
+      enabled: true,
+      status: "connected",
+      config: botUsername ? { botUsername } : {},
+      createdAt: "2026-10-26T10:00:00.000Z",
+      updatedAt: "2026-10-26T10:00:00.000Z",
+      ...rest,
+    } as IntegrationConnection;
+  }
+
+  it("shows how to say hi once the key works: a code to scan, a link to open, and the code to send", async () => {
+    await toSayHi();
+    const code = savedCode();
+    expect(code).toMatch(CODE);
+    const hi = steps()[2]!;
+    expect(hi.getAttribute("data-state")).toBe("current");
+    expect(hi.textContent).toContain("Scan this with your phone, or open your bot, then tap Start.");
+    expect(hi.querySelector("svg")?.getAttribute("aria-label")).toBe("QR code that opens your bot");
+    const open = link("Open @MyGoatBot");
+    expect(open?.getAttribute("href")).toBe(`https://t.me/MyGoatBot?start=${code}`);
+    expect(open?.getAttribute("target")).toBe("_blank");
+    expect(open?.getAttribute("rel")).toContain("noopener");
+    expect(hi.textContent).toContain(`Can't see Start? Send your bot this code: ${code}`);
+    expect(hi.textContent).toContain("Waiting for your hi…");
+    expect(status()).toBe("Waiting for your hi…");
+    // Not yet: nothing to turn on until someone has said hi.
+    expect(steps()[3]!.getAttribute("data-state")).toBe("locked");
+    expect(button("Turn on")).toBeUndefined();
+  });
+
+  it("makes no code while the bot still sends its messages to a web address, and makes one once that is stopped", async () => {
+    await toSayHi(discovery({ webhookActive: true }));
+    expect(savedCode()).toBeUndefined();
+    expect(steps()[2]!.getAttribute("data-state")).toBe("locked");
+
+    api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ webhookActive: false }));
+    await click(button("Stop sending to that address"));
+    await settle();
+    expect(savedCode()).toMatch(CODE);
+    expect(steps()[2]!.getAttribute("data-state")).toBe("current");
+  });
+
+  it("makes one code, however often the page draws", async () => {
+    await toSayHi();
+    await advance(SAY_HI_POLL_MS * 3);
+    const withCode = api.updateChannelSetupDraft.mock.calls.filter(
+      ([, input]) => (input as { draft: Record<string, unknown> }).draft.setupCode,
+    );
+    expect(withCode).toHaveLength(1);
+  });
+
+  it("says who said hi, and that only they can message the bot for now", async () => {
+    await toSayHi();
+    await someoneSaysHi();
+    const hi = steps()[2]!;
+    expect(hi.getAttribute("data-state")).toBe("done");
+    expect(hi.textContent).toContain("Ada Lovelace said hi. Only they can message your bot for now.");
+    // The code to scan is gone (the check mark in the heading is the only drawing left).
+    expect(hi.querySelector('[role="img"]')).toBeNull();
+    expect(container.textContent).not.toContain("Waiting for your hi…");
+    expect(container.textContent).not.toContain("Can't see Start?");
+    expect(status()).toBe("Ada Lovelace said hi. Only they can message your bot for now.");
+    expect(steps()[3]!.getAttribute("data-state")).toBe("current");
+    expect(steps()[3]!.getAttribute("aria-current")).toBe("step");
+    expect(steps()[2]!.getAttribute("aria-current")).toBeNull();
+  });
+
+  it.each([
+    [{ actorId: "5", chatId: "5", username: "grace" }, "@grace"],
+    [{ actorId: "5", chatId: "5" }, "Someone"],
+  ])("names a sender with no name as %j: %s", async (sender, name) => {
+    await toSayHi();
+    await someoneSaysHi(sender);
+    expect(steps()[2]!.textContent).toContain(`${name} said hi. Only they can message your bot for now.`);
+    expect(steps()[3]!.textContent).toContain(`Who can message your bot: ${name}`);
+  });
+
+  it("lists what turning on will do, with a line for the host that has to be added", async () => {
+    await toSayHi();
+    expect(api.fetchSettings).not.toHaveBeenCalled();
+    await someoneSaysHi();
+    expect([...steps()[3]!.querySelectorAll("li")].map((item) => item.textContent)).toEqual([
+      "Who can message your bot: Ada Lovelace",
+      "Where it posts: your chat with @MyGoatBot",
+      "How it gets messages: GoatCitadel asks Telegram for new ones, so no public web address is needed",
+      "GoatCitadel sends a test message to your chat and then removes it",
+      "api.telegram.org is added to the hosts GoatCitadel may reach",
+    ]);
+  });
+
+  it.each([["api.telegram.org"], ["*.telegram.org"]])("leaves out the host line when %s is allowed", async (entry) => {
+    api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: [entry] });
+    await toSayHi();
+    await someoneSaysHi();
+    expect([...steps()[3]!.querySelectorAll("li")]).toHaveLength(4);
+    expect(container.textContent).not.toContain("hosts GoatCitadel may reach");
+  });
+
+  it("makes no claim about hosts when the settings cannot be read", async () => {
+    api.fetchSettings.mockRejectedValue(new Error("offline"));
+    await toSayHi();
+    await someoneSaysHi();
+    expect([...steps()[3]!.querySelectorAll("li")]).toHaveLength(4);
+    expect(button("Turn on")).toBeDefined();
+  });
+
+  it("turns on with the channel and the hosts it needs, and says what it is doing", async () => {
+    let finish!: (outcome: unknown) => void;
+    turnOnApi.turnOnChannelDraft.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    await toSayHi();
+    await someoneSaysHi();
+    await click(button("Turn on"));
+
+    expect(turnOnApi.turnOnChannelDraft).toHaveBeenCalledTimes(1);
+    expect(turnOnApi.turnOnChannelDraft).toHaveBeenCalledWith({
+      workspaceId: "default",
+      draftId: "draft-1",
+      catalogId: "channel.telegram",
+      requiredHosts: ["api.telegram.org"],
+    });
+    expect(button("Turning on…")).toBeDefined();
+    expect(status()).toBe("Turning on…");
+    // A second click while it works does nothing.
+    await click(button("Turning on…"));
+    expect(turnOnApi.turnOnChannelDraft).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finish({ kind: "completed", plan });
+    });
+    await settle();
+    expect(steps()[3]!.getAttribute("data-state")).toBe("done");
+  });
+
+  it("links to the new channel's page, picking the newest Telegram connection for this bot", async () => {
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "completed", plan });
+    api.fetchIntegrationConnections.mockResolvedValue({
+      items: [
+        connection({ connectionId: "older", botUsername: "@MyGoatBot", createdAt: "2026-10-01T10:00:00.000Z" }),
+        connection({ connectionId: "other-bot", botUsername: "@SomeoneElse", createdAt: "2026-10-26T13:00:00.000Z" }),
+        connection({ connectionId: "mine", botUsername: "@mygoatbot", createdAt: "2026-10-26T12:00:00.000Z" }),
+        connection({
+          connectionId: "discord",
+          key: "discord",
+          botUsername: "@MyGoatBot",
+          createdAt: "2026-10-27T00:00:00.000Z",
+        }),
+      ],
+    });
+    await toSayHi();
+    await someoneSaysHi();
+    await click(button("Turn on"));
+    await settle();
+
+    expect(api.fetchIntegrationConnections).toHaveBeenCalledWith("channel");
+    const done = steps()[3]!;
+    expect(done.textContent).toContain(DONE);
+    const page = link("Open Telegram's page");
+    expect(new URL(page!.getAttribute("href")!, "http://cockpit.invalid").pathname).toBe("/chat/messaging/mine");
+    expect(status()).toBe(DONE);
+    // Nothing to start over from once it is on.
+    expect(button("Start over")).toBeUndefined();
+  });
+
+  it("matches a bot name with or without the @, whatever the case", async () => {
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "completed", plan });
+    api.fetchIntegrationConnections.mockResolvedValue({
+      items: [connection({ connectionId: "plain", botUsername: "MYGOATBOT" })],
+    });
+    await toSayHi();
+    await someoneSaysHi();
+    await click(button("Turn on"));
+    await settle();
+    expect(link("Open Telegram's page")?.getAttribute("href")).toContain("/chat/messaging/plain");
+  });
+
+  it("says Telegram is on without a link when no connection for this bot is found", async () => {
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "completed", plan });
+    api.fetchIntegrationConnections.mockResolvedValue({
+      items: [connection({ connectionId: "other-bot", botUsername: "@SomeoneElse" })],
+    });
+    await toSayHi();
+    await someoneSaysHi();
+    await click(button("Turn on"));
+    await settle();
+    expect(steps()[3]!.textContent).toContain(DONE);
+    expect(link("Open Telegram's page")).toBeUndefined();
+  });
+
+  it("says Telegram is on without a link when the connections cannot be read", async () => {
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "completed", plan });
+    api.fetchIntegrationConnections.mockRejectedValue(new Error("offline"));
+    await toSayHi();
+    await someoneSaysHi();
+    await click(button("Turn on"));
+    await settle();
+    expect(steps()[3]!.textContent).toContain(DONE);
+    expect(link("Open Telegram's page")).toBeUndefined();
+  });
+
+  it("does not look for the channel before it is on", async () => {
+    await toSayHi();
+    await someoneSaysHi();
+    expect(api.fetchIntegrationConnections).not.toHaveBeenCalled();
+  });
+
+  it("sends the operator to the approval in Inbox when this sign-in cannot give it", async () => {
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "elsewhere", plan, approvalId: "approval-9" });
+    await toSayHi();
+    await someoneSaysHi();
+    await click(button("Turn on"));
+    const inbox = link("Approve it in Inbox");
+    const target = new URL(inbox!.getAttribute("href")!, "http://cockpit.invalid");
+    expect(target.pathname).toBe("/inbox");
+    expect(target.searchParams.get("approvalId")).toBe("approval-9");
+    expect(button("Turn on")).toBeDefined();
+  });
+
+  it("sends the operator to Settings when the next step is not an approval", async () => {
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "elsewhere", plan });
+    await toSayHi();
+    await someoneSaysHi();
+    await click(button("Turn on"));
+    expect(link("Finish this in Settings")).toBeDefined();
+  });
+
+  it("shows why it could not turn on, and says so once in the status line", async () => {
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "failed", message: "Telegram said no." });
+    await toSayHi();
+    await someoneSaysHi();
+    await click(button("Turn on"));
+    expect(steps()[3]!.textContent).toContain("Telegram said no.");
+    expect(status()).toBe("Telegram said no.");
+    expect(steps()[3]!.getAttribute("data-state")).toBe("current");
+  });
+
+  it("lists what blocks turning on, one reason to a line", async () => {
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "blocked", reasons: ["Add a chat.", "Check the key."] });
+    await toSayHi();
+    await someoneSaysHi();
+    await click(button("Turn on"));
+    const reasons = [...steps()[3]!.querySelectorAll('[data-tone="warning"] p')].map((line) => line.textContent);
+    expect(reasons).toEqual(["Add a chat.", "Check the key."]);
+  });
+
+  it("asks whether to carry on when the test message could not be removed, and carries on", async () => {
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "needs_cleanup_ack", evidenceId: "proof-1" });
+    turnOnApi.acknowledgeCleanupAndTurnOn.mockResolvedValue({ kind: "completed", plan });
+    await toSayHi();
+    await someoneSaysHi();
+    await click(button("Turn on"));
+    expect(steps()[3]!.textContent).toContain(
+      "GoatCitadel couldn't remove its test message. Delete it in Telegram if you like.",
+    );
+    expect(status()).toBe("GoatCitadel couldn't remove its test message. Delete it in Telegram if you like.");
+
+    await click(button("Continue"));
+    expect(turnOnApi.acknowledgeCleanupAndTurnOn).toHaveBeenCalledWith({
+      workspaceId: "default",
+      draftId: "draft-1",
+      catalogId: "channel.telegram",
+      evidenceId: "proof-1",
+    });
+    expect(steps()[3]!.getAttribute("data-state")).toBe("done");
+  });
+
+  it("stops listening for good once someone has said hi", async () => {
+    await toSayHi();
+    await someoneSaysHi();
+    const asked = api.discoverTelegramSetupTargets.mock.calls.length;
+    await advance(SETUP_CODE_TTL_MS);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(asked);
+  });
+
+  it("offers a new code when this one expires, and the new code works", async () => {
+    await toSayHi();
+    const first = savedCode()!;
+    await advance(SETUP_CODE_TTL_MS);
+
+    const hi = steps()[2]!;
+    expect(hi.textContent).toContain("This code expired.");
+    expect(hi.querySelector("svg")).toBeNull();
+    expect(hi.textContent).not.toContain(first);
+    expect(link("Open @MyGoatBot")).toBeUndefined();
+    expect(hi.textContent).not.toContain("Waiting for your hi…");
+    expect(status()).toBe("This code expired.");
+
+    await click(button("Get a new code"));
+    const second = savedCode()!;
+    expect(second).toMatch(CODE);
+    expect(second).not.toBe(first);
+    expect(link("Open @MyGoatBot")?.getAttribute("href")).toBe(`https://t.me/MyGoatBot?start=${second}`);
+    expect(steps()[2]!.textContent).not.toContain("This code expired.");
+    expect(steps()[2]!.textContent).toContain("Waiting for your hi…");
+
+    await someoneSaysHi();
+    expect(steps()[2]!.getAttribute("data-state")).toBe("done");
+  });
+
+  it("says a hi may take a while when the bot has many waiting messages", async () => {
+    await toSayHi();
+    api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ updatesTruncated: true }));
+    await advance(SAY_HI_POLL_MS);
+    await settle();
+    expect(steps()[2]!.textContent).toContain(
+      "Your bot has many waiting messages, so your hi may take a while to show up.",
+    );
+    api.discoverTelegramSetupTargets.mockResolvedValue(discovery());
+    await advance(SAY_HI_POLL_MS);
+    await settle();
+    expect(container.textContent).not.toContain("many waiting messages");
+  });
+
+  it("offers a new code, and says why, when the code could not be saved", async () => {
+    vi.useFakeTimers();
+    arrangeCheck();
+    // The key check writes the draft once; the second write, for the code, fails.
+    const savesDraft = api.updateChannelSetupDraft.getMockImplementation()!;
+    let writes = 0;
+    api.updateChannelSetupDraft.mockImplementation(async (...args: unknown[]) => {
+      writes += 1;
+      if (writes === 2) throw new Error("This changed somewhere else.");
+      return savesDraft(...args);
+    });
+    api.fetchChannelSetupDraft.mockResolvedValue(draft({ revision: 3, secretState: KEY_STORED }));
+    await mount();
+    await checkKey();
+    await settle();
+
+    // The key's own write succeeded; the one for the code did not. One message, beside the steps.
+    expect(steps()[2]!.textContent).toContain("Say hi to your bot");
+    expect(container.querySelectorAll('[data-tone="error"]')).toHaveLength(1);
+    expect(container.textContent).toContain("This changed somewhere else.");
+    expect(steps()[2]!.textContent).not.toContain("Waiting for your hi…");
+
+    await click(button("Get a new code"));
+    expect(savedCode()).toMatch(CODE);
+    expect(container.querySelector('[data-tone="error"]')).toBeNull();
+  });
+
+  it("stops listening, and goes back to the first steps, when the operator starts over", async () => {
+    await toSayHi();
+    await click(button("Start over"));
+    expect(api.discardChannelSetupDraft).toHaveBeenCalledTimes(1);
+    expect(keyField()).not.toBeNull();
+    expect(steps()[2]!.getAttribute("data-state")).toBe("locked");
+    expect(container.textContent).not.toContain("Waiting for your hi…");
+    const asked = api.discoverTelegramSetupTargets.mock.calls.length;
+    await advance(SAY_HI_POLL_MS * 3);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(asked);
+  });
+
+  it("adds no live region beyond the one status line, whatever happens", async () => {
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "needs_cleanup_ack", evidenceId: "proof-1" });
+    turnOnApi.acknowledgeCleanupAndTurnOn.mockResolvedValue({ kind: "failed", message: "Telegram said no." });
+    await toSayHi();
+    expect(liveRegions()).toBe(1);
+    await advance(SETUP_CODE_TTL_MS);
+    expect(liveRegions()).toBe(1);
+    await click(button("Get a new code"));
+    expect(liveRegions()).toBe(1);
+    api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ updatesTruncated: true }));
+    await advance(SAY_HI_POLL_MS);
+    expect(liveRegions()).toBe(1);
+    await someoneSaysHi();
+    expect(liveRegions()).toBe(1);
+    await click(button("Turn on"));
+    expect(liveRegions()).toBe(1);
+    await click(button("Continue"));
+    expect(liveRegions()).toBe(1);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("shows no key and no id in any step", async () => {
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "completed", plan });
+    await toSayHi();
+    await someoneSaysHi();
+    await click(button("Turn on"));
+    await settle();
+    expect(container.innerHTML).not.toContain("SECRET-TOKEN");
+    expect(container.textContent).not.toContain("draft-1");
+    expect(container.textContent).not.toContain("777");
   });
 });

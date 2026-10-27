@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCredentialInput } from "../../../../features/native-routes/settings/credential-input-owner";
 import { channelPickerHref } from "../../../app/routes";
 import { Button } from "../../../ui/Button";
@@ -7,10 +7,17 @@ import { Field } from "../../../ui/Field";
 import { cockpitInputClass } from "../../../ui/input-class";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { settingsChannelSetupHref } from "./channel-picker-model";
+import { senderName } from "./code-sender";
 import { QrCode } from "./QrCode";
+import { CODE_EXPIRED, SayHiStep, WAITING_FOR_HI } from "./SayHiStep";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
+import { CLEANUP_NOTE, TURNED_ON, TurnOnStep, turnOnChanges } from "./TurnOnStep";
+import { useChannelRequiredHosts } from "./use-channel-picker-groups";
+import { useMissingHosts } from "./use-missing-hosts";
+import { useNewTelegramHref } from "./use-new-connection-href";
 import { TELEGRAM_CATALOG_ID, useTelegramSetup, type TelegramSetupState } from "./use-telegram-setup";
+import { useTurnOn, type TurnOnState } from "./use-turn-on";
 
 const BOTFATHER_URL = "https://t.me/BotFather";
 const WEB_ADDRESS_NOTE =
@@ -114,21 +121,52 @@ function BotKey({
 }
 
 const keyWorks = (username: string) => `Key works. Your bot is @${username}.`;
+const saidHi = (name: string) => `${name} said hi. Only they can message your bot for now.`;
 
-/** What the page tells a screen reader after each thing the operator does. */
-function statusLine(setup: TelegramSetupState, checking: boolean): string | undefined {
+/** What turning on says while it is not done: the latest thing that happened, or nothing yet. */
+function turnOnLine(turnOn: TurnOnState): string | undefined {
+  switch (turnOn.state) {
+    case "working":
+      return "Turning on…";
+    case "done":
+      return TURNED_ON;
+    case "cleanup":
+      return CLEANUP_NOTE;
+    case "failed":
+      return turnOn.message;
+    case "blocked":
+      return turnOn.reasons.join(" ");
+    case "elsewhere":
+      return turnOn.approvalId ? "Approve it in Inbox" : "Finish this in Settings";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * What the page tells a screen reader after each thing happens: the one status line, latest first. Everything it says
+ * is also on the page, in the step it belongs to.
+ */
+function statusLine(setup: TelegramSetupState, checking: boolean, turnOn: TurnOnState): string | undefined {
   if (setup.error) return setup.error;
   if (checking) return "Checking your key…";
+  const turningOn = turnOnLine(turnOn);
+  if (turningOn) return turningOn;
   if (setup.busy) return "Working…";
+  if (setup.sender) return saidHi(senderName(setup.sender));
+  if (setup.codeExpired) return CODE_EXPIRED;
+  if (setup.code) return WAITING_FOR_HI;
   return setup.bot ? keyWorks(setup.bot.username) : undefined;
 }
 
 /**
  * Telegram's setup: make a bot, paste its key, say hi, turn it on. Each step checks itself and the next opens when it
- * has. The first two are here; the last two stay locked until their content arrives.
+ * has. Saying hi makes the person who does it the bot's only allowed sender; turning on finishes the setup in place.
  */
 export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
   const setup = useTelegramSetup(workspaceId);
+  const turnOn = useTurnOn(workspaceId, setup.draft?.draftId);
+  const requiredHosts = useChannelRequiredHosts(TELEGRAM_CATALOG_ID);
   const [checking, setChecking] = useState(false);
   const key = useCredentialInput(`channel:${workspaceId}:telegram:bot-key`, "", undefined, {
     label: "Telegram bot key",
@@ -136,7 +174,10 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
     active: false,
   });
   const { discard: discardKey } = key;
-  const { bot, conflict, webhookActive } = setup;
+  const { bot, conflict, draft, sender, webhookActive } = setup;
+  const ready = bot !== null && !webhookActive && !conflict;
+  const missing = useMissingHosts(requiredHosts, sender !== null);
+  const doneHref = useNewTelegramHref(turnOn.state === "done", bot?.username);
 
   // The key is stored securely once checked, so what was typed is dropped. A key that failed stays, to fix.
   useEffect(() => {
@@ -144,6 +185,20 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
   }, [bot, discardKey]);
   // Nothing typed outlives the page.
   useEffect(() => discardKey, [discardKey]);
+
+  // Step 3 opens with a code to send. It is asked for once per setup: if saving it fails, the step offers a button
+  // instead of trying again on every draw.
+  const codeAsked = useRef(false);
+  const { busy, newCode } = setup;
+  useEffect(() => {
+    if (!ready) {
+      codeAsked.current = false;
+      return;
+    }
+    if (codeAsked.current || !draft || busy) return;
+    codeAsked.current = true;
+    void newCode();
+  }, [ready, draft, busy, newCode]);
 
   const check = async () => {
     setChecking(true);
@@ -158,7 +213,24 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
     await setup.startOver();
   };
 
-  const ready = bot !== null && !webhookActive && !conflict;
+  const name = sender ? senderName(sender) : "";
+  const turnOnStep =
+    sender && bot ? (
+      <TurnOnStep
+        changes={turnOnChanges({ senderName: name, botUsername: bot.username, missingHosts: missing })}
+        turnOn={turnOn}
+        onTurnOn={() => {
+          if (draft && requiredHosts) {
+            void turnOn.turnOn({ draftId: draft.draftId, catalogId: TELEGRAM_CATALOG_ID, requiredHosts });
+          }
+        }}
+        doneHref={doneHref}
+        disabled={!requiredHosts}
+        workspaceId={workspaceId}
+        settingsHref={settingsChannelSetupHref(TELEGRAM_CATALOG_ID)}
+      />
+    ) : undefined;
+  const turnedOn = turnOn.state === "done";
   const steps: SetupStepView[] = [
     { id: "make-bot", title: "Make your bot", state: bot ? "done" : "current", children: <MakeBot /> },
     {
@@ -176,8 +248,20 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
         />
       ),
     },
-    { id: "say-hi", title: "Say hi to your bot", state: ready ? "current" : "locked" },
-    { id: "turn-on", title: "Turn it on", state: "locked" },
+    {
+      id: "say-hi",
+      title: "Say hi to your bot",
+      state: !ready ? "locked" : sender ? "done" : "current",
+      result: sender ? saidHi(name) : undefined,
+      children: bot ? <SayHiStep username={bot.username} setup={setup} /> : undefined,
+    },
+    {
+      id: "turn-on",
+      title: "Turn it on",
+      state: !sender ? "locked" : turnedOn ? "done" : "current",
+      result: turnedOn ? turnOnStep : undefined,
+      children: turnOnStep,
+    },
   ];
 
   return (
@@ -186,7 +270,7 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
       back={{ href: channelPickerHref(), label: "Back to channels" }}
       workspaceId={workspaceId}
     >
-      <SetupSteps steps={steps} status={statusLine(setup, checking)} />
+      <SetupSteps steps={steps} status={statusLine(setup, checking, turnOn)} />
       {/* The key step shows a failure beside its field while it is open. Once it is done its body is gone, and a
           failure of something else (Start over) would be heard but not seen, so it shows here instead. Never both. */}
       {ready && setup.error ? (
@@ -195,9 +279,12 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
         </Callout>
       ) : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line-subtle pt-4">
-        <Button variant="ghost" disabled={setup.busy} onClick={() => void startOver()}>
-          Start over
-        </Button>
+        {/* Nothing to start over from once the channel is on: the setup is finished. */}
+        {turnedOn ? null : (
+          <Button variant="ghost" disabled={setup.busy || turnOn.state === "working"} onClick={() => void startOver()}>
+            Start over
+          </Button>
+        )}
         <NativeOwnerLink href={settingsChannelSetupHref(TELEGRAM_CATALOG_ID)} scope={workspaceId} className="text-sm">
           More options in Settings
         </NativeOwnerLink>

@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { ChannelSetupDiscoveryResult, ChannelSetupDraft } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SAY_HI_POLL_MS, SETUP_CODE_TTL_MS } from "./setup-code";
 import { useTelegramSetup, type TelegramSetupState } from "./use-telegram-setup";
 
 const api = vi.hoisted(() => ({
@@ -101,6 +102,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   act(() => root.unmount());
   container.remove();
 });
@@ -423,5 +425,330 @@ describe("useTelegramSetup", () => {
     await mount("workspace-b");
     expect(current.draft).toBeNull();
     expect(current.bot).toBeNull();
+  });
+});
+
+describe("saying hi", () => {
+  const ADA = { actorId: "777", chatId: "777", displayName: "Ada Lovelace", username: "ada" };
+  const CODE = /^[A-HJ-NP-Za-km-z2-9]{10}$/;
+  /** What the draft holds once the key is checked: version 3, with the bot named. */
+  const CHECKED_DRAFT = { label: "kept", botUsername: "MyGoatBot", receiveMode: "poll" };
+
+  /** The key is checked (draft version 3), then time is the test's to move. */
+  async function afterKeyCheck() {
+    arrangeCheck();
+    await mount();
+    await run(() => current.checkKey(TOKEN));
+    api.updateChannelSetupDraft.mockClear();
+    api.discoverTelegramSetupTargets.mockClear();
+    vi.useFakeTimers();
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it("saves a fresh code and listens every 4 seconds", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+
+    const code = current.code!;
+    expect(code).toMatch(CODE);
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledWith("draft-1", {
+      expectedRevision: 3,
+      draft: { ...CHECKED_DRAFT, setupCode: code },
+    });
+    expect(current.draft?.revision).toBe(4);
+    expect(current).toMatchObject({ sender: null, codeExpired: false, manyWaiting: false, busy: false });
+    expect(current.error).toBeUndefined();
+
+    // Nothing is asked of Telegram until the first 4 seconds are up, then once every 4.
+    expect(api.discoverTelegramSetupTargets).not.toHaveBeenCalled();
+    await advance(SAY_HI_POLL_MS - 1);
+    expect(api.discoverTelegramSetupTargets).not.toHaveBeenCalled();
+    await advance(1);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(1);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenLastCalledWith({
+      source: "draft",
+      draftId: "draft-1",
+      expectedRevision: 4,
+      setupCode: code,
+    });
+    await advance(SAY_HI_POLL_MS);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(2);
+    // Listening is not work the page waits on: its other buttons stay usable.
+    expect(current.busy).toBe(false);
+  });
+
+  it("stops listening once someone says hi and makes them the allowed sender and owner", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    const code = current.code!;
+    api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ codeSender: ADA }));
+    await advance(SAY_HI_POLL_MS);
+
+    // One draft write for the match, on top of the one that saved the code, carrying the version that write returned.
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+    expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith("draft-1", {
+      expectedRevision: 4,
+      draft: {
+        ...CHECKED_DRAFT,
+        setupCode: code,
+        allowedSenders: ["777"],
+        ownerActorIds: ["777"],
+        inboundAccessMode: "allowlist",
+        targets: [
+          {
+            id: "telegram:777",
+            label: "Ada Lovelace",
+            chatId: "777",
+            kind: "private",
+            source: "recent_update",
+            setupCodeMatched: true,
+            default: true,
+          },
+        ],
+      },
+    });
+    expect(current.sender).toEqual(ADA);
+    expect(current.draft?.revision).toBe(5);
+    expect(current.error).toBeUndefined();
+
+    const asked = api.discoverTelegramSetupTargets.mock.calls.length;
+    await advance(SETUP_CODE_TTL_MS);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(asked);
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+    // They said hi in time: the code did not expire.
+    expect(current.codeExpired).toBe(false);
+  });
+
+  it("stops after 10 minutes and offers a new code", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    const first = current.code!;
+
+    await advance(SETUP_CODE_TTL_MS);
+    expect(current.codeExpired).toBe(true);
+    expect(current.sender).toBeNull();
+    const asked = api.discoverTelegramSetupTargets.mock.calls.length;
+    expect(asked).toBeGreaterThan(0);
+    await advance(SETUP_CODE_TTL_MS);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(asked);
+
+    await run(() => current.newCode());
+    expect(current.codeExpired).toBe(false);
+    expect(current.code).toMatch(CODE);
+    expect(current.code).not.toBe(first);
+    expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith("draft-1", {
+      expectedRevision: 4,
+      draft: { ...CHECKED_DRAFT, setupCode: current.code },
+    });
+    await advance(SAY_HI_POLL_MS);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(asked + 1);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenLastCalledWith(
+      expect.objectContaining({ setupCode: current.code, expectedRevision: 5 }),
+    );
+  });
+
+  it("stops when the page closes, and ignores a reply that comes after", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    let reply!: (result: ChannelSetupDiscoveryResult) => void;
+    api.discoverTelegramSetupTargets.mockReturnValue(new Promise((resolve) => (reply = resolve)));
+    await advance(SAY_HI_POLL_MS);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(1);
+
+    act(() => root.unmount());
+    // The interval and the expiry are both gone.
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(SETUP_CODE_TTL_MS);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      reply(discovery({ codeSender: ADA }));
+    });
+    // Only the write that saved the code: nothing was written for someone who said hi to a page that is gone.
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start listening for a code that was saved after the page closed", async () => {
+    await afterKeyCheck();
+    let save!: (value: ChannelSetupDraft) => void;
+    api.updateChannelSetupDraft.mockReturnValueOnce(new Promise((resolve) => (save = resolve)));
+    let started!: Promise<void>;
+    await act(async () => {
+      started = current.newCode();
+      await Promise.resolve();
+    });
+    act(() => root.unmount());
+    await act(async () => {
+      save(draft({ revision: 4, draft: CHECKED_DRAFT, secretState: KEY_STORED }));
+      await started;
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(SAY_HI_POLL_MS * 3);
+    expect(api.discoverTelegramSetupTargets).not.toHaveBeenCalled();
+  });
+
+  it("notes a full page of waiting messages", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    expect(current.manyWaiting).toBe(false);
+
+    api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ updatesTruncated: true }));
+    await advance(SAY_HI_POLL_MS);
+    expect(current.manyWaiting).toBe(true);
+    expect(current.sender).toBeNull();
+
+    api.discoverTelegramSetupTargets.mockResolvedValue(discovery());
+    await advance(SAY_HI_POLL_MS);
+    expect(current.manyWaiting).toBe(false);
+  });
+
+  it("does not ask again while the last question is still out", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    api.discoverTelegramSetupTargets.mockReturnValue(new Promise(() => undefined));
+    await advance(SAY_HI_POLL_MS * 5);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps listening when a question fails, and says nothing about it", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    api.discoverTelegramSetupTargets.mockRejectedValueOnce(new Error("offline"));
+    await advance(SAY_HI_POLL_MS);
+    expect(current.error).toBeUndefined();
+    await advance(SAY_HI_POLL_MS);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a reply to the old code once a new code has been made", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    let reply!: (result: ChannelSetupDiscoveryResult) => void;
+    api.discoverTelegramSetupTargets.mockReturnValue(new Promise((resolve) => (reply = resolve)));
+    await advance(SAY_HI_POLL_MS);
+
+    await run(() => current.newCode());
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      reply(discovery({ codeSender: ADA }));
+    });
+    expect(current.sender).toBeNull();
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps listening, and says why, when who said hi cannot be saved; then saves it on the next try", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    const withCode = { ...CHECKED_DRAFT, setupCode: current.code };
+    api.updateChannelSetupDraft.mockRejectedValueOnce(new Error("This changed somewhere else."));
+    // The first write may have moved the draft on before the reply was lost: it is at version 6 now.
+    api.fetchChannelSetupDraft.mockResolvedValue(draft({ revision: 6, draft: withCode, secretState: KEY_STORED }));
+    api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ codeSender: ADA }));
+    await advance(SAY_HI_POLL_MS);
+
+    expect(current.sender).toBeNull();
+    expect(current.error).toBe("This changed somewhere else.");
+    // The draft is read again, so the next try carries the version it has now.
+    expect(api.fetchChannelSetupDraft).toHaveBeenCalledWith("draft-1");
+
+    await advance(SAY_HI_POLL_MS);
+    expect(current.sender).toEqual(ADA);
+    expect(current.error).toBeUndefined();
+    expect(current.draft?.draft).toMatchObject({ ...withCode, allowedSenders: ["777"], ownerActorIds: ["777"] });
+    // The second try carried the version the draft was read at, for the questions and the write alike.
+    expect(api.discoverTelegramSetupTargets).toHaveBeenLastCalledWith(expect.objectContaining({ expectedRevision: 6 }));
+    expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith(
+      "draft-1",
+      expect.objectContaining({ expectedRevision: 6 }),
+    );
+  });
+
+  it("says why a code could not be saved, and does not listen for it", async () => {
+    await afterKeyCheck();
+    api.updateChannelSetupDraft.mockRejectedValueOnce(new Error("This changed somewhere else."));
+    api.fetchChannelSetupDraft.mockResolvedValue(draft({ revision: 3, draft: CHECKED_DRAFT, secretState: KEY_STORED }));
+    await run(() => current.newCode());
+
+    expect(current.error).toBe("This changed somewhere else.");
+    expect(current.code).toBeNull();
+    expect(current.busy).toBe(false);
+    await advance(SAY_HI_POLL_MS * 3);
+    expect(api.discoverTelegramSetupTargets).not.toHaveBeenCalled();
+
+    // Trying again works, and clears the message.
+    await run(() => current.newCode());
+    expect(current.error).toBeUndefined();
+    expect(current.code).toMatch(CODE);
+  });
+
+  it("makes no code before the key has worked", async () => {
+    await mount();
+    await run(() => current.newCode());
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+    expect(current.code).toBeNull();
+  });
+
+  it("ignores a second request for a code while the first is being saved", async () => {
+    await afterKeyCheck();
+    let save!: (value: ChannelSetupDraft) => void;
+    api.updateChannelSetupDraft.mockReturnValueOnce(new Promise((resolve) => (save = resolve)));
+    let first!: Promise<void>;
+    await act(async () => {
+      first = current.newCode();
+      await Promise.resolve();
+    });
+    expect(current.busy).toBe(true);
+    await run(() => current.newCode());
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      save(draft({ revision: 4, draft: CHECKED_DRAFT, secretState: KEY_STORED }));
+      await first;
+    });
+    expect(current.code).toMatch(CODE);
+  });
+
+  it("stops listening and forgets the code when the operator starts over", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    await run(() => current.startOver());
+    expect(api.discardChannelSetupDraft).toHaveBeenCalledWith("draft-1", 4);
+    expect(current).toMatchObject({ draft: null, bot: null, code: null, sender: null, codeExpired: false });
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(SAY_HI_POLL_MS * 3);
+    expect(api.discoverTelegramSetupTargets).not.toHaveBeenCalled();
+  });
+
+  it("keeps listening when Start over fails", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    api.discardChannelSetupDraft.mockRejectedValue(new Error("This changed somewhere else."));
+    await run(() => current.startOver());
+    expect(current.error).toBe("This changed somewhere else.");
+    await advance(SAY_HI_POLL_MS);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops listening and forgets the code when the key is checked again", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    await run(() => current.checkKey("654321:OTHER"));
+    expect(current.code).toBeNull();
+    expect(current.sender).toBeNull();
+    const asked = api.discoverTelegramSetupTargets.mock.calls.length;
+    await advance(SAY_HI_POLL_MS * 3);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(asked);
+  });
+
+  it("never sends the key along with the code", async () => {
+    await afterKeyCheck();
+    await run(() => current.newCode());
+    expect(JSON.stringify(api.updateChannelSetupDraft.mock.calls)).not.toContain("SECRET-TOKEN");
+    expect(JSON.stringify(api.discoverTelegramSetupTargets.mock.calls)).not.toContain("SECRET-TOKEN");
   });
 });
