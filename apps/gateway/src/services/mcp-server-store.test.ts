@@ -430,7 +430,9 @@ it.skipIf(!process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim())(
         b.writeAuthState({ server: authCommitted, expected: publishedAuth, next: authState("oauth-fixture") }),
       ).rejects.toThrow(/configuration changed/);
       let releaseCleanup!: () => void;
-      const cleanupGate = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+      const cleanupGate = new Promise<void>((resolve) => {
+        releaseCleanup = resolve;
+      });
       const interruptedDelete = vi.fn(async () => {
         await cleanupGate;
         throw new Error("PostgreSQL retirement delete acknowledgement fixture");
@@ -438,9 +440,12 @@ it.skipIf(!process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim())(
       const cleanup = a.reconcileCredentialRetirements(interruptedDelete, 1);
       try {
         await vi.waitFor(() => expect(interruptedDelete).toHaveBeenCalledOnce());
-        await expect(b.writeAuthState({ server: environmentCommitted, expected: undefined, next: publishedAuth }))
-          .rejects.toThrow("retired");
-      } finally { releaseCleanup(); }
+        await expect(
+          b.writeAuthState({ server: environmentCommitted, expected: undefined, next: publishedAuth }),
+        ).rejects.toThrow("retired");
+      } finally {
+        releaseCleanup();
+      }
       expect(await cleanup).toMatchObject({ deleted: 0, failed: 1, remaining: 2 });
       await clients.pop()!.close();
       await clients.pop()!.close();
@@ -453,12 +458,19 @@ it.skipIf(!process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim())(
       expect((await reopenedStore.readAuthState())["oauth-fixture"]).toBeUndefined();
       expect(await reopenedStore.readEnvironmentBinding("oauth-fixture")).toEqual(environmentBinding);
       const retiredAccounts: string[] = [];
-      expect(await reopenedStore.reconcileCredentialRetirements((account) => { retiredAccounts.push(account); }))
-        .toMatchObject({ deleted: 2, failed: 0, remaining: 0 });
-      expect(retiredAccounts.sort()).toEqual([publishedAuth!.accessTokenRef!, publishedAuth!.refreshTokenRef!]
-        .map((ref) => ref.slice("keychain:goatcitadel:".length)).sort());
-      await expect(reopenedStore.writeAuthState({ server: environmentCommitted, expected: undefined, next: publishedAuth }))
-        .rejects.toThrow("retired");
+      expect(
+        await reopenedStore.reconcileCredentialRetirements((account) => {
+          retiredAccounts.push(account);
+        }),
+      ).toMatchObject({ deleted: 2, failed: 0, remaining: 0 });
+      expect(retiredAccounts.sort()).toEqual(
+        [publishedAuth!.accessTokenRef!, publishedAuth!.refreshTokenRef!]
+          .map((ref) => ref.slice("keychain:goatcitadel:".length))
+          .sort(),
+      );
+      await expect(
+        reopenedStore.writeAuthState({ server: environmentCommitted, expected: undefined, next: publishedAuth }),
+      ).rejects.toThrow("retired");
       expect(await reopenedStore.readEnvironmentBinding("oauth-fixture")).toEqual(environmentBinding);
     } finally {
       closeResults = await Promise.allSettled(clients.map((client) => client.close()));
