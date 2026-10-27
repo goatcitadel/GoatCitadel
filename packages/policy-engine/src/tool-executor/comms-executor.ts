@@ -67,7 +67,12 @@ interface ApprovalActionSecretRuntime {
   isApprovalActionConnectorReady?: (connectionId: string) => Promise<boolean>;
   beforeExternalSideEffect?: () => void | Promise<void>;
   resolveGoogleWorkspaceAccessToken?: (input: { connectionId: string; toolName: string }) => Promise<string>;
+  /** Reads the key a channel connection saved in secure storage; undefined when nothing is stored for it. */
+  resolveChannelConnectionSecret?: (secretRef: string) => string | undefined;
 }
+
+/** Where the secure-storage references of a channel connection start; the connection id and a colon follow. */
+const CHANNEL_CONNECTION_SECRET_REF_PREFIX = "keychain:goatcitadel:channel-connection:";
 
 export async function executeCommsTool(
   request: ToolInvokeRequest,
@@ -154,10 +159,12 @@ async function executeCommsToolWithBoundaryTracking(
     const googleAccessToken = isGoogleWorkspaceWriteTool(toolName)
       ? await resolveGoogleWorkspaceToken(approvalActionSecrets, connectionId, toolName)
       : undefined;
+    // Held only for this provider call; the stored connection and everything recorded below keep the references.
+    const providerConfig = resolveSavedChannelSecrets(connection, connectionConfig, approvalActionSecrets);
     providerMessageId = await executeCommsProviderTool(
       toolName,
       connection.key,
-      connectionConfig,
+      providerConfig,
       providerRequest.args,
       config.sandbox.networkAllowlist,
       grantAllowlist,
@@ -366,6 +373,32 @@ async function resolveGoogleWorkspaceToken(
     throw new Error(`blocked: Google sign-in returned no access token for ${toolName}.`);
   }
   return token;
+}
+
+/**
+ * Copies the connection config with each of this connection's secure-storage references swapped for the stored
+ * key. Setup saves every secret field as a top-level reference, so only top-level strings are read. A reference
+ * to another connection, one nobody can read and a missing reader all fail the send before any request: reference
+ * text is never a credential, and no part of it is sent.
+ */
+function resolveSavedChannelSecrets(
+  connection: { connectionId: string; key: string; label?: string },
+  config: Record<string, unknown>,
+  runtime: ApprovalActionSecretRuntime,
+): Record<string, unknown> {
+  const ownPrefix = `${CHANNEL_CONNECTION_SECRET_REF_PREFIX}${connection.connectionId}:`;
+  const resolveValue = (value: unknown): unknown => {
+    const reference = typeof value === "string" ? value.trim() : "";
+    if (!reference.startsWith(CHANNEL_CONNECTION_SECRET_REF_PREFIX)) return value;
+    const secret = reference.startsWith(ownPrefix) ? runtime.resolveChannelConnectionSecret?.(reference)?.trim() : "";
+    if (!secret) {
+      throw new Error(
+        `The saved ${asString(connection.label) ?? connection.key} credential is unavailable from secure storage.`,
+      );
+    }
+    return secret;
+  };
+  return Object.fromEntries(Object.entries(config).map(([field, value]) => [field, resolveValue(value)]));
 }
 
 function classifyChannelDeliveryFailure(message: string): ChannelDeliveryStatus {

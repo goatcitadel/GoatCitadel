@@ -1475,6 +1475,8 @@ export class GatewayService {
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
       isApprovalActionConnectorReady: (connectionId) =>
         isTelegramApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
+      // A real send reads the key the connection saved at setup, the way the setup test does.
+      resolveChannelConnectionSecret: (ref) => this.resolveConnectionSecret({ ref }, "ref", "refEnv"),
       resolveGoogleWorkspaceAccessToken: (input) => this.googleWorkspaceOAuth.resolveToolAccessToken(input),
       acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
       prepareEmbeddingUsageDispatch: (input) => this.llmService.prepareScopedModelUsageDispatch(input),
