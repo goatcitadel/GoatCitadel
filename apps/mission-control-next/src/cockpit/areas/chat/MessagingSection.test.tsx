@@ -185,11 +185,11 @@ describe("MessagingSection", () => {
   it("offers to add a channel when there are none", async () => {
     await mount(overviewOf([]));
     expect(container.textContent).toContain("No channels yet");
-    const links = [...container.querySelectorAll<HTMLAnchorElement>('a[href^="/settings/connections"]')];
-    // The heading's Add link and the empty state's link go to the same place.
+    const links = [...container.querySelectorAll<HTMLAnchorElement>('a[href^="/chat/messaging/add"]')];
+    // The heading's Add link and the empty state's link go to the same place: the channel picker.
     expect(links).toHaveLength(2);
     for (const link of links) {
-      expect(link.getAttribute("href")).toMatch(/#channels$/);
+      expect(new URL(link.getAttribute("href")!, "http://cockpit.invalid").pathname).toBe("/chat/messaging/add");
       expect(link.getAttribute("aria-label")).toBe("Add a channel");
       expect(link.textContent).toContain("Add");
       expect(link.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
@@ -210,7 +210,7 @@ describe("MessagingSection", () => {
     });
     expect(container.textContent).toContain("Couldn't load your channels");
     expect(container.textContent).not.toContain("No channels yet");
-    expect(container.querySelector('a[href^="/settings/connections"]')).not.toBeNull();
+    expect(container.querySelector('a[href^="/chat/messaging/add"]')).not.toBeNull();
     api.fetchChatMessaging.mockResolvedValue(overviewOf([channel()]));
     await act(async () => button("Try again").click());
     await act(async () => {

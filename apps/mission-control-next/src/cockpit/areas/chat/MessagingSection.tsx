@@ -2,12 +2,13 @@ import { Plus } from "lucide-react";
 import type { ChatMessagingChannel, ChatMessagingConversation } from "@goatcitadel/contracts";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { presentChannelStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { channelPickerHref } from "../../app/routes";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
 import { useMessagingOverview } from "./use-messaging-overview";
 
-const ADD_CHANNEL_HREF = "/settings/connections#channels";
+const ADD_CHANNEL_HREF = channelPickerHref();
 const MAX_VISIBLE_COUNT = 99;
 /** Rows are 44px targets in the phone sheet and compact in the desktop rail, which shows from the md breakpoint. */
 const ROW_TARGET = "min-h-11 md:min-h-0";

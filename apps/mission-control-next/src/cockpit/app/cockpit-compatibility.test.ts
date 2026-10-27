@@ -32,6 +32,35 @@ describe("Cockpit compatibility coverage", () => {
     expect(isChannelPageLocation("/chat/projects/p-1")).toBe(false);
   });
   it.each([
+    "/chat/messaging/add",
+    "/chat/messaging/add/telegram",
+    "/chat/messaging/0b9f2c1e-3d4a-4e5f-8a6b-7c8d9e0f1a2b/key",
+    "/chat/messaging/add?workspaceId=w&extra=keep#top",
+  ])("opens the add-channel and key-change views natively: %s", (href) => {
+    expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
+  });
+  it("treats every Messaging view as a page that is not a conversation", () => {
+    for (const href of [
+      "/chat/messaging/conn-1",
+      "/chat/messaging/add",
+      "/chat/messaging/add/telegram?workspaceId=w",
+      "/chat/messaging/conn-1/key",
+    ]) {
+      expect(isChannelPageLocation(href), href).toBe(true);
+      expect(isCockpitConversationLocation(href), href).toBe(false);
+    }
+    expect(isChannelPageLocation("/chat/messaging/a/b")).toBe(false);
+    expect(isChannelPageLocation("/chat/messaging/add/Tele%20gram")).toBe(false);
+  });
+  it.each([
+    "/chat/messaging/add/Tele%20gram",
+    "/chat/messaging/add/telegram/x",
+    "/chat/messaging/conn-1/key/x",
+    "/chat/messaging/conn-1/other",
+  ])("keeps %s unavailable", (input) => {
+    expect(resolveCockpitCompatibility(input)).toEqual({ kind: "missing" });
+  });
+  it.each([
     "/chat/messaging",
     "/chat/messaging/",
     "/chat/messaging/a/b",
