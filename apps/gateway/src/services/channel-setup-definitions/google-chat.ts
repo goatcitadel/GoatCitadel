@@ -49,6 +49,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "overview",
           kind: "intro",
+          createOnly: true,
           title: "What this connection does",
           body: [
             paragraph(
@@ -66,6 +67,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "create-webhook",
           kind: "instruction",
+          createOnly: true,
           title: "Choose webhook or Chat app mode",
           body: [
             paragraph(

@@ -29,6 +29,7 @@ export function createZaloDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "overview",
           kind: "intro",
+          createOnly: true,
           title: "What this connection does",
           body: [
             paragraph(

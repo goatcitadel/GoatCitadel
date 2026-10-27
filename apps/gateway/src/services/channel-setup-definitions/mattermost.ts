@@ -36,6 +36,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "overview",
           kind: "intro",
+          createOnly: true,
           title: "What this connection does",
           body: [
             paragraph("GoatCitadel uses Mattermost bot-token auth for outbound sends, replies, reactions, and unsend."),
