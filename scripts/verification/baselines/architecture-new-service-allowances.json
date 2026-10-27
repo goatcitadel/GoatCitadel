@@ -2632,6 +2632,14 @@
       "maxDependencyMemberAccesses": 19,
       "reason": "Reviewed new owner for native Google Workspace sign-in (operator clarification 2026-10-25): Google's installed-app OAuth (authorization code, PKCE S256, loopback redirect), refresh, revocation and per-capability scope gating for the Gmail and Calendar tools. It reads only its own options bag (secret store, integration connections, the in-memory PKCE store and the ledgered Google OAuth client) and keeps tokens and the client secret in the OS keychain, out of GatewayService and connection config. Its route, diagnostics and action-host wiring was consolidated into the existing owners within their original limits.",
       "evidence": "2026-10-25: google-workspace-oauth-service.test.ts covers the PKCE challenge and verifier, single-use state, ledger rows without codes or tokens, granted-scope gating, single-flight refresh, invalid_grant renewal and revocation; repository counters measure 0 host callbacks and 19 dependency accesses (4 keychain, 2 connection, 4 PKCE store and 4 Google client calls, the rest constructor reads of its options)."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/mcp-approval-relief.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3,
+      "reason": "Reviewed new owner for the per-connector approval setting (Capabilities hub PR 1b, #601, operator clarification 2026-10-26): the only place that mints an MCP approval relief, decided from server-owned state alone. It reads one narrow port (the deployment profile, the saved server record and the stored tool inventory), once per member, so it cannot be consolidated further; keeping it separate keeps relief minting out of GatewayService and the tool-invocation coordinator, which call it.",
+      "evidence": "2026-10-26: mcp-approval-relief.test.ts covers every setting against tool labels, money-moving caps, remote_hardened, A2A peers, requester-scoped, disabled and quarantined servers and unlabelled or disagreeing duplicates; mcp-approval-relief-mint-guard.test.ts fails if anything else mints a relief; repository counters measure 0 host callbacks and 3 dependency accesses (getDeploymentProfile, requireMcpServer and listMcpTools, one each)."
     }
   ]
 }
