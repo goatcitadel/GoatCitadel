@@ -283,8 +283,17 @@ export function inboundWebhookPath(
   if (condition && wizardValuesWithDefaults(definition, values)[condition.fieldKey] !== condition.value) {
     return undefined;
   }
-  const encodedId = encodeURIComponent(connectionId);
-  return inbound.pathTemplate.replaceAll("{connectionId}", () => encodedId);
+  const encodedId = encodePathSegment(connectionId);
+  return encodedId === undefined ? undefined : inbound.pathTemplate.replaceAll("{connectionId}", () => encodedId);
+}
+
+/** `encodeURIComponent` throws on a lone surrogate; an id that can't be encoded names no path. */
+function encodePathSegment(value: string): string | undefined {
+  try {
+    return encodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ChannelTargetRow extends Record<string, unknown> {

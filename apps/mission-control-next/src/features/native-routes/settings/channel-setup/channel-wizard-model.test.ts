@@ -92,6 +92,14 @@ describe("channelHosts", () => {
     expect(channelHosts(definition, draft(), { baseUrl: "http://127.0.0.1:8080" })).toEqual(["127.0.0.1"]);
   });
 
+  it("names no host for a port-only address without a scheme, and does not throw", () => {
+    const definition = def({ hostFields: ["baseUrl"] });
+    for (const baseUrl of ["127.0.0.1:8080", "localhost:8080"]) {
+      expect(() => channelHosts(definition, draft(), { baseUrl })).not.toThrow();
+      expect(channelHosts(definition, draft(), { baseUrl })).toEqual([]);
+    }
+  });
+
   it("adds a conditional host only when its field equals the value given", () => {
     const definition = def({
       conditionalHosts: [{ host: "sandbox.api.sgroup.qq.com", whenAnyFieldSet: ["sandbox"], equals: true }],
@@ -231,6 +239,15 @@ describe("inboundWebhookPath", () => {
     });
     expect(inboundWebhookPath(withDefault, {}, "abc")).toBe("/hooks/abc");
     expect(inboundWebhookPath(withDefault, { receiveMode: "poll" }, "abc")).toBeUndefined();
+  });
+
+  it("gives no path, and does not throw, for an id that can't be encoded", () => {
+    const always = def({ inboundWebhook: { pathTemplate: "/hooks/{connectionId}" } });
+    for (const id of ["\uD800", "a\uDC00b", "ok\uD83D"]) {
+      expect(() => inboundWebhookPath(always, {}, id)).not.toThrow();
+      expect(inboundWebhookPath(always, {}, id)).toBeUndefined();
+    }
+    expect(inboundWebhookPath(always, {}, "😀")).toBe("/hooks/%F0%9F%98%80");
   });
 
   it("escapes every occurrence of the id placeholder", () => {
