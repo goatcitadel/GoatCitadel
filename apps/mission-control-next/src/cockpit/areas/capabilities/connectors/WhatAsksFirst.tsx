@@ -35,7 +35,8 @@ const CHOICES: readonly Choice[] = [
 
 const BOUNDARY_LINE =
   "This goes by how the app labels its own tools. Deny rules, wards, risky requests and quarantine still apply, and it applies whichever approval profile Chat uses.";
-const REMOTE_LINE = "This install is set up for remote access, so every action asks you first.";
+/** Said wherever a connector's approval setting could be chosen on an install that never lets a call run on its own. */
+export const REMOTE_LINE = "This install is set up for remote access, so every action asks you first.";
 const MONEY_LINE = "This connector can move money, so changes always ask you first.";
 const PER_CHAT_LINE = "This connector's tools are listed per chat, so every action asks you first.";
 const NO_BINDING_LINE = "This server's saved version isn't available, so it can't be changed here.";

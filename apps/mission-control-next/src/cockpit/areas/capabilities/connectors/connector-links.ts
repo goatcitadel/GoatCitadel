@@ -30,6 +30,22 @@ export function connectorSettingsHref(item: CapabilityConnectorItem): string {
   }
 }
 
+const TEMPLATE_ID_PREFIX = "mcp-template:";
+
+/**
+ * The saved server installed from the template a connector id names ("mcp-template:<templateId>"), when the list
+ * holds one. Once a template is installed the list shows the saved server in its place, so a panel or an address that
+ * still names the template opens the saved server.
+ */
+export function savedConnectorForTemplate(
+  items: readonly CapabilityConnectorItem[] | undefined,
+  id: string,
+): CapabilityConnectorItem | undefined {
+  if (!id.startsWith(TEMPLATE_ID_PREFIX)) return undefined;
+  const templateId = id.slice(TEMPLATE_ID_PREFIX.length);
+  return items?.find((entry) => entry.source === "mcp_server" && entry.templateId === templateId);
+}
+
 /** The address that opens one connector's panel. */
 export function connectorItemHref(id: string): string {
   return `${CONNECTORS_HREF}?item=${encodeURIComponent(id)}`;

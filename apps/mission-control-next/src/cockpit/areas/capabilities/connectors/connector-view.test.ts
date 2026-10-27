@@ -6,6 +6,7 @@ import type {
   CapabilityConnectorState,
 } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
+import type { ConnectorInstallState } from "./connector-install-store";
 import {
   approvalPostureInEffect,
   connectorAction,
@@ -19,6 +20,7 @@ import {
   LETTER_ICON_TONE_COUNT,
   letterIconTone,
   presentConnectorState,
+  withInstallProgress,
 } from "./connector-view";
 
 function item(overrides: Partial<CapabilityConnectorItem> = {}): CapabilityConnectorItem {
@@ -298,7 +300,7 @@ describe("describeConnection", () => {
     ).toEqual({
       lines: ["Runs on this computer"],
       command: "npx -y context7-mcp@1.2.3",
-      warning: "This program's own internet access isn't limited by GoatCitadel's allowed sites.",
+      warning: "This program's own internet access isn't limited by your network allowlist.",
     });
   });
 
@@ -312,7 +314,7 @@ describe("describeConnection", () => {
   it("still warns about the network when the command is missing", () => {
     const shown = describeConnection(item({ runsOnThisDevice: true }));
     expect(shown.command).toBeUndefined();
-    expect(shown.warning).toContain("isn't limited by GoatCitadel's allowed sites");
+    expect(shown.warning).toContain("isn't limited by your network allowlist");
   });
 
   it.each<[CapabilityConnectorState, CapabilityConnectorReason]>([
@@ -389,17 +391,108 @@ describe("connectorSearchSuggestion", () => {
   });
 });
 
+describe("withInstallProgress", () => {
+  const saved = item({
+    id: "mcp-server:srv-1",
+    source: "mcp_server",
+    serverId: "srv-1",
+    state: "broken",
+    reason: "error",
+  });
+
+  it("says a row waits on you in Inbox, in the waiting tone", () => {
+    const flow = { phase: "waiting_inbox", approvalId: "a-1", planId: "p-1" } as const;
+    expect(withInstallProgress(item(), presentConnectorState(item()), flow)).toEqual({
+      label: "Available",
+      tone: "waiting",
+      reason: "Waiting on you in Inbox",
+    });
+    // A saved row the install already made waits on the same approval.
+    expect(withInstallProgress(saved, presentConnectorState(saved), flow).reason).toBe("Waiting on you in Inbox");
+  });
+
+  // M6: signing in waits on the operator, like an Inbox approval (R87), so the row says so in the waiting tone.
+  it("says a row waits on you to sign in, in the waiting tone", () => {
+    const flow = {
+      phase: "signing_in",
+      authorizeUrl: "https://a.test",
+      signInHost: "a.test",
+      scopes: "read",
+      startedAt: 1,
+    } as const;
+    expect(withInstallProgress(item(), presentConnectorState(item()), flow)).toEqual({
+      label: "Available",
+      tone: "waiting",
+      reason: "Waiting on you to sign in",
+    });
+    expect(withInstallProgress(saved, presentConnectorState(saved), flow)).toEqual({
+      ...presentConnectorState(saved),
+      tone: "waiting",
+      reason: "Waiting on you to sign in",
+    });
+  });
+
+  it.each([
+    { phase: "working", step: "plan" },
+    { phase: "working", step: "connect" },
+  ] as const)("says a template row is installing while its flow is %j", (flow) => {
+    expect(withInstallProgress(item(), presentConnectorState(item()), flow)).toEqual({
+      label: "Available",
+      tone: "running",
+      reason: "Installing",
+    });
+  });
+
+  it("says a saved server is connecting, since its flow may be a sign-in or a connect", () => {
+    const base = presentConnectorState(saved);
+    expect(withInstallProgress(saved, base, { phase: "working", step: "sign_in" })).toEqual({
+      ...base,
+      tone: "running",
+      reason: "Connecting",
+    });
+  });
+
+  it.each<ConnectorInstallState>([
+    { phase: "idle" },
+    { phase: "done", serverId: "srv-1" },
+    { phase: "failed", step: "connect", message: "Couldn't connect.", changed: [] },
+    { phase: "stopped", message: "Stopped.", changed: [] },
+  ])("leaves the row's own state alone when its flow is %j", (flow) => {
+    const base = presentConnectorState(saved);
+    expect(withInstallProgress(saved, base, flow)).toBe(base);
+  });
+});
+
 describe("connectorAction", () => {
   it.each<[CapabilityConnectorState, CapabilityConnectorReason, string, string]>([
-    ["available", "not_installed", "set_up", "Set up"],
+    ["available", "not_installed", "install", "Install"],
     ["available", "needs_api_key", "set_up", "Set up"],
-    ["needs_sign_in", "sign_in_needed", "set_up", "Set up"],
+    ["available", "missing_sign_in_setup", "set_up", "Set up"],
+    ["needs_sign_in", "sign_in_needed", "connect", "Connect"],
     ["broken", "error", "try_again", "Try again"],
     ["sign_in_expired", "sign_in_expired", "reconnect", "Reconnect"],
     ["turned_off", "turned_off", "turn_back_on", "Turn back on"],
     ["connected", "ready", "manage", "Manage"],
   ])("offers an action for %s (%s): %s", (state, reason, kind, label) => {
     expect(connectorAction(item({ state, reason }))).toEqual({ kind, label });
+  });
+
+  it.each<[string, Partial<CapabilityConnectorItem>]>([
+    ["a service from the catalog", { id: "integration:automation.notion", source: "integration", kind: "built_in" }],
+    ["a web search key", { id: "web-search:search.brave", source: "web_search", reason: "needs_api_key" }],
+  ])("keeps Set up for %s that has no install", (_label, overrides) => {
+    expect(connectorAction(item({ reason: "not_installed", ...overrides }))).toEqual({
+      kind: "set_up",
+      label: "Set up",
+    });
+  });
+
+  it("asks a saved server that still needs its sign-in to connect", () => {
+    const saved = item({ id: "mcp-server:linear", source: "mcp_server", serverId: "linear" });
+    expect(connectorAction({ ...saved, state: "needs_sign_in", reason: "sign_in_needed" })).toEqual({
+      kind: "connect",
+      label: "Connect",
+    });
   });
 });
 

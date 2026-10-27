@@ -397,6 +397,21 @@ describe("buildCapabilityConnectors", () => {
     expect(item.command).toBe("npx -y @upstash/context7-mcp@1.2.3");
   });
 
+  it("carries a template's risk notes, and none when it has none", () => {
+    const [plain, payments] = buildCapabilityConnectors(
+      input({
+        templates: [
+          template({ riskNotes: [] }),
+          template({ templateId: "stripe", label: "Stripe", riskNotes: ["Can create charges and refunds."] }),
+        ],
+      }),
+    );
+
+    expect(plain?.templateId).toBe("linear");
+    expect(plain).not.toHaveProperty("riskNotes");
+    expect(payments?.riskNotes).toEqual(["Can create charges and refunds."]);
+  });
+
   it("keeps a remote template in the available group without a command", () => {
     const item = only(
       buildCapabilityConnectors(input({ templates: [template({ networkHosts: ["mcp.linear.app"] })] })),

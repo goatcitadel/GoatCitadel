@@ -6,6 +6,7 @@ import {
   connectorItemHref,
   connectorSettingsHref,
   readLinkedConnectorId,
+  savedConnectorForTemplate,
   WORKSPACE_CAPABILITIES_HREF,
 } from "./connector-links";
 
@@ -75,5 +76,20 @@ describe("connector item links", () => {
     expect(connectorIdFromSource("inbox:approval:1")).toBeNull();
     expect(connectorIdFromSource("capabilities:")).toBeNull();
     expect(connectorIdFromSource(undefined)).toBeNull();
+  });
+});
+
+describe("savedConnectorForTemplate", () => {
+  const saved = item({ id: "mcp-server:srv-1", source: "mcp_server", serverId: "srv-1", templateId: "linear" });
+  const template = item({ id: "mcp-template:linear", templateId: "linear" });
+
+  it("finds the saved server installed from the template the id names", () => {
+    expect(savedConnectorForTemplate([template, saved], "mcp-template:linear")).toBe(saved);
+  });
+
+  it("finds nothing for another template, a saved server's own id, or no list", () => {
+    expect(savedConnectorForTemplate([saved], "mcp-template:notion")).toBeUndefined();
+    expect(savedConnectorForTemplate([saved], "mcp-server:srv-1")).toBeUndefined();
+    expect(savedConnectorForTemplate(undefined, "mcp-template:linear")).toBeUndefined();
   });
 });

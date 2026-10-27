@@ -5,6 +5,7 @@ import {
   changePlanScopeForKind,
   isChangePlanKind,
   isChangePlanRequest,
+  isChangePlanResult,
   isChangePlanStatus,
 } from "./change-plan.js";
 
@@ -19,6 +20,7 @@ describe("Evolution Control Plane Change Plan contract", () => {
       "runtime_remediation",
       "capability_candidate",
       "capability_pack",
+      "connector_install",
       "improvement_candidate",
       "managed_source_registration",
       "product_source_update",
@@ -37,6 +39,7 @@ describe("Evolution Control Plane Change Plan contract", () => {
     expect(changePlanScopeForKind("runtime_remediation")).toBe("remediation");
     expect(changePlanScopeForKind("capability_candidate")).toBe("capability");
     expect(changePlanScopeForKind("capability_pack")).toBe("capability");
+    expect(changePlanScopeForKind("connector_install")).toBe("capability");
     expect(changePlanScopeForKind("improvement_candidate")).toBe("improvement");
     expect(changePlanScopeForKind("managed_source_registration")).toBe("product_source");
     expect(changePlanScopeForKind("product_source_update")).toBe("product_source");
@@ -243,6 +246,39 @@ describe("Evolution Control Plane Change Plan contract", () => {
         changeSummary: "diff --git a/a.ts b/a.ts",
         codeModeRunId: "code-run-1",
       }),
+    ).toBe(false);
+  });
+
+  // R79: the owner's own error text travels beside the plain summary, bounded, for technical details only.
+  it("accepts a bounded failure detail beside the summary", () => {
+    const result = {
+      summary: "Couldn't save Example. Trying again is safe.",
+      failureCode: "connector_install_save_failed",
+    };
+    expect(isChangePlanResult(result)).toBe(true);
+    expect(isChangePlanResult({ ...result, failureDetail: "MCP configuration changed." })).toBe(true);
+    expect(isChangePlanResult({ ...result, failureDetail: "x".repeat(300) })).toBe(true);
+
+    expect(isChangePlanResult({ ...result, failureDetail: "x".repeat(301) })).toBe(false);
+    expect(isChangePlanResult({ ...result, failureDetail: 42 })).toBe(false);
+    expect(isChangePlanResult({ ...result, failureDetail: "" })).toBe(false);
+    expect(isChangePlanResult({ ...result, failureDetail: "bad\0byte" })).toBe(false);
+    expect(isChangePlanResult({ ...result, failureMessage: "not a known field" })).toBe(false);
+  });
+
+  it("accepts a connector install only as a template id and the Chat choice", () => {
+    const install = (value: Record<string, unknown>) => isChangePlanRequest({ kind: "connector_install", ...value });
+    expect(install({ templateId: "linear", enableChatConnectors: true })).toBe(true);
+    expect(install({ templateId: "context7", enableChatConnectors: false })).toBe(true);
+
+    expect(install({ templateId: "linear" })).toBe(false);
+    expect(install({ enableChatConnectors: true })).toBe(false);
+    expect(install({ templateId: "linear", enableChatConnectors: "yes" })).toBe(false);
+    expect(install({ templateId: "C:/templates/linear", enableChatConnectors: true })).toBe(false);
+    expect(install({ templateId: "../linear", enableChatConnectors: true })).toBe(false);
+    expect(install({ templateId: "linear", enableChatConnectors: true, url: "https://example.test/mcp" })).toBe(false);
+    expect(
+      install({ templateId: "linear", enableChatConnectors: true, policy: { approvalPosture: "nothing_asks" } }),
     ).toBe(false);
   });
 });

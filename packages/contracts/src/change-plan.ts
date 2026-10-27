@@ -24,6 +24,7 @@ export const CHANGE_PLAN_KINDS = [
   "runtime_remediation",
   "capability_candidate",
   "capability_pack",
+  "connector_install",
   "improvement_candidate",
   "managed_source_registration",
   "product_source_update",
@@ -68,7 +69,8 @@ export const CHANGE_PLAN_PHASES = [
 
 export type ChangePlanPhase = (typeof CHANGE_PLAN_PHASES)[number];
 export type ChangePlanRisk = "safe" | "caution" | "danger";
-export type ChangePlanOriginSurface = "chat" | "settings" | "system";
+/** `capabilities` plans are the operator's own Capabilities installs; only a server-owned Capabilities route starts one. */
+export type ChangePlanOriginSurface = "chat" | "settings" | "system" | "capabilities";
 
 export type ChangePlanScope =
   | "current_chat"
@@ -318,6 +320,17 @@ export interface ChangePlanCapabilityPackRequest {
   readonly assetIds: readonly string[];
 }
 
+/**
+ * Installs a connector from its shipped template: allow its hosts, save it switched off with "Reading is free", and
+ * optionally let Chat use connectors. Only the operator's own Capabilities install route creates one.
+ */
+export interface ChangePlanConnectorInstallRequest {
+  readonly kind: "connector_install";
+  readonly templateId: string;
+  /** Also turn on connectors in Chat when they are off. */
+  readonly enableChatConnectors: boolean;
+}
+
 export interface ChangePlanImprovementCandidateRequest {
   readonly kind: "improvement_candidate";
   readonly candidateId: string;
@@ -347,6 +360,7 @@ export type ChangePlanRequest =
   | ChangePlanRuntimeRemediationRequest
   | ChangePlanCapabilityCandidateRequest
   | ChangePlanCapabilityPackRequest
+  | ChangePlanConnectorInstallRequest
   | ChangePlanImprovementCandidateRequest
   | ChangePlanManagedSourceRegistrationRequest
   | ChangePlanProductSourceUpdateRequest;
@@ -448,6 +462,8 @@ export interface ChangePlanResult {
   readonly evidenceRefs?: readonly string[];
   readonly rollbackRef?: string;
   readonly failureCode?: string;
+  /** The owner's own redacted error text for a failed step: for technical details only, never the plain summary. */
+  readonly failureDetail?: string;
   readonly providerProfileCheckpoint?: ProviderProfileCheckpoint;
 }
 
@@ -484,6 +500,16 @@ export interface ChangePlanRecord {
   readonly sessionId?: string;
   readonly requesterActorId?: string;
   readonly expectedTargetRevision?: number;
+}
+
+/** What a governed save or install route returns about the Change Plan it started, so a client can follow it. */
+export interface ChangePlanReceipt {
+  readonly planId: string;
+  readonly status: ChangePlanStatus;
+  readonly revision: number;
+  readonly risk: ChangePlanRisk;
+  readonly requiredAction?: ChangePlanRequiredAction;
+  readonly summary: string;
 }
 
 export interface ChangePlanCreateInput {
@@ -537,6 +563,7 @@ export function changePlanScopeForKind(kind: ChangePlanKind): ChangePlanScope {
       return "remediation";
     case "capability_candidate":
     case "capability_pack":
+    case "connector_install":
       return "capability";
     case "improvement_candidate":
       return "improvement";
@@ -655,6 +682,12 @@ export function isChangePlanRequest(value: unknown): value is ChangePlanRequest 
         value.assetIds.every(isIdentifier) &&
         new Set(value.assetIds).size === value.assetIds.length
       );
+    case "connector_install":
+      return (
+        hasOnlyKeys(value, ["kind", "templateId", "enableChatConnectors"]) &&
+        isIdentifier(value.templateId) &&
+        typeof value.enableChatConnectors === "boolean"
+      );
     case "capability_candidate":
       return (
         hasOnlyKeys(value, ["kind", "proposalId", "action", "versionId"]) &&
@@ -686,6 +719,7 @@ export function isChangePlanResult(value: unknown): value is ChangePlanResult {
       "evidenceRefs",
       "rollbackRef",
       "failureCode",
+      "failureDetail",
       "providerProfileCheckpoint",
     ])
   ) {
@@ -697,7 +731,8 @@ export function isChangePlanResult(value: unknown): value is ChangePlanResult {
     (value.evidenceRefs === undefined || isReferenceList(value.evidenceRefs)) &&
     (value.providerProfileCheckpoint === undefined || isProviderProfileCheckpoint(value.providerProfileCheckpoint)) &&
     isOptionalBoundedText(value.rollbackRef, 512) &&
-    isOptionalBoundedText(value.failureCode, 128)
+    isOptionalBoundedText(value.failureCode, 128) &&
+    isOptionalBoundedText(value.failureDetail, 300)
   );
 }
 
@@ -1072,34 +1107,3 @@ function isChatThinkingLevel(value: unknown): value is ChatThinkingLevel {
     typeof value === "string" && ["off", "minimal", "standard", "extended", "deep", "max", "ultra"].includes(value)
   );
 }
-
-/** Compatibility aliases for the original Chat-scoped vertical. */
-export const CHAT_CHANGE_PLAN_KINDS = CHANGE_PLAN_KINDS;
-export const CHAT_CHANGE_PLAN_STATUSES = CHANGE_PLAN_STATUSES;
-export type ChatChangePlanKind = ChangePlanKind;
-export type ChatChangePlanStatus = ChangePlanStatus;
-export type ChatChangePlanScope = ChangePlanScope;
-export type ChatChangePlanRequest = ChangePlanRequest;
-export type ChatChangePlanResult = ChangePlanResult;
-export type ChatChangePlanSessionModelRequest = ChangePlanSessionModelRequest;
-export type ChatChangePlanInstallationDefaultModelRequest = ChangePlanInstallationDefaultModelRequest;
-export type ChatChangePlanChannelConnectionRequest = ChangePlanChannelConnectionRequest;
-export type ChatChangePlanCapabilityCandidateRequest = ChangePlanCapabilityCandidateRequest;
-export type ChatChangePlanProductSourceUpdateRequest = ChangePlanProductSourceUpdateRequest;
-export type ChatChangePlanRecord = ChangePlanRecord & {
-  readonly sessionId: string;
-  /** The compatibility API always issued expiring plans. */
-  readonly expiresAt: string;
-};
-export interface ChatChangePlanCreateInput {
-  readonly sessionId: string;
-  readonly requesterActorId?: string;
-  readonly request: ChatChangePlanRequest;
-}
-export type ChatChangePlanConfirmInput = ChangePlanConfirmInput;
-export type ChatChangePlanCancelInput = ChangePlanCancelInput;
-export const chatChangePlanScopeForKind = changePlanScopeForKind;
-export const isChatChangePlanStatus = isChangePlanStatus;
-export const isChatChangePlanKind = isChangePlanKind;
-export const isChatChangePlanRequest = isChangePlanRequest;
-export const isChatChangePlanResult = isChangePlanResult;

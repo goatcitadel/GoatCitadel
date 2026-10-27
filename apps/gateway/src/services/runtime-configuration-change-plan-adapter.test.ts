@@ -283,7 +283,7 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
       });
     const on = await prepare(true);
     expect(on.risk).toBe("danger");
-    expect(on.title).toBe("Turn on Apply my Settings changes without an Inbox approval");
+    expect(on.title).toBe("Turn on Apply my Settings and Capabilities changes without an Inbox approval");
     expect((await prepare(false)).risk).toBe("caution");
   });
 

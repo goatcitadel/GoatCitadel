@@ -12,6 +12,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { StatusPresentation, StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import type { CategoryOption } from "../CategoryFilter";
+import { isActiveInstallState, type ConnectorInstallState } from "./connector-install-store";
 
 // Wording and ordering for the list the Gateway already built. Nothing here decides what a row is.
 
@@ -92,6 +93,9 @@ const REASON_LINES: Readonly<Record<CapabilityConnectorReason, string>> = {
 const PANEL_REASON_LINES: Readonly<Partial<Record<CapabilityConnectorReason, string>>> = {
   error: "Stopped working.",
 };
+
+/** Why a hidden row's AI can't use it, said in place of its reason. */
+const HIDDEN_REASON = "The AI can't use it in this workspace";
 
 /** Added to the panel's broken line only when Technical details is on the page and holds the error. */
 const LAST_ERROR_POINTER = " The last error is under Technical details.";
@@ -200,7 +204,7 @@ export function presentConnectorState(
   const panelLine = where === "panel" ? PANEL_REASON_LINES[item.reason] : undefined;
   const pointer = panelLine && technicalDetailsShown && item.lastError ? LAST_ERROR_POINTER : "";
   const reason = item.hiddenInWorkspace
-    ? "The AI can't use it in this workspace"
+    ? HIDDEN_REASON
     : chatBlocked
       ? "Connected · not available in Chat"
       : panelLine
@@ -209,9 +213,37 @@ export function presentConnectorState(
   return { label, tone, reason };
 }
 
+/**
+ * What a finished connect announces (M10): connected, and whether the AI can use it, as the row reads once the list
+ * catches up, so a Chat or workspace limit is never left out of a plain "Connected.".
+ */
+export function connectedAnnouncement(item: Pick<CapabilityConnectorItem, "hiddenInWorkspace" | "chat">): string {
+  if (item.hiddenInWorkspace) return `Connected. ${HIDDEN_REASON}.`;
+  if (!item.chat.available) return "Connected. Not available in Chat.";
+  return `Connected. ${REASON_LINES.ready}.`;
+}
+
+/**
+ * A row whose install flow is running says so instead of its own reason (R87), read from the flow, never moving it.
+ * A flow that waits on the operator says so in the waiting tone: "Waiting on you in Inbox" for its approval, "Waiting
+ * on you to sign in" while its sign-in page is open (M6). Any other running phase reads "Installing" on a template row
+ * and "Connecting" on a saved server, whose flow may be its own sign-in or connect rather than an install; both in the
+ * running tone, so the row never looks ready while it isn't. The badge keeps the row's own state word, and a finished,
+ * failed or stopped flow leaves the row as the list has it.
+ */
+export function withInstallProgress(
+  item: CapabilityConnectorItem,
+  state: StatusPresentation & { reason: string },
+  flow: ConnectorInstallState,
+): StatusPresentation & { reason: string } {
+  if (flow.phase === "waiting_inbox") return { ...state, tone: "waiting", reason: "Waiting on you in Inbox" };
+  if (flow.phase === "signing_in") return { ...state, tone: "waiting", reason: "Waiting on you to sign in" };
+  if (!isActiveInstallState(flow)) return state;
+  return { ...state, tone: "running", reason: item.source === "mcp_server" ? "Connecting" : "Installing" };
+}
+
 /** Said under an on-device program's command: it runs outside the Gateway's own network rules. */
-export const ON_DEVICE_NETWORK_WARNING =
-  "This program's own internet access isn't limited by GoatCitadel's allowed sites.";
+export const ON_DEVICE_NETWORK_WARNING = "This program's own internet access isn't limited by your network allowlist.";
 
 export interface ConnectionDescription {
   /** Plain sentences, for example "Signs in at mcp.linear.app". */
@@ -253,12 +285,19 @@ export function describeConnection(item: CapabilityConnectorItem): ConnectionDes
   }
 }
 
-export type ConnectorActionKind = "install" | "set_up" | "reconnect" | "try_again" | "turn_back_on" | "manage";
+export type ConnectorActionKind =
+  | "install"
+  | "set_up"
+  | "connect"
+  | "reconnect"
+  | "try_again"
+  | "turn_back_on"
+  | "manage";
 
 /**
- * The one button on a row. Every action opens the row's panel; "install" is in the union for the install flow, which
- * does not return it yet. A row that still needs its sign-in is set up the same way a new one is, because the reason
- * line beside the button already says "Sign in to finish setup".
+ * The one button on a row. Every action opens the row's panel, where the action itself runs. Only an MCP template that
+ * isn't installed yet offers Install: one that needs an API key or a sign-in setup is set up in Settings, and other
+ * available rows (services, web search keys) have no install of their own.
  */
 export function connectorAction(item: CapabilityConnectorItem): { kind: ConnectorActionKind; label: string } {
   switch (item.state) {
@@ -268,11 +307,14 @@ export function connectorAction(item: CapabilityConnectorItem): { kind: Connecto
       return { kind: "try_again", label: "Try again" };
     case "sign_in_expired":
       return { kind: "reconnect", label: "Reconnect" };
+    case "needs_sign_in":
+      return { kind: "connect", label: "Connect" };
     case "turned_off":
       return { kind: "turn_back_on", label: "Turn back on" };
-    case "needs_sign_in":
     case "available":
-      return { kind: "set_up", label: "Set up" };
+      return item.source === "mcp_template" && item.reason === "not_installed"
+        ? { kind: "install", label: "Install" }
+        : { kind: "set_up", label: "Set up" };
   }
 }
 

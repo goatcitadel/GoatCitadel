@@ -4,7 +4,13 @@ import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
-import { ValidationError, type McpServerPolicyUpdateRequest, type McpServerRecord } from "@goatcitadel/contracts";
+import {
+  ValidationError,
+  type McpServerCreateInput,
+  type McpServerPolicyUpdateRequest,
+  type McpServerRecord,
+  type McpServerUpdateRequest,
+} from "@goatcitadel/contracts";
 import { McpServerStore } from "../services/mcp-server-store.js";
 import * as admin from "../services/mcp-server-admin-service.js";
 import { McpRouteService } from "../services/mcp-route-service.js";
@@ -59,6 +65,13 @@ async function fixture() {
   // The audit is the admin service's: the port only carries the route's actor to it, as the production wiring does.
   const port = {
     listMcpServers: () => store.readServers(),
+    createMcpServer: (input: McpServerCreateInput, committed?: () => Promise<void>) =>
+      admin.createMcpServer(host, input, undefined, undefined, committed),
+    updateMcpServer: (id: string, input: McpServerUpdateRequest, committed?: () => Promise<void>) =>
+      admin.updateMcpServer(host, id, input, undefined, {
+        expectedRevision: input.expectedRevision,
+        onCommitted: committed,
+      }),
     updateMcpServerPolicy: (
       id: string,
       input: McpServerPolicyUpdateRequest,
@@ -95,13 +108,15 @@ async function fixture() {
   await app.register(authPlugin);
   await app.register(idempotencyHeaderPlugin, { mutationStore: storage.mutationIdempotency });
   await app.register(mcpRoutes);
-  const patchPolicy = (serverId: string, payload: Record<string, unknown>) =>
+  const operatorRequest = (method: "POST" | "PATCH", url: string, payload: Record<string, unknown>) =>
     app.inject({
-      method: "PATCH",
-      url: `/api/v1/mcp/servers/${serverId}/policy`,
+      method,
+      url,
       headers: { authorization: "Bearer synthetic-operator", "Idempotency-Key": `mcp-approval-${++serial}` },
       payload,
     });
+  const patchPolicy = (serverId: string, payload: Record<string, unknown>) =>
+    operatorRequest("PATCH", `/api/v1/mcp/servers/${serverId}/policy`, payload);
   const revision = async (serverId: string) => (await store.requireServer(serverId)).revision;
   /** Finishes a connection the way the Gateway does, so the server holds a tool and a first-tool approval. */
   const connect = async (server: McpServerRecord) => {
@@ -114,10 +129,47 @@ async function fixture() {
   };
   const toolNames = async (serverId: string) =>
     (await store.readTools()).filter((tool) => tool.serverId === serverId).map((tool) => tool.toolName);
-  return { store, host, appendApprovalsAudit, closeSessions, patchPolicy, revision, connect, toolNames };
+  return {
+    store,
+    host,
+    appendApprovalsAudit,
+    closeSessions,
+    patchPolicy,
+    operatorRequest,
+    revision,
+    connect,
+    toolNames,
+  };
 }
 
 describe("what asks first on the MCP policy route", () => {
+  // Only the policy route sets it; the create and edit routes drop it, so no other public path can relax a server.
+  it("is dropped by the create and edit routes", async () => {
+    const f = await fixture();
+    const created = await f.operatorRequest("POST", "/api/v1/mcp/servers", {
+      label: "Docs",
+      transport: "stdio",
+      command: "node",
+      enabled: false,
+      policy: { approvalPosture: "nothing_asks", redactionMode: "strict" },
+    });
+    expect(created.statusCode).toBe(201);
+    const saved = await f.store.requireServer(created.json().serverId);
+    expect(saved.policy.redactionMode).toBe("strict");
+    expect(saved.policy.approvalPosture).toBeUndefined();
+
+    const edited = await f.operatorRequest("PATCH", `/api/v1/mcp/servers/${saved.serverId}`, {
+      expectedRevision: saved.revision,
+      label: "Docs 2",
+      policy: { approvalPosture: "reads_free", notes: "edited" },
+    });
+    expect(edited.statusCode).toBe(200);
+    const after = await f.store.requireServer(saved.serverId);
+    expect(after).toMatchObject({ label: "Docs 2", policy: { notes: "edited" } });
+    expect(after.policy.approvalPosture).toBeUndefined();
+    expect(f.appendApprovalsAudit).not.toHaveBeenCalled();
+  });
+
   // R52: a server pointed at a money template's host can't let changes run on their own, whatever it is called.
   it("refuses Nothing asks on a server that can move money and saves nothing, but saves Reading is free", async () => {
     const f = await fixture();

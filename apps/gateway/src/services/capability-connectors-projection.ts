@@ -118,6 +118,7 @@ function templateParts(template: McpServerTemplateRecord, input: CapabilityConne
     ...(command ? { command } : {}),
     networkHosts: [...(template.networkHosts ?? [])],
     templateId: template.templateId,
+    ...(template.riskNotes?.length ? { riskNotes: [...template.riskNotes] } : {}),
     ...(template.movesMoney ? { movesMoney: true } : {}),
     chat: mcpChat(input.chat),
   };

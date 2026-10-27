@@ -125,16 +125,21 @@ function isLlamaCppAutoResumePlan(plan: ChangePlanRecord): boolean {
 /**
  * Plans whose approval is the operator's last word, so approving applies them. Besides llama.cpp setup, that is a
  * switch the operator flipped in Settings: a separate "Continue approved change" step after approving only made the
- * one decision two (#496). A rollback approval and anything proposed from Chat keep their explicit continuation.
+ * one decision two (#496). The same holds for a connector the operator installed from Capabilities. A rollback
+ * approval and anything proposed from Chat keep their explicit continuation.
  */
 export function isAutoResumeOnApprovalPlan(plan: ChangePlanRecord): boolean {
   if (isLlamaCppAutoResumePlan(plan)) return true;
+  if (
+    // The generic create route accepts a caller-chosen surface, so a plan with Chat linkage keeps its continuation.
+    plan.origin.sessionId ||
+    plan.origin.turnId ||
+    plan.result?.failureCode === "rollback_approval_pending"
+  )
+    return false;
+  if (plan.origin.surface === "capabilities") return plan.request.kind === "connector_install";
   return (
     plan.origin.surface === "settings" &&
-    // The create route accepts a caller-chosen surface, so a plan with Chat linkage is not treated as a Settings switch.
-    !plan.origin.sessionId &&
-    !plan.origin.turnId &&
-    plan.result?.failureCode !== "rollback_approval_pending" &&
     plan.request.kind === "runtime_configuration" &&
     (plan.request.change.operation === "feature_flag" || plan.request.change.operation === "feature_flags")
   );

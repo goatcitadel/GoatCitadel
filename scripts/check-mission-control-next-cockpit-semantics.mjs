@@ -23,7 +23,9 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // 894: a connector panel announces why its switch or Remove did not happen (one alert, shared by both).
 // 895: a connector panel announces why a change to what asks first did not happen.
 // 896: Channel setup page status line (SetupSteps).
-export const LIVE_REGION_BUDGET = 896;
+// 897: a connector install's status line (InstallStatus), one per panel, which reads out each step the install or a
+// saved server's sign-in and connect reaches.
+export const LIVE_REGION_BUDGET = 897;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

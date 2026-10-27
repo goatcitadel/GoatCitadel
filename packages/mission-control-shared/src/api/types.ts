@@ -425,14 +425,7 @@ export interface RuntimeSettingsResponse {
   /** Opaque monotonic revision required by settings mutation requests. */
   revision: number;
   /** Present when the compatibility save was governed by a Change Plan. */
-  changePlanReceipt?: {
-    planId: string;
-    status: import("@goatcitadel/contracts").ChangePlanStatus;
-    revision: number;
-    risk: import("@goatcitadel/contracts").ChangePlanRisk;
-    requiredAction?: import("@goatcitadel/contracts").ChangePlanRequiredAction;
-    summary: string;
-  };
+  changePlanReceipt?: import("@goatcitadel/contracts").ChangePlanReceipt;
   environment: string;
   deploymentProfile: "local_dev" | "trusted_local" | "remote_hardened";
   toolApprovalMode: "approve_all" | "approve_risky" | "bypass";

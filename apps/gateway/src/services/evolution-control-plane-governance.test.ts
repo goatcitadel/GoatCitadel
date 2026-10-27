@@ -32,8 +32,16 @@ describe("Evolution Control Plane governed route inventory", () => {
   it("binds compatibility entrypoints to one named owner mutation boundary", () => {
     for (const entry of EVOLUTION_GOVERNED_MUTATION_INVENTORY) {
       expect(entry.mutationBoundary).toMatch(/ChangePlanAdapter\.(apply|stage)$/u);
+      if (entry.kind === "connector_install") continue;
       expect(entry.canonicalEntryPoints).toContain("POST /api/v1/change-plans");
     }
+  });
+
+  // A connector install is the operator's own Capabilities action, so neither the generic API nor a model can start one.
+  it("keeps a connector install on its own operator route", () => {
+    const install = EVOLUTION_GOVERNED_MUTATION_INVENTORY.find((entry) => entry.kind === "connector_install");
+    expect(install?.canonicalEntryPoints).toEqual(["POST /api/v1/capabilities/connectors/install"]);
+    expect(install?.compatibilityEntryPoints).toEqual([]);
   });
 
   it("normalizes every registered owner to the inspect, describeInputs, validate, apply, verify, and reconcile contract", () => {

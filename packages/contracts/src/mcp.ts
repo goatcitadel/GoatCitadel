@@ -355,7 +355,10 @@ export interface McpServerTemplateRecord {
   costTier: McpCostTier;
   policy: McpServerPolicy;
   enabledByDefault: boolean;
-  /** Hosts the operator must allow before this server can connect. Never added automatically. */
+  /**
+   * Hosts the operator must allow before this server can connect. Added only through a Change Plan the operator
+   * confirms, such as the Capabilities install, which adds the ones the allowed list doesn't cover yet.
+   */
   networkHosts?: string[];
   /** Where this template came from; display-only, never invocation authority. */
   provenance?: McpServerTemplateProvenance;

@@ -29,6 +29,8 @@ function formatKind(kind: ChangePlanRecord["kind"]): string {
       return "Capability candidate";
     case "capability_pack":
       return "Capability pack";
+    case "connector_install":
+      return "Install a connector";
     case "improvement_candidate":
       return "Improvement";
     case "managed_source_registration":
@@ -130,7 +132,9 @@ function ChatChangePlanCardContents({
             <span>{formatStatus(plan.status)}</span>
           </p>
           <div className="chat-change-plan-receipt-actions">
-            {onRollback && plan.rollbackRefs?.length > 0 && ["completed", "applied", "manual_required", "failed"].includes(plan.status) ? (
+            {onRollback &&
+            plan.rollbackRefs?.length > 0 &&
+            ["completed", "applied", "manual_required", "failed"].includes(plan.status) ? (
               <button type="button" onClick={() => onRollback(plan)} disabled={pending}>
                 Review rollback
               </button>

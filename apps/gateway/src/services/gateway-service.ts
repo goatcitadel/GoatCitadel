@@ -653,6 +653,7 @@ import {
 } from "./provider-connection-change-plan-adapter.js";
 import { CapabilityCandidateChangePlanAdapter } from "./capability-candidate-change-plan-adapter.js";
 import { CapabilityPackChangePlanAdapter } from "./capability-pack-change-plan-adapter.js";
+import { createConnectorInstallChangePlanAdapter } from "./connector-install-change-plan-adapter.js";
 import { compensatePackMcpServer } from "./capability-pack-mcp-owner.js";
 import { ImprovementCandidateChangePlanAdapter } from "./improvement-candidate-change-plan-adapter.js";
 import { ChannelConnectionChangePlanAdapter } from "./channel-connection-change-plan-adapter.js";
@@ -3378,6 +3379,7 @@ export class GatewayService {
             idempotencyKey,
           }),
       }),
+      createConnectorInstallChangePlanAdapter(this, this.mcpAdministration),
       new ModelChangePlanAdapter({
         getChatSessionPrefs: (sessionId) => this.getChatSessionPrefs(sessionId),
         updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
