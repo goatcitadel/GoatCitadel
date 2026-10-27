@@ -43,7 +43,8 @@ export const capabilityConnectorsRoutes: FastifyPluginAsync = async (fastify) =>
    */
   fastify.post(
     "/api/v1/capabilities/connectors/install",
-    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    // The body is a template id and one switch; the bound matches the other operator save routes.
+    { bodyLimit: 20 * 1_024, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const body = installBodySchema.safeParse(request.body);
       if (!body.success) return reply.code(400).send({ error: body.error.flatten() });

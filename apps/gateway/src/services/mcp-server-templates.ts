@@ -58,7 +58,7 @@ const MCP_CORE_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     description: "Read and write local workspace files through MCP.",
     transport: "stdio",
     command: "npx",
-    // 2.x needs Node 24 but this repo supports Node 20.18.1 and up, so pin the last release before 2.x.
+    // 2.x needs Node 24 but this repo's baseline is Node 22, so pin the last release before 2.x.
     args: ["-y", "@modelcontextprotocol/server-filesystem@2026.8.31", "."],
     authType: "none",
     category: "development",

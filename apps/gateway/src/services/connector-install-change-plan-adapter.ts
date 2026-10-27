@@ -27,8 +27,11 @@ import { mcpServerRevision } from "./mcp-server-revision.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { isVisibleMcpTemplateRecord } from "./mcp-template-visibility.js";
 
-/** The settings an install reads: the allowed hosts and whether Chat may use connectors. */
-export type ConnectorInstallSettings = Pick<RuntimeSettings, "revision" | "networkAllowlist"> & {
+/**
+ * The settings an install reads: the allowed hosts, whether Chat may use connectors, and the deployment profile (a
+ * remote_hardened install never lets a connector's call run on its own, R49).
+ */
+export type ConnectorInstallSettings = Pick<RuntimeSettings, "revision" | "networkAllowlist" | "deploymentProfile"> & {
   features: Pick<RuntimeSettings["features"], "chatStaticMcpV1Enabled">;
 };
 
@@ -86,7 +89,10 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
     const missing = missingHosts(template, settings.networkAllowlist);
     const steps = [
       ...(missing.length > 0 ? [`Allow ${missing.join(", ")}.`] : []),
-      `Save ${template.label}, switched off, set to Reading is free.`,
+      // "Reading is free" is still saved there, but no call on a remote_hardened install runs on its own (R49).
+      settings.deploymentProfile === "remote_hardened"
+        ? `Save ${template.label}, switched off. On this install every action it takes asks you first.`
+        : `Save ${template.label}, switched off, set to Reading is free.`,
       ...(request.enableChatConnectors && settings.features.chatStaticMcpV1Enabled !== true
         ? ["Let Chat use connectors."]
         : []),
@@ -97,7 +103,7 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
       summary: steps,
       impact: [
         ...(missing.length > 0 ? ["Any tool can reach an allowed host, not only this connector."] : []),
-        `${template.label} stays switched off until you switch it on.`,
+        afterApproval(template),
         ...(template.riskNotes ?? []),
       ].join(" "),
       risk: "danger" as const,
@@ -123,6 +129,7 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
     let step: InstallStep = "allowlist";
     let pending: readonly string[] = [];
     let allowed: readonly string[] = [];
+    let savedId: string | undefined;
     try {
       const settings = await readSettings();
       pending = missingHosts(template, settings.networkAllowlist);
@@ -136,6 +143,7 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
       }
       step = "save";
       const created = await this.deps.createMcpServer(createInput(template));
+      savedId = created.serverId;
       step = "posture";
       // The operator who asked for the install, not whoever resumed it, is named in the audit record.
       await this.deps.setReadsFree(created, plan.origin.actorId ?? "operator");
@@ -161,7 +169,11 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
         step === "allowlist"
           ? undefined
           : await this.observe(template).catch(() => undefined /* the step tracker stands in */);
-      return stopped({ template, request, step, pending, allowed, observed, error });
+      const outcome = stopped({ template, request, step, pending, allowed, observed, error });
+      // A saved server is named (M3), so Capabilities hands its panel over to it instead of offering an Install that
+      // would be refused as already saved.
+      const serverId = observed ? observed.server?.serverId : savedId;
+      return serverId ? { ...outcome, evidenceRefs: [...plan.evidenceRefs, `mcp_server:${serverId}`] } : outcome;
     }
   }
 
@@ -193,6 +205,8 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
     return {
       effectObserved: false,
       status: "manual_required" as const,
+      // A saved server is named (M3), so Capabilities hands its panel over to it.
+      ...(server ? { evidenceRefs: [...plan.evidenceRefs, `mcp_server:${server.serverId}`] } : {}),
       result: {
         summary: `The install stopped before it finished. ${found}`,
         failureCode: "connector_install_interrupted",
@@ -308,6 +322,18 @@ function createInput(template: McpServerTemplateRecord): McpServerCreateInput {
     policy: template.policy,
     enabled: false,
   };
+}
+
+/**
+ * What the one-button install does once approved (R92): Capabilities goes on to switch the app on and connect it,
+ * after the operator signs in when it signs in.
+ */
+function afterApproval(template: McpServerTemplateRecord): string {
+  return template.authType === "oauth2"
+    ? `After you approve, ${template.label} is saved switched off. Once you sign in, Capabilities switches it on and ` +
+        "connects it, unless you stop it."
+    : `After you approve, ${template.label} is saved switched off, then Capabilities switches it on and connects it, ` +
+        "unless you stop it.";
 }
 
 /** One plain sentence per finished step (R66). */

@@ -3,6 +3,7 @@ import {
   ConflictError,
   type ChangePlanConnectorInstallRequest,
   type ChangePlanRecord,
+  type DeploymentProfile,
   type McpServerCreateInput,
   type McpServerRecord,
   type McpServerTemplateRecord,
@@ -83,6 +84,13 @@ const TEMPLATES: McpServerTemplateRecord[] = [
     oauth: undefined,
   }),
   template({ templateId: "hidden", label: "Hidden", url: undefined }),
+  template({
+    templateId: "plain",
+    label: "Plain",
+    authType: "none",
+    oauth: undefined,
+    networkHosts: ["mcp.plain.test"],
+  }),
 ];
 
 const OPERATOR = { workspaceId: "default", actorId: "operator-1", surface: "capabilities" as const };
@@ -111,7 +119,9 @@ function savedServer(label: string, overrides: Partial<McpServerRecord> = {}): M
 }
 
 /** In-memory owners. Settings writes are fenced by revision, as the real settings owner fences them. */
-function owners(input: { servers?: McpServerRecord[]; allowlist?: string[]; chat?: boolean } = {}) {
+function owners(
+  input: { servers?: McpServerRecord[]; allowlist?: string[]; chat?: boolean; profile?: DeploymentProfile } = {},
+) {
   const state = {
     servers: [...(input.servers ?? [])],
     settings: {
@@ -125,6 +135,7 @@ function owners(input: { servers?: McpServerRecord[]; allowlist?: string[]; chat
     readMcpServers: vi.fn(async () => [...state.servers]),
     readSettings: vi.fn(async () => ({
       revision: state.settings.revision,
+      deploymentProfile: input.profile ?? ("local_dev" as const),
       networkAllowlist: [...state.settings.networkAllowlist],
       features: { ...state.settings.features },
     })),
@@ -269,6 +280,35 @@ describe("installing a connector through one Change Plan", () => {
       }),
     ]);
     expect(h.deps.updateSettings).toHaveBeenCalledTimes(1);
+  });
+
+  // R92: the one-button install switches the app on and connects it after approval, so the approval says so.
+  it("says what happens after approval: saved switched off, then switched on and connected", async () => {
+    const h = harness({ allowlist: ["*.example.test"] });
+    const signsIn = await h.service.create({ actor: OPERATOR, request: installRequest("example") });
+    expect(signsIn.summary).toBe("Save Example, switched off, set to Reading is free.");
+    expect(signsIn.impact).toBe(
+      "After you approve, Example is saved switched off. Once you sign in, Capabilities switches it on and connects " +
+        "it, unless you stop it. It can read and change your tickets.",
+    );
+    expect(signsIn.impact).not.toContain("stays switched off");
+
+    const plain = await harness().service.create({ actor: OPERATOR, request: installRequest("plain") });
+    expect(plain.impact).toBe(
+      "Any tool can reach an allowed host, not only this connector. After you approve, Plain is saved switched off, " +
+        "then Capabilities switches it on and connects it, unless you stop it.",
+    );
+  });
+
+  // R49: a remote_hardened install never lets a connector's call run on its own, so the plan doesn't promise it.
+  it("says every action asks first on a remote_hardened install instead of Reading is free", async () => {
+    const h = harness({ allowlist: ["*.example.test"], profile: "remote_hardened" });
+
+    const plan = await h.service.create({ actor: OPERATOR, request: installRequest("example") });
+
+    expect(plan.summary).toBe("Save Example, switched off. On this install every action it takes asks you first.");
+    expect(plan.requiredAction).toMatchObject({ kind: "confirmation", confirmationText: plan.summary });
+    expect(plan.requiredAction).not.toMatchObject({ confirmationText: expect.stringContaining("Reading is free") });
   });
 
   it("writes no allowed host when a wildcard already covers every one", async () => {
@@ -435,6 +475,8 @@ describe("installing a connector through one Change Plan", () => {
         failureCode: "connector_install_posture_failed",
         failureDetail: "MCP configuration changed.",
       });
+      // M3: the saved server is named, so Capabilities hands the panel to it instead of offering Install again.
+      expect(settled.evidenceRefs).toEqual(["mcp_template:example", "mcp_server:server-1"]);
     });
 
     it("says Chat can't use it yet, and where to look, when connectors in Chat couldn't be turned on", async () => {
@@ -451,6 +493,7 @@ describe("installing a connector through one Change Plan", () => {
         failureCode: "connector_install_chat_flag_failed",
         failureDetail: "Settings changed elsewhere.",
       });
+      expect(settled.evidenceRefs).toEqual(["mcp_template:example", "mcp_server:server-1"]);
       expect(h.state.servers).toEqual([
         expect.objectContaining({ policy: { ...POLICY, approvalPosture: "reads_free" } }),
       ]);
@@ -463,11 +506,14 @@ describe("installing a connector through one Change Plan", () => {
       rolledBack.deps.createMcpServer.mockRejectedValueOnce(
         Object.assign(new Error("MCP configuration committed but follow-up work failed."), { mutationCommitted: true }),
       );
-      expect((await rolledBack.install(installRequest("example"))).result).toEqual({
+      const notSaved = await rolledBack.install(installRequest("example"));
+      expect(notSaved.result).toEqual({
         summary: "Couldn't save Example. Trying again is safe.",
         failureCode: "connector_install_save_failed",
         failureDetail: "MCP configuration committed but follow-up work failed.",
       });
+      // Nothing is saved, so there is no server to name and the template can be installed again.
+      expect(notSaved.evidenceRefs).toEqual(["mcp_template:example"]);
 
       const landed = harness({ allowlist: ["*.example.test"] });
       landed.deps.createMcpServer.mockImplementationOnce(async (create: McpServerCreateInput) => {
@@ -482,7 +528,23 @@ describe("installing a connector through one Change Plan", () => {
           "You can choose Reading is free under What asks first in its panel.",
         failureCode: "connector_install_save_failed",
       });
+      expect(settled.evidenceRefs).toEqual(["mcp_template:example", "mcp_server:saved-Example"]);
       expect(landed.deps.setReadsFree).not.toHaveBeenCalled();
+    });
+
+    it("names the saved server from the step it reached when the read after a failure fails too", async () => {
+      const h = harness({ allowlist: ["*.example.test"] });
+      const plan = await h.service.create({ actor: OPERATOR, request: installRequest("example") });
+      h.deps.setReadsFree.mockRejectedValueOnce(new Error("MCP configuration changed."));
+      // Apply's own check reads the list, then the read after the failure can't.
+      h.deps.readMcpServers
+        .mockImplementationOnce(async () => [...h.state.servers])
+        .mockRejectedValueOnce(new Error("The MCP list is unreadable."));
+
+      const settled = await h.confirm(plan);
+
+      expect(settled.status).toBe("manual_required");
+      expect(settled.evidenceRefs).toEqual(["mcp_template:example", "mcp_server:server-1"]);
     });
 
     it("keeps the owner's error text out of the summary, redacted and bounded", async () => {
@@ -584,6 +646,7 @@ describe("reconciling an interrupted install", () => {
       result: { failureCode: "connector_install_interrupted" },
     });
     expect(missing.result?.summary).toContain("Example isn't saved.");
+    expect(missing.evidenceRefs).toBeUndefined();
 
     h.state.servers = [savedServer("Example")];
     const unrelaxed = await h.adapter.reconcile({} as never, plan);
@@ -591,6 +654,8 @@ describe("reconciling an interrupted install", () => {
     expect(unrelaxed.result?.summary).toContain(
       "Example is saved, switched off, and everything it does asks you first.",
     );
+    // M3: the saved server is named so Capabilities hands its panel over to it.
+    expect(unrelaxed.evidenceRefs).toEqual(["mcp_template:example", "mcp_server:saved-Example"]);
 
     h.state.servers = [savedServer("Example", { policy: { ...POLICY, approvalPosture: "reads_free" } })];
     expect(await h.adapter.reconcile({} as never, plan)).toMatchObject({

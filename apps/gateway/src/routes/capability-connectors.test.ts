@@ -224,6 +224,21 @@ describe("capability connectors route", () => {
       expect(evolution.create).not.toHaveBeenCalled();
     });
 
+    it("refuses a body over 20 KiB before reading it, like the other operator saves", async () => {
+      const evolution = mockedEvolution({ status: "completed" });
+      const server = await build({ evolution });
+
+      const response = await server.inject({
+        method: "POST",
+        url: INSTALL,
+        headers: { "content-type": "application/json" },
+        payload: JSON.stringify({ templateId: "linear", enableChatConnectors: true, padding: "x".repeat(21 * 1_024) }),
+      });
+
+      expect(response.statusCode).toBe(413);
+      expect(evolution.create).not.toHaveBeenCalled();
+    });
+
     it("passes a refusal through as a 409 naming its field", async () => {
       const evolution = mockedEvolution({ status: "completed" });
       evolution.create.mockRejectedValueOnce(
@@ -279,6 +294,7 @@ describe("capability connectors route", () => {
         const servers: McpServerRecord[] = [];
         let settings = {
           revision: 1,
+          deploymentProfile: "local_dev" as const,
           networkAllowlist: ["api.openai.com"],
           features: { chatStaticMcpV1Enabled: false },
         };
@@ -289,6 +305,7 @@ describe("capability connectors route", () => {
           readSettings: async () => settings,
           updateSettings: async (update) => {
             settings = {
+              ...settings,
               revision: settings.revision + 1,
               networkAllowlist: update.networkAllowlist ?? settings.networkAllowlist,
               features: { ...settings.features, ...update.features },

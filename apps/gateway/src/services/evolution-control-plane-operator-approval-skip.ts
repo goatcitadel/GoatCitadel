@@ -4,8 +4,8 @@ import type { ChangePlanRecord } from "@goatcitadel/contracts";
 export interface Dependencies {
   /**
    * Whether the operator has chosen to apply their own Settings saves and Capabilities installs without a separate
-   * approval (the runtime flag and the deployment profile). Consulted only for a Settings- or Capabilities-origin
-   * caution or danger plan confirmed by that surface's own server-owned save route.
+   * approval (the runtime flag and the deployment profile). Consulted only for a caution or danger plan from Settings,
+   * or a connector install from Capabilities, confirmed by that surface's own server-owned save route.
    */
   readonly allowsOperatorApprovalSkip?: (plan: ChangePlanRecord) => boolean | Promise<boolean>;
 }
@@ -25,8 +25,15 @@ export interface ApplyStartEvent {
   readonly eventPayload?: Readonly<Record<string, unknown>>;
 }
 
-/** The origin surfaces whose own save routes may ask for the operator's skip. Chat and system plans never may. */
-const OPERATOR_SAVE_SURFACES: ReadonlySet<string> = new Set(["settings", "capabilities"]);
+/**
+ * Whether the plan is one an operator save route may ask the skip for. Settings keeps every kind it saves. On
+ * Capabilities only a connector install may (R95), so a future Capabilities action has to be added here on purpose.
+ * Chat and system plans never may.
+ */
+function isOperatorSavePlan(plan: ChangePlanRecord): boolean {
+  if (plan.origin.surface === "settings") return true;
+  return plan.origin.surface === "capabilities" && plan.kind === "connector_install";
+}
 
 /**
  * The apply-start event for a confirmed caution or danger plan whose separate approval the operator's
@@ -37,11 +44,7 @@ export async function eventFor(
   options: ConfirmOptions,
   deps: Dependencies,
 ): Promise<ApplyStartEvent | undefined> {
-  if (
-    plan.risk === "safe" ||
-    options.operatorSettingsSave !== true ||
-    !OPERATOR_SAVE_SURFACES.has(plan.origin.surface)
-  ) {
+  if (plan.risk === "safe" || options.operatorSettingsSave !== true || !isOperatorSavePlan(plan)) {
     return undefined;
   }
   if ((await deps.allowsOperatorApprovalSkip?.(plan)) !== true) return undefined;
