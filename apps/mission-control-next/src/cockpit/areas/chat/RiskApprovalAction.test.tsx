@@ -233,6 +233,71 @@ describe("risk approval action", () => {
     expect(onApprove).not.toHaveBeenCalled();
   });
 
+  // R91 (BP1): a danger Change Plan's approval is its own plan text, bound to the plan by id and action hash.
+  describe("a danger Change Plan", () => {
+    const planApproval = (payload: Record<string, unknown>): ApprovalRequest => ({
+      approvalId: "approval-1",
+      kind: "change_plan_effect",
+      riskLevel: "danger",
+      status: "pending",
+      payload,
+      preview: {
+        title: "Install AWS Knowledge",
+        summary: "Allow knowledge-mcp.global.api.aws. Save AWS Knowledge, switched off, set to Reading is free.",
+        impact: "Any tool can reach an allowed host, not only this connector.",
+        risk: "danger",
+      },
+      linkage: { workspaceId: "default", actionType: "change_plan_effect" },
+      createdAt: "2026-10-27T00:00:00Z",
+      explanationStatus: "not_requested",
+    });
+    const pendingPlan = { ...approval("danger"), kind: "change_plan_effect", toolName: undefined };
+    const approveOnce = () =>
+      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Approve once")!;
+
+    it("enables Approve once in the review for a hash-bound plan, showing what it changes", async () => {
+      const onApprove = vi.fn();
+      await act(async () =>
+        root.render(
+          <RiskApprovalAction
+            approval={pendingPlan}
+            reviewedApproval={planApproval({ planId: "plan-1", actionSnapshotHash: "a".repeat(64) })}
+            pending={false}
+            onApprove={onApprove}
+          />,
+        ),
+      );
+      await act(async () => container.querySelector("button")?.click());
+
+      expect(document.body.textContent).toContain("Change: Install AWS Knowledge");
+      expect(document.body.textContent).toContain("What it does: Allow knowledge-mcp.global.api.aws.");
+      expect(document.body.textContent).toContain("Approving applies this one change once, exactly as planned.");
+      expect(document.body.textContent).not.toContain("current action preview is unavailable");
+      expect(approveOnce().disabled).toBe(false);
+      await act(async () => approveOnce().click());
+      expect(onApprove).toHaveBeenCalledTimes(1);
+    });
+
+    it("still refuses a plan approval that isn't bound to its plan", async () => {
+      const onApprove = vi.fn();
+      await act(async () =>
+        root.render(
+          <RiskApprovalAction
+            approval={pendingPlan}
+            reviewedApproval={planApproval({ planId: "plan-1" })}
+            pending={false}
+            onApprove={onApprove}
+          />,
+        ),
+      );
+      await act(async () => container.querySelector("button")?.click());
+
+      expect(document.body.textContent).toContain("current action preview is unavailable");
+      expect(approveOnce().disabled).toBe(true);
+      expect(onApprove).not.toHaveBeenCalled();
+    });
+  });
+
   it("keeps the complete persisted command available when the compact summary is shortened", async () => {
     const command = `run ${"a".repeat(180)}`;
     await act(async () =>
