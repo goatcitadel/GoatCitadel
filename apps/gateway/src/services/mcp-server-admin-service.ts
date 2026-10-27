@@ -258,11 +258,13 @@ export async function updateMcpServer(
   await afterMcpCommit(review?.onCommitted, async () => {
     // A change to what asks first is audited once the write has committed, before any follow-up work that could fail.
     // A refused or conflicting write never gets here, so it records nothing. The edit has committed either way, so
-    // sessions on the old configuration still close if the audit write fails.
+    // sessions on a replaced connection still close if the audit write fails. The write rotates the connection
+    // version exactly when it disconnects the server; an edit that only changed what asks first keeps the
+    // connection, so its live sessions stay open.
     try {
       await auditApprovalPostureChange(host, original, acknowledgement, input.policy?.approvalPosture, review?.actorId);
     } finally {
-      closeOwnedSessions?.();
+      if (acknowledgement.connectionRevision !== original.connectionRevision) closeOwnedSessions?.();
     }
   });
   return acknowledgement;

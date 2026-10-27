@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { McpServerRecord } from "@goatcitadel/contracts";
+import type { McpServerRecord, McpToolRecord } from "@goatcitadel/contracts";
 import {
   Storage,
   createSqliteAsyncStorage,
@@ -13,6 +13,7 @@ import {
 import { Pool } from "pg";
 import { GATEWAY_OWNED_MCP_SERVER_IDS, McpServerStore } from "./mcp-server-store.js";
 import { normalizeMcpPolicy } from "./mcp-server-policy.js";
+import { mcpServerRevision } from "./mcp-server-revision.js";
 import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
 
 const KEY = "mcp_servers_v1";
@@ -75,6 +76,144 @@ describe("McpServerStore configuration authority", () => {
     const previous = await callers();
     await store.writeServers([{ ...previous[0]!, ...patch }], previous);
     expect((await callers())[0]!.configurationBindingId).not.toBe(previous[0]!.configurationBindingId);
+  });
+
+  // R55: changing only what asks first is a reviewed edit, but it describes the same connection.
+  describe("a reviewed edit that changes only what asks first", () => {
+    const toolsOf = async () => (await store.readTools()).filter((item) => item.serverId === "server-1");
+    const firstApprovals = async () => (await storage.systemSettings.get("mcp_tool_first_approval_v1"))?.value;
+    const reviewedEdit = async (base: McpServerRecord, patch: Partial<McpServerRecord>) => {
+      const current = await store.readServers();
+      const saved = await store.writeServers(
+        current.map((item) => (item.serverId === base.serverId ? { ...item, ...patch } : item)),
+        current,
+        { serverId: base.serverId, expectedRevision: mcpServerRevision(base) },
+      );
+      return saved.find((item) => item.serverId === base.serverId)!;
+    };
+    const askingPolicy = (approvalPosture: "everything_asks" | "reads_free" | "nothing_asks") => ({
+      ...normalizeMcpPolicy(),
+      approvalPosture,
+    });
+    const tool = (toolName: string): McpToolRecord => ({
+      serverId: "server-1",
+      toolName,
+      enabled: true,
+      updatedAt: "2026-09-11T00:00:00.000Z",
+    });
+    /** A saved server that finished connecting, with a stored tool and a first-tool approval. */
+    const connected = async (overrides: Partial<McpServerRecord> = {}) => {
+      await store.writeServers([{ ...server(), ...overrides }], []);
+      const created = await store.requireServer("server-1");
+      const attempt = await store.patchServerState("server-1", { status: "connecting" }, created);
+      const settled = await store.completeConnection(attempt, [tool("read")]);
+      await storage.systemSettings.set("mcp_tool_first_approval_v1", { "server-1": ["read"], peer: ["read"] });
+      return settled;
+    };
+
+    it("takes a new revision but keeps the connection, its tools and its first-tool approvals", async () => {
+      const before = await connected();
+      expect(before).toMatchObject({ status: "connected" });
+      expect(before.lastConnectedAt).toBeDefined();
+
+      const after = await reviewedEdit(before, { policy: askingPolicy("reads_free") });
+
+      expect(after.revision).not.toBe(before.revision);
+      expect(after.status).toBe("connected");
+      expect(after.lastConnectedAt).toBe(before.lastConnectedAt);
+      expect(after.lastError).toBe(before.lastError);
+      expect(after.connectionRevision).toBe(before.connectionRevision);
+      expect(after.configurationBindingId).toBe(before.configurationBindingId);
+      expect(after.policy.approvalPosture).toBe("reads_free");
+      expect((await toolsOf()).map((item) => item.toolName)).toEqual(["read"]);
+      expect(await firstApprovals()).toEqual({ "server-1": ["read"], peer: ["read"] });
+      // The kept connection is what later reads see too, not only the acknowledgement.
+      expect(await store.requireServer("server-1")).toMatchObject({
+        status: "connected",
+        connectionRevision: before.connectionRevision,
+        configurationBindingId: before.configurationBindingId,
+        revision: after.revision,
+      });
+    });
+
+    it("keeps it again when the setting changes back, each time with a new revision", async () => {
+      const before = await connected({ policy: askingPolicy("reads_free") });
+      const second = await reviewedEdit(before, { policy: askingPolicy("everything_asks") });
+      const third = await reviewedEdit(second, { policy: askingPolicy("nothing_asks") });
+
+      expect(new Set([before.revision, second.revision, third.revision]).size).toBe(3);
+      expect(third).toMatchObject({
+        status: "connected",
+        connectionRevision: before.connectionRevision,
+        configurationBindingId: before.configurationBindingId,
+      });
+      expect((await toolsOf()).map((item) => item.toolName)).toEqual(["read"]);
+    });
+
+    it("still disconnects a server that is mid-connection, so the late result is refused and the tools are cleared, but keeps its binding and first-tool approvals", async () => {
+      const settled = await connected();
+      const attempt = await store.patchServerState("server-1", { status: "connecting" }, settled);
+
+      const after = await reviewedEdit(attempt, { policy: askingPolicy("reads_free") });
+
+      expect(after.status).toBe("disconnected");
+      expect(after.connectionRevision).not.toBe(attempt.connectionRevision);
+      expect(after.revision).not.toBe(attempt.revision);
+      // Only the connection is fenced: the configuration is the same one the operator approved tools for.
+      expect(after.configurationBindingId).toBe(settled.configurationBindingId);
+      expect(await firstApprovals()).toEqual({ "server-1": ["read"], peer: ["read"] });
+      await expect(store.completeConnection(attempt, [tool("late")])).rejects.toMatchObject({ httpStatus: 409 });
+      expect(await toolsOf()).toEqual([]);
+      expect(await store.requireServer("server-1")).toMatchObject({ status: "disconnected" });
+    });
+
+    it.each([
+      { args: ["other-fixture.js"] },
+      { command: "different-node" },
+      { enabled: false },
+      { policy: { ...askingPolicy("reads_free"), blockedToolPatterns: ["write*"] } },
+    ])("still disconnects when another field changes in the same edit: %j", async (patch) => {
+      const before = await connected();
+
+      const after = await reviewedEdit(before, { policy: askingPolicy("reads_free"), ...patch });
+
+      expect(after.status).toBe("disconnected");
+      expect(after.connectionRevision).not.toBe(before.connectionRevision);
+      expect(after.configurationBindingId).not.toBe(before.configurationBindingId);
+      expect(await toolsOf()).toEqual([]);
+      expect(await firstApprovals()).toEqual({ peer: ["read"] });
+    });
+
+    it("keeps the connection of a server a capability pack installed, though the edit clears its pack bookkeeping", async () => {
+      const before = await connected({
+        packChange: { planId: "plan-1", revision: 1, phase: "apply", created: true },
+      });
+      expect(before.packChange).toBeDefined();
+
+      // An operator edit through updateMcpServer drops packChange, so a pack can't undo it.
+      const after = await reviewedEdit(before, { packChange: undefined, policy: askingPolicy("reads_free") });
+
+      expect(after.packChange).toBeUndefined();
+      expect(after.revision).not.toBe(before.revision);
+      expect(after).toMatchObject({
+        status: "connected",
+        connectionRevision: before.connectionRevision,
+        configurationBindingId: before.configurationBindingId,
+      });
+      expect((await toolsOf()).map((item) => item.toolName)).toEqual(["read"]);
+      expect(await firstApprovals()).toEqual({ "server-1": ["read"], peer: ["read"] });
+    });
+
+    it("still disconnects a server whose pack bookkeeping is the only thing that changes", async () => {
+      const before = await connected({
+        packChange: { planId: "plan-1", revision: 1, phase: "apply", created: true },
+      });
+
+      const after = await reviewedEdit(before, { packChange: undefined });
+
+      expect(after.status).toBe("disconnected");
+      expect(await toolsOf()).toEqual([]);
+    });
   });
 
   it("refuses a stale edit after a competing edit without overwriting its configuration", async () => {
@@ -430,7 +569,9 @@ it.skipIf(!process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim())(
         b.writeAuthState({ server: authCommitted, expected: publishedAuth, next: authState("oauth-fixture") }),
       ).rejects.toThrow(/configuration changed/);
       let releaseCleanup!: () => void;
-      const cleanupGate = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+      const cleanupGate = new Promise<void>((resolve) => {
+        releaseCleanup = resolve;
+      });
       const interruptedDelete = vi.fn(async () => {
         await cleanupGate;
         throw new Error("PostgreSQL retirement delete acknowledgement fixture");
@@ -438,9 +579,12 @@ it.skipIf(!process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim())(
       const cleanup = a.reconcileCredentialRetirements(interruptedDelete, 1);
       try {
         await vi.waitFor(() => expect(interruptedDelete).toHaveBeenCalledOnce());
-        await expect(b.writeAuthState({ server: environmentCommitted, expected: undefined, next: publishedAuth }))
-          .rejects.toThrow("retired");
-      } finally { releaseCleanup(); }
+        await expect(
+          b.writeAuthState({ server: environmentCommitted, expected: undefined, next: publishedAuth }),
+        ).rejects.toThrow("retired");
+      } finally {
+        releaseCleanup();
+      }
       expect(await cleanup).toMatchObject({ deleted: 0, failed: 1, remaining: 2 });
       await clients.pop()!.close();
       await clients.pop()!.close();
@@ -453,12 +597,19 @@ it.skipIf(!process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim())(
       expect((await reopenedStore.readAuthState())["oauth-fixture"]).toBeUndefined();
       expect(await reopenedStore.readEnvironmentBinding("oauth-fixture")).toEqual(environmentBinding);
       const retiredAccounts: string[] = [];
-      expect(await reopenedStore.reconcileCredentialRetirements((account) => { retiredAccounts.push(account); }))
-        .toMatchObject({ deleted: 2, failed: 0, remaining: 0 });
-      expect(retiredAccounts.sort()).toEqual([publishedAuth!.accessTokenRef!, publishedAuth!.refreshTokenRef!]
-        .map((ref) => ref.slice("keychain:goatcitadel:".length)).sort());
-      await expect(reopenedStore.writeAuthState({ server: environmentCommitted, expected: undefined, next: publishedAuth }))
-        .rejects.toThrow("retired");
+      expect(
+        await reopenedStore.reconcileCredentialRetirements((account) => {
+          retiredAccounts.push(account);
+        }),
+      ).toMatchObject({ deleted: 2, failed: 0, remaining: 0 });
+      expect(retiredAccounts.sort()).toEqual(
+        [publishedAuth!.accessTokenRef!, publishedAuth!.refreshTokenRef!]
+          .map((ref) => ref.slice("keychain:goatcitadel:".length))
+          .sort(),
+      );
+      await expect(
+        reopenedStore.writeAuthState({ server: environmentCommitted, expected: undefined, next: publishedAuth }),
+      ).rejects.toThrow("retired");
       expect(await reopenedStore.readEnvironmentBinding("oauth-fixture")).toEqual(environmentBinding);
     } finally {
       closeResults = await Promise.allSettled(clients.map((client) => client.close()));

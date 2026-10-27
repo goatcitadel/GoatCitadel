@@ -67,6 +67,28 @@ export function sameConfiguration(left: McpServerRecord, right: McpServerRecord)
   return isDeepStrictEqual(configurationMaterial(left), configurationMaterial(right));
 }
 
+/**
+ * True when the two records differ in what asks first (policy.approvalPosture) and nothing that decides how the
+ * server connects. packChange is left out of the comparison: it is capability-pack ownership bookkeeping that every
+ * operator edit clears, so a pack-installed server would otherwise never count. A difference in packChange alone,
+ * with the same setting, is not a change to what asks first. sameConfiguration stays strict for the snapshot, OAuth
+ * and static Chat checks.
+ */
+export function onlyApprovalPostureChanged(previous: McpServerRecord, next: McpServerRecord): boolean {
+  const left = connectionMaterial(previous);
+  const right = connectionMaterial(next);
+  return left.approvalPosture !== right.approvalPosture && isDeepStrictEqual(left.rest, right.rest);
+}
+
+type NormalizedMaterial = Record<string, unknown> & { policy: Record<string, unknown> };
+
+/** The setting, and everything else that decides how the server connects. */
+function connectionMaterial(server: McpServerRecord): { approvalPosture: unknown; rest: unknown } {
+  const { packChange: _packChange, policy, ...rest } = configurationMaterial(server) as NormalizedMaterial;
+  const { approvalPosture, ...otherPolicy } = policy;
+  return { approvalPosture, rest: { ...rest, policy: otherPolicy } };
+}
+
 export function assertConfigurationSnapshot(current: McpServerRecord[], expected: McpServerRecord[]): void {
   if (
     current.length !== expected.length ||
