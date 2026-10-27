@@ -20,7 +20,12 @@ import {
   __resetMcpOAuthReturnForTests,
   consumeMcpOAuthReturnFragment,
 } from "../../../../features/native-routes/settings/mcp-oauth-return";
-import { __resetConnectorInstallForTests, useConnectorInstall } from "./use-connector-install";
+import {
+  __resetConnectorInstallForTests,
+  useConnectorInstall,
+  useConnectorInstallStatus,
+  type ConnectorInstallState,
+} from "./use-connector-install";
 
 const install = vi.hoisted(() => ({ installCapabilityConnector: vi.fn(), fetchCapabilityConnectors: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/capability-connectors", () => install);
@@ -561,22 +566,116 @@ describe("useConnectorInstall", () => {
     expect(latest.state).toEqual({ phase: "done", serverId: "srv-1" });
   });
 
-  it("reads the plan only while mounted and goes on reading after a remount", async () => {
-    vi.useFakeTimers();
-    install.installCapabilityConnector.mockResolvedValueOnce(
-      receipt({ status: "awaiting_approval", requiredAction: APPROVAL }),
-    );
-    plans.fetchChangePlan.mockResolvedValue(plan({ status: "awaiting_approval", requiredAction: APPROVAL }));
+  describe("when the panel closes (R88)", () => {
+    const WAITING = plan({ status: "awaiting_approval", requiredAction: APPROVAL, evidenceRefs: [] });
 
-    await startInstall();
-    act(() => root.unmount());
-    root = createRoot(container);
-    await act(async () => vi.advanceTimersByTimeAsync(20_000));
-    expect(plans.fetchChangePlan).not.toHaveBeenCalled();
+    async function waitInInboxThenClose(item: CapabilityConnectorItem) {
+      vi.useFakeTimers();
+      install.installCapabilityConnector.mockResolvedValueOnce(
+        receipt({ status: "awaiting_approval", requiredAction: APPROVAL }),
+      );
+      await startInstall(item);
+      expect(latest.state).toMatchObject({ phase: "waiting_inbox" });
+      // "Open in Inbox" changes the address, which closes the panel.
+      act(() => root.unmount());
+      root = createRoot(container);
+    }
 
-    await render(TEMPLATE);
-    expect(latest.state).toMatchObject({ phase: "waiting_inbox", approvalId: "approval-1" });
-    await act(async () => vi.advanceTimersByTimeAsync(5_000));
-    expect(plans.fetchChangePlan).toHaveBeenCalledTimes(1);
+    it("keeps reading the plan and finishes the install after approval lands", async () => {
+      plans.fetchChangePlan.mockResolvedValueOnce(WAITING).mockResolvedValueOnce(plan());
+      servers.fetchMcpServer.mockResolvedValue(server({ authType: "none" }));
+      await waitInInboxThenClose({ ...TEMPLATE, auth: "none" });
+
+      await act(async () => vi.advanceTimersByTimeAsync(5_000));
+      expect(plans.fetchChangePlan).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTimeAsync(5_000));
+      await flush();
+
+      expect(wrappers.commitMcpServerUpdate).toHaveBeenCalledTimes(1);
+      expect(wrappers.commitMcpConnection).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      await render(SAVED);
+      expect(latest.state).toEqual({ phase: "done", serverId: "srv-1" });
+    });
+
+    it("goes on to sign-in in the background and waits there for the operator", async () => {
+      plans.fetchChangePlan.mockResolvedValueOnce(plan());
+      await waitInInboxThenClose(TEMPLATE);
+
+      await act(async () => vi.advanceTimersByTimeAsync(5_000));
+      await flush();
+
+      expect(wrappers.commitMcpOAuth).toHaveBeenCalledWith(expect.objectContaining({ action: "start" }));
+      expect(vi.getTimerCount()).toBe(0);
+      await render(SAVED);
+      expect(latest.state).toMatchObject({ phase: "signing_in", signInHost: "auth.linear.app" });
+      await returnFromProvider("state-1");
+      expect(latest.state).toEqual({ phase: "done", serverId: "srv-1" });
+    });
+
+    it("stops reading the plan once the install is cancelled or forgotten", async () => {
+      plans.fetchChangePlan.mockResolvedValue(WAITING);
+      plans.cancelChangePlan.mockResolvedValueOnce(plan({ status: "cancelled", evidenceRefs: [] }));
+      await waitInInboxThenClose(TEMPLATE);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await render(TEMPLATE);
+      await act(async () => latest.cancel());
+      await flush();
+      expect(latest.state).toMatchObject({ phase: "stopped" });
+      expect(vi.getTimerCount()).toBe(0);
+      const reads = plans.fetchChangePlan.mock.calls.length;
+      await act(async () => vi.advanceTimersByTimeAsync(20_000));
+      expect(plans.fetchChangePlan).toHaveBeenCalledTimes(reads);
+
+      // A new install waiting in Inbox, then forgotten, leaves no timer either.
+      install.installCapabilityConnector.mockResolvedValueOnce(
+        receipt({ status: "awaiting_approval", requiredAction: APPROVAL }),
+      );
+      await act(async () => latest.start({ enableChatConnectors: true }));
+      await flush();
+      expect(latest.state).toMatchObject({ phase: "waiting_inbox" });
+      expect(vi.getTimerCount()).toBe(1);
+      __resetConnectorInstallForTests();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("reads the plan once per beat however many hooks show the flow", async () => {
+      plans.fetchChangePlan.mockResolvedValue(WAITING);
+      await waitInInboxThenClose(TEMPLATE);
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <Probe item={TEMPLATE} />
+            <Probe item={TEMPLATE} />
+          </QueryClientProvider>,
+        ),
+      );
+
+      await act(async () => vi.advanceTimersByTimeAsync(5_000));
+      expect(plans.fetchChangePlan).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTimeAsync(5_000));
+      expect(plans.fetchChangePlan).toHaveBeenCalledTimes(2);
+    });
+
+    it("lets a row read the flow's state without reading the plan itself", async () => {
+      let status: ConnectorInstallState | undefined;
+      function Row({ item }: { item: CapabilityConnectorItem }) {
+        status = useConnectorInstallStatus(item);
+        return null;
+      }
+      vi.useFakeTimers();
+      await act(async () => root.render(<Row item={TEMPLATE} />));
+      expect(status).toEqual({ phase: "idle" });
+      expect(vi.getTimerCount()).toBe(0);
+
+      plans.fetchChangePlan.mockResolvedValue(WAITING);
+      await waitInInboxThenClose(TEMPLATE);
+      await act(async () => root.render(<Row item={TEMPLATE} />));
+
+      expect(status).toEqual({ phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
+      expect(vi.getTimerCount()).toBe(1);
+      expect(plans.fetchChangePlan).not.toHaveBeenCalled();
+    });
   });
 });

@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
   CapabilityConnectorItem,
@@ -32,6 +31,7 @@ import {
   retireRun,
   runName,
   serverKey,
+  setInstallPlanReader,
   settleInstallFlow as settle,
   technicalText,
   templateKey,
@@ -129,7 +129,7 @@ function waitInInbox(id: number, planId: string, approvalId: string) {
   });
 }
 
-/** Reads the install's plan once and moves the flow on. The hook's effect calls it while the flow polls. */
+/** Reads the install's plan once and moves the flow on. The store's plan poll calls it while the flow polls (R88). */
 async function readPlan(id: number) {
   const flow = readInstallFlow(id);
   const run = readRun(id);
@@ -158,6 +158,8 @@ async function readPlan(id: number) {
   patchRun(id, { rounds });
   updateInstallFlow(id, { state: WORKING.plan, pollMs: rounds > APPLY_POLL_ROUNDS ? INBOX_POLL_MS : APPLY_POLL_MS });
 }
+
+setInstallPlanReader(readPlan);
 
 /** A read that failed. While it waits in Inbox the next read tries again; while it applies the tries are bounded. */
 function missedRead(id: number, error: unknown) {
@@ -285,20 +287,14 @@ export interface ConnectorInstall {
 /**
  * One-button install for a connector row, driven end to end: the install plan (waiting in Inbox when it asks), sign-in
  * for OAuth apps, switch on, connect. A saved server's row resumes at sign-in or connect. The flow lives outside the
- * component (R68): a template row and the saved server's row that replaces it find the same flow, and plan reads run
- * while a hook showing the flow is mounted.
+ * component (R68): a template row and the saved server's row that replaces it find the same flow. The store reads the
+ * plan whether or not anything is mounted, and the flow goes on by itself until it signs in or is done (R88).
  */
 export function useConnectorInstall(item: CapabilityConnectorItem): ConnectorInstall {
   const client = useQueryClient();
   const { activeWorkspaceId } = useUiPreferences();
   const flow = useInstallFlow(item);
   const id = flow?.id;
-  const pollMs = flow?.pollMs;
-  useEffect(() => {
-    if (id === undefined || !pollMs) return undefined;
-    const timer = globalThis.setInterval(() => void readPlan(id), pollMs);
-    return () => globalThis.clearInterval(timer);
-  }, [id, pollMs]);
   const context: RunContext = { client, listKey: queryKeys.capabilityConnectors(activeWorkspaceId) };
   return {
     state: flow?.state ?? IDLE,
@@ -312,6 +308,11 @@ export function useConnectorInstall(item: CapabilityConnectorItem): ConnectorIns
       if (id !== undefined) cancelFlow(id);
     },
   };
+}
+
+/** A row's read of its install flow (R87): the state only. It reads no plan and starts or changes nothing. */
+export function useConnectorInstallStatus(item: CapabilityConnectorItem): ConnectorInstallState {
+  return useInstallFlow(item)?.state ?? IDLE;
 }
 
 export function __resetConnectorInstallForTests() {

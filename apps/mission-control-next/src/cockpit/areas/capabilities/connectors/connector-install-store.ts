@@ -45,7 +45,7 @@ export interface ConnectorInstallFlow {
   readonly serverId?: string;
   /** The install's plan while the flow follows it. */
   readonly planId?: string;
-  /** Set while the plan should be read again: how often, in milliseconds. Mounted hooks run the reads. */
+  /** Set while the plan should be read again: how often, in milliseconds. The store runs the reads (R88). */
   readonly pollMs?: number;
 }
 
@@ -70,6 +70,30 @@ function subscribe(listener: () => void) {
   return () => {
     listeners.delete(listener);
   };
+}
+
+// One plan read timer per flow, kept in step with its record's `pollMs` (R88). It doesn't depend on a mounted hook, so
+// leaving the page (following "Open in Inbox") doesn't stall an install, and it stops when the flow settles or is
+// forgotten. The read itself belongs to the install hook's module, which registers it.
+const polls = new Map<
+  number,
+  { readonly everyMs: number; readonly timer: ReturnType<typeof globalThis.setInterval> }
+>();
+let readPlanOf: ((id: number) => unknown) | undefined;
+
+/** Sets the read each plan poll runs. The install hook's module calls it once. */
+export function setInstallPlanReader(read: (id: number) => unknown) {
+  readPlanOf = read;
+}
+
+function syncPlanPoll(id: number, everyMs: number | undefined) {
+  const current = polls.get(id);
+  if (current?.everyMs === everyMs) return;
+  if (current) {
+    globalThis.clearInterval(current.timer);
+    polls.delete(id);
+  }
+  if (everyMs) polls.set(id, { everyMs, timer: globalThis.setInterval(() => void readPlanOf?.(id), everyMs) });
 }
 
 export function readInstallFlow(id: number): ConnectorInstallFlow | undefined {
@@ -100,6 +124,7 @@ export function updateInstallFlow(
     Object.entries({ ...current, ...change }).filter(([, value]) => value !== undefined),
   ) as unknown as ConnectorInstallFlow;
   flows.set(id, next);
+  syncPlanPoll(id, next.pollMs);
   publish();
   return next;
 }
@@ -111,6 +136,7 @@ export function indexInstallFlow(id: number, key: string) {
 
 /** Forgets a flow: its rows read idle again. */
 export function deleteInstallFlow(id: number) {
+  syncPlanPoll(id, undefined);
   flows.delete(id);
   for (const [key, value] of [...index]) if (value === id) index.delete(key);
   publish();
@@ -246,6 +272,7 @@ export function technicalText(error: unknown) {
 
 export function __resetConnectorInstallFlowsForTests() {
   for (const run of runs.values()) run.signIn?.stop();
+  for (const id of [...polls.keys()]) syncPlanPoll(id, undefined);
   runs.clear();
   flows.clear();
   index.clear();
