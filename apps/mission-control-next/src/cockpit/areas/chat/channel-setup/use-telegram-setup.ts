@@ -162,7 +162,7 @@ export function useTelegramSetup(workspaceId: string): TelegramSetupState {
           const many = found.updatesTruncated === true;
           if (core.current.manyWaiting !== many) set({ manyWaiting: many });
         } catch {
-          // A question that fails is asked again with the next one.
+          // Ignored: a question that fails is asked again with the next one.
         }
       };
 
