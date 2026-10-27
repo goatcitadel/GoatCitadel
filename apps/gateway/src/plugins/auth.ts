@@ -216,10 +216,14 @@ export const authPlugin = fp(async (fastify) => {
       return;
     }
 
-    // SSE bridge token for EventSource, regardless of auth mode.
+    // SSE bridge token, regardless of auth mode. Browsers' EventSource can only
+    // send it as `?sse_token=`; clients that can set headers (the Windows
+    // desktop) send it as a bearer token so it stays out of URLs and request
+    // logs. A bearer that is not a live bridge token falls through to the
+    // normal operator, device and companion checks below.
     const sseScope = getSseTokenScopeForPath(request.url);
     if (sseScope) {
-      const sseToken = readQueryToken(request.query, "sse_token");
+      const sseToken = readQueryToken(request.query, "sse_token") ?? readBearerToken(request.headers.authorization);
       if (sseToken && validateSseToken(sseToken, sseScope, sseTokens)) {
         setAuthActor(request, `sse:${tokenFingerprint(sseToken)}`, "sse");
         return;
