@@ -38,17 +38,31 @@ function textUpdate(updateId: number) {
   };
 }
 
+/** A command whose text must never reach a diagnostic. */
+function commandUpdate(updateId: number) {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      from: { id: 777, is_bot: false },
+      chat: { id: 777, type: "private" },
+      text: "/approve secret-words",
+    },
+  };
+}
+
+/** Per-connection cursors; every connection starts from `initial` until it writes its own. */
 function memoryStore(initial?: { cursor: string; scope?: string }) {
-  let value = initial;
+  const values = new Map<string, { cursor: string; scope?: string }>();
   const writes: Array<{ channelKey: string; connectionId: string; cursor: string; scope?: string }> = [];
   const store: ChannelStreamCursorStore = {
-    read: async () => value,
+    read: async (_channelKey, connectionId) => values.get(connectionId) ?? initial,
     write: async (channelKey, connectionId, next) => {
-      value = next;
+      values.set(connectionId, next);
       writes.push({ channelKey, connectionId, ...next });
     },
   };
-  return { store, writes, current: () => value };
+  return { store, writes, current: (connectionId = "conn-1") => values.get(connectionId) ?? initial };
 }
 
 interface RecordedCall {
@@ -62,6 +76,8 @@ interface RecordedCall {
 interface HarnessOptions {
   /** Responses for long polls, in order; after they run out the session aborts. */
   polls?: Array<() => Response | Promise<Response>>;
+  /** Answers each long poll by offset instead of `polls`; undefined ends the session. */
+  respond?: (offset: string) => Response | undefined;
   probe?: () => Response;
   reply?: () => Response | Promise<Response>;
   token?: string | undefined;
@@ -72,7 +88,8 @@ interface HarnessOptions {
 }
 
 function harness(options: HarnessOptions = {}) {
-  const controller = new AbortController();
+  // Each ctx() is a new session with its own signal, as the runtime gives each run.
+  let controller = new AbortController();
   const pollQueue = [...(options.polls ?? [])];
   const calls: RecordedCall[] = [];
   const events: string[] = [];
@@ -87,12 +104,14 @@ function harness(options: HarnessOptions = {}) {
     });
     if (url.pathname.endsWith("/getUpdates")) {
       if (url.searchParams.get("offset") === "-1") return options.probe ? options.probe() : updates();
-      const next = pollQueue.shift();
-      if (!next) {
+      const response = options.respond
+        ? options.respond(url.searchParams.get("offset") ?? "")
+        : await pollQueue.shift()?.();
+      if (!response) {
         controller.abort();
         throw Object.assign(new Error("aborted"), { name: "AbortError" });
       }
-      return await next();
+      return response;
     }
     return options.reply ? await options.reply() : json({ ok: true, result: {} });
   });
@@ -120,9 +139,10 @@ function harness(options: HarnessOptions = {}) {
   const touch = vi.fn();
   const diagnostic = vi.fn();
   const handled: Array<string | undefined> = [];
-  function ctx(config?: Record<string, unknown>): ChannelStreamRunContext {
+  function ctx(config?: Record<string, unknown>, connectionId = "conn-1"): ChannelStreamRunContext {
+    controller = new AbortController();
     return {
-      connection: connection(config),
+      connection: { ...connection(config), connectionId },
       signal: controller.signal,
       cursor: undefined,
       markReady,
@@ -230,6 +250,117 @@ describe("telegram stream adapter", () => {
     expect(h.events).toEqual(["process:10", "write:11", "process:11", "write:12"]);
     expect(store.current()).toEqual({ cursor: "12", scope: BOT_ID });
     expect(h.getUpdatesCalls()[1]!.url.searchParams.get("offset")).toBe("12");
+  });
+
+  it("skips an update that fails 8 times and keeps receiving", async () => {
+    const store = memoryStore({ cursor: "10", scope: BOT_ID });
+    const h = harness({
+      store,
+      respond: (offset) =>
+        offset === "10"
+          ? updates(commandUpdate(10), textUpdate(11))
+          : offset === "11"
+            ? updates(textUpdate(11))
+            : undefined,
+      processUpdate: async (_connectionId, update) => {
+        if ((update as { update_id: number }).update_id === 10) {
+          throw new Error("Inbound command was denied by sender policy: sender_not_allowlisted");
+        }
+        return undefined;
+      },
+    });
+
+    // Each run is a new session with a new ctx, as the runtime's backoff retries would be.
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      await expect(h.adapter.run(h.ctx())).rejects.toThrow("denied by sender policy");
+    }
+    expect(h.diagnostic).not.toHaveBeenCalled();
+    expect(store.writes).toEqual([]);
+    const handledBefore = h.handled.length;
+
+    await expect(h.adapter.run(h.ctx())).resolves.toBeUndefined();
+
+    expect(h.diagnostic).toHaveBeenCalledTimes(1);
+    expect(h.diagnostic).toHaveBeenCalledWith(
+      "update_skipped",
+      "Skipped a Telegram update GoatCitadel couldn't handle after 8 tries.",
+      { updateId: 10 },
+      "warn",
+    );
+    const reported = JSON.stringify(h.diagnostic.mock.calls);
+    expect(reported).not.toContain(KEY);
+    expect(reported).not.toContain("secret-words");
+    expect(reported).not.toContain("sender policy");
+    expect(store.writes.map((write) => write.cursor)).toEqual(["11", "12"]);
+    // The skip is not inbound activity: only update 11 went through handle on the last run.
+    expect(h.handled.slice(handledBefore)).toEqual(["12"]);
+    const attemptsAt10 = h.processUpdate.mock.calls.filter(
+      ([, update]) => (update as { update_id: number }).update_id === 10,
+    );
+    expect(attemptsAt10).toHaveLength(8);
+    expect(h.processUpdate).toHaveBeenLastCalledWith("conn-1", textUpdate(11));
+    expect(store.current()).toEqual({ cursor: "12", scope: BOT_ID });
+  });
+
+  it("a success clears the failure count", async () => {
+    const store = memoryStore({ cursor: "10", scope: BOT_ID });
+    let failuresLeft = 7;
+    const h = harness({
+      store,
+      respond: (offset) => (offset === "10" ? updates(commandUpdate(10)) : undefined),
+      processUpdate: async () => {
+        if (failuresLeft > 0) {
+          failuresLeft -= 1;
+          throw new Error("store down");
+        }
+        return undefined;
+      },
+    });
+    for (let attempt = 1; attempt <= 7; attempt += 1) {
+      await expect(h.adapter.run(h.ctx())).rejects.toThrow("store down");
+    }
+    await expect(h.adapter.run(h.ctx())).resolves.toBeUndefined();
+    expect(store.current()).toEqual({ cursor: "11", scope: BOT_ID });
+
+    // The same update arrives again (say its offset write was lost): its failures count from zero, not from 7.
+    await store.store.write("telegram", "conn-1", { cursor: "10", scope: BOT_ID });
+    failuresLeft = 7;
+    for (let attempt = 1; attempt <= 7; attempt += 1) {
+      await expect(h.adapter.run(h.ctx())).rejects.toThrow("store down");
+    }
+    await expect(h.adapter.run(h.ctx())).resolves.toBeUndefined();
+
+    expect(h.diagnostic).not.toHaveBeenCalled();
+    expect(h.processUpdate).toHaveBeenCalledTimes(16);
+    expect(store.current()).toEqual({ cursor: "11", scope: BOT_ID });
+  });
+
+  it("counts failures per connection", async () => {
+    const store = memoryStore({ cursor: "10", scope: BOT_ID });
+    const h = harness({
+      store,
+      respond: (offset) => (offset === "10" ? updates(commandUpdate(10)) : undefined),
+      processUpdate: async (connectionId) => {
+        if (connectionId === "conn-1") throw new Error("denied");
+        return undefined;
+      },
+    });
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      await expect(h.adapter.run(h.ctx())).rejects.toThrow("denied");
+    }
+
+    // Another connection's update 10 is its own: conn-1's eight failures do not skip it.
+    await expect(h.adapter.run(h.ctx(undefined, "conn-2"))).resolves.toBeUndefined();
+    expect(h.processUpdate).toHaveBeenLastCalledWith("conn-2", commandUpdate(10));
+    expect(h.diagnostic).not.toHaveBeenCalled();
+    expect(store.current("conn-2")).toEqual({ cursor: "11", scope: BOT_ID });
+
+    // And conn-2's success leaves conn-1's count alone: conn-1 now skips its update 10.
+    await expect(h.adapter.run(h.ctx())).resolves.toBeUndefined();
+    expect(h.diagnostic).toHaveBeenCalledTimes(1);
+    expect(h.diagnostic.mock.calls[0]![2]).toEqual({ updateId: 10 });
+    expect(store.current("conn-1")).toEqual({ cursor: "11", scope: BOT_ID });
+    expect(h.processUpdate.mock.calls.filter(([connectionId]) => connectionId === "conn-1")).toHaveLength(8);
   });
 
   it("sends the reply the handler returns", async () => {

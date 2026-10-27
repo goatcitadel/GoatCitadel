@@ -23,6 +23,8 @@ import { readTelegramBotMethodCall, type TelegramBotMethodCall } from "../telegr
 
 export const LONG_POLL_SECONDS = 25;
 export const REQUEST_TIMEOUT_MS = 35_000;
+/** Tries at one update before it is skipped, so one update that always fails cannot block every later one. */
+export const MAX_UPDATE_ATTEMPTS = 8;
 const IDLE_TIMEOUT_MS = 60_000;
 const ALLOWED_UPDATES = ["message", "channel_post", "callback_query"];
 const BOT_API_ORIGIN = "https://api.telegram.org/";
@@ -38,6 +40,7 @@ const ANOTHER_READER =
 const UNREACHABLE = "GoatCitadel couldn't reach Telegram.";
 const NOT_ALLOWED = "GoatCitadel isn't allowed to reach api.telegram.org.";
 const REPLY_FAILED = "GoatCitadel couldn't send its reply to Telegram.";
+const UPDATE_SKIPPED = `Skipped a Telegram update GoatCitadel couldn't handle after ${MAX_UPDATE_ATTEMPTS} tries.`;
 
 export interface TelegramStreamAdapterDeps {
   fetch: typeof fetch;
@@ -68,6 +71,21 @@ function discardBody(response: Response): void {
 }
 
 export function createTelegramStreamAdapter(deps: TelegramStreamAdapterDeps): ChannelStreamAdapter {
+  // Failures of the update at the head of each connection's queue. Kept here, not per session, so the count
+  // survives the session restarts the runtime's backoff makes between tries.
+  const headFailures = new Map<string, { updateId: number; attempts: number }>();
+
+  function recordHeadFailure(connectionId: string, updateId: number): void {
+    const previous = headFailures.get(connectionId);
+    const attempts = previous?.updateId === updateId ? previous.attempts + 1 : 1;
+    headFailures.set(connectionId, { updateId, attempts });
+  }
+
+  function hasExhaustedAttempts(connectionId: string, updateId: number): boolean {
+    const failures = headFailures.get(connectionId);
+    return failures?.updateId === updateId && failures.attempts >= MAX_UPDATE_ATTEMPTS;
+  }
+
   async function callBotApi(key: string, method: string, init: RequestInit & { signal: AbortSignal }) {
     try {
       // A redirect could carry the key to another host; surface it as an error instead.
@@ -202,7 +220,21 @@ export function createTelegramStreamAdapter(deps: TelegramStreamAdapterDeps): Ch
             const updateId = readUpdateId(update);
             if (updateId === undefined) continue;
             const next = String(updateId + 1);
-            await ctx.handle(() => handleUpdate(ctx, key, update), next);
+            if (hasExhaustedAttempts(connectionId, updateId)) {
+              // Not inbound activity: no handle, only the diagnostic (the id alone) and the offset past it.
+              ctx.diagnostic("update_skipped", UPDATE_SKIPPED, { updateId }, "warn");
+              await saveOffset(next);
+              headFailures.delete(connectionId);
+              offset = next;
+              continue;
+            }
+            try {
+              await ctx.handle(() => handleUpdate(ctx, key, update), next);
+            } catch (error) {
+              recordHeadFailure(connectionId, updateId);
+              throw error;
+            }
+            headFailures.delete(connectionId);
             await saveOffset(next);
             offset = next;
           }
