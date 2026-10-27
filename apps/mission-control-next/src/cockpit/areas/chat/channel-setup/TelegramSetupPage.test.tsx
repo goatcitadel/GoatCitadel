@@ -771,6 +771,55 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
     expect(steps()[3]!.getAttribute("data-state")).toBe("done");
   });
 
+  it("comes back to a setup someone said hi to: says so, writes nothing, listens for nothing, and can turn on", async () => {
+    vi.useFakeTimers();
+    const saidHi = draft({
+      revision: 7,
+      secretState: KEY_STORED,
+      draft: {
+        botUsername: "MyGoatBot",
+        receiveMode: "poll",
+        setupCode: "OLDCODE234",
+        allowedSenders: ["777"],
+        ownerActorIds: ["777"],
+        inboundAccessMode: "allowlist",
+        targets: [
+          {
+            id: "telegram:777",
+            label: "Ada Lovelace",
+            chatId: "777",
+            kind: "private",
+            source: "recent_update",
+            setupCodeMatched: true,
+            default: true,
+          },
+        ],
+      },
+    });
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [saidHi] });
+    api.discoverTelegramSetupTargets.mockResolvedValue(discovery());
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "completed", plan });
+    await mount();
+    await settle();
+
+    expect(steps()[2]!.getAttribute("data-state")).toBe("done");
+    expect(steps()[2]!.textContent).toContain("Ada Lovelace said hi. Only they can message your bot for now.");
+    expect(status()).toBe("Ada Lovelace said hi. Only they can message your bot for now.");
+    expect(steps()[3]!.getAttribute("data-state")).toBe("current");
+    expect(steps()[3]!.textContent).toContain("Who can message your bot: Ada Lovelace");
+
+    await advance(SAY_HI_POLL_MS * 3);
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+    expect(api.createChannelSetupDraft).not.toHaveBeenCalled();
+    // One look at the bot, and no listening for a code.
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(1);
+    expect(api.discoverTelegramSetupTargets.mock.calls.some(([input]) => "setupCode" in input)).toBe(false);
+
+    expect(button("Turn on")?.disabled).toBe(false);
+    await click(button("Turn on"));
+    expect(turnOnApi.turnOnChannelDraft).toHaveBeenCalledWith(expect.objectContaining({ draftId: "draft-1" }));
+  });
+
   it("stops listening for good once someone has said hi", async () => {
     await toSayHi();
     await someoneSaysHi();

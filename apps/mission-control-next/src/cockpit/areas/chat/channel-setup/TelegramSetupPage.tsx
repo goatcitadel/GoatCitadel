@@ -136,18 +136,19 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
   useEffect(() => discardKey, [discardKey]);
 
   // Step 3 opens with a code to send. It is asked for once per setup: if saving it fails, the step offers a button
-  // instead of trying again on every draw.
+  // instead of trying again on every draw. Someone who said hi on an earlier visit needs no code.
   const codeAsked = useRef(false);
   const { busy, newCode } = setup;
+  const saidHiAlready = sender !== null;
   useEffect(() => {
     if (!ready) {
       codeAsked.current = false;
       return;
     }
-    if (codeAsked.current || !draft || busy) return;
+    if (codeAsked.current || !draft || busy || saidHiAlready) return;
     codeAsked.current = true;
     void newCode();
-  }, [ready, draft, busy, newCode]);
+  }, [ready, draft, busy, saidHiAlready, newCode]);
 
   const check = async () => {
     setChecking(true);

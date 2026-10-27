@@ -1,6 +1,6 @@
 import type { ChannelSetupCodeSender } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
-import { draftWithSender, senderName } from "./code-sender";
+import { draftWithSender, savedSender, senderName } from "./code-sender";
 
 const ADA: ChannelSetupCodeSender = { actorId: "777", chatId: "777", displayName: "Ada Lovelace", username: "ada" };
 
@@ -88,5 +88,57 @@ describe("draftWithSender", () => {
     expect((named.targets as { label: string }[])[0]!.label).toBe("@grace");
     const unnamed = draftWithSender({}, { actorId: "5", chatId: "5" });
     expect((unnamed.targets as { label: string }[])[0]!.label).toBe("Someone");
+  });
+});
+
+describe("savedSender", () => {
+  const ADA_CHAT = {
+    id: "telegram:777",
+    label: "Ada Lovelace",
+    chatId: "777",
+    kind: "private",
+    source: "recent_update",
+    setupCodeMatched: true,
+    default: true,
+  };
+
+  it("gives back who draftWithSender saved, from the owner and their chat", () => {
+    expect(savedSender(draftWithSender({ targets: [] }, ADA))).toEqual({
+      actorId: "777",
+      chatId: "777",
+      displayName: "Ada Lovelace",
+    });
+  });
+
+  it("takes the chat the code came from over another default", () => {
+    const values = {
+      ownerActorIds: ["777"],
+      targets: [
+        { id: "group", label: "Team", chatId: "-100", default: true },
+        { ...ADA_CHAT, default: false },
+      ],
+    };
+    expect(savedSender(values)).toEqual({ actorId: "777", chatId: "777", displayName: "Ada Lovelace" });
+  });
+
+  it("takes the default chat when no chat is marked as the one the code came from", () => {
+    const values = {
+      ownerActorIds: ["777"],
+      targets: [
+        { id: "other", label: "Other", chatId: "-200" },
+        { id: "mine", label: "Me", chatId: "777", default: true },
+      ],
+    };
+    expect(savedSender(values)).toEqual({ actorId: "777", chatId: "777", displayName: "Me" });
+  });
+
+  it("is nobody before anyone has said hi, or without a chat to post to", () => {
+    expect(savedSender({})).toBeNull();
+    expect(savedSender({ targets: [ADA_CHAT] })).toBeNull();
+    expect(savedSender({ ownerActorIds: ["  "], targets: [ADA_CHAT] })).toBeNull();
+    expect(savedSender({ ownerActorIds: ["777"] })).toBeNull();
+    expect(
+      savedSender({ ownerActorIds: ["777"], targets: [{ id: "x", label: "X", chatId: "", default: true }] }),
+    ).toBeNull();
   });
 });

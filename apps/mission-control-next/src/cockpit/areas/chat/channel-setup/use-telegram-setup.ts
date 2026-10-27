@@ -9,7 +9,7 @@ import {
   updateChannelSetupDraft,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { draftWithSender } from "./code-sender";
+import { draftWithSender, savedSender } from "./code-sender";
 import { listenForHi } from "./listen-for-hi";
 import { createSetupCode } from "./setup-code";
 import { checkTelegramKey, readTelegramBot } from "./telegram-key-check";
@@ -200,7 +200,11 @@ export function useTelegramSetup(workspaceId: string): TelegramSetupState {
         return;
       }
       try {
-        set({ ...(await readTelegramBot({ draftId: found.draftId, expectedRevision: found.revision })), busy: false });
+        const reading = await readTelegramBot({ draftId: found.draftId, expectedRevision: found.revision });
+        // Someone may have said hi on an earlier visit. Then there is no code to save and nothing to listen for: the
+        // draft already says who they are, and writing it again would only make an open change out of date.
+        const clear = !reading.webhookActive && !reading.conflict;
+        set({ ...reading, sender: clear ? savedSender(found.draft) : null, busy: false });
       } catch {
         set({ busy: false, error: TELEGRAM_KEY_FAILED });
       }
