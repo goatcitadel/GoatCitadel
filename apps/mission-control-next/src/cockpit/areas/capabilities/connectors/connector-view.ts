@@ -94,6 +94,9 @@ const PANEL_REASON_LINES: Readonly<Partial<Record<CapabilityConnectorReason, str
   error: "Stopped working.",
 };
 
+/** Why a hidden row's AI can't use it, said in place of its reason. */
+const HIDDEN_REASON = "The AI can't use it in this workspace";
+
 /** Added to the panel's broken line only when Technical details is on the page and holds the error. */
 const LAST_ERROR_POINTER = " The last error is under Technical details.";
 
@@ -201,7 +204,7 @@ export function presentConnectorState(
   const panelLine = where === "panel" ? PANEL_REASON_LINES[item.reason] : undefined;
   const pointer = panelLine && technicalDetailsShown && item.lastError ? LAST_ERROR_POINTER : "";
   const reason = item.hiddenInWorkspace
-    ? "The AI can't use it in this workspace"
+    ? HIDDEN_REASON
     : chatBlocked
       ? "Connected · not available in Chat"
       : panelLine
@@ -211,11 +214,22 @@ export function presentConnectorState(
 }
 
 /**
+ * What a finished connect announces (M10): connected, and whether the AI can use it, as the row reads once the list
+ * catches up, so a Chat or workspace limit is never left out of a plain "Connected.".
+ */
+export function connectedAnnouncement(item: Pick<CapabilityConnectorItem, "hiddenInWorkspace" | "chat">): string {
+  if (item.hiddenInWorkspace) return `Connected. ${HIDDEN_REASON}.`;
+  if (!item.chat.available) return "Connected. Not available in Chat.";
+  return `Connected. ${REASON_LINES.ready}.`;
+}
+
+/**
  * A row whose install flow is running says so instead of its own reason (R87), read from the flow, never moving it.
- * Waiting on an Inbox approval reads "Waiting on you in Inbox" in the waiting tone. Any other running phase reads
- * "Installing" on a template row and "Connecting" on a saved server, whose flow may be its own sign-in or connect rather
- * than an install; both in the running tone, so the row never looks ready while it isn't. The badge keeps the row's own
- * state word, and a finished, failed or stopped flow leaves the row as the list has it.
+ * A flow that waits on the operator says so in the waiting tone: "Waiting on you in Inbox" for its approval, "Waiting
+ * on you to sign in" while its sign-in page is open (M6). Any other running phase reads "Installing" on a template row
+ * and "Connecting" on a saved server, whose flow may be its own sign-in or connect rather than an install; both in the
+ * running tone, so the row never looks ready while it isn't. The badge keeps the row's own state word, and a finished,
+ * failed or stopped flow leaves the row as the list has it.
  */
 export function withInstallProgress(
   item: CapabilityConnectorItem,
@@ -223,13 +237,13 @@ export function withInstallProgress(
   flow: ConnectorInstallState,
 ): StatusPresentation & { reason: string } {
   if (flow.phase === "waiting_inbox") return { ...state, tone: "waiting", reason: "Waiting on you in Inbox" };
+  if (flow.phase === "signing_in") return { ...state, tone: "waiting", reason: "Waiting on you to sign in" };
   if (!isActiveInstallState(flow)) return state;
   return { ...state, tone: "running", reason: item.source === "mcp_server" ? "Connecting" : "Installing" };
 }
 
 /** Said under an on-device program's command: it runs outside the Gateway's own network rules. */
-export const ON_DEVICE_NETWORK_WARNING =
-  "This program's own internet access isn't limited by GoatCitadel's allowed sites.";
+export const ON_DEVICE_NETWORK_WARNING = "This program's own internet access isn't limited by your network allowlist.";
 
 export interface ConnectionDescription {
   /** Plain sentences, for example "Signs in at mcp.linear.app". */

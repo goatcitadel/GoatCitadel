@@ -11,9 +11,16 @@ import { readMcpOAuthFlow, writeMcpOAuthFlow } from "./mcp-oauth-flow-state";
 import { IDLE_MCP_ATTEMPT, readMcpServerAttempt, trackMcpWrite, writeMcpServerAttempt } from "./mcp-server-attempts";
 
 export type McpOAuthAction = "start" | "complete";
+/**
+ * Which pre-admission refusal a conflict was, for callers that word it themselves; the message stays the same. The
+ * sign-in site was off the network allowlist, it couldn't be read, the vendor refused client registration, or the
+ * sign-in request expired before it was finished. A reviewed-request conflict names none.
+ */
+export type McpOAuthRefusal = "not_allowed" | "sign_in_site" | "registration" | "expired";
 type Result =
   | { status: "saved"; server: McpServerRecord }
-  | { status: "cancelled" | "conflict" | "unavailable" | "locked" | "uncertain"; message: string };
+  | { status: "conflict"; message: string; refused?: McpOAuthRefusal; refusedHost?: string }
+  | { status: "cancelled" | "unavailable" | "locked" | "uncertain"; message: string };
 function rejected(error: unknown, id: string, action: McpOAuthAction) {
   if (
     !isApiRequestError(error) ||
@@ -56,6 +63,39 @@ function discoveryRejection(error: unknown): string | undefined {
   if (details?.field === "oauth") return `${sentence} Nothing changed; fix this, then review authorization again.`;
   if (details?.field === "oauthRegistration") return `${sentence} Review authorization again when ready.`;
   return undefined;
+}
+/**
+ * The network guard's own reason for a host that isn't on the allowlist, as sign-in discovery passes it on. The guard
+ * names it as a scheme and host only, or a bare host.
+ */
+const NOT_ALLOWLISTED = /\bnot yet allowlisted:\s*(\S+)/iu;
+const BARE_HOST = /^[a-z0-9.-]+(?::\d{1,5})?$/iu;
+function blockedHost(reason: string): string | undefined {
+  const named = NOT_ALLOWLISTED.exec(reason)?.[1]?.replace(/[.,;)]+$/u, "");
+  if (!named) return undefined;
+  try {
+    const host = named.includes("://") ? new URL(named).host : named;
+    return BARE_HOST.test(host) ? host.toLowerCase() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+/** Which refusal `discoveryRejection` worded, by the field the Gateway named and the step it refused. */
+function refusalOf(
+  error: unknown,
+  action: McpOAuthAction,
+): { refused: McpOAuthRefusal; refusedHost?: string } | undefined {
+  if (!isApiRequestError(error) || !error.body || typeof error.body !== "object") return undefined;
+  const body = error.body as Record<string, unknown>,
+    field = (body.details as Record<string, unknown> | undefined)?.field;
+  if (field === "oauthRegistration") return { refused: "registration" };
+  if (field !== "oauth") return undefined;
+  // Completion's only pre-admission refusal is a PKCE verifier that is gone: the request expired.
+  if (action === "complete") return { refused: "expired" };
+  const reason = typeof body.error === "string" ? body.error : "";
+  if (!NOT_ALLOWLISTED.test(reason)) return { refused: "sign_in_site" };
+  const host = blockedHost(reason);
+  return { refused: "not_allowed", ...(host ? { refusedHost: host } : {}) };
 }
 export async function commitMcpOAuth({
   reviewed,
@@ -155,13 +195,11 @@ export async function commitMcpOAuth({
     if (!dispatched || (!acknowledged && rejected(error, id, action))) {
       writeMcpServerAttempt(id, IDLE_MCP_ATTEMPT);
       const discovery = dispatched && !acknowledged ? discoveryRejection(error) : undefined;
+      if (!dispatched) return { status: "unavailable", message: "Current OAuth metadata could not be verified." };
       return {
-        status: dispatched ? "conflict" : "unavailable",
-        message: discovery
-          ? discovery
-          : dispatched
-            ? "The reviewed request was rejected before admission. Refresh before reviewing again."
-            : "Current OAuth metadata could not be verified.",
+        status: "conflict",
+        message: discovery ?? "The reviewed request was rejected before admission. Refresh before reviewing again.",
+        ...(discovery ? refusalOf(error, action) : undefined),
       };
     }
     const message =

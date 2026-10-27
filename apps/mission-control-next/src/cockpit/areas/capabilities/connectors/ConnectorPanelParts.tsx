@@ -23,7 +23,11 @@ export function ConnectorHeader({ item }: { item: CapabilityConnectorItem }) {
   const { showTechnicalDetails } = useUiPreferences();
   const state = presentConnectorState(item, "panel", { technicalDetailsShown: showTechnicalDetails });
   return (
-    <div data-focus-landing tabIndex={-1} className="space-y-2 outline-none">
+    <div
+      data-focus-landing
+      tabIndex={-1}
+      className="space-y-2 rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+    >
       <p className="text-sm text-fg-secondary">
         {connectorKindLabel(item.kind)} · {connectorCategoryLabel(item.category)}
       </p>

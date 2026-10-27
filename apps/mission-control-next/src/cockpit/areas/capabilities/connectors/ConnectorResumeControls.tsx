@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
 import type { CapabilityConnectorItem, CapabilityConnectorState } from "@goatcitadel/contracts";
 import { ConnectorInstallProgress, installSteps, InstallStatus, type InstallStepId } from "./ConnectorInstallProgress";
-import { IDLE as SILENT } from "./connector-install-store";
+import { IDLE as SILENT, type ConnectorInstallState } from "./connector-install-store";
+import { connectedAnnouncement } from "./connector-view";
 import { useConnectorInstall } from "./use-connector-install";
 import { usePanelFocus } from "./use-panel-focus";
 
@@ -13,6 +14,14 @@ const RESUME: Readonly<Partial<Record<CapabilityConnectorState, { label: string;
   sign_in_expired: { label: "Reconnect", from: "sign_in" },
   broken: { label: "Try again", from: "connect" },
 };
+
+/**
+ * After a sign-in that failed, a server whose state offers no button (one its install left switched off) still gets
+ * one: the failure says to sign in again (I1).
+ */
+const SIGN_IN_AGAIN = { label: "Sign in again", from: "sign_in" } as const;
+const signInFailed = (state: ConnectorInstallState) =>
+  state.phase === "failed" && (state.step === "sign_in" || state.step === "finish_sign_in");
 
 const STEPS: Readonly<Record<ResumeFrom, readonly InstallStepId[]>> = {
   sign_in: ["sign_in", "switch_on", "connect"],
@@ -34,11 +43,12 @@ export function ConnectorResumeControls({
   const install = useConnectorInstall(item);
   const anchor = useRef<HTMLParagraphElement>(null);
   usePanelFocus(anchor, "primary");
-  const resume = RESUME[item.state];
-  // The button last pressed here says which steps its flow runs. A flow this view didn't start, with no button to
-  // offer, is the install that saved this server, so it lists the install's own steps.
+  const own = RESUME[item.state];
+  const resume = own ?? (signInFailed(install.state) ? SIGN_IN_AGAIN : undefined);
+  // The button last pressed here says which steps its flow runs. A flow this view didn't start, with no button of the
+  // state's own to offer, is the install that saved this server, so it lists the install's own steps.
   const [pressed, setPressed] = useState<ResumeFrom | undefined>(undefined);
-  const steps = pressed ? STEPS[pressed] : resume ? STEPS[resume.from] : installSteps(item);
+  const steps = pressed ? STEPS[pressed] : own ? STEPS[own.from] : installSteps(item);
   // A finished flow has nothing more to say here: the state above already reads Connected.
   const shown = resume !== undefined || (install.state.phase !== "idle" && install.state.phase !== "done");
   return (
@@ -62,7 +72,11 @@ export function ConnectorResumeControls({
         />
       ) : null}
       {/* Kept on the page while silenced, so it reads out the next change once it may speak again. */}
-      <InstallStatus anchor={anchor} state={announce ? install.state : SILENT} doneWords="Connected." />
+      <InstallStatus
+        anchor={anchor}
+        state={announce ? install.state : SILENT}
+        doneWords={connectedAnnouncement(item)}
+      />
     </>
   );
 }

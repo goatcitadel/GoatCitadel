@@ -21,6 +21,8 @@ export type ConnectorInstallState =
       scopes: string;
       /** Set when a pasted code's state doesn't match this sign-in (R82); gone once the phase moves on. */
       manualError?: string;
+      /** When this sign-in request was made (ms since the epoch); the Gateway keeps it for 10 minutes (R94). */
+      startedAt: number;
     }
   | { phase: "done"; serverId: string }
   | { phase: "failed"; step: ConnectorInstallStep; message: string; changed: string[]; detail?: string }

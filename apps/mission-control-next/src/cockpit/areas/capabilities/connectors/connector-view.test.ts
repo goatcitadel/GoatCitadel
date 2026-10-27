@@ -300,7 +300,7 @@ describe("describeConnection", () => {
     ).toEqual({
       lines: ["Runs on this computer"],
       command: "npx -y context7-mcp@1.2.3",
-      warning: "This program's own internet access isn't limited by GoatCitadel's allowed sites.",
+      warning: "This program's own internet access isn't limited by your network allowlist.",
     });
   });
 
@@ -314,7 +314,7 @@ describe("describeConnection", () => {
   it("still warns about the network when the command is missing", () => {
     const shown = describeConnection(item({ runsOnThisDevice: true }));
     expect(shown.command).toBeUndefined();
-    expect(shown.warning).toContain("isn't limited by GoatCitadel's allowed sites");
+    expect(shown.warning).toContain("isn't limited by your network allowlist");
   });
 
   it.each<[CapabilityConnectorState, CapabilityConnectorReason]>([
@@ -411,10 +411,30 @@ describe("withInstallProgress", () => {
     expect(withInstallProgress(saved, presentConnectorState(saved), flow).reason).toBe("Waiting on you in Inbox");
   });
 
+  // M6: signing in waits on the operator, like an Inbox approval (R87), so the row says so in the waiting tone.
+  it("says a row waits on you to sign in, in the waiting tone", () => {
+    const flow = {
+      phase: "signing_in",
+      authorizeUrl: "https://a.test",
+      signInHost: "a.test",
+      scopes: "read",
+      startedAt: 1,
+    } as const;
+    expect(withInstallProgress(item(), presentConnectorState(item()), flow)).toEqual({
+      label: "Available",
+      tone: "waiting",
+      reason: "Waiting on you to sign in",
+    });
+    expect(withInstallProgress(saved, presentConnectorState(saved), flow)).toEqual({
+      ...presentConnectorState(saved),
+      tone: "waiting",
+      reason: "Waiting on you to sign in",
+    });
+  });
+
   it.each([
     { phase: "working", step: "plan" },
     { phase: "working", step: "connect" },
-    { phase: "signing_in", authorizeUrl: "https://a.test", signInHost: "a.test", scopes: "read" },
   ] as const)("says a template row is installing while its flow is %j", (flow) => {
     expect(withInstallProgress(item(), presentConnectorState(item()), flow)).toEqual({
       label: "Available",

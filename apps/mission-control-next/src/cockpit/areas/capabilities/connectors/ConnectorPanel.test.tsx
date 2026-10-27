@@ -210,7 +210,7 @@ describe("Connector panel", () => {
     expect(text()).toContain("How it connects");
     expect(text()).toContain("Runs on this computer");
     expect(body().querySelector("code")?.textContent).toBe("npx -y @upstash/context7-mcp@1.0.31");
-    expect(text()).toContain("This program's own internet access isn't limited by GoatCitadel's allowed sites.");
+    expect(text()).toContain("This program's own internet access isn't limited by your network allowlist.");
     // An app that is not saved has no switch and nothing to remove yet.
     expect(switchControl()).toBeNull();
     expect(button("Remove")).toBeUndefined();
@@ -220,7 +220,7 @@ describe("Connector panel", () => {
     await renderPanel(LINEAR.id);
     expect(text()).toContain("Signs in at mcp.linear.app");
     expect(body().querySelector("code")).toBeNull();
-    expect(text()).not.toContain("isn't limited by GoatCitadel's allowed sites");
+    expect(text()).not.toContain("isn't limited by your network allowlist");
   });
 
   it("links Advanced setup to the MCP section", async () => {

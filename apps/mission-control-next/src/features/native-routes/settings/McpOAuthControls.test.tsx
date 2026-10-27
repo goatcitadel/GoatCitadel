@@ -296,38 +296,35 @@ it.each([
   "unchanged-binding",
   "invalid-binding",
   "unchanged-revision",
-])(
-  "retains uncertainty for mismatched completion %s",
-  async (mismatch) => {
-    await begin();
-    const receipt = { version: 1 as const, reviewed: review(started), state, server: structuredClone(saved) };
-    if (mismatch === "state") receipt.state = "22222222-2222-4222-8222-222222222222";
-    if (mismatch === "review") receipt.reviewed.expectedRevision = "f".repeat(64);
-    if (mismatch === "nonce") receipt.server.connectionRevision = "f".repeat(64);
-    if (mismatch === "configuration") receipt.server.url = "https://other.invalid/mcp";
-    if (mismatch === "auth") receipt.server.authState = { authType: "oauth2", readiness: "needs_auth" };
-    if (mismatch === "unchanged-binding") receipt.server.configurationBindingId = started.configurationBindingId;
-    if (mismatch === "invalid-binding") receipt.server.configurationBindingId = "invalid";
-    if (mismatch === "unchanged-revision") receipt.server.revision = started.revision;
-    api.completeReviewedMcpOAuth.mockImplementation(async () => {
-      api.fetchMcpServer.mockResolvedValue(mismatch === "readback" ? { ...saved, label: "Peer" } : receipt.server);
-      return receipt;
-    });
-    expect(
-      (
-        await commitMcpOAuth({
-          reviewed: started,
-          action: "complete",
-          code: "secret-code",
-          state,
-          isCurrent: () => true,
-          onDispatch: () => undefined,
-        })
-      ).status,
-    ).toBe("uncertain");
-    expect(readMcpServerAttempt(initial.serverId).phase).toBe("uncertain");
-  },
-);
+])("retains uncertainty for mismatched completion %s", async (mismatch) => {
+  await begin();
+  const receipt = { version: 1 as const, reviewed: review(started), state, server: structuredClone(saved) };
+  if (mismatch === "state") receipt.state = "22222222-2222-4222-8222-222222222222";
+  if (mismatch === "review") receipt.reviewed.expectedRevision = "f".repeat(64);
+  if (mismatch === "nonce") receipt.server.connectionRevision = "f".repeat(64);
+  if (mismatch === "configuration") receipt.server.url = "https://other.invalid/mcp";
+  if (mismatch === "auth") receipt.server.authState = { authType: "oauth2", readiness: "needs_auth" };
+  if (mismatch === "unchanged-binding") receipt.server.configurationBindingId = started.configurationBindingId;
+  if (mismatch === "invalid-binding") receipt.server.configurationBindingId = "invalid";
+  if (mismatch === "unchanged-revision") receipt.server.revision = started.revision;
+  api.completeReviewedMcpOAuth.mockImplementation(async () => {
+    api.fetchMcpServer.mockResolvedValue(mismatch === "readback" ? { ...saved, label: "Peer" } : receipt.server);
+    return receipt;
+  });
+  expect(
+    (
+      await commitMcpOAuth({
+        reviewed: started,
+        action: "complete",
+        code: "secret-code",
+        state,
+        isCurrent: () => true,
+        onDispatch: () => undefined,
+      })
+    ).status,
+  ).toBe("uncertain");
+  expect(readMcpServerAttempt(initial.serverId).phase).toBe("uncertain");
+});
 it("does not claim nothing changed when client registration reached the vendor", async () => {
   api.startReviewedMcpOAuth.mockRejectedValueOnce(
     new ApiRequestError("request failed", {
@@ -403,10 +400,85 @@ it.each(["discovery", "discovery-committed", "discovery-on-complete"] as const)(
       status: "conflict",
       message:
         "Sign-in discovery for Fixture failed: Host is not yet allowlisted: https://mcp.example. Nothing changed; fix this, then review authorization again.",
+      refused: "not_allowed",
+      refusedHost: "mcp.example",
     });
     expect(readMcpServerAttempt(initial.serverId).phase).not.toBe("uncertain");
   },
 );
+// I1: callers that word the refusal themselves (Capabilities) learn which one it was; the message is unchanged.
+it.each([
+  [
+    "start",
+    "oauth",
+    "Sign-in discovery for Fixture failed: Host is not yet allowlisted: https://Auth.example:8443.",
+    "not_allowed",
+    "auth.example:8443",
+  ],
+  ["start", "oauth", "Sign-in discovery for Fixture failed: metadata was not valid JSON", "sign_in_site", undefined],
+  [
+    "start",
+    "oauthRegistration",
+    "Sign-in for Fixture stopped at client registration: refused.",
+    "registration",
+    undefined,
+  ],
+  [
+    "complete",
+    "oauth",
+    "This sign-in expired or the Gateway restarted since it began. Start authorization again.",
+    "expired",
+    undefined,
+  ],
+] as const)("names a pre-admission %s refusal (%s: %s)", async (action, field, error, refused, refusedHost) => {
+  const rejection = new ApiRequestError("request failed", {
+    kind: "http",
+    status: 400,
+    method: "POST",
+    path: `/api/v1/mcp/servers/fixture/oauth/${action}-reviewed`,
+    body: { error, code: "FIELD_INVALID", details: { field } },
+  });
+  let reviewed = initial;
+  if (action === "complete") {
+    await begin();
+    reviewed = started;
+    api.completeReviewedMcpOAuth.mockRejectedValueOnce(rejection);
+  } else {
+    api.startReviewedMcpOAuth.mockRejectedValueOnce(rejection);
+  }
+
+  const result = await commitMcpOAuth({
+    reviewed,
+    action,
+    ...(action === "complete" ? { code: "code", state } : {}),
+    isCurrent: () => true,
+    onDispatch: () => undefined,
+  });
+
+  expect(result).toMatchObject({ status: "conflict", refused });
+  if (result.status !== "conflict") return;
+  expect(result.refusedHost).toBe(refusedHost);
+  expect(result.message).toContain(error.replace(/\.$/u, ""));
+});
+it("names no refusal for a reviewed-request conflict", async () => {
+  api.startReviewedMcpOAuth.mockRejectedValueOnce(
+    new ApiRequestError("request failed", {
+      kind: "http",
+      status: 409,
+      method: "POST",
+      path: "/api/v1/mcp/servers/fixture/oauth/start-reviewed",
+      body: { code: "WRITE_CONFLICT", details: { reason: "MCP_SERVER_REVIEW_REQUIRED" } },
+    }),
+  );
+  const result = await commitMcpOAuth({
+    reviewed: initial,
+    action: "start",
+    isCurrent: () => true,
+    onDispatch: () => undefined,
+  });
+  expect(result.status).toBe("conflict");
+  expect(result).not.toHaveProperty("refused");
+});
 it.each(["stale", "committed", "old-gateway"])(
   "releases only a source-owned noncommitted rejection (%s)",
   async (kind) => {

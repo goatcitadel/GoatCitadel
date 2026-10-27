@@ -43,6 +43,7 @@ const flows = vi.hoisted(() => {
     start: vi.fn(),
     resume: vi.fn(),
     submitManualCode: vi.fn(),
+    restartSignIn: vi.fn(),
     cancel: vi.fn(),
     keyOf,
     read: (item: { source: string; templateId?: string; serverId?: string }) => entries.get(keyOf(item)) ?? IDLE,
@@ -73,6 +74,7 @@ vi.mock("./use-connector-install", async () => {
         start: (options: { enableChatConnectors: boolean }) => flows.start(item.id, options),
         resume: (from: string) => flows.resume(item.id, from),
         submitManualCode: (code: string, state: string) => flows.submitManualCode(code, state),
+        restartSignIn: () => flows.restartSignIn(item.id),
         cancel: () => flows.cancel(item.id),
       };
     },
@@ -241,6 +243,7 @@ beforeEach(() => {
     flows.start,
     flows.resume,
     flows.submitManualCode,
+    flows.restartSignIn,
     flows.cancel,
   ])
     mock.mockReset();
@@ -275,11 +278,13 @@ describe("Install panel", () => {
     expect(notes).toContain("Can post comments as you.");
     expect(text()).toContain("How it connects");
     expect(text()).toContain("Signs in at mcp.linear.app");
-    expect(text()).toContain("Installing adds mcp.linear.app, auth.linear.app to your network allowlist.");
+    expect(text()).toContain("Installing makes sure mcp.linear.app, auth.linear.app are on your network allowlist.");
+    expect(text()).not.toContain("Installing adds");
   });
 
   it("says what asks first once it is installed", async () => {
     await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    expect(text()).toContain("Installing makes sure mcp.example.com is on your network allowlist.");
     expect(text()).toContain("What asks first");
     expect(text()).toContain(
       "Reads run on their own. Anything that creates or changes something asks you first. You can change this later.",
@@ -402,7 +407,13 @@ describe("Install progress", () => {
     await renderPanel(LINEAR.id, [LINEAR]);
     setFlow(
       LINEAR,
-      { phase: "signing_in", authorizeUrl: AUTHORIZE_URL, signInHost: "auth.linear.app", scopes: "read, write" },
+      {
+        phase: "signing_in",
+        authorizeUrl: AUTHORIZE_URL,
+        signInHost: "auth.linear.app",
+        scopes: "read, write",
+        startedAt: Date.now(),
+      },
       "srv-1",
     );
     expect(text()).toContain("Finish signing in in your browser");
@@ -436,6 +447,57 @@ describe("Install progress", () => {
     expect(flows.cancel).toHaveBeenCalledExactlyOnceWith(LINEAR.id);
   });
 
+  // R94: the Gateway keeps a sign-in request for 10 minutes; an old one is offered as a new one instead of failing.
+  it("says to finish within 10 minutes, and offers a new sign-in once the request is nearly out of time", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      await renderPanel(LINEAR.id, [LINEAR]);
+      setFlow(
+        LINEAR,
+        {
+          phase: "signing_in",
+          authorizeUrl: AUTHORIZE_URL,
+          signInHost: "auth.linear.app",
+          scopes: "read, write",
+          startedAt: Date.now(),
+        },
+        "srv-1",
+      );
+      expect(text()).toContain("Finish within 10 minutes.");
+      expect(link("Open sign-in page")).toBeDefined();
+      expect(button("Start sign-in again")).toBeUndefined();
+
+      await act(async () => {
+        vi.advanceTimersByTime(9 * 60_000);
+      });
+
+      expect(link("Open sign-in page")).toBeUndefined();
+      expect(text()).toContain("This sign-in request is about to run out of time.");
+      await act(async () => button("Start sign-in again")?.click());
+      expect(flows.restartSignIn).toHaveBeenCalledExactlyOnceWith(LINEAR.id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("offers a new sign-in straight away when the panel opens on an old one", async () => {
+    await renderPanel(LINEAR.id, [LINEAR]);
+    setFlow(
+      LINEAR,
+      {
+        phase: "signing_in",
+        authorizeUrl: AUTHORIZE_URL,
+        signInHost: "auth.linear.app",
+        scopes: "read, write",
+        startedAt: Date.now() - 9.5 * 60_000,
+      },
+      "srv-1",
+    );
+    expect(button("Start sign-in again")).toBeDefined();
+    expect(link("Open sign-in page")).toBeUndefined();
+    expect(body().querySelector("details summary")).toBeNull();
+  });
+
   it("says when a pasted code doesn't match, beside the fields it kept", async () => {
     const mismatch = "That doesn't match this sign-in. Paste the code and state from the sign-in page again.";
     await renderPanel(LINEAR.id, [LINEAR]);
@@ -444,6 +506,7 @@ describe("Install progress", () => {
       authorizeUrl: AUTHORIZE_URL,
       signInHost: "auth.linear.app",
       scopes: "read, write",
+      startedAt: Date.now(),
     } as const;
     setFlow(LINEAR, signingIn, "srv-1");
     await type(field("Authorization code"), "code-1");
@@ -473,7 +536,8 @@ describe("Install progress", () => {
     );
     expect(text()).toContain("Couldn't switch it on.");
     expect(text()).toContain("Couldn't switch Linear on. Reload and try again.");
-    expect(text()).toContain("What changed");
+    expect(text()).toContain("What happened");
+    expect(text()).not.toContain("What changed");
     const changed = [...body().querySelectorAll("[data-install-changed] li")].map((entry) => entry.textContent);
     expect(changed).toEqual(["Allowed mcp.linear.app. Saved Linear, switched off.", "Signed in."]);
     expect(steps()).toEqual([
@@ -497,6 +561,12 @@ describe("Install progress", () => {
       changed: [],
     });
     expect(text()).toContain("Nothing was changed.");
+    // M4: said once on the page, by the message (the status line reads it out on its own); the empty list adds nothing.
+    const said = [...body().querySelectorAll('p:not([role="status"])')].filter((entry) =>
+      entry.textContent?.includes("Nothing was changed."),
+    );
+    expect(said).toHaveLength(1);
+    expect(body().querySelector("[data-install-changed]")).toBeNull();
     await act(async () => button("Dismiss")?.click());
     expect(flows.cancel).toHaveBeenCalledExactlyOnceWith(EXAMPLE.id);
   });
@@ -540,6 +610,8 @@ describe("Install progress", () => {
     expect(steps()).toEqual([]);
     expect(text()).toContain(message);
     expect(status()).toBe(message);
+    // Whether anything changed isn't known here, so an empty list claims nothing (M4).
+    expect(text()).not.toContain("Nothing was changed.");
   });
 
   it("keeps a failure's error text inside Technical details", async () => {
@@ -628,11 +700,57 @@ describe("Saved server sign-in and connect", () => {
     expect(text()).toContain("Couldn't connect it.");
     expect(steps()).toEqual(["Connect · Didn't finish"]);
   });
+
+  // I1: a sign-in that failed leaves a way to sign in again, even on a server switched off by its install.
+  it("offers Sign in again when a sign-in failed on a server with no button of its own", async () => {
+    const off = { ...SAVED_LINEAR, state: "turned_off", reason: "turned_off" } as const;
+    await renderPanel(off.id, [off]);
+    expect(button("Sign in again")).toBeUndefined();
+    setFlow(
+      off,
+      {
+        phase: "failed",
+        step: "sign_in",
+        message:
+          "Couldn't start signing in to Linear. Its sign-in site auth.linear.app isn't on your network allowlist. " +
+          "Add it in Settings, then sign in again.",
+        changed: ["Allowed mcp.linear.app. Saved Linear, switched off."],
+      },
+      "srv-1",
+    );
+    await act(async () => button("Sign in again")?.click());
+    expect(flows.resume).toHaveBeenCalledExactlyOnceWith(off.id, "sign_in");
+  });
+
+  // M10: a finished connect says what it left, never a plain "Connected." that hides a limit.
+  it.each([
+    ["can be used", {}, "Connected. Ready to use."],
+    [
+      "can't be used in Chat",
+      { chat: { available: false, blockedBy: "mcp_in_chat_off" } },
+      "Connected. Not available in Chat.",
+    ],
+    ["is hidden in this workspace", { hiddenInWorkspace: true }, "Connected. The AI can't use it in this workspace."],
+  ] as const)("says what a finished connect left when the app %s", async (_label, overrides, words) => {
+    const broken = { ...SAVED_LINEAR, state: "broken", reason: "error", ...overrides } as CapabilityConnectorItem;
+    await renderPanel(broken.id, [broken]);
+    setFlow(broken, { phase: "working", step: "connect" }, "srv-1");
+    setFlow(broken, { phase: "done", serverId: "srv-1" }, "srv-1");
+    expect(spoken()).toEqual([words]);
+  });
 });
 
 describe("Focus through the install", () => {
   const landing = () => body().querySelector<HTMLElement>("[data-focus-landing]");
   const busy = () => body().querySelector<HTMLButtonElement>('button[aria-busy="true"]');
+
+  // M9: focus moved here by the panel is visible, with the cockpit's own ring.
+  it("shows where focus lands with a visible ring", async () => {
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    const classes = landing()!.className.split(/\s+/u);
+    expect(classes).toEqual(expect.arrayContaining(["focus-visible:outline-2", "focus-visible:outline-accent"]));
+    expect(classes).not.toContain("outline-none");
+  });
 
   it("stays on the busy button, then lands on the saved server's view when the install is done", async () => {
     await renderPanel(EXAMPLE.id, [EXAMPLE]);
@@ -694,7 +812,13 @@ describe("Focus through the install", () => {
     await renderPanel(LINEAR.id, [LINEAR]);
     setFlow(
       LINEAR,
-      { phase: "signing_in", authorizeUrl: AUTHORIZE_URL, signInHost: "auth.linear.app", scopes: "read, write" },
+      {
+        phase: "signing_in",
+        authorizeUrl: AUTHORIZE_URL,
+        signInHost: "auth.linear.app",
+        scopes: "read, write",
+        startedAt: Date.now(),
+      },
       "srv-1",
     );
     await type(field("Authorization code"), "code-1");
@@ -747,7 +871,13 @@ describe("Panel across the install", () => {
     // The plan saved the server: the list now holds the server's row instead of the template's.
     setFlow(
       LINEAR,
-      { phase: "signing_in", authorizeUrl: AUTHORIZE_URL, signInHost: "auth.linear.app", scopes: "read, write" },
+      {
+        phase: "signing_in",
+        authorizeUrl: AUTHORIZE_URL,
+        signInHost: "auth.linear.app",
+        scopes: "read, write",
+        startedAt: Date.now(),
+      },
       "srv-1",
     );
     await readListAgain([SAVED_LINEAR]);

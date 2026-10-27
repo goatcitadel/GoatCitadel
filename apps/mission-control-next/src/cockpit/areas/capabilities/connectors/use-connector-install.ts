@@ -6,6 +6,7 @@ import type {
   ChangePlanStatus,
   ConnectorInstallResponse,
 } from "@goatcitadel/contracts";
+import { fetchApproval, resolveApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { installCapabilityConnector } from "@goatcitadel/mission-control-shared/api/capability-connectors";
 import { cancelChangePlan, fetchChangePlan } from "@goatcitadel/mission-control-shared/api/chat";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -75,6 +76,7 @@ const UNFINISHED = "The install didn't finish.";
 const UNCHECKED = "Couldn't check the install. Reload to see where it stands.";
 const NOT_FOUND = "The install finished, but the new app wasn't found. Reload to see it.";
 const INSTALL_STOPPED = "Install stopped. Nothing was changed.";
+const STOPPED_STILL_IN_INBOX = `${INSTALL_STOPPED} Its request is still in Inbox, where you can deny it.`;
 const NOT_STOPPED = "Couldn't stop the install. Reload to see where it stands.";
 
 type RunContext = Pick<RunStart, "client" | "listKey">;
@@ -180,21 +182,31 @@ function planEnded(id: number, plan: ChangePlanRecord) {
   if (plan.status === "cancelled") return fail(id, "approval", WITHDRAWN);
   // The install's own refusal is one plain sentence about why nothing changed.
   if (code === "connector_install_refused") return fail(id, "plan", summary || UNFINISHED, detail);
-  // The install's own sentences say what happened and what to do next (R66, R79); don't parse them.
+  // The install's own sentences say what happened and what to do next (R66, R79); don't parse them. One that saved the
+  // app names it (M3), so the panel hands over to the saved server instead of offering an Install it would refuse.
   if (code?.startsWith("connector_install_")) {
     patchRun(id, { changed: summary ? [summary] : [] });
+    adoptServerRef(id, plan);
     return fail(id, "plan", UNFINISHED, detail);
   }
   fail(id, "plan", UNFINISHED, [summary, detail].filter(Boolean).join(" ") || undefined);
+}
+
+/** The server a plan saved, from its evidence, indexed so the saved server's row finds this flow too. */
+function adoptServerRef(id: number, plan: ChangePlanRecord): string | undefined {
+  const serverId = plan.evidenceRefs?.find((ref) => ref.startsWith(SERVER_REF))?.slice(SERVER_REF.length);
+  if (!serverId) return undefined;
+  updateInstallFlow(id, { serverId });
+  indexInstallFlow(id, serverKey(serverId));
+  return serverId;
 }
 
 /** Takes on the server the finished plan saved: what changed, its id, and the rows that show it. */
 function adoptServer(id: number, plan: ChangePlanRecord): string | undefined {
   const summary = plan.result?.summary?.trim();
   patchRun(id, { changed: summary ? [summary] : [] });
-  const serverId = plan.evidenceRefs?.find((ref) => ref.startsWith(SERVER_REF))?.slice(SERVER_REF.length);
-  updateInstallFlow(id, { state: WORKING.plan, pollMs: undefined, ...(serverId ? { serverId } : {}) });
-  if (serverId) indexInstallFlow(id, serverKey(serverId));
+  updateInstallFlow(id, { state: WORKING.plan, pollMs: undefined });
+  const serverId = adoptServerRef(id, plan);
   refreshConnector(readRun(id), undefined);
   return serverId;
 }
@@ -221,9 +233,31 @@ async function withdraw(id: number, planId: string) {
     const action = plan.requiredAction;
     if (plan.status !== "awaiting_approval" || !action) return fail(id, "approval", NOT_STOPPED);
     await cancelChangePlan(planId, PLAN_CONTEXT, { expectedRevision: plan.revision, actionNonce: action.actionNonce });
-    if (isCurrent(id, token)) settle(id, { phase: "stopped", message: INSTALL_STOPPED, changed: [] });
+    if (!isCurrent(id, token)) return;
+    const cleared = await denyOwnApproval(planId, approvalIdOf(action));
+    if (isCurrent(id, token)) {
+      settle(id, { phase: "stopped", message: cleared ? INSTALL_STOPPED : STOPPED_STILL_IN_INBOX, changed: [] });
+    }
   } catch (error) {
     if (isCurrent(id, token)) fail(id, "approval", NOT_STOPPED, technicalText(error));
+  }
+}
+
+/**
+ * Denies the withdrawn plan's own Inbox approval (R93), so Inbox stops asking about it. It reads the approval first and
+ * acts only on a pending one for this very plan, as `approvePlanInPlace` does. False when it couldn't be denied; the
+ * withdrawal stands either way.
+ */
+async function denyOwnApproval(planId: string, approvalId: string | undefined): Promise<boolean> {
+  if (!approvalId) return true;
+  try {
+    const approval = await fetchApproval(approvalId, PLAN_CONTEXT);
+    if (approval.kind !== "change_plan_effect" || approval.payload?.planId !== planId) return true;
+    if (approval.status !== "pending") return true;
+    await resolveApproval(approvalId, "reject");
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -269,8 +303,20 @@ function resumeServer(item: CapabilityConnectorItem, from: "sign_in" | "connect"
   if (existing) forgetInstallFlow(existing.id);
   const flow = createInstallFlow([serverKey(serverId)]);
   const token = beginRun(flow.id, { ...context, name: item.name, oauth: true });
+  // Known from the row before the server is read, so a Stop that early says truly whether it is switched on.
+  patchRun(flow.id, { enabled: item.state !== "turned_off" });
   updateInstallFlow(flow.id, { serverId, state: WORKING[from] });
   void (from === "connect" ? connectServer(flow.id, token, serverId) : startSignIn(flow.id, token, serverId));
+}
+
+/**
+ * Asks for a new sign-in in place of one that is waiting (R94): the Gateway keeps a sign-in request for 10 minutes, and
+ * one started in the background may be close to that by the time the operator comes back. What already changed stays.
+ */
+function restartSignIn(id: number) {
+  const flow = readInstallFlow(id);
+  if (flow?.state.phase !== "signing_in" || !flow.serverId) return;
+  void startSignIn(id, retireRun(id), flow.serverId);
 }
 
 export interface ConnectorInstall {
@@ -281,6 +327,8 @@ export interface ConnectorInstall {
   /** For a saved server: "sign_in" runs sign-in, then switch on and connect; "connect" runs connect only. */
   resume(from: "sign_in" | "connect"): void;
   submitManualCode(code: string, state: string): void;
+  /** While signing in: asks for a new sign-in request in place of the one waiting (R94). */
+  restartSignIn(): void;
   cancel(): void;
 }
 
@@ -303,6 +351,9 @@ export function useConnectorInstall(item: CapabilityConnectorItem): ConnectorIns
     resume: (from) => resumeServer(item, from, context),
     submitManualCode: (code, state) => {
       if (id !== undefined && code.trim()) submitSignInCode(id, code.trim(), state.trim());
+    },
+    restartSignIn: () => {
+      if (id !== undefined) restartSignIn(id);
     },
     cancel: () => {
       if (id !== undefined) cancelFlow(id);

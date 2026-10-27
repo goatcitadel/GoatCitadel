@@ -61,8 +61,12 @@ export function ConnectorInstallPanel({
 
       <Section title="How it connects" headingLevel={3}>
         <ConnectionLines item={item}>
+          {/* The install adds only the hosts the allowlist doesn't cover yet (M2). */}
           {!elsewhere && item.networkHosts.length > 0 ? (
-            <p>Installing adds {item.networkHosts.join(", ")} to your network allowlist.</p>
+            <p>
+              Installing makes sure {item.networkHosts.join(", ")} {item.networkHosts.length === 1 ? "is" : "are"} on
+              your network allowlist.
+            </p>
           ) : null}
         </ConnectionLines>
       </Section>

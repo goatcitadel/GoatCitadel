@@ -208,7 +208,28 @@ describe("Connectors tab", () => {
     expect(slack.textContent).toContain("Ready to use");
   });
 
-  it("says a saved server is connecting while its sign-in or connect runs, not that it installs", async () => {
+  it("says a saved server is connecting while its connect runs, not that it installs", async () => {
+    const saved = item({
+      id: "mcp-server:srv-1",
+      name: "Linear",
+      source: "mcp_server",
+      state: "broken",
+      reason: "error",
+      group: "connected",
+      serverId: "srv-1",
+    });
+    rowFlows.set(saved.id, { phase: "working", step: "connect" });
+    api.fetchCapabilityConnectors.mockResolvedValue(response([saved]));
+    await render();
+    await vi.waitFor(() => expect(text()).toContain("Linear"));
+    const row = container.querySelector("li")!;
+    expect(row.textContent).toContain("Connecting");
+    expect(row.textContent).not.toContain("Installing");
+    expect(row.querySelector("[data-tone]")?.getAttribute("data-tone")).toBe("running");
+  });
+
+  // M6: signing in waits on the operator, so the row says so in the waiting tone rather than "Connecting".
+  it("says a row waits on you while its sign-in page is open", async () => {
     const saved = item({
       id: "mcp-server:srv-1",
       name: "Linear",
@@ -223,14 +244,15 @@ describe("Connectors tab", () => {
       authorizeUrl: "https://auth.example.test/a",
       signInHost: "auth.example.test",
       scopes: "read",
+      startedAt: Date.now(),
     });
     api.fetchCapabilityConnectors.mockResolvedValue(response([saved]));
     await render();
     await vi.waitFor(() => expect(text()).toContain("Linear"));
     const row = container.querySelector("li")!;
-    expect(row.textContent).toContain("Connecting");
-    expect(row.textContent).not.toContain("Installing");
-    expect(row.querySelector("[data-tone]")?.getAttribute("data-tone")).toBe("running");
+    expect(row.textContent).toContain("Waiting on you to sign in");
+    expect(row.textContent).not.toContain("Connecting");
+    expect(row.querySelector("[data-tone]")?.getAttribute("data-tone")).toBe("waiting");
   });
 
   it("opens the panel the address names once the list has it", async () => {

@@ -171,22 +171,22 @@ function StepList({ steps, state }: { steps: readonly InstallStepId[]; state: Co
   );
 }
 
-/** What already happened, so a failure or a stop never leaves the operator guessing. */
-function ChangedList({ changed, emptyLine }: { changed: readonly string[]; emptyLine?: string }) {
-  if (changed.length === 0 && !emptyLine) return null;
+/**
+ * What already happened, so a failure or a stop never leaves the operator guessing. A failure's list holds the
+ * install's own sentences, which say what didn't happen too, so it reads "What happened" (M4). An empty list says
+ * nothing: the message already says when nothing changed, and some failures can't know.
+ */
+function ChangedList({ changed, heading }: { changed: readonly string[]; heading: string }) {
+  if (changed.length === 0) return null;
   return (
     <div data-install-changed className="space-y-1">
-      <p className="font-medium text-fg">What changed</p>
-      {changed.length > 0 ? (
-        <ul className="list-disc space-y-0.5 pl-5">
-          {changed.map((sentence, index) => (
-            // The same sentence can come twice, so the position keeps each key apart.
-            <li key={`${index}:${sentence}`}>{sentence}</li>
-          ))}
-        </ul>
-      ) : (
-        <p>{emptyLine}</p>
-      )}
+      <p className="font-medium text-fg">{heading}</p>
+      <ul className="list-disc space-y-0.5 pl-5">
+        {changed.map((sentence, index) => (
+          // The same sentence can come twice, so the position keeps each key apart.
+          <li key={`${index}:${sentence}`}>{sentence}</li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -207,7 +207,7 @@ function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; sc
         </div>
       );
     case "signing_in":
-      return <ConnectorSignInStep state={state} submit={install.submitManualCode} />;
+      return <ConnectorSignInStep state={state} submit={install.submitManualCode} restart={install.restartSignIn} />;
     case "failed": {
       const step = FAILED_WORDS[state.step];
       return (
@@ -221,7 +221,7 @@ function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; sc
             // Whether anything failed may be unknown here (a read that couldn't check it), so no failure colour.
             <p className="font-medium text-fg">{state.message}</p>
           )}
-          <ChangedList changed={state.changed} emptyLine="Nothing was changed." />
+          <ChangedList changed={state.changed} heading="What happened" />
           {state.detail ? (
             <TechnicalDetails label="Error details">
               <p className="break-all font-mono text-xs">{state.detail}</p>
@@ -234,7 +234,7 @@ function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; sc
       return (
         <div className="space-y-2 text-sm text-fg-secondary">
           <p className="text-fg">{state.message}</p>
-          <ChangedList changed={state.changed} />
+          <ChangedList changed={state.changed} heading="What changed" />
         </div>
       );
     case "done":
