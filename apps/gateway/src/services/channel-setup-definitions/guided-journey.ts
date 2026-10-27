@@ -28,14 +28,15 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Register the connection webhook URL in Slack Events, enable message events, and allow your Slack user ID. Send a message from that user in a selected channel and confirm the reply. A webhook fallback remains a notification destination.",
   },
   telegram: {
-    summary: "Connect a Telegram bot, choose who can message it, and how it gets messages.",
+    summary:
+      "Change a Telegram channel that's already on: use its bot in groups or channels, choose who can message it, and how its messages arrive. A new bot is set up in Chat › Messaging.",
     prerequisites: [
-      "A BotFather bot token and access to each intended chat.",
-      "The bot added to each destination and permitted to post.",
+      "A Telegram channel that's already on. To add a new bot, go to Chat › Messaging and choose Add.",
+      "For a group or channel: permission to add the bot there.",
       "A public HTTPS address only if you choose web-address delivery.",
     ],
     firstMessage:
-      "Send the bot a message and approve its pairing request in GoatCitadel. With web-address delivery, first register the connection's webhook URL with the same secret token. Then send another message and confirm its reply. Destination discovery does not authorize users.",
+      "Send the bot a message from an allowed account and check that it answers. Someone not yet allowed gets a pairing request to approve in GoatCitadel. With web-address delivery, first register the connection's webhook URL with the same secret token. Finding a chat doesn't let anyone in it message the bot.",
   },
   ntfy: {
     summary:

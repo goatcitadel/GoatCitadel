@@ -174,9 +174,11 @@ describe("Telegram receive mode setup", () => {
     const firstMessage = wizard.steps.find((step) => step.id === "first-message");
     const firstMessageText = JSON.stringify(firstMessage?.body);
 
-    expect(wizard.introSummary).toBe("Connect a Telegram bot, choose who can message it, and how it gets messages.");
+    expect(wizard.introSummary).toBe(
+      "Change a Telegram channel that's already on: use its bot in groups or channels, choose who can message it, and how its messages arrive. A new bot is set up in Chat › Messaging.",
+    );
     expect(firstMessageText).toContain(
-      "Send the bot a message and approve its pairing request in GoatCitadel. With web-address delivery, first register the connection's webhook URL with the same secret token.",
+      "Send the bot a message from an allowed account and check that it answers. Someone not yet allowed gets a pairing request to approve in GoatCitadel. With web-address delivery, first register the connection's webhook URL with the same secret token.",
     );
     expect(firstMessageText).not.toContain("Register the saved connection webhook URL");
     expect(`${wizard.introSummary} ${firstMessageText}`).not.toContain("webhook conversations");
