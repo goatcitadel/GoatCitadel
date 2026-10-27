@@ -1,10 +1,7 @@
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import { fetchMcpServer } from "@goatcitadel/mission-control-shared/api/mcp-operations";
 import { commitMcpConnection } from "../../../../features/native-routes/settings/mcp-connection-mutation";
-import {
-  describeAuthorizeHost,
-  describeRequestedScopes,
-} from "../../../../features/native-routes/settings/mcp-oauth-binding";
+import { describeRequestedScopes } from "../../../../features/native-routes/settings/mcp-oauth-binding";
 import { readMcpOAuthFlow } from "../../../../features/native-routes/settings/mcp-oauth-flow-state";
 import { commitMcpOAuth } from "../../../../features/native-routes/settings/mcp-oauth-mutation";
 import {
@@ -51,6 +48,18 @@ const WHAT_NEXT: Readonly<Record<"cancelled" | "conflict" | "unavailable" | "loc
 
 const ignore = () => undefined;
 
+/**
+ * The sign-in page's host without the scheme, the way "Signs in at <host>" names it (R85); a port other than the
+ * default stays. The start check has already refused an address it can't read.
+ */
+function signInHostOf(authorizeUrl: string) {
+  try {
+    return new URL(authorizeUrl).host || "Unreadable sign-in address";
+  } catch {
+    return "Unreadable sign-in address";
+  }
+}
+
 function failStep(id: number, step: ServerStep, result: { status: keyof typeof WHAT_NEXT; message: string }) {
   failInstallFlow(id, step, `${STEP_FAILED[step](runName(id))} ${WHAT_NEXT[result.status]}`, result.message);
 }
@@ -90,7 +99,7 @@ export async function startSignIn(id: number, token: number, serverId: string) {
     state: {
       phase: "signing_in",
       authorizeUrl: pending.authorizeUrl,
-      signInHost: describeAuthorizeHost(pending.authorizeUrl),
+      signInHost: signInHostOf(pending.authorizeUrl),
       scopes: describeRequestedScopes(pending.authorizeUrl),
     },
   });

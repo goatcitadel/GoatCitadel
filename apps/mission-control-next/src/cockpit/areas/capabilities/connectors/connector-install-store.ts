@@ -109,12 +109,6 @@ export function indexInstallFlow(id: number, key: string) {
   publish();
 }
 
-export function unindexInstallFlow(id: number, key: string) {
-  if (index.get(key) !== id) return;
-  index.delete(key);
-  publish();
-}
-
 /** Forgets a flow: its rows read idle again. */
 export function deleteInstallFlow(id: number) {
   flows.delete(id);
@@ -122,10 +116,15 @@ export function deleteInstallFlow(id: number) {
   publish();
 }
 
+export const isActiveInstallState = (state: ConnectorInstallState) =>
+  state.phase === "working" || state.phase === "waiting_inbox" || state.phase === "signing_in";
+
 /**
- * The flow a row shows. A template row looks it up by its template; a saved server's row by its server, then by its
- * template, so the flow an install started is still found after the template row became the server's row. A template
- * flow that is already working for another server is not this server's.
+ * The flow a row shows. A template row looks it up by its template, and keeps an install it started until the flow is
+ * forgotten (dismissed, or started again), so the panel can stay on it until the list shows the saved server (R80).
+ * A saved server's row looks it up by its server first. It takes its template's flow only while that flow is still
+ * running and has no other server, or once it carries this row's server: a finished template flow that saved nothing
+ * (an "already saved" refusal) is not this row's, and doesn't take its Reconnect.
  */
 export function findInstallFlow(
   item: Pick<CapabilityConnectorItem, "source" | "templateId" | "serverId">,
@@ -135,7 +134,8 @@ export function findInstallFlow(
   const templateFlow = item.templateId ? index.get(templateKey(item.templateId)) : undefined;
   const byTemplate = templateFlow === undefined ? undefined : flows.get(templateFlow);
   if (!byTemplate || item.source === "mcp_template") return byTemplate;
-  return byTemplate.serverId === undefined || byTemplate.serverId === item.serverId ? byTemplate : undefined;
+  if (byTemplate.serverId !== undefined) return byTemplate.serverId === item.serverId ? byTemplate : undefined;
+  return isActiveInstallState(byTemplate.state) ? byTemplate : undefined;
 }
 
 export function useInstallFlow(
@@ -222,14 +222,13 @@ export function refreshConnector(run: FlowRun | undefined, serverId: string | un
 }
 
 /**
- * Ends the flow in `state`. Once a server is saved the template's key is dropped: the panel is on the server's row by
- * then (R74), and a template row that shows again (the server was removed) starts clean.
+ * Ends the flow in `state`. It keeps every key, so both the template row and the saved server's row still show the
+ * result until the flow is forgotten.
  */
 export function settleInstallFlow(id: number, state: ConnectorInstallState) {
   const run = runs.get(id);
   retireRun(id);
   const flow = updateInstallFlow(id, { state, pollMs: undefined });
-  if (flow?.serverId && run?.templateId) unindexInstallFlow(id, templateKey(run.templateId));
   refreshConnector(run, flow?.serverId);
 }
 

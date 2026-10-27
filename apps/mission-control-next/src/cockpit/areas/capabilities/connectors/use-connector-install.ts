@@ -22,6 +22,7 @@ import {
   findInstallFlow,
   forgetInstallFlow,
   IDLE,
+  isActiveInstallState,
   indexInstallFlow,
   isCurrent,
   patchRun,
@@ -78,8 +79,6 @@ const NOT_STOPPED = "Couldn't stop the install. Reload to see where it stands.";
 
 type RunContext = Pick<RunStart, "client" | "listKey">;
 
-const isActive = (state: ConnectorInstallState) =>
-  state.phase === "working" || state.phase === "waiting_inbox" || state.phase === "signing_in";
 const approvalIdOf = (action: ChangePlanRequiredAction | undefined) =>
   action?.kind === "approval" ? action.approvalId : undefined;
 const changedSoFar = (id: number) => [...(readRun(id)?.changed ?? [])];
@@ -252,7 +251,7 @@ function startInstall(item: CapabilityConnectorItem, enableChatConnectors: boole
   const { templateId } = item;
   if (!templateId || item.source !== "mcp_template") return;
   const existing = findInstallFlow(item);
-  if (existing && isActive(existing.state)) return;
+  if (existing && isActiveInstallState(existing.state)) return;
   if (existing) forgetInstallFlow(existing.id);
   const flow = createInstallFlow([templateKey(templateId)]);
   const token = beginRun(flow.id, { ...context, name: item.name, templateId, oauth: item.auth === "oauth" });
@@ -264,7 +263,7 @@ function resumeServer(item: CapabilityConnectorItem, from: "sign_in" | "connect"
   const { serverId } = item;
   if (!serverId) return;
   const existing = findInstallFlow(item);
-  if (existing && isActive(existing.state)) return;
+  if (existing && isActiveInstallState(existing.state)) return;
   if (existing) forgetInstallFlow(existing.id);
   const flow = createInstallFlow([serverKey(serverId)]);
   const token = beginRun(flow.id, { ...context, name: item.name, oauth: true });
@@ -274,7 +273,7 @@ function resumeServer(item: CapabilityConnectorItem, from: "sign_in" | "connect"
 
 export interface ConnectorInstall {
   state: ConnectorInstallState;
-  /** The saved server once the install created it (or the item's own server), for the panel to re-point ?item= (R74). */
+  /** The saved server once the install created it (or the item's own server): the panel finds its row by it (R80). */
   serverId: string | undefined;
   start(options: { enableChatConnectors: boolean }): void;
   /** For a saved server: "sign_in" runs sign-in, then switch on and connect; "connect" runs connect only. */

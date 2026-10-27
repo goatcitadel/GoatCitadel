@@ -258,7 +258,7 @@ describe("useConnectorInstall", () => {
     expect(latest.state).toEqual({
       phase: "signing_in",
       authorizeUrl: AUTHORIZE_URL,
-      signInHost: "https://auth.linear.app",
+      signInHost: "auth.linear.app",
       scopes: "read, write",
     });
     expect(latest.serverId).toBe("srv-1");
@@ -341,7 +341,7 @@ describe("useConnectorInstall", () => {
     expect(latest.state).toEqual({
       phase: "signing_in",
       authorizeUrl: AUTHORIZE_URL,
-      signInHost: "https://auth.linear.app",
+      signInHost: "auth.linear.app",
       scopes: "read, write",
       manualError: "That doesn't match this sign-in. Paste the code and state from the sign-in page again.",
     });
@@ -407,7 +407,7 @@ describe("useConnectorInstall", () => {
     await act(async () => latest.resume("sign_in"));
     await flush();
 
-    expect(latest.state).toMatchObject({ phase: "signing_in", signInHost: "https://auth.linear.app" });
+    expect(latest.state).toMatchObject({ phase: "signing_in", signInHost: "auth.linear.app" });
     expect(install.installCapabilityConnector).not.toHaveBeenCalled();
     expect(calls).toEqual(["read server", "sign in: start"]);
     expect(servers.fetchMcpServer).toHaveBeenCalledWith("srv-1");
@@ -442,6 +442,39 @@ describe("useConnectorInstall", () => {
       changed: [],
     });
     expect(plans.fetchChangePlan).not.toHaveBeenCalled();
+  });
+
+  it("keeps a finished install on its template row before the list is read again", async () => {
+    servers.fetchMcpServer.mockResolvedValue(server({ authType: "none" }));
+
+    // The panel stays on the template row until the list catches up (R80); here the list never reads again.
+    await startInstall({ ...TEMPLATE, auth: "none" });
+
+    expect(latest.state).toEqual({ phase: "done", serverId: "srv-1" });
+    expect(latest.serverId).toBe("srv-1");
+    expect(install.fetchCapabilityConnectors).not.toHaveBeenCalled();
+  });
+
+  it("doesn't show a template install that saved nothing on the saved server's row", async () => {
+    install.installCapabilityConnector.mockRejectedValueOnce(
+      new ApiRequestError("Linear is already saved.", {
+        kind: "http",
+        method: "POST",
+        path: "/api/v1/capabilities/connectors/install",
+        status: 409,
+        body: { error: "Linear is already saved.", details: { field: "alreadyInstalled" } },
+      }),
+    );
+    await startInstall();
+    expect(latest.state).toMatchObject({ phase: "failed", step: "plan" });
+
+    await render({ ...SAVED, state: "sign_in_expired", reason: "sign_in_expired" });
+    expect(latest.state).toEqual({ phase: "idle" });
+    expect(latest.serverId).toBe("srv-1");
+    // Reconnect on the saved row starts its own sign-in rather than being taken by the template's failed install.
+    await act(async () => latest.resume("sign_in"));
+    await flush();
+    expect(latest.state).toMatchObject({ phase: "signing_in" });
   });
 
   it("keeps a failed plan's error text in its detail, never in its message", async () => {
