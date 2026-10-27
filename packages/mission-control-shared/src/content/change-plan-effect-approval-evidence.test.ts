@@ -53,7 +53,8 @@ describe("change plan approval evidence (R91)", () => {
       commands: [],
       changes: [],
       supporting: [],
-      consequence: "Approving lets this one change apply once, exactly as planned. Denying cancels it.",
+      consequence:
+        "Approving lets this one change apply once, exactly as planned. Some changes then wait for you to continue them. Denying cancels it.",
     });
   });
 
@@ -71,7 +72,7 @@ describe("change plan approval evidence (R91)", () => {
 
     expect(model?.targetEntries?.map((entry) => entry.label)).toEqual(["Change", "What it does", "Impact"]);
     expect(model?.consequence).toBe(
-      "Approving lets this one change apply once, exactly as planned. Denying cancels it.",
+      "Approving lets this one change apply once, exactly as planned. Some changes then wait for you to continue them. Denying cancels it.",
     );
   });
 

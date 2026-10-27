@@ -55,11 +55,13 @@ const MCP_CORE_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   {
     templateId: "filesystem",
     label: "Filesystem (Local)",
-    description: "Read and write local workspace files through MCP.",
+    description: "Read and write local workspace files through MCP. Needs Node.js 24 or later on this computer.",
     transport: "stdio",
     command: "npx",
-    // 2.x needs Node 24 but this repo's baseline is Node 22, so pin the last release before 2.x.
-    args: ["-y", "@modelcontextprotocol/server-filesystem@2026.8.31", "."],
+    // 2.0.1 is the first release that stops writes escaping the allowed folders; every date release through 2026.8.31
+    // is affected. It needs Node 24 although this repo's baseline is Node 22: on Node 22 it fails to start rather than
+    // run an affected release. Only Settings offers it; Capabilities leaves it out.
+    args: ["-y", "@modelcontextprotocol/server-filesystem@2.0.1", "."],
     authType: "none",
     category: "development",
     trustTier: "restricted",

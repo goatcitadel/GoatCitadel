@@ -41,6 +41,15 @@ describe("mcp server templates", () => {
     expect(floating).toEqual([]);
   });
 
+  // Every release through 2026.8.31 can write outside the allowed folders (GHSA-53mr-w429-c597, GHSA-7rgq-gccq-qphx,
+  // GHSA-4gxg-m5jx-9j57, GHSA-hhwq-wxfx-cj7g); 2.0.1 is the first fixed release.
+  it("pins the filesystem template to the release that fixes its path-escape advisories", () => {
+    const filesystem = MCP_SERVER_TEMPLATES.find((template) => template.templateId === "filesystem");
+
+    expect(packageArgument(filesystem?.args)).toBe("@modelcontextprotocol/server-filesystem@2.0.1");
+    expect(filesystem?.description).toContain("Needs Node.js 24 or later");
+  });
+
   it("keeps the playwright pin at the reviewed 0.0.80 package", () => {
     const playwright = MCP_SERVER_TEMPLATES.find((template) => template.templateId === "playwright");
 

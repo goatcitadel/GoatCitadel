@@ -387,7 +387,10 @@ export function changePlanEffectApprovalEvidence(approval: ApprovalRequest): App
     commands: [],
     changes: [],
     supporting: [],
-    consequence: "Approving lets this one change apply once, exactly as planned. Denying cancels it.",
+    // Only some plans apply on approval; a Chat-linked plan, for one, waits to be continued (approval reconciliation).
+    consequence:
+      "Approving lets this one change apply once, exactly as planned. Some changes then wait for you to continue them. " +
+      "Denying cancels it.",
   };
 }
 

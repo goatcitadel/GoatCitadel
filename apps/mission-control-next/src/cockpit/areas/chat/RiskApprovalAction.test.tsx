@@ -285,7 +285,9 @@ describe("risk approval action", () => {
 
       expect(document.body.textContent).toContain("Change: Install AWS Knowledge");
       expect(document.body.textContent).toContain("What it does: Allow knowledge-mcp.global.api.aws.");
-      expect(document.body.textContent).toContain("Approving lets this one change apply once, exactly as planned.");
+      expect(document.body.textContent).toContain(
+        "Approving lets this one change apply once, exactly as planned. Some changes then wait for you to continue them.",
+      );
       expect(document.body.textContent).not.toContain("current action preview is unavailable");
       expect(approveOnce().disabled).toBe(false);
       await act(async () => approveOnce().click());
