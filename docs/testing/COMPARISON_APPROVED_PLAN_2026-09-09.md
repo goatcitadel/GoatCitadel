@@ -98,6 +98,16 @@ owner added in #601, as explicit C0 gate-reconciliation scope exceptions. Every
 original baseline-owner limit remains unchanged; this does not permit future growth
 above these caps.
 
+Additional operator clarification, October 27: the Capabilities one-button install
+(PR 1c) adds a `connector_install` Change Plan adapter that installs an MCP connector
+from its shipped template. Its 14 reads are 10 in the adapter class and 4 in its
+dependency factory; it lives outside `GatewayService`, which is at its original
+13132-line limit, so the registration is one import and one line. Record the
+dependency/host caps of **14/0** for `connector-install-change-plan-adapter.ts` as
+an explicit C0 gate-reconciliation scope exception, following the October 26
+**3/0** precedent for `mcp-approval-relief.ts`. Every original baseline-owner limit
+remains unchanged; this does not permit future growth above this cap.
+
 ### 2. Simplify onboarding through the first useful response
 
 Use the existing guided setup and Change Plans to provide one continuous flow:
