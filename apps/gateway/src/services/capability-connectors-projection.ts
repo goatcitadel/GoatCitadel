@@ -16,7 +16,7 @@ import {
   type WebSearchCredentialTargetId,
 } from "@goatcitadel/contracts";
 import { isListedIntegration } from "./capability-connectors-integrations.js";
-import { isMoneyMovingMcpServer, mcpServerLabelKey as labelKey } from "./mcp-money-moving.js";
+import { isMoneyMovingCatalogServer, mcpServerLabelKey as labelKey } from "./mcp-money-moving.js";
 
 /** Templates that are internal to GoatCitadel or duplicate a built-in tool, so they are not apps to list. */
 export const EXCLUDED_CONNECTOR_TEMPLATE_IDS: ReadonlySet<string> = new Set([
@@ -150,8 +150,9 @@ function serverParts(
     ...(server.connectionRevision !== undefined ? { serverConnectionRevision: server.connectionRevision } : {}),
     ...(server.policy.approvalPosture ? { approvalPosture: server.policy.approvalPosture } : {}),
     ...(server.connectionMode === "requester_scoped" ? { requesterScoped: true } : {}),
-    // The same rule the Gateway applies when it saves the setting and when it decides a call.
-    ...(isMoneyMovingMcpServer(server, input.templates) ? { movesMoney: true } : {}),
+    // The same rule, against the same whole catalog, as the Gateway's write lock and its decision of a call. Not the
+    // visible list, which leaves some templates out.
+    ...(isMoneyMovingCatalogServer(server) ? { movesMoney: true } : {}),
     chat: mcpChat(input.chat),
     ...(server.lastError ? { lastError: server.lastError } : {}),
   };

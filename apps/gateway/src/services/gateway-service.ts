@@ -3147,6 +3147,7 @@ export class GatewayService {
       exchangeMcpOAuthCode: (server, code, state, review) =>
         this.mcpOAuth.exchangeAuthorizationCode(server, code, state, review),
       publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+      appendApprovalsAudit: (event) => this.storage.audit.append("approvals", event),
     });
     this.durableWorkflowRegistry = durableExecutionService.createDurableWorkflowExecutorRegistry(
       durableExecutionService.buildDurableWorkflowExecutors({

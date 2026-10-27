@@ -29,8 +29,7 @@ import type { McpConnectionFence } from "./mcp-static-environment-service.js";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
-import { isMoneyMovingMcpServer } from "./mcp-money-moving.js";
-import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
+import { isMoneyMovingCatalogServer } from "./mcp-money-moving.js";
 import { discoverMcpTools } from "./mcp-runtime.js";
 import {
   mcpOAuthPkceStore,
@@ -128,6 +127,15 @@ export interface McpServerAdminHost {
   readMcpAuthState(): Promise<Record<string, McpAuthStateRecord>>;
   writeMcpAuthState(update: McpAuthStateUpdate): Promise<void>;
   publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
+  /** Appends one operator record to the approvals audit stream. */
+  appendApprovalsAudit(event: Record<string, unknown>): Promise<void>;
+}
+
+/** A write bound to the revision the operator reviewed. `actorId` names who made it, for the audit record. */
+export interface McpServerEditReview {
+  expectedRevision: string;
+  onCommitted?: () => void | Promise<void>;
+  actorId?: string;
 }
 
 export async function createMcpServer(
@@ -175,7 +183,7 @@ export async function createMcpServer(
     createdAt: now,
     updatedAt: now,
   };
-  assertMcpApprovalPostureAllowed(created, created.policy.approvalPosture);
+  assertMcpApprovalPostureAllowed(created, created.policy.approvalPosture, undefined);
   const previous = await host.readMcpServers();
   const servers = [created, ...previous];
   const committed = await host.writeMcpServers(servers, previous);
@@ -195,7 +203,7 @@ export async function updateMcpServer(
   serverId: string,
   input: McpServerUpdateInput,
   packOwner?: { planId: string; phase: "apply" | "compensate" },
-  review?: { expectedRevision: string; onCommitted?: () => void | Promise<void> },
+  review?: McpServerEditReview,
 ): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
     throw new ValidationError({ message: buildInternalMcpServerCreateBlockedMessage() });
@@ -236,7 +244,7 @@ export async function updateMcpServer(
       updatedAt: now,
     };
     // Checked against the record as it would be saved, so a rename or new endpoint in the same edit counts too.
-    assertMcpApprovalPostureAllowed(updated, input.policy?.approvalPosture);
+    assertMcpApprovalPostureAllowed(updated, input.policy?.approvalPosture, item);
     return updated;
   });
   if (!updated) {
@@ -247,7 +255,10 @@ export async function updateMcpServer(
     expectedRevision: review?.expectedRevision ?? mcpServerRevision(original),
   });
   const acknowledgement = committed.find((server) => server.serverId === serverId)!;
-  await afterMcpCommit(review?.onCommitted, () => {
+  await afterMcpCommit(review?.onCommitted, async () => {
+    // A change to what asks first is audited once the write has committed, before any follow-up work that could fail.
+    // A refused or conflicting write never gets here, so it records nothing.
+    await auditApprovalPostureChange(host, original, acknowledgement, input.policy?.approvalPosture, review?.actorId);
     closeOwnedSessions?.();
   });
   return acknowledgement;
@@ -257,7 +268,7 @@ export async function updateMcpServerPolicy(
   host: McpServerAdminHost,
   serverId: string,
   policy: Partial<McpServerPolicy>,
-  review?: { expectedRevision: string; onCommitted?: () => void | Promise<void> },
+  review?: McpServerEditReview,
 ): Promise<McpServerRecord> {
   return await updateMcpServer(host, serverId, { policy }, undefined, review);
 }
@@ -471,14 +482,50 @@ export async function deleteMcpServer(
 /**
  * A server that can move money can't be set to let changes run on their own. Every create and policy write checks it
  * before saving, whichever caller asked. The relief helper also caps a saved value, in case one slipped past.
+ *
+ * `server` is the record as it would be saved, so a rename or new endpoint in the same edit counts. An edit that asks
+ * for the setting is refused on a money server. An edit that doesn't is refused only when it is the edit that turns the
+ * record into a money server while it keeps the setting (a label or address change pointing a non-money server at
+ * PayPal). A record that already held both, saved earlier or re-marked by a later catalog, can still be switched off or
+ * edited otherwise.
  */
-function assertMcpApprovalPostureAllowed(server: McpServerRecord, requested: McpApprovalPosture | undefined): void {
-  // The shipped catalog is the one `listMcpTemplates` lists from; every money template in it counts here.
-  if (requested === "nothing_asks" && isMoneyMovingMcpServer(server, MCP_SERVER_TEMPLATES)) {
+function assertMcpApprovalPostureAllowed(
+  server: McpServerRecord,
+  requested: McpApprovalPosture | undefined,
+  before: McpServerRecord | undefined,
+): void {
+  const asksForIt = requested === "nothing_asks";
+  const keepsItOnNewMoneyServer =
+    before !== undefined && server.policy.approvalPosture === "nothing_asks" && !isMoneyMovingCatalogServer(before);
+  if ((asksForIt || keepsItOnNewMoneyServer) && isMoneyMovingCatalogServer(server)) {
     throw new ValidationError({
       message: "This connector can move money, so changes can't be set to run on their own.",
     });
   }
+}
+
+/**
+ * Records a change to what a connector asks first, as the write owner: the edit set the value, and it differs from the
+ * saved value it replaced (`from` is null when none was saved). The same value, or an edit that doesn't mention it,
+ * records nothing.
+ */
+async function auditApprovalPostureChange(
+  host: McpServerAdminHost,
+  replaced: McpServerRecord,
+  saved: McpServerRecord,
+  requested: McpApprovalPosture | undefined,
+  actorId: string | undefined,
+): Promise<void> {
+  const to = saved.policy.approvalPosture;
+  const from = replaced.policy.approvalPosture ?? null;
+  if (requested === undefined || to === undefined || to === from) return;
+  await host.appendApprovalsAudit({
+    event: "mcp_server_approval_posture_changed",
+    serverId: saved.serverId,
+    from,
+    to,
+    actorId: actorId ?? "operator",
+  });
 }
 
 async function afterMcpCommit(

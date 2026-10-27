@@ -103,6 +103,7 @@ async function fixture() {
     exchangeMcpOAuthCode: (...args) => tokenOwner.exchangeAuthorizationCode(...args),
     resolveConnectedMcpTools: transport,
     publishRealtime: async () => undefined,
+    appendApprovalsAudit: async () => undefined,
   });
   return {
     storage,

@@ -62,13 +62,13 @@ export interface McpRoutePort {
     input: McpServerUpdateRequest,
     onCommitted?: () => void | Promise<void>,
   ): Promise<McpServerRecord>;
+  /** `actor` names who made the change, for the audit record the write owner writes once it commits. */
   updateMcpServerPolicy(
     serverId: string,
     policy: McpServerPolicyUpdateRequest,
     onCommitted?: () => void | Promise<void>,
+    actor?: { actorId: string },
   ): Promise<McpServerRecord>;
-  /** Appends one operator record to the approvals audit stream. */
-  appendApprovalsAudit(event: Record<string, unknown>): Promise<void>;
 }
 
 export type McpAdminPort = McpRoutePort;
@@ -199,26 +199,9 @@ export class McpRouteService {
     const { expectedRevision, ...policy } = input;
     assertMcpServerReview(current, expectedRevision);
     const reconciled = preserveMcpServerSecretsForPublicUpdate(current, { policy }).policy ?? policy;
-    // The write is bound to this exact revision, so `current` is the record it replaces and `from` is what was saved.
-    const to = policy.approvalPosture;
-    const from = to === undefined ? undefined : (current.policy.approvalPosture ?? null);
-    // A change to what asks first is audited once the write commits and before any follow-up work that could fail.
-    // A refused or conflicting write never commits, so it records nothing.
-    const committed =
-      to !== undefined && to !== from
-        ? async () => {
-            await onCommitted?.();
-            await this.mcp.appendApprovalsAudit({
-              event: "mcp_server_approval_posture_changed",
-              serverId,
-              from,
-              to,
-              actorId: actor?.actorId ?? "operator",
-            });
-          }
-        : onCommitted;
+    // The write owner audits a change to what asks first once it commits; the actor travels with the request.
     return projectMcpPublicValue(
-      await this.mcp.updateMcpServerPolicy(serverId, { ...reconciled, expectedRevision }, committed),
+      await this.mcp.updateMcpServerPolicy(serverId, { ...reconciled, expectedRevision }, onCommitted, actor),
     );
   }
 

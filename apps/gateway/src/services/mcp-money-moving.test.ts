@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { McpServerTemplateRecord } from "@goatcitadel/contracts";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
-import { isMoneyMovingMcpServer, mcpServerLabelKey } from "./mcp-money-moving.js";
+import { isMoneyMovingCatalogServer, isMoneyMovingMcpServer, mcpServerLabelKey } from "./mcp-money-moving.js";
 
 const PAY: Pick<McpServerTemplateRecord, "label" | "networkHosts" | "movesMoney"> = {
   label: "PayPal",
@@ -47,6 +47,22 @@ describe("isMoneyMovingMcpServer", () => {
     expect(isMoneyMovingMcpServer({ label: "Linear", url: "https://mcp.linear.app/mcp" }, MCP_SERVER_TEMPLATES)).toBe(
       false,
     );
+  });
+});
+
+describe("isMoneyMovingCatalogServer", () => {
+  it("asks the whole shipped catalog, so every template marked as moving money counts", () => {
+    const marked = MCP_SERVER_TEMPLATES.filter((template) => template.movesMoney === true);
+
+    expect(marked.length).toBeGreaterThan(0);
+    for (const template of marked) {
+      expect(isMoneyMovingCatalogServer({ label: "Renamed", url: template.url }), template.templateId).toBe(true);
+      expect(isMoneyMovingCatalogServer({ label: template.label, url: "https://proxy.example/mcp" })).toBe(true);
+    }
+  });
+
+  it("leaves other shipped connectors alone", () => {
+    expect(isMoneyMovingCatalogServer({ label: "Linear", url: "https://mcp.linear.app/mcp" })).toBe(false);
   });
 });
 

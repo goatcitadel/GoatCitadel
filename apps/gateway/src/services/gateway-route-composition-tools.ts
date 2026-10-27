@@ -40,6 +40,7 @@ export function composeMcpAdministration(
     | "resolveConnectedMcpTools"
     | "exchangeMcpOAuthCode"
     | "publishRealtime"
+    | "appendApprovalsAudit"
   >,
 ): mcpServerAdminService.McpServerAdminHost {
   return {
@@ -60,16 +61,18 @@ export function composeToolsMcpRouteDependencies(
   gateway: GatewayRouteCompositionPort,
 ): RouteDependencyDomain<"llm" | "mcp" | "secrets" | "tools" | "toolsInvoke"> {
   const mcpAdminDeps = gateway.mcpAdministration;
+  // The port's storage is readonly, so one read serves every use below.
+  const storage = gateway.storage;
   const mcpDiagnosticsDeps: mcpDiagnosticsService.McpDiagnosticsHost = {
     requireFeatureEnabled: (flag) => gateway.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
     listMcpTemplates: async () => await gateway.listMcpTemplates(),
     requireMcpServer: async (serverId) => await mcpAdminDeps.requireMcpServer(serverId),
     pickConnectorDiagnosticAction: (checks) => connectorDiagnosticsHelpers.pickConnectorDiagnosticAction(checks),
     recordConnectorHealthRun: async (report) =>
-      await connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: gateway.storage.gatewaySql }, report),
+      await connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: storage.gatewaySql }, report),
   };
   const llmRuntimeTruth = new LlmRuntimeTruthService({
-    storage: gateway.storage,
+    storage,
     listProviders: () => gateway.llmService.listProviders(),
   });
 
@@ -164,7 +167,7 @@ export function composeToolsMcpRouteDependencies(
       readMcpServerTestEvidence: (serverId, scope) =>
         readMcpServerTestEvidence(
           {
-            storage: gateway.storage,
+            storage,
             readServer: async (id) => (await gateway.listMcpServers()).find((server) => server.serverId === id),
             readTools: (id) => gateway.listMcpTools(id),
           },
@@ -195,14 +198,15 @@ export function composeToolsMcpRouteDependencies(
         serverId: string,
         input: McpServerPolicyUpdateRequest,
         onCommitted?: () => void | Promise<void>,
+        actor?: { actorId: string },
       ) => {
         const { expectedRevision, ...policy } = input;
         return await mcpServerAdminService.updateMcpServerPolicy(mcpAdminDeps, serverId, policy, {
           expectedRevision,
           onCommitted,
+          actorId: actor?.actorId,
         });
       },
-      appendApprovalsAudit: (event) => gateway.storage.audit.append("approvals", event),
     },
     secrets: {
       deleteProviderSecret: (providerId, expectedRevision, storage) =>
@@ -231,7 +235,7 @@ export function composeToolsMcpRouteDependencies(
           ...input,
           workspaceId:
             input.workspaceId ??
-            (await gateway.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ??
+            (await storage.chatSessionMeta.get(input.sessionId))?.workspaceId ??
             DEFAULT_WORKSPACE_ID,
         }),
       listPermissionProfiles: (includeArchived) => gateway.listPermissionProfiles(includeArchived),

@@ -12,6 +12,7 @@ import type {
 import { createMcpToolPolicyBinding } from "@goatcitadel/policy-engine";
 import { loadGatewayConfig } from "../config.js";
 import { GatewayService } from "./gateway-service.js";
+import { createMcpServer, updateMcpServerPolicy } from "./mcp-server-admin-service.js";
 
 function server(posture?: McpApprovalPosture): McpServerRecord {
   return {
@@ -160,5 +161,38 @@ describe("GatewayService access probes report the MCP approval setting", () => {
       expect(access.reasonCodes).toContain(asks ? "approval_mode_all" : "mcp_approval_relief");
       expect(access.reasonCodes.includes("mcp_approval_relief")).toBe(!asks);
     }
+  });
+
+  // R50: the admin service audits a change to what asks first through the host the Gateway builds, into the approvals
+  // stream. The route only carries the actor; this is the one place that wiring is exercised against the real store.
+  it("audits a change to what asks first into the approvals stream through the Gateway's own admin host", async () => {
+    const service = gateway!;
+    const host = service["mcpAdministration"];
+    const created = await createMcpServer(host, {
+      label: "Audit wiring probe",
+      transport: "stdio",
+      command: "node",
+      enabled: false,
+    });
+
+    await updateMcpServerPolicy(
+      host,
+      created.serverId,
+      { approvalPosture: "reads_free" },
+      { expectedRevision: created.revision!, actorId: "operator-audit-probe" },
+    );
+
+    const posture = (await service.storage.audit.list("approvals")).filter(
+      (record) => record.event === "mcp_server_approval_posture_changed" && record.serverId === created.serverId,
+    );
+    expect(posture).toEqual([
+      expect.objectContaining({
+        event: "mcp_server_approval_posture_changed",
+        serverId: created.serverId,
+        from: null,
+        to: "reads_free",
+        actorId: "operator-audit-probe",
+      }),
+    ]);
   });
 });

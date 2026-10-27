@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { McpServerRecord, McpToolRecord } from "@goatcitadel/contracts";
+import { ValidationError, type McpServerRecord, type McpToolRecord } from "@goatcitadel/contracts";
 import { compensatePackMcpServer, packMcpConfigurationHash } from "./capability-pack-mcp-owner.js";
 import {
   completeMcpOAuth,
@@ -13,6 +13,7 @@ import {
   updateMcpServerPolicy,
   type McpServerAdminHost,
 } from "./mcp-server-admin-service.js";
+import { mcpServerRevision } from "./mcp-server-revision.js";
 
 const EMPTY_TOOLS_MCP_SCRIPT = String.raw`
 const readline = require("node:readline");
@@ -253,6 +254,189 @@ describe("mcp-server-admin-service", () => {
       blockedToolPatterns: ["secret.*"],
     });
     await expect(updateMcpServer(host, "missing", { label: "Nope" })).rejects.toThrow("Unknown MCP server: missing");
+  });
+
+  // R50: the write owner records a change to what asks first, once the write has committed.
+  describe("what asks first", () => {
+    const AUDIT_EVENT = "mcp_server_approval_posture_changed";
+
+    it("records a change once, after the commit callback and before the sessions close, with the saved value as from", async () => {
+      const existing = createServer({
+        policy: { ...createServer().policy, approvalPosture: "reads_free" },
+      });
+      const host = createHost({ servers: [existing] });
+      const order: string[] = [];
+      host.captureMcpServerSessionCloser = () => () => {
+        order.push("close sessions");
+      };
+      host.appendApprovalsAudit.mockImplementation(async () => {
+        order.push("audit");
+      });
+
+      await updateMcpServerPolicy(
+        host,
+        "server-1",
+        { approvalPosture: "everything_asks" },
+        {
+          expectedRevision: mcpServerRevision(existing),
+          onCommitted: async () => {
+            order.push("committed");
+          },
+          actorId: "token:ab12",
+        },
+      );
+
+      expect(host.appendApprovalsAudit).toHaveBeenCalledExactlyOnceWith({
+        event: AUDIT_EVENT,
+        serverId: "server-1",
+        from: "reads_free",
+        to: "everything_asks",
+        actorId: "token:ab12",
+      });
+      expect(order).toEqual(["committed", "audit", "close sessions"]);
+    });
+
+    it("records a first choice as from null, and a full edit that sets it the same way", async () => {
+      const host = createHost({ servers: [createServer()] });
+
+      await updateMcpServerPolicy(host, "server-1", { approvalPosture: "reads_free" }, undefined);
+      await updateMcpServer(host, "server-1", { policy: { approvalPosture: "nothing_asks" } as never });
+
+      expect(host.appendApprovalsAudit).toHaveBeenNthCalledWith(1, {
+        event: AUDIT_EVENT,
+        serverId: "server-1",
+        from: null,
+        to: "reads_free",
+        actorId: "operator",
+      });
+      expect(host.appendApprovalsAudit).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ from: "reads_free", to: "nothing_asks" }),
+      );
+      expect(host.appendApprovalsAudit).toHaveBeenCalledTimes(2);
+    });
+
+    it("records nothing for the same value, another field, or an edit with no policy", async () => {
+      const existing = createServer({ policy: { ...createServer().policy, approvalPosture: "reads_free" } });
+      const host = createHost({ servers: [existing] });
+
+      await updateMcpServerPolicy(host, "server-1", { approvalPosture: "reads_free" });
+      await updateMcpServerPolicy(host, "server-1", { redactionMode: "off" });
+      await updateMcpServer(host, "server-1", { enabled: false });
+
+      expect(host.appendApprovalsAudit).not.toHaveBeenCalled();
+    });
+
+    it("records nothing when the write does not commit", async () => {
+      const existing = createServer();
+      const host = createHost({ servers: [existing] });
+      const onCommitted = vi.fn();
+      host.writeMcpServers.mockRejectedValueOnce(new Error("The MCP configuration changed."));
+
+      await expect(
+        updateMcpServerPolicy(
+          host,
+          "server-1",
+          { approvalPosture: "reads_free" },
+          { expectedRevision: mcpServerRevision(existing), onCommitted, actorId: "token:ab12" },
+        ),
+      ).rejects.toThrow("The MCP configuration changed.");
+      await expect(
+        updateMcpServerPolicy(
+          host,
+          "server-1",
+          { approvalPosture: "reads_free" },
+          { expectedRevision: "0".repeat(64), onCommitted },
+        ),
+      ).rejects.toThrow();
+
+      expect(onCommitted).not.toHaveBeenCalled();
+      expect(host.appendApprovalsAudit).not.toHaveBeenCalled();
+    });
+
+    it("reports a failed audit as a committed change, and still reaches the caller's commit callback first", async () => {
+      const existing = createServer();
+      const host = createHost({ servers: [existing] });
+      const onCommitted = vi.fn();
+      host.appendApprovalsAudit.mockRejectedValueOnce(new Error("audit store is down"));
+
+      await expect(
+        updateMcpServerPolicy(
+          host,
+          "server-1",
+          { approvalPosture: "reads_free" },
+          { expectedRevision: mcpServerRevision(existing), onCommitted },
+        ),
+      ).rejects.toMatchObject({ message: "audit store is down", mutationCommitted: true });
+      expect(onCommitted).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The lock on money connectors is checked against the record as it would be saved.
+  describe("a connector that can move money", () => {
+    const REFUSAL = "This connector can move money, so changes can't be set to run on their own.";
+    const PAYPAL_URL = "https://mcp.paypal.com/sse";
+    const nothingAsks = { ...createServer().policy, approvalPosture: "nothing_asks" as const };
+
+    it("can't be pointed at, or renamed to, a money vendor while it keeps Nothing asks", async () => {
+      const docs = createServer({
+        label: "Docs",
+        transport: "http",
+        command: undefined,
+        args: undefined,
+        url: "https://docs.example/mcp",
+        policy: nothingAsks,
+      });
+      const host = createHost({ servers: [docs] });
+
+      await expect(updateMcpServer(host, "server-1", { url: PAYPAL_URL })).rejects.toThrow(REFUSAL);
+      await expect(updateMcpServer(host, "server-1", { label: "PayPal" })).rejects.toBeInstanceOf(ValidationError);
+      await expect(updateMcpServer(host, "server-1", { label: "Team wallet", url: PAYPAL_URL })).rejects.toThrow(
+        REFUSAL,
+      );
+      // The edit-by-policy route is the same function underneath.
+      expect(host.writeMcpServers).not.toHaveBeenCalled();
+      expect(host.servers).toEqual([docs]);
+    });
+
+    it("can still be pointed at a money vendor once the edit also stops asking for nothing, and ordinary edits still save", async () => {
+      const docs = createServer({
+        label: "Docs",
+        transport: "http",
+        command: undefined,
+        args: undefined,
+        url: "https://docs.example/mcp",
+        policy: nothingAsks,
+      });
+      const host = createHost({ servers: [docs] });
+
+      await expect(updateMcpServer(host, "server-1", { label: "Docs two" })).resolves.toMatchObject({
+        label: "Docs two",
+        policy: { approvalPosture: "nothing_asks" },
+      });
+      await expect(
+        updateMcpServer(host, "server-1", { url: PAYPAL_URL, policy: { approvalPosture: "reads_free" } as never }),
+      ).resolves.toMatchObject({ url: PAYPAL_URL, policy: { approvalPosture: "reads_free" } });
+    });
+
+    it("keeps unrelated edits possible when a record already holds Nothing asks (saved earlier, or re-marked since)", async () => {
+      const wallet = createServer({
+        label: "Team wallet",
+        transport: "sse",
+        command: undefined,
+        args: undefined,
+        url: PAYPAL_URL,
+        policy: nothingAsks,
+      });
+      const host = createHost({ servers: [wallet] });
+
+      await expect(updateMcpServer(host, "server-1", { enabled: false })).resolves.toMatchObject({ enabled: false });
+      await expect(updateMcpServer(host, "server-1", { label: "Wallet" })).resolves.toMatchObject({ label: "Wallet" });
+      // Asking for it again is still refused.
+      await expect(
+        updateMcpServer(host, "server-1", { policy: { approvalPosture: "nothing_asks" } as never }),
+      ).rejects.toThrow(REFUSAL);
+    });
   });
 
   it("connects servers, replaces their tools, and records connected status", async () => {
@@ -588,6 +772,7 @@ function createHost(input?: {
   resolveConnectedMcpTools: ReturnType<typeof vi.fn>;
   exchangeMcpOAuthCode: ReturnType<typeof vi.fn>;
   publishRealtime: ReturnType<typeof vi.fn>;
+  appendApprovalsAudit: ReturnType<typeof vi.fn>;
 } {
   const host = {
     servers: input?.servers ? [...input.servers] : [],
@@ -661,6 +846,7 @@ function createHost(input?: {
       },
     ),
     publishRealtime: vi.fn(),
+    appendApprovalsAudit: vi.fn(async () => undefined),
   };
   return host;
 }

@@ -1,4 +1,5 @@
 import type { McpServerRecord, McpServerTemplateRecord } from "@goatcitadel/contracts";
+import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 
 /** How a saved server is paired with a template: by label, ignoring case. The connector list pairs them the same way. */
 export function mcpServerLabelKey(label: string): string {
@@ -23,6 +24,15 @@ export function isMoneyMovingMcpServer(
       mcpServerLabelKey(template.label) === label ||
       (host !== undefined && (template.networkHosts ?? []).some((entry) => readHostName(`https://${entry}`) === host)),
   );
+}
+
+/**
+ * The same question against the whole shipped catalog, whether or not the connector list shows a template. The write
+ * lock, the decision that caps a saved setting and the connector list all ask here, so they can't disagree on which
+ * templates count.
+ */
+export function isMoneyMovingCatalogServer(server: Pick<McpServerRecord, "url" | "label">): boolean {
+  return isMoneyMovingMcpServer(server, MCP_SERVER_TEMPLATES);
 }
 
 /** The lowercase host name without a port or a trailing dot, so a port or spelling variant names the same host. */

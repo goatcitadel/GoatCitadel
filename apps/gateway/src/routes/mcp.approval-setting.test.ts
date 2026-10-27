@@ -47,20 +47,30 @@ async function fixture() {
     runImmediateTransaction: (callback) => storage.runImmediateTransaction(callback),
   });
   await storage.systemSettings.set("mcp_servers_v1", []);
+  const appendApprovalsAudit = vi.fn(async (_event: Record<string, unknown>) => undefined);
   const host = composeMcpAdministration(store, {
     storage,
     captureMcpServerSessionCloser: () => () => undefined,
     resolveConnectedMcpTools: vi.fn(async () => []),
     publishRealtime: vi.fn(async () => undefined),
+    appendApprovalsAudit,
   });
-  const appendApprovalsAudit = vi.fn(async (_event: Record<string, unknown>) => undefined);
+  // The audit is the admin service's: the port only carries the route's actor to it, as the production wiring does.
   const port = {
     listMcpServers: () => store.readServers(),
-    updateMcpServerPolicy: (id: string, input: McpServerPolicyUpdateRequest, committed?: () => Promise<void>) => {
+    updateMcpServerPolicy: (
+      id: string,
+      input: McpServerPolicyUpdateRequest,
+      committed?: () => Promise<void>,
+      actor?: { actorId: string },
+    ) => {
       const { expectedRevision, ...policy } = input;
-      return admin.updateMcpServerPolicy(host, id, policy, { expectedRevision, onCommitted: committed });
+      return admin.updateMcpServerPolicy(host, id, policy, {
+        expectedRevision,
+        onCommitted: committed,
+        actorId: actor?.actorId,
+      });
     },
-    appendApprovalsAudit,
   };
   const app = Fastify();
   apps.push(app);

@@ -533,11 +533,25 @@ describe("route composition loop 15 delegates", () => {
     await expect(deps.mcp.updateMcpServerPolicy("server-1", { allowed: true })).resolves.toMatchObject({
       method: "updateMcpServerPolicy",
     });
-    await deps.mcp.appendApprovalsAudit({ event: "mcp_server_approval_posture_changed", serverId: "server-1" });
-    expect(gateway.storage.audit.append).toHaveBeenCalledWith("approvals", {
-      event: "mcp_server_approval_posture_changed",
-      serverId: "server-1",
-    });
+    // The route's actor reaches the admin service in the review it audits from; the audit is that service's, not the route's.
+    const onCommitted = vi.fn();
+    await deps.mcp.updateMcpServerPolicy(
+      "server-1",
+      { approvalPosture: "reads_free", expectedRevision: "r1" },
+      onCommitted,
+      { actorId: "token:ab12" },
+    );
+    expect(mocks.updateMcpServerPolicy).toHaveBeenLastCalledWith(
+      gateway,
+      "server-1",
+      { approvalPosture: "reads_free" },
+      {
+        expectedRevision: "r1",
+        onCommitted,
+        actorId: "token:ab12",
+      },
+    );
+    expect("appendApprovalsAudit" in deps.mcp).toBe(false);
 
     await expect(deps.secrets.deleteProviderSecret("openai", 8, "all")).resolves.toEqual({
       method: "deleteProviderSecret",

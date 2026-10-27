@@ -13,8 +13,7 @@ import {
   type McpApprovalRelief,
   type McpToolPolicyBinding,
 } from "@goatcitadel/policy-engine";
-import { isMoneyMovingMcpServer } from "./mcp-money-moving.js";
-import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
+import { isMoneyMovingCatalogServer } from "./mcp-money-moving.js";
 
 /**
  * Server-owned state only: the install's deployment profile, the saved server record and the stored
@@ -70,11 +69,8 @@ export async function resolveMcpApprovalRelief(
     if (error instanceof NotFoundError) return undefined;
     throw error;
   }
-  // The shipped catalog is the one `listMcpTemplates` lists from; every money template in it counts here.
-  const posture = capMcpApprovalPosture(
-    server.policy.approvalPosture,
-    isMoneyMovingMcpServer(server, MCP_SERVER_TEMPLATES),
-  );
+  // Every money template in the shipped catalog counts here, the same ones the write lock and the connector list use.
+  const posture = capMcpApprovalPosture(server.policy.approvalPosture, isMoneyMovingCatalogServer(server));
   if (
     posture === undefined ||
     !server.enabled ||

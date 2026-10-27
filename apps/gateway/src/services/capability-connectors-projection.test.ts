@@ -340,6 +340,26 @@ describe("buildCapabilityConnectors", () => {
     expect(other.find((item) => item.id === "mcp-template:paypal")?.movesMoney).toBe(true);
   });
 
+  it("marks a saved money server from the whole catalog, even when the list shows no such template", () => {
+    // The visible list names no money template here (a template left out of the list is such a case). The Gateway's
+    // write lock and its decision still count it, so the row must say so too.
+    const items = buildCapabilityConnectors(
+      input({
+        templates: [],
+        servers: [
+          server({ serverId: "server-wallet", label: "Team wallet", url: "https://mcp.paypal.com/sse" }),
+          server({ serverId: "server-proxy", label: "Square", url: "https://proxy.example/mcp" }),
+          server({ serverId: "server-linear" }),
+        ],
+      }),
+    );
+    const byServer = (serverId: string) => items.find((item) => item.id === `mcp-server:${serverId}`)!;
+
+    expect(byServer("server-wallet").movesMoney).toBe(true);
+    expect(byServer("server-proxy").movesMoney).toBe(true);
+    expect("movesMoney" in byServer("server-linear")).toBe(false);
+  });
+
   it("marks a saved server that lists its tools per chat", () => {
     const perChat = only(
       buildCapabilityConnectors(input({ servers: [server({ connectionMode: "requester_scoped" })] })),

@@ -64,6 +64,7 @@ async function fixture() {
     captureMcpServerSessionCloser: () => closeOwned,
     resolveConnectedMcpTools: vi.fn(async () => []),
     publishRealtime: vi.fn(async () => undefined),
+    appendApprovalsAudit: vi.fn(async () => undefined),
   });
   const created = await admin.createMcpServer(host, {
     label: "Reviewed MCP",

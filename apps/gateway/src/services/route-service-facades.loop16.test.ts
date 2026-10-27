@@ -209,19 +209,27 @@ describe("gateway route service facades", () => {
     );
     expect(rawServer.args[2]).toBe("short-pass");
 
-    await service.updateMcpServerPolicy(rawServer.serverId, {
-      expectedRevision: rawServer.revision,
-      ...projected.policy,
-      redactionMode: "basic",
-    });
+    const onCommitted = vi.fn();
+    await service.updateMcpServerPolicy(
+      rawServer.serverId,
+      {
+        expectedRevision: rawServer.revision,
+        ...projected.policy,
+        redactionMode: "basic",
+      },
+      onCommitted,
+      { actorId: "token:ab12" },
+    );
 
+    // The commit callback and the actor go to the raw admin port untouched: the write owner audits from them.
     expect(updateMcpServerPolicy).toHaveBeenCalledWith(
       rawServer.serverId,
       expect.objectContaining({
         notes: rawServer.policy.notes,
         redactionMode: "basic",
       }),
-      undefined,
+      onCommitted,
+      { actorId: "token:ab12" },
     );
   });
 
