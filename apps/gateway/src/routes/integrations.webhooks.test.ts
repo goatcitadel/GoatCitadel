@@ -470,6 +470,121 @@ describe("integration provider webhook routes", () => {
     );
   });
 
+  describe("Telegram receive mode", () => {
+    const connectionId = "11111111-1111-1111-1111-111111111111";
+    const webhookUrl = `/api/v1/integrations/connections/${connectionId}/telegram/webhook`;
+    const signedHeaders = {
+      "content-type": "application/json",
+      "x-telegram-bot-api-secret-token": "telegram-webhook-secret",
+    };
+    const update = JSON.stringify({
+      update_id: 9201,
+      message: {
+        message_id: 601,
+        from: { id: 777, is_bot: false, first_name: "Ada", username: "ada" },
+        chat: { id: 777, type: "private", first_name: "Ada" },
+        text: "please help",
+      },
+    });
+
+    async function buildTelegramApp(receiveMode: unknown) {
+      const acceptInboundChannelEvent = createDurableAcceptanceMock();
+      const ingestChannelMessage = vi.fn();
+      const respondToExistingChatMessage = vi.fn();
+      app = Fastify();
+      decorateIntegrationServices(app, {
+        validateDeviceAccessToken: vi.fn(() => undefined),
+        getIntegrationConnection: vi.fn(() => ({
+          connectionId,
+          key: "telegram",
+          config: {
+            botToken: "telegram-bot-token",
+            webhookSecret: "telegram-webhook-secret",
+            ...(receiveMode === undefined ? {} : { receiveMode }),
+            telegramPairing: {
+              approved: [{ actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Ada" }],
+              pending: [],
+            },
+          },
+        })),
+        ingestChannelMessage,
+        respondToExistingChatMessage,
+        acceptInboundChannelEvent,
+      });
+      app.decorate("gatewayConfig", {
+        assistant: {
+          auth: {
+            mode: "token",
+            allowLoopbackBypass: false,
+            token: { value: "gateway-token", queryParam: "access_token" },
+            basic: { username: "operator", password: "password123" },
+          },
+        },
+      } as never);
+      await app.register(authPlugin);
+      await app.register(idempotencyHeaderPlugin);
+      await app.register(integrationsRoutes);
+      return { acceptInboundChannelEvent, ingestChannelMessage, respondToExistingChatMessage };
+    }
+
+    it.each(["off", "poll"])(
+      "answers a signed delivery with the ignored reply and accepts nothing when receiveMode is %s",
+      async (receiveMode) => {
+        const mocks = await buildTelegramApp(receiveMode);
+
+        const response = await app!.inject({
+          method: "POST",
+          url: webhookUrl,
+          headers: signedHeaders,
+          payload: update,
+        });
+
+        // 200, so Telegram stops retrying; nothing is accepted or run.
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({ accepted: true, ignored: true, reason: `receive_mode_${receiveMode}` });
+        expect(mocks.acceptInboundChannelEvent).not.toHaveBeenCalled();
+        expect(mocks.ingestChannelMessage).not.toHaveBeenCalled();
+        expect(mocks.respondToExistingChatMessage).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["off", "poll"])(
+      "still rejects an unsigned delivery for receiveMode %s without revealing the mode",
+      async (receiveMode) => {
+        const mocks = await buildTelegramApp(receiveMode);
+
+        const response = await app!.inject({
+          method: "POST",
+          url: webhookUrl,
+          headers: { ...signedHeaders, "x-telegram-bot-api-secret-token": "wrong-secret" },
+          payload: update,
+        });
+
+        expect(response.statusCode).toBe(401);
+        expect(response.body).not.toContain("receive_mode");
+        expect(mocks.acceptInboundChannelEvent).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([["webhook"], [undefined]])(
+      "keeps dispatching signed deliveries when receiveMode is %s",
+      async (receiveMode) => {
+        const mocks = await buildTelegramApp(receiveMode);
+
+        const response = await app!.inject({
+          method: "POST",
+          url: webhookUrl,
+          headers: signedHeaders,
+          payload: update,
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual(expect.objectContaining({ accepted: true, durableAccepted: true }));
+        expect(mocks.acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
   it("names a private conversation after the sender and a group after its title", async () => {
     const connectionId = "11111111-1111-1111-1111-111111111111";
     const getIntegrationConnection = vi.fn(() => ({

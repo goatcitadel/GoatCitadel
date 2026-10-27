@@ -1404,9 +1404,10 @@ function readConfigString(config: Record<string, unknown>, key: string): string 
 /**
  * Telegram's explicit receive mode. Only "poll" and "off" change behavior here: "webhook", a missing
  * value, or anything unknown keeps the secret-based logic that predates the setting, so connections
- * saved before it existed behave exactly as before.
+ * saved before it existed behave exactly as before. The Telegram webhook route reads it too, so a
+ * connection that polls or receives nothing never acts on a webhook delivery.
  */
-function readTelegramReceiveMode(config: Record<string, unknown>): "poll" | "off" | undefined {
+export function readTelegramReceiveMode(config: Record<string, unknown>): "poll" | "off" | undefined {
   const mode = readConfigString(config, "receiveMode");
   return mode === "poll" || mode === "off" ? mode : undefined;
 }

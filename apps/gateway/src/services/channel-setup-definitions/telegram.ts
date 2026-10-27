@@ -1,4 +1,8 @@
-import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
+import {
+  resolveChannelOwnerActorIds,
+  type ChannelSetupDefinition,
+  type ChannelSetupIssue,
+} from "@goatcitadel/contracts";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
@@ -48,19 +52,6 @@ function hydrateTelegramReceiveMode(config: Record<string, unknown>): TelegramRe
   return hasAnyConfiguredSecret(config, [["webhookSecret", "webhookSecretEnv", "secretToken", "secretTokenEnv"]])
     ? "webhook"
     : "off";
-}
-
-/** Reads a list of ids stored as an array of strings: trimmed, blanks and non-strings dropped, duplicates removed. */
-function readActorIdList(source: Record<string, unknown>, key: string): string[] {
-  const raw = source[key];
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  const ids = raw
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-  return [...new Set(ids)];
 }
 
 export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
@@ -377,7 +368,7 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
     hydrate(connection) {
       const config = connection.config;
       const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["botToken", "botTokenEnv", "token", "tokenEnv"]]);
-      const ownerActorIds = readActorIdList(config, "ownerActorIds");
+      const ownerActorIds = resolveChannelOwnerActorIds(config);
       return {
         draft: {
           botTokenEnv: readString(config, "botTokenEnv") ?? readString(config, "tokenEnv"),
@@ -433,7 +424,7 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
       const targets = normalizeTelegramTargets(draft.draft);
       const defaultTarget = targets.find((target) => target.default) ?? targets[0];
       const receiveMode = readString(draft.draft, "receiveMode");
-      const ownerActorIds = readActorIdList(draft.draft, "ownerActorIds");
+      const ownerActorIds = resolveChannelOwnerActorIds(draft.draft);
       // receiveMode and ownerActorIds are left out when the draft has none, so finalize keeps the saved
       // connection's own values instead of overwriting them with a default.
       return compactRecord({

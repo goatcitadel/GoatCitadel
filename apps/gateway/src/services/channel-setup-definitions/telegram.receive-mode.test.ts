@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ChannelSetupDraft, ChannelSetupFieldDefinition, IntegrationConnection } from "@goatcitadel/contracts";
+import {
+  resolveChannelOwnerActorIds,
+  type ChannelSetupDraft,
+  type ChannelSetupFieldDefinition,
+  type IntegrationConnection,
+} from "@goatcitadel/contracts";
 import { requireChannelSetupDefinition } from "../channel-setup-definitions.js";
 import { createTelegramDefinition } from "./telegram.js";
 
@@ -120,20 +125,30 @@ describe("Telegram receive mode setup", () => {
     expect(telegram.normalize(draftOf({ ...BASE_CONFIG, ownerActorIds: ["42"] })).ownerActorIds).toEqual(["42"]);
   });
 
+  it("stores owner ids in the canonical form the rest of GoatCitadel compares against", () => {
+    const ownerActorIds = [" U1 ", "u1", "U2", "", "   ", 5];
+    const normalized = telegram.normalize(draftOf({ ...BASE_CONFIG, ownerActorIds }));
+
+    expect(normalized.ownerActorIds).toEqual(["u1", "u2"]);
+    expect(normalized.ownerActorIds).toEqual(resolveChannelOwnerActorIds({ ownerActorIds }));
+  });
+
   it("omits ownerActorIds when the draft has none or only blanks", () => {
     expect(telegram.normalize(draftOf(BASE_CONFIG))).not.toHaveProperty("ownerActorIds");
     expect(telegram.normalize(draftOf({ ...BASE_CONFIG, ownerActorIds: [] }))).not.toHaveProperty("ownerActorIds");
     expect(telegram.normalize(draftOf({ ...BASE_CONFIG, ownerActorIds: ["  ", 7] }))).not.toHaveProperty(
       "ownerActorIds",
     );
+    expect(telegram.normalize(draftOf({ ...BASE_CONFIG, ownerActorIds: "42" }))).not.toHaveProperty("ownerActorIds");
   });
 
   it("carries ownerActorIds through hydrate and normalize", () => {
-    const hydrated = telegram.hydrate(connection({ ...BASE_CONFIG, ownerActorIds: ["42", " 77 ", "42"] }));
+    const hydrated = telegram.hydrate(connection({ ...BASE_CONFIG, ownerActorIds: ["42", " 77 ", "42", "U1"] }));
 
-    expect(hydrated.draft.ownerActorIds).toEqual(["42", "77"]);
+    expect(hydrated.draft.ownerActorIds).toEqual(["42", "77", "u1"]);
     expect(hydrated.hydration.fieldState.ownerActorIds).toBe("configured");
     expect(telegram.hydrate(connection(BASE_CONFIG)).hydration.fieldState.ownerActorIds).toBe("unknown");
+    expect(telegram.normalize(draftOf(hydrated.draft)).ownerActorIds).toEqual(["42", "77", "u1"]);
   });
 
   it("shows webhook secrets only for web-address delivery", () => {

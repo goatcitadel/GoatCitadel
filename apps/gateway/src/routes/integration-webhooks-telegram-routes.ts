@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { ChatChannelConversation, PersonalityCatalogResponse } from "@goatcitadel/contracts";
+import { readTelegramReceiveMode } from "@goatcitadel/gateway-core";
 import { buildChannelConversation } from "../services/channel-conversation.js";
 import { listPersonalityPresets } from "../services/channel-personalities.js";
 import { normalizeChannelCommandInput } from "../services/channel-command-contract.js";
@@ -62,7 +63,17 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
         }
         return { ok: true as const };
       },
-      parsePayload: async ({ connectionId, request }) => {
+      parsePayload: async ({ connectionId, connection, request }) => {
+        // A connection that polls for messages, or receives none, must not act on a webhook delivery even
+        // when an old webhook secret is still saved. This runs after the secret-token check, so only a
+        // correctly signed caller learns the mode. The 200 reply makes Telegram stop retrying.
+        const receiveMode = readTelegramReceiveMode(connection.config);
+        if (receiveMode) {
+          return {
+            kind: "reply" as const,
+            payload: createIgnoredWebhookReply(undefined, `receive_mode_${receiveMode}`),
+          };
+        }
         const normalized = normalizeTelegramWebhookPayload({
           connectionId,
           payload: request.body,
