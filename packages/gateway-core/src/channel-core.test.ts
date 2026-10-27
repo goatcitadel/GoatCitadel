@@ -5,6 +5,7 @@ import {
   listChannelRuleKeys,
   planChannelRichMessageDelivery,
   planChannelTextDelivery,
+  readTelegramReceiveMode,
 } from "./channel-core.js";
 
 describe("describeChannelCapabilities", () => {
@@ -156,6 +157,77 @@ describe("describeChannelCapabilities", () => {
         "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path.",
       ]),
     );
+  });
+
+  it("advertises Telegram polling when the receive mode is poll", () => {
+    const capabilities = describeChannelCapabilities("telegram", {
+      botTokenEnv: "TELEGRAM_BOT_TOKEN",
+      defaultChatId: "-1001234567890",
+      receiveMode: "poll",
+    });
+
+    expect(capabilities.inboundModes).toEqual(["poll"]);
+    expect(capabilities.runtimePosture).toMatchObject({
+      outboundTransport: "api",
+      inboundTransport: "poll",
+      lifecycle: "persistent",
+      inboundReadiness: "ready",
+    });
+    expect(capabilities.runtimePosture.operatorSummary).toContain("asking Telegram for new messages");
+    expect(capabilities.supportNotes.join(" ")).toContain("asking Telegram for new messages");
+    expect(capabilities.supportNotes).not.toContain(
+      "Telegram inbound routing remains disabled until a webhook secret is configured.",
+    );
+  });
+
+  it("lets Telegram polling win over a leftover webhook secret", () => {
+    const capabilities = describeChannelCapabilities("telegram", {
+      botTokenEnv: "TELEGRAM_BOT_TOKEN",
+      webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
+      receiveMode: "poll",
+    });
+
+    expect(capabilities.inboundModes).toEqual(["poll"]);
+    expect(capabilities.runtimePosture.inboundTransport).toBe("poll");
+  });
+
+  it("turns Telegram inbound off when the receive mode is off, even with a webhook secret", () => {
+    const capabilities = describeChannelCapabilities("telegram", {
+      botTokenEnv: "TELEGRAM_BOT_TOKEN",
+      webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
+      receiveMode: "off",
+    });
+
+    expect(capabilities.inboundModes).toEqual(["none"]);
+    expect(capabilities.runtimePosture.inboundTransport).toBeUndefined();
+    expect(capabilities.runtimePosture.inboundReadiness).toBe("unsupported");
+    expect(capabilities.supportNotes).not.toContain(
+      "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path.",
+    );
+  });
+
+  it("reads only poll and off as an explicit Telegram receive mode", () => {
+    expect(readTelegramReceiveMode({ receiveMode: "poll" })).toBe("poll");
+    expect(readTelegramReceiveMode({ receiveMode: " off " })).toBe("off");
+    expect(readTelegramReceiveMode({ receiveMode: "webhook" })).toBeUndefined();
+    expect(readTelegramReceiveMode({ receiveMode: "carrier-pigeon" })).toBeUndefined();
+    expect(readTelegramReceiveMode({ receiveMode: 7 })).toBeUndefined();
+    expect(readTelegramReceiveMode({})).toBeUndefined();
+  });
+
+  it("keeps the secret-based Telegram behavior for webhook and missing receive modes", () => {
+    const webhook = describeChannelCapabilities("telegram", {
+      botTokenEnv: "TELEGRAM_BOT_TOKEN",
+      webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
+      receiveMode: "webhook",
+    });
+    expect(webhook.inboundModes).toEqual(["webhook"]);
+
+    const webhookWithoutSecret = describeChannelCapabilities("telegram", {
+      botTokenEnv: "TELEGRAM_BOT_TOKEN",
+      receiveMode: "webhook",
+    });
+    expect(webhookWithoutSecret.inboundModes).toEqual(["none"]);
   });
 
   it("advertises WhatsApp webhook ingress when the verification secret pair is configured", () => {

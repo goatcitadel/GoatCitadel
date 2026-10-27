@@ -321,10 +321,16 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   telegram: {
     supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
     supportedAttachmentSources: ["url", "inline"],
-    resolveInboundModes: (config) =>
-      hasAnyConfigured(config, ["webhookSecret", "webhookSecretEnv", "secretToken", "secretTokenEnv"])
-        ? ["webhook"]
-        : ["none"],
+    resolveInboundModes: (config) => {
+      const receiveMode = readTelegramReceiveMode(config);
+      if (receiveMode === "poll") {
+        return ["poll"];
+      }
+      if (receiveMode === "off") {
+        return ["none"];
+      }
+      return hasTelegramWebhookSecret(config) ? ["webhook"] : ["none"];
+    },
     threadCapabilities: {
       replies: true,
       direct: true,
@@ -333,12 +339,27 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     chunkingMode: "fallback",
     supportsStreaming: false,
     resolveRuntimePosture: (config) => {
-      const hasWebhookIngress = hasAnyConfigured(config, [
-        "webhookSecret",
-        "webhookSecretEnv",
-        "secretToken",
-        "secretTokenEnv",
-      ]);
+      const receiveMode = readTelegramReceiveMode(config);
+      if (receiveMode === "poll") {
+        return {
+          outboundTransport: "api",
+          inboundTransport: "poll",
+          lifecycle: "persistent",
+          inboundReadiness: "ready",
+          operatorSummary:
+            "Telegram is normalized as a bot bridge that receives by asking Telegram for new messages, so no public web address is needed. Sends, replies, reactions, deletes, typing indicators, and inbound message routing are available in the current runtime.",
+        };
+      }
+      if (receiveMode === "off") {
+        return {
+          outboundTransport: "api",
+          lifecycle: "stateless",
+          inboundReadiness: "unsupported",
+          operatorSummary:
+            "Telegram is normalized as a stateless outbound bot bridge. Sends, replies, reactions, deletes, and typing indicators are supported, but receiving messages is turned off for this connection.",
+        };
+      }
+      const hasWebhookIngress = hasTelegramWebhookSecret(config);
       return {
         outboundTransport: "api",
         inboundTransport: hasWebhookIngress ? "webhook" : undefined,
@@ -353,9 +374,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       "Telegram bot connections can add reactions, delete sent messages, and emit typing indicators when the bot has access to the target chat.",
       "Telegram rich sends use photo/document delivery and apply the message body as the first caption when it fits provider limits.",
       "Telegram rich-message preflight blocks metadata-only attachments, caps rich batches at 10 attachments, and records provider delivery evidence before send.",
-      hasAnyConfigured(config, ["webhookSecret", "webhookSecretEnv", "secretToken", "secretTokenEnv"])
-        ? "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path."
-        : "Telegram inbound routing remains disabled until a webhook secret is configured.",
+      resolveTelegramInboundNote(config),
       "Guided setup can run a sandbox send/delete probe before finalize.",
     ],
     requiredAnyOf: [["botTokenEnv", "botToken", "tokenEnv", "token"]],
@@ -1384,6 +1403,34 @@ function uniqueInboundModes(values: ChannelInboundMode[]): ChannelInboundMode[] 
 function readConfigString(config: Record<string, unknown>, key: string): string | undefined {
   const value = config[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+/**
+ * Telegram's explicit receive mode. Only "poll" and "off" change behavior here: "webhook", a missing
+ * value, or anything unknown keeps the secret-based logic that predates the setting, so connections
+ * saved before it existed behave exactly as before. The Telegram webhook route reads it too, so a
+ * connection that polls or receives nothing never acts on a webhook delivery.
+ */
+export function readTelegramReceiveMode(config: Record<string, unknown>): "poll" | "off" | undefined {
+  const mode = readConfigString(config, "receiveMode");
+  return mode === "poll" || mode === "off" ? mode : undefined;
+}
+
+function hasTelegramWebhookSecret(config: Record<string, unknown>): boolean {
+  return hasAnyConfigured(config, ["webhookSecret", "webhookSecretEnv", "secretToken", "secretTokenEnv"]);
+}
+
+function resolveTelegramInboundNote(config: Record<string, unknown>): string {
+  const receiveMode = readTelegramReceiveMode(config);
+  if (receiveMode === "poll") {
+    return "Telegram inbound routing works by asking Telegram for new messages; no public web address or webhook secret is needed.";
+  }
+  if (receiveMode === "off") {
+    return "Telegram inbound routing is turned off for this connection.";
+  }
+  return hasTelegramWebhookSecret(config)
+    ? "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path."
+    : "Telegram inbound routing remains disabled until a webhook secret is configured.";
 }
 
 function isNtfyInboundRequested(config: Record<string, unknown>): boolean {

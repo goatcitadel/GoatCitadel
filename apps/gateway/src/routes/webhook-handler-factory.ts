@@ -1,7 +1,11 @@
 import { Readable } from "node:stream";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { IntegrationConnectionRecord, IntegrationWebhookRouteLike } from "../services/channel-inbound-dispatch.js";
+import {
+  createIgnoredWebhookReply,
+  type IntegrationConnectionRecord,
+  type IntegrationWebhookRouteLike,
+} from "../services/channel-inbound-dispatch.js";
 import { createAcceptedWebhookRateLimit, enforceAcceptedWebhookRateLimit } from "../services/webhook-rate-limit.js";
 
 // The inbound dispatch seam (trust gate + bot-loop guard + ingest idempotency)
@@ -9,6 +13,7 @@ import { createAcceptedWebhookRateLimit, enforceAcceptedWebhookRateLimit } from 
 // transports can share it. Re-exported here so webhook route modules keep
 // importing from this factory unchanged.
 export {
+  createIgnoredWebhookReply,
   DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG,
   dispatchInboundWebhookBatch,
   dispatchInboundWebhookCommand,
@@ -207,15 +212,6 @@ export function validateWebhookHostHeader(request: Pick<FastifyRequest, "headers
   } catch {
     return "Malformed Host header";
   }
-}
-
-export function createIgnoredWebhookReply(eventType: string | undefined, reason: string) {
-  return {
-    accepted: true,
-    ignored: true,
-    eventType,
-    reason,
-  };
 }
 
 export function parseContentLength(value: string | string[] | undefined): number | undefined {

@@ -34,6 +34,7 @@ vi.mock("./MessagingSection", () => ({
     selectedSessionId?: string;
     onSelectSession: (sessionId: string) => void;
     onOpenChannel: (connectionId: string) => void;
+    onNavigate?: () => void;
   }) => (
     <section data-testid="messaging" data-workspace={props.workspaceId} data-selected={props.selectedSessionId ?? ""}>
       <button type="button" onClick={() => props.onSelectSession("channel-session")}>
@@ -41,6 +42,9 @@ vi.mock("./MessagingSection", () => ({
       </button>
       <button type="button" onClick={() => props.onOpenChannel("conn-1")}>
         pick channel
+      </button>
+      <button type="button" onClick={() => props.onNavigate?.()}>
+        add a channel
       </button>
     </section>
   ),
@@ -124,6 +128,17 @@ describe("Messaging in the conversation list", () => {
     await click("pick channel");
     expect(onOpenChannel).toHaveBeenCalledWith("conn-1");
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    onOpenChange.mockClear();
+    // "+ Add" leaves for the channel picker inside Chat, so it closes the sheet too.
+    await click("add a channel");
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("gives the desktop rail nothing to close when Add takes the operator on", async () => {
+    await act(async () =>
+      root.render(<ThreadList rail={makeRail()} messaging={{ workspaceId: "ws-1", onOpenChannel: vi.fn() }} />),
+    );
+    await expect(click("add a channel")).resolves.toBeUndefined();
   });
 
   it("leaves Messaging out when the list is given no channel destination", async () => {

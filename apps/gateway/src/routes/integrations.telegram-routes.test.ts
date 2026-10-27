@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { authorizeTelegramChannelActor } from "../services/telegram-channel-pairing.js";
+import { registerChannelSetupIntegrationRoutes } from "./integrations-channel-setup-routes.js";
 import { registerTelegramIntegrationRoutes } from "./integrations-telegram-routes.js";
 
 describe("integrations Telegram route tails", () => {
@@ -27,6 +28,77 @@ describe("integrations Telegram route tails", () => {
     registerTelegramIntegrationRoutes(app);
     return app;
   }
+
+  it("accepts clearWebhook only on a draft channel discovery request", async () => {
+    const discoverChannelSetupTelegramTargets = vi.fn(async () => ({ items: [], warnings: [], webhookActive: false }));
+    app = Fastify();
+    app.decorate("services", { channelSetup: { discoverChannelSetupTelegramTargets } } as never);
+    registerChannelSetupIntegrationRoutes(app);
+    const url = "/api/v1/channels/telegram/discover-targets";
+    const draft = {
+      source: "draft",
+      draftId: "11111111-1111-1111-1111-111111111111",
+      expectedRevision: 3,
+      setupCode: "Ab3dEf7hJk",
+    };
+    const connection = {
+      source: "connection",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      expectedConnectionRevision: "a".repeat(64),
+    };
+
+    const cleared = await app.inject({ method: "POST", url, payload: { ...draft, clearWebhook: true } });
+    expect(cleared.statusCode).toBe(200);
+    expect(discoverChannelSetupTelegramTargets).toHaveBeenCalledWith({ ...draft, clearWebhook: true });
+
+    discoverChannelSetupTelegramTargets.mockClear();
+    for (const payload of [
+      { ...connection, clearWebhook: true },
+      { ...draft, clearWebhook: false },
+      { ...draft, clearWebhook: "true" },
+    ]) {
+      const rejected = await app.inject({ method: "POST", url, payload });
+      expect(rejected.statusCode).toBe(400);
+    }
+    expect(discoverChannelSetupTelegramTargets).not.toHaveBeenCalled();
+
+    expect((await app.inject({ method: "POST", url, payload: draft })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url, payload: connection })).statusCode).toBe(200);
+  });
+
+  it("accepts skipWaiting only on a draft channel discovery request", async () => {
+    const discoverChannelSetupTelegramTargets = vi.fn(async () => ({ items: [], warnings: [], webhookActive: false }));
+    app = Fastify();
+    app.decorate("services", { channelSetup: { discoverChannelSetupTelegramTargets } } as never);
+    registerChannelSetupIntegrationRoutes(app);
+    const url = "/api/v1/channels/telegram/discover-targets";
+    const draft = {
+      source: "draft",
+      draftId: "11111111-1111-1111-1111-111111111111",
+      expectedRevision: 3,
+      setupCode: "Ab3dEf7hJk",
+    };
+    const connection = {
+      source: "connection",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      expectedConnectionRevision: "a".repeat(64),
+    };
+
+    const skipped = await app.inject({ method: "POST", url, payload: { ...draft, skipWaiting: true } });
+    expect(skipped.statusCode).toBe(200);
+    expect(discoverChannelSetupTelegramTargets).toHaveBeenCalledWith({ ...draft, skipWaiting: true });
+
+    discoverChannelSetupTelegramTargets.mockClear();
+    for (const payload of [
+      { ...connection, skipWaiting: true },
+      { ...draft, skipWaiting: false },
+      { ...draft, skipWaiting: "true" },
+    ]) {
+      const rejected = await app.inject({ method: "POST", url, payload });
+      expect(rejected.statusCode).toBe(400);
+    }
+    expect(discoverChannelSetupTelegramTargets).not.toHaveBeenCalled();
+  });
 
   it("keeps Telegram pairing and target-directory routes behind CodeQL-visible rate limits", () => {
     const source = fs.readFileSync(new URL("./integrations-telegram-routes.ts", import.meta.url), "utf8");
@@ -132,7 +204,10 @@ describe("integrations Telegram route tails", () => {
       config: { botToken: "telegram-token", targets: [{ label: "Pinned Room", chatId: "-100999" }] },
     };
     const staleConflict = () =>
-      new ConflictError({ code: "WRITE_CONFLICT", message: "The Telegram connection changed. Reload before discovering targets." });
+      new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: "The Telegram connection changed. Reload before discovering targets.",
+      });
     const getIntegrationConnection = vi
       .fn()
       .mockRejectedValueOnce(new NotFoundError({ entity: "integration connection", id: connectionId }))
@@ -176,7 +251,9 @@ describe("integrations Telegram route tails", () => {
     expect(staleDirectory.statusCode).toBe(409);
     expect(staleDirectory.json()).toMatchObject({ code: "WRITE_CONFLICT" });
 
-    getIntegrationConnection.mockRejectedValueOnce(new NotFoundError({ entity: "integration connection", id: connectionId }));
+    getIntegrationConnection.mockRejectedValueOnce(
+      new NotFoundError({ entity: "integration connection", id: connectionId }),
+    );
     const missingDirectory = await app!.inject({
       method: "GET",
       url: `/api/v1/channels/connections/${connectionId}/target-directory`,
@@ -223,7 +300,16 @@ describe("integrations Telegram route tails", () => {
         );
       }),
     );
-    createApp({ getIntegrationConnection, discoverChannelSetupTelegramTargets: vi.fn(async () => ({ items: [{ id: "telegram:-100123", chatId: "-100123", label: "Ops Room", kind: "supergroup", source: "recent_update" }], warnings: [], webhookActive: false })) });
+    createApp({
+      getIntegrationConnection,
+      discoverChannelSetupTelegramTargets: vi.fn(async () => ({
+        items: [
+          { id: "telegram:-100123", chatId: "-100123", label: "Ops Room", kind: "supergroup", source: "recent_update" },
+        ],
+        warnings: [],
+        webhookActive: false,
+      })),
+    });
 
     const invalid = await app!.inject({
       method: "GET",
@@ -265,7 +351,10 @@ describe("integrations Telegram route tails", () => {
         targets: [{ label: "Pinned Room", chatId: "-100999" }],
       },
     }));
-    createApp({ getIntegrationConnection, discoverChannelSetupTelegramTargets: vi.fn(async () => ({ items: [], warnings: [], webhookActive: true })) });
+    createApp({
+      getIntegrationConnection,
+      discoverChannelSetupTelegramTargets: vi.fn(async () => ({ items: [], warnings: [], webhookActive: true })),
+    });
 
     const response = await app!.inject({
       method: "GET",
@@ -312,7 +401,53 @@ describe("integrations Telegram route tails", () => {
     });
   });
 
-  it("requires the exact connection revision for coordinated pairing approve and revoke", async () => { const connectionId = "11111111-1111-1111-1111-111111111111"; const initial = { inboundAccessMode: "allowlist", allowedSenders: ["888"] }; const pending = authorizeTelegramChannelActor({ config: initial, actorId: "777", chatId: "123" }); const code = (pending.configPatch!.telegramPairing as { pending: { code: string }[] }).pending[0]!.code; let connection = { connectionId, revision: "a".repeat(64), key: "telegram", kind: "channel", config: { ...initial, ...pending.configPatch } }; const updateIntegrationConnection = vi.fn(async (_id: string, patch: { config: typeof connection.config; expectedRevision: string }) => { expect(patch.expectedRevision).toBe(connection.revision); connection = { ...connection, revision: connection.revision === "a".repeat(64) ? "b".repeat(64) : "c".repeat(64), config: patch.config }; return connection; }); createApp({ getIntegrationConnection: vi.fn(async () => connection), updateIntegrationConnection }); const url = `/api/v1/channels/connections/${connectionId}/telegram/pairings/approve`; expect((await app!.inject({ method: "POST", url, payload: { code } })).statusCode).toBe(400); expect((await app!.inject({ method: "POST", url, payload: { code, expectedConnectionRevision: "f".repeat(64) } })).statusCode).toBe(409); expect(updateIntegrationConnection).not.toHaveBeenCalled(); const approved = await app!.inject({ method: "POST", url, payload: { code, expectedConnectionRevision: "a".repeat(64) } }); expect(approved.statusCode).toBe(200); expect(approved.json().allowedSenders).toEqual(["888", "777"]); const revoked = await app!.inject({ method: "POST", url: `/api/v1/channels/connections/${connectionId}/telegram/pairings/777/revoke`, payload: { expectedConnectionRevision: "b".repeat(64) } }); expect(revoked.statusCode).toBe(200); expect(revoked.json().allowedSenders).toEqual(["888"]); expect(revoked.json().items).toEqual([]); });
+  it("requires the exact connection revision for coordinated pairing approve and revoke", async () => {
+    const connectionId = "11111111-1111-1111-1111-111111111111";
+    const initial = { inboundAccessMode: "allowlist", allowedSenders: ["888"] };
+    const pending = authorizeTelegramChannelActor({ config: initial, actorId: "777", chatId: "123" });
+    const code = (pending.configPatch!.telegramPairing as { pending: { code: string }[] }).pending[0]!.code;
+    let connection = {
+      connectionId,
+      revision: "a".repeat(64),
+      key: "telegram",
+      kind: "channel",
+      config: { ...initial, ...pending.configPatch },
+    };
+    const updateIntegrationConnection = vi.fn(
+      async (_id: string, patch: { config: typeof connection.config; expectedRevision: string }) => {
+        expect(patch.expectedRevision).toBe(connection.revision);
+        connection = {
+          ...connection,
+          revision: connection.revision === "a".repeat(64) ? "b".repeat(64) : "c".repeat(64),
+          config: patch.config,
+        };
+        return connection;
+      },
+    );
+    createApp({ getIntegrationConnection: vi.fn(async () => connection), updateIntegrationConnection });
+    const url = `/api/v1/channels/connections/${connectionId}/telegram/pairings/approve`;
+    expect((await app!.inject({ method: "POST", url, payload: { code } })).statusCode).toBe(400);
+    expect(
+      (await app!.inject({ method: "POST", url, payload: { code, expectedConnectionRevision: "f".repeat(64) } }))
+        .statusCode,
+    ).toBe(409);
+    expect(updateIntegrationConnection).not.toHaveBeenCalled();
+    const approved = await app!.inject({
+      method: "POST",
+      url,
+      payload: { code, expectedConnectionRevision: "a".repeat(64) },
+    });
+    expect(approved.statusCode).toBe(200);
+    expect(approved.json().allowedSenders).toEqual(["888", "777"]);
+    const revoked = await app!.inject({
+      method: "POST",
+      url: `/api/v1/channels/connections/${connectionId}/telegram/pairings/777/revoke`,
+      payload: { expectedConnectionRevision: "b".repeat(64) },
+    });
+    expect(revoked.statusCode).toBe(200);
+    expect(revoked.json().allowedSenders).toEqual(["888"]);
+    expect(revoked.json().items).toEqual([]);
+  });
 
   it("validates and rejects unavailable Telegram pairing approvals", async () => {
     const updateIntegrationConnection = vi.fn();

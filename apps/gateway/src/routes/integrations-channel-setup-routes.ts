@@ -38,6 +38,8 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
             draftId: z.guid(),
             expectedRevision: z.number().int().positive(),
             setupCode: z.string().max(128).optional(),
+            clearWebhook: z.literal(true).optional(),
+            skipWaiting: z.literal(true).optional(),
           })
           .strict(),
         z
@@ -327,13 +329,11 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
           finalized: false,
         });
       }
-      return reply
-        .code(409)
-        .send({
-          error:
-            "Channel activation requires Change Plan review in Chat. Enable change management, then create and review the channel plan.",
-          code: "CHANNEL_ACTIVATION_REVIEW_UNAVAILABLE",
-        });
+      return reply.code(409).send({
+        error:
+          "Channel activation requires Change Plan review in Chat. Enable change management, then create and review the channel plan.",
+        code: "CHANNEL_ACTIVATION_REVIEW_UNAVAILABLE",
+      });
     } catch (error) {
       await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);

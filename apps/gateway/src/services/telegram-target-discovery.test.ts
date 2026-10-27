@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { discoverTelegramTargets, parseTelegramUpdateTargets } from "./telegram-target-discovery.js";
+import {
+  discoverTelegramTargets,
+  findTelegramStartCodeSender,
+  parseTelegramUpdateTargets,
+} from "./telegram-target-discovery.js";
 
 describe("telegram target discovery", () => {
   it("parses recent updates into unique candidate targets and prioritizes setup-code matches", () => {
@@ -62,5 +66,73 @@ describe("telegram target discovery", () => {
 
     await expect(discoverTelegramTargets({ token: "bad-token", fetcher })).rejects.toThrow("Unauthorized");
     expect(fetcher).toHaveBeenCalledWith("https://api.telegram.org/botbad-token/getUpdates");
+  });
+});
+
+describe("telegram setup code sender", () => {
+  const code = "Ab3dEf7hJk";
+  const from = { id: 42, first_name: "Sam", last_name: "Lee", username: "sam" };
+  const privateUpdate = (
+    updateId: number,
+    text: string,
+    sender: Record<string, unknown> = from,
+    chatType = "private",
+  ) => ({
+    update_id: updateId,
+    message: { message_id: updateId, text, from: sender, chat: { id: sender.id, type: chatType } },
+  });
+
+  it("finds the sender of /start <code> in a private chat", () => {
+    expect(findTelegramStartCodeSender({ ok: true, result: [privateUpdate(1, `/start ${code}`)] }, code)).toEqual({
+      actorId: "42",
+      chatId: "42",
+      displayName: "Sam Lee",
+      username: "sam",
+    });
+  });
+
+  it("accepts /start@bot <code> and the bare code", () => {
+    expect(findTelegramStartCodeSender({ result: [privateUpdate(1, `/start@goat_bot ${code}`)] }, code)?.actorId).toBe(
+      "42",
+    );
+    expect(findTelegramStartCodeSender({ result: [privateUpdate(1, `  ${code}  `)] }, code)?.actorId).toBe("42");
+  });
+
+  it("ignores groups, other codes, codes inside other text and bots", () => {
+    const ignored = [
+      privateUpdate(1, `/start ${code}`, from, "group"),
+      privateUpdate(2, "/start other"),
+      privateUpdate(3, `hello ${code}`),
+      privateUpdate(4, `x${code}`),
+      privateUpdate(5, `/start ${code}`, { ...from, is_bot: true }),
+      privateUpdate(6, `/start ${code} extra`),
+    ];
+    for (const update of ignored)
+      expect(findTelegramStartCodeSender({ ok: true, result: [update] }, code)).toBeUndefined();
+    expect(findTelegramStartCodeSender({ ok: true, result: [] }, code)).toBeUndefined();
+    expect(findTelegramStartCodeSender({ ok: true }, code)).toBeUndefined();
+    expect(findTelegramStartCodeSender(undefined, code)).toBeUndefined();
+    expect(findTelegramStartCodeSender({ result: [privateUpdate(1, `/start ${code}`)] }, "")).toBeUndefined();
+  });
+
+  it("uses the latest matching message", () => {
+    const first = { id: 7, first_name: "Early" };
+    const latest = { id: 9, first_name: "Late" };
+    expect(
+      findTelegramStartCodeSender(
+        { result: [privateUpdate(1, `/start ${code}`, first), privateUpdate(2, `/start ${code}`, latest)] },
+        code,
+      )?.actorId,
+    ).toBe("9");
+    expect(
+      findTelegramStartCodeSender(
+        { result: [privateUpdate(2, `/start ${code}`, latest), privateUpdate(1, `/start ${code}`, first)] },
+        code,
+      )?.actorId,
+    ).toBe("9");
+    const unnumbered = [first, latest].map((sender) => ({
+      message: { text: `/start ${code}`, from: sender, chat: { id: sender.id, type: "private" } },
+    }));
+    expect(findTelegramStartCodeSender({ result: unnumbered }, code)?.actorId).toBe("9");
   });
 });

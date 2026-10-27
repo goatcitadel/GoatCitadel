@@ -34,9 +34,10 @@ export function useChatSelectionReview(identity: string) {
 }
 
 /**
- * Chat owns the address on a conversation and on a channel page. Only a selection or new chat the operator asked for
- * (`request`) publishes, so choosing a conversation beside a channel page leaves the page for it, while a retained
- * selection never takes the page over. Projects stays outside this: it hides Chat.
+ * Chat owns the address on a conversation and on any Messaging view (a channel page, the add-channel picker or a
+ * channel's setup). Only a selection or new chat the operator asked for (`request`) publishes, so choosing a
+ * conversation beside one of those pages leaves the page for it, while a retained selection never takes the page
+ * over. Projects stays outside this: it hides Chat.
  */
 function isOwnedChatLocation(location: string) {
   return isCockpitConversationLocation(location) || isChannelPageLocation(location);

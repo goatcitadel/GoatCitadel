@@ -6,14 +6,17 @@ import {
 import { ChannelEntryControls } from "../../../features/native-routes/settings/channel-setup/ChannelEntryControls";
 import { useChannelReturnNavigation } from "../../../features/native-routes/settings/sections/use-channel-return-navigation";
 import { useChannelSettings } from "../../../features/native-routes/settings/sections/use-channel-settings";
+import { channelPickerHref } from "../../app/routes";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { ChannelOutcomeCheck } from "../../../features/native-routes/settings/sections/ChannelOutcomeCheck";
 import { ChannelDraftEditor } from "./ChannelDraftEditor";
 import { ChannelDraftLeave } from "./ChannelDraftLeave";
 import { ChannelOperations } from "./ChannelOperations";
 import { ChannelLifecycleControls } from "./ChannelLifecycleControls";
 import { channelInputClass } from "./ChannelWizardFields";
+import { useChannelPreselect } from "./use-channel-preselect";
 
 export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
   const { navigate, search } = useCockpitRoute();
@@ -21,6 +24,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
     navigate(channelPlanReviewHref(createChannelPlanReviewHandoff(plan))),
   );
   useChannelReturnNavigation(owner, search);
+  useChannelPreselect(owner, search);
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(20);
   const { data, selectedDraft, selectedDefinition, channelDraft, selectedConnection } = owner;
@@ -32,7 +36,13 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
       aria-label="Channel setup"
       className="space-y-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
-      <header>
+      <header className="space-y-1">
+        <p className="text-sm text-fg-secondary">
+          Add and manage channels from Messaging in Chat.{" "}
+          <NativeOwnerLink href={channelPickerHref()} scope={workspaceId}>
+            Open Messaging
+          </NativeOwnerLink>
+        </p>
         <p className="text-sm text-fg-secondary">
           Connections and setup drafts belong to this installation. This workspace is only the origin of a finalization
           plan.

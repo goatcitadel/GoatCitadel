@@ -217,6 +217,16 @@ async function click(target: HTMLElement) {
   await settle();
 }
 
+/** Where each "Change the key" link on the page goes, as a path and hash (the shell parameter is the link's own). */
+function keyLinks(): string[] {
+  return [...container.querySelectorAll<HTMLAnchorElement>("a")]
+    .filter((candidate) => candidate.textContent === "Change the key")
+    .map((candidate) => {
+      const target = new URL(candidate.getAttribute("href")!, "http://cockpit.invalid");
+      return `${target.pathname}${target.hash}`;
+    });
+}
+
 /** Page text with every Technical details disclosure taken out: what an operator sees by default. */
 function primaryText(): string {
   const copy = container.cloneNode(true) as HTMLElement;
@@ -281,9 +291,17 @@ describe("ChannelPage", () => {
 
     expect(button("Turn off")).toBeDefined();
     expect(button("Remove")).toBeDefined();
-    const keyLink = container.querySelector<HTMLAnchorElement>('a[href^="/settings/connections"]');
-    expect(keyLink?.textContent).toBe("Change the key");
-    expect(keyLink?.getAttribute("href")).toMatch(/#channels$/);
+    // Telegram's key is changed here, in Chat, on its own page.
+    expect(keyLinks()).toEqual(["/chat/messaging/conn-1/key"]);
+  });
+
+  it("sends a channel without its own key page to Settings to change the key", async () => {
+    load({
+      connection: discordConnection(),
+      overview: overviewOf(channel({ channelKey: "discord", label: "Discord" })),
+    });
+    await mount();
+    expect(keyLinks()).toEqual(["/settings/connections#channels"]);
   });
 
   it("shows no provider id, pairing code or version hash outside Technical details", async () => {

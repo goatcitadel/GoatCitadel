@@ -9,6 +9,9 @@ reviewed checks, governed activation, then first-message verification.
 
 - Start from **Needs attention**, **Connected accounts**, **Resume setup**, or
   **Add channel**. Repair and credential rotation hydrate a revision-bound draft.
+- In the Cockpit, Telegram is added from Chat › Messaging: select **+ Add**, then
+  **Telegram** (see "Telegram quick setup" below). The picker opens the other
+  channels in Settings › Channels with that channel already chosen.
 - Complete account credentials and choose destinations. Slack and Telegram use
   editable destination cards with one explicit default. Discovery adds candidates
   for review and preserves existing thread information and selections.
@@ -41,11 +44,71 @@ connectivity. Advanced input remains secondary and obeys the setup definition's
 manual-mode policy. Configured credentials are masked and never copied back into
 form controls.
 
+## Telegram quick setup
+
+New Telegram connections receive by polling. GoatCitadel asks Telegram for new
+messages (`getUpdates` long polling), which works from any network and needs no
+public web address and no webhook secret. Delivery to a public HTTPS web address
+(a webhook) is the advanced option.
+
+- **Where.** Chat › Messaging › **+ Add** opens the channel picker at
+  `/chat/messaging/add`; **Telegram** opens its page at
+  `/chat/messaging/add/telegram`. The page has four steps, each opening when the
+  one before it checks out:
+  1. **Make your bot.** A QR code and link open BotFather; send `/newbot`.
+  2. **Paste the key BotFather sent you.** The key is checked with Telegram
+     (`getMe`, `getWebhookInfo`, `getUpdates`) and stored as a masked credential;
+     the page never shows it again.
+  3. **Say hi to your bot.** The page shows a one-time code as a QR code, a link
+     and plain text. The private-chat sender who sends it within ten minutes
+     becomes the bot's only allowed sender and its recorded owner, and that
+     private chat becomes the default destination. **Get a new code** replaces an
+     expired code. When a full page of waiting messages hides the code, the step
+     says so and offers **Clear waiting messages**, which confirms them once (see
+     Starting and resuming); a hi sent earlier than the newest message may need
+     sending again.
+  4. **Turn it on.** The step lists what will change, then sends a test message
+     to that chat, removes it and applies the activation Change Plan in place. If
+     the approval cannot be given there, the step links to Inbox or Settings.
+- **Receive mode.** The connection stores `receiveMode`: `poll` (the default for
+  new connections), `webhook` (Telegram sends to a public web address and the
+  webhook secret fields apply) or `off`. Settings › Channels offers the same
+  choice. Existing connections are not switched: one with a webhook secret stays
+  `webhook` and one without stays `off` until an operator changes it.
+- **Who can message the bot.** Polling uses the same update handler as the web
+  address route, so sender allowlist, pairing and policy gates are unchanged. An
+  empty allowlist still denies every sender. The web address route ignores updates
+  for connections in `poll` or `off` mode. The owner the setup page recorded needs
+  no pairing code: on an `allowlist` connection, an actor in both `ownerActorIds`
+  and `allowedSenders` is let through like an approved pairing. Anyone else pairs
+  first, and taking the owner off the allowlist ends it.
+- **Starting and resuming.** The first time a bot is polled, GoatCitadel skips
+  whatever is already waiting, including the setup messages. After that it saves
+  its place in Telegram's queue after each message, so a restart resumes there.
+  Messages Telegram no longer holds are not recovered. An update that fails eight
+  times is skipped with a warning diagnostic so it cannot block later ones.
+- **One reader per bot.** Telegram refuses `getUpdates` while the bot sends to a
+  web address, and while another app is reading the same bot. The page says which
+  applies. For a web address it offers **Stop sending to that address**, which
+  calls `deleteWebhook` only after the operator asks. Another reading app has to
+  be stopped in that app.
+- **Allowed hosts.** Polling needs `api.telegram.org` in the network allowlist.
+  When it is missing, the Turn on step lists it as a change, and Turn on adds it
+  through its own approved Change Plan. Turn on approves only the plan it created
+  or resumed and never uses the Settings approval skip.
+- **Changing the key.** Chat › Messaging › the channel's page › **Change the
+  key** (`/chat/messaging/<connection id>/key`) checks a new key and saves it with
+  the same in-place approval. It keeps the connection's receive mode and does not
+  offer to stop a web address.
+- **Settings.** Settings › Channels points to Messaging, and
+  `/settings/connections?channel=<catalog id>#channels` opens with that channel
+  preselected, for example `channel.slack`.
+
 ## Channel boundaries
 
 | Channel | Supported setup and completion evidence |
 | --- | --- |
-| Telegram | Bot identity, explicit chats/default, webhook secret and coordinated pairing/sender allowlist; an authorized incoming message and linked provider-accepted reply. |
+| Telegram | Bot identity, explicit chats/default, how messages are received (polling by default; a webhook secret only for web-address delivery) and coordinated pairing/sender allowlist; an authorized incoming message and linked provider-accepted reply. |
 | Discord | Paired direct messages or separately allowlisted server/guild/channel/user/role rules; identity/intents and invitation guidance. DM-only destination checks may remain deferred until runtime activation and pairing. |
 | Slack | Explicit adoption of a bound OAuth install or existing supported credentials, workspace/channel membership and scopes, signed Events callbacks when configured; linked ingress/reply evidence for conversations. |
 | WhatsApp | Business Cloud API sender phone-number resource and recipient. Both app secret and webhook verify token are needed for inbound routing. Personal WhatsApp QR linking is unavailable. |
@@ -118,9 +181,26 @@ structural URL recognition never establishes successful delivery.
   revision or a connection ID and opaque revision. Credentials resolve only at
   the Gateway. The legacy token/env discovery API remains validated for existing
   callers. First-party UI callers use owner references.
-- An active Telegram webhook is never deleted for discovery. Configured,
-  accepted-ingress and pairing destinations remain usable candidates; unavailable
-  update polling is explained. Discovery grants no access and selects no default.
+- An active Telegram webhook is never deleted for discovery, unless a draft-based
+  request sets `clearWebhook: true`, which calls `deleteWebhook` once and keeps
+  pending updates. Configured, accepted-ingress and pairing destinations remain
+  usable candidates; unavailable update polling is explained, and a 409 from
+  `getUpdates` is reported as `updatesConflict`. Discovery grants no access and
+  selects no default.
+- A draft-based discovery request can carry a one-time `setupCode`. The result's
+  `codeSender` is the latest private-chat, non-bot sender whose `/start <code>`
+  (or bare code) message matches exactly. `updatesTruncated` marks a full page of
+  100 updates, so the sender may be further back. The code finds a sender; it
+  grants nothing until the setup page saves that sender to the draft.
+- A draft-based request that sets `skipWaiting: true` (the setup page's **Clear
+  waiting messages** click) first calls `getUpdates` with `offset=-1&limit=1&timeout=0`,
+  once, when no webhook is active. Telegram then forgets every update before the
+  newest, and the usual look follows, so a hi sent after it is found. Discovery
+  never acknowledges updates otherwise. It is refused for a draft that belongs to
+  a connection (an edit or key change), whose poller owns the queue, and the
+  connection source rejects the field. A 409 is reported as `updatesConflict`
+  and nothing is skipped. Nothing GoatCitadel would have processed is lost: a
+  connection's first poll skips whatever is already waiting.
 - Telegram pairing list/approve/revoke APIs expose bounded public identities and
   require the current connection revision for writes. Approval and revocation
   update both pairing and sender authorization under one connection CAS. Existing

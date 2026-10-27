@@ -232,6 +232,47 @@ describe("ChannelStreamRuntimeService", () => {
     await h.service.close();
   });
 
+  it("handle runs adapter work with emit's bookkeeping", async () => {
+    let fail = true;
+    const h = setup({
+      dispatch: async () => {
+        if (fail) throw new Error("store down");
+        return {};
+      },
+    });
+    await h.service.sync();
+    const first = await nextRun(h.runs, 1);
+    await expect(first.ctx.emit(event("e1"), "c1")).rejects.toThrow("store down");
+    expect(h.service.getStatus("conn-1")?.lastError).toContain("store down");
+    expect(h.service.getStatus("conn-1")?.lastInboundAt).toBeUndefined();
+    fail = false;
+
+    const work = vi.fn(async () => "handled");
+    await first.ctx.handle(work, "c2");
+
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
+    expect(h.service.getStatus("conn-1")?.lastInboundAt).toBeTruthy();
+    expect(h.service.getStatus("conn-1")).not.toHaveProperty("lastError");
+    expect(first.ctx.cursor).toBe("c2");
+
+    await expect(
+      first.ctx.handle(async () => {
+        throw new Error("handler down");
+      }, "c3"),
+    ).rejects.toThrow("handler down");
+    expect(h.service.getStatus("conn-1")?.lastError).toContain("handler down");
+    expect(first.ctx.cursor).toBe("c2");
+
+    first.reject(new Error("drop"));
+    await flush();
+    const second = await nextRun(h.runs, 2);
+    expect(second.ctx.cursor).toBe("c2");
+    await h.service.close();
+    await expect(second.ctx.handle(work)).rejects.toThrow("Channel stream session is closed.");
+    expect(work).toHaveBeenCalledTimes(1);
+  });
+
   it("close aborts runners, awaits settlement and blocks later sync", async () => {
     const h = setup();
     await h.service.sync();

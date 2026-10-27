@@ -54,7 +54,7 @@ If the voice runtime is missing, ffmpeg or the model is unavailable, the media i
 
 To turn it off, set `GOATCITADEL_FEATURE_CHANNEL_VOICE_INBOUND_V1_ENABLED=false` or store `channelVoiceInboundV1Enabled: false` in Settings feature flags. With it off, Telegram voice and Slack voice-only shares are ignored, WhatsApp audio keeps its `[whatsapp audio]` placeholder, and a Discord voice-only message is declined.
 
-Webhook-ingress channels (Telegram, Slack, WhatsApp, LINE, Nextcloud Talk, Google Chat app mode) start with an empty default-deny sender allowlist; unknown senders are rejected before any message reaches the runtime. Discord's gateway ingress is governed differently: guild allowlist policy plus per-guild channel/role/user rules and mention requirements (`apps/gateway/src/services/discord-runtime-service.ts`), so scope those pairing rules deliberately — a configured guild/channel without a user list accepts any member who mentions the bot. In every case, accepted messages still pass the standard policy gate.
+Webhook-ingress channels (Telegram, Slack, WhatsApp, LINE, Nextcloud Talk, Google Chat app mode) start with an empty default-deny sender allowlist, and Telegram's polling mode uses the same one; unknown senders are rejected before any message reaches the runtime. Discord's gateway ingress is governed differently: guild allowlist policy plus per-guild channel/role/user rules and mention requirements (`apps/gateway/src/services/discord-runtime-service.ts`), so scope those pairing rules deliberately — a configured guild/channel without a user list accepts any member who mentions the bot. In every case, accepted messages still pass the standard policy gate.
 
 Long-form walkthroughs below still focus on the current high-traffic channels. The additional guided definitions above exist so operators can draft, edit, repair, and retest those guided channels inside Mission Control without dropping back to raw JSON.
 
@@ -256,14 +256,36 @@ Reference:
 
 - https://core.telegram.org/bots/tutorial
 
-### Step-by-step
+New Telegram connections receive by polling: GoatCitadel asks Telegram for new messages, so you do not need a public web address or a webhook secret. Delivery to a public HTTPS web address (a webhook) is the advanced option, covered below.
 
-1. Open `@BotFather` in Telegram.
-2. Run `/newbot`.
-3. Follow the naming prompts.
-4. Copy the token into `TELEGRAM_BOT_TOKEN`.
-5. Add the bot to your target chat/channel and grant send rights.
-6. Configure the Telegram channel integration inside GoatCitadel.
+### Step-by-step (Messaging)
+
+1. In Chat, open **Messaging**, select **+ Add**, then **Telegram**.
+2. **Make your bot.** Scan the QR code or open the link to reach `@BotFather`, send `/newbot` and follow the naming prompts.
+3. **Paste the key BotFather sent you.** GoatCitadel checks it with Telegram and stores it as a masked credential. If the bot still sends its messages to a web address, or another app is reading them, the page says so. For a web address it offers **Stop sending to that address**.
+4. **Say hi to your bot.** Scan the new QR code or open the link, then tap Start. If you do not see Start, send the code shown on the page. The code works for ten minutes, and **Get a new code** replaces it. If the bot already has more waiting messages than GoatCitadel can look through, the step says it can't see your hi yet and offers **Clear waiting messages**; GoatCitadel skips them when it turns on anyway, and a hi sent before you clear them may need to be sent again. Whoever says hi from a private chat becomes the only person allowed to message the bot until you add others, and that chat becomes its default destination.
+5. **Turn it on.** The step lists what will change: who can message the bot, where it posts, how it gets messages, a test message that GoatCitadel sends and then removes, and `api.telegram.org` if it is not yet in the allowed hosts. Turn on makes and approves that change in place. If the approval cannot be given there, the step links to Inbox or Settings.
+6. Send your bot a message to try it.
+
+To replace the key later, open the channel in Messaging and select **Change the key**. Settings › Channels offers every option, including the receive mode, and points back to Messaging.
+
+### Step-by-step (environment variable)
+
+1. Create the bot with `@BotFather` and copy the token into `TELEGRAM_BOT_TOKEN`.
+2. Add the bot to your target chat/channel and grant send rights.
+3. In Settings › Channels, add Telegram and point it at that environment variable.
+
+### Receiving messages
+
+- **Ask Telegram for new messages (default).** Needs no public web address. `api.telegram.org` must be in the network allowlist.
+- **Telegram sends messages to a public web address (advanced).** Choose it as the receive mode in Settings › Channels, set the webhook secret and register the connection's web address with Telegram. The address must be public and HTTPS.
+- **Don't receive messages.** The channel can still send.
+
+Existing Telegram connections keep working as they do today. One with a webhook secret stays on the web address, and one without stays off until you change it in Settings › Channels. Polling and the web address use the same sender allowlist, pairing and policy gates, and an empty allowlist denies every sender.
+
+Telegram allows only one reader per bot. While the bot sends to a web address, or another app is reading it, polling reports an error instead of receiving.
+
+The first time a bot is polled, GoatCitadel skips whatever is already waiting. It saves its place after each message, so a restart resumes there. Telegram does not keep unread messages indefinitely, so messages sent during a long outage may be gone.
 
 Treat Telegram as pilot-only until your sandbox workflow is stable.
 
@@ -275,7 +297,10 @@ TELEGRAM_BOT_TOKEN=123456789:AA...
 
 ### Telegram troubleshooting
 
-- `401` or auth failure: token is wrong, revoked, or copied incompletely
+- `401` or auth failure, or "Telegram rejected the bot key.": token is wrong, revoked, or copied incompletely; use **Change the key** on the channel's page
+- "Telegram says another app is reading this bot's messages, or the bot sends them to a web address.": stop the other reader, or use **Stop sending to that address** during setup
+- "GoatCitadel isn't allowed to reach api.telegram.org.": add `api.telegram.org` to the network allowlist; Turn on does this for you after its approval
+- your hi is never seen: the code may have expired, so get a new one; only a private chat with the bot counts, not a group
 - send succeeds nowhere: the bot is not actually in the target chat or channel
 - delete probe fails: the bot can post but lacks permission to remove the sandbox message
 - `@channel_name` works inconsistently: prefer the real chat id when available

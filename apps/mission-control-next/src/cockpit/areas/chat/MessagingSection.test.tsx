@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ChatMessagingChannel, ChatMessagingConversation, ChatMessagingOverview } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { MessagingSection } from "./MessagingSection";
 
 const api = vi.hoisted(() => ({ fetchChatMessaging: vi.fn() }));
@@ -185,11 +186,11 @@ describe("MessagingSection", () => {
   it("offers to add a channel when there are none", async () => {
     await mount(overviewOf([]));
     expect(container.textContent).toContain("No channels yet");
-    const links = [...container.querySelectorAll<HTMLAnchorElement>('a[href^="/settings/connections"]')];
-    // The heading's Add link and the empty state's link go to the same place.
+    const links = [...container.querySelectorAll<HTMLAnchorElement>('a[href^="/chat/messaging/add"]')];
+    // The heading's Add link and the empty state's link go to the same place: the channel picker.
     expect(links).toHaveLength(2);
     for (const link of links) {
-      expect(link.getAttribute("href")).toMatch(/#channels$/);
+      expect(new URL(link.getAttribute("href")!, "http://cockpit.invalid").pathname).toBe("/chat/messaging/add");
       expect(link.getAttribute("aria-label")).toBe("Add a channel");
       expect(link.textContent).toContain("Add");
       expect(link.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
@@ -210,13 +211,70 @@ describe("MessagingSection", () => {
     });
     expect(container.textContent).toContain("Couldn't load your channels");
     expect(container.textContent).not.toContain("No channels yet");
-    expect(container.querySelector('a[href^="/settings/connections"]')).not.toBeNull();
+    expect(container.querySelector('a[href^="/chat/messaging/add"]')).not.toBeNull();
     api.fetchChatMessaging.mockResolvedValue(overviewOf([channel()]));
     await act(async () => button("Try again").click());
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(container.textContent).toContain("Telegram");
+  });
+
+  describe("when its host closes with navigation", () => {
+    const links = () => [...container.querySelectorAll<HTMLAnchorElement>('a[aria-label="Add a channel"]')];
+    async function mountWithNavigation(onNavigate: () => void) {
+      window.history.replaceState(null, "", "/chat?shell=cockpit");
+      api.fetchChatMessaging.mockResolvedValue(overviewOf([]));
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={client}>
+            <CockpitNavigationProvider>
+              <MessagingSection
+                workspaceId="default"
+                onSelectSession={vi.fn()}
+                onOpenChannel={vi.fn()}
+                onNavigate={onNavigate}
+              />
+            </CockpitNavigationProvider>
+          </QueryClientProvider>,
+        );
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      // The heading has one Add link and the empty state another.
+      expect(links()).toHaveLength(2);
+    }
+
+    it.each([
+      ["heading", 0],
+      ["empty state", 1],
+    ])("tells its host once the %s Add link has taken the operator on", async (_name, index) => {
+      const onNavigate = vi.fn();
+      await mountWithNavigation(onNavigate);
+      await act(async () => links()[index]!.click());
+      expect(window.location.pathname).toBe("/chat/messaging/add");
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not tell its host about a new-tab click", async () => {
+      const onNavigate = vi.fn();
+      await mountWithNavigation(onNavigate);
+      // A new-tab click is left to the browser; here the browser's default move is stopped so the page stays put.
+      const stopDefault = (event: Event) => event.preventDefault();
+      document.addEventListener("click", stopDefault);
+      try {
+        for (const link of links()) {
+          await act(async () => {
+            link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
+          });
+        }
+      } finally {
+        document.removeEventListener("click", stopDefault);
+      }
+      expect(onNavigate).not.toHaveBeenCalled();
+      expect(window.location.pathname).toBe("/chat");
+    });
   });
 
   it("adds no live regions", async () => {

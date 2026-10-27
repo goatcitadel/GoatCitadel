@@ -3,7 +3,7 @@ import { readCatalogLocation } from "../areas/library/capability-catalog-route";
 import { adaptLegacyUrl } from "../../app/legacy-route-adapter";
 import { buildAppHref, parseAppRoute } from "../../app/route-model";
 import { buildSettingsDestinations } from "../areas/settings/settings-destinations";
-import { channelPageConnectionId, parseCockpitLocation } from "./routes";
+import { messagingView, parseCockpitLocation } from "./routes";
 import { isDevDiagnosticsEnabled } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 
 export type CockpitResolution =
@@ -84,12 +84,16 @@ export function isCockpitConversationLocation(input: string): boolean {
   return route.area === "chat" && route.rest.length === 0;
 }
 
-/** A channel page (`/chat/messaging/<connectionId>`): a native Chat view that is not a conversation. */
+/**
+ * Any Messaging view (`/chat/messaging/…`: a channel's page, the add-channel picker, a channel's setup or its key
+ * change): a native Chat view that is not a conversation, so a retained conversation selection never takes the
+ * address over from it.
+ */
 export function isChannelPageLocation(input: string): boolean {
   const resolution = resolveCockpitCompatibility(input);
   if (resolution.kind !== "native") return false;
   const route = parseCockpitLocation(new URL(resolution.href, "http://cockpit.invalid").pathname);
-  return route.area === "chat" && channelPageConnectionId(route.rest) !== null;
+  return route.area === "chat" && messagingView(route.rest) !== null;
 }
 
 /** A record id a native path may carry: no surrounding whitespace and no control characters. */
@@ -272,8 +276,9 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     return native(opsNative[section]);
   }
   if (area === "chat" && section === "projects" && parts.length <= 3) return native();
-  // A channel page is Chat's own view of one connected channel; it is never a conversation (see isChannelPageLocation).
-  if (area === "chat" && channelPageConnectionId(parts.slice(1)) !== null) return native();
+  // Messaging views (a channel's page, the add-channel picker, a channel's setup) are Chat's own and never a
+  // conversation (see isChannelPageLocation).
+  if (area === "chat" && messagingView(parts.slice(1)) !== null) return native();
   if (area === "projects" && parts.length <= 2)
     return native(
       `/chat/projects${section ? `/${section}` : url.searchParams.get("projectId") ? `/${encodeURIComponent(url.searchParams.get("projectId")!)}` : ""}`,

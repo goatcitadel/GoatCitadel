@@ -22,7 +22,7 @@ import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
 import { InspectorSourceContext } from "../../app/inspector-context";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { channelPageConnectionId } from "../../app/routes";
+import { channelPageHref, messagingView } from "../../app/routes";
 import { ChatMainColumn } from "./ChatMainColumn";
 import { ChatOwnerNavigationBoundary } from "./ChatOwnerNavigationBoundary";
 import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
@@ -236,7 +236,7 @@ export function ChatAreaView({
   // Messaging lists this workspace's channels under the conversations; a channel row opens that channel's page.
   const messaging = {
     workspaceId: activeWorkspaceId ?? "default",
-    onOpenChannel: (connectionId: string) => navigate(`/chat/messaging/${encodeURIComponent(connectionId)}`),
+    onOpenChannel: (connectionId: string) => navigate(channelPageHref(connectionId)),
   };
   useEffect(() => {
     onVisibleSessionChange?.(selectedSessionId);
@@ -285,10 +285,7 @@ export function ChatAreaView({
         onOpenProjects={openProjects}
         messaging={messaging}
       />
-      <ChatMainColumn
-        channelPageId={channelPageConnectionId(rest)}
-        channelConversation={isChannelConversation(session)}
-      >
+      <ChatMainColumn messaging={messagingView(rest)} channelConversation={isChannelConversation(session)}>
         <ChatSessionHeader
           input={input}
           active={active}

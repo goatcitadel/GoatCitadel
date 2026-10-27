@@ -3,7 +3,15 @@ import type { ChannelSetupTestResult } from "./channel-wizard.js";
 import type { ChannelSetupEvidence } from "./channel-setup-evidence.js";
 
 export type ChannelSetupDiscoveryInput =
-  | { source: "draft"; draftId: string; expectedRevision: number; setupCode?: string }
+  | {
+      source: "draft";
+      draftId: string;
+      expectedRevision: number;
+      setupCode?: string;
+      clearWebhook?: true;
+      /** Confirms every waiting update before the newest, so a full page of old messages stops hiding the code. */
+      skipWaiting?: true;
+    }
   | { source: "connection"; connectionId: string; expectedConnectionRevision: string; setupCode?: string };
 export interface ChannelSetupDiscoveredTarget {
   id: string;
@@ -13,11 +21,24 @@ export interface ChannelSetupDiscoveredTarget {
   source: "recent_update" | "connection_config" | "accepted_ingress" | "pending_pairing";
   setupCodeMatched?: boolean;
 }
+/** The private-chat sender of the one-time setup code (`/start <code>`). */
+export interface ChannelSetupCodeSender {
+  actorId: string;
+  chatId: string;
+  displayName?: string;
+  username?: string;
+}
 export interface ChannelSetupDiscoveryResult {
   items: ChannelSetupDiscoveredTarget[];
   warnings: string[];
   webhookActive: boolean;
   botIdentity?: { id: string; username?: string; label?: string };
+  /** Present when the setup code was found in a private chat's recent messages. */
+  codeSender?: ChannelSetupCodeSender;
+  /** A full page of updates came back, so older messages may not have been read. */
+  updatesTruncated?: true;
+  /** Telegram reported another reader of updates (HTTP 409), so none could be read. */
+  updatesConflict?: true;
 }
 export interface TelegramChannelPairingList {
   connectionId: string;
@@ -25,11 +46,29 @@ export interface TelegramChannelPairingList {
   inboundAccessMode: "allowlist" | "open_legacy";
   allowedSenders: string[];
   legacyOpenWarning?: string;
-  items: Array<{ actorId: string; status: "pending" | "approved"; code?: string; chatId?: string; displayName?: string; createdAt?: string; expiresAt?: string; approvedAt?: string }>;
+  items: Array<{
+    actorId: string;
+    status: "pending" | "approved";
+    code?: string;
+    chatId?: string;
+    displayName?: string;
+    createdAt?: string;
+    expiresAt?: string;
+    approvedAt?: string;
+  }>;
 }
-export interface TelegramChannelPairingApproveInput { code: string; expectedConnectionRevision: string }
-export interface TelegramChannelPairingRevokeInput { expectedConnectionRevision: string }
-export interface ChannelSetupAcknowledgementInput { expectedRevision: number; evidenceId: string; acknowledgement: "cleanup" | "receipt" }
+export interface TelegramChannelPairingApproveInput {
+  code: string;
+  expectedConnectionRevision: string;
+}
+export interface TelegramChannelPairingRevokeInput {
+  expectedConnectionRevision: string;
+}
+export interface ChannelSetupAcknowledgementInput {
+  expectedRevision: number;
+  evidenceId: string;
+  acknowledgement: "cleanup" | "receipt";
+}
 export type ChannelSetupProofState = "pending" | "verified" | "failed" | "unknown" | "unsupported";
 export interface ChannelSetupJourney {
   connectionId: string;
@@ -38,8 +77,17 @@ export interface ChannelSetupJourney {
   capabilities: ChannelCapabilities;
   runtime: ChannelRuntimeStatus;
   setupEvidence: ChannelSetupEvidence[];
-  states: Record<"configuration" | "activation" | "outbound" | "inbound" | "reply", ChannelSetupProofState> & Partial<Record<"credentials" | "destination" | "access" | "transport", ChannelSetupProofState>>;
-  latestInbound?: { eventId: string; status: string; acceptedAt: string; sessionId?: string; turnId?: string; durableRunId?: string; deliveryId?: string };
+  states: Record<"configuration" | "activation" | "outbound" | "inbound" | "reply", ChannelSetupProofState> &
+    Partial<Record<"credentials" | "destination" | "access" | "transport", ChannelSetupProofState>>;
+  latestInbound?: {
+    eventId: string;
+    status: string;
+    acceptedAt: string;
+    sessionId?: string;
+    turnId?: string;
+    durableRunId?: string;
+    deliveryId?: string;
+  };
   latestReply?: { deliveryId: string; status: string; providerMessageId?: string; updatedAt: string };
   /** Latest delivery observation, separate from completed first-conversation proof. */
   latestReplyState?: ChannelSetupProofState;

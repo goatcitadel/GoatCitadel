@@ -53,6 +53,8 @@ export const queryKeys = {
     connectionId,
     revision ?? "",
   ],
+  /** The channel catalogue the add-channel pages read. It is fixed for a GoatCitadel version, so no event refreshes it. */
+  channelSetupDefinitions: () => ["channel-setup", "definitions"] as const,
   workActivityAll: (): TopicKey => ["system", "work-activity"],
   workActivity: (workspaceId: string): TopicKey => ["system", "work-activity", workspaceId],
   schedules: (): TopicKey => ["tasks", "schedules"],

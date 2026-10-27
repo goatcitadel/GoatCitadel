@@ -51,9 +51,24 @@ export type ChannelSetupStepKind =
   | "test"
   | "confirm";
 
-export type ChannelSetupFieldType = "text" | "secret" | "url" | "id" | "select" | "boolean" | "textarea" | "target-list" | "sender-list";
+export type ChannelSetupFieldType =
+  | "text"
+  | "secret"
+  | "url"
+  | "id"
+  | "select"
+  | "boolean"
+  | "textarea"
+  | "target-list"
+  | "sender-list";
 
-export type ChannelSetupStage = "prerequisites" | "identity" | "destinations_access" | "checks" | "activation" | "first_message";
+export type ChannelSetupStage =
+  | "prerequisites"
+  | "identity"
+  | "destinations_access"
+  | "checks"
+  | "activation"
+  | "first_message";
 
 export interface ChannelSetupFinalizationEligibility {
   allowed: boolean;
@@ -128,6 +143,18 @@ export interface ChannelSetupStepDefinition {
   };
 }
 
+export type ChannelPickerGroup = "quickest" | "team_chat" | "phone_apps";
+
+export interface ChannelSetupPickerHint {
+  group: ChannelPickerGroup;
+  /** 0-based position of the channel within its group; the picker lists a group's tiles by this. */
+  order: number;
+  /** Time shown on the picker tile; the wizard's `estimatedMinutes` applies when absent. */
+  minutes?: number;
+  /** One short line on what the channel needs. */
+  note?: string;
+}
+
 export interface ChannelSetupWizardContent {
   archetype: ChannelArchetype;
   contentVersion: string;
@@ -137,6 +164,10 @@ export interface ChannelSetupWizardContent {
   introSummary: string;
   prerequisites: string[];
   steps: ChannelSetupStepDefinition[];
+  /** Absent means the channel is not offered in the channel picker. */
+  picker?: ChannelSetupPickerHint;
+  /** Provider hosts the channel must be allowed to reach. */
+  requiredHosts?: string[];
 }
 
 export interface ChannelSetupValidationStrategy {

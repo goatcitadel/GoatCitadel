@@ -35,6 +35,8 @@ export interface ChannelStreamRunContext {
   touch(): void;
   /** Resolves only after durable acceptance (or a gate drop); the cursor advances only after this resolves. */
   emit(event: ChannelStreamEvent, cursor?: string): Promise<void>;
+  /** Runs adapter-owned work with emit's bookkeeping: touch, error capture, cursor advance, lastInboundAt, clearError. */
+  handle(work: () => Promise<unknown>, cursor?: string): Promise<void>;
   /** `event` is a bare name; the runtime prefixes `<channelKey>.stream.`. Level defaults to info. */
   diagnostic(event: string, message: string, context?: Record<string, unknown>, level?: "info" | "warn"): void;
 }
@@ -318,6 +320,22 @@ export class ChannelStreamRuntimeService {
 
     while (!controller.signal.aborted) {
       const session = this.openSession(controller.signal, adapter.idleTimeoutMs);
+      const handle = async (work: () => Promise<unknown>, nextCursor?: string): Promise<void> => {
+        if (session.signal.aborted) {
+          throw new Error("Channel stream session is closed.");
+        }
+        session.touch();
+        try {
+          await work();
+        } catch (error) {
+          update({ lastError: describeError(error) });
+          throw error;
+        }
+        if (nextCursor !== undefined) cursor = nextCursor;
+        failures = 0;
+        update({ lastInboundAt: this.now().toISOString() });
+        clearError();
+      };
       const ctx: ChannelStreamRunContext = {
         connection,
         signal: session.signal,
@@ -332,22 +350,8 @@ export class ChannelStreamRuntimeService {
           diagnostic("info", "connected", "Channel stream connected.");
         },
         touch: () => session.touch(),
-        emit: async (event, nextCursor) => {
-          if (session.signal.aborted) {
-            throw new Error("Channel stream session is closed.");
-          }
-          session.touch();
-          try {
-            await this.dispatch(connection, event);
-          } catch (error) {
-            update({ lastError: describeError(error) });
-            throw error;
-          }
-          if (nextCursor !== undefined) cursor = nextCursor;
-          failures = 0;
-          update({ lastInboundAt: this.now().toISOString() });
-          clearError();
-        },
+        emit: (event, nextCursor) => handle(() => this.dispatch(connection, event), nextCursor),
+        handle,
         diagnostic: (event, message, context, level) => {
           diagnostic(level ?? "info", event, message, context);
         },
