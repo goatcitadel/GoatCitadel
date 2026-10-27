@@ -272,7 +272,7 @@ describe("capability connectors route", () => {
       });
 
       /** The real service and install adapter on a migrated SQLite ledger; only the owners and approvals are faked. */
-      function controlPlane(skip: boolean) {
+      function controlPlane(skip: boolean, saveFailure?: Error) {
         const database = createDatabase({ dbPath: ":memory:" });
         databases.push(database);
         const sync = new ChangePlanRepository(database);
@@ -295,6 +295,7 @@ describe("capability connectors route", () => {
             };
           },
           createMcpServer: async (input) => {
+            if (saveFailure) throw saveFailure;
             const server = {
               ...input,
               serverId: "server-1",
@@ -415,6 +416,28 @@ describe("capability connectors route", () => {
         expect(plane.servers).toEqual([expect.objectContaining({ label: "Linear", enabled: false })]);
         // The operator who asked for the install is named, not the approval resolution that resumed it.
         expect(plane.relaxedBy).toHaveBeenCalledExactlyOnceWith("operator-test");
+      });
+
+      // R79: the receipt's summary stays plain; the owner's error text is only on the plan, for technical details.
+      it("keeps a failed step's error text out of the receipt", async () => {
+        const plane = controlPlane(true, new Error("SQLITE_BUSY: database is locked"));
+        const server = await build({ evolution: plane.service });
+
+        const response = await install(server);
+
+        expect(response.statusCode).toBe(202);
+        const receipt = response.json().changePlanReceipt;
+        expect(receipt).toMatchObject({
+          status: "manual_required",
+          summary: "Allowed mcp.linear.app. Couldn't save Linear. Trying again is safe.",
+        });
+        expect(response.body).not.toContain("SQLITE_BUSY");
+        const actor = { workspaceId: "default", actorId: "operator-test", surface: "capabilities" as const };
+        expect((await plane.service.get(actor, receipt.planId)).result).toEqual({
+          summary: "Allowed mcp.linear.app. Couldn't save Linear. Trying again is safe.",
+          failureCode: "connector_install_save_failed",
+          failureDetail: "SQLITE_BUSY: database is locked",
+        });
       });
     });
   });

@@ -55,7 +55,18 @@ export interface ConnectorInstallGateway {
   listMcpServers(): Promise<McpServerRecord[]>;
 }
 
-type InstallStep = "allow" | "save" | "reads_free" | "chat";
+/** The install's steps in order; a failure's `failureCode` names the one it stopped at. */
+type InstallStep = "allowlist" | "save" | "posture" | "chat_flag";
+
+/** What the owners hold for a template now. */
+interface InstallObservation {
+  /** The saved server paired with the template by label, ignoring case. */
+  readonly server: McpServerRecord | undefined;
+  readonly relaxed: boolean;
+  /** The template's hosts the allowed list doesn't cover. */
+  readonly missing: readonly string[];
+  readonly chatOn: boolean;
+}
 
 /**
  * Installs a connector from its template as the operator's own Capabilities action: it allows the template's hosts,
@@ -109,42 +120,48 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
       };
     }
     const { readSettings, updateSettings } = this.deps;
-    const done: string[] = [];
-    let step: InstallStep = "allow";
-    let missing: string[] = [];
+    let step: InstallStep = "allowlist";
+    let pending: readonly string[] = [];
+    let allowed: readonly string[] = [];
     try {
       const settings = await readSettings();
-      missing = missingHosts(template, settings.networkAllowlist);
+      pending = missingHosts(template, settings.networkAllowlist);
       // The allowed list is replaced whole, so the missing hosts are appended to the list as it is now.
-      if (missing.length > 0) {
+      if (pending.length > 0) {
         await updateSettings({
           expectedRevision: settings.revision,
-          networkAllowlist: [...settings.networkAllowlist, ...missing],
+          networkAllowlist: [...settings.networkAllowlist, ...pending],
         });
-        done.push(`Allowed ${missing.join(", ")}.`);
+        allowed = pending;
       }
       step = "save";
       const created = await this.deps.createMcpServer(createInput(template));
-      done.push(`Saved ${template.label}, switched off.`);
-      step = "reads_free";
+      step = "posture";
       // The operator who asked for the install, not whoever resumed it, is named in the audit record.
       await this.deps.setReadsFree(created, plan.origin.actorId ?? "operator");
-      step = "chat";
+      step = "chat_flag";
+      let chatTurnedOn = false;
       if (request.enableChatConnectors) {
         // Each settings write bumps the revision, so read it again.
         const current = await readSettings();
         if (current.features.chatStaticMcpV1Enabled !== true) {
           await updateSettings({ expectedRevision: current.revision, features: { chatStaticMcpV1Enabled: true } });
-          done.push("Let Chat use connectors.");
+          chatTurnedOn = true;
         }
       }
       return {
         status: "completed" as const,
         evidenceRefs: [...plan.evidenceRefs, `mcp_server:${created.serverId}`],
-        result: { summary: done.join(" ") },
+        result: { summary: finishedSentences(template, allowed, true, chatTurnedOn).join(" ") },
       };
     } catch (error) {
-      return stopped(template, step, missing, done, error);
+      // Nothing was written before the allowed-host write landed. After it, what the owners hold decides the summary:
+      // a save can report a failed follow-up after it landed, or be rolled back with its transaction.
+      const observed =
+        step === "allowlist"
+          ? undefined
+          : await this.observe(template).catch(() => undefined /* the step tracker stands in */);
+      return stopped({ template, request, step, pending, allowed, observed, error });
     }
   }
 
@@ -159,11 +176,8 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
         result: { summary: "The install stopped before it finished.", failureCode: "connector_install_interrupted" },
       };
     }
-    const [servers, settings] = await Promise.all([this.deps.readMcpServers(), this.deps.readSettings()]);
-    const server = servers.find((item) => mcpServerLabelKey(item.label) === mcpServerLabelKey(template.label));
-    const relaxed = server?.policy.approvalPosture === "reads_free";
-    const chatReady = !request.enableChatConnectors || settings.features.chatStaticMcpV1Enabled === true;
-    if (server && relaxed && chatReady && missingHosts(template, settings.networkAllowlist).length === 0) {
+    const { server, relaxed, missing, chatOn } = await this.observe(template);
+    if (server && relaxed && (!request.enableChatConnectors || chatOn) && missing.length === 0) {
       return {
         effectObserved: true,
         status: "completed" as const,
@@ -183,6 +197,17 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
         summary: `The install stopped before it finished. ${found}`,
         failureCode: "connector_install_interrupted",
       },
+    };
+  }
+
+  private async observe(template: McpServerTemplateRecord): Promise<InstallObservation> {
+    const [servers, settings] = await Promise.all([this.deps.readMcpServers(), this.deps.readSettings()]);
+    const server = servers.find((item) => mcpServerLabelKey(item.label) === mcpServerLabelKey(template.label));
+    return {
+      server,
+      relaxed: server?.policy.approvalPosture === "reads_free",
+      missing: missingHosts(template, settings.networkAllowlist),
+      chatOn: settings.features.chatStaticMcpV1Enabled === true,
     };
   }
 
@@ -285,39 +310,81 @@ function createInput(template: McpServerTemplateRecord): McpServerCreateInput {
   };
 }
 
-/**
- * The outcome when a step fails: one sentence per step that finished, then what didn't. A write that committed before
- * a follow-up failed counts as finished.
- */
-function stopped(
+/** One plain sentence per finished step (R66). */
+function finishedSentences(
   template: McpServerTemplateRecord,
-  step: InstallStep,
-  missing: readonly string[],
-  done: readonly string[],
-  error: unknown,
-): EvolutionControlPlaneAdapterOutcome {
-  const committed = (error as { mutationCommitted?: unknown } | null)?.mutationCommitted === true;
-  const committedSentence = {
-    allow: missing.length > 0 ? `Allowed ${missing.join(", ")}.` : undefined,
-    save: `Saved ${template.label}, switched off.`,
-    reads_free: undefined,
-    chat: "Let Chat use connectors.",
-  }[step];
-  const finished = committed && committedSentence ? [...done, committedSentence] : done;
-  const failure = committed
-    ? "The install stopped before it finished."
-    : {
-        allow: missing.length > 0 ? `Couldn't allow ${missing.join(", ")}.` : "Couldn't read the allowed hosts.",
-        save: `Couldn't save ${template.label}.`,
-        reads_free: `Couldn't set ${template.label} to Reading is free, so everything it does asks you first.`,
-        chat: "Couldn't let Chat use connectors.",
-      }[step];
-  const reason = redactSecretText((error instanceof Error ? error.message : "").replace(/\s+/gu, " ").trim()).value;
+  allowed: readonly string[],
+  saved: boolean,
+  chatTurnedOn: boolean,
+): string[] {
+  return [
+    ...(allowed.length > 0 ? [`Allowed ${allowed.join(", ")}.`] : []),
+    ...(saved ? [`Saved ${template.label}, switched off.`] : []),
+    ...(chatTurnedOn ? ["Let Chat use connectors."] : []),
+  ];
+}
+
+/**
+ * The outcome when a step fails (R79): the summary is plain sentences only, one per finished step and then what didn't
+ * happen and what to do next. The owner's own error text goes to `failureDetail`, for technical details only.
+ */
+function stopped(input: {
+  readonly template: McpServerTemplateRecord;
+  readonly request: ChangePlanConnectorInstallRequest;
+  readonly step: InstallStep;
+  readonly pending: readonly string[];
+  readonly allowed: readonly string[];
+  readonly observed: InstallObservation | undefined;
+  readonly error: unknown;
+}): EvolutionControlPlaneAdapterOutcome {
+  const { template, step, observed } = input;
+  // Without a fresh read, a step counts as done once the next one started.
+  const held = {
+    saved: observed ? observed.server !== undefined : step === "posture" || step === "chat_flag",
+    relaxed: observed ? observed.relaxed : step === "chat_flag",
+    chatMissing: input.request.enableChatConnectors && observed?.chatOn !== true,
+  };
+  const finished = finishedSentences(template, input.allowed, held.saved, false);
+  const detail = failureDetail(input.error);
   return {
     status: finished.length > 0 ? "manual_required" : "failed",
     result: {
-      summary: [...finished, failure, reason.slice(0, 300)].filter(Boolean).join(" "),
+      summary: [...finished, whatsLeft(template.label, step, input.pending, held)].join(" "),
       failureCode: `connector_install_${step}_failed`,
+      ...(detail ? { failureDetail: detail } : {}),
     },
   };
+}
+
+/** What didn't happen and what to do next, from what the owners hold once the install stopped. */
+function whatsLeft(
+  label: string,
+  step: InstallStep,
+  pending: readonly string[],
+  held: { readonly saved: boolean; readonly relaxed: boolean; readonly chatMissing: boolean },
+): string {
+  if (step === "allowlist") {
+    const failed = pending.length > 0 ? `Couldn't allow ${pending.join(", ")}.` : "Couldn't read the allowed hosts.";
+    return `${failed} Nothing was changed, so trying again is safe.`;
+  }
+  // Trying again skips the hosts already allowed, and nothing else was saved.
+  if (!held.saved) return `Couldn't save ${label}. Trying again is safe.`;
+  // It is saved now, so installing again would refuse: the setting is changed in its panel instead.
+  if (!held.relaxed) {
+    return (
+      `Couldn't set ${label} to Reading is free, so everything it does asks you first. ` +
+      "You can choose Reading is free under What asks first in its panel."
+    );
+  }
+  if (held.chatMissing) {
+    return `Couldn't let Chat use connectors, so Chat can't use ${label} yet. Its panel links to Chat access in Settings.`;
+  }
+  return `${label} is installed, but its last step reported a problem. Check it in its panel.`;
+}
+
+/** The error's own message on one line, redacted and bounded, or nothing when it carries none. */
+function failureDetail(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message.replace(/[\s\p{Cc}]+/gu, " ").trim() : "";
+  const detail = redactSecretText(message).value.slice(0, 300).trim();
+  return detail || undefined;
 }

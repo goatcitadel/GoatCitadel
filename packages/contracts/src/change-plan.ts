@@ -462,6 +462,8 @@ export interface ChangePlanResult {
   readonly evidenceRefs?: readonly string[];
   readonly rollbackRef?: string;
   readonly failureCode?: string;
+  /** The owner's own redacted error text for a failed step: for technical details only, never the plain summary. */
+  readonly failureDetail?: string;
   readonly providerProfileCheckpoint?: ProviderProfileCheckpoint;
 }
 
@@ -717,6 +719,7 @@ export function isChangePlanResult(value: unknown): value is ChangePlanResult {
       "evidenceRefs",
       "rollbackRef",
       "failureCode",
+      "failureDetail",
       "providerProfileCheckpoint",
     ])
   ) {
@@ -728,7 +731,8 @@ export function isChangePlanResult(value: unknown): value is ChangePlanResult {
     (value.evidenceRefs === undefined || isReferenceList(value.evidenceRefs)) &&
     (value.providerProfileCheckpoint === undefined || isProviderProfileCheckpoint(value.providerProfileCheckpoint)) &&
     isOptionalBoundedText(value.rollbackRef, 512) &&
-    isOptionalBoundedText(value.failureCode, 128)
+    isOptionalBoundedText(value.failureCode, 128) &&
+    isOptionalBoundedText(value.failureDetail, 300)
   );
 }
 

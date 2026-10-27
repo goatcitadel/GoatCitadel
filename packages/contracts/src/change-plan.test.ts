@@ -5,6 +5,7 @@ import {
   changePlanScopeForKind,
   isChangePlanKind,
   isChangePlanRequest,
+  isChangePlanResult,
   isChangePlanStatus,
 } from "./change-plan.js";
 
@@ -246,6 +247,23 @@ describe("Evolution Control Plane Change Plan contract", () => {
         codeModeRunId: "code-run-1",
       }),
     ).toBe(false);
+  });
+
+  // R79: the owner's own error text travels beside the plain summary, bounded, for technical details only.
+  it("accepts a bounded failure detail beside the summary", () => {
+    const result = {
+      summary: "Couldn't save Example. Trying again is safe.",
+      failureCode: "connector_install_save_failed",
+    };
+    expect(isChangePlanResult(result)).toBe(true);
+    expect(isChangePlanResult({ ...result, failureDetail: "MCP configuration changed." })).toBe(true);
+    expect(isChangePlanResult({ ...result, failureDetail: "x".repeat(300) })).toBe(true);
+
+    expect(isChangePlanResult({ ...result, failureDetail: "x".repeat(301) })).toBe(false);
+    expect(isChangePlanResult({ ...result, failureDetail: 42 })).toBe(false);
+    expect(isChangePlanResult({ ...result, failureDetail: "" })).toBe(false);
+    expect(isChangePlanResult({ ...result, failureDetail: "bad\0byte" })).toBe(false);
+    expect(isChangePlanResult({ ...result, failureMessage: "not a known field" })).toBe(false);
   });
 
   it("accepts a connector install only as a template id and the Chat choice", () => {

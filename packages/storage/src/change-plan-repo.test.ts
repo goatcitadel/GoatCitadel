@@ -178,6 +178,43 @@ describe("ChangePlanRepository", () => {
     );
   });
 
+  // R79: a failed step's own error text is stored beside the plain summary and read back; an over-long one is refused.
+  it("stores a bounded failure detail beside the result summary", () => {
+    const { repo } = createRepo();
+    const plan = createModelPlan(repo);
+    const applying = repo.transition(plan.planId, {
+      expectedRevision: 1,
+      status: "applying",
+      actionNonce: "nonce-that-must-be-consumed-once",
+      requiredAction: null,
+    });
+    const result = {
+      summary: "Couldn't save Example. Trying again is safe.",
+      failureCode: "connector_install_save_failed",
+      failureDetail: "SQLITE_BUSY: database is locked",
+    };
+    assert.throws(
+      () =>
+        repo.transition(plan.planId, {
+          expectedRevision: applying.revision,
+          status: "failed",
+          internal: true,
+          result: { ...result, failureDetail: "x".repeat(301) },
+        }),
+      /result is not a bounded secret-free shape/u,
+    );
+
+    const failed = repo.transition(plan.planId, {
+      expectedRevision: applying.revision,
+      status: "failed",
+      internal: true,
+      result,
+    });
+
+    assert.deepEqual(failed.result, result);
+    assert.deepEqual(repo.get(plan.planId).result, result);
+  });
+
   it("deduplicates exact idempotent creates and denies competing target claims", () => {
     const { repo } = createRepo();
     const first = createModelPlan(repo, { idempotencyKey: "turn-1:tool-1" });

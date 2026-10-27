@@ -388,61 +388,134 @@ describe("installing a connector through one Change Plan", () => {
     expect(h.writes()).toEqual([]);
   });
 
-  it("reports nothing changed when the first write fails", async () => {
-    const h = harness();
-    h.deps.updateSettings.mockRejectedValueOnce(new Error("The settings file is locked."));
+  // R79: the summary is plain sentences only, ending with what to do next; the owner's own error text is kept apart.
+  describe("when a step fails", () => {
+    it("says nothing changed and that trying again is safe when the hosts can't be allowed", async () => {
+      const h = harness();
+      h.deps.updateSettings.mockRejectedValueOnce(new Error("The settings file is locked."));
 
-    const settled = await h.install(installRequest("example", true));
+      const settled = await h.install(installRequest("example", true));
 
-    expect(settled.status).toBe("failed");
-    expect(settled.result).toEqual({
-      summary: "Couldn't allow mcp.example.test, auth.example.test. The settings file is locked.",
-      failureCode: "connector_install_allow_failed",
+      expect(settled.status).toBe("failed");
+      expect(settled.result).toEqual({
+        summary: "Couldn't allow mcp.example.test, auth.example.test. Nothing was changed, so trying again is safe.",
+        failureCode: "connector_install_allowlist_failed",
+        failureDetail: "The settings file is locked.",
+      });
+      expect(h.deps.createMcpServer).not.toHaveBeenCalled();
     });
-    expect(h.deps.createMcpServer).not.toHaveBeenCalled();
-  });
 
-  it("names each finished step when a later step fails, and stops there", async () => {
-    const h = harness();
-    h.deps.createMcpServer.mockRejectedValueOnce(new Error("MCP configuration changed."));
+    it("names each finished step and says trying again is safe when the save fails", async () => {
+      const h = harness();
+      h.deps.createMcpServer.mockRejectedValueOnce(new Error("MCP configuration changed."));
 
-    const settled = await h.install(installRequest("example", true));
+      const settled = await h.install(installRequest("example", true));
 
-    expect(settled.status).toBe("manual_required");
-    expect(settled.result).toEqual({
-      summary: "Allowed mcp.example.test, auth.example.test. Couldn't save Example. MCP configuration changed.",
-      failureCode: "connector_install_save_failed",
+      expect(settled.status).toBe("manual_required");
+      expect(settled.result).toEqual({
+        summary: "Allowed mcp.example.test, auth.example.test. Couldn't save Example. Trying again is safe.",
+        failureCode: "connector_install_save_failed",
+        failureDetail: "MCP configuration changed.",
+      });
+      expect(h.deps.setReadsFree).not.toHaveBeenCalled();
+      expect(h.state.settings.features.chatStaticMcpV1Enabled).toBe(false);
     });
-    expect(h.deps.setReadsFree).not.toHaveBeenCalled();
-    expect(h.state.settings.features.chatStaticMcpV1Enabled).toBe(false);
-  });
 
-  it("says everything still asks when Reading is free couldn't be saved", async () => {
-    const h = harness({ allowlist: ["*.example.test"] });
-    h.deps.setReadsFree.mockRejectedValueOnce(new Error("MCP configuration changed."));
+    it("says everything still asks, and where to change it, when Reading is free couldn't be saved", async () => {
+      const h = harness({ allowlist: ["*.example.test"] });
+      h.deps.setReadsFree.mockRejectedValueOnce(new Error("MCP configuration changed."));
 
-    const settled = await h.install(installRequest("example"));
+      const settled = await h.install(installRequest("example"));
 
-    expect(settled.status).toBe("manual_required");
-    expect(settled.result).toEqual({
-      summary:
-        "Saved Example, switched off. Couldn't set Example to Reading is free, so everything it does asks you first. " +
-        "MCP configuration changed.",
-      failureCode: "connector_install_reads_free_failed",
+      expect(settled.status).toBe("manual_required");
+      expect(settled.result).toEqual({
+        summary:
+          "Saved Example, switched off. Couldn't set Example to Reading is free, so everything it does asks you first. " +
+          "You can choose Reading is free under What asks first in its panel.",
+        failureCode: "connector_install_posture_failed",
+        failureDetail: "MCP configuration changed.",
+      });
     });
-  });
 
-  it("counts a save whose write committed before a follow-up failed", async () => {
-    const h = harness({ allowlist: ["*.example.test"] });
-    h.deps.createMcpServer.mockRejectedValueOnce(
-      Object.assign(new Error("MCP configuration committed but follow-up work failed."), { mutationCommitted: true }),
-    );
+    it("says Chat can't use it yet, and where to look, when connectors in Chat couldn't be turned on", async () => {
+      const h = harness({ allowlist: ["*.example.test"] });
+      h.deps.updateSettings.mockRejectedValueOnce(new Error("Settings changed elsewhere."));
 
-    const settled = await h.install(installRequest("example"));
+      const settled = await h.install(installRequest("example", true));
 
-    expect(settled.status).toBe("manual_required");
-    expect(settled.result?.summary).toMatch(/^Saved Example, switched off\. The install stopped before it finished\./u);
-    expect(h.deps.setReadsFree).not.toHaveBeenCalled();
+      expect(settled.status).toBe("manual_required");
+      expect(settled.result).toEqual({
+        summary:
+          "Saved Example, switched off. Couldn't let Chat use connectors, so Chat can't use Example yet. " +
+          "Its panel links to Chat access in Settings.",
+        failureCode: "connector_install_chat_flag_failed",
+        failureDetail: "Settings changed elsewhere.",
+      });
+      expect(h.state.servers).toEqual([
+        expect.objectContaining({ policy: { ...POLICY, approvalPosture: "reads_free" } }),
+      ]);
+    });
+
+    // A save can report a failed follow-up after it landed, or be rolled back with its transaction: what the owner
+    // holds afterwards decides what the summary says.
+    it("goes by what was saved, not by the step's error", async () => {
+      const rolledBack = harness({ allowlist: ["*.example.test"] });
+      rolledBack.deps.createMcpServer.mockRejectedValueOnce(
+        Object.assign(new Error("MCP configuration committed but follow-up work failed."), { mutationCommitted: true }),
+      );
+      expect((await rolledBack.install(installRequest("example"))).result).toEqual({
+        summary: "Couldn't save Example. Trying again is safe.",
+        failureCode: "connector_install_save_failed",
+        failureDetail: "MCP configuration committed but follow-up work failed.",
+      });
+
+      const landed = harness({ allowlist: ["*.example.test"] });
+      landed.deps.createMcpServer.mockImplementationOnce(async (create: McpServerCreateInput) => {
+        landed.state.servers = [savedServer(create.label)];
+        throw new Error("Realtime publish failed.");
+      });
+      const settled = await landed.install(installRequest("example"));
+      expect(settled.status).toBe("manual_required");
+      expect(settled.result).toMatchObject({
+        summary:
+          "Saved Example, switched off. Couldn't set Example to Reading is free, so everything it does asks you first. " +
+          "You can choose Reading is free under What asks first in its panel.",
+        failureCode: "connector_install_save_failed",
+      });
+      expect(landed.deps.setReadsFree).not.toHaveBeenCalled();
+    });
+
+    it("keeps the owner's error text out of the summary, redacted and bounded", async () => {
+      const h = harness({ allowlist: ["*.example.test"] });
+      const secret = "abc123def456ghi789jkl0123";
+      h.deps.createMcpServer.mockRejectedValueOnce(
+        new Error(
+          ["SQLITE_BUSY: database is locked (gateway.db)", `Authorization: Bearer ${secret}`, "x".repeat(400)].join(
+            "\n",
+          ),
+        ),
+      );
+
+      const result = (await h.install(installRequest("example"))).result!;
+
+      expect(result.summary).toBe("Couldn't save Example. Trying again is safe.");
+      expect(result.failureDetail).toMatch(/^SQLITE_BUSY: database is locked \(gateway\.db\) Authorization: /u);
+      expect(result.failureDetail).not.toContain(secret);
+      expect(result.failureDetail).not.toMatch(/[\r\n]/u);
+      expect(result.failureDetail!.length).toBeLessThanOrEqual(300);
+    });
+
+    it("leaves the detail out when the failure carries no message", async () => {
+      const h = harness({ allowlist: ["*.example.test"] });
+      h.deps.createMcpServer.mockRejectedValueOnce("not an error");
+
+      const result = (await h.install(installRequest("example"))).result!;
+
+      expect(result).toEqual({
+        summary: "Couldn't save Example. Trying again is safe.",
+        failureCode: "connector_install_save_failed",
+      });
+    });
   });
 
   it("keeps no staging step, so the operator's own confirmation reaches the approval skip", () => {
