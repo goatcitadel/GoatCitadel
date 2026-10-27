@@ -448,6 +448,78 @@ describe("integration-channel-service runtime status", () => {
     expect(failed.lastError).toContain("401");
     expect(failed.metadata.streamStoppedReason).toBe("auth_failed");
   });
+
+  it("reports Telegram polling readiness from the live stream runtime, not the last probe", async () => {
+    const deps = createDeps();
+    const connection = await createIntegrationConnection(deps, {
+      catalogId: "channel.telegram",
+      label: "Telegram",
+      config: {
+        botTokenEnv: "TELEGRAM_BOT_TOKEN",
+        defaultChatId: "-1001234567890",
+        receiveMode: "poll",
+      },
+    });
+    await updateIntegrationConnection(deps, connection.connectionId, {
+      status: "connected",
+      lastSyncAt: "2026-10-26T12:00:00.000Z",
+    });
+
+    vi.mocked(deps.getChannelStreamRuntimeStatus).mockReturnValue(undefined);
+    const notStarted = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+    expect(notStarted.ready).toBe(false);
+    expect(notStarted.inboundModes).toEqual(["poll"]);
+    expect(notStarted.metadata).toMatchObject({ readinessSource: "live_runtime", authoritative: true });
+
+    vi.mocked(deps.getChannelStreamRuntimeStatus).mockReturnValue({
+      connectionId: connection.connectionId,
+      channelKey: "telegram",
+      ready: true,
+      lastReadyAt: "2026-10-26T12:01:00.000Z",
+      lastInboundAt: "2026-10-26T12:02:00.000Z",
+    });
+    const live = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+    expect(live.ready).toBe(true);
+    expect(live.lastReadyAt).toBe("2026-10-26T12:01:00.000Z");
+    expect(live.lastInboundAt).toBe("2026-10-26T12:02:00.000Z");
+    expect(live.runtimePosture).toMatchObject({ lifecycle: "persistent", inboundTransport: "poll" });
+
+    vi.mocked(deps.getChannelStreamRuntimeStatus).mockReturnValue({
+      connectionId: connection.connectionId,
+      channelKey: "telegram",
+      ready: false,
+      lastError: "Telegram rejected the bot token (401)",
+      stoppedReason: "auth_failed",
+    });
+    const failed = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+    expect(failed.ready).toBe(false);
+    expect(failed.lastError).toContain("401");
+    expect(failed.metadata.streamStoppedReason).toBe("auth_failed");
+  });
+
+  it("does not consult the stream runtime for a Telegram connection that receives nothing", async () => {
+    const deps = createDeps();
+    const connection = await createIntegrationConnection(deps, {
+      catalogId: "channel.telegram",
+      label: "Telegram",
+      config: {
+        botTokenEnv: "TELEGRAM_BOT_TOKEN",
+        defaultChatId: "-1001234567890",
+        receiveMode: "off",
+      },
+    });
+    await updateIntegrationConnection(deps, connection.connectionId, {
+      status: "connected",
+      lastSyncAt: "2026-10-26T12:00:00.000Z",
+    });
+
+    const status = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+
+    expect(status.inboundModes).toEqual(["none"]);
+    expect(status.ready).toBe(true);
+    expect(status.metadata.readinessSource).toBe("last_live_probe");
+    expect(deps.getChannelStreamRuntimeStatus).not.toHaveBeenCalled();
+  });
 });
 
 describe("integration plugin package integrity at install", () => {

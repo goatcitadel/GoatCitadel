@@ -353,7 +353,7 @@ export async function getIntegrationConnectionChannelRuntimeStatus(
     },
   };
 
-  if (capabilities.inboundModes.includes("stream")) {
+  if (capabilities.inboundModes.includes("stream") || capabilities.inboundModes.includes("poll")) {
     const stream = deps.getChannelStreamRuntimeStatus(connectionId);
     return {
       ...runtimeStatus,

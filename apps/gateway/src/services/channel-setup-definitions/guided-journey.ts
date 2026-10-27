@@ -32,7 +32,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     prerequisites: [
       "A BotFather bot token and access to each intended chat.",
       "The bot added to each destination and permitted to post.",
-      "A reachable HTTPS Gateway URL and webhook secret for inbound conversations.",
+      "A public HTTPS address only if you choose web-address delivery.",
     ],
     firstMessage:
       "Register the saved connection webhook URL with the same secret token. Send the bot a message, approve its pairing request, then send another message and confirm its reply. Destination discovery does not authorize users.",

@@ -28,6 +28,41 @@ function normalizeVoiceReplyMode(value: string | undefined): "off" | "voice_on_v
   return "off";
 }
 
+/** How GoatCitadel hears new Telegram messages. */
+type TelegramReceiveMode = "poll" | "webhook" | "off";
+
+function isTelegramReceiveMode(value: string | undefined): value is TelegramReceiveMode {
+  return value === "poll" || value === "webhook" || value === "off";
+}
+
+/**
+ * The receive mode an existing connection already behaves with. A stored mode wins; older connections
+ * never had one and receive only when a webhook secret is set, so they hydrate as "webhook" or "off".
+ * The "poll" default for new drafts never reaches this path.
+ */
+function hydrateTelegramReceiveMode(config: Record<string, unknown>): TelegramReceiveMode {
+  const stored = readString(config, "receiveMode");
+  if (isTelegramReceiveMode(stored)) {
+    return stored;
+  }
+  return hasAnyConfiguredSecret(config, [["webhookSecret", "webhookSecretEnv", "secretToken", "secretTokenEnv"]])
+    ? "webhook"
+    : "off";
+}
+
+/** Reads a list of ids stored as an array of strings: trimmed, blanks and non-strings dropped, duplicates removed. */
+function readActorIdList(source: Record<string, unknown>, key: string): string[] {
+  const raw = source[key];
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const ids = raw
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return [...new Set(ids)];
+}
+
 export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
   const catalog = requireCatalog("channel.telegram");
   const definition: ChannelSetupDefinition = {
@@ -44,7 +79,7 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
         "A Telegram account.",
         "Access to the target chat, group, or channel.",
         "Permission to add the bot to the destination if needed.",
-        "A public HTTPS URL for the gateway if you want inbound webhook routing.",
+        "A public HTTPS address only if you choose web-address delivery.",
       ],
       steps: [
         {
@@ -205,10 +240,28 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               canChangeLater: true,
             },
             {
+              key: "receiveMode",
+              label: "How GoatCitadel receives Telegram messages",
+              type: "select",
+              required: false,
+              defaultValue: "poll",
+              explanation:
+                "Choose how new Telegram messages reach GoatCitadel. Asking Telegram for new messages works on any network and needs no public web address.",
+              whyNeeded:
+                "Receiving messages lets you chat with GoatCitadel from Telegram. Web-address delivery needs a public HTTPS address and a webhook secret.",
+              options: [
+                { value: "poll", label: "Ask Telegram for new messages (no public web address needed)" },
+                { value: "webhook", label: "Telegram sends messages to a public web address" },
+                { value: "off", label: "Don't receive messages" },
+              ],
+              canChangeLater: true,
+            },
+            {
               key: "webhookSecretEnv",
               label: "Webhook secret ENV var",
               type: "text",
               required: false,
+              visibleWhenFieldEquals: { fieldKey: "receiveMode", value: "webhook" },
               explanation:
                 "Optional. Env var name for the Telegram webhook secret token used to verify inbound Bot API webhooks.",
               whyNeeded:
@@ -231,6 +284,7 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               label: "Webhook secret (manual fallback)",
               type: "secret",
               required: false,
+              visibleWhenFieldEquals: { fieldKey: "receiveMode", value: "webhook" },
               explanation: "Optional direct secret-token entry for Telegram inbound webhook verification.",
               whyNeeded:
                 "Lets GoatCitadel verify Telegram webhook deliveries when env-backed secret storage is not available yet.",
@@ -323,6 +377,7 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
     hydrate(connection) {
       const config = connection.config;
       const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["botToken", "botTokenEnv", "token", "tokenEnv"]]);
+      const ownerActorIds = readActorIdList(config, "ownerActorIds");
       return {
         draft: {
           botTokenEnv: readString(config, "botTokenEnv") ?? readString(config, "tokenEnv"),
@@ -332,6 +387,8 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
           defaultChatId: readString(config, "defaultChatId") ?? readString(config, "defaultChannelId"),
           parseMode: readString(config, "parseMode") ?? "Markdown",
           voiceReplyMode: normalizeVoiceReplyMode(readString(config, "voiceReplyMode")),
+          receiveMode: hydrateTelegramReceiveMode(config),
+          ownerActorIds,
           webhookSecretEnv: readString(config, "webhookSecretEnv") ?? readString(config, "secretTokenEnv"),
         },
         hydration: {
@@ -352,6 +409,8 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               readString(config, "defaultChatId") || readString(config, "defaultChannelId") ? "configured" : "unknown",
             parseMode: "configured",
             voiceReplyMode: "configured",
+            receiveMode: "configured",
+            ownerActorIds: ownerActorIds.length > 0 ? "configured" : "unknown",
             webhookSecret:
               readString(config, "webhookSecret") || readString(config, "secretToken") ? "configured" : "unknown",
             webhookSecretEnv:
@@ -373,6 +432,10 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
       const preservedWebhookSecretEnv = readLegacyString(draft, "webhookSecretEnv", "secretTokenEnv");
       const targets = normalizeTelegramTargets(draft.draft);
       const defaultTarget = targets.find((target) => target.default) ?? targets[0];
+      const receiveMode = readString(draft.draft, "receiveMode");
+      const ownerActorIds = readActorIdList(draft.draft, "ownerActorIds");
+      // receiveMode and ownerActorIds are left out when the draft has none, so finalize keeps the saved
+      // connection's own values instead of overwriting them with a default.
       return compactRecord({
         botTokenEnv: readString(draft.draft, "botTokenEnv") ?? preservedBotTokenEnv,
         botToken: readString(draft.draft, "botToken") ?? preservedBotToken,
@@ -383,6 +446,8 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
         defaultChatId: defaultTarget?.chatId ?? readString(draft.draft, "defaultChatId"),
         parseMode: readString(draft.draft, "parseMode") ?? "Markdown",
         voiceReplyMode: normalizeVoiceReplyMode(readString(draft.draft, "voiceReplyMode")),
+        receiveMode: isTelegramReceiveMode(receiveMode) ? receiveMode : undefined,
+        ownerActorIds: ownerActorIds.length > 0 ? ownerActorIds : undefined,
         webhookSecretEnv: readString(draft.draft, "webhookSecretEnv") ?? preservedWebhookSecretEnv,
         webhookSecret: readString(draft.draft, "webhookSecret") ?? preservedWebhookSecret,
       });
@@ -416,6 +481,10 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
         issues.push(
           malformedFieldIssue("voiceReplyMode", "Voice replies must be one of off, voice_on_voice, or always."),
         );
+      }
+      const receiveMode = readString(draft.draft, "receiveMode");
+      if (receiveMode && !isTelegramReceiveMode(receiveMode)) {
+        issues.push(malformedFieldIssue("receiveMode", "Choose how Telegram messages are received."));
       }
       return issues;
     },
