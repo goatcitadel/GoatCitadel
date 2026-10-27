@@ -401,8 +401,7 @@ fn watch_approval_events(app: AppHandle, runtime: DesktopLaunchResult, stop: Arc
     }
 
     while !stop.load(Ordering::Relaxed) {
-        let stream_url = build_event_stream_url(&gateway_url, token.as_deref());
-        let response = client.get(&stream_url).send();
+        let response = build_event_stream_request(&client, &gateway_url, token.as_deref()).send();
         let Ok(response) = response else {
             sleep_or_stop(&stop, Duration::from_secs(5));
             continue;
@@ -467,16 +466,25 @@ fn desktop_event_stream_requires_token(credential: Option<&DesktopEventStreamCre
     )
 }
 
-fn build_event_stream_url(gateway_url: &str, token: Option<&str>) -> String {
-    let mut url = format!(
+fn build_event_stream_url(gateway_url: &str) -> String {
+    format!(
         "{}/api/v1/events/stream?replay=0",
         trim_trailing_slash(gateway_url)
-    );
-    if let Some(token) = token.filter(|value| !value.is_empty()) {
-        url.push_str("&sse_token=");
-        url.push_str(&url_encode_query_value(token));
+    )
+}
+
+// The bridge token travels as a bearer header, never in the URL, so it cannot
+// end up in proxy, gateway or diagnostics logs that record request URLs.
+fn build_event_stream_request(
+    client: &reqwest::blocking::Client,
+    gateway_url: &str,
+    token: Option<&str>,
+) -> reqwest::blocking::RequestBuilder {
+    let request = client.get(build_event_stream_url(gateway_url));
+    match token.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(token) => request.bearer_auth(token),
+        None => request,
     }
-    url
 }
 
 fn refresh_desktop_event_stream_token(gateway_url: &str) -> Option<String> {
@@ -496,19 +504,6 @@ fn emit_watcher_error(app: &AppHandle, code: &str, message: &str) {
             "message": message,
         }),
     );
-}
-
-fn url_encode_query_value(value: &str) -> String {
-    value
-        .bytes()
-        .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (byte as char).to_string()
-            }
-            _ => format!("%{byte:02X}"),
-        })
-        .collect::<Vec<_>>()
-        .join("")
 }
 
 fn parse_approval_notification(data: &str) -> Option<ApprovalNotificationPayload> {
@@ -1028,20 +1023,35 @@ mod tests {
     }
 
     #[test]
-    fn encodes_sse_token_query_value() {
-        assert_eq!(url_encode_query_value("abc 123+/="), "abc%20123%2B%2F%3D");
-    }
-
-    #[test]
-    fn builds_event_stream_url_with_optional_sse_token() {
+    fn sends_event_stream_token_as_bearer_header_not_in_url() {
+        let client = reqwest::blocking::Client::new();
+        let request =
+            build_event_stream_request(&client, "http://127.0.0.1:8787/", Some("token-value"))
+                .build()
+                .expect("event stream request");
         assert_eq!(
-            build_event_stream_url("http://127.0.0.1:8787/", Some("token value")),
-            "http://127.0.0.1:8787/api/v1/events/stream?replay=0&sse_token=token%20value",
-        );
-        assert_eq!(
-            build_event_stream_url("http://127.0.0.1:8787", None),
+            request.url().as_str(),
             "http://127.0.0.1:8787/api/v1/events/stream?replay=0",
         );
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .map(|value| value.to_str().unwrap()),
+            Some("Bearer token-value"),
+        );
+
+        let anonymous = build_event_stream_request(&client, "http://127.0.0.1:8787", Some(" "))
+            .build()
+            .expect("event stream request");
+        assert_eq!(
+            anonymous.url().as_str(),
+            "http://127.0.0.1:8787/api/v1/events/stream?replay=0",
+        );
+        assert!(anonymous
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .is_none());
     }
 
     #[test]

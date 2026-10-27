@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using GoatCitadel.MissionControl.Windows.Models;
@@ -47,8 +48,9 @@ public sealed class EventStreamService
         {
             try
             {
-                using var response = await client.GetAsync(
-                    BuildEventStreamUrl(gatewayUrl, token),
+                using var request = BuildEventStreamRequest(gatewayUrl, token);
+                using var response = await client.SendAsync(
+                    request,
                     HttpCompletionOption.ResponseHeadersRead,
                     cancellationToken);
 
@@ -130,10 +132,22 @@ public sealed class EventStreamService
         return TimeSpan.FromSeconds(seconds * jitter);
     }
 
-    public static string BuildEventStreamUrl(string gatewayUrl, string? token)
+    public static string BuildEventStreamUrl(string gatewayUrl) =>
+        $"{gatewayUrl.TrimEnd('/')}/api/v1/events/stream?replay=0";
+
+    /// <summary>
+    /// The bridge token travels as a bearer header, never in the URL, so it cannot
+    /// end up in proxy, gateway or diagnostics logs that record request URLs.
+    /// </summary>
+    public static HttpRequestMessage BuildEventStreamRequest(string gatewayUrl, string? token)
     {
-        var url = $"{gatewayUrl.TrimEnd('/')}/api/v1/events/stream?replay=0";
-        return string.IsNullOrWhiteSpace(token) ? url : $"{url}&sse_token={Uri.EscapeDataString(token)}";
+        var request = new HttpRequestMessage(HttpMethod.Get, BuildEventStreamUrl(gatewayUrl));
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Trim());
+        }
+
+        return request;
     }
 
     public static bool TryParseApprovalNotification(string data, out ApprovalNotificationPayload payload)
