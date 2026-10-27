@@ -61,7 +61,7 @@ const WHAT_NEXT: Readonly<Record<"cancelled" | "conflict" | "unavailable" | "loc
 const SIGN_IN_REFUSED: Readonly<Record<McpOAuthRefusal, (host: string | undefined) => string>> = {
   not_allowed: (host) =>
     `Its sign-in site ${host ? `${host} ` : ""}isn't on your network allowlist. Add it in Settings, then sign in again.`,
-  sign_in_site: () => "Its sign-in site couldn't be reached. Try again in a moment, or set up its sign-in in Settings.",
+  sign_in_site: () => "Its sign-in site couldn't be read. Try again in a moment, or set up its sign-in in Settings.",
   registration: () => "It wouldn't register GoatCitadel for sign-in. Set up its sign-in in Settings instead.",
   expired: () => "This sign-in request expired. Sign in again to get a new one.",
 };

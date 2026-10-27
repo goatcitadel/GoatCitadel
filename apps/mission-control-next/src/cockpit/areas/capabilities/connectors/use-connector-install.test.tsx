@@ -619,7 +619,7 @@ describe("useConnectorInstall", () => {
       [
         "its sign-in site can't be read",
         { refused: "sign_in_site" },
-        "Couldn't start signing in to Linear. Its sign-in site couldn't be reached. Try again in a moment, or set up " +
+        "Couldn't start signing in to Linear. Its sign-in site couldn't be read. Try again in a moment, or set up " +
           "its sign-in in Settings.",
       ],
       [

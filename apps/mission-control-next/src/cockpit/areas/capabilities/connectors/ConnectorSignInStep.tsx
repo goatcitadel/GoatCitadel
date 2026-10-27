@@ -8,10 +8,10 @@ type SigningIn = Extract<ConnectorInstallState, { phase: "signing_in" }>;
 
 /** The Gateway keeps a sign-in request for 10 minutes; a minute before that, a new one is offered instead (R94). */
 const RESTART_AFTER_MS = 9 * 60_000;
+const EXPIRES_AFTER_MS = 10 * 60_000;
 
-/** Whether this sign-in request is close to running out, rechecked when that moment comes. */
-function useNearlyOutOfTime(startedAt: number): boolean {
-  const deadline = startedAt + RESTART_AFTER_MS;
+/** Whether this moment has passed, rechecked when it comes. */
+function useHasPassed(deadline: number): boolean {
   // The deadline this view has seen pass; a new sign-in request has a new one.
   const [passed, setPassed] = useState(() => (Date.now() >= deadline ? deadline : undefined));
   useEffect(() => {
@@ -31,7 +31,8 @@ function useNearlyOutOfTime(startedAt: number): boolean {
  * The return reaches this page through Settings, so the page carries on by itself. When it doesn't, the code and state
  * from the sign-in page can be pasted instead, named as Settings names them; a paste that doesn't match keeps what was
  * typed and says so beside the fields. A request close to its 10 minutes (one started in the background while the
- * operator was in Inbox, say) is offered as a new one instead of a sign-in that would fail.
+ * operator was in Inbox, say) is offered as a new one instead of a sign-in that would fail, and one past them says it
+ * has run out.
  */
 export function ConnectorSignInStep({
   state,
@@ -45,11 +46,16 @@ export function ConnectorSignInStep({
   const [code, setCode] = useState("");
   const [returned, setReturned] = useState("");
   const errorId = useId();
-  const outOfTime = useNearlyOutOfTime(state.startedAt);
-  if (outOfTime) {
+  const nearlyOutOfTime = useHasPassed(state.startedAt + RESTART_AFTER_MS);
+  const outOfTime = useHasPassed(state.startedAt + EXPIRES_AFTER_MS);
+  if (nearlyOutOfTime || outOfTime) {
     return (
       <div className="space-y-2 text-sm text-fg-secondary">
-        <p className="font-medium text-fg">This sign-in request is about to run out of time.</p>
+        <p className="font-medium text-fg">
+          {outOfTime
+            ? "This sign-in request has run out of time."
+            : "This sign-in request is about to run out of time."}
+        </p>
         <p>Start a new one, then finish signing in within 10 minutes.</p>
         <Button size="sm" onClick={restart}>
           Start sign-in again

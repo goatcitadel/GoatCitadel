@@ -473,6 +473,16 @@ describe("Install progress", () => {
 
       expect(link("Open sign-in page")).toBeUndefined();
       expect(text()).toContain("This sign-in request is about to run out of time.");
+      expect(text()).not.toContain("has run out of time");
+
+      // Past its 10 minutes the request is gone, so the page says so rather than that it is about to be.
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(text()).toContain("This sign-in request has run out of time.");
+      expect(text()).not.toContain("about to run out of time");
+      expect(text()).toContain("Start a new one, then finish signing in within 10 minutes.");
       await act(async () => button("Start sign-in again")?.click());
       expect(flows.restartSignIn).toHaveBeenCalledExactlyOnceWith(LINEAR.id);
     } finally {
@@ -493,6 +503,29 @@ describe("Install progress", () => {
       },
       "srv-1",
     );
+    expect(button("Start sign-in again")).toBeDefined();
+    expect(text()).toContain("This sign-in request is about to run out of time.");
+    expect(text()).not.toContain("has run out of time");
+    expect(link("Open sign-in page")).toBeUndefined();
+    expect(body().querySelector("details summary")).toBeNull();
+  });
+
+  it("says a sign-in request has run out of time when the panel opens on one past its 10 minutes", async () => {
+    await renderPanel(LINEAR.id, [LINEAR]);
+    setFlow(
+      LINEAR,
+      {
+        phase: "signing_in",
+        authorizeUrl: AUTHORIZE_URL,
+        signInHost: "auth.linear.app",
+        scopes: "read, write",
+        startedAt: Date.now() - 30 * 60_000,
+      },
+      "srv-1",
+    );
+    expect(text()).toContain("This sign-in request has run out of time.");
+    expect(text()).not.toContain("about to run out of time");
+    expect(text()).toContain("Start a new one, then finish signing in within 10 minutes.");
     expect(button("Start sign-in again")).toBeDefined();
     expect(link("Open sign-in page")).toBeUndefined();
     expect(body().querySelector("details summary")).toBeNull();
