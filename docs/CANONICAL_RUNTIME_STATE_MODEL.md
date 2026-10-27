@@ -296,11 +296,11 @@ A saved static server's per-connector approval setting (`policy.approvalPosture`
 can let one call skip its ask. The Gateway decides it from the saved setting and
 the tool labels stored in the `mcp_tools_v1` inventory, and passes the policy
 engine a process-local relief bound to that one canonical target. The relief
-clears only the tool-level ask and the approval mode's ask for that call; Wards,
-risky arguments, outside-folder access, deny rules, quarantine and the
-first-mutation check still apply, and it is never granted to a remote A2A peer or
-on a `remote_hardened` install. A server that can move money is decided as
-`reads_free` even when `nothing_asks` is saved.
+clears only the tool-level ask, the approval mode's ask and the server's first-tool
+approval for that call; Wards, risky arguments, outside-folder access, deny rules,
+quarantine and the first-mutation check still apply, and it is never granted to a
+remote A2A peer or on a `remote_hardened` install. A server that can move money is
+decided as `reads_free` even when `nothing_asks` is saved.
 
 The policy engine also has a process-local mesh mapping for exact `mesh_tool`
 and `mesh_mcp_server` publication identities. Its private `mesh.invoke` policy
