@@ -168,4 +168,17 @@ describe("Telegram receive mode setup", () => {
       expect(prerequisites.join(" ")).not.toMatch(/Gateway URL/i);
     }
   });
+
+  it("does not tell a polling connection to register a webhook", () => {
+    const wizard = telegram.definition.wizard;
+    const firstMessage = wizard.steps.find((step) => step.id === "first-message");
+    const firstMessageText = JSON.stringify(firstMessage?.body);
+
+    expect(wizard.introSummary).toBe("Connect a Telegram bot, choose who can message it, and how it gets messages.");
+    expect(firstMessageText).toContain(
+      "Send the bot a message and approve its pairing request in GoatCitadel. With web-address delivery, first register the connection's webhook URL with the same secret token.",
+    );
+    expect(firstMessageText).not.toContain("Register the saved connection webhook URL");
+    expect(`${wizard.introSummary} ${firstMessageText}`).not.toContain("webhook conversations");
+  });
 });

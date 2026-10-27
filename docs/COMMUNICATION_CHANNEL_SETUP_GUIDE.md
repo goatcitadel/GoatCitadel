@@ -274,8 +274,6 @@ To replace the key later, open the channel in Messaging and select **Change the 
 2. Add the bot to your target chat/channel and grant send rights.
 3. In Settings › Channels, add Telegram and point it at that environment variable.
 
-The Settings steps for Telegram still describe registering a web address with Telegram. With polling there is no address to register, so skip that step.
-
 ### Receiving messages
 
 - **Ask Telegram for new messages (default).** Needs no public web address. `api.telegram.org` must be in the network allowlist.
