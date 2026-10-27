@@ -12,6 +12,7 @@ import {
   readMcpToolPolicyBinding,
   type McpApprovalRelief,
   type McpToolPolicyBinding,
+  type ToolPolicyEvaluateOptions,
 } from "@goatcitadel/policy-engine";
 import { isMoneyMovingCatalogServer } from "./mcp-money-moving.js";
 
@@ -89,6 +90,23 @@ export async function resolveMcpApprovalRelief(
   // Read last and at the moment of minting, so a hardened install never gets a relief whatever else allowed it.
   if (!isMcpApprovalReliefAvailable(port.getDeploymentProfile())) return undefined;
   return createMcpApprovalRelief({ canonicalName: target.canonicalName });
+}
+
+/**
+ * The MCP mapping plus any server-authored approval relief, so the Gateway's advisory access probes report the same
+ * decision the canonical invocation will make. Undefined when the request is not an MCP call.
+ */
+export async function resolveMcpToolPolicyOptions(
+  port: McpApprovalReliefPort,
+  request: Parameters<typeof resolveMcpApprovalRelief>[1],
+  mcpToolBinding: McpToolPolicyBinding | undefined,
+): Promise<ToolPolicyEvaluateOptions | undefined> {
+  const mcpApprovalRelief = await resolveMcpApprovalRelief(port, request, mcpToolBinding);
+  if (!mcpToolBinding && !mcpApprovalRelief) return undefined;
+  return {
+    ...(mcpToolBinding ? { mcpToolBinding } : {}),
+    ...(mcpApprovalRelief ? { mcpApprovalRelief } : {}),
+  };
 }
 
 function readMcpApprovalReliefTarget(

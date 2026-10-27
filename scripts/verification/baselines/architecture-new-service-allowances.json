@@ -2639,6 +2639,22 @@
       "maxDependencyMemberAccesses": 12,
       "reason": "Reviewed new Messaging read-model owner (Messaging in Chat, operator approval 2026-10-25): lists channel conversations grouped by their channel connection and keeps one read marker per operator and conversation. It reads only the narrowed chat message, session binding, session metadata, integration connection, session and system settings repositories plus the session-list and workspace-normalizer ports; the route composition derives them from the existing chat session dependencies and adds no member reads to gateway-route-composition-chat.ts. Original baseline, inventory and existing-owner caps are unchanged.",
       "evidence": "2026-10-25: chat-messaging-service.test.ts covers grouping, channel rows without conversations, status mapping and order, own-conversation matching, title fallbacks, per-operator read counts, no-identity omission, removed connections, never-backwards markers and the future-time clamp; chat.messaging.test.ts covers the routes and the Inbox identity rule; repository counters measure 0 host callbacks and 10 dependency accesses (cap 12 as approved)."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/evolution-control-plane-operator-approval-skip.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 1,
+      "reason": "Operator-approved scope exception (2026-10-26) for C0 gate reconciliation of the Settings approval skip added in #572 (a4ffeb1da), absent from the pinned baseline inventory. Decides whether a confirmed caution or danger plan that the server-owned Settings save route confirmed may skip its separate approval, and returns the operator_approval_skipped apply-start event when it does. Its one read is the optional allowsOperatorApprovalSkip owner callback. Original baseline, inventory and existing-owner caps are unchanged.",
+      "evidence": "2026-10-26: evolution-control-plane-service.test.ts covers the skip for a Settings-save confirmation the owner allows, and keeps the approval when the owner refuses, when the confirmation did not come from the Settings save and when the plan started outside Settings; repository counters measure 0 host callbacks and 1 dependency access."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/mcp-approval-relief.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3,
+      "reason": "Operator-approved scope exception (2026-10-26) for C0 gate reconciliation of the per-connector What asks first setting added in #601 (cd7314f98), absent from the pinned baseline inventory. The only Gateway file that mints an MCP approval relief: from the saved server record, the stored mcp_tools_v1 inventory and the install's deployment profile it decides whether one MCP call may skip the approval mode's ask, and it assembles the MCP policy options both GatewayService access probes pass to the policy engine. Its three reads are one per port member (requireMcpServer, listMcpTools, getDeploymentProfile). GatewayService returns within its original line limit by sharing one relief port with the tool invocation coordinator and one native MCP probe path between evaluateToolAccess and inspectToolAccess. Original baseline, inventory and existing-owner caps are unchanged.",
+      "evidence": "2026-10-26: mcp-approval-relief.test.ts covers wrapper and named-binding targets, the refusals (disabled, quarantined and requester-scoped servers, unknown servers, unlabelled or disagreeing entries, destructive tools, A2A peers, remote_hardened installs) and the money-connector cap from nothing_asks to reads_free; mcp-approval-relief-mint-guard.test.ts pins createMcpApprovalRelief to this file; gateway-service.mcp-approval-relief.test.ts drives evaluateToolAccess, inspectToolAccess and the catalog inspection path on a real GatewayService; repository counters measure 0 host callbacks and 3 dependency accesses, and GatewayService 13130 lines (limit 13132)."
     }
   ]
 }
