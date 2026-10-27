@@ -43,6 +43,16 @@ export function getInboundBotLoopGuard(): ChannelBotLoopGuard {
   return sharedInboundBotLoopGuard;
 }
 
+/** The 200 body for an inbound event that was received but deliberately not acted on. */
+export function createIgnoredWebhookReply(eventType: string | undefined, reason: string) {
+  return {
+    accepted: true,
+    ignored: true,
+    eventType,
+    reason,
+  };
+}
+
 export type IntegrationConnectionRecord = {
   connectionId?: string;
   revision: string;
