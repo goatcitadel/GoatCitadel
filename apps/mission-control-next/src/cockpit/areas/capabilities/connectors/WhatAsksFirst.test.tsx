@@ -327,7 +327,7 @@ describe("What asks first", () => {
     expect(alertText()).toBeUndefined();
   });
 
-  it("reads the tool list again after a save, because a saved edit disconnects the server and clears its tools", async () => {
+  it("reads the tool list again after a save, so tools the Gateway no longer holds stop being labelled", async () => {
     mcp.updateMcpServerPolicy.mockResolvedValue(
       savedServer({ policy: { approvalPosture: "reads_free" } as McpServerRecord["policy"] }),
     );

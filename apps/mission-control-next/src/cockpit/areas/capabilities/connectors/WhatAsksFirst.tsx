@@ -114,7 +114,8 @@ export function WhatAsksFirst({ item, reliefAvailable }: { item: CapabilityConne
           })),
         );
         void client.invalidateQueries({ queryKey: queryKeys.capabilityConnectorServer(serverId) });
-        // A saved edit disconnects the server and clears its stored tools, so the tool list is read again too.
+        // A save keeps the server's tools unless it lands mid-connection, which disconnects the server and clears
+        // them, so the tool list is read again too.
         void client.invalidateQueries({ queryKey: queryKeys.capabilityConnectorTools(serverId) });
         void client.invalidateQueries({ queryKey: ["settings", "mcp-servers"] });
         target = queued.current;
