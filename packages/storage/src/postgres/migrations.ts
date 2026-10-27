@@ -37,7 +37,11 @@ import { REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL } from "./remot
 import { REMOTE_WORKER_MESH_NODE_ADMISSION_POSTGRES_SQL } from "./remote-worker-mesh-node-admission.js";
 import { MOBILE_PUSH_POSTGRES_SCHEMA_SQL } from "./mobile-push-schema.js";
 import { MOBILE_APPROVAL_KEY_POSTGRES_SCHEMA_SQL } from "./mobile-approval-key-schema.js";
-import { CHANGE_PLAN_POSTGRES_SCHEMA_SQL, CHANGE_PLAN_PACK_POSTGRES_SQL } from "../change-plan-schema.js";
+import {
+  CHANGE_PLAN_CONNECTOR_INSTALL_POSTGRES_SQL,
+  CHANGE_PLAN_POSTGRES_SCHEMA_SQL,
+  CHANGE_PLAN_PACK_POSTGRES_SQL,
+} from "../change-plan-schema.js";
 import { NATIVE_WORKER_CELL_POSTGRES_SQL } from "../remote-worker-native-cell-migration.js";
 import { REMOTE_WORKER_BUDGET_POSTGRES_SQL } from "../remote-worker-budget-schema.js";
 import { REMOTE_WORKER_CHAT_CONTEXT_POSTGRES_SQL } from "../remote-worker-chat-context-schema.js";
@@ -15250,6 +15254,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "chat_turn_traces_user_message_index",
     sql: `CREATE INDEX IF NOT EXISTS idx_chat_turn_traces_user_message ON chat_turn_traces(user_message_id);`,
     integritySha256: "10c9319a7fa04be0c6adf099d1a6d3d0a999f4b452b861268e4ea78b6d7ddc5b",
+  },
+  {
+    // Parity with SQLite v271: Capabilities installs record 'capabilities' origin, 'connector_install' plans.
+    version: 220,
+    name: "connector_install_change_plans",
+    sql: CHANGE_PLAN_CONNECTOR_INSTALL_POSTGRES_SQL,
+    integritySha256: "f7e015be2dbf1b2b9cbbda4f2331b6de14d35365aa05bb75d41af9896f4d1964",
   },
 ];
 

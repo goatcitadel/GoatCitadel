@@ -171,6 +171,53 @@ export function upgradeChangePlanPackSchema(db: SqlExecutor): void {
   `);
 }
 
+/** Replaces one exact span of reviewed schema text, failing closed if the text drifted. */
+function replaceReviewedSchemaText(sql: string, from: string, to: string): string {
+  const at = sql.indexOf(from);
+  if (at < 0 || sql.indexOf(from, at + from.length) >= 0) {
+    throw new Error(`Change Plan schema text drifted; expected exactly one ${JSON.stringify(from)}.`);
+  }
+  return sql.slice(0, at) + to + sql.slice(at + from.length);
+}
+
+/**
+ * Lets the Capabilities surface record its own connector install plans: widens the origin surface CHECK with
+ * 'capabilities' and the plan kind CHECK with 'connector_install' (keeping v205's 'capability_pack'). Same rebuild as
+ * `upgradeChangePlanPackSchema`; every plan, event and link is copied back unchanged.
+ */
+export function upgradeChangePlanConnectorInstallSchema(db: SqlExecutor): void {
+  db.exec(`
+    CREATE TEMP TABLE gc_connector_install_migration_plans AS SELECT * FROM change_plans;
+    CREATE TEMP TABLE gc_connector_install_migration_events AS SELECT * FROM change_plan_events;
+    CREATE TEMP TABLE gc_connector_install_migration_links AS SELECT * FROM change_plan_links;
+    DROP TABLE change_plan_links;
+    DROP TABLE change_plan_events;
+    DROP TABLE change_plans;
+  `);
+  createChangePlanSchema({
+    exec: (sql) =>
+      db.exec(
+        replaceReviewedSchemaText(
+          replaceReviewedSchemaText(
+            sql,
+            "'managed_source_registration', 'product_source_update'",
+            "'managed_source_registration', 'product_source_update', 'capability_pack', 'connector_install'",
+          ),
+          "CHECK(origin_surface IN ('chat', 'settings', 'system'))",
+          "CHECK(origin_surface IN ('chat', 'settings', 'system', 'capabilities'))",
+        ),
+      ),
+  });
+  db.exec(`
+    INSERT INTO change_plans SELECT * FROM gc_connector_install_migration_plans;
+    INSERT INTO change_plan_events SELECT * FROM gc_connector_install_migration_events;
+    INSERT INTO change_plan_links SELECT * FROM gc_connector_install_migration_links;
+    DROP TABLE gc_connector_install_migration_links;
+    DROP TABLE gc_connector_install_migration_events;
+    DROP TABLE gc_connector_install_migration_plans;
+  `);
+}
+
 export const CHANGE_PLAN_PACK_POSTGRES_SQL = `
   -- Dynamic v2 bootstrap creates columns without CHECK constraints. Older
   -- PostgreSQL-owned tables have the named constraint; validate it before widening.
@@ -193,6 +240,49 @@ export const CHANGE_PLAN_PACK_POSTGRES_SQL = `
     'session_model', 'installation_default_model', 'provider_connection', 'runtime_configuration',
     'channel_connection', 'runtime_remediation', 'capability_candidate', 'improvement_candidate',
     'managed_source_registration', 'product_source_update', 'capability_pack'
+  ));
+`;
+
+/** Parity with `upgradeChangePlanConnectorInstallSchema`, in the v150 form: validate each named CHECK, then widen it. */
+export const CHANGE_PLAN_CONNECTOR_INSTALL_POSTGRES_SQL = `
+  -- Dynamic v2 bootstrap creates columns without CHECK constraints. Older
+  -- PostgreSQL-owned tables have the v145 origin constraint; validate it before widening.
+  ALTER TABLE change_plans ADD CONSTRAINT gc_connector_install_origin_before CHECK(
+    origin_surface IN ('chat', 'settings', 'system')
+  ) NOT VALID;
+  DO $$ BEGIN
+    IF EXISTS (
+      SELECT 1 FROM pg_constraint old_check
+      JOIN pg_constraint probe ON probe.conrelid = old_check.conrelid AND probe.conname = 'gc_connector_install_origin_before'
+      WHERE old_check.conrelid = 'change_plans'::regclass AND old_check.conname = 'change_plans_origin_surface_check'
+        AND (old_check.contype <> 'c' OR pg_get_expr(old_check.conbin, old_check.conrelid) IS DISTINCT FROM pg_get_expr(probe.conbin, probe.conrelid))
+    ) THEN RAISE EXCEPTION 'Connector install migration found a drifted plan origin constraint'; END IF;
+  END $$;
+  ALTER TABLE change_plans DROP CONSTRAINT gc_connector_install_origin_before;
+  ALTER TABLE change_plans DROP CONSTRAINT IF EXISTS change_plans_origin_surface_check;
+  ALTER TABLE change_plans ADD CONSTRAINT change_plans_origin_surface_check CHECK(
+    origin_surface IN ('chat', 'settings', 'system', 'capabilities')
+  );
+  -- v150 named the kind constraint on every install; validate it before widening.
+  ALTER TABLE change_plans ADD CONSTRAINT gc_connector_install_kind_before CHECK(kind IN (
+    'session_model', 'installation_default_model', 'provider_connection', 'runtime_configuration',
+    'channel_connection', 'runtime_remediation', 'capability_candidate', 'improvement_candidate',
+    'managed_source_registration', 'product_source_update', 'capability_pack'
+  )) NOT VALID;
+  DO $$ BEGIN
+    IF EXISTS (
+      SELECT 1 FROM pg_constraint old_check
+      JOIN pg_constraint probe ON probe.conrelid = old_check.conrelid AND probe.conname = 'gc_connector_install_kind_before'
+      WHERE old_check.conrelid = 'change_plans'::regclass AND old_check.conname = 'change_plans_kind_check'
+        AND (old_check.contype <> 'c' OR pg_get_expr(old_check.conbin, old_check.conrelid) IS DISTINCT FROM pg_get_expr(probe.conbin, probe.conrelid))
+    ) THEN RAISE EXCEPTION 'Connector install migration found a drifted plan kind constraint'; END IF;
+  END $$;
+  ALTER TABLE change_plans DROP CONSTRAINT gc_connector_install_kind_before;
+  ALTER TABLE change_plans DROP CONSTRAINT IF EXISTS change_plans_kind_check;
+  ALTER TABLE change_plans ADD CONSTRAINT change_plans_kind_check CHECK(kind IN (
+    'session_model', 'installation_default_model', 'provider_connection', 'runtime_configuration',
+    'channel_connection', 'runtime_remediation', 'capability_candidate', 'improvement_candidate',
+    'managed_source_registration', 'product_source_update', 'capability_pack', 'connector_install'
   ));
 `;
 

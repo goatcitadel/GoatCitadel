@@ -46,7 +46,11 @@ import {
   runSqliteMigrations,
   type SqliteMigrationGroup,
 } from "./sqlite/migration-registry.js";
-import { createChangePlanSchema, upgradeChangePlanPackSchema } from "./change-plan-schema.js";
+import {
+  createChangePlanSchema,
+  upgradeChangePlanConnectorInstallSchema,
+  upgradeChangePlanPackSchema,
+} from "./change-plan-schema.js";
 import { upgradeNativeWorkerCells } from "./remote-worker-native-cell-migration.js";
 import { createRemoteWorkerBudgetSchema } from "./remote-worker-budget-schema.js";
 import { createRemoteWorkerChatContextSchema } from "./remote-worker-chat-context-schema.js";
@@ -7511,6 +7515,8 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           }
         },
       },
+      // Capabilities installs record their own plans: 'capabilities' origin and 'connector_install' kind.
+      { version: 271, name: "connector_install_change_plans", up: upgradeChangePlanConnectorInstallSchema },
     ],
   },
 ];
