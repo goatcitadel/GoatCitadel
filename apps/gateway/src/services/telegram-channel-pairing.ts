@@ -1,4 +1,10 @@
-import { resolveAllowedSenders, type TelegramChannelPairingList, type IntegrationConnection } from "@goatcitadel/contracts";
+import {
+  evaluateChannelInboundAccess,
+  resolveAllowedSenders,
+  resolveChannelOwnerActorIds,
+  type TelegramChannelPairingList,
+  type IntegrationConnection,
+} from "@goatcitadel/contracts";
 import { randomInt } from "node:crypto";
 
 export interface TelegramPairingDecision {
@@ -42,6 +48,9 @@ export function authorizeTelegramChannelActor(input: {
   }
   const pairing = readPairingState(input.config);
   if (pairing.approved.some((item) => item.actorId === input.actorId)) {
+    return { authorized: true };
+  }
+  if (isAllowlistedOwner(input.config, input.actorId)) {
     return { authorized: true };
   }
 
@@ -122,6 +131,23 @@ export function approveTelegramPairingCode(
   };
 }
 
+/**
+ * The operator's own account, proven on the setup page by sending its one-time code: one of the connection's owners
+ * and on its sender allowlist, on a connection that lets only allowlisted senders in. It is recognized wherever an
+ * approved pairing would be, and stops being recognized once it is taken off the allowlist. Connections that are open
+ * or have no access mode set are left to pairing, as before.
+ */
+function isAllowlistedOwner(config: Record<string, unknown>, actorId: string): boolean {
+  if (config.inboundAccessMode !== "allowlist") {
+    return false;
+  }
+  const access = evaluateChannelInboundAccess({ config, actorId });
+  if (access.mode !== "allowlist" || !access.allowed) {
+    return false;
+  }
+  return resolveChannelOwnerActorIds(config).includes(actorId.trim().toLowerCase());
+}
+
 function readPairingState(config: Record<string, unknown>): {
   approved: TelegramPairingApprovedRecord[];
   pending: TelegramPairingPendingRecord[];
@@ -194,7 +220,6 @@ function readBoolean(value: unknown): boolean {
   return value === true || (typeof value === "string" && ["true", "1", "yes", "on"].includes(value.toLowerCase()));
 }
 
-
 /** Revoke only this actor; the caller commits both trust gates with one connection CAS. */
 export function revokeTelegramPairingActor(config: Record<string, unknown>, actorId: string): Record<string, unknown> {
   const actor = actorId.trim();
@@ -208,19 +233,31 @@ export function revokeTelegramPairingActor(config: Record<string, unknown>, acto
   };
 }
 
-export function listTelegramPairingState(connection: IntegrationConnection, now: Date = new Date()): TelegramChannelPairingList {
+export function listTelegramPairingState(
+  connection: IntegrationConnection,
+  now: Date = new Date(),
+): TelegramChannelPairingList {
   const state = readPairingState(connection.config);
-  const legacyOpen = connection.config.inboundAccessMode === "open_legacy" ||
+  const legacyOpen =
+    connection.config.inboundAccessMode === "open_legacy" ||
     (!connection.config.inboundAccessMode && resolveAllowedSenders(connection.config).length === 0) ||
-    readBoolean(connection.config.telegramAllowAllUsers) || readBoolean(connection.config.allowAllTelegramUsers);
+    readBoolean(connection.config.telegramAllowAllUsers) ||
+    readBoolean(connection.config.allowAllTelegramUsers);
   return {
     connectionId: connection.connectionId,
     connectionRevision: connection.revision,
     inboundAccessMode: connection.config.inboundAccessMode === "allowlist" ? "allowlist" : "open_legacy",
     allowedSenders: [...resolveAllowedSenders(connection.config)],
-    ...(legacyOpen ? { legacyOpenWarning: "This connection retains an open legacy posture. Review sender access; a pairing change does not close an explicit allow-all setting." } : {}),
+    ...(legacyOpen
+      ? {
+          legacyOpenWarning:
+            "This connection retains an open legacy posture. Review sender access; a pairing change does not close an explicit allow-all setting.",
+        }
+      : {}),
     items: [
-      ...state.pending.filter((entry) => Date.parse(entry.expiresAt) > now.getTime()).map((entry) => ({ ...entry, status: "pending" as const })),
+      ...state.pending
+        .filter((entry) => Date.parse(entry.expiresAt) > now.getTime())
+        .map((entry) => ({ ...entry, status: "pending" as const })),
       ...state.approved.map((entry) => ({ ...entry, status: "approved" as const })),
     ].slice(0, 100),
   };

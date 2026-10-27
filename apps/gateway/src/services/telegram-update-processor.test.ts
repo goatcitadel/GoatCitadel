@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ChannelSetupDraft } from "@goatcitadel/contracts";
+import { requireChannelSetupDefinition } from "./channel-setup-definitions.js";
+import { buildEphemeralChannelConnection } from "./channel-setup-helpers.js";
 import {
   integrationWebhookRouteMethods,
   type IntegrationWebhookRouteMethod,
@@ -333,5 +336,77 @@ describe("telegram update processor", () => {
         voiceRequest: expect.objectContaining({ channel: "telegram", fileId: "voice-file-2" }),
       }),
     );
+  });
+
+  it("lets the person who said hi on the setup page message the bot once it is on, with no pairing step", async () => {
+    // The draft as the setup page leaves it once Ada (4242) sent the one-time code, turned into the connection
+    // config exactly as finalize builds it.
+    const definition = requireChannelSetupDefinition("channel.telegram").definition;
+    const now = new Date().toISOString();
+    const draft: ChannelSetupDraft = {
+      draftId: "22222222-2222-2222-2222-222222222222",
+      revision: 6,
+      catalogId: "channel.telegram",
+      lifecycleMode: "create",
+      enabled: true,
+      draft: {
+        botToken: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        botUsername: "goat_test_bot",
+        receiveMode: "poll",
+        setupCode: "GOAT-4821",
+        allowedSenders: ["4242"],
+        ownerActorIds: ["4242"],
+        inboundAccessMode: "allowlist",
+        targets: [
+          {
+            id: "telegram:4242",
+            label: "Ada",
+            chatId: "4242",
+            kind: "private",
+            source: "recent_update",
+            setupCodeMatched: true,
+            default: true,
+          },
+        ],
+      },
+      secretState: {},
+      contentVersion: definition.wizard.contentVersion,
+      adapterVersion: definition.adapter.adapterVersion,
+      validationVersion: definition.validation.validationVersion,
+      testVersion: definition.testing.testVersion,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const connection = await buildEphemeralChannelConnection({ getIntegrationConnection: vi.fn() }, draft);
+    expect(connection.config).not.toHaveProperty("telegramPairing");
+
+    const updateIntegrationConnection = vi.fn();
+    const acceptInboundChannelEvent = vi.fn(async (input: { eventType: string; message: { eventId: string } }) =>
+      acceptedEvent(input),
+    );
+    const webhooks = createFakeWebhooks({
+      getIntegrationConnection: async () => ({ ...connection, connectionId: CONNECTION_ID, revision: "rev-1" }),
+      acceptInboundChannelEvent,
+      updateIntegrationConnection,
+    });
+
+    const result = await runTelegramUpdate(
+      createDeps(webhooks),
+      CONNECTION_ID,
+      privateTextUpdate({ updateId: 9020, actorId: 4242, text: "hello from my phone" }),
+    );
+
+    expect(readTelegramBotMethodCall(result)).toBeUndefined();
+    expect(updateIntegrationConnection).not.toHaveBeenCalled();
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        connectionId: CONNECTION_ID,
+        dispatchKind: "agent_turn",
+        message: expect.objectContaining({ actorId: "4242", content: "hello from my phone" }),
+      }),
+    );
+    expect(result).toEqual(expect.objectContaining({ accepted: true, durableAccepted: true }));
   });
 });
