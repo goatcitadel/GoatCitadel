@@ -479,8 +479,9 @@ function filterGatewayExtraHeaders(extraHeaders?: HeadersInit): Record<string, s
   return Object.fromEntries(entries.filter(([name]) => !PROTECTED_GATEWAY_HEADER_NAMES.has(name.trim().toLowerCase())));
 }
 
-function buildGetRequestCoalescingKey(path: string, method: string, init?: RequestInit): string | undefined {
-  if (method !== "GET" || init?.body || init?.signal || freshReadsActive()) {
+function buildGetRequestCoalescingKey(path: string, method: string, init?: GatewayRequestInit): string | undefined {
+  // A caller's own signal or timeout is its own contract, so it never shares another caller's in-flight read.
+  if (method !== "GET" || init?.body || init?.signal || init?.timeoutMs !== undefined || freshReadsActive()) {
     return undefined;
   }
   const headers = init?.headers ? Array.from(new Headers(init.headers).entries()).sort() : [];

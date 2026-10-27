@@ -432,6 +432,11 @@ describe("client-core", () => {
     expect(fetchMock.mock.calls[1]?.[1]?.signal).toBeUndefined();
     expect(fetchMock.mock.calls[2]?.[1]?.signal).toBeUndefined();
     await expect(request("/api/v1/x", { timeoutMs: -1 })).rejects.toThrow(/timeout/i);
+
+    // A read with its own timeout never joins another caller's in-flight read.
+    fetchMock.mockClear();
+    await Promise.all([request("/api/v1/y"), request("/api/v1/y", { timeoutMs: 0 }), request("/api/v1/y")]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("sends an owner-chosen attempt key as the Idempotency-Key of a mutation", async () => {
