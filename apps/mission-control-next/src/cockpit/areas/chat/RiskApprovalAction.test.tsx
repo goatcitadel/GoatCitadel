@@ -233,8 +233,22 @@ describe("risk approval action", () => {
     expect(onApprove).not.toHaveBeenCalled();
   });
 
-  // R91 (BP1): a danger Change Plan's approval is its own plan text, bound to the plan by id and action hash.
+  // R91 (BP1): a danger Change Plan's approval is its own plan text, bound to the plan by its id and the hash of the
+  // plan's request (intentHash). R97: the fixtures use the payload a real approval carries, which has no action snapshot hash.
   describe("a danger Change Plan", () => {
+    const realPlanPayload = {
+      planId: "064ca5c1-eb4a-42e9-ae98-88ef5b9a367c",
+      kind: "connector_install",
+      scope: "capability",
+      intentHash: "02b5bc0b0b2f9c55a65ec4328f8ba346706eb6273d0d8a227f121b35576d4e20",
+      targetOwnerId: "capability_connector_install",
+      targetResourceId: "mcp_template:aws-knowledge",
+      adapterId: "connector-install",
+      adapterVersion: 1,
+      evidenceRefs: ["mcp_template:aws-knowledge"],
+      rollbackRefs: [],
+      rollbackNote: "Remove it again from Capabilities.",
+    };
     const planApproval = (payload: Record<string, unknown>): ApprovalRequest => ({
       approvalId: "approval-1",
       kind: "change_plan_effect",
@@ -255,13 +269,13 @@ describe("risk approval action", () => {
     const approveOnce = () =>
       [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Approve once")!;
 
-    it("enables Approve once in the review for a hash-bound plan, showing what it changes", async () => {
+    it("enables Approve once in the review for a real plan approval, showing what it changes", async () => {
       const onApprove = vi.fn();
       await act(async () =>
         root.render(
           <RiskApprovalAction
             approval={pendingPlan}
-            reviewedApproval={planApproval({ planId: "plan-1", actionSnapshotHash: "a".repeat(64) })}
+            reviewedApproval={planApproval(realPlanPayload)}
             pending={false}
             onApprove={onApprove}
           />,
@@ -271,20 +285,20 @@ describe("risk approval action", () => {
 
       expect(document.body.textContent).toContain("Change: Install AWS Knowledge");
       expect(document.body.textContent).toContain("What it does: Allow knowledge-mcp.global.api.aws.");
-      expect(document.body.textContent).toContain("Approving applies this one change once, exactly as planned.");
+      expect(document.body.textContent).toContain("Approving lets this one change apply once, exactly as planned.");
       expect(document.body.textContent).not.toContain("current action preview is unavailable");
       expect(approveOnce().disabled).toBe(false);
       await act(async () => approveOnce().click());
       expect(onApprove).toHaveBeenCalledTimes(1);
     });
 
-    it("still refuses a plan approval that isn't bound to its plan", async () => {
+    it("still refuses a plan approval that doesn't carry the hash of its plan's request", async () => {
       const onApprove = vi.fn();
       await act(async () =>
         root.render(
           <RiskApprovalAction
             approval={pendingPlan}
-            reviewedApproval={planApproval({ planId: "plan-1" })}
+            reviewedApproval={planApproval({ ...realPlanPayload, intentHash: undefined })}
             pending={false}
             onApprove={onApprove}
           />,

@@ -354,16 +354,24 @@ export function buildApprovalRequestReviewEvidenceModel(approval: ApprovalReques
 const nonEmptyText = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined;
 
+/** The hash of a Change Plan's request, as the Gateway stores it: 64 lowercase hex characters. */
+const PLAN_REQUEST_HASH = /^[0-9a-f]{64}$/;
+
 /**
  * A Change Plan's approval (R91). Its preview is the plan's own title, summary and impact, the lines the adapter wrote
  * from the hash-bound request and the operator confirms in Settings, Capabilities or Chat; the Gateway applies only
- * the plan this approval names, as planned. Listed only for a hash-bound approval (its plan id and action hash) with
- * a title and summary; anything less keeps the generic model, which offers nothing exact to approve.
+ * the plan this approval names, as planned. Listed only for an approval bound to its plan (its plan id and the hash of
+ * the plan's request, intentHash) with a title and summary; anything less keeps the generic model, which offers
+ * nothing exact to approve. A real approval never carries the plan's action snapshot hash (the Gateway can only know it
+ * once the approval exists), so it is not asked for.
  */
 export function changePlanEffectApprovalEvidence(approval: ApprovalRequest): ApprovalEvidenceModel | null {
   const payload = approval.payload as Record<string, unknown> | undefined;
   const preview = approval.preview as Record<string, unknown> | undefined;
-  if (!nonEmptyText(payload?.planId) || !nonEmptyText(payload?.actionSnapshotHash)) return null;
+  const requestHash = payload?.intentHash;
+  if (!nonEmptyText(payload?.planId) || typeof requestHash !== "string" || !PLAN_REQUEST_HASH.test(requestHash)) {
+    return null;
+  }
   const title = nonEmptyText(preview?.title);
   const summary = nonEmptyText(preview?.summary);
   if (!title || !summary) return null;
@@ -379,7 +387,7 @@ export function changePlanEffectApprovalEvidence(approval: ApprovalRequest): App
     commands: [],
     changes: [],
     supporting: [],
-    consequence: "Approving applies this one change once, exactly as planned. Denying cancels it.",
+    consequence: "Approving lets this one change apply once, exactly as planned. Denying cancels it.",
   };
 }
 
