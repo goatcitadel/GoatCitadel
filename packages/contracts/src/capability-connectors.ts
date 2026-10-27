@@ -50,6 +50,8 @@ export interface CapabilityConnectorItem {
   command?: string;
   networkHosts: string[];
   templateId?: string;
+  /** A template's own plain-words risk notes, shown before it is installed. Missing when it has none. */
+  riskNotes?: string[];
   serverId?: string;
   /** McpServerRecord.revision (opaque). */
   serverRevision?: string;
