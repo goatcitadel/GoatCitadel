@@ -26,6 +26,41 @@ export function newestTelegramConnection(
 }
 
 /**
+ * Whether a bot is already a GoatCitadel channel: "checking" until the connections have been read, then "connected"
+ * with that channel's page, or "none". A second channel for one bot would fight the first for its messages.
+ */
+export type ConnectedBot = { state: "checking" } | { state: "none" } | { state: "connected"; href: string };
+
+/**
+ * Looks once for a channel this bot already is, as soon as the bot is known; the same bot is not looked for again,
+ * so the channel a setup goes on to make is never taken for an earlier one. When the connections cannot be read it
+ * claims nothing and the setup goes on.
+ */
+export function useConnectedTelegramBot(botUsername: string | undefined): ConnectedBot {
+  const [found, setFound] = useState<{ bot: string; href?: string }>();
+  useEffect(() => {
+    if (!botUsername) return;
+    let current = true;
+    const answer = (href?: string) => {
+      if (current) setFound({ bot: botUsername, ...(href ? { href } : {}) });
+    };
+    void fetchIntegrationConnections("channel").then(
+      ({ items }) => {
+        const connection = newestTelegramConnection(items, botUsername);
+        answer(connection ? channelPageHref(connection.connectionId) : undefined);
+      },
+      () => answer(),
+    );
+    return () => {
+      current = false;
+    };
+  }, [botUsername]);
+  if (!botUsername) return { state: "none" };
+  if (found?.bot !== botUsername) return { state: "checking" };
+  return found.href ? { state: "connected", href: found.href } : { state: "none" };
+}
+
+/**
  * Where the new Telegram channel's page is, once the setup has been turned on. It looks once, when `done` turns true;
  * when the connections cannot be read or none is the bot's, there is no link and the page says it is on without one.
  */

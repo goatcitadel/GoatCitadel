@@ -14,7 +14,7 @@ import { SetupSteps, type SetupStepView } from "./SetupSteps";
 import { HOSTS_UNKNOWN, TurnOnStep, turnOnChanges, turnOnStatus } from "./TurnOnStep";
 import { useChannelRequiredHosts } from "./use-channel-picker-groups";
 import { useMissingHosts } from "./use-missing-hosts";
-import { useNewTelegramHref } from "./use-new-connection-href";
+import { useConnectedTelegramBot, useNewTelegramHref } from "./use-new-connection-href";
 import { TELEGRAM_CATALOG_ID, useTelegramSetup, type TelegramSetupState } from "./use-telegram-setup";
 import { useTurnOn, type TurnOnState } from "./use-turn-on";
 
@@ -49,16 +49,31 @@ function BotKey({
   onChange,
   checking,
   onCheck,
+  connectedHref,
+  workspaceId,
 }: {
   setup: TelegramSetupState;
   value: string;
   onChange: (value: string) => void;
   checking: boolean;
   onCheck: () => void;
+  /** The page of the channel this bot already is, when it is one. */
+  connectedHref?: string;
+  workspaceId: string;
 }) {
   const { bot, busy, conflict, error, webhookActive } = setup;
   return (
     <>
+      {bot && connectedHref ? (
+        <Callout tone="warning" announce={false}>
+          <p>{ALREADY_CONNECTED}</p>
+          <div className="mt-2">
+            <NativeOwnerLink href={connectedHref} scope={workspaceId}>
+              Open its page
+            </NativeOwnerLink>
+          </div>
+        </Callout>
+      ) : null}
       {bot && webhookActive ? (
         <Callout tone="warning" announce={false}>
           <p>{WEB_ADDRESS_NOTE}</p>
@@ -85,6 +100,8 @@ function BotKey({
 }
 
 const saidHi = (name: string) => `${name} said hi. Only they can message your bot for now.`;
+/** A second channel for one bot would fight the first for its messages, so the setup stops at the key. */
+const ALREADY_CONNECTED = "This bot is already connected to GoatCitadel.";
 
 /**
  * What the page tells a screen reader after each thing happens: the one status line, latest first. Everything it says
@@ -94,14 +111,15 @@ function statusLine(
   setup: TelegramSetupState,
   checking: boolean,
   turnOn: TurnOnState,
-  hostsFailed: boolean,
+  page: { hostsFailed: boolean; alreadyConnected: boolean },
 ): string | undefined {
   if (setup.error) return setup.error;
   if (checking) return "Checking your key…";
   const turningOn = turnOnStatus(turnOn);
   if (turningOn) return turningOn;
-  if (hostsFailed) return HOSTS_UNKNOWN;
+  if (page.hostsFailed) return HOSTS_UNKNOWN;
   if (setup.busy) return "Working…";
+  if (page.alreadyConnected) return ALREADY_CONNECTED;
   if (setup.sender) return saidHi(senderName(setup.sender));
   if (setup.codeExpired) return CODE_EXPIRED;
   if (setup.code) return WAITING_FOR_HI;
@@ -124,8 +142,10 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
   });
   const { discard: discardKey } = key;
   const { bot, conflict, draft, sender, webhookActive } = setup;
-  const ready = bot !== null && !webhookActive && !conflict;
-  const hosts = useMissingHosts(requiredHosts, sender !== null);
+  // A bot that is already a channel goes no further than its key.
+  const connected = useConnectedTelegramBot(bot?.username);
+  const ready = bot !== null && !webhookActive && !conflict && connected.state === "none";
+  const hosts = useMissingHosts(requiredHosts, ready && sender !== null);
   const doneHref = useNewTelegramHref(turnOn.state === "done", bot?.username);
 
   // The key is stored securely once checked, so what was typed is dropped. A key that failed stays, to fix.
@@ -197,6 +217,8 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
           onChange={key.setValue}
           checking={checking}
           onCheck={() => void check()}
+          connectedHref={connected.state === "connected" ? connected.href : undefined}
+          workspaceId={workspaceId}
         />
       ),
     },
@@ -210,7 +232,7 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
     {
       id: "turn-on",
       title: "Turn it on",
-      state: !sender ? "locked" : turnedOn ? "done" : "current",
+      state: !ready || !sender ? "locked" : turnedOn ? "done" : "current",
       result: turnedOn ? turnOnStep : undefined,
       children: turnOnStep,
     },
@@ -222,7 +244,13 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
       back={{ href: channelPickerHref(), label: "Back to channels" }}
       workspaceId={workspaceId}
     >
-      <SetupSteps steps={steps} status={statusLine(setup, checking, turnOn, hosts.failed)} />
+      <SetupSteps
+        steps={steps}
+        status={statusLine(setup, checking, turnOn, {
+          hostsFailed: hosts.failed,
+          alreadyConnected: connected.state === "connected",
+        })}
+      />
       {/* The key step shows a failure beside its field while it is open. Once it is done its body is gone, and a
           failure of something else (Start over) would be heard but not seen, so it shows here instead. Never both. */}
       {ready && setup.error ? (

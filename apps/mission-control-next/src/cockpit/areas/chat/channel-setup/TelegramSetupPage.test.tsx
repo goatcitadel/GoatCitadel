@@ -641,6 +641,9 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
 
   it("links to the new channel's page, picking the newest Telegram connection for this bot", async () => {
     turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "completed", plan });
+    await toSayHi();
+    await someoneSaysHi();
+    // The bot's channels exist once it is on.
     api.fetchIntegrationConnections.mockResolvedValue({
       items: [
         connection({ connectionId: "older", botUsername: "@MyGoatBot", createdAt: "2026-10-01T10:00:00.000Z" }),
@@ -654,8 +657,6 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
         }),
       ],
     });
-    await toSayHi();
-    await someoneSaysHi();
     await click(button("Turn on"));
     await settle();
 
@@ -671,11 +672,11 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
 
   it("matches a bot name with or without the @, whatever the case", async () => {
     turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "completed", plan });
+    await toSayHi();
+    await someoneSaysHi();
     api.fetchIntegrationConnections.mockResolvedValue({
       items: [connection({ connectionId: "plain", botUsername: "MYGOATBOT" })],
     });
-    await toSayHi();
-    await someoneSaysHi();
     await click(button("Turn on"));
     await settle();
     expect(link("Open Telegram's page")?.getAttribute("href")).toContain("/chat/messaging/plain");
@@ -705,10 +706,44 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
     expect(link("Open Telegram's page")).toBeUndefined();
   });
 
-  it("does not look for the channel before it is on", async () => {
+  it("looks for the bot among the channels once, after the key works, and not again before it is on", async () => {
     await toSayHi();
+    expect(api.fetchIntegrationConnections).toHaveBeenCalledExactlyOnceWith("channel");
     await someoneSaysHi();
-    expect(api.fetchIntegrationConnections).not.toHaveBeenCalled();
+    await advance(SAY_HI_POLL_MS * 3);
+    expect(api.fetchIntegrationConnections).toHaveBeenCalledTimes(1);
+  });
+
+  it("says when the bot is already connected, links to its page, and keeps step 3 locked", async () => {
+    api.fetchIntegrationConnections.mockResolvedValue({
+      items: [
+        connection({ connectionId: "other-bot", botUsername: "@SomeoneElse" }),
+        connection({ connectionId: "existing", botUsername: "@mygoatbot" }),
+      ],
+    });
+    await toSayHi();
+
+    const key = steps()[1]!;
+    expect(key.getAttribute("data-state")).toBe("current");
+    expect(key.textContent).toContain("This bot is already connected to GoatCitadel.");
+    const page = link("Open its page");
+    expect(new URL(page!.getAttribute("href")!, "http://cockpit.invalid").pathname).toBe("/chat/messaging/existing");
+    expect(status()).toBe("This bot is already connected to GoatCitadel.");
+    expect(steps()[2]!.getAttribute("data-state")).toBe("locked");
+    expect(steps()[3]!.getAttribute("data-state")).toBe("locked");
+    // No code is saved and nothing listens for one.
+    expect(savedCode()).toBeUndefined();
+    const asked = api.discoverTelegramSetupTargets.mock.calls.length;
+    await advance(SAY_HI_POLL_MS * 3);
+    expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(asked);
+  });
+
+  it("goes on to say hi when the channels cannot be read, claiming nothing", async () => {
+    api.fetchIntegrationConnections.mockRejectedValue(new Error("offline"));
+    await toSayHi();
+    expect(container.textContent).not.toContain("already connected");
+    expect(steps()[2]!.getAttribute("data-state")).toBe("current");
+    expect(savedCode()).toMatch(CODE);
   });
 
   it("sends the operator to the approval in Inbox when this sign-in cannot give it", async () => {
