@@ -1,3 +1,5 @@
+import type { GatewayRuntimeConfig } from "./config.js";
+
 export function isTailnetDevOrigin(origin: string, shortHostAllowlist: Set<string>): boolean {
   try {
     const parsed = new URL(origin);
@@ -99,13 +101,32 @@ function isPrivateOrCarrierGradeIpv4(host: string): boolean {
   return false;
 }
 
+export type GatewayAuthMode = GatewayRuntimeConfig["assistant"]["auth"]["mode"];
+
+/**
+ * Loopback origins on any port are trusted only outside production and only when the Gateway requires
+ * auth. With auth.mode "none", any page served from localhost could otherwise drive the whole Gateway,
+ * so only the explicit origins (env or defaults) are accepted.
+ */
+export function trustsLoopbackDevOrigins(
+  authMode: GatewayAuthMode | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.NODE_ENV !== "production" && authMode !== undefined && authMode !== "none";
+}
+
 /**
  * The one Gateway origin policy: explicit origins (env or defaults), loopback dev origins outside
- * production, and opt-in tailnet/private dev origins. CORS and the OAuth return hand-off both use it.
+ * production when auth is required, and opt-in tailnet/private dev origins. CORS and the OAuth
+ * return hand-off both use it.
  */
-export function isAllowedGatewayOrigin(origin: string, env: NodeJS.ProcessEnv = process.env): boolean {
+export function isAllowedGatewayOrigin(
+  origin: string,
+  authMode: GatewayAuthMode | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   if (resolveAllowedOrigins().has(origin)) return true;
-  if (env.NODE_ENV !== "production" && isLoopbackDevOrigin(origin)) return true;
+  if (trustsLoopbackDevOrigins(authMode, env) && isLoopbackDevOrigin(origin)) return true;
   return resolveAllowTailnetDevOrigins() && isTailnetDevOrigin(origin, resolveTailnetShortHostAllowlist(env));
 }
 

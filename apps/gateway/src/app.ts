@@ -101,6 +101,7 @@ import {
   resolveAllowedOrigins,
   resolveAllowTailnetDevOrigins,
   resolveTailnetShortHostAllowlist,
+  trustsLoopbackDevOrigins,
 } from "./cors-origin-guard.js";
 import { projectPublicErrorValue } from "./services/public-secret-projection.js";
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
@@ -183,9 +184,11 @@ export async function buildApp(options: GatewayPluginOptions = {}) {
      *    Always accepted. Defaults include localhost:5173 (dev), localhost:4173 (preview),
      *    and 127.0.0.1:8787 (gateway self-reference).
      *
-     * 2. **Loopback dev origins** (non-production only):
+     * 2. **Loopback dev origins** (non-production, auth required):
      *    Any origin resolving to 127.0.0.1/::1 on any port is accepted in
-     *    non-production environments, enabling local dev tooling on arbitrary ports.
+     *    non-production environments when auth.mode is not "none", enabling local
+     *    dev tooling on arbitrary ports without letting any localhost page drive
+     *    an unauthenticated Gateway.
      *
      * 3. **Tailnet/private dev origins** (opt-in via `GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS`):
      *    Origins matching Tailscale `.ts.net` patterns are accepted when enabled,
@@ -203,7 +206,8 @@ export async function buildApp(options: GatewayPluginOptions = {}) {
           cb(null, true);
           return;
         }
-        if (process.env.NODE_ENV !== "production" && isLoopbackDevOrigin(origin)) {
+        // Read per request: the auth mode is only known once the gateway plugin has loaded config.
+        if (trustsLoopbackDevOrigins(app.gatewayConfig.assistant.auth.mode) && isLoopbackDevOrigin(origin)) {
           cb(null, true);
           return;
         }
