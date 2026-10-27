@@ -15,7 +15,8 @@ describe("chat session routes", () => {
   });
 
   it("validates bounded scoped membership and marks only complete non-cursor reads", async () => {
-    const service = createChatSessionsService(); app = buildApp(service);
+    const service = createChatSessionsService();
+    app = buildApp(service);
     const ids = ["sess-1", "missing"];
     const url = `/api/v1/chat/sessions?workspaceId=default&sessionIds=${encodeURIComponent(JSON.stringify(ids))}`;
     const response = await app.inject({ method: "GET", url });
@@ -23,9 +24,14 @@ describe("chat session routes", () => {
     expect(response.json()).toMatchObject({ membership: { sessionIds: ids, complete: true } });
     expect(response.json().nextCursor).toBeUndefined();
     expect(response.headers["cache-control"]).toContain("no-store");
-    expect(service.listChatSessions).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: ids, workspaceId: "default" }));
+    expect(service.listChatSessions).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionIds: ids, workspaceId: "default" }),
+    );
     for (const invalid of ["[]", "broken", JSON.stringify(Array(101).fill("sess-1"))]) {
-      expect((await app.inject({ method: "GET", url: `/api/v1/chat/sessions?sessionIds=${encodeURIComponent(invalid)}` })).statusCode).toBe(400);
+      expect(
+        (await app.inject({ method: "GET", url: `/api/v1/chat/sessions?sessionIds=${encodeURIComponent(invalid)}` }))
+          .statusCode,
+      ).toBe(400);
     }
     expect((await app.inject({ method: "GET", url: `${url}&cursor=x` })).statusCode).toBe(400);
   });
@@ -41,7 +47,7 @@ describe("chat session routes", () => {
     expect(listed.statusCode).toBe(200);
     expect(listed.json()).toEqual({
       items: [{ sessionId: "sess-1", updatedAt: "2026-05-14T00:00:00.000Z" }],
-      nextCursor: "2026-05-14T00:00:00.000Z|sess-1",
+      nextCursor: "p0|2026-05-14T00:00:00.000Z|sess-1",
     });
     expect(chatSessions.listChatSessions).toHaveBeenCalledWith({
       scope: "mission",
