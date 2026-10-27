@@ -589,7 +589,7 @@ async function flushWork(rounds = 5): Promise<void> {
   }
 }
 
-async function renderChannelsSection(label = "Discord sandbox"): Promise<ReactTestRenderer> {
+async function renderChannelsSection(label: string | null = "Discord sandbox"): Promise<ReactTestRenderer> {
   let renderer!: ReactTestRenderer;
   await act(async () => {
     renderer = create(
@@ -607,7 +607,7 @@ async function renderChannelsSection(label = "Discord sandbox"): Promise<ReactTe
     await Promise.resolve();
   });
   await flushWork();
-  await click(findDraftButton(renderer.root, label));
+  if (label !== null) await click(findDraftButton(renderer.root, label));
   return renderer;
 }
 
@@ -1596,11 +1596,19 @@ describe("bound channel setup operations", () => {
     };
     channelApiMocks.fetchChannelSetupDefinitions.mockResolvedValue({ items: [discordDefinition, telegram] });
     channelApiMocks.fetchChannelSetupDrafts.mockResolvedValue({ items: [unfinished] });
-    const renderer = await renderChannelsSection("Telegram sandbox");
-    expect(renderer.root.findAllByType(ChannelSetupWizard)).toHaveLength(0);
-    const link = renderer.root.findAllByType("a").find((node) => textOf(node) === "Set up Telegram in Chat");
-    expect(link?.props.href).toBe("/chat/messaging/add/telegram?shell=cockpit");
+    const renderer = await renderChannelsSection(null);
+    const link = (label: string) => renderer.root.findAllByType("a").find((node) => textOf(node) === label);
+    // The unfinished setup is a link to that very setup in Chat, not a draft row that opens the guide.
+    expect(link("Continue Telegram sandbox in Chat")?.props.href).toBe(
+      "/chat/messaging/add/telegram?draft=telegram-draft&shell=cockpit",
+    );
+    expect(() => findDraftButton(renderer.root, "Telegram sandbox")).toThrow();
+    // Starting one from Connect channel goes to Chat too.
+    await click(findButton(renderer.root, "Connect channel"));
+    await changeValue(renderer.root.findByType("select"), "channel.telegram");
+    expect(link("Set up Telegram in Chat")?.props.href).toBe("/chat/messaging/add/telegram?shell=cockpit");
     expect(renderer.root.findAllByType("button").some((node) => textOf(node) === "Start Telegram setup")).toBe(false);
+    expect(renderer.root.findAllByType(ChannelSetupWizard)).toHaveLength(0);
     expect(channelApiMocks.createChannelSetupDraft).not.toHaveBeenCalled();
     renderer.unmount();
   });

@@ -190,7 +190,12 @@ describe("Telegram is set up in Chat, not here", () => {
     });
     await mount("");
     expect(buttonNamed("Edit New bot")).toBeUndefined();
-    expect(pathOf(linkNamed("Continue New bot in Chat"))).toBe("/chat/messaging/add/telegram");
+    const resume = linkNamed("Continue New bot in Chat");
+    expect(pathOf(resume)).toBe("/chat/messaging/add/telegram");
+    // The page picks up this very setup, not whichever unfinished one is newest.
+    expect(new URL(resume!.getAttribute("href")!, "http://cockpit.invalid").searchParams.get("draft")).toBe(
+      "channel.telegram:New bot",
+    );
     expect(buttonNamed("Edit Home bot")).toBeDefined();
     expect(buttonNamed("Edit Team")).toBeDefined();
   });

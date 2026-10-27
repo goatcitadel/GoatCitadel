@@ -39,16 +39,16 @@ export function chatSetupHref(definition: Pick<ChannelSetupDefinition, "catalog"
 }
 
 /**
- * Where an unfinished new setup goes on, when its channel is set up in Chat: its page there picks the draft up. A
- * change to a saved channel stays in Settings, and so does a draft for a channel the definitions don't know.
+ * Where an unfinished new setup goes on, when its channel is set up in Chat: its page there, sent to this very draft.
+ * A change to a saved channel stays in Settings, and so does a draft for a channel the definitions don't know.
  */
 export function chatSetupHrefForDraft(
-  draft: Pick<ChannelSetupDraft, "catalogId" | "lifecycleMode" | "connectionId">,
+  draft: Pick<ChannelSetupDraft, "draftId" | "catalogId" | "lifecycleMode" | "connectionId">,
   definitions: readonly Pick<ChannelSetupDefinition, "catalog">[],
 ): string | undefined {
   if (draft.lifecycleMode !== "create" || draft.connectionId) return undefined;
   const definition = definitions.find((candidate) => candidate.catalog.catalogId === draft.catalogId);
-  return definition ? chatSetupHref(definition) : undefined;
+  return definition && chatSetupHref(definition) ? channelSetupHref(definition.catalog.key, draft.draftId) : undefined;
 }
 
 function tileFor(definition: ChannelSetupDefinition, minutes: number, note: string | undefined): ChannelPickerTile {

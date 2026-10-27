@@ -122,18 +122,25 @@ describe("where a channel is set up", () => {
     expect(chatSetupHref(definitions[1]!)).toBeUndefined();
   });
 
-  it("continues an unfinished new setup on its Chat page", () => {
-    const draft = { catalogId: "channel.telegram", lifecycleMode: "create" as const };
-    expect(chatSetupHrefForDraft(draft, definitions)).toBe("/chat/messaging/add/telegram");
+  it("continues an unfinished new setup on its Chat page, naming that setup", () => {
+    const draft = { draftId: "draft-1", catalogId: "channel.telegram", lifecycleMode: "create" as const };
+    expect(chatSetupHrefForDraft(draft, definitions)).toBe("/chat/messaging/add/telegram?draft=draft-1");
   });
 
   it("leaves changes to a saved channel, other channels and unknown ones in Settings", () => {
-    const editing = { catalogId: "channel.telegram", lifecycleMode: "edit" as const, connectionId: "conn-1" };
+    const editing = {
+      draftId: "d",
+      catalogId: "channel.telegram",
+      lifecycleMode: "edit" as const,
+      connectionId: "conn-1",
+    };
     expect(chatSetupHrefForDraft(editing, definitions)).toBeUndefined();
     // A new setup that already names its connection is past the point Chat's page starts from.
-    const named = { catalogId: "channel.telegram", lifecycleMode: "create" as const, connectionId: "conn-1" };
+    const named = { draftId: "d", catalogId: "channel.telegram", lifecycleMode: "create" as const, connectionId: "c" };
     expect(chatSetupHrefForDraft(named, definitions)).toBeUndefined();
-    expect(chatSetupHrefForDraft({ catalogId: "channel.slack", lifecycleMode: "create" }, definitions)).toBeUndefined();
-    expect(chatSetupHrefForDraft({ catalogId: "channel.gone", lifecycleMode: "create" }, definitions)).toBeUndefined();
+    const slack = { draftId: "d", catalogId: "channel.slack", lifecycleMode: "create" as const };
+    expect(chatSetupHrefForDraft(slack, definitions)).toBeUndefined();
+    const gone = { draftId: "d", catalogId: "channel.gone", lifecycleMode: "create" as const };
+    expect(chatSetupHrefForDraft(gone, definitions)).toBeUndefined();
   });
 });

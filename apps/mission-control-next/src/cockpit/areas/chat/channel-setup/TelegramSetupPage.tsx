@@ -153,8 +153,15 @@ function statusLine(
  * Telegram's setup: make a bot, paste its key, say hi, turn it on. Each step checks itself and the next opens when it
  * has. Saying hi makes the person who does it the bot's only allowed sender; turning on finishes the setup in place.
  */
-export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
-  const setup = useTelegramSetup(workspaceId);
+export function TelegramSetupPage({
+  workspaceId,
+  resumeDraftId,
+}: {
+  workspaceId: string;
+  /** The unfinished setup to go on with, when the page was sent to one; else the newest. */
+  resumeDraftId?: string;
+}) {
+  const setup = useTelegramSetup(workspaceId, resumeDraftId);
   const turnOn = useTurnOn(workspaceId, setup.draft?.draftId);
   const requiredHosts = useChannelRequiredHosts(TELEGRAM_CATALOG_ID);
   const [checking, setChecking] = useState(false);

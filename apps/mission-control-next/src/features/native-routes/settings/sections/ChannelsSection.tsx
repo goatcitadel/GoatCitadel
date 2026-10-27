@@ -35,6 +35,13 @@ import {
   chatSetupHrefForDraft,
 } from "../../../../cockpit/areas/chat/channel-setup/channel-picker-model";
 
+/** A Cockpit address opened from this Classic page: the same address, asking for the Cockpit shell. */
+function cockpitShellHref(href: string): string {
+  const url = new URL(href, "http://goatcitadel.local");
+  url.searchParams.set("shell", "cockpit");
+  return url.pathname + url.search;
+}
+
 export function ChannelsSection({ activeWorkspaceId, navigate, route }: SettingsSectionProps) {
   const owner = useChannelSettings(activeWorkspaceId, (plan) =>
     navigate({
@@ -94,8 +101,16 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     selectedConnection,
     editConnection,
   } = owner;
-  // A channel with its own setup page in Chat is set up there, from the start or from where a new setup stopped.
+  // A channel with its own setup page in Chat is set up there, from the start or from where a new setup stopped:
+  // each unfinished one is a link to that very setup, and only the rest open this guide.
   const createInChat = createDefinition ? chatSetupHref(createDefinition) : undefined;
+  const chatDrafts = (data?.drafts ?? []).flatMap((draft) => {
+    const href = chatSetupHrefForDraft(draft, data?.definitions ?? []);
+    return href ? [{ draft, href }] : [];
+  });
+  const guideDrafts = (data?.drafts ?? []).filter(
+    (draft) => !chatDrafts.some((entry) => entry.draft.draftId === draft.draftId),
+  );
   return (
     // Block-render the loader only while there is nothing to show yet. Reloads
     // after save/validate/test keep `data` (useAsyncLoad retains it), and the
@@ -140,7 +155,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                 <SettingsButtonRow>
                   {createInChat && createDefinition ? (
                     <CockpitOwnerLink
-                      href={`${createInChat}?shell=cockpit`}
+                      href={cockpitShellHref(createInChat)}
                       scope={activeWorkspaceId}
                       label={`Set up ${createDefinition.catalog.label} in Chat`}
                     />
@@ -308,8 +323,21 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                 />
               </NativeCard>
               <NativeCard title="Drafts" subtitle="Saved setup work, including retained edits.">
+                {chatDrafts.length ? (
+                  <ul aria-label="Setups that go on in Chat">
+                    {chatDrafts.map(({ draft, href }) => (
+                      <li key={draft.draftId}>
+                        <CockpitOwnerLink
+                          href={cockpitShellHref(href)}
+                          scope={activeWorkspaceId}
+                          label={`Continue ${draft.label || draft.catalogId} in Chat`}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 <NativeSelectableList
-                  items={(data.drafts ?? []).map((item) => ({
+                  items={guideDrafts.map((item) => ({
                     id: item.draftId,
                     title: item.label || item.catalogId,
                     meta:
@@ -322,18 +350,9 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                   }))}
                   selectedId={selectedDraftId}
                   onSelect={(draftId) => {
-                    const draft = data.drafts?.find((item) => item.draftId === draftId);
-                    // An unfinished setup for a channel set up in Chat opens the link there, not this guide.
-                    if (draft && chatSetupHrefForDraft(draft, data.definitions ?? [])) {
-                      leave.request(() => {
-                        setCreateCatalogId(draft.catalogId);
-                        setPanel("create");
-                      });
-                      return;
-                    }
                     draftSelectionGuard.requestTransition(draftId);
                   }}
-                  emptyLabel="No channel drafts yet."
+                  emptyLabel={chatDrafts.length ? "No other drafts." : "No channel drafts yet."}
                 />
               </NativeCard>
             </>

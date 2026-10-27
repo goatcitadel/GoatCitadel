@@ -55,8 +55,8 @@ let root: Root;
 let container: HTMLDivElement;
 let current: TelegramSetupState;
 
-function Probe({ workspaceId }: { workspaceId: string }) {
-  current = useTelegramSetup(workspaceId);
+function Probe({ workspaceId, resumeDraftId }: { workspaceId: string; resumeDraftId?: string }) {
+  current = useTelegramSetup(workspaceId, resumeDraftId);
   return null;
 }
 
@@ -66,9 +66,9 @@ async function settle() {
   });
 }
 
-async function mount(workspaceId = "default") {
+async function mount(workspaceId = "default", resumeDraftId?: string) {
   await act(async () => {
-    root.render(createElement(Probe, { workspaceId }));
+    root.render(createElement(Probe, { workspaceId, resumeDraftId }));
   });
   await settle();
 }
@@ -287,6 +287,26 @@ describe("useTelegramSetup", () => {
     });
     expect(current.bot).toEqual({ username: "MyGoatBot", label: "My Goat Bot" });
     expect(api.createChannelSetupDraft).not.toHaveBeenCalled();
+  });
+
+  it("resumes the setup it was sent to, not the newest one", async () => {
+    const chosen = draft({ draftId: "chosen", revision: 2, updatedAt: "2026-10-26T08:00:00.000Z" });
+    const newest = draft({ draftId: "newest", revision: 6, updatedAt: "2026-10-26T11:00:00.000Z" });
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [chosen, newest] });
+    await mount("default", "chosen");
+    expect(current.draft?.draftId).toBe("chosen");
+  });
+
+  it("starts fresh, touching no other setup, when the setup it was sent to is gone", async () => {
+    const newest = draft({ draftId: "newest", revision: 6, updatedAt: "2026-10-26T11:00:00.000Z" });
+    // A finished one is gone too: it changes a connection now.
+    const finished = draft({ draftId: "finished", connectionId: "connection-1" });
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [newest, finished] });
+    await mount("default", "finished");
+    expect(current.draft).toBeNull();
+    // Start over has nothing of another bot's to discard.
+    await run(() => current.startOver());
+    expect(api.discardChannelSetupDraft).not.toHaveBeenCalled();
   });
 
   it("resumes a draft that has no key yet without asking Telegram, and checks into that draft", async () => {
