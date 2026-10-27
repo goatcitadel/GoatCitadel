@@ -302,6 +302,18 @@ quarantine and the first-mutation check still apply, and it is never granted to 
 remote A2A peer or on a `remote_hardened` install. A server that can move money is
 decided as `reads_free` even when `nothing_asks` is saved.
 
+A change to only this setting is still a reviewed edit: the server takes a new
+revision and the change is audited. It keeps the server's connection, so the
+status, connection revision, configuration binding, stored tools, first-tool
+approvals and live stdio sessions stay as they were. Capability-pack ownership
+bookkeeping, which every operator edit clears, does not count as another change.
+A server that is mid-connection is still disconnected, as by any other edit,
+because the attempt in flight holds the pre-edit record. Any other edit
+disconnects the server as before, rotates its configuration binding and removes
+its stored tools and first-tool approvals. A Chat turn that admitted the server
+before the change asks for a new turn, because the static admission receipt binds
+the server revision.
+
 The policy engine also has a process-local mesh mapping for exact `mesh_tool`
 and `mesh_mcp_server` publication identities. Its private `mesh.invoke` policy
 template is absent from the public tool registry and cannot be invoked as a
