@@ -184,9 +184,10 @@ export class GatewayChatStreamRuntime {
       signal?: AbortSignal;
     },
   ): AsyncGenerator<ChatStreamChunk> {
+    const storage = this.host.storage;
     let afterSequence = 0;
     if (options?.sinceEventId) {
-      const priorEvent = await this.host.storage.chatStreamEvents.getByEventId(options.sinceEventId);
+      const priorEvent = await storage.chatStreamEvents.getByEventId(options.sinceEventId);
       if (priorEvent?.turnId === turnId) {
         const priorPayload = toChatStreamChunk(priorEvent.payload);
         // A client can receive the retained terminal id together with a
@@ -196,7 +197,7 @@ export class GatewayChatStreamRuntime {
         afterSequence = priorPayload?.type === "done" ? Math.max(0, priorEvent.sequence - 1) : priorEvent.sequence;
       } else {
         const terminalFallback = yield* this.streamTurnStateFallback(sessionId, turnId, options.sinceEventId);
-        afterSequence = await this.host.storage.chatStreamEvents.getLatestSequence(turnId);
+        afterSequence = await storage.chatStreamEvents.getLatestSequence(turnId);
         if (terminalFallback || !options?.liveTail) {
           return;
         }
@@ -209,7 +210,7 @@ export class GatewayChatStreamRuntime {
       if (options?.signal?.aborted) {
         return;
       }
-      const events = await this.host.storage.chatStreamEvents.listByTurn(turnId, afterSequence, 200);
+      const events = await storage.chatStreamEvents.listByTurn(turnId, afterSequence, 200);
       if (events.length > 0) {
         idlePollDelayMs = CHAT_STREAM_EVENT_POLL_INTERVAL_MS;
         for (const event of events) {
@@ -346,11 +347,12 @@ export class GatewayChatStreamRuntime {
     options?: { includeInterrupts?: boolean },
     probe?: DurableTurnProbeCache,
   ): Promise<boolean> {
+    const storage = this.host.storage;
     let runId: string | null = probe?.runId ?? null;
     if (!runId) {
       const statement =
         probe?.statement ??
-        (await this.host.storage.gatewaySql.prepare(
+        (await storage.gatewaySql.prepare(
           `
       SELECT run_id
       FROM chat_stream_events
@@ -364,7 +366,7 @@ export class GatewayChatStreamRuntime {
       runId = eventRow?.run_id ?? null;
       if (!runId) {
         try {
-          runId = (await this.host.storage.chatTurnTraces.get(turnId)).durable?.runId ?? null;
+          runId = (await storage.chatTurnTraces.get(turnId)).durable?.runId ?? null;
         } catch {
           runId = null;
         }
@@ -376,7 +378,7 @@ export class GatewayChatStreamRuntime {
       return false;
     }
     try {
-      const run = await this.host.storage.durableRuns.getRun(runId);
+      const run = await storage.durableRuns.getRun(runId);
       if (run.status === "queued" || run.status === "running") {
         return true;
       }
