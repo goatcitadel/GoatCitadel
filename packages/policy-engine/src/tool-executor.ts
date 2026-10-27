@@ -547,7 +547,6 @@ export async function executeTool(
     case "whatsapp.send":
     case "whatsapp.react":
     case "zalo.send":
-    case "zalouser.send":
       return finalizeToolResult(
         await executeCommsTool(
           request,

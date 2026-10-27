@@ -1980,7 +1980,6 @@ Channels to cover when configured:
 - Nextcloud Talk
 - LINE
 - Zalo OA
-- Zalo Personal
 
 Steps:
 

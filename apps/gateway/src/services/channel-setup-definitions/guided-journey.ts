@@ -177,15 +177,6 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     firstMessage:
       "Confirm the sandbox message arrives at the intended OA recipient. This narrow outbound adapter does not receive conversations.",
   },
-  zalouser: {
-    summary: "Send outbound messages through an authenticated zca personal-session bridge.",
-    prerequisites: [
-      "A reachable authenticated zca bridge and its bearer credential.",
-      "An already linked profile and intended personal-session recipient or group.",
-    ],
-    firstMessage:
-      "Confirm the sandbox text arrives from the expected profile. Rich media uses URL-backed attachments; inbound conversations are unavailable. Authentication is required for the supported bridge posture.",
-  },
 };
 const DESTINATION_KEYS = new Set([
   "targets",

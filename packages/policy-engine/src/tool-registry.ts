@@ -2576,14 +2576,6 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     description: "Send message to Zalo OA bot integration.",
     pack: "comms",
   },
-  {
-    name: "zalouser.send",
-    category: "comms",
-    riskLevel: "caution",
-    requiresApproval: false,
-    description: "Send message to Zalo personal zca bridge integration.",
-    pack: "comms",
-  },
 ];
 
 export class ToolRegistry {

@@ -7,6 +7,7 @@ import type {
   McpToolRecord,
   McpServerRecord,
 } from "@goatcitadel/contracts";
+import { describeRetiredChannel } from "@goatcitadel/contracts";
 import { MCP_APPROVAL_DELIVERY_TOOL_NAME } from "./mcp-approval-inbox.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import { describeChannelCapabilities, describeChannelFeatureMetadata } from "./channel-diagnostics.js";
@@ -71,8 +72,10 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
       : connection.status === "connected"
         ? "active"
         : "degraded";
+  // A retired channel's connection stays listed so the operator can delete it, but it sends and receives nothing.
+  const retiredReason = isChannel ? describeRetiredChannel(connection.key) : undefined;
   const approvalDeliveryTarget = resolveIntegrationApprovalDeliveryTarget(connection);
-  const approvalDeliveryReady = status === "active" && Boolean(approvalDeliveryTarget);
+  const approvalDeliveryReady = !retiredReason && status === "active" && Boolean(approvalDeliveryTarget);
   const approvalInlineActionsReady =
     approvalDeliveryReady &&
     channelFeatures?.runtimePosture.inboundReadiness === "ready" &&
@@ -85,8 +88,8 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
     status,
     capabilities: [
       createCapability("health_checks"),
-      createCapability("inbound_messages", isChannel),
-      createCapability("outbound_messages", isChannel),
+      createCapability("inbound_messages", isChannel && !retiredReason),
+      createCapability("outbound_messages", isChannel && !retiredReason),
       createCapability(
         "interactive_actions",
         isChannel && (channelFeatures?.supportedDeliveryActions.some((action) => action !== "channel.send") ?? false),
@@ -102,7 +105,7 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
       approvalDeliveryMode: isChannel ? "integration_channel_send" : undefined,
       approvalDeliveryReady,
       approvalInlineActionsReady,
-      approvalDeliveryReason: describeIntegrationApprovalDelivery(connection, approvalDeliveryTarget),
+      approvalDeliveryReason: retiredReason ?? describeIntegrationApprovalDelivery(connection, approvalDeliveryTarget),
       approvalDeliveryTarget,
       channelCapabilities:
         channelFeatures && connection.kind === "channel"
@@ -204,7 +207,6 @@ function describeIntegrationApprovalDelivery(
     case "line":
       return "Set config.defaultTarget (or config.defaultUserId / config.defaultGroupId / config.defaultRoomId) to enable approval delivery.";
     case "zalo":
-    case "zalouser":
       return "Set config.defaultRecipientId or config.defaultTarget to enable approval delivery.";
     default:
       return "Set config.target or config.defaultTarget to enable approval delivery.";

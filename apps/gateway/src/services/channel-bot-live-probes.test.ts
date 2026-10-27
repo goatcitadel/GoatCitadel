@@ -11,7 +11,6 @@ import {
   runTelegramBotLiveChecks,
   runWhatsAppCloudLiveChecks,
   runZaloBotLiveChecks,
-  runZaloUserBridgeLiveChecks,
 } from "./channel-bot-live-probes.js";
 
 describe("channel bot live probes", () => {
@@ -38,17 +37,6 @@ describe("channel bot live probes", () => {
     expect(evaluateChannelSetupEligibility(test, { key: "discord", config: {} } as IntegrationConnection).allowed).toBe(
       false,
     );
-  });
-  it("does not dispatch an unauthenticated Zalo User bridge probe", async () => {
-    const fetcher = vi.fn();
-    const result = await runZaloUserBridgeLiveChecks({
-      baseUrl: "http://127.0.0.1:56789",
-      defaultTarget: "user:operator",
-      includeSandboxSend: true,
-      fetcher,
-    });
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(result.probe.steps[0]).toMatchObject({ key: "zalouser_auth", status: "fail", disposition: "blocking" });
   });
   it("authenticates DM-only Discord while deferring destination and delivery proof", async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ id: "bot", username: "bot" })));
@@ -600,37 +588,6 @@ describe("channel bot live probes", () => {
     expect(JSON.parse(String(sendCall?.[1]?.body))).toEqual({
       recipient: { user_id: "chat-123" },
       message: { text: "[GoatCitadel Zalo probe 2026-04-02T12:00:00.000Z] Channel setup smoke check." },
-    });
-  });
-
-  it("runs Zalo User sandbox send probes against the zca text path", async () => {
-    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url === "http://127.0.0.1:56789/work/messages/text" && init?.method === "POST") {
-        return new Response(JSON.stringify({ messageId: "zca-msg-123" }), { status: 200 });
-      }
-      throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
-    });
-
-    const result = await runZaloUserBridgeLiveChecks({
-      baseUrl: "http://127.0.0.1:56789",
-      authorizationHeader: "Bearer zlu-token",
-      profile: "work",
-      defaultTarget: "group:g-987654321",
-      includeSandboxSend: true,
-      checkedAt: "2026-04-02T12:00:00.000Z",
-      fetcher,
-    });
-
-    expect(result.probe.steps).toEqual([expect.objectContaining({ key: "zalouser_sandbox_send", status: "pass" })]);
-    const sendCall = fetcher.mock.calls[0];
-    expect(sendCall?.[0]).toBe("http://127.0.0.1:56789/work/messages/text");
-    expect(sendCall?.[1]?.headers).toBeDefined();
-    const headers = new Headers(sendCall?.[1]?.headers);
-    expect(headers.get("Authorization")).toBe("Bearer zlu-token");
-    expect(JSON.parse(String(sendCall?.[1]?.body))).toEqual({
-      threadId: "g-987654321",
-      message: "[GoatCitadel Zalo User probe 2026-04-02T12:00:00.000Z] Channel setup smoke check.",
-      isGroup: true,
     });
   });
 

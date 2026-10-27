@@ -24,7 +24,6 @@ export const CONNECTOR_INTEGRATION_CATALOG_IDS: ReadonlySet<string> = new Set([
   "channel.telegram",
   "channel.whatsapp",
   "channel.zalo",
-  "channel.zalouser",
 ]);
 
 export function isListedIntegration(entry: IntegrationCatalogEntry): boolean {

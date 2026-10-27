@@ -6,7 +6,11 @@ import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.j
 import { appendQqbotStructuralChecks, runConfiguredQqbotChecks } from "./qqbot-live-probes.js";
 import { appendWecomStructuralChecks, runConfiguredWecomChecks } from "./wecom-live-probes.js";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
-import { GOOGLE_WORKSPACE_CATALOG_ID, evaluateChannelInboundAccess } from "@goatcitadel/contracts";
+import {
+  GOOGLE_WORKSPACE_CATALOG_ID,
+  describeRetiredChannel,
+  evaluateChannelInboundAccess,
+} from "@goatcitadel/contracts";
 import type {
   ChannelProbeReport,
   ConnectorDiagnosticReport,
@@ -25,7 +29,6 @@ import {
   runTelegramBotLiveChecks,
   runWhatsAppCloudLiveChecks,
   runZaloBotLiveChecks,
-  runZaloUserBridgeLiveChecks,
 } from "./channel-bot-live-probes.js";
 import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-diagnostic-checks.js";
 import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
@@ -165,6 +168,12 @@ export function buildIntegrationConnectionChecks(
       message:
         "Global network allowlist contains '*'. This enables outbound connections to all public hosts, but local/private addresses remain protected by sandbox guards.",
     });
+  }
+
+  const retiredReason = connection.kind === "channel" ? describeRetiredChannel(connection.key) : undefined;
+  if (retiredReason) {
+    checks.push({ key: "retired", status: "fail", message: retiredReason });
+    return checks;
   }
 
   if (connection.kind === "channel") {
@@ -380,37 +389,6 @@ export function buildIntegrationConnectionChecks(
         requireSecretRef("auth", "Zalo access token", "accessToken", "accessTokenEnv");
         requireText("target", "Default Zalo recipient", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
-      case "zalouser": {
-        const baseUrl =
-          deps.readConnectionConfigValue(config, "baseUrl") ??
-          deps.readConnectionConfigValue(config, "bridgeUrl") ??
-          deps.readConnectionConfigValue(config, "serverUrl");
-        checkUrl("url", "Zalo User bridge URL", baseUrl, true);
-        const hasAuth = Boolean(
-          deps.readConnectionConfigValue(config, "authToken") ||
-          hasConnectionEnvValue(deps, config, "authTokenEnv") ||
-          deps.readConnectionConfigValue(config, "authorization") ||
-          hasConnectionEnvValue(deps, config, "authorizationEnv") ||
-          deps.readConnectionConfigValue(config, "basicAuth") ||
-          hasConnectionEnvValue(deps, config, "basicAuthEnv") ||
-          deps.readConnectionConfigValue(config, "accessToken") ||
-          hasConnectionEnvValue(deps, config, "accessTokenEnv"),
-        );
-        checks.push({
-          key: "auth",
-          status: hasAuth ? "pass" : "fail",
-          message: hasAuth
-            ? "Zalo User bridge authentication is configured."
-            : "An authenticated zca bridge credential is required.",
-        });
-        requireText(
-          "target",
-          "Default Zalo User recipient",
-          resolveChannelConfigTarget(connection.key, config),
-          "warn",
-        );
-        break;
-      }
       default:
         requireText("target", "Default target", resolveChannelConfigTarget(connection.key, config), "warn");
         requireSecretRef("auth", "Channel token", "token", "tokenEnv");
@@ -871,23 +849,6 @@ export async function runIntegrationConnectionLiveChecks(
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
-    case "zalouser": {
-      const baseUrl =
-        deps.readConnectionConfigValue(config, "baseUrl") ??
-        deps.readConnectionConfigValue(config, "bridgeUrl") ??
-        deps.readConnectionConfigValue(config, "serverUrl");
-      if (!baseUrl) {
-        return { checks: [] };
-      }
-      return runZaloUserBridgeLiveChecks({
-        baseUrl,
-        authorizationHeader: resolveZaloUserConnectionAuthorizationHeader(deps, config, connection.catalogId),
-        profile: deps.readConnectionConfigValue(config, "profile"),
-        defaultTarget: resolveChannelConfigTarget(connection.key, config),
-        includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
-      });
-    }
     default:
       return { checks: [] };
   }
@@ -913,28 +874,6 @@ function hasConnectionEnvValue(
 
 function isHostAllowlisted(deps: IntegrationDiagnosticsPort, hostname: string): boolean {
   return connectionUrlHelpers.isHostAllowlistedInList(hostname, deps.config.toolPolicy.sandbox.networkAllowlist);
-}
-
-function resolveZaloUserConnectionAuthorizationHeader(
-  deps: IntegrationDiagnosticsPort,
-  config: Record<string, unknown>,
-  catalogId: string,
-): string | undefined {
-  const explicit = deps.resolveConnectionSecret(config, "authorization", "authorizationEnv", catalogId);
-  if (explicit) {
-    return explicit;
-  }
-  const bearer =
-    deps.resolveConnectionSecret(config, "authToken", "authTokenEnv", catalogId) ??
-    deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv", catalogId);
-  if (bearer) {
-    return `Bearer ${bearer}`;
-  }
-  const basic = deps.resolveConnectionSecret(config, "basicAuth", "basicAuthEnv", catalogId);
-  if (basic) {
-    return /^Basic\s+/i.test(basic) ? basic : `Basic ${Buffer.from(basic, "utf8").toString("base64")}`;
-  }
-  return undefined;
 }
 
 function readIMessageBridgeProvider(

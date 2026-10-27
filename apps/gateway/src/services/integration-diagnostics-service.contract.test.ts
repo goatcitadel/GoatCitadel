@@ -4,7 +4,6 @@ import type { IntegrationConnection } from "@goatcitadel/contracts";
 const runDiscordBotLiveChecksMock = vi.hoisted(() => vi.fn());
 const runIMessageBridgeLiveChecksMock = vi.hoisted(() => vi.fn());
 const runNtfyLiveChecksMock = vi.hoisted(() => vi.fn());
-const runZaloUserBridgeLiveChecksMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./channel-bot-live-probes.js", () => ({
   runDiscordBotLiveChecks: runDiscordBotLiveChecksMock,
@@ -17,7 +16,6 @@ vi.mock("./channel-bot-live-probes.js", () => ({
   runTelegramBotLiveChecks: vi.fn(),
   runWhatsAppCloudLiveChecks: vi.fn(),
   runZaloBotLiveChecks: vi.fn(),
-  runZaloUserBridgeLiveChecks: runZaloUserBridgeLiveChecksMock,
 }));
 
 import {
@@ -100,7 +98,6 @@ describe("integration-diagnostics-service contract behavior", () => {
     runDiscordBotLiveChecksMock.mockReset();
     runIMessageBridgeLiveChecksMock.mockReset();
     runNtfyLiveChecksMock.mockReset();
-    runZaloUserBridgeLiveChecksMock.mockReset();
   });
 
   it("marks remote plain-http webhook URLs as unsafe while still recognizing configured auth", () => {
@@ -683,11 +680,6 @@ describe("integration-diagnostics-service contract behavior", () => {
           accessToken: "zalo-token",
           defaultTarget: "user-1",
         }),
-        createIntegrationConnection("zalouser", "channel", {
-          baseUrl: "http://127.0.0.1:9876",
-          authToken: "bridge-token",
-          defaultTarget: "group:ops",
-        }),
       ];
       for (const connection of directChannels) {
         expect(buildIntegrationConnectionChecks(host, connection)).toEqual(
@@ -942,57 +934,23 @@ describe("integration-diagnostics-service contract behavior", () => {
     }
   });
 
-  it("resolves Zalo User bridge authorization from explicit, bearer, and basic config sources", async () => {
+  it("reports a saved Zalo Personal connection as retired and runs no live probe for it", async () => {
     const host = createPort();
     const connection = createIntegrationConnection("zalouser", "channel", {
       baseUrl: "https://zca.example.test",
+      authToken: "token-1",
       defaultTarget: "group:thread-1",
-      basicAuth: "operator:secret",
-      profile: "ops",
-    });
-    runZaloUserBridgeLiveChecksMock.mockResolvedValue({
-      checks: [{ key: "zalouser_sandbox_send", status: "pass", message: "sent" }],
-      probe: { canSend: true },
     });
 
-    const result = await runIntegrationConnectionLiveChecks(host, connection, { includeSandboxSend: true });
-
-    expect(result.checks).toEqual([{ key: "zalouser_sandbox_send", status: "pass", message: "sent" }]);
-    expect(runZaloUserBridgeLiveChecksMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "https://zca.example.test",
-        defaultTarget: "group:thread-1",
-        profile: "ops",
-        includeSandboxSend: true,
-        authorizationHeader: `Basic ${Buffer.from("operator:secret", "utf8").toString("base64")}`,
-      }),
-    );
-
-    runZaloUserBridgeLiveChecksMock.mockClear();
-    await runIntegrationConnectionLiveChecks(
-      host,
-      createIntegrationConnection("zalouser", "channel", {
-        baseUrl: "https://zca.example.test",
-        authorization: "Bearer explicit",
-      }),
-      { includeSandboxSend: false },
-    );
-    expect(runZaloUserBridgeLiveChecksMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ authorizationHeader: "Bearer explicit" }),
-    );
-
-    runZaloUserBridgeLiveChecksMock.mockClear();
-    await runIntegrationConnectionLiveChecks(
-      host,
-      createIntegrationConnection("zalouser", "channel", {
-        baseUrl: "https://zca.example.test",
-        authToken: "token-1",
-      }),
-      { includeSandboxSend: false },
-    );
-    expect(runZaloUserBridgeLiveChecksMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ authorizationHeader: "Bearer token-1" }),
-    );
+    expect(buildIntegrationConnectionChecks(host, connection)).toEqual([
+      {
+        key: "retired",
+        status: "fail",
+        message: expect.stringMatching(/^Zalo Personal is not supported anymore/),
+      },
+    ]);
+    const live = await runIntegrationConnectionLiveChecks(host, connection, { includeSandboxSend: true });
+    expect(live).toEqual({ checks: [] });
   });
 
   it("warns when '*' is present in connection-level allowlist or global networkAllowlist", () => {

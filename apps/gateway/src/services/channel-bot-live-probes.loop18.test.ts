@@ -9,7 +9,6 @@ import {
   runTelegramBotLiveChecks,
   runWhatsAppCloudLiveChecks,
   runZaloBotLiveChecks,
-  runZaloUserBridgeLiveChecks,
 } from "./channel-bot-live-probes.js";
 
 describe("channel bot live probes loop 18 failure coverage", () => {
@@ -273,7 +272,7 @@ describe("channel bot live probes loop 18 failure coverage", () => {
     });
   });
 
-  it("covers WhatsApp, LINE, Signal, Zalo, and Zalo User send failures", async () => {
+  it("covers WhatsApp, LINE, Signal, and Zalo send failures", async () => {
     const whatsappAuthOnlyFetcher = vi.fn(
       async () => new Response(JSON.stringify({ id: "123456789012345" }), { status: 200 }),
     );
@@ -366,31 +365,6 @@ describe("channel bot live probes loop 18 failure coverage", () => {
       key: "zalo_sandbox_send",
       status: "fail",
       message: "rate limited",
-    });
-
-    const zaloUserSkipped = await runZaloUserBridgeLiveChecks({
-      baseUrl: "https://zalo-user.example.com/",
-      authorizationHeader: "Bearer bridge-token",
-      includeSandboxSend: false,
-      fetcher: vi.fn(),
-    });
-    expect(zaloUserSkipped.probe.steps).toEqual([
-      expect.objectContaining({ key: "zalouser_sandbox_send", status: "skipped" }),
-    ]);
-
-    const zaloUserFailure = await runZaloUserBridgeLiveChecks({
-      baseUrl: "https://zalo-user.example.com/",
-      authorizationHeader: "Bearer bridge-token",
-      profile: "default",
-      defaultTarget: "group:ops",
-      includeSandboxSend: true,
-      fetcher: vi.fn(async () => new Response(JSON.stringify({ error: "bridge offline" }), { status: 503 })),
-    });
-    expect(zaloUserFailure.probe.steps.at(-1)).toMatchObject({
-      key: "zalouser_sandbox_send",
-      status: "warn",
-      failureCategory: "platform_unavailable",
-      message: "bridge offline",
     });
   });
 
@@ -744,36 +718,6 @@ describe("channel bot live probes loop 18 failure coverage", () => {
     });
     expect(zaloTransportFailure.probe.steps.at(-1)).toMatchObject({
       key: "zalo_sandbox_send",
-      status: "warn",
-      failureCategory: "platform_unavailable",
-    });
-
-    const zaloUserMissingTarget = await runZaloUserBridgeLiveChecks({
-      baseUrl: "https://zalo-user.example.com/",
-      authorizationHeader: "Bearer bridge-token",
-      defaultTarget: " ",
-      includeSandboxSend: true,
-      fetcher: vi.fn(),
-    });
-    expect(zaloUserMissingTarget.probe.steps).toEqual([
-      expect.objectContaining({
-        key: "zalouser_sandbox_send",
-        status: "fail",
-        failureCategory: "missing_input",
-      }),
-    ]);
-
-    const zaloUserTransportFailure = await runZaloUserBridgeLiveChecks({
-      baseUrl: "https://zalo-user.example.com/",
-      authorizationHeader: "Bearer bridge-token",
-      defaultTarget: "user:operator",
-      includeSandboxSend: true,
-      fetcher: vi.fn(async () => {
-        throw new Error("zalo user bridge timeout");
-      }),
-    });
-    expect(zaloUserTransportFailure.probe.steps.at(-1)).toMatchObject({
-      key: "zalouser_sandbox_send",
       status: "warn",
       failureCategory: "platform_unavailable",
     });
