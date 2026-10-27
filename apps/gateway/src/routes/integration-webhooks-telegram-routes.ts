@@ -6,6 +6,7 @@ import { dispatchTelegramUpdate, type TelegramDispatchPayload } from "../service
 import { normalizeTelegramWebhookPayload, verifyTelegramWebhookSecretToken } from "../services/telegram-webhook.js";
 import {
   createWebhookRouteOptions,
+  createWebhookSecretResolver,
   readWebhookVoiceInboundEnabled,
   resolveTelegramWebhookSecret,
 } from "./integration-webhooks-shared.js";
@@ -31,8 +32,11 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
       connectorLabel: "Telegram",
       rawBodyKey: "telegramRawBody",
       missingRawBodyError: "Missing Telegram raw request body",
-      verifySignature: ({ request, connection }) => {
-        const webhookSecret = resolveTelegramWebhookSecret(connection.config);
+      verifySignature: ({ request, connection, connectionId }) => {
+        const webhookSecret = resolveTelegramWebhookSecret(
+          connection.config,
+          createWebhookSecretResolver(fastify, connectionId),
+        );
         if (!webhookSecret) {
           return { ok: false as const, statusCode: 400, error: "Telegram connection is missing a webhook secret" };
         }

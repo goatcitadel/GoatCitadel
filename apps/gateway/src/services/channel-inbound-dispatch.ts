@@ -186,6 +186,15 @@ export type IntegrationWebhookRouteLike = {
   ) => Promise<DurableInboundChannelAcceptResult[]>;
   awaitInboundChannelCommandResult?: (eventId: string) => Promise<DurableInboundChannelCommandResult>;
   findRemoteActionTokenId?: (token: string) => string | undefined;
+  /**
+   * Reads the key a channel connection saved in secure storage, so a webhook is checked against the key and
+   * never against the reference kept in the connection config. The port itself is bound to the connection: it
+   * gives no key unless the reference is one this connection saved for itself, so no route can read another
+   * connection's key, a setup draft's key or a plain string through it. Optional-typed so existing route-level
+   * test harnesses keep compiling, but a REQUIRED member of the integration-webhook route port, so the real
+   * gateway composition cannot drop it. Absent means a saved key counts as missing and the webhook is rejected.
+   */
+  resolveChannelConnectionSecret?: (connectionId: string, secretRef: string) => string | undefined;
 };
 
 export type InboundWebhookDispatchOptions = {

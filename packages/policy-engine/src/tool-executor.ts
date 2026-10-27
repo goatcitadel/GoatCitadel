@@ -169,6 +169,11 @@ export interface ToolExecutorRuntimeHooks {
    * Absent means no native Google sign-in, so those tools stay unavailable.
    */
   resolveGoogleWorkspaceAccessToken?: (input: { connectionId: string; toolName: string }) => Promise<string>;
+  /**
+   * Reads the key a channel connection saved in secure storage, so a real send uses the key and never the
+   * reference kept in the connection config. Absent means a send that needs a saved key fails before any request.
+   */
+  resolveChannelConnectionSecret?: (secretRef: string) => string | undefined;
   /** Called at the concrete provider or irreversible mutation boundary. */
   beforeExternalSideEffect?: () => void | Promise<void>;
   /**

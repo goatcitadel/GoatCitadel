@@ -5,7 +5,12 @@ import {
   normalizeWecomMessage,
   readWecomXmlFields,
 } from "../services/wecom-webhook.js";
-import { createWebhookRouteOptions, resolveWecomCallbackSecrets } from "./integration-webhooks-shared.js";
+import type { ChannelSecretReferenceResolver } from "../services/channel-secret-resolution.js";
+import {
+  createWebhookRouteOptions,
+  createWebhookSecretResolver,
+  resolveWecomCallbackSecrets,
+} from "./integration-webhooks-shared.js";
 import { timingSafeStringEqual } from "../services/webhook-json-helpers.js";
 import type { IntegrationConnectionRecord } from "../services/channel-inbound-dispatch.js";
 import { connectionParamsSchema } from "./integration-webhook-schemas.js";
@@ -26,8 +31,11 @@ const verifiedPlaintext = new WeakMap<object, string>();
 
 type CallbackCredentials = { corpId: string; token: string; encodingAesKey: string };
 
-function readCallbackCredentials(config: Record<string, unknown>): CallbackCredentials | undefined {
-  const { corpId, token, encodingAesKey } = resolveWecomCallbackSecrets(config);
+function readCallbackCredentials(
+  config: Record<string, unknown>,
+  resolveReference: ChannelSecretReferenceResolver,
+): CallbackCredentials | undefined {
+  const { corpId, token, encodingAesKey } = resolveWecomCallbackSecrets(config, resolveReference);
   return corpId && token && encodingAesKey ? { corpId, token, encodingAesKey } : undefined;
 }
 
@@ -85,7 +93,10 @@ function registerWecomRoutes(fastify: FastifyInstance): void {
       if (connection.key !== "wecom") {
         return reply.code(400).send({ error: "Integration connection is not a WeCom connector" });
       }
-      const credentials = readCallbackCredentials(connection.config);
+      const credentials = readCallbackCredentials(
+        connection.config,
+        createWebhookSecretResolver(fastify, params.data.connectionId),
+      );
       if (!credentials) {
         return reply.code(400).send({ error: "WeCom connection is missing corpId, callbackToken or encodingAesKey" });
       }
@@ -126,8 +137,11 @@ function registerWecomRoutes(fastify: FastifyInstance): void {
       missingRawBodyError: "Missing WeCom raw request body",
       // A disabled connection is acknowledged so WeCom does not keep retrying.
       ignoredReply: () => WECOM_ACK,
-      verifySignature: ({ request, connection, rawBody }) => {
-        const credentials = readCallbackCredentials(connection.config);
+      verifySignature: ({ request, connection, connectionId, rawBody }) => {
+        const credentials = readCallbackCredentials(
+          connection.config,
+          createWebhookSecretResolver(fastify, connectionId),
+        );
         if (!credentials) {
           return {
             ok: false as const,

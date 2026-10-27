@@ -4,7 +4,11 @@ import {
   normalizeLineWebhookPayloads,
   verifyLineWebhookSignature,
 } from "../services/line-webhook.js";
-import { createWebhookRouteOptions, resolveLineChannelSecret } from "./integration-webhooks-shared.js";
+import {
+  createWebhookRouteOptions,
+  createWebhookSecretResolver,
+  resolveLineChannelSecret,
+} from "./integration-webhooks-shared.js";
 import {
   createIgnoredWebhookReply,
   createWebhookHandler,
@@ -35,8 +39,11 @@ export function registerLineWebhookRoutes(fastify: FastifyInstance): void {
       connectorLabel: "LINE",
       rawBodyKey: "lineRawBody",
       missingRawBodyError: "Missing LINE raw request body",
-      verifySignature: ({ request, connection, rawBody }) => {
-        const channelSecret = resolveLineChannelSecret(connection.config);
+      verifySignature: ({ request, connection, connectionId, rawBody }) => {
+        const channelSecret = resolveLineChannelSecret(
+          connection.config,
+          createWebhookSecretResolver(fastify, connectionId),
+        );
         if (!channelSecret) {
           return { ok: false as const, statusCode: 400, error: "LINE connection is missing a channel secret" };
         }

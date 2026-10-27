@@ -67,7 +67,19 @@ interface ApprovalActionSecretRuntime {
   isApprovalActionConnectorReady?: (connectionId: string) => Promise<boolean>;
   beforeExternalSideEffect?: () => void | Promise<void>;
   resolveGoogleWorkspaceAccessToken?: (input: { connectionId: string; toolName: string }) => Promise<string>;
+  /** Reads the key a channel connection saved in secure storage; undefined when nothing is stored for it. */
+  resolveChannelConnectionSecret?: (secretRef: string) => string | undefined;
 }
+
+/** Every GoatCitadel secure-storage reference starts here; on a send, such a value is never a credential itself. */
+const KEYCHAIN_REF_PREFIX = "keychain:goatcitadel:";
+/** Where the secure-storage references of a channel connection start; the connection id and a colon follow. */
+const CHANNEL_CONNECTION_SECRET_REF_PREFIX = `${KEYCHAIN_REF_PREFIX}channel-connection:`;
+/** A stored key with one of these cannot travel in a header, and the request layer would quote it in its error. */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point.
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+/** Saved keys that are documents read on this machine (a Google service-account JSON), never sent as a header. */
+const STRUCTURED_SECRET_FIELDS: ReadonlySet<string> = new Set(["serviceAccountKey"]);
 
 export async function executeCommsTool(
   request: ToolInvokeRequest,
@@ -154,10 +166,15 @@ async function executeCommsToolWithBoundaryTracking(
     const googleAccessToken = isGoogleWorkspaceWriteTool(toolName)
       ? await resolveGoogleWorkspaceToken(approvalActionSecrets, connectionId, toolName)
       : undefined;
+    // Held only for this provider call; the stored connection and everything recorded below keep the references.
+    // Gmail and Calendar writes use the Google sign-in above and never read the config's saved keys.
+    const providerConfig = googleAccessToken
+      ? connectionConfig
+      : resolveSavedChannelSecrets(connection, connectionConfig, approvalActionSecrets);
     providerMessageId = await executeCommsProviderTool(
       toolName,
       connection.key,
-      connectionConfig,
+      providerConfig,
       providerRequest.args,
       config.sandbox.networkAllowlist,
       grantAllowlist,
@@ -366,6 +383,34 @@ async function resolveGoogleWorkspaceToken(
     throw new Error(`blocked: Google sign-in returned no access token for ${toolName}.`);
   }
   return token;
+}
+
+/**
+ * Copies the connection config with each of this connection's secure-storage references swapped for the stored
+ * key. Setup saves every secret field as a top-level reference, so only top-level strings are read. A reference
+ * to another connection or to a draft, one nobody can read, a missing reader and a stored value that holds a control
+ * character all fail the send before any request: reference text is never a credential, and no part of a stored
+ * key is sent, quoted or recorded (the request layer quotes a rejected header value in its error). A structured key
+ * (a service-account JSON) may hold line breaks: it is parsed and signed here, never put in a header.
+ */
+function resolveSavedChannelSecrets(
+  connection: { connectionId: string; key: string; label?: string },
+  config: Record<string, unknown>,
+  runtime: ApprovalActionSecretRuntime,
+): Record<string, unknown> {
+  const ownPrefix = `${CHANNEL_CONNECTION_SECRET_REF_PREFIX}${connection.connectionId}:`;
+  const resolveValue = (field: string, value: unknown): unknown => {
+    const reference = typeof value === "string" ? value.trim() : "";
+    if (!reference.startsWith(KEYCHAIN_REF_PREFIX)) return value;
+    const secret = reference.startsWith(ownPrefix) ? runtime.resolveChannelConnectionSecret?.(reference)?.trim() : "";
+    if (!secret || (!STRUCTURED_SECRET_FIELDS.has(field) && CONTROL_CHARACTER_PATTERN.test(secret))) {
+      throw new Error(
+        `The saved ${asString(connection.label) ?? connection.key} credential is unavailable from secure storage.`,
+      );
+    }
+    return secret;
+  };
+  return Object.fromEntries(Object.entries(config).map(([field, value]) => [field, resolveValue(field, value)]));
 }
 
 function classifyChannelDeliveryFailure(message: string): ChannelDeliveryStatus {

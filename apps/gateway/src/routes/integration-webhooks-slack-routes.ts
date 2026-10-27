@@ -8,6 +8,7 @@ import {
 } from "../services/slack-webhook.js";
 import {
   createWebhookRouteOptions,
+  createWebhookSecretResolver,
   readConfigSecret,
   readWebhookVoiceInboundEnabled,
 } from "./integration-webhooks-shared.js";
@@ -45,8 +46,13 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
       connectorLabel: "Slack",
       rawBodyKey: "slackRawBody",
       missingRawBodyError: "Missing Slack raw request body",
-      verifySignature: ({ request, connection, rawBody }) => {
-        const signingSecret = readConfigSecret(connection.config, "signingSecret", "signingSecretEnv");
+      verifySignature: ({ request, connection, connectionId, rawBody }) => {
+        const signingSecret = readConfigSecret(
+          connection.config,
+          "signingSecret",
+          "signingSecretEnv",
+          createWebhookSecretResolver(fastify, connectionId),
+        );
         if (!signingSecret) {
           return { ok: false as const, statusCode: 400, error: "Slack connection is missing a signing secret" };
         }
