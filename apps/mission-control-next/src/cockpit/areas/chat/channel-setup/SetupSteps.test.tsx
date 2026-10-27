@@ -49,6 +49,28 @@ describe("SetupSteps", () => {
     expect(container.querySelectorAll('[aria-current="step"]')).toHaveLength(1);
   });
 
+  it("marks one step current even when two are open, the last one, and shows both bodies", async () => {
+    await mount([
+      { id: "a", title: "Make it", state: "current", children: <p>Body a</p> },
+      { id: "b", title: "Check it", state: "current", children: <p>Body b</p> },
+      { id: "c", title: "Use it", state: "locked" },
+    ]);
+    expect(items().map((item) => item.getAttribute("aria-current"))).toEqual([null, "step", null]);
+    expect(container.querySelectorAll('[aria-current="step"]')).toHaveLength(1);
+    // Both are still open: the operator acts in each.
+    expect(items().map((item) => item.getAttribute("data-state"))).toEqual(["current", "current", "locked"]);
+    expect(items()[0]!.textContent).toContain("Body a");
+    expect(items()[1]!.textContent).toContain("Body b");
+  });
+
+  it("marks no step current when none is", async () => {
+    await mount([
+      { id: "a", title: "Make it", state: "done" },
+      { id: "b", title: "Use it", state: "locked" },
+    ]);
+    expect(container.querySelector("[aria-current]")).toBeNull();
+  });
+
   it("shows a current step's body and a done step's result, and a locked step only its title", async () => {
     await mount();
     const [done, current, locked] = items();

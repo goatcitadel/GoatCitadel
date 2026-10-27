@@ -88,7 +88,8 @@ function BotKey({
             <input
               {...field}
               type="password"
-              autoComplete="off"
+              // Browsers ignore "off" on a password field, and offer to save it when this form goes away.
+              autoComplete="new-password"
               autoCapitalize="off"
               spellCheck={false}
               className={cockpitInputClass}
@@ -186,6 +187,13 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
       workspaceId={workspaceId}
     >
       <SetupSteps steps={steps} status={statusLine(setup, checking)} />
+      {/* The key step shows a failure beside its field while it is open. Once it is done its body is gone, and a
+          failure of something else (Start over) would be heard but not seen, so it shows here instead. Never both. */}
+      {ready && setup.error ? (
+        <Callout tone="error" announce={false}>
+          <p>{setup.error}</p>
+        </Callout>
+      ) : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line-subtle pt-4">
         <Button variant="ghost" disabled={setup.busy} onClick={() => void startOver()}>
           Start over

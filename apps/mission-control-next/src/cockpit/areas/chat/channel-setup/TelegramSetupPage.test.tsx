@@ -167,10 +167,18 @@ describe("TelegramSetupPage", () => {
     expect(button("Check key")).toBeDefined();
   });
 
+  it("asks the browser not to offer to save the bot key", async () => {
+    await mount();
+    // Browsers ignore "off" on a password field and offer "Save password?" when the form goes away on success.
+    expect(keyField()?.getAttribute("autocomplete")).toBe("new-password");
+  });
+
   it("keeps steps 3 and 4 locked until the key works", async () => {
     arrangeCheck();
     await mount();
-    expect(steps().map((step) => step.getAttribute("aria-current"))).toEqual(["step", "step", null, null]);
+    // Steps 1 and 2 are both open, but only the last open step, where the key is pasted, is the current one.
+    expect(steps().map((step) => step.getAttribute("data-state"))).toEqual(["current", "current", "locked", "locked"]);
+    expect(steps().map((step) => step.getAttribute("aria-current"))).toEqual([null, "step", null, null]);
     expect(steps()[2]!.getAttribute("data-state")).toBe("locked");
     expect(steps()[3]!.getAttribute("data-state")).toBe("locked");
 
@@ -230,6 +238,10 @@ describe("TelegramSetupPage", () => {
     // Still there to correct, and masked.
     expect(keyField()?.value).toBe(TOKEN);
     expect(container.querySelector('[role="status"]')?.textContent).toBe(KEY_FAILED);
+    // Shown once, in the step that has the field.
+    const callouts = container.querySelectorAll('[data-tone="error"]');
+    expect(callouts).toHaveLength(1);
+    expect(steps()[1]!.contains(callouts[0]!)).toBe(true);
   });
 
   it("offers to stop sending to the web address when the bot has one, and goes on once it is stopped", async () => {
@@ -292,6 +304,50 @@ describe("TelegramSetupPage", () => {
     expect(keyField()).not.toBeNull();
     expect(steps()[0]!.querySelector("svg")).not.toBeNull();
     expect(steps()[2]!.getAttribute("data-state")).toBe("locked");
+  });
+
+  it("shows on screen why Start over failed, even once the key has checked out", async () => {
+    arrangeCheck();
+    await mount();
+    await checkKey();
+    // Step 2 is done now, so its body (where a check's failure shows) is not on the page.
+    expect(steps()[1]!.getAttribute("data-state")).toBe("done");
+    expect(keyField()).toBeNull();
+
+    api.discardChannelSetupDraft.mockRejectedValue(new Error("This changed somewhere else."));
+    await click(button("Start over"));
+
+    const callouts = container.querySelectorAll('[data-tone="error"]');
+    expect(callouts).toHaveLength(1);
+    expect(callouts[0]!.textContent).toContain("This changed somewhere else.");
+    // On the page itself, not in a step's body, so it is there whichever step is open.
+    expect(callouts[0]!.closest("li")).toBeNull();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("This changed somewhere else.");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    // Nothing was discarded: the bot is still named and the draft still there.
+    expect(steps()[1]!.textContent).toContain("Key works. Your bot is @MyGoatBot.");
+
+    // The message goes once the operator tries again and it works.
+    api.discardChannelSetupDraft.mockResolvedValue({ draftId: "draft-1", deleted: true });
+    await click(button("Start over"));
+    expect(container.querySelector('[data-tone="error"]')).toBeNull();
+    expect(keyField()).not.toBeNull();
+  });
+
+  it("shows why Start over failed once, not twice, while the key step is open", async () => {
+    arrangeCheck();
+    api.discoverTelegramSetupTargets.mockRejectedValue(new Error("offline"));
+    await mount();
+    await checkKey();
+    expect(steps()[1]!.getAttribute("data-state")).toBe("current");
+
+    api.discardChannelSetupDraft.mockRejectedValue(new Error("This changed somewhere else."));
+    await click(button("Start over"));
+
+    const callouts = container.querySelectorAll('[data-tone="error"]');
+    expect(callouts).toHaveLength(1);
+    expect(callouts[0]!.textContent).toContain("This changed somewhere else.");
+    expect(steps()[1]!.contains(callouts[0]!)).toBe(true);
   });
 
   it("points to Settings for more options", async () => {

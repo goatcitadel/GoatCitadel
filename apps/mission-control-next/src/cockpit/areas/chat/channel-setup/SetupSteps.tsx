@@ -17,11 +17,14 @@ export interface SetupStepView {
 const STATE_WORD: Readonly<Partial<Record<SetupStepView["state"], string>>> = { done: "Done", locked: "Locked" };
 
 /**
- * A channel's setup as numbered steps. A locked step shows only its title; a done step shows what it found; the
- * current step shows what to do. The one status line is the page's only live region: it announces an outcome while
- * the visible text sits in the step that has it, so nothing is read twice on screen.
+ * A channel's setup as numbered steps. A locked step shows only its title; a done step shows what it found; a
+ * current step shows what to do. More than one step can be open at once (a step whose work happens elsewhere stays
+ * open beside the one that takes its result), and each shows what to do; but assistive technology is told about one
+ * current step, the last open one, where the operator acts. The one status line is the page's only live region: it
+ * announces an outcome while the visible text sits in the step that has it, so nothing is read twice on screen.
  */
 export function SetupSteps({ steps, status }: { steps: readonly SetupStepView[]; status?: string }) {
+  const currentIndex = steps.reduce((last, step, index) => (step.state === "current" ? index : last), -1);
   return (
     <div>
       <ol className="grid gap-4">
@@ -29,7 +32,7 @@ export function SetupSteps({ steps, status }: { steps: readonly SetupStepView[];
           <li
             key={step.id}
             data-state={step.state}
-            aria-current={step.state === "current" ? "step" : undefined}
+            aria-current={index === currentIndex ? "step" : undefined}
             className="border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
           >
             <div className="flex flex-wrap items-center gap-2">
