@@ -24,6 +24,7 @@ const RESPONSE: CapabilityConnectorsResponse = {
     },
   ],
   issues: [],
+  approvalReliefAvailable: true,
   generatedAt: "2026-10-25T00:00:00.000Z",
 };
 

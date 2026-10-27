@@ -1,5 +1,7 @@
 import {
   CAPABILITY_CONNECTOR_GROUP_ORDER,
+  capMcpApprovalPosture,
+  type McpApprovalPosture,
   type CapabilityConnectorCategory,
   type CapabilityConnectorChatBlock,
   type CapabilityConnectorGroup,
@@ -98,6 +100,20 @@ const CHAT_BLOCK_LINES: Readonly<Record<CapabilityConnectorChatBlock, string>> =
   mcp_in_chat_off: "Chat can't use connectors yet.",
   background_runs_off: "Chat can't use connectors while background runs are off.",
 };
+
+/**
+ * The "what asks first" setting the Gateway decides a saved server's calls by, read from fields it already sent. None
+ * (so everything asks) where the setting can never apply: on an install that never lets a call run on its own, or for
+ * a server whose tools are listed per chat. A connector that can move money has a saved "Nothing asks" counted as
+ * "Reading is free".
+ */
+export function approvalPostureInEffect(
+  item: CapabilityConnectorItem,
+  reliefAvailable: boolean,
+): McpApprovalPosture | undefined {
+  if (!reliefAvailable || item.requesterScoped === true) return undefined;
+  return capMcpApprovalPosture(item.approvalPosture, item.movesMoney === true);
+}
 
 /** Why Chat can't use connectors, as a sentence. Without a named cause it is the general one. */
 export function chatBlockLine(blockedBy: CapabilityConnectorChatBlock | undefined): string {

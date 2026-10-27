@@ -23,6 +23,7 @@ interface VendorTemplateInput {
   costTier?: McpServerTemplateRecord["costTier"];
   documentationUrl: string;
   riskNotes?: string[];
+  movesMoney?: boolean;
 }
 
 function vendorTemplate(input: VendorTemplateInput): McpServerTemplateRecord {
@@ -47,6 +48,7 @@ function vendorTemplate(input: VendorTemplateInput): McpServerTemplateRecord {
     networkHosts: [new URL(input.url).host],
     provenance: { ...MCP_VENDOR_CATALOG_PROVENANCE, documentationUrl: input.documentationUrl },
     ...(input.riskNotes ? { riskNotes: input.riskNotes } : {}),
+    ...(input.movesMoney ? { movesMoney: true } : {}),
   };
 }
 
@@ -474,6 +476,7 @@ export const MCP_VENDOR_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     costTier: "paid",
     documentationUrl: "https://developer.paypal.com/tools/mcp-server/",
     riskNotes: ["Can move money and issue refunds. Review every payment action before approving it."],
+    movesMoney: true,
   }),
   vendorTemplate({
     templateId: "plaid",
@@ -486,6 +489,7 @@ export const MCP_VENDOR_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     costTier: "paid",
     documentationUrl: "https://plaid.com/docs/resources/mcp/",
     riskNotes: ["Reaches bank account and transaction data. Grant only the scopes you need."],
+    movesMoney: true,
   }),
   vendorTemplate({
     templateId: "postman",
@@ -529,6 +533,7 @@ export const MCP_VENDOR_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     costTier: "paid",
     documentationUrl: "https://rentahuman.ai/docs#mcp",
     riskNotes: ["Hires paid human workers. Every task spends money; review each one before approving it."],
+    movesMoney: true,
   }),
   vendorTemplate({
     templateId: "robinhood",
@@ -543,6 +548,7 @@ export const MCP_VENDOR_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     riskNotes: [
       "Places real brokerage trades. Keep first-tool approval on and review every order before approving it.",
     ],
+    movesMoney: true,
   }),
   vendorTemplate({
     templateId: "semgrep",
@@ -575,6 +581,7 @@ export const MCP_VENDOR_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     costTier: "paid",
     documentationUrl: "https://developer.squareup.com/docs/mcp",
     riskNotes: ["Can take payments and change orders and inventory. Review every write before approving it."],
+    movesMoney: true,
   }),
   vendorTemplate({
     templateId: "strava",

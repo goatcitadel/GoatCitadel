@@ -297,6 +297,81 @@ describe("buildCapabilityConnectors", () => {
     expect(item.serverConnectionRevision).toBe("c-4");
   });
 
+  it("carries a saved server's approval setting so the panel can show what asks first", () => {
+    const relaxed = only(
+      buildCapabilityConnectors(
+        input({ servers: [server({ policy: { ...policy(), approvalPosture: "nothing_asks" } })] }),
+      ),
+    );
+    const unset = only(buildCapabilityConnectors(input({ servers: [server()] })));
+
+    expect(relaxed.approvalPosture).toBe("nothing_asks");
+    expect(unset.approvalPosture).toBeUndefined();
+    expect("approvalPosture" in unset).toBe(false);
+  });
+
+  it("marks the apps that can move money, as templates and as saved servers found by host or label", () => {
+    const pay = template({
+      templateId: "paypal",
+      label: "PayPal",
+      url: "https://mcp.paypal.com/sse",
+      transport: "sse",
+      networkHosts: ["mcp.paypal.com"],
+      movesMoney: true,
+    });
+    const listed = only(buildCapabilityConnectors(input({ templates: [pay] })));
+    const renamed = only(
+      buildCapabilityConnectors(
+        input({ templates: [pay], servers: [server({ label: "Team wallet", url: "https://mcp.paypal.com/sse" })] }),
+      ).filter((item) => item.source === "mcp_server"),
+    );
+    const sameLabel = only(
+      buildCapabilityConnectors(
+        input({ templates: [pay], servers: [server({ label: "PayPal", url: "https://proxy.example/mcp" })] }),
+      ),
+    );
+    const other = buildCapabilityConnectors(input({ templates: [pay, template()], servers: [server()] }));
+
+    expect(listed.movesMoney).toBe(true);
+    expect(renamed.movesMoney).toBe(true);
+    expect(sameLabel.movesMoney).toBe(true);
+    expect(other.find((item) => item.id === "mcp-server:server-linear")?.movesMoney).toBeUndefined();
+    expect("movesMoney" in other.find((item) => item.id === "mcp-server:server-linear")!).toBe(false);
+    expect(other.find((item) => item.id === "mcp-template:paypal")?.movesMoney).toBe(true);
+  });
+
+  it("marks a saved money server from the whole catalog, even when the list shows no such template", () => {
+    // The visible list names no money template here (a template left out of the list is such a case). The Gateway's
+    // write lock and its decision still count it, so the row must say so too.
+    const items = buildCapabilityConnectors(
+      input({
+        templates: [],
+        servers: [
+          server({ serverId: "server-wallet", label: "Team wallet", url: "https://mcp.paypal.com/sse" }),
+          server({ serverId: "server-proxy", label: "Square", url: "https://proxy.example/mcp" }),
+          server({ serverId: "server-linear" }),
+        ],
+      }),
+    );
+    const byServer = (serverId: string) => items.find((item) => item.id === `mcp-server:${serverId}`)!;
+
+    expect(byServer("server-wallet").movesMoney).toBe(true);
+    expect(byServer("server-proxy").movesMoney).toBe(true);
+    expect("movesMoney" in byServer("server-linear")).toBe(false);
+  });
+
+  it("marks a saved server that lists its tools per chat", () => {
+    const perChat = only(
+      buildCapabilityConnectors(input({ servers: [server({ connectionMode: "requester_scoped" })] })),
+    );
+    const fixed = only(buildCapabilityConnectors(input({ servers: [server({ connectionMode: "static" })] })));
+    const legacy = only(buildCapabilityConnectors(input({ servers: [server()] })));
+
+    expect(perChat.requesterScoped).toBe(true);
+    expect(fixed.requesterScoped).toBeUndefined();
+    expect(legacy.requesterScoped).toBeUndefined();
+  });
+
   it("places unsaved stdio templates on this device with the exact command", () => {
     const item = only(
       buildCapabilityConnectors(

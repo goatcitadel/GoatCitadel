@@ -70,6 +70,15 @@ describe("MCP public projection", () => {
     expect(raw.args[5]).toBe("cHJveHktc2VjcmV0");
   });
 
+  it("leaves the approval setting and boolean tool annotations readable to the operator", () => {
+    const raw = {
+      policy: { redactionMode: "basic", approvalPosture: "reads_free" },
+      items: [{ serverId: "srv-1", toolName: "search", annotations: { readOnlyHint: true, destructiveHint: false } }],
+    };
+
+    expect(projectMcpPublicValue(raw)).toEqual(raw);
+  });
+
   it("preserves MCP auth/count semantics and JSON Schema shape while removing schema defaults", () => {
     const raw = {
       authReadiness: "ready",

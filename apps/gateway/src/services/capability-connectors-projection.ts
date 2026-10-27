@@ -16,6 +16,7 @@ import {
   type WebSearchCredentialTargetId,
 } from "@goatcitadel/contracts";
 import { isListedIntegration } from "./capability-connectors-integrations.js";
+import { isMoneyMovingCatalogServer, mcpServerLabelKey as labelKey } from "./mcp-money-moving.js";
 
 /** Templates that are internal to GoatCitadel or duplicate a built-in tool, so they are not apps to list. */
 export const EXCLUDED_CONNECTOR_TEMPLATE_IDS: ReadonlySet<string> = new Set([
@@ -101,10 +102,6 @@ export function buildCapabilityConnectors(input: CapabilityConnectorsProjectionI
   return parts.map((item) => finish(item, input)).sort(compareItems);
 }
 
-function labelKey(label: string): string {
-  return label.toLowerCase();
-}
-
 function templateParts(template: McpServerTemplateRecord, input: CapabilityConnectorsProjectionInput): ItemParts {
   const verdict = templateVerdict(template);
   const command = stdioCommand(template);
@@ -121,6 +118,7 @@ function templateParts(template: McpServerTemplateRecord, input: CapabilityConne
     ...(command ? { command } : {}),
     networkHosts: [...(template.networkHosts ?? [])],
     templateId: template.templateId,
+    ...(template.movesMoney ? { movesMoney: true } : {}),
     chat: mcpChat(input.chat),
   };
 }
@@ -150,6 +148,11 @@ function serverParts(
     serverId: server.serverId,
     ...(server.revision !== undefined ? { serverRevision: server.revision } : {}),
     ...(server.connectionRevision !== undefined ? { serverConnectionRevision: server.connectionRevision } : {}),
+    ...(server.policy.approvalPosture ? { approvalPosture: server.policy.approvalPosture } : {}),
+    ...(server.connectionMode === "requester_scoped" ? { requesterScoped: true } : {}),
+    // The same rule, against the same whole catalog, as the Gateway's write lock and its decision of a call. Not the
+    // visible list, which leaves some templates out.
+    ...(isMoneyMovingCatalogServer(server) ? { movesMoney: true } : {}),
     chat: mcpChat(input.chat),
     ...(server.lastError ? { lastError: server.lastError } : {}),
   };

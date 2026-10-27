@@ -87,6 +87,7 @@ async function fixture(empty = false) {
       return transport();
     },
     publishRealtime: async () => undefined,
+    appendApprovalsAudit: async () => undefined,
   });
   return {
     store,

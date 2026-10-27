@@ -1,5 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import type { CapabilityConnectorItem, CapabilityConnectorsResponse, McpToolRecord } from "@goatcitadel/contracts";
+import {
+  mcpCallAsksFirst,
+  type CapabilityConnectorItem,
+  type CapabilityConnectorsResponse,
+  type McpApprovalPosture,
+  type McpToolRecord,
+} from "@goatcitadel/contracts";
 import { fetchMcpTools } from "@goatcitadel/mission-control-shared/api/mcp-operations";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { connectorListQuery } from "../../../data/capability-connectors-query";
@@ -11,8 +17,10 @@ import { Section } from "../../../ui/Section";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { ConnectorServerControls } from "./ConnectorServerControls";
+import { WhatAsksFirst } from "./WhatAsksFirst";
 import { CHAT_CONNECTORS_SETTINGS_HREF, connectorSettingsHref, WORKSPACE_CAPABILITIES_HREF } from "./connector-links";
 import {
+  approvalPostureInEffect,
   chatBlockLine,
   connectorCategoryLabel,
   connectorKindLabel,
@@ -20,8 +28,23 @@ import {
   presentConnectorState,
 } from "./connector-view";
 
-/** The tools a saved server offers, as it last listed them. Other connectors have no tool list of their own. */
-function ConnectorTools({ serverId }: { serverId: string }) {
+/**
+ * The tools a saved server offers, as it last listed them, each switched-on tool marked with whether it asks first under
+ * the setting the Gateway decides its calls by. A server whose tools are listed per chat has no list here and never has
+ * its setting applied. A switched-off connector runs nothing, so its tools carry no label. Other connectors have no tool
+ * list of their own.
+ */
+function ConnectorTools({
+  serverId,
+  perChat,
+  posture,
+  labelled,
+}: {
+  serverId: string;
+  perChat: boolean;
+  posture: McpApprovalPosture | undefined;
+  labelled: boolean;
+}) {
   const query = useQuery({
     queryKey: queryKeys.capabilityConnectorTools(serverId),
     queryFn: () => fetchMcpTools(serverId),
@@ -42,15 +65,36 @@ function ConnectorTools({ serverId }: { serverId: string }) {
     return <p className="mt-2 text-sm text-fg-muted">Reading its tools…</p>;
   }
   if (tools.length === 0) {
-    return <p className="mt-2 text-sm text-fg-muted">No tools listed yet. They show up once it connects.</p>;
+    return (
+      <p className="mt-2 text-sm text-fg-muted">
+        {perChat ? "Its tools are listed per chat." : "No tools listed yet. They show up once it connects."}
+      </p>
+    );
+  }
+  // The Gateway lets a tool name run on its own only when every entry with that name allows it, switched on or off.
+  const asksByName = new Map<string, boolean>();
+  for (const tool of tools) {
+    asksByName.set(
+      tool.toolName,
+      asksByName.get(tool.toolName) === true || mcpCallAsksFirst(posture, tool.annotations),
+    );
   }
   return (
     <ul className="mt-2 divide-y divide-line-subtle">
-      {tools.map((tool) => (
-        <li key={tool.toolName} className="py-1.5">
+      {tools.map((tool, index) => (
+        // A server can list one name twice, so the position keeps each row's key apart.
+        <li key={`${tool.toolName}:${index}`} className="py-1.5">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <code className="break-all font-mono text-xs text-fg">{tool.toolName}</code>
-            {tool.enabled ? null : <span className="text-xs text-fg-muted">Switched off</span>}
+            {!tool.enabled ? (
+              <span className="text-xs text-fg-muted">Switched off</span>
+            ) : labelled ? (
+              // The rule the Gateway applies to a call, read from the labels the server gave this tool when it last
+              // connected. A tool that is switched off never runs, so it carries no label.
+              <span className="text-xs text-fg-secondary">
+                {asksByName.get(tool.toolName) === true ? "Asks first" : "Runs freely"}
+              </span>
+            ) : null}
           </div>
           {tool.description ? <p className="text-sm text-fg-secondary">{tool.description}</p> : null}
         </li>
@@ -83,7 +127,15 @@ function TechnicalRows({ item }: { item: CapabilityConnectorItem }) {
   );
 }
 
-function ConnectorDetails({ item, onRemoved }: { item: CapabilityConnectorItem; onRemoved?: () => void }) {
+function ConnectorDetails({
+  item,
+  reliefAvailable,
+  onRemoved,
+}: {
+  item: CapabilityConnectorItem;
+  reliefAvailable: boolean;
+  onRemoved?: () => void;
+}) {
   const { showTechnicalDetails } = useUiPreferences();
   const state = presentConnectorState(item, "panel", { technicalDetailsShown: showTechnicalDetails });
   const connection = describeConnection(item);
@@ -102,7 +154,14 @@ function ConnectorDetails({ item, onRemoved }: { item: CapabilityConnectorItem; 
 
       <Section title="What it does" headingLevel={3}>
         {item.description ? <p className="text-sm text-fg-secondary">{item.description}</p> : null}
-        {savedServer && item.serverId ? <ConnectorTools serverId={item.serverId} /> : null}
+        {savedServer && item.serverId ? (
+          <ConnectorTools
+            serverId={item.serverId}
+            perChat={item.requesterScoped === true}
+            posture={approvalPostureInEffect(item, reliefAvailable)}
+            labelled={item.state !== "turned_off"}
+          />
+        ) : null}
       </Section>
 
       <Section title="How it connects" headingLevel={3}>
@@ -118,6 +177,12 @@ function ConnectorDetails({ item, onRemoved }: { item: CapabilityConnectorItem; 
           {connection.warning ? <p>{connection.warning}</p> : null}
         </div>
       </Section>
+
+      {savedServer ? (
+        <Section title="What asks first" headingLevel={3}>
+          <WhatAsksFirst key={item.id} item={item} reliefAvailable={reliefAvailable} />
+        </Section>
+      ) : null}
 
       {item.chat.available ? null : (
         <p className="text-sm text-fg-secondary">
@@ -160,8 +225,12 @@ export function ConnectorPanel({ itemId, onRemoved }: { itemId: string; onRemove
   const live = useQuery({
     ...connectorListQuery(activeWorkspaceId),
     enabled: false,
-    select: (list: CapabilityConnectorsResponse) => list.items.find((entry) => entry.id === itemId),
+    select: (list: CapabilityConnectorsResponse) => {
+      const item = list.items.find((entry) => entry.id === itemId);
+      // A list that doesn't say so is read as an install where every action asks.
+      return item ? { item, reliefAvailable: list.approvalReliefAvailable === true } : undefined;
+    },
   });
   if (!live.data) return <p className="text-sm text-fg-muted">This connector isn't in the list anymore.</p>;
-  return <ConnectorDetails item={live.data} onRemoved={onRemoved} />;
+  return <ConnectorDetails item={live.data.item} reliefAvailable={live.data.reliefAvailable} onRemoved={onRemoved} />;
 }

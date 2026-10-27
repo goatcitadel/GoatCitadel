@@ -1980,6 +1980,8 @@ describe("mcp routes", () => {
         expectedRevision: "a".repeat(64),
       },
       expect.any(Function),
+      // With no signed-in actor on the request, the change is recorded as the operator's.
+      { actorId: "operator" },
     );
     expect(toolsResponse.json()).toEqual({ items: [{ serverId: "srv-1", toolName: "tool.echo" }] });
     expect(policyResponse.json()).toMatchObject({
@@ -1988,6 +1990,32 @@ describe("mcp routes", () => {
         redactionMode: "strict",
       },
     });
+  });
+
+  it("accepts approvalPosture on a policy update and rejects unknown values", async () => {
+    const service = await registerMcpService();
+    const patchPolicy = (approvalPosture: unknown) =>
+      app!.inject({
+        method: "PATCH",
+        url: "/api/v1/mcp/servers/srv-1/policy",
+        payload: { approvalPosture, expectedRevision: "a".repeat(64) },
+      });
+
+    for (const accepted of ["everything_asks", "reads_free", "nothing_asks"]) {
+      expect((await patchPolicy(accepted)).statusCode).toBe(200);
+    }
+    expect(service.updateMcpServerPolicy).toHaveBeenLastCalledWith(
+      "srv-1",
+      { approvalPosture: "nothing_asks", expectedRevision: "a".repeat(64) },
+      expect.any(Function),
+      { actorId: "operator" },
+    );
+
+    service.updateMcpServerPolicy.mockClear();
+    for (const rejected of ["sometimes", "", 7, null, "READS_FREE"]) {
+      expect((await patchPolicy(rejected)).statusCode).toBe(400);
+    }
+    expect(service.updateMcpServerPolicy).not.toHaveBeenCalled();
   });
 
   it("maps MCP service failures to their route error status", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { McpServerRecord, McpToolRecord } from "@goatcitadel/contracts";
+import { ValidationError, type McpServerRecord, type McpToolRecord } from "@goatcitadel/contracts";
 import { compensatePackMcpServer, packMcpConfigurationHash } from "./capability-pack-mcp-owner.js";
 import {
   completeMcpOAuth,
@@ -13,6 +13,7 @@ import {
   updateMcpServerPolicy,
   type McpServerAdminHost,
 } from "./mcp-server-admin-service.js";
+import { mcpServerRevision } from "./mcp-server-revision.js";
 
 const EMPTY_TOOLS_MCP_SCRIPT = String.raw`
 const readline = require("node:readline");
@@ -37,11 +38,24 @@ rl.on("line", (line) => {
 describe("mcp-server-admin-service", () => {
   it("binds compensation to the creating plan and current pack revision", async () => {
     const host = createHost();
-    const created = await createMcpServer(host, {
-      label: "Pack fixture", transport: "stdio", command: "node", args: ["fixture.js"], enabled: false,
-    }, `pack-${"1".repeat(40)}`, "plan-1");
-    const input = { planId: "plan-1", serverId: created.serverId, mode: "created" as const,
-      configurationHash: packMcpConfigurationHash(created) };
+    const created = await createMcpServer(
+      host,
+      {
+        label: "Pack fixture",
+        transport: "stdio",
+        command: "node",
+        args: ["fixture.js"],
+        enabled: false,
+      },
+      `pack-${"1".repeat(40)}`,
+      "plan-1",
+    );
+    const input = {
+      planId: "plan-1",
+      serverId: created.serverId,
+      mode: "created" as const,
+      configurationHash: packMcpConfigurationHash(created),
+    };
     await expect(compensatePackMcpServer(host, { ...input, planId: "foreign" })).rejects.toThrow("preserved");
     await updateMcpServer(host, created.serverId, { enabled: true }, { planId: "plan-1", phase: "apply" });
     expect(host.servers[0]!.packChange).toMatchObject({ revision: 2, created: true });
@@ -59,10 +73,18 @@ describe("mcp-server-admin-service", () => {
     const host = createHost({ servers: [createServer({ enabled: false })] });
     const original = host.servers[0]!;
     await updateMcpServer(host, original.serverId, { enabled: true }, { planId: "enable-plan", phase: "apply" });
-    await compensatePackMcpServer(host, { planId: "enable-plan", serverId: original.serverId,
-      mode: "enabled", configurationHash: packMcpConfigurationHash(original) });
+    await compensatePackMcpServer(host, {
+      planId: "enable-plan",
+      serverId: original.serverId,
+      mode: "enabled",
+      configurationHash: packMcpConfigurationHash(original),
+    });
     expect(host.servers).toHaveLength(1);
-    expect(host.servers[0]).toMatchObject({ enabled: false, command: original.command, packChange: { created: false } });
+    expect(host.servers[0]).toMatchObject({
+      enabled: false,
+      command: original.command,
+      packChange: { created: false },
+    });
   });
   it("creates stdio server records with normalized policy and emits realtime", async () => {
     const host = createHost();
@@ -234,6 +256,193 @@ describe("mcp-server-admin-service", () => {
     await expect(updateMcpServer(host, "missing", { label: "Nope" })).rejects.toThrow("Unknown MCP server: missing");
   });
 
+  // R50: the write owner records a change to what asks first, once the write has committed.
+  describe("what asks first", () => {
+    const AUDIT_EVENT = "mcp_server_approval_posture_changed";
+
+    it("records a change once, after the commit callback and before the sessions close, with the saved value as from", async () => {
+      const existing = createServer({
+        policy: { ...createServer().policy, approvalPosture: "reads_free" },
+      });
+      const host = createHost({ servers: [existing] });
+      const order: string[] = [];
+      host.captureMcpServerSessionCloser = () => () => {
+        order.push("close sessions");
+      };
+      host.appendApprovalsAudit.mockImplementation(async () => {
+        order.push("audit");
+      });
+
+      await updateMcpServerPolicy(
+        host,
+        "server-1",
+        { approvalPosture: "everything_asks" },
+        {
+          expectedRevision: mcpServerRevision(existing),
+          onCommitted: async () => {
+            order.push("committed");
+          },
+          actorId: "token:ab12",
+        },
+      );
+
+      expect(host.appendApprovalsAudit).toHaveBeenCalledExactlyOnceWith({
+        event: AUDIT_EVENT,
+        serverId: "server-1",
+        from: "reads_free",
+        to: "everything_asks",
+        actorId: "token:ab12",
+      });
+      expect(order).toEqual(["committed", "audit", "close sessions"]);
+    });
+
+    it("records a first choice as from null, and a full edit that sets it the same way", async () => {
+      const host = createHost({ servers: [createServer()] });
+
+      await updateMcpServerPolicy(host, "server-1", { approvalPosture: "reads_free" }, undefined);
+      await updateMcpServer(host, "server-1", { policy: { approvalPosture: "nothing_asks" } as never });
+
+      expect(host.appendApprovalsAudit).toHaveBeenNthCalledWith(1, {
+        event: AUDIT_EVENT,
+        serverId: "server-1",
+        from: null,
+        to: "reads_free",
+        actorId: "operator",
+      });
+      expect(host.appendApprovalsAudit).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ from: "reads_free", to: "nothing_asks" }),
+      );
+      expect(host.appendApprovalsAudit).toHaveBeenCalledTimes(2);
+    });
+
+    it("records nothing for the same value, another field, or an edit with no policy", async () => {
+      const existing = createServer({ policy: { ...createServer().policy, approvalPosture: "reads_free" } });
+      const host = createHost({ servers: [existing] });
+
+      await updateMcpServerPolicy(host, "server-1", { approvalPosture: "reads_free" });
+      await updateMcpServerPolicy(host, "server-1", { redactionMode: "off" });
+      await updateMcpServer(host, "server-1", { enabled: false });
+
+      expect(host.appendApprovalsAudit).not.toHaveBeenCalled();
+    });
+
+    it("records nothing when the write does not commit", async () => {
+      const existing = createServer();
+      const host = createHost({ servers: [existing] });
+      const onCommitted = vi.fn();
+      host.writeMcpServers.mockRejectedValueOnce(new Error("The MCP configuration changed."));
+
+      await expect(
+        updateMcpServerPolicy(
+          host,
+          "server-1",
+          { approvalPosture: "reads_free" },
+          { expectedRevision: mcpServerRevision(existing), onCommitted, actorId: "token:ab12" },
+        ),
+      ).rejects.toThrow("The MCP configuration changed.");
+      await expect(
+        updateMcpServerPolicy(
+          host,
+          "server-1",
+          { approvalPosture: "reads_free" },
+          { expectedRevision: "0".repeat(64), onCommitted },
+        ),
+      ).rejects.toThrow();
+
+      expect(onCommitted).not.toHaveBeenCalled();
+      expect(host.appendApprovalsAudit).not.toHaveBeenCalled();
+    });
+
+    it("reports a failed audit as a committed change, still reaching the commit callback first and closing the server's sessions", async () => {
+      const existing = createServer();
+      const host = createHost({ servers: [existing] });
+      const onCommitted = vi.fn();
+      const closeSessions = vi.fn();
+      host.captureMcpServerSessionCloser = () => closeSessions;
+      host.appendApprovalsAudit.mockRejectedValueOnce(new Error("audit store is down"));
+
+      await expect(
+        updateMcpServerPolicy(
+          host,
+          "server-1",
+          { approvalPosture: "reads_free" },
+          { expectedRevision: mcpServerRevision(existing), onCommitted },
+        ),
+      ).rejects.toMatchObject({ message: "audit store is down", mutationCommitted: true });
+      expect(onCommitted).toHaveBeenCalledTimes(1);
+      // The edit committed, so sessions on the old configuration still close even though the audit write failed.
+      expect(closeSessions).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The lock on money connectors is checked against the record as it would be saved.
+  describe("a connector that can move money", () => {
+    const REFUSAL = "This connector can move money, so changes can't be set to run on their own.";
+    const PAYPAL_URL = "https://mcp.paypal.com/sse";
+    const nothingAsks = { ...createServer().policy, approvalPosture: "nothing_asks" as const };
+
+    it("can't be pointed at, or renamed to, a money vendor while it keeps Nothing asks", async () => {
+      const docs = createServer({
+        label: "Docs",
+        transport: "http",
+        command: undefined,
+        args: undefined,
+        url: "https://docs.example/mcp",
+        policy: nothingAsks,
+      });
+      const host = createHost({ servers: [docs] });
+
+      await expect(updateMcpServer(host, "server-1", { url: PAYPAL_URL })).rejects.toThrow(REFUSAL);
+      await expect(updateMcpServer(host, "server-1", { label: "PayPal" })).rejects.toBeInstanceOf(ValidationError);
+      await expect(updateMcpServer(host, "server-1", { label: "Team wallet", url: PAYPAL_URL })).rejects.toThrow(
+        REFUSAL,
+      );
+      // The edit-by-policy route is the same function underneath.
+      expect(host.writeMcpServers).not.toHaveBeenCalled();
+      expect(host.servers).toEqual([docs]);
+    });
+
+    it("can still be pointed at a money vendor once the edit also stops asking for nothing, and ordinary edits still save", async () => {
+      const docs = createServer({
+        label: "Docs",
+        transport: "http",
+        command: undefined,
+        args: undefined,
+        url: "https://docs.example/mcp",
+        policy: nothingAsks,
+      });
+      const host = createHost({ servers: [docs] });
+
+      await expect(updateMcpServer(host, "server-1", { label: "Docs two" })).resolves.toMatchObject({
+        label: "Docs two",
+        policy: { approvalPosture: "nothing_asks" },
+      });
+      await expect(
+        updateMcpServer(host, "server-1", { url: PAYPAL_URL, policy: { approvalPosture: "reads_free" } as never }),
+      ).resolves.toMatchObject({ url: PAYPAL_URL, policy: { approvalPosture: "reads_free" } });
+    });
+
+    it("keeps unrelated edits possible when a record already holds Nothing asks (saved earlier, or re-marked since)", async () => {
+      const wallet = createServer({
+        label: "Team wallet",
+        transport: "sse",
+        command: undefined,
+        args: undefined,
+        url: PAYPAL_URL,
+        policy: nothingAsks,
+      });
+      const host = createHost({ servers: [wallet] });
+
+      await expect(updateMcpServer(host, "server-1", { enabled: false })).resolves.toMatchObject({ enabled: false });
+      await expect(updateMcpServer(host, "server-1", { label: "Wallet" })).resolves.toMatchObject({ label: "Wallet" });
+      // Asking for it again is still refused.
+      await expect(
+        updateMcpServer(host, "server-1", { policy: { approvalPosture: "nothing_asks" } as never }),
+      ).rejects.toThrow(REFUSAL);
+    });
+  });
+
   it("connects servers, replaces their tools, and records connected status", async () => {
     const host = createHost({
       servers: [createServer({ serverId: "server-1" })],
@@ -257,10 +466,15 @@ describe("mcp-server-admin-service", () => {
       lastError: undefined,
     });
     expect(connected.lastConnectedAt).toBeDefined();
-    expect(host.patchMcpServerState).toHaveBeenNthCalledWith(1, "server-1", {
-      status: "connecting",
-      lastError: undefined,
-    }, expect.objectContaining({ serverId: "server-1" }));
+    expect(host.patchMcpServerState).toHaveBeenNthCalledWith(
+      1,
+      "server-1",
+      {
+        status: "connecting",
+        lastError: undefined,
+      },
+      expect.objectContaining({ serverId: "server-1" }),
+    );
     expect(host.patchMcpServerState).toHaveBeenLastCalledWith(
       "server-1",
       expect.objectContaining({ status: "connected", lastError: undefined }),
@@ -386,10 +600,14 @@ describe("mcp-server-admin-service", () => {
       lastError: "handshake failed",
     });
     expect(host.writeMcpTools).not.toHaveBeenCalled();
-    expect(host.patchMcpServerState).toHaveBeenLastCalledWith("server-1", {
-      status: "error",
-      lastError: "handshake failed",
-    }, expect.objectContaining({ serverId: "server-1", status: "connecting" }));
+    expect(host.patchMcpServerState).toHaveBeenLastCalledWith(
+      "server-1",
+      {
+        status: "error",
+        lastError: "handshake failed",
+      },
+      expect.objectContaining({ serverId: "server-1", status: "connecting" }),
+    );
   });
 
   it("stores OAuth handshake state and completes it through the connect path", async () => {
@@ -426,7 +644,11 @@ describe("mcp-server-admin-service", () => {
     expect(host.authState["server-1"]).toMatchObject({
       oauthState: started.state,
     });
-    expect(host.writeMcpAuthState).toHaveBeenCalledWith({ server: host.servers[0], expected: undefined, next: host.authState["server-1"] });
+    expect(host.writeMcpAuthState).toHaveBeenCalledWith({
+      server: host.servers[0],
+      expected: undefined,
+      next: host.authState["server-1"],
+    });
 
     await expect(completeMcpOAuth(host, "server-1", "secret-code")).rejects.toThrow(
       "OAuth state is required to complete this handshake.",
@@ -466,15 +688,19 @@ describe("mcp-server-admin-service", () => {
   it("binds OAuth setup to the enrolled configuration without falling back to ambient client values", async () => {
     vi.stubEnv("MCP_ENVIRONMENT_CLIENT_ID", "ambient-client-must-not-be-used");
     try {
-      const host = createHost({ servers: [createServer({
-        serverId: "server-1",
-        authType: "oauth2",
-        oauth: {
-          authorizationUrl: "https://example.invalid/authorize",
-          tokenUrl: "https://example.invalid/token",
-          clientIdEnv: "MCP_ENVIRONMENT_CLIENT_ID",
-        },
-      })] });
+      const host = createHost({
+        servers: [
+          createServer({
+            serverId: "server-1",
+            authType: "oauth2",
+            oauth: {
+              authorizationUrl: "https://example.invalid/authorize",
+              tokenUrl: "https://example.invalid/token",
+              clientIdEnv: "MCP_ENVIRONMENT_CLIENT_ID",
+            },
+          }),
+        ],
+      });
       const prepared = { ...host.servers[0]!, configurationBindingId: "00000000-0000-4000-8000-000000000001" };
       host.prepareMcpStaticEnvironment = vi.fn(async () => {
         host.servers = [prepared];
@@ -490,14 +716,20 @@ describe("mcp-server-admin-service", () => {
     }
   });
 
-  it.each(["auth-type", "token-url"])("rejects changed %s during OAuth environment preparation", async drift => {
-    const server = createServer({ authType: "oauth2", oauth: {
-      authorizationUrl: "https://example.invalid/authorize", tokenUrl: "https://example.invalid/token",
-    } });
+  it.each(["auth-type", "token-url"])("rejects changed %s during OAuth environment preparation", async (drift) => {
+    const server = createServer({
+      authType: "oauth2",
+      oauth: {
+        authorizationUrl: "https://example.invalid/authorize",
+        tokenUrl: "https://example.invalid/token",
+      },
+    });
     const host = createHost({ servers: [server] });
-    host.prepareMcpStaticEnvironment = vi.fn(async () => drift === "auth-type"
-      ? { ...server, authType: "none" as const }
-      : { ...server, oauth: { ...server.oauth, tokenUrl: undefined } });
+    host.prepareMcpStaticEnvironment = vi.fn(async () =>
+      drift === "auth-type"
+        ? { ...server, authType: "none" as const }
+        : { ...server, oauth: { ...server.oauth, tokenUrl: undefined } },
+    );
     host.resolveMcpOAuthClientId = vi.fn(async () => "unused-client");
     await expect(startMcpOAuth(host, server.serverId)).rejects.toThrow("configuration changed");
     expect(host.resolveMcpOAuthClientId).not.toHaveBeenCalled();
@@ -544,6 +776,7 @@ function createHost(input?: {
   resolveConnectedMcpTools: ReturnType<typeof vi.fn>;
   exchangeMcpOAuthCode: ReturnType<typeof vi.fn>;
   publishRealtime: ReturnType<typeof vi.fn>;
+  appendApprovalsAudit: ReturnType<typeof vi.fn>;
 } {
   const host = {
     servers: input?.servers ? [...input.servers] : [],
@@ -563,28 +796,34 @@ function createHost(input?: {
       host.servers = [...servers];
       return host.servers;
     }),
-    patchMcpServerState: vi.fn(async (serverId: string, patch: Partial<McpServerRecord>, _expected?: McpServerRecord) => {
-      let updated: McpServerRecord | undefined;
-      host.servers = host.servers.map((server) => {
-        if (server.serverId !== serverId) {
-          return server;
+    patchMcpServerState: vi.fn(
+      async (serverId: string, patch: Partial<McpServerRecord>, _expected?: McpServerRecord) => {
+        let updated: McpServerRecord | undefined;
+        host.servers = host.servers.map((server) => {
+          if (server.serverId !== serverId) {
+            return server;
+          }
+          updated = {
+            ...server,
+            ...patch,
+            updatedAt: new Date().toISOString(),
+          };
+          return updated;
+        });
+        if (!updated) {
+          throw new Error(`Unknown MCP server: ${serverId}`);
         }
-        updated = {
-          ...server,
-          ...patch,
-          updatedAt: new Date().toISOString(),
-        };
         return updated;
-      });
-      if (!updated) {
-        throw new Error(`Unknown MCP server: ${serverId}`);
-      }
-      return updated;
-    }),
+      },
+    ),
     readMcpTools: vi.fn(async () => host.tools),
     completeMcpServerConnection: vi.fn(async (server: McpServerRecord, tools: McpToolRecord[]) => {
-      await host.writeMcpTools([...host.tools.filter(tool => tool.serverId !== server.serverId), ...tools]);
-      return host.patchMcpServerState(server.serverId, { status: "connected", lastConnectedAt: new Date().toISOString(), lastError: undefined }, server);
+      await host.writeMcpTools([...host.tools.filter((tool) => tool.serverId !== server.serverId), ...tools]);
+      return host.patchMcpServerState(
+        server.serverId,
+        { status: "connected", lastConnectedAt: new Date().toISOString(), lastError: undefined },
+        server,
+      );
     }),
     writeMcpTools: vi.fn(async (tools: McpToolRecord[]) => {
       host.tools = [...tools];
@@ -602,13 +841,16 @@ function createHost(input?: {
       if (update.next) host.authState[update.server.serverId] = update.next;
       else delete host.authState[update.server.serverId];
     }),
-    exchangeMcpOAuthCode: vi.fn(async (...args: Parameters<NonNullable<McpServerAdminHost["exchangeMcpOAuthCode"]>>) => {
-      const next = await input?.exchangeMcpOAuthCode?.(...args);
-      if (!next) throw new Error("OAuth exchange fixture is unavailable.");
-      host.authState[args[0].serverId] = next;
-      return next;
-    }),
+    exchangeMcpOAuthCode: vi.fn(
+      async (...args: Parameters<NonNullable<McpServerAdminHost["exchangeMcpOAuthCode"]>>) => {
+        const next = await input?.exchangeMcpOAuthCode?.(...args);
+        if (!next) throw new Error("OAuth exchange fixture is unavailable.");
+        host.authState[args[0].serverId] = next;
+        return next;
+      },
+    ),
     publishRealtime: vi.fn(),
+    appendApprovalsAudit: vi.fn(async () => undefined),
   };
   return host;
 }

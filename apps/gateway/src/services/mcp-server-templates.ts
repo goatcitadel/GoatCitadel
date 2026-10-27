@@ -93,7 +93,8 @@ const MCP_CORE_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   {
     templateId: "playwright",
     label: "Playwright Browser",
-    description: "Browser automation with reviewed Playwright MCP 0.0.80 packages, verified archive and runtime file hashes, and isolated browser contexts.",
+    description:
+      "Browser automation with reviewed Playwright MCP 0.0.80 packages, verified archive and runtime file hashes, and isolated browser contexts.",
     transport: "stdio",
     command: "npx",
     args: ["-y", "@playwright/mcp@0.0.80", "--isolated", "--headless"],
@@ -149,6 +150,7 @@ const MCP_CORE_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     networkHosts: ["mcp.stripe.com"],
     provenance: { ...MCP_VENDOR_CATALOG_PROVENANCE, documentationUrl: "https://docs.stripe.com/mcp" },
     riskNotes: ["Can create charges, refunds and subscriptions. Review every write before approving it."],
+    movesMoney: true,
   },
   {
     templateId: "context7",
@@ -246,4 +248,7 @@ const MCP_CORE_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   },
 ];
 
-export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [...MCP_CORE_SERVER_TEMPLATES, ...MCP_VENDOR_SERVER_TEMPLATES];
+export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
+  ...MCP_CORE_SERVER_TEMPLATES,
+  ...MCP_VENDOR_SERVER_TEMPLATES,
+];

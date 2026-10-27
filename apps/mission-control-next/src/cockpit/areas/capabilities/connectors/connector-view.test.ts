@@ -7,6 +7,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  approvalPostureInEffect,
   connectorAction,
   connectorCategoryLabel,
   connectorCategoryOptions,
@@ -417,5 +418,36 @@ describe("letterIconTone", () => {
       expect(tone).toBeLessThan(LETTER_ICON_TONE_COUNT);
     }
     expect(new Set(tones).size).toBeGreaterThan(1);
+  });
+});
+
+describe("approvalPostureInEffect", () => {
+  const saved = (overrides: Partial<CapabilityConnectorItem> = {}) =>
+    item({ id: "mcp-server:pay", source: "mcp_server", serverId: "pay", ...overrides });
+
+  it.each([
+    ["a saved setting", saved({ approvalPosture: "nothing_asks" }), true, "nothing_asks"],
+    ["no saved setting", saved(), true, undefined],
+    ["an install that never relaxes approvals", saved({ approvalPosture: "reads_free" }), false, undefined],
+    [
+      "a server whose tools are listed per chat",
+      saved({ approvalPosture: "reads_free", requesterScoped: true }),
+      true,
+      undefined,
+    ],
+    [
+      "a money connector's Nothing asks",
+      saved({ approvalPosture: "nothing_asks", movesMoney: true }),
+      true,
+      "reads_free",
+    ],
+    [
+      "a money connector's Reading is free",
+      saved({ approvalPosture: "reads_free", movesMoney: true }),
+      true,
+      "reads_free",
+    ],
+  ] as const)("decides calls the way the Gateway does for %s", (_label, entry, reliefAvailable, posture) => {
+    expect(approvalPostureInEffect(entry, reliefAvailable)).toBe(posture);
   });
 });
