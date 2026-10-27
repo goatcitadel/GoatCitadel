@@ -150,7 +150,7 @@ describe("McpServerStore configuration authority", () => {
       expect((await toolsOf()).map((item) => item.toolName)).toEqual(["read"]);
     });
 
-    it("still disconnects a server that is mid-connection, so the late result is refused and the tools are cleared", async () => {
+    it("still disconnects a server that is mid-connection, so the late result is refused and the tools are cleared, but keeps its binding and first-tool approvals", async () => {
       const settled = await connected();
       const attempt = await store.patchServerState("server-1", { status: "connecting" }, settled);
 
@@ -159,6 +159,9 @@ describe("McpServerStore configuration authority", () => {
       expect(after.status).toBe("disconnected");
       expect(after.connectionRevision).not.toBe(attempt.connectionRevision);
       expect(after.revision).not.toBe(attempt.revision);
+      // Only the connection is fenced: the configuration is the same one the operator approved tools for.
+      expect(after.configurationBindingId).toBe(settled.configurationBindingId);
+      expect(await firstApprovals()).toEqual({ "server-1": ["read"], peer: ["read"] });
       await expect(store.completeConnection(attempt, [tool("late")])).rejects.toMatchObject({ httpStatus: 409 });
       expect(await toolsOf()).toEqual([]);
       expect(await store.requireServer("server-1")).toMatchObject({ status: "disconnected" });
