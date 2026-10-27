@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
+import { channelKeyChangeHref } from "../../app/routes";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
@@ -7,6 +8,13 @@ import { Section } from "../../ui/Section";
 import { ChannelActionNote } from "./ChannelActionNote";
 import { REMOVE_CONSEQUENCE, removeChannelTitle } from "./channel-remove-copy";
 import { useChannelLifecycle } from "./use-channel-lifecycle";
+
+/** Telegram's key is changed on its own page in Chat; every other channel's is still changed in Settings. */
+function keyChangeHref(connection: IntegrationConnection): string {
+  return connection.key === "telegram"
+    ? channelKeyChangeHref(connection.connectionId)
+    : "/settings/connections#channels";
+}
 
 /**
  * Turn the channel off or on (reversible, so a plain button) or remove it (red, and asked about first), and the way to
@@ -52,7 +60,7 @@ export function ManageSection({
           </Button>
         </div>
         {lifecycle.note ? <ChannelActionNote message={lifecycle.note} fresh /> : null}
-        <NativeOwnerLink href="/settings/connections#channels" scope={workspaceId} className="block text-sm">
+        <NativeOwnerLink href={keyChangeHref(connection)} scope={workspaceId} className="block text-sm">
           Change the key
         </NativeOwnerLink>
       </div>

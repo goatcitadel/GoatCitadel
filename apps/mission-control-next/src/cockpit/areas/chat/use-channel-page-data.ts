@@ -1,18 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type {
-  ChannelRuntimeStatus,
-  DiscordPairingRecord,
-  IntegrationConnection,
-  TelegramChannelPairingList,
-} from "@goatcitadel/contracts";
-import {
-  fetchChannelRuntimeStatus,
-  fetchDiscordPairings,
-  fetchIntegrationConnections,
-} from "@goatcitadel/mission-control-shared/api/client";
+import type { ChannelRuntimeStatus, DiscordPairingRecord, TelegramChannelPairingList } from "@goatcitadel/contracts";
+import { fetchChannelRuntimeStatus, fetchDiscordPairings } from "@goatcitadel/mission-control-shared/api/client";
 import { fetchTelegramChannelPairings } from "@goatcitadel/mission-control-shared/api/channel-setup-operations";
 import { queryKeys } from "../../data/query-keys";
 import { approvedSenders, pendingRequests, type ApprovedSender, type PendingRequest } from "./channel-page-model";
+import { useChannelConnection } from "./use-channel-connections";
 import { useMessagingOverview } from "./use-messaging-overview";
 
 /**
@@ -21,14 +13,8 @@ import { useMessagingOverview } from "./use-messaging-overview";
  * the approved senders are read only for a connection that exists.
  */
 export function useChannelPageData(connectionId: string, workspaceId: string) {
-  const connections = useQuery({
-    queryKey: ["settings", "integration-connections"],
-    queryFn: () => fetchIntegrationConnections(),
-  });
+  const { connection, connections } = useChannelConnection(connectionId);
   const overview = useMessagingOverview(workspaceId);
-  const connection: IntegrationConnection | undefined = connections.data?.items.find(
-    (item) => item.connectionId === connectionId && item.kind === "channel",
-  );
   const channel = overview.data?.channels.find((item) => item.connectionId === connectionId);
   const present = Boolean(connection);
   const runtime = useQuery({

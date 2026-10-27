@@ -3,16 +3,15 @@ import { useCredentialInput } from "../../../../features/native-routes/settings/
 import { channelPickerHref } from "../../../app/routes";
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
-import { Field } from "../../../ui/Field";
-import { cockpitInputClass } from "../../../ui/input-class";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
+import { BotKeyField, keyWorks, OTHER_APP_NOTE, WEB_ADDRESS_NOTE } from "./BotKeyField";
 import { settingsChannelSetupHref } from "./channel-picker-model";
 import { senderName } from "./code-sender";
 import { QrCode } from "./QrCode";
 import { CODE_EXPIRED, SayHiStep, WAITING_FOR_HI } from "./SayHiStep";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
-import { CLEANUP_NOTE, TURNED_ON, TurnOnStep, turnOnChanges } from "./TurnOnStep";
+import { TurnOnStep, turnOnChanges, turnOnStatus } from "./TurnOnStep";
 import { useChannelRequiredHosts } from "./use-channel-picker-groups";
 import { useMissingHosts } from "./use-missing-hosts";
 import { useNewTelegramHref } from "./use-new-connection-href";
@@ -20,9 +19,6 @@ import { TELEGRAM_CATALOG_ID, useTelegramSetup, type TelegramSetupState } from "
 import { useTurnOn, type TurnOnState } from "./use-turn-on";
 
 const BOTFATHER_URL = "https://t.me/BotFather";
-const WEB_ADDRESS_NOTE =
-  "This bot sends its messages to a web address, so GoatCitadel can't read them here. If another app uses that address, it stops getting messages.";
-const OTHER_APP_NOTE = "Another app is reading this bot's messages. Stop it there, or make a new bot for GoatCitadel.";
 
 function MakeBot() {
   return (
@@ -83,65 +79,12 @@ function BotKey({
           <p>{error}</p>
         </Callout>
       ) : null}
-      <form
-        className="space-y-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onCheck();
-        }}
-      >
-        <Field label="Bot key">
-          {(field) => (
-            <input
-              {...field}
-              type="password"
-              // Browsers ignore "off" on a password field, and offer to save it when this form goes away.
-              autoComplete="new-password"
-              autoCapitalize="off"
-              spellCheck={false}
-              className={cockpitInputClass}
-              value={value}
-              readOnly={busy}
-              onChange={(event) => onChange(event.target.value)}
-            />
-          )}
-        </Field>
-        <Button
-          type="submit"
-          variant="primary"
-          loading={checking}
-          loadingLabel="Checking…"
-          disabled={!value.trim() || (busy && !checking)}
-        >
-          Check key
-        </Button>
-      </form>
+      <BotKeyField value={value} onChange={onChange} busy={busy} checking={checking} onCheck={onCheck} />
     </>
   );
 }
 
-const keyWorks = (username: string) => `Key works. Your bot is @${username}.`;
 const saidHi = (name: string) => `${name} said hi. Only they can message your bot for now.`;
-
-/** What turning on says while it is not done: the latest thing that happened, or nothing yet. */
-function turnOnLine(turnOn: TurnOnState): string | undefined {
-  switch (turnOn.state) {
-    case "working":
-      return "Turning on…";
-    case "done":
-      return TURNED_ON;
-    case "cleanup":
-      return CLEANUP_NOTE;
-    case "failed":
-      return turnOn.message;
-    case "blocked":
-      return turnOn.reasons.join(" ");
-    case "elsewhere":
-      return turnOn.approvalId ? "Approve it in Inbox" : "Finish this in Settings";
-    default:
-      return undefined;
-  }
-}
 
 /**
  * What the page tells a screen reader after each thing happens: the one status line, latest first. Everything it says
@@ -150,7 +93,7 @@ function turnOnLine(turnOn: TurnOnState): string | undefined {
 function statusLine(setup: TelegramSetupState, checking: boolean, turnOn: TurnOnState): string | undefined {
   if (setup.error) return setup.error;
   if (checking) return "Checking your key…";
-  const turningOn = turnOnLine(turnOn);
+  const turningOn = turnOnStatus(turnOn);
   if (turningOn) return turningOn;
   if (setup.busy) return "Working…";
   if (setup.sender) return saidHi(senderName(setup.sender));

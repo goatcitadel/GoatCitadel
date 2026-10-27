@@ -2,13 +2,13 @@
 import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ChannelSetupDefinition } from "@goatcitadel/contracts";
+import type { ChannelSetupDefinition, IntegrationConnection } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MessagingView } from "../../app/routes";
 import { ChatMainColumn } from "./ChatMainColumn";
 import { settingsChannelSetupHref } from "./channel-setup/channel-picker-model";
 
-const api = vi.hoisted(() => ({ fetchChannelSetupDefinitions: vi.fn() }));
+const api = vi.hoisted(() => ({ fetchChannelSetupDefinitions: vi.fn(), fetchIntegrationConnections: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "workspace-a" }),
@@ -27,6 +27,22 @@ const DEFINITIONS = [
     wizard: { estimatedMinutes: 10, picker: { group: "quickest", order: 0 } },
   },
 ] as unknown as ChannelSetupDefinition[];
+
+function connectionOf(key: string, label: string): IntegrationConnection {
+  return {
+    connectionId: "conn-1",
+    revision: "a".repeat(64),
+    catalogId: `channel.${key}`,
+    kind: "channel",
+    key,
+    label,
+    enabled: true,
+    status: "connected",
+    config: key === "telegram" ? { botUsername: "@MyGoatBot", receiveMode: "poll" } : {},
+    createdAt: "2026-10-01T09:00:00.000Z",
+    updatedAt: "2026-10-01T09:00:00.000Z",
+  } as IntegrationConnection;
+}
 
 const live = { effects: 0 };
 function Conversation() {
@@ -77,6 +93,8 @@ beforeEach(() => {
   live.effects = 0;
   api.fetchChannelSetupDefinitions.mockReset();
   api.fetchChannelSetupDefinitions.mockResolvedValue({ items: DEFINITIONS });
+  api.fetchIntegrationConnections.mockReset();
+  api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf("slack", "Slack")] });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -148,10 +166,28 @@ it("says a channel that is not offered is not available, with a way back to the 
   expect(link("Back to channels").pathname).toBe("/chat/messaging/add");
 });
 
-it("shows a placeholder for a key change, with a way back to the channel page", async () => {
+it("shows Telegram's own key page for a Telegram channel's key change, with a way back to the channel page", async () => {
+  api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf("telegram", "Telegram")] });
+  await render({ kind: "change_key", connectionId: "conn-1" });
+  expect(container.querySelector("h1")?.textContent).toBe("Change Telegram's key");
+  expect(container.textContent).toContain("Paste the new key");
+  expect(container.textContent).not.toContain("Change the key in Settings");
+  expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
+  expect(conversationHidden()).toBe("none");
+  expect(live.effects).toBe(0);
+});
+
+it("points a key change for any other channel at Settings, with a way back to the channel page", async () => {
   await render({ kind: "change_key", connectionId: "conn-1" });
   expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");
   expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
   expect(link("Change the key in Settings").pathname).toBe("/settings/connections");
   expect(conversationHidden()).toBe("none");
+});
+
+it("points a key change at Settings when the channel cannot be read", async () => {
+  api.fetchIntegrationConnections.mockRejectedValue(new Error("offline"));
+  await render({ kind: "change_key", connectionId: "conn-1" });
+  expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");
+  expect(link("Change the key in Settings").pathname).toBe("/settings/connections");
 });

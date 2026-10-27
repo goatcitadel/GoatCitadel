@@ -3,22 +3,36 @@ import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { channelPageHref, channelPickerHref, type MessagingView } from "../../../app/routes";
 import { settingsChannelSetupHref } from "./channel-picker-model";
+import { useChannelConnection } from "../use-channel-connections";
 import { SetupFrame as Frame } from "./SetupFrame";
+import { TelegramKeyChange } from "./TelegramKeyChange";
 import { TelegramSetupPage } from "./TelegramSetupPage";
 import { useChannelPickerGroups } from "./use-channel-picker-groups";
 
-/** The views this page shows: a channel's setup, and, until it has its own page, a channel's key change. */
+/** The views this page shows: a channel's setup, and a channel's key change. */
 export type ChannelSetupViewTarget = Extract<MessagingView, { kind: "setup" | "change_key" }>;
 
 /**
- * Changing a channel's key. Settings still owns it, so this says so and links there; the page itself comes later.
+ * Changing a channel's key. Telegram's is changed here, on its own page. Any other channel's key is Settings' still,
+ * so this says so and links there: also while the channel cannot be read, because Settings can still change it.
  */
 function KeyChange({ connectionId, workspaceId }: { connectionId: string; workspaceId: string }) {
+  const { connection, connections } = useChannelConnection(connectionId);
+  if (connection?.key === "telegram")
+    return <TelegramKeyChange connectionId={connectionId} workspaceId={workspaceId} />;
+  const back = { href: channelPageHref(connectionId), label: "Back to channel" };
+  if (connections.isPending) {
+    return (
+      <Frame title="Change this channel's key" back={back} workspaceId={workspaceId}>
+        <p className="text-sm text-fg-muted">Loading channel…</p>
+      </Frame>
+    );
+  }
   return (
     <Frame
       title="Change this channel's key"
       description="You can't change a key from Chat yet. Settings has it."
-      back={{ href: channelPageHref(connectionId), label: "Back to channel" }}
+      back={back}
       workspaceId={workspaceId}
     >
       <NativeOwnerLink href="/settings/connections#channels" scope={workspaceId} className="text-sm">

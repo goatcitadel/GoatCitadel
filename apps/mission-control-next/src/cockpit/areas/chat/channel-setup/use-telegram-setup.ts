@@ -76,7 +76,7 @@ function newestUnfinished(drafts: readonly ChannelSetupDraft[]): ChannelSetupDra
 }
 
 /** The draft as the gateway has it now, or null when it cannot be read. */
-async function latestDraft(draftId: string): Promise<ChannelSetupDraft | null> {
+export async function latestDraft(draftId: string): Promise<ChannelSetupDraft | null> {
   try {
     return await fetchChannelSetupDraft(draftId);
   } catch {
