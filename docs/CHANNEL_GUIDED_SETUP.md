@@ -75,7 +75,10 @@ public web address and no webhook secret. Delivery to a public HTTPS web address
 - **Who can message the bot.** Polling uses the same update handler as the web
   address route, so sender allowlist, pairing and policy gates are unchanged. An
   empty allowlist still denies every sender. The web address route ignores updates
-  for connections in `poll` or `off` mode.
+  for connections in `poll` or `off` mode. The owner the setup page recorded needs
+  no pairing code: on an `allowlist` connection, an actor in both `ownerActorIds`
+  and `allowedSenders` is let through like an approved pairing. Anyone else pairs
+  first, and taking the owner off the allowlist ends it.
 - **Starting and resuming.** The first time a bot is polled, GoatCitadel skips
   whatever is already waiting, including the setup messages. After that it saves
   its place in Telegram's queue after each message, so a restart resumes there.
