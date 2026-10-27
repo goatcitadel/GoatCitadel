@@ -451,7 +451,7 @@ describe("mcp-server-admin-service", () => {
       expect(closeSessions).toHaveBeenCalledTimes(1);
     });
 
-    it("close when only the connection changed in the same edit as the setting", async () => {
+    it("close when a connection field changes in the same edit as the setting", async () => {
       const existing = createServer({ status: "connected", connectionRevision: connection });
       const { host, closeSessions } = stage(existing);
       replaceConnection(host);
