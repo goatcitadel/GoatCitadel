@@ -8,6 +8,7 @@ import {
 } from "../services/whatsapp-webhook.js";
 import {
   createWebhookRouteOptions,
+  createWebhookSecretResolver,
   readWebhookVoiceInboundEnabled,
   resolveWhatsAppAppSecret,
   resolveWhatsAppVerifyToken,
@@ -55,7 +56,10 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
         return reply.code(400).send({ error: "Integration connection is not a WhatsApp connector" });
       }
 
-      const verifyToken = resolveWhatsAppVerifyToken(connection.config);
+      const verifyToken = resolveWhatsAppVerifyToken(
+        connection.config,
+        createWebhookSecretResolver(fastify, params.data.connectionId),
+      );
       if (!verifyToken) {
         return reply.code(400).send({ error: "WhatsApp connection is missing a webhook verify token" });
       }
@@ -93,8 +97,11 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
       connectorLabel: "WhatsApp",
       rawBodyKey: "whatsappRawBody",
       missingRawBodyError: "Missing WhatsApp raw request body",
-      verifySignature: ({ request, connection, rawBody }) => {
-        const appSecret = resolveWhatsAppAppSecret(connection.config);
+      verifySignature: ({ request, connection, connectionId, rawBody }) => {
+        const appSecret = resolveWhatsAppAppSecret(
+          connection.config,
+          createWebhookSecretResolver(fastify, connectionId),
+        );
         if (!appSecret) {
           return { ok: false as const, statusCode: 400, error: "WhatsApp connection is missing an app secret" };
         }

@@ -334,6 +334,9 @@ export function composeIntegrationChannelRouteDependencies(
     emitChannelActivity: (input) => gateway.commsActivity(input),
     respondToExistingChatMessage: (sessionId, messageId, input) =>
       gateway.respondToExistingChatMessage(sessionId, messageId, input),
+    // A signed webhook is checked against the key the connection saved at setup, never its reference.
+    resolveChannelConnectionSecret: (secretRef) =>
+      gateway.resolveConnectionSecret({ ref: secretRef }, "ref", "refEnv", "channel.webhook"),
     resolveApprovalWithRemoteToken: (input) => gateway.resolveApprovalWithRemoteToken(input),
     resolveApprovalWithRemoteTokenId: (input) => gateway.resolveApprovalWithRemoteTokenId(input),
     // A desk send into a channel conversation; the durable desk question is an inbound channel event.

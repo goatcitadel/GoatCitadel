@@ -5,7 +5,11 @@ import {
   signQqbotValidation,
   verifyQqbotSignature,
 } from "../services/qqbot-webhook.js";
-import { createWebhookRouteOptions, resolveQqbotSecret } from "./integration-webhooks-shared.js";
+import {
+  createWebhookRouteOptions,
+  createWebhookSecretResolver,
+  resolveQqbotSecret,
+} from "./integration-webhooks-shared.js";
 import type { IntegrationConnectionRecord } from "../services/channel-inbound-dispatch.js";
 import { createWebhookHandler, dispatchInboundWebhookMessage, readHeaderValue } from "./webhook-handler-factory.js";
 
@@ -25,8 +29,8 @@ export function registerQqbotWebhookRoutes(fastify: FastifyInstance): void {
       rawBodyKey: "qqbotRawBody",
       ignoredReply: () => QQBOT_ACK,
       missingRawBodyError: "Missing QQBot raw request body",
-      verifySignature: ({ request, connection, rawBody }) => {
-        const appSecret = resolveQqbotSecret(connection.config);
+      verifySignature: ({ request, connection, connectionId, rawBody }) => {
+        const appSecret = resolveQqbotSecret(connection.config, createWebhookSecretResolver(fastify, connectionId));
         if (!appSecret) {
           return {
             ok: false as const,
@@ -54,7 +58,8 @@ export function registerQqbotWebhookRoutes(fastify: FastifyInstance): void {
         const normalized = normalizeQqbotWebhookPayload({ connectionId, payload: request.body });
         if (normalized.kind === "validation") {
           // verifySignature already proved the secret exists.
-          const appSecret = resolveQqbotSecret(connection.config) ?? "";
+          const appSecret =
+            resolveQqbotSecret(connection.config, createWebhookSecretResolver(fastify, connectionId)) ?? "";
           return {
             kind: "reply" as const,
             payload: {

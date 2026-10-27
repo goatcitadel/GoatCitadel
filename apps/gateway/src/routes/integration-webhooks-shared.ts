@@ -1,7 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebhookRawBodyRequest } from "./webhook-handler-factory.js";
 import { CHANNEL_INBOUND_MAX_BYTES, createWebhookPreParsing } from "./webhook-handler-factory.js";
-import { readConfigSecret } from "../services/channel-secret-resolution.js";
+import {
+  createConnectionSecretReferenceResolver,
+  readConfigSecret,
+  type ChannelSecretReferenceResolver,
+} from "../services/channel-secret-resolution.js";
+import type { IntegrationWebhookRouteLike } from "../services/channel-inbound-dispatch.js";
 import { buildWebhookIngressRateLimitKey, resolveWebhookRateLimitConfig } from "../services/webhook-rate-limit.js";
 export {
   isAllowedSecretEnvName,
@@ -57,16 +62,36 @@ export function createWebhookReadRouteOptions() {
   };
 }
 
-export function resolveNextcloudTalkSecret(config: Record<string, unknown>): string | undefined {
-  return (
-    readConfigSecret(config, "token", "tokenEnv") ??
-    readConfigSecret(config, "botSecret", "botSecretEnv") ??
-    readConfigSecret(config, "secret", "secretEnv")
+/**
+ * Reads the keys a webhook's connection saved at setup. Pass the connection id the request is for: only that
+ * connection's own references resolve, and anything else counts as a missing secret.
+ */
+export function createWebhookSecretResolver(
+  fastify: { services: { integrationWebhooks: Pick<IntegrationWebhookRouteLike, "resolveChannelConnectionSecret"> } },
+  connectionId: string,
+): ChannelSecretReferenceResolver {
+  return createConnectionSecretReferenceResolver(
+    connectionId,
+    fastify.services.integrationWebhooks.resolveChannelConnectionSecret,
   );
 }
 
-export function resolveQqbotSecret(config: Record<string, unknown>): string | undefined {
-  return readConfigSecret(config, "appSecret", "appSecretEnv");
+export function resolveNextcloudTalkSecret(
+  config: Record<string, unknown>,
+  resolveReference?: ChannelSecretReferenceResolver,
+): string | undefined {
+  return (
+    readConfigSecret(config, "token", "tokenEnv", resolveReference) ??
+    readConfigSecret(config, "botSecret", "botSecretEnv", resolveReference) ??
+    readConfigSecret(config, "secret", "secretEnv", resolveReference)
+  );
+}
+
+export function resolveQqbotSecret(
+  config: Record<string, unknown>,
+  resolveReference?: ChannelSecretReferenceResolver,
+): string | undefined {
+  return readConfigSecret(config, "appSecret", "appSecretEnv", resolveReference);
 }
 
 export interface WecomCallbackSecrets {
@@ -76,41 +101,57 @@ export interface WecomCallbackSecrets {
 }
 
 /** Callback credentials for the WeCom URL verification and message callbacks. */
-export function resolveWecomCallbackSecrets(config: Record<string, unknown>): WecomCallbackSecrets {
+export function resolveWecomCallbackSecrets(
+  config: Record<string, unknown>,
+  resolveReference?: ChannelSecretReferenceResolver,
+): WecomCallbackSecrets {
   const corpId = typeof config.corpId === "string" ? config.corpId.trim() : "";
   return {
     ...(corpId ? { corpId } : {}),
-    token: readConfigSecret(config, "callbackToken", "callbackTokenEnv"),
-    encodingAesKey: readConfigSecret(config, "encodingAesKey", "encodingAesKeyEnv"),
+    token: readConfigSecret(config, "callbackToken", "callbackTokenEnv", resolveReference),
+    encodingAesKey: readConfigSecret(config, "encodingAesKey", "encodingAesKeyEnv", resolveReference),
   };
 }
 
-export function resolveWhatsAppAppSecret(config: Record<string, unknown>): string | undefined {
+export function resolveWhatsAppAppSecret(
+  config: Record<string, unknown>,
+  resolveReference?: ChannelSecretReferenceResolver,
+): string | undefined {
   return (
-    readConfigSecret(config, "appSecret", "appSecretEnv") ??
-    readConfigSecret(config, "webhookSecret", "webhookSecretEnv")
+    readConfigSecret(config, "appSecret", "appSecretEnv", resolveReference) ??
+    readConfigSecret(config, "webhookSecret", "webhookSecretEnv", resolveReference)
   );
 }
 
-export function resolveWhatsAppVerifyToken(config: Record<string, unknown>): string | undefined {
+export function resolveWhatsAppVerifyToken(
+  config: Record<string, unknown>,
+  resolveReference?: ChannelSecretReferenceResolver,
+): string | undefined {
   return (
-    readConfigSecret(config, "webhookVerifyToken", "webhookVerifyTokenEnv") ??
-    readConfigSecret(config, "verifyToken", "verifyTokenEnv")
+    readConfigSecret(config, "webhookVerifyToken", "webhookVerifyTokenEnv", resolveReference) ??
+    readConfigSecret(config, "verifyToken", "verifyTokenEnv", resolveReference)
   );
 }
 
-export function resolveLineChannelSecret(config: Record<string, unknown>): string | undefined {
+export function resolveLineChannelSecret(
+  config: Record<string, unknown>,
+  resolveReference?: ChannelSecretReferenceResolver,
+): string | undefined {
   return (
-    readConfigSecret(config, "channelSecret", "channelSecretEnv") ?? readConfigSecret(config, "secret", "secretEnv")
+    readConfigSecret(config, "channelSecret", "channelSecretEnv", resolveReference) ??
+    readConfigSecret(config, "secret", "secretEnv", resolveReference)
   );
 }
 
-export function resolveGenericChannelInboundSecret(config: Record<string, unknown>): string | undefined {
+export function resolveGenericChannelInboundSecret(
+  config: Record<string, unknown>,
+  resolveReference?: ChannelSecretReferenceResolver,
+): string | undefined {
   return (
-    readConfigSecret(config, "inboundSecret", "inboundSecretEnv") ??
-    readConfigSecret(config, "webhookSecret", "webhookSecretEnv") ??
-    readConfigSecret(config, "signingSecret", "signingSecretEnv") ??
-    readConfigSecret(config, "channelSecret", "channelSecretEnv") ??
-    readConfigSecret(config, "secret", "secretEnv")
+    readConfigSecret(config, "inboundSecret", "inboundSecretEnv", resolveReference) ??
+    readConfigSecret(config, "webhookSecret", "webhookSecretEnv", resolveReference) ??
+    readConfigSecret(config, "signingSecret", "signingSecretEnv", resolveReference) ??
+    readConfigSecret(config, "channelSecret", "channelSecretEnv", resolveReference) ??
+    readConfigSecret(config, "secret", "secretEnv", resolveReference)
   );
 }

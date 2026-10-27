@@ -18,12 +18,45 @@ const TELEGRAM_BOT_TOKEN_ENV_PATTERNS: readonly RegExp[] = [
   /^GC_TELEGRAM_[A-Z0-9]+_BOT_TOKEN$/,
 ];
 
-export function resolveTelegramWebhookSecret(config: Record<string, unknown>): string | undefined {
+/** Reads the key a reference points to in secure storage; undefined when the reference cannot be used. */
+export type ChannelSecretReferenceResolver = (secretRef: string) => string | undefined;
+
+/** Where every secure-storage reference starts. A value that starts this way is a pointer, never a secret. */
+const SECRET_REFERENCE_PREFIX = "keychain:goatcitadel:";
+/** Where the references saved for a channel connection start; the connection id and a colon follow. */
+const CONNECTION_SECRET_REFERENCE_PREFIX = `${SECRET_REFERENCE_PREFIX}channel-connection:`;
+
+export function resolveTelegramWebhookSecret(
+  config: Record<string, unknown>,
+  resolveReference?: ChannelSecretReferenceResolver,
+): string | undefined {
   return (
-    readConfigSecret(config, "webhookSecret", "webhookSecretEnv") ??
-    readConfigSecret(config, "secretToken", "secretTokenEnv") ??
-    readConfigSecret(config, "botSecret", "botSecretEnv")
+    readConfigSecret(config, "webhookSecret", "webhookSecretEnv", resolveReference) ??
+    readConfigSecret(config, "secretToken", "secretTokenEnv", resolveReference) ??
+    readConfigSecret(config, "botSecret", "botSecretEnv", resolveReference)
   );
+}
+
+/**
+ * Limits a reference reader to the keys one connection saved for itself. A reference to another connection,
+ * one the reader cannot resolve, a failing read and a missing reader all give no key: the reference text is never
+ * a credential, and a read failure is dropped so its message cannot reach a response or a log.
+ */
+export function createConnectionSecretReferenceResolver(
+  connectionId: string,
+  readReference: ChannelSecretReferenceResolver | undefined,
+): ChannelSecretReferenceResolver {
+  const ownPrefix = `${CONNECTION_SECRET_REFERENCE_PREFIX}${connectionId}:`;
+  return (secretRef) => {
+    if (!readReference || !secretRef.startsWith(ownPrefix)) {
+      return undefined;
+    }
+    try {
+      return readReference(secretRef)?.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  };
 }
 
 export function isTelegramApprovalActionConnectionReady(connection: IntegrationConnection): boolean {
@@ -91,10 +124,21 @@ export function resolveTelegramBotTokenEnvSecret(envName: string | undefined): s
   return resolved?.trim() ? resolved.trim() : undefined;
 }
 
-export function readConfigSecret(config: Record<string, unknown>, key: string, envKey: string): string | undefined {
+/**
+ * Reads a channel secret from its direct config field, else from an allowlisted env var. With a resolver, a direct
+ * value that is a secure-storage reference is replaced by the key it points to, and is missing when the resolver
+ * gives none; the reference is never returned as the secret. Without one, direct values come back as saved.
+ */
+export function readConfigSecret(
+  config: Record<string, unknown>,
+  key: string,
+  envKey: string,
+  resolveReference?: ChannelSecretReferenceResolver,
+): string | undefined {
   const direct = config[key];
   if (typeof direct === "string" && direct.trim().length > 0) {
-    return direct.trim();
+    const value = direct.trim();
+    return resolveReference && value.startsWith(SECRET_REFERENCE_PREFIX) ? resolveReference(value) : value;
   }
   const envName = config[envKey];
   if (typeof envName !== "string" || envName.trim().length === 0) {

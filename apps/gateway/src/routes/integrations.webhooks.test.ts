@@ -1,5 +1,6 @@
 import { authPlugin } from "../plugins/auth.js";
 import { idempotencyHeaderPlugin } from "../plugins/idempotency.js";
+import { parseChannelSecretRef } from "../services/channel-secret-custody-service.js";
 import { buildLineWebhookSignature } from "../services/line-webhook.js";
 import { buildNextcloudTalkSignature } from "../services/nextcloud-talk-webhook.js";
 import { buildSlackSignature } from "../services/slack-webhook.js";
@@ -2385,6 +2386,182 @@ describe("integration provider webhook routes", () => {
         eventType: "Like",
       }),
     );
+  });
+});
+
+describe("Nextcloud Talk webhooks signed with a key saved at setup", () => {
+  const connectionId = "11111111-1111-1111-1111-111111111111";
+  const otherConnectionId = "22222222-2222-2222-2222-222222222222";
+  const savedKeyReference = `keychain:goatcitadel:channel-connection:${connectionId}:token:00000000-0000-4000-8000-000000000001`;
+  const otherConnectionReference = `keychain:goatcitadel:channel-connection:${otherConnectionId}:token:00000000-0000-4000-8000-000000000002`;
+  const realSecret = "nextcloud-real-secret";
+  const otherConnectionSecret = "other-connection-real-secret";
+  const random = "abcdef0123456789";
+  const payload = JSON.stringify({
+    type: "Create",
+    actor: { type: "Person", id: "users/ada-lovelace", name: "Ada Lovelace" },
+    object: {
+      type: "Note",
+      id: "1567",
+      name: "message",
+      content:
+        '{"message":"hi {mention-call1} !","parameters":{"mention-call1":{"type":"call","id":"room-42","name":"world"}}}',
+      mediaType: "text/markdown",
+    },
+    target: { type: "Collection", id: "room-42", name: "world" },
+  });
+  let app: FastifyInstance | null = null;
+
+  afterEach(async () => {
+    await cleanupIntegrationTestApp(app);
+    app = null;
+  });
+
+  /** Reads a saved key the way the gateway does: a reference names an account in the secure store. */
+  function readSecureStore(secureStore: Map<string, string>) {
+    return vi.fn((secretRef: string): string | undefined => {
+      try {
+        return secureStore.get(parseChannelSecretRef(secretRef).account);
+      } catch {
+        return undefined;
+      }
+    });
+  }
+
+  async function postNextcloudWebhook(input: {
+    token: string;
+    signWith: string;
+    resolveChannelConnectionSecret?: (secretRef: string) => string | undefined;
+  }) {
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId,
+        key: "nextcloud-talk",
+        config: { baseUrl: "https://cloud.example.com", token: input.token },
+      })),
+      acceptInboundChannelEvent,
+      recordDevDiagnostic: vi.fn(),
+      ...(input.resolveChannelConnectionSecret
+        ? { resolveChannelConnectionSecret: input.resolveChannelConnectionSecret }
+        : {}),
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/integrations/connections/${connectionId}/nextcloud-talk/webhook`,
+      headers: {
+        "content-type": "application/json",
+        "x-nextcloud-talk-random": random,
+        "x-nextcloud-talk-signature": buildNextcloudTalkSignature(random, payload, input.signWith),
+        "x-nextcloud-talk-backend": "https://cloud.example.com",
+      },
+      payload,
+    });
+    return { response, acceptInboundChannelEvent };
+  }
+
+  it("accepts a webhook signed with the saved key", async () => {
+    const resolveChannelConnectionSecret = readSecureStore(
+      new Map([[`channel-connection:${connectionId}:token:00000000-0000-4000-8000-000000000001`, realSecret]]),
+    );
+
+    const { response, acceptInboundChannelEvent } = await postNextcloudWebhook({
+      token: savedKeyReference,
+      signWith: realSecret,
+      resolveChannelConnectionSecret,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(resolveChannelConnectionSecret).toHaveBeenCalledWith(savedKeyReference);
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a webhook signed with the reference text instead of the saved key", async () => {
+    const { response, acceptInboundChannelEvent } = await postNextcloudWebhook({
+      token: savedKeyReference,
+      signWith: savedKeyReference,
+      resolveChannelConnectionSecret: readSecureStore(
+        new Map([[`channel-connection:${connectionId}:token:00000000-0000-4000-8000-000000000001`, realSecret]]),
+      ),
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+  });
+
+  it("treats a reference to another connection's key as a missing secret and never reads it", async () => {
+    const resolveChannelConnectionSecret = readSecureStore(
+      new Map([
+        [`channel-connection:${otherConnectionId}:token:00000000-0000-4000-8000-000000000002`, otherConnectionSecret],
+      ]),
+    );
+
+    for (const signWith of [otherConnectionSecret, otherConnectionReference]) {
+      const { response, acceptInboundChannelEvent } = await postNextcloudWebhook({
+        token: otherConnectionReference,
+        signWith,
+        resolveChannelConnectionSecret,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+      await cleanupIntegrationTestApp(app);
+      app = null;
+    }
+    expect(resolveChannelConnectionSecret).not.toHaveBeenCalled();
+  });
+
+  it("treats a key that is gone from secure storage as a missing secret", async () => {
+    for (const signWith of [realSecret, savedKeyReference]) {
+      const { response, acceptInboundChannelEvent } = await postNextcloudWebhook({
+        token: savedKeyReference,
+        signWith,
+        resolveChannelConnectionSecret: readSecureStore(new Map()),
+      });
+      expect(response.statusCode).toBe(400);
+      expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+      await cleanupIntegrationTestApp(app);
+      app = null;
+    }
+  });
+
+  it("treats a failing secure-storage read as a missing secret", async () => {
+    const { response, acceptInboundChannelEvent } = await postNextcloudWebhook({
+      token: savedKeyReference,
+      signWith: savedKeyReference,
+      resolveChannelConnectionSecret: () => {
+        throw new Error("keychain unavailable");
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).not.toContain("keychain unavailable");
+    expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+  });
+
+  it("treats a reference as a missing secret when the gateway offers no way to read saved keys", async () => {
+    const { response, acceptInboundChannelEvent } = await postNextcloudWebhook({
+      token: savedKeyReference,
+      signWith: savedKeyReference,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
   });
 });
 

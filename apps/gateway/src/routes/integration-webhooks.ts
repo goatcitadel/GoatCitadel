@@ -9,7 +9,11 @@ import { registerNextcloudTalkWebhookRoutes } from "./integration-webhooks-nextc
 import { registerSlackWebhookRoutes } from "./integration-webhooks-slack-routes.js";
 import { registerTelegramWebhookRoutes } from "./integration-webhooks-telegram-routes.js";
 import { registerWhatsAppWebhookRoutes } from "./integration-webhooks-whatsapp-routes.js";
-import { createWebhookRouteOptions, resolveGenericChannelInboundSecret } from "./integration-webhooks-shared.js";
+import {
+  createWebhookRouteOptions,
+  createWebhookSecretResolver,
+  resolveGenericChannelInboundSecret,
+} from "./integration-webhooks-shared.js";
 import { channelConnectionInboundParamsSchema, channelInboundSchema } from "./integration-webhook-schemas.js";
 import {
   CHANNEL_INBOUND_MAX_BYTES,
@@ -87,7 +91,10 @@ export const integrationWebhookRoutes: FastifyPluginAsync<IntegrationWebhookRout
         return reply.code(400).send({ error: "Missing generic channel raw request body" });
       }
 
-      const secret = resolveGenericChannelInboundSecret(connection.config);
+      const secret = resolveGenericChannelInboundSecret(
+        connection.config,
+        createWebhookSecretResolver(fastify, params.data.connectionId),
+      );
       if (!secret) {
         return reply.code(400).send({ error: "Integration connection is missing a generic inbound secret" });
       }

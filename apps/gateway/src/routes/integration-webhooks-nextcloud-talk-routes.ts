@@ -4,7 +4,11 @@ import {
   normalizeNextcloudTalkWebhookPayload,
   verifyNextcloudTalkSignature,
 } from "../services/nextcloud-talk-webhook.js";
-import { createWebhookRouteOptions, resolveNextcloudTalkSecret } from "./integration-webhooks-shared.js";
+import {
+  createWebhookRouteOptions,
+  createWebhookSecretResolver,
+  resolveNextcloudTalkSecret,
+} from "./integration-webhooks-shared.js";
 import {
   createIgnoredWebhookReply,
   createWebhookHandler,
@@ -37,8 +41,11 @@ export function registerNextcloudTalkWebhookRoutes(fastify: FastifyInstance): vo
       connectorLabel: "Nextcloud Talk",
       rawBodyKey: "nextcloudTalkRawBody",
       missingRawBodyError: "Missing Nextcloud Talk raw request body",
-      verifySignature: ({ request, connection, rawBody }) => {
-        const secret = resolveNextcloudTalkSecret(connection.config);
+      verifySignature: ({ request, connection, connectionId, rawBody }) => {
+        const secret = resolveNextcloudTalkSecret(
+          connection.config,
+          createWebhookSecretResolver(fastify, connectionId),
+        );
         if (!secret) {
           return {
             ok: false as const,
