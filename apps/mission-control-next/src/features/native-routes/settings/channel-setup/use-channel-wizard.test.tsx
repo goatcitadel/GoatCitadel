@@ -126,7 +126,11 @@ function stepsShown(definition: ChannelSetupDefinition, draft: ChannelSetupDraft
     renderer = create(<Probe />);
   });
   if (!latest) throw new Error("The hook did not render.");
-  return { ids: latest.visibleSteps.map((step) => step.id), activeStepId: latest.activeStep?.id };
+  return {
+    ids: latest.visibleSteps.map((step) => step.id),
+    activeStepId: latest.activeStep?.id,
+    stepsHidden: latest.stepsHidden,
+  };
 }
 
 describe("useChannelWizard step filtering", () => {
@@ -165,5 +169,31 @@ describe("useChannelWizard step filtering", () => {
     const shown = stepsShown(definition, draftFor("edit"));
     expect(shown.ids).toEqual(["prerequisites", "create-bot"]);
     expect(shown.activeStepId).toBe("prerequisites");
+  });
+
+  it("reports hidden steps only when the lifecycle filter really removed one", () => {
+    const setupOnly = definitionWith([intro, prerequisites, createBot, collect, test]);
+    const nothingSetupOnly = definitionWith([intro, collect, test]);
+    const allSetupOnly = definitionWith([prerequisites, createBot]);
+    // A setup-only step that its own condition already keeps off the list is not "hidden" by the lifecycle.
+    const conditional = definitionWith([
+      intro,
+      { ...createBot, visibleWhenFieldEquals: { fieldKey: "never", value: "set" } },
+      collect,
+    ]);
+    const cases: Array<[string, ChannelSetupDefinition, ChannelSetupDraft["lifecycleMode"], boolean]> = [
+      ["edit with setup-only steps", setupOnly, "edit", true],
+      ["repair with setup-only steps", setupOnly, "repair", true],
+      ["create with setup-only steps", setupOnly, "create", false],
+      ["edit with no setup-only steps", nothingSetupOnly, "edit", false],
+      ["edit when every step is setup-only (the guide keeps them all)", allSetupOnly, "edit", false],
+      ["edit when the setup-only step is already off by its own condition", conditional, "edit", false],
+    ];
+    for (const [name, definition, mode, expected] of cases) {
+      expect(stepsShown(definition, draftFor(mode)).stepsHidden, name).toBe(expected);
+      act(() => renderer?.unmount());
+      renderer = undefined;
+      __resetSessionViewStateForTests();
+    }
   });
 });

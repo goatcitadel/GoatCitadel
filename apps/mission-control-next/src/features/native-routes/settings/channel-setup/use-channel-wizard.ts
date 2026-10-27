@@ -29,11 +29,13 @@ export function useChannelWizard({
   onFinalize,
 }: ChannelSetupWizardProps) {
   useChannelProofFreshness(feedback);
-  const visibleSteps = useMemo(() => {
+  const { visibleSteps, stepsHidden } = useMemo(() => {
     const effectiveValues = wizardValuesWithDefaults(definition, values);
     const allowedSteps = definition.wizard.steps.filter((step) => isStepVisible(step, effectiveValues));
     const lifecycleSteps = allowedSteps.filter((step) => isStepForLifecycle(step, draft.lifecycleMode));
-    return lifecycleSteps.length > 0 ? lifecycleSteps : allowedSteps;
+    const shown = lifecycleSteps.length > 0 ? lifecycleSteps : allowedSteps;
+    // True only when the lifecycle filter really removed a step that would otherwise be shown.
+    return { visibleSteps: shown, stepsHidden: shown.length < allowedSteps.length };
   }, [definition, values, draft.lifecycleMode]);
   const viewKey = "channel:" + scopeId + ":" + draft.draftId;
   const [activeStepId, setActiveStepId] = useSessionViewState(viewKey + ":step", visibleSteps[0]?.id ?? "");
@@ -200,6 +202,7 @@ export function useChannelWizard({
 
   return {
     visibleSteps,
+    stepsHidden,
     activeStepId,
     activeStepIndex,
     activeStep,

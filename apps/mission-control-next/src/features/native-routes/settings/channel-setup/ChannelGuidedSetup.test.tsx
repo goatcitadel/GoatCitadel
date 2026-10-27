@@ -684,6 +684,24 @@ describe("what a channel needs and the editing note, in both shells", () => {
         r.unmount();
       }
   });
+  it("says nothing about hidden steps when editing a channel that has none to hide", async () => {
+    const telegram = definitions.find((item) => item.catalog.catalogId === "channel.telegram")!;
+    expect(telegram.wizard.steps.some((step) => step.createOnly)).toBe(false);
+    // When every step is setup-only the guide keeps them all, so nothing is hidden there either.
+    const everyStepSetupOnly: ChannelSetupDefinition = {
+      ...slack,
+      wizard: { ...slack.wizard, steps: slack.wizard.steps.map((step) => ({ ...step, createOnly: true })) },
+    };
+    for (const definition of [telegram, everyStepSetupOnly])
+      for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+        const draft: ChannelSetupDraft = { ...makeDraft(definition), lifecycleMode: "edit", label: "" };
+        const r = await render(<Component {...propsFor(definition, draft)} />);
+        expect(stepButtons(r.root)).toHaveLength(definition.wizard.steps.length);
+        expect(editingNotes(r.root)).toHaveLength(0);
+        expect(text(r.root)).not.toContain("The steps for setting it up are hidden");
+        r.unmount();
+      }
+  });
   it("names the connection by its label, and falls back to the channel when the label is blank", async () => {
     for (const [label, name] of [
       ["Ops workspace", "Ops workspace"],

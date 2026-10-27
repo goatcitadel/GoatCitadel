@@ -41,6 +41,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
   } = props;
   const {
     visibleSteps,
+    stepsHidden,
     activeStepIndex,
     activeStep,
     anyBusy,
@@ -105,7 +106,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
           </div>
         </dl>
         <ChannelNeeds className="col-span-full" items={definition.wizard.prerequisites} />
-        <ChannelEditingNote className="col-span-full" definition={definition} draft={draft} />
+        <ChannelEditingNote className="col-span-full" definition={definition} draft={draft} stepsHidden={stepsHidden} />
       </header>
 
       <details open={definition.wizard.manualModePolicy === "expert-forward" || advancedMode}>

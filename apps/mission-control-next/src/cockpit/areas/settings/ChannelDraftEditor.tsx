@@ -42,7 +42,12 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
           version {props.draft.revision} · {props.dirty ? "Unsaved input" : "Saved draft"}
         </p>
         <ChannelNeeds className="mt-3" items={props.definition.wizard.prerequisites} />
-        <ChannelEditingNote className="mt-3" definition={props.definition} draft={props.draft} />
+        <ChannelEditingNote
+          className="mt-3"
+          definition={props.definition}
+          draft={props.draft}
+          stepsHidden={wizard.stepsHidden}
+        />
       </header>
       <label className="block text-sm">
         Connection label

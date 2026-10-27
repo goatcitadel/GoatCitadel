@@ -16,17 +16,22 @@ export function ChannelNeeds({ items, className = "" }: { items?: readonly strin
   );
 }
 
-/** Plain text, not an announcement: it says why the setup-only steps are missing when a saved channel is changed. */
+/**
+ * Plain text, not an announcement: it says why the setup-only steps are missing when a saved channel is changed.
+ * `stepsHidden` comes from useChannelWizard, so it is only true when the guide really left a step out.
+ */
 export function ChannelEditingNote({
   definition,
   draft,
+  stepsHidden,
   className = "",
 }: {
   definition: Pick<ChannelSetupDefinition, "catalog">;
-  draft: Pick<ChannelSetupDraft, "lifecycleMode" | "label">;
+  draft: Pick<ChannelSetupDraft, "label">;
+  stepsHidden: boolean;
   className?: string;
 }) {
-  if (draft.lifecycleMode === "create") return null;
+  if (!stepsHidden) return null;
   const name = draft.label?.trim() || definition.catalog.label;
   return (
     <p className={`text-sm text-fg-secondary ${className}`.trim()}>
