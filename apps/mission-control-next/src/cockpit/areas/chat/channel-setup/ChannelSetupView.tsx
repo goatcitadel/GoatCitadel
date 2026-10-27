@@ -1,44 +1,14 @@
-import type { ReactNode } from "react";
-import { AreaHeader } from "../../../ui/AreaHeader";
-import { AREA_COLUMN } from "../../../ui/area-layout";
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { channelPageHref, channelPickerHref, type MessagingView } from "../../../app/routes";
 import { settingsChannelSetupHref } from "./channel-picker-model";
+import { SetupFrame as Frame } from "./SetupFrame";
+import { TelegramSetupPage } from "./TelegramSetupPage";
 import { useChannelPickerGroups } from "./use-channel-picker-groups";
 
 /** The views this page shows: a channel's setup, and, until it has its own page, a channel's key change. */
 export type ChannelSetupViewTarget = Extract<MessagingView, { kind: "setup" | "change_key" }>;
-
-function Frame({
-  title,
-  description,
-  back,
-  workspaceId,
-  children,
-}: {
-  title: string;
-  description?: string;
-  back: { href: string; label: string };
-  workspaceId: string;
-  children?: ReactNode;
-}) {
-  return (
-    <section aria-label={title} className={`${AREA_COLUMN} grid min-w-0 gap-6 p-4 md:p-6`}>
-      <AreaHeader
-        title={title}
-        description={description}
-        actions={
-          <NativeOwnerLink href={back.href} scope={workspaceId} className="text-sm">
-            {back.label}
-          </NativeOwnerLink>
-        }
-      />
-      {children}
-    </section>
-  );
-}
 
 /**
  * Changing a channel's key. Settings still owns it, so this says so and links there; the page itself comes later.
@@ -59,8 +29,8 @@ function KeyChange({ connectionId, workspaceId }: { connectionId: string; worksp
 }
 
 /**
- * One channel's setup. A channel without a setup page of its own sends the operator to Settings, which has its
- * steps; a channel the picker does not offer is not available here, whatever the address says.
+ * One channel's setup. Telegram has its own page; a channel without one sends the operator to Settings, which has
+ * its steps; a channel the picker does not offer is not available here, whatever the address says.
  */
 function ChannelSetup({ channelKey, workspaceId }: { channelKey: string; workspaceId: string }) {
   const { groups, isError, isPending, refetch } = useChannelPickerGroups();
@@ -91,6 +61,7 @@ function ChannelSetup({ channelKey, workspaceId }: { channelKey: string; workspa
       </Frame>
     );
   }
+  if (tile.channelKey === "telegram") return <TelegramSetupPage workspaceId={workspaceId} />;
   return (
     <Frame
       title={`Add ${tile.label}`}
