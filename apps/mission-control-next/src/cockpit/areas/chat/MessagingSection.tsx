@@ -14,11 +14,12 @@ const MAX_VISIBLE_COUNT = 99;
 const ROW_TARGET = "min-h-11 md:min-h-0";
 
 /** "+ Add" reads as "Add a channel": the name starts with the visible text, and the icon is decoration. */
-function AddChannelLink({ workspaceId }: { workspaceId: string }) {
+function AddChannelLink({ workspaceId, onNavigate }: { workspaceId: string; onNavigate?: () => void }) {
   return (
     <NativeOwnerLink
       href={ADD_CHANNEL_HREF}
       scope={workspaceId}
+      onNavigate={onNavigate}
       aria-label="Add a channel"
       className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${ROW_TARGET}`}
     >
@@ -116,17 +117,21 @@ function ChannelItem({
  * Chat's Messaging area: the channels connected to this workspace, with the conversations people hold through each
  * one indented under it. The Gateway builds the overview, so status, titles and new-message counts are shown as
  * given. Loading and failure are plain text rather than live regions: this area refreshes on its own.
+ * `onNavigate` runs after either Add link has taken the operator on (see `NativeOwnerLink`), so a sheet holding this
+ * section can close.
  */
 export function MessagingSection({
   workspaceId,
   selectedSessionId,
   onSelectSession,
   onOpenChannel,
+  onNavigate,
 }: {
   workspaceId: string;
   selectedSessionId?: string;
   onSelectSession: (sessionId: string) => void;
   onOpenChannel: (connectionId: string) => void;
+  onNavigate?: () => void;
 }) {
   const overview = useMessagingOverview(workspaceId);
   const channels = overview.data?.channels;
@@ -134,7 +139,7 @@ export function MessagingSection({
     <section>
       <div className="flex items-center justify-between gap-2 px-2 py-1">
         <h2 className="text-sm font-semibold text-fg">Messaging</h2>
-        <AddChannelLink workspaceId={workspaceId} />
+        <AddChannelLink workspaceId={workspaceId} onNavigate={onNavigate} />
       </div>
       {channels?.length ? (
         <ul>
@@ -151,7 +156,7 @@ export function MessagingSection({
       ) : channels ? (
         <div className="flex items-center justify-between gap-2 px-2 py-1">
           <p className="text-xs text-fg-muted">No channels yet</p>
-          <AddChannelLink workspaceId={workspaceId} />
+          <AddChannelLink workspaceId={workspaceId} onNavigate={onNavigate} />
         </div>
       ) : overview.isError ? (
         <div className="px-2 py-1 text-xs text-fg-muted">

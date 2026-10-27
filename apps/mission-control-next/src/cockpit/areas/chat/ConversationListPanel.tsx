@@ -230,6 +230,7 @@ export function ConversationListPanel({
               messaging.onOpenChannel(connectionId);
               onDone?.();
             }}
+            onNavigate={onDone}
           />
         </div>
       ) : null}

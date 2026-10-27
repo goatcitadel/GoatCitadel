@@ -18,7 +18,15 @@ let draft: ReturnType<typeof useSessionDraft<{ name: string }>>;
 let mounts = 0,
   unmounts = 0;
 const href = "/chat?sessionId=session%2Fone&turnId=turn%3Atwo#evidence";
-function Probe({ scope = "record-a", target = href }: { scope?: string; target?: string }) {
+function Probe({
+  scope = "record-a",
+  target = href,
+  onNavigate,
+}: {
+  scope?: string;
+  target?: string;
+  onNavigate?: () => void;
+}) {
   draft = useSessionDraft("native-navigation", { name: "Saved" }, 1, { label: "Retained native draft" });
   useEffect(() => {
     mounts++;
@@ -27,17 +35,17 @@ function Probe({ scope = "record-a", target = href }: { scope?: string; target?:
     };
   }, []);
   return (
-    <NativeOwnerLink href={target} scope={scope} className="evidence-link">
+    <NativeOwnerLink href={target} scope={scope} className="evidence-link" onNavigate={onNavigate}>
       <strong>Open evidence</strong>
       <span aria-hidden="true">↗</span>
     </NativeOwnerLink>
   );
 }
-async function render(scope = "record-a", target = href) {
+async function render(scope = "record-a", target = href, onNavigate?: () => void) {
   await act(async () => {
     root.render(
       <CockpitNavigationProvider>
-        <Probe scope={scope} target={target} />
+        <Probe scope={scope} target={target} onNavigate={onNavigate} />
       </CockpitNavigationProvider>,
     );
   });
@@ -186,6 +194,59 @@ describe("native owner navigation", () => {
       expect(container.textContent).not.toContain("Open evidence");
     }
     expect(switchShell).not.toHaveBeenCalled();
+  });
+
+  it("runs onNavigate once after a plain click has moved the page, and never for a modified click", async () => {
+    const onNavigate = vi.fn();
+    await render("record-a", href, onNavigate);
+    // A modified click is left to the browser; here the browser's default move is stopped so the page stays put.
+    const stopDefault = (event: Event) => event.preventDefault();
+    document.addEventListener("click", stopDefault);
+    try {
+      for (const init of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+        await act(async () => {
+          container
+            .querySelector("a")!
+            .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
+        });
+      }
+    } finally {
+      document.removeEventListener("click", stopDefault);
+    }
+    expect(onNavigate).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/work");
+    await act(async () => container.querySelector("a")!.click());
+    expect(window.location.pathname).toBe("/chat");
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs onNavigate for a link to the page that is already open", async () => {
+    const onNavigate = vi.fn();
+    window.history.replaceState(null, "", "/work?shell=cockpit");
+    await render("record-a", "/work", onNavigate);
+    await act(async () => container.querySelector("a")!.click());
+    expect(window.location.pathname).toBe("/work");
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the leave review: onNavigate runs when it is confirmed, never when it is cancelled", async () => {
+    const onNavigate = vi.fn();
+    await render("record-a", href, onNavigate);
+    await act(async () => {
+      draft.setValue({ name: "Unsaved input" });
+    });
+    await act(async () => container.querySelector("a")!.click());
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(onNavigate).not.toHaveBeenCalled();
+    await act(async () => {
+      [...document.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!.click();
+    });
+    expect(onNavigate).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/work");
+    await act(async () => container.querySelector("a")!.click());
+    await clickKeep();
+    expect(window.location.pathname).toBe("/chat");
+    expect(onNavigate).toHaveBeenCalledTimes(1);
   });
 
   it("defaults to accent link styling at its natural width (WK-N04)", async () => {
