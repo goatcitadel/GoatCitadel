@@ -202,6 +202,28 @@ describe("TurnOnStep", () => {
     expect(link("Finish this in Settings")).toBeUndefined();
   });
 
+  it("says when it couldn't check the hosts, with Try again, and adds no live region for it", async () => {
+    const retry = vi.fn();
+    await act(async () => {
+      root.render(
+        <TurnOnStep
+          changes={CHANGES}
+          turnOn={turnOnState()}
+          onTurnOn={() => undefined}
+          disabled
+          workspaceId="default"
+          settingsHref="/settings/connections"
+          retryHostCheck={retry}
+        />,
+      );
+    });
+    expect(container.textContent).toContain("GoatCitadel couldn't check which hosts it may reach. Try again.");
+    expect(button("Turn on")?.disabled).toBe(true);
+    await act(async () => button("Try again")!.click());
+    expect(retry).toHaveBeenCalledOnce();
+    expect(container.querySelectorAll('[role="status"], [role="alert"], [aria-live]')).toHaveLength(0);
+  });
+
   it("adds no live region of its own, in any state", async () => {
     const states: TurnOn[] = [
       turnOnState(),

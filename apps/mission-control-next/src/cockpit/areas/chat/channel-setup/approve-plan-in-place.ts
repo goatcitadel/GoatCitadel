@@ -44,6 +44,8 @@ const STILL_WORKING: ReadonlySet<ChangePlanStatus> = new Set(["applying", "verif
 const ANOTHER_CHANGE = "This approval belongs to another change.";
 const TURNED_DOWN = "The approval was turned down.";
 const STILL_TURNING_ON = "GoatCitadel is still turning this on. Check again in a moment.";
+const unlistedHost = (host: string) =>
+  `GoatCitadel needs to reach ${host}. Reload this page to see the change before turning it on.`;
 
 const failed = (message: string): InPlaceOutcome => ({ kind: "failed", message });
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -133,12 +135,14 @@ async function approveOwnApproval(
  * their own change in the caller's workspace, which is approved in place like the channel's change. It does not use
  * the Settings save: that route plans in the default workspace and applies with the operator's approval skip, and
  * Turn on never takes the skip. A finished allowlist change is "allowed", never "completed": that word is for the
- * channel's own change.
+ * channel's own change. A host missing now that is not in `shownHosts`, the ones the page listed, is never added:
+ * the click is blocked so the operator can see the change first.
  */
 export async function ensureHostsAllowed(
   hosts: readonly string[],
   workspaceId: string,
-): Promise<{ kind: "allowed" } | InPlaceOutcome> {
+  shownHosts: readonly string[],
+): Promise<{ kind: "allowed" } | InPlaceOutcome | { kind: "blocked"; reasons: string[] }> {
   if (hosts.length === 0) return { kind: "allowed" };
   try {
     const settings = await fetchSettings();
@@ -146,6 +150,9 @@ export async function ensureHostsAllowed(
       (host) => !isBaseUrlAllowlisted(`https://${host}/`, settings.networkAllowlist),
     );
     if (missing.length === 0) return { kind: "allowed" };
+    const shown = new Set(shownHosts.map((host) => host.trim().toLowerCase()));
+    const unshown = missing.filter((host) => !shown.has(host.trim().toLowerCase()));
+    if (unshown.length > 0) return { kind: "blocked", reasons: unshown.map(unlistedHost) };
     const plan = await createChangePlan({
       workspaceId,
       surface: "settings",

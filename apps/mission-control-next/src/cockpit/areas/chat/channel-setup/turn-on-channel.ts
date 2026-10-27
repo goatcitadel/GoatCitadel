@@ -47,16 +47,17 @@ const issueMessages = (issues: readonly Pick<ChannelSetupIssue, "level" | "messa
  * Turn on, from one click: the same calls Settings and Chat make by hand, in the same order, leaving the same
  * approval record. It first resumes an open change for this draft; otherwise it makes sure the hosts are allowed,
  * checks and tests the draft, and creates the change bound to the version it just tested. Nothing here finalizes the
- * draft itself: the change does that when it is applied.
+ * draft itself: the change does that when it is applied. `shownHosts` are the missing hosts the page listed; a host
+ * missing now that it didn't list blocks the click, so nothing is added that the operator never saw.
  */
 export async function turnOnChannelDraft(
-  input: DraftRef & { requiredHosts: readonly string[] },
+  input: DraftRef & { requiredHosts: readonly string[]; shownHosts: readonly string[] },
 ): Promise<TurnOnOutcome> {
   try {
     const open = await findOpenChange(input);
     // Only a change this page made is approved in place; one from Chat or a model keeps its own review in Inbox.
     if (open) return madeHere(open) ? await approvePlanInPlace(open.planId, input.workspaceId) : elsewhere(open);
-    const hosts = await ensureHostsAllowed(input.requiredHosts, input.workspaceId);
+    const hosts = await ensureHostsAllowed(input.requiredHosts, input.workspaceId, input.shownHosts);
     if (hosts.kind !== "allowed") return hosts;
     const checked = await checkSetup(input.draftId);
     if (checked.kind !== "ready") return checked;

@@ -472,6 +472,8 @@ describe("TelegramKeyChange", () => {
         draftId: "rotate-1",
         catalogId: "channel.telegram",
         requiredHosts: ["api.telegram.org"],
+        // The host is allowed already, so the step listed none to add.
+        shownHosts: [],
       });
     });
 
@@ -498,11 +500,42 @@ describe("TelegramKeyChange", () => {
         expect(lines()).toEqual([TEST_MESSAGE]);
       });
 
-      it("makes no claim about hosts when the settings cannot be read, and can still save", async () => {
+      it("keeps Save key off until it knows which hosts it would add", async () => {
+        let answer!: (settings: unknown) => void;
+        api.fetchSettings.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+        await toKeyChecked();
+        expect(button("Save key")?.disabled).toBe(true);
+
+        await act(async () => answer({ revision: 1, networkAllowlist: ["example.com"] }));
+        await settle();
+        expect(lines()).toEqual([TEST_MESSAGE, HOST_LINE]);
+        expect(button("Save key")?.disabled).toBe(false);
+      });
+
+      it("says it couldn't check the hosts when the settings cannot be read, keeps Save key off, and tries again", async () => {
         api.fetchSettings.mockRejectedValue(new Error("offline"));
         await toKeyChecked();
+        expect(steps()[1]!.textContent).toContain("GoatCitadel couldn't check which hosts it may reach. Try again.");
+        expect(status()).toBe("GoatCitadel couldn't check which hosts it may reach. Try again.");
         expect(lines()).toEqual([TEST_MESSAGE]);
+        expect(button("Save key")?.disabled).toBe(true);
+
+        api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: ["example.com"] });
+        await click(button("Try again"));
+        await settle();
+        expect(container.textContent).not.toContain("couldn't check which hosts");
+        expect(lines()).toEqual([TEST_MESSAGE, HOST_LINE]);
         expect(button("Save key")?.disabled).toBe(false);
+      });
+
+      it("saves with the hosts it listed", async () => {
+        turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "completed", plan });
+        api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: ["example.com"] });
+        await toKeyChecked();
+        await click(button("Save key"));
+        expect(turnOnApi.turnOnChannelDraft).toHaveBeenCalledWith(
+          expect.objectContaining({ shownHosts: ["api.telegram.org"] }),
+        );
       });
 
       it("reads the settings only once there is a step to save", async () => {
@@ -529,6 +562,8 @@ describe("TelegramKeyChange", () => {
       await toKeyChecked();
       expect(button("Save key")?.disabled).toBe(true);
       await act(async () => release({ items: [telegramDefinition()] }));
+      await settle();
+      // Then the allowlist is read, for the hosts it would add.
       await settle();
       expect(button("Save key")?.disabled).toBe(false);
     });

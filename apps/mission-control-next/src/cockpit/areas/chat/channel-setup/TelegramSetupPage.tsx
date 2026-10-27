@@ -11,7 +11,7 @@ import { QrCode } from "./QrCode";
 import { CODE_EXPIRED, SayHiStep, WAITING_FOR_HI } from "./SayHiStep";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
-import { TurnOnStep, turnOnChanges, turnOnStatus } from "./TurnOnStep";
+import { HOSTS_UNKNOWN, TurnOnStep, turnOnChanges, turnOnStatus } from "./TurnOnStep";
 import { useChannelRequiredHosts } from "./use-channel-picker-groups";
 import { useMissingHosts } from "./use-missing-hosts";
 import { useNewTelegramHref } from "./use-new-connection-href";
@@ -90,11 +90,17 @@ const saidHi = (name: string) => `${name} said hi. Only they can message your bo
  * What the page tells a screen reader after each thing happens: the one status line, latest first. Everything it says
  * is also on the page, in the step it belongs to.
  */
-function statusLine(setup: TelegramSetupState, checking: boolean, turnOn: TurnOnState): string | undefined {
+function statusLine(
+  setup: TelegramSetupState,
+  checking: boolean,
+  turnOn: TurnOnState,
+  hostsFailed: boolean,
+): string | undefined {
   if (setup.error) return setup.error;
   if (checking) return "Checking your key…";
   const turningOn = turnOnStatus(turnOn);
   if (turningOn) return turningOn;
+  if (hostsFailed) return HOSTS_UNKNOWN;
   if (setup.busy) return "Working…";
   if (setup.sender) return saidHi(senderName(setup.sender));
   if (setup.codeExpired) return CODE_EXPIRED;
@@ -119,7 +125,7 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
   const { discard: discardKey } = key;
   const { bot, conflict, draft, sender, webhookActive } = setup;
   const ready = bot !== null && !webhookActive && !conflict;
-  const missing = useMissingHosts(requiredHosts, sender !== null);
+  const hosts = useMissingHosts(requiredHosts, sender !== null);
   const doneHref = useNewTelegramHref(turnOn.state === "done", bot?.username);
 
   // The key is stored securely once checked, so what was typed is dropped. A key that failed stays, to fix.
@@ -160,17 +166,19 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
   const turnOnStep =
     sender && bot ? (
       <TurnOnStep
-        changes={turnOnChanges({ senderName: name, botUsername: bot.username, missingHosts: missing })}
+        changes={turnOnChanges({ senderName: name, botUsername: bot.username, missingHosts: hosts.missing })}
         turnOn={turnOn}
         onTurnOn={() => {
-          if (draft && requiredHosts) {
-            void turnOn.turnOn({ draftId: draft.draftId, catalogId: TELEGRAM_CATALOG_ID, requiredHosts });
+          if (draft && requiredHosts && hosts.known) {
+            const target = { draftId: draft.draftId, catalogId: TELEGRAM_CATALOG_ID };
+            void turnOn.turnOn({ ...target, requiredHosts, shownHosts: hosts.missing });
           }
         }}
         doneHref={doneHref}
-        disabled={!requiredHosts}
+        disabled={!requiredHosts || !hosts.known}
         workspaceId={workspaceId}
         settingsHref={settingsChannelSetupHref(TELEGRAM_CATALOG_ID)}
+        retryHostCheck={hosts.failed ? hosts.retry : undefined}
       />
     ) : undefined;
   const turnedOn = turnOn.state === "done";
@@ -213,7 +221,7 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
       back={{ href: channelPickerHref(), label: "Back to channels" }}
       workspaceId={workspaceId}
     >
-      <SetupSteps steps={steps} status={statusLine(setup, checking, turnOn)} />
+      <SetupSteps steps={steps} status={statusLine(setup, checking, turnOn, hosts.failed)} />
       {/* The key step shows a failure beside its field while it is open. Once it is done its body is gone, and a
           failure of something else (Start over) would be heard but not seen, so it shows here instead. Never both. */}
       {ready && setup.error ? (

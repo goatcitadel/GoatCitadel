@@ -8,6 +8,8 @@ export interface TurnOnInput {
   draftId: string;
   catalogId: string;
   requiredHosts: readonly string[];
+  /** The missing hosts the step listed: Turn on adds no other. */
+  shownHosts: readonly string[];
 }
 
 export interface TurnOnState {
@@ -95,9 +97,11 @@ export function useTurnOn(workspaceId: string, setupId?: string): TurnOnState {
   }, []);
 
   const turnOn = useCallback(
-    async ({ draftId, catalogId, requiredHosts }: TurnOnInput) => {
+    async ({ draftId, catalogId, requiredHosts, shownHosts }: TurnOnInput) => {
       if (working.current) return;
-      await run({ draftId, catalogId }, () => turnOnChannelDraft({ workspaceId, draftId, catalogId, requiredHosts }));
+      await run({ draftId, catalogId }, () =>
+        turnOnChannelDraft({ workspaceId, draftId, catalogId, requiredHosts, shownHosts }),
+      );
     },
     [run, workspaceId],
   );

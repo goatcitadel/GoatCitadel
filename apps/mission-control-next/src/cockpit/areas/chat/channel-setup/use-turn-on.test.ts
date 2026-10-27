@@ -11,7 +11,12 @@ const turnOnModule = vi.hoisted(() => ({
 }));
 vi.mock("./turn-on-channel", () => turnOnModule);
 
-const INPUT = { draftId: "draft-1", catalogId: "channel.telegram", requiredHosts: ["api.telegram.org"] };
+const INPUT = {
+  draftId: "draft-1",
+  catalogId: "channel.telegram",
+  requiredHosts: ["api.telegram.org"],
+  shownHosts: ["api.telegram.org"],
+};
 const plan = { planId: "plan-1" } as never;
 
 let root: Root;
@@ -74,6 +79,7 @@ describe("useTurnOn", () => {
       draftId: "draft-1",
       catalogId: "channel.telegram",
       requiredHosts: ["api.telegram.org"],
+      shownHosts: ["api.telegram.org"],
     });
     expect(current.state).toBe("done");
   });

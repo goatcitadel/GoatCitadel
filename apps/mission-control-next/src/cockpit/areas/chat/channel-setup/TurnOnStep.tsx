@@ -10,6 +10,8 @@ export const TEST_MESSAGE_CHANGE = "GoatCitadel sends a test message to your cha
 
 /** The line for a host that is not yet allowed and will be added when the change is made. */
 export const hostChange = (host: string) => `${host} is added to the hosts GoatCitadel may reach`;
+/** Said when the allowlist couldn't be read: until it is, the step can't list every change, so it can't go ahead. */
+export const HOSTS_UNKNOWN = "GoatCitadel couldn't check which hosts it may reach. Try again.";
 
 /** The words of the step's button and its ending, so a page that applies a different change can say its own. */
 export interface TurnOnWording {
@@ -31,8 +33,8 @@ export const TURN_ON_WORDING: TurnOnWording = {
 };
 
 /**
- * What turning on will do, as plain lines. A host appears only when it is not yet allowed; when the settings could
- * not be read the caller passes none, because the page cannot say what it has not seen.
+ * What turning on will do, as plain lines. A host appears only when it is not yet allowed; until the settings have
+ * been read the caller passes none, because the page cannot say what it has not seen, and keeps the button off.
  */
 export function turnOnChanges({
   senderName,
@@ -162,6 +164,7 @@ export function TurnOnStep({
   workspaceId,
   settingsHref,
   wording = TURN_ON_WORDING,
+  retryHostCheck,
 }: {
   changes: readonly string[];
   turnOn: TurnOnState;
@@ -174,6 +177,8 @@ export function TurnOnStep({
   settingsHref: string;
   /** The button and the ending; turning a new channel on unless the page says otherwise. */
   wording?: TurnOnWording;
+  /** Given when the hosts GoatCitadel may reach couldn't be read: the step says so, and Try again calls this. */
+  retryHostCheck?: () => void;
 }) {
   if (turnOn.state === "done") {
     return (
@@ -194,6 +199,16 @@ export function TurnOnStep({
           <li key={change}>{change}</li>
         ))}
       </ul>
+      {retryHostCheck ? (
+        <Callout tone="warning" announce={false}>
+          <p>{HOSTS_UNKNOWN}</p>
+          <div className="mt-2">
+            <Button size="sm" onClick={retryHostCheck}>
+              Try again
+            </Button>
+          </div>
+        </Callout>
+      ) : null}
       <Outcome turnOn={turnOn} workspaceId={workspaceId} settingsHref={settingsHref} />
       {turnOn.state === "cleanup" ? null : (
         <Button

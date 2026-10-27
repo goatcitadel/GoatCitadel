@@ -11,7 +11,14 @@ import { BotKeyField, keyWorks, OTHER_APP_NOTE } from "./BotKeyField";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
 import { botChangeNote, whatIsInTheWay, type InTheWay } from "./telegram-key-change-model";
-import { hostChange, TEST_MESSAGE_CHANGE, TurnOnStep, turnOnStatus, type TurnOnWording } from "./TurnOnStep";
+import {
+  hostChange,
+  HOSTS_UNKNOWN,
+  TEST_MESSAGE_CHANGE,
+  TurnOnStep,
+  turnOnStatus,
+  type TurnOnWording,
+} from "./TurnOnStep";
 import { useChannelRequiredHosts } from "./use-channel-picker-groups";
 import { useMissingHosts } from "./use-missing-hosts";
 import { useTelegramKeyChange, type TelegramKeyChangeState } from "./use-telegram-key-change";
@@ -39,11 +46,13 @@ function statusLine(
   turnOn: TurnOnState,
   inTheWay: InTheWay | null,
   botChange: string | undefined,
+  hostsFailed: boolean,
 ): string | undefined {
   if (change.error) return change.error;
   if (change.busy) return "Checking your key…";
   const saving = turnOnStatus(turnOn, SAVE_KEY_WORDING);
   if (saving) return saving;
+  if (hostsFailed) return HOSTS_UNKNOWN;
   if (!change.bot) return undefined;
   if (inTheWay) return NOTE_FOR[inTheWay];
   return botChange ?? keyWorks(change.bot.username);
@@ -75,8 +84,8 @@ function KeyChangeSteps({ connection, workspaceId }: { connection: IntegrationCo
   const ready = bot !== null && inTheWay === null;
   const saved = turnOn.state === "done";
   const botChange = bot && ready ? botChangeNote(config, bot.username) : undefined;
-  // Read once there is a step to save, as on the setup page. A host it cannot see is not claimed either way.
-  const missing = useMissingHosts(requiredHosts, ready);
+  // Read once there is a step to save, as on the setup page. Saving waits until the read says which hosts it adds.
+  const hosts = useMissingHosts(requiredHosts, ready);
 
   // The key is stored securely once checked, so what was typed is dropped. A key that failed stays, to fix.
   useEffect(() => {
@@ -95,18 +104,20 @@ function KeyChangeSteps({ connection, workspaceId }: { connection: IntegrationCo
     <div className="space-y-3">
       {botChange && !saved ? <Warning>{botChange}</Warning> : null}
       <TurnOnStep
-        changes={[TEST_MESSAGE_CHANGE, ...missing.map(hostChange)]}
+        changes={[TEST_MESSAGE_CHANGE, ...hosts.missing.map(hostChange)]}
         turnOn={turnOn}
         wording={SAVE_KEY_WORDING}
         onTurnOn={() => {
-          if (draft && requiredHosts) {
-            void turnOn.turnOn({ draftId: draft.draftId, catalogId: TELEGRAM_CATALOG_ID, requiredHosts });
+          if (draft && requiredHosts && hosts.known) {
+            const target = { draftId: draft.draftId, catalogId: TELEGRAM_CATALOG_ID };
+            void turnOn.turnOn({ ...target, requiredHosts, shownHosts: hosts.missing });
           }
         }}
         doneHref={channelPageHref(connectionId)}
-        disabled={!requiredHosts}
+        disabled={!requiredHosts || !hosts.known}
         workspaceId={workspaceId}
         settingsHref={SETTINGS_KEY_HREF}
+        retryHostCheck={hosts.failed ? hosts.retry : undefined}
       />
     </div>
   ) : undefined;
@@ -149,7 +160,7 @@ function KeyChangeSteps({ connection, workspaceId }: { connection: IntegrationCo
       back={{ href: channelPageHref(connectionId), label: "Back to channel" }}
       workspaceId={workspaceId}
     >
-      <SetupSteps steps={steps} status={statusLine(change, turnOn, inTheWay, botChange)} />
+      <SetupSteps steps={steps} status={statusLine(change, turnOn, inTheWay, botChange, hosts.failed)} />
     </SetupFrame>
   );
 }

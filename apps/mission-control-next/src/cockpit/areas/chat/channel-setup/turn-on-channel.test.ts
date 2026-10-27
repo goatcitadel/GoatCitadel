@@ -45,6 +45,8 @@ const input = {
   draftId: "d-1",
   catalogId: "channel.telegram",
   requiredHosts: ["api.telegram.org"],
+  // The page listed the host as one Turn on adds, for the tests where it is missing.
+  shownHosts: ["api.telegram.org"],
 };
 const ctx = { workspaceId: "w-1" };
 
@@ -326,6 +328,20 @@ describe("turnOnChannelDraft", () => {
     expect(api.createChangePlan).toHaveBeenCalledOnce();
     expect(api.patchSettings).not.toHaveBeenCalled();
     expect(api.validateChannelSetupDraft).not.toHaveBeenCalled();
+  });
+
+  it("blocks a host that is missing now but the page didn't list, and makes no change", async () => {
+    api.fetchSettings.mockResolvedValue({ revision: 2, networkAllowlist: [] });
+
+    expect(await turnOnChannelDraft({ ...input, shownHosts: [] })).toEqual({
+      kind: "blocked",
+      reasons: [
+        "GoatCitadel needs to reach api.telegram.org. Reload this page to see the change before turning it on.",
+      ],
+    });
+    expect(api.createChangePlan).not.toHaveBeenCalled();
+    expect(api.validateChannelSetupDraft).not.toHaveBeenCalled();
+    expect(api.testChannelSetupDraft).not.toHaveBeenCalled();
   });
 
   it("stops with the issue messages when the setup doesn't validate", async () => {

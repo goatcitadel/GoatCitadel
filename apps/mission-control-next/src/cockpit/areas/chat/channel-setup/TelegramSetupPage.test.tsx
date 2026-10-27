@@ -575,12 +575,39 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
     expect(container.textContent).not.toContain("hosts GoatCitadel may reach");
   });
 
-  it("makes no claim about hosts when the settings cannot be read", async () => {
+  it("keeps Turn on off until it knows which hosts it would add", async () => {
+    let answer!: (settings: unknown) => void;
+    api.fetchSettings.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    await toSayHi();
+    await someoneSaysHi();
+    expect(button("Turn on")?.disabled).toBe(true);
+    expect(container.textContent).not.toContain("hosts GoatCitadel may reach");
+
+    await act(async () => {
+      answer({ revision: 1, networkAllowlist: [] });
+    });
+    await settle();
+    expect(button("Turn on")?.disabled).toBe(false);
+    expect(container.textContent).toContain("api.telegram.org is added to the hosts GoatCitadel may reach");
+  });
+
+  it("says it couldn't check the hosts when the settings cannot be read, keeps Turn on off, and tries again", async () => {
     api.fetchSettings.mockRejectedValue(new Error("offline"));
     await toSayHi();
     await someoneSaysHi();
+    expect(steps()[3]!.textContent).toContain("GoatCitadel couldn't check which hosts it may reach. Try again.");
+    expect(status()).toBe("GoatCitadel couldn't check which hosts it may reach. Try again.");
     expect([...steps()[3]!.querySelectorAll("li")]).toHaveLength(4);
-    expect(button("Turn on")).toBeDefined();
+    expect(button("Turn on")?.disabled).toBe(true);
+    await click(button("Turn on"));
+    expect(turnOnApi.turnOnChannelDraft).not.toHaveBeenCalled();
+
+    api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: [] });
+    await click(button("Try again"));
+    await settle();
+    expect(container.textContent).not.toContain("couldn't check which hosts");
+    expect(container.textContent).toContain("api.telegram.org is added to the hosts GoatCitadel may reach");
+    expect(button("Turn on")?.disabled).toBe(false);
   });
 
   it("turns on with the channel and the hosts it needs, and says what it is doing", async () => {
@@ -596,6 +623,8 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
       draftId: "draft-1",
       catalogId: "channel.telegram",
       requiredHosts: ["api.telegram.org"],
+      // The host the step listed, so Turn on adds no host the operator never saw.
+      shownHosts: ["api.telegram.org"],
     });
     expect(button("Turning on…")).toBeDefined();
     expect(status()).toBe("Turning on…");
