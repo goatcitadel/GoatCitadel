@@ -1,5 +1,8 @@
 import { __resetSessionViewStateForTests } from "../../../../hooks/use-session-view-state";
-import { __resetCredentialInputsForTests as __resetSessionDraftsForTests, hasCredentialInput as hasSessionDraft } from "../credential-input-owner";
+import {
+  __resetCredentialInputsForTests as __resetSessionDraftsForTests,
+  hasCredentialInput as hasSessionDraft,
+} from "../credential-input-owner";
 import { DraftLeaveDialog } from "../../library/DraftLeaveDialog";
 // @vitest-environment happy-dom
 import { useState, type ComponentProps } from "react";
@@ -34,13 +37,46 @@ const channelApiMocks = vi.hoisted(() => ({
   validateChannelSetupDraft: vi.fn(),
 }));
 
-const operationApiMocks = vi.hoisted(() => ({ discoverTelegramSetupTargets: vi.fn(), fetchChannelSetupDraftEvidence: vi.fn(), acknowledgeChannelSetupTest: vi.fn(), fetchChannelSetupJourney: vi.fn(), fetchTelegramChannelPairings: vi.fn(), approveTelegramChannelPairing: vi.fn(), revokeTelegramChannelPairing: vi.fn() }));
-const oauthApiMocks = vi.hoisted(() => ({ startStagedSlackOAuth: vi.fn(), fetchChannelOAuthAttempt: vi.fn(), adoptSlackOAuthInstall: vi.fn(), cancelChannelOAuthAttempt: vi.fn() }));
+const operationApiMocks = vi.hoisted(() => ({
+  discoverTelegramSetupTargets: vi.fn(),
+  fetchChannelSetupDraftEvidence: vi.fn(),
+  acknowledgeChannelSetupTest: vi.fn(),
+  fetchChannelSetupJourney: vi.fn(),
+  fetchTelegramChannelPairings: vi.fn(),
+  approveTelegramChannelPairing: vi.fn(),
+  revokeTelegramChannelPairing: vi.fn(),
+}));
+const oauthApiMocks = vi.hoisted(() => ({
+  startStagedSlackOAuth: vi.fn(),
+  fetchChannelOAuthAttempt: vi.fn(),
+  adoptSlackOAuthInstall: vi.fn(),
+  cancelChannelOAuthAttempt: vi.fn(),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/channel-setup-operations", () => operationApiMocks);
 vi.mock("@goatcitadel/mission-control-shared/api/channel-oauth", () => oauthApiMocks);
 const settingsNavigate = vi.fn();
-vi.mock("../../../../cockpit/app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: settingsNavigate }) }));
-vi.mock("../../../../cockpit/ui/Dialog", () => ({ Dialog: ({ open, children, title, description }: { open: boolean; children: import("react").ReactNode; title: string; description?: string }) => open ? <div role="dialog" aria-label={title}><p>{description}</p>{children}</div> : null }));
+vi.mock("../../../../cockpit/app/use-cockpit-route", () => ({
+  useCockpitRoute: () => ({ navigate: settingsNavigate }),
+}));
+vi.mock("../../../../cockpit/ui/Dialog", () => ({
+  Dialog: ({
+    open,
+    children,
+    title,
+    description,
+  }: {
+    open: boolean;
+    children: import("react").ReactNode;
+    title: string;
+    description?: string;
+  }) =>
+    open ? (
+      <div role="dialog" aria-label={title}>
+        <p>{description}</p>
+        {children}
+      </div>
+    ) : null,
+}));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => channelApiMocks);
 
@@ -379,17 +415,47 @@ function configureChannelApiMocks(): void {
   channelApiMocks.fetchIntegrationConnections.mockImplementation(async () => ({ items: [] }));
   channelApiMocks.fetchSettings.mockResolvedValue({ features: { connectorDiagnosticsV1Enabled: false } });
   channelApiMocks.fetchSlackOAuthStatus.mockImplementation(async () => ({ configured: false }));
-  operationApiMocks.fetchChannelSetupDraftEvidence.mockImplementation(async (draftId: string, draftRevision: number) => {
-    const checked = [channelApiMocks.testChannelSetupDraft, operationApiMocks.acknowledgeChannelSetupTest]
-      .flatMap((mock) => mock.mock.results.map((result, index) => ({ result, order: mock.mock.invocationCallOrder[index] ?? 0 })))
-      .sort((left, right) => right.order - left.order)[0];
-    let result: typeof testResponse & { evidenceId?: string; finalizationEligibility?: ChannelSetupWizardFeedback["finalizationEligibility"] } | undefined;
-    try { if (checked?.result.type === "return") result = await checked.result.value; } catch { result = undefined; }
-    if (!result || result.draftId !== draftId) return { draftId, draftRevision, items: [] };
-    const evidenceId = result.evidenceId ?? "fixture-stored-" + draftRevision;
-    const currentTest = { ...result, evidenceId, proofExpiresAt: new Date(Date.now() + 300_000).toISOString(), finalizationEligibility: { allowed: result.status === "ok", blockingReasons: [], ...result.finalizationEligibility, evidenceId } };
-    return { draftId, draftRevision, currentTest: result.draftRevision === draftRevision ? currentTest : undefined, items: [{ ...currentTest, catalogId: currentApiDraft.catalogId, phase: "test", createdAt: currentTest.checkedAt }] };
-  });
+  operationApiMocks.fetchChannelSetupDraftEvidence.mockImplementation(
+    async (draftId: string, draftRevision: number) => {
+      const checked = [channelApiMocks.testChannelSetupDraft, operationApiMocks.acknowledgeChannelSetupTest]
+        .flatMap((mock) =>
+          mock.mock.results.map((result, index) => ({ result, order: mock.mock.invocationCallOrder[index] ?? 0 })),
+        )
+        .sort((left, right) => right.order - left.order)[0];
+      let result:
+        | (typeof testResponse & {
+            evidenceId?: string;
+            finalizationEligibility?: ChannelSetupWizardFeedback["finalizationEligibility"];
+          })
+        | undefined;
+      try {
+        if (checked?.result.type === "return") result = await checked.result.value;
+      } catch {
+        result = undefined;
+      }
+      if (!result || result.draftId !== draftId) return { draftId, draftRevision, items: [] };
+      const evidenceId = result.evidenceId ?? "fixture-stored-" + draftRevision;
+      const currentTest = {
+        ...result,
+        evidenceId,
+        proofExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+        finalizationEligibility: {
+          allowed: result.status === "ok",
+          blockingReasons: [],
+          ...result.finalizationEligibility,
+          evidenceId,
+        },
+      };
+      return {
+        draftId,
+        draftRevision,
+        currentTest: result.draftRevision === draftRevision ? currentTest : undefined,
+        items: [
+          { ...currentTest, catalogId: currentApiDraft.catalogId, phase: "test", createdAt: currentTest.checkedAt },
+        ],
+      };
+    },
+  );
   channelApiMocks.validateChannelSetupDraft.mockImplementation(async () => {
     currentApiDraft = { ...currentApiDraft, revision: currentApiDraft.revision + 1 };
     return { ...validationResponse, draftRevision: currentApiDraft.revision };
@@ -417,7 +483,11 @@ function configureChannelApiMocks(): void {
     revision: 1,
     origin: { workspaceId: "default", surface: "settings" },
     request: { kind: "channel_connection", channelKind: currentApiDraft.catalogId, draftId: currentApiDraft.draftId },
-    target: { ownerId: "channel_setup_draft", resourceId: currentApiDraft.draftId, expectedRevision: currentApiDraft.revision },
+    target: {
+      ownerId: "channel_setup_draft",
+      resourceId: currentApiDraft.draftId,
+      expectedRevision: currentApiDraft.revision,
+    },
   }));
 }
 
@@ -547,7 +617,12 @@ beforeEach(() => {
   __resetSessionDraftsForTests();
   vi.clearAllMocks();
   configureChannelApiMocks();
-  vi.stubGlobal("fetch", vi.fn(() => { throw new Error("Channel fixture must never reach a live Gateway."); }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => {
+      throw new Error("Channel fixture must never reach a live Gateway.");
+    }),
+  );
 });
 
 afterEach(() => {
@@ -784,19 +859,46 @@ describe("ChannelSetupWizard", () => {
 describe("ChannelsSection Discord setup lifecycle", () => {
   it("preserves unsaved input through a failed connection refresh and explicitly reviews before retrying", async () => {
     currentApiDraft = { ...discordDraft, connectionId: "connection-fixture", connectionRevision: "a".repeat(64) };
-    const connection = { connectionId: "connection-fixture", revision: "a".repeat(64), catalogId: "channel.discord", kind: "channel", key: "discord", label: "Saved connection", enabled: true, status: "connected", config: { botToken: "[REDACTED]" }, createdAt: discordDraft.createdAt, updatedAt: discordDraft.updatedAt };
+    const connection = {
+      connectionId: "connection-fixture",
+      revision: "a".repeat(64),
+      catalogId: "channel.discord",
+      kind: "channel",
+      key: "discord",
+      label: "Saved connection",
+      enabled: true,
+      status: "connected",
+      config: { botToken: "[REDACTED]" },
+      createdAt: discordDraft.createdAt,
+      updatedAt: discordDraft.updatedAt,
+    };
     channelApiMocks.fetchIntegrationConnections.mockResolvedValue({ items: [connection] });
-    channelApiMocks.fetchIntegrationConnection.mockRejectedValueOnce(new Error("Read unavailable")).mockResolvedValue({ ...connection, revision: "b".repeat(64), label: "Peer connection", enabled: false });
+    channelApiMocks.fetchIntegrationConnection
+      .mockRejectedValueOnce(new Error("Read unavailable"))
+      .mockResolvedValue({ ...connection, revision: "b".repeat(64), label: "Peer connection", enabled: false });
     channelApiMocks.isApiRequestError.mockReturnValue(true);
-    channelApiMocks.updateChannelSetupDraft.mockRejectedValueOnce(new ApiRequestError("Changed", { kind: "http", method: "PATCH", path: "/fixture", status: 409,
-      body: { code: "WRITE_CONFLICT", details: { reason: "CHANNEL_DRAFT_REVISION_CONFLICT", draftId: discordDraft.draftId } } }));
+    channelApiMocks.updateChannelSetupDraft.mockRejectedValueOnce(
+      new ApiRequestError("Changed", {
+        kind: "http",
+        method: "PATCH",
+        path: "/fixture",
+        status: 409,
+        body: {
+          code: "WRITE_CONFLICT",
+          details: { reason: "CHANNEL_DRAFT_REVISION_CONFLICT", draftId: discordDraft.draftId },
+        },
+      }),
+    );
     channelApiMocks.reviewChannelSetupConnection.mockImplementation(async (_id, input) => {
       currentApiDraft = { ...currentApiDraft, revision: 2, connectionRevision: input.expectedConnectionRevision };
       return currentApiDraft;
     });
     const renderer = await renderChannelsSection();
     await click(findButton(renderer.root, "Advanced JSON"));
-    await changeValue(renderer.root.findByType("textarea"), JSON.stringify({ ...discordDraft.draft, defaultChannelId: "retained-channel" }));
+    await changeValue(
+      renderer.root.findByType("textarea"),
+      JSON.stringify({ ...discordDraft.draft, defaultChannelId: "retained-channel" }),
+    );
     await click(findButton(renderer.root, "Save draft"));
     expect(textOf(renderer.root)).toContain("Current settings could not be loaded");
     expect(renderer.root.findByType("textarea").props.value).toContain("retained-channel");
@@ -805,19 +907,30 @@ describe("ChannelsSection Discord setup lifecycle", () => {
     expect(textOf(renderer.root)).toContain("Peer connection");
     expect(channelApiMocks.reviewChannelSetupConnection).not.toHaveBeenCalled();
     await click(findButton(renderer.root, "Use current connection review"));
-    expect(channelApiMocks.reviewChannelSetupConnection).toHaveBeenCalledExactlyOnceWith(discordDraft.draftId, { expectedRevision: 1, expectedConnectionRevision: "b".repeat(64) });
+    expect(channelApiMocks.reviewChannelSetupConnection).toHaveBeenCalledExactlyOnceWith(discordDraft.draftId, {
+      expectedRevision: 1,
+      expectedConnectionRevision: "b".repeat(64),
+    });
     expect(renderer.root.findByType("textarea").props.value).toContain("retained-channel");
     expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
     expect(channelApiMocks.testChannelSetupDraft).not.toHaveBeenCalled();
     await click(findButton(renderer.root, "Save draft"));
-    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenLastCalledWith(discordDraft.draftId, expect.objectContaining({ expectedRevision: 2, draft: expect.objectContaining({ defaultChannelId: "retained-channel" }) }));
+    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenLastCalledWith(
+      discordDraft.draftId,
+      expect.objectContaining({
+        expectedRevision: 2,
+        draft: expect.objectContaining({ defaultChannelId: "retained-channel" }),
+      }),
+    );
     renderer.unmount();
   });
 
   it("blocks a deleted connection while retaining the channel draft", async () => {
     currentApiDraft = { ...discordDraft, connectionId: "deleted-connection", connectionRevision: "a".repeat(64) };
     channelApiMocks.isApiRequestError.mockReturnValue(true);
-    channelApiMocks.fetchIntegrationConnection.mockRejectedValueOnce(new ApiRequestError("Deleted", { kind: "http", method: "GET", path: "/fixture", status: 404 }));
+    channelApiMocks.fetchIntegrationConnection.mockRejectedValueOnce(
+      new ApiRequestError("Deleted", { kind: "http", method: "GET", path: "/fixture", status: 404 }),
+    );
     const renderer = await renderChannelsSection();
     await click(findButton(renderer.root, "Advanced JSON"));
     expect(textOf(renderer.root)).toContain("This connection was deleted. Your draft is retained.");
@@ -829,17 +942,39 @@ describe("ChannelsSection Discord setup lifecycle", () => {
 
   it("ignores a late accepted review after switching workspace and back", async () => {
     currentApiDraft = { ...discordDraft, connectionId: "connection-fixture", connectionRevision: "a".repeat(64) };
-    const connection = { connectionId: "connection-fixture", revision: "b".repeat(64), catalogId: "channel.discord", kind: "channel", key: "discord", label: "Current connection", enabled: true, status: "connected", config: {}, createdAt: discordDraft.createdAt, updatedAt: discordDraft.updatedAt };
+    const connection = {
+      connectionId: "connection-fixture",
+      revision: "b".repeat(64),
+      catalogId: "channel.discord",
+      kind: "channel",
+      key: "discord",
+      label: "Current connection",
+      enabled: true,
+      status: "connected",
+      config: {},
+      createdAt: discordDraft.createdAt,
+      updatedAt: discordDraft.updatedAt,
+    };
     channelApiMocks.fetchIntegrationConnections.mockResolvedValue({ items: [connection] });
     channelApiMocks.fetchIntegrationConnection.mockResolvedValue(connection);
     let resolve!: (draft: ChannelSetupDraft) => void;
-    channelApiMocks.reviewChannelSetupConnection.mockReturnValueOnce(new Promise<ChannelSetupDraft>(yes => { resolve = yes; }));
+    channelApiMocks.reviewChannelSetupConnection.mockReturnValueOnce(
+      new Promise<ChannelSetupDraft>((yes) => {
+        resolve = yes;
+      }),
+    );
     const renderer = await renderChannelsSection();
     await click(findButton(renderer.root, "Use current connection review"));
     const props = renderer.root.findByType(ChannelsSection).props as ComponentProps<typeof ChannelsSection>;
-    await act(async () => { renderer.update(<ChannelsSection {...props} activeWorkspaceId="other" />); });
-    await act(async () => { renderer.update(<ChannelsSection {...props} />); });
-    await act(async () => { resolve({ ...currentApiDraft, label: "Late response", revision: 2, connectionRevision: connection.revision }); });
+    await act(async () => {
+      renderer.update(<ChannelsSection {...props} activeWorkspaceId="other" />);
+    });
+    await act(async () => {
+      renderer.update(<ChannelsSection {...props} />);
+    });
+    await act(async () => {
+      resolve({ ...currentApiDraft, label: "Late response", revision: 2, connectionRevision: connection.revision });
+    });
     await click(findDraftButton(renderer.root, "Discord sandbox"));
     expect(textOf(renderer.root)).not.toContain("Late response");
     expect(renderer.root.findByType(ChannelSetupWizard).props.busyAction).toBe(null);
@@ -977,7 +1112,14 @@ describe("ChannelsSection Discord setup lifecycle", () => {
       idempotencyKey: expect.stringContaining("settings-channel-finalize:discord-draft-1:"),
     });
     expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
-    expect(settingsNavigate).toHaveBeenCalledWith({ area: "chat", theme: "light", channelPlan: "plan-channel-1", channelDraft: "discord-draft-1", channelRevision: 1, channelWorkspace: "default" });
+    expect(settingsNavigate).toHaveBeenCalledWith({
+      area: "chat",
+      theme: "light",
+      channelPlan: "plan-channel-1",
+      channelDraft: "discord-draft-1",
+      channelRevision: 1,
+      channelWorkspace: "default",
+    });
     expect(textOf(renderer.root)).toContain("has not been finalized yet");
 
     renderer.unmount();
@@ -1050,12 +1192,19 @@ describe("ChannelsSection Discord setup lifecycle", () => {
 describe("shared channel setup safety and native controls", () => {
   it("keeps an unconfirmed save locked across remount and admits only one dispatch", async () => {
     let reject!: (error: Error) => void;
-    channelApiMocks.updateChannelSetupDraft.mockReturnValueOnce(new Promise((_yes, no) => { reject = no; }));
+    channelApiMocks.updateChannelSetupDraft.mockReturnValueOnce(
+      new Promise((_yes, no) => {
+        reject = no;
+      }),
+    );
     const renderer = await renderChannelsSection();
     const label = renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!;
     await changeValue(label, "Reviewed replacement");
     const save = findButton(renderer.root, "Save draft");
-    await act(async () => { save.props.onClick(); save.props.onClick(); });
+    await act(async () => {
+      save.props.onClick();
+      save.props.onClick();
+    });
     await flushWork();
     expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
     renderer.unmount();
@@ -1075,9 +1224,16 @@ describe("shared channel setup safety and native controls", () => {
 
   it("cancels a delayed preflight when the workspace changes away and back", async () => {
     const renderer = await renderChannelsSection();
-    await changeValue(renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!, "Never dispatch");
+    await changeValue(
+      renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!,
+      "Never dispatch",
+    );
     let resolve!: (draft: ChannelSetupDraft) => void;
-    channelApiMocks.fetchChannelSetupDraft.mockReturnValueOnce(new Promise<ChannelSetupDraft>((yes) => { resolve = yes; }));
+    channelApiMocks.fetchChannelSetupDraft.mockReturnValueOnce(
+      new Promise<ChannelSetupDraft>((yes) => {
+        resolve = yes;
+      }),
+    );
     await click(findButton(renderer.root, "Save draft"));
     const props = renderer.root.findByType(ChannelsSection).props as ComponentProps<typeof ChannelsSection>;
     await act(async () => renderer.update(<ChannelsSection {...props} activeWorkspaceId="other" />));
@@ -1090,12 +1246,24 @@ describe("shared channel setup safety and native controls", () => {
 
   it("never classifies a committed conflict marker as permission to retry", async () => {
     channelApiMocks.isApiRequestError.mockReturnValue(true);
-    channelApiMocks.updateChannelSetupDraft.mockRejectedValueOnce(new ApiRequestError("Audit failed after commit", {
-      kind: "http", method: "PATCH", path: "/fixture", status: 409,
-      body: { code: "WRITE_CONFLICT", mutationCommitted: true, details: { reason: "CHANNEL_DRAFT_REVISION_CONFLICT", draftId: discordDraft.draftId } },
-    }));
+    channelApiMocks.updateChannelSetupDraft.mockRejectedValueOnce(
+      new ApiRequestError("Audit failed after commit", {
+        kind: "http",
+        method: "PATCH",
+        path: "/fixture",
+        status: 409,
+        body: {
+          code: "WRITE_CONFLICT",
+          mutationCommitted: true,
+          details: { reason: "CHANNEL_DRAFT_REVISION_CONFLICT", draftId: discordDraft.draftId },
+        },
+      }),
+    );
     const renderer = await renderChannelsSection();
-    await changeValue(renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!, "Commit receipt missing");
+    await changeValue(
+      renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!,
+      "Commit receipt missing",
+    );
     await click(findButton(renderer.root, "Save draft"));
     expect(textOf(renderer.root)).toContain("Outcome uncertain");
     expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
@@ -1104,7 +1272,9 @@ describe("shared channel setup safety and native controls", () => {
 
   it("uses the native editor to cancel a live test without any validation or test mutation", async () => {
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = create(<ChannelsSettings workspaceId="default" />); });
+    await act(async () => {
+      renderer = create(<ChannelsSettings workspaceId="default" />);
+    });
     await flushWork();
     await click(findButton(renderer.root, "Edit Discord sandbox"));
     expect(textOf(renderer.root)).toContain("belong to this installation");
@@ -1120,7 +1290,9 @@ describe("shared channel setup safety and native controls", () => {
 
   it("withholds a live test if input changes while its native review is open", async () => {
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = create(<ChannelsSettings workspaceId="default" />); });
+    await act(async () => {
+      renderer = create(<ChannelsSettings workspaceId="default" />);
+    });
     await flushWork();
     await click(findButton(renderer.root, "Edit Discord sandbox"));
     await click(findStepButton(renderer.root, "Validate and test the connection"));
@@ -1135,9 +1307,16 @@ describe("shared channel setup safety and native controls", () => {
 describe("channel confirmed receipts and OAuth scope", () => {
   it("acknowledges a confirmed late public save in the originating retained draft", async () => {
     let resolve!: (draft: ChannelSetupDraft) => void;
-    channelApiMocks.updateChannelSetupDraft.mockReturnValueOnce(new Promise<ChannelSetupDraft>((yes) => { resolve = yes; }));
+    channelApiMocks.updateChannelSetupDraft.mockReturnValueOnce(
+      new Promise<ChannelSetupDraft>((yes) => {
+        resolve = yes;
+      }),
+    );
     const renderer = await renderChannelsSection();
-    await changeValue(renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!, "Saved after leave");
+    await changeValue(
+      renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!,
+      "Saved after leave",
+    );
     await click(findButton(renderer.root, "Save draft"));
     renderer.unmount();
     currentApiDraft = { ...discordDraft, label: "Saved after leave", revision: 2 };
@@ -1145,15 +1324,24 @@ describe("channel confirmed receipts and OAuth scope", () => {
     await flushWork();
     expect(hasSessionDraft("channel:default:discord-draft-1:setup")).toBe(false);
     const next = await renderChannelsSection("Saved after leave");
-    expect(next.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")?.props.value).toBe("Saved after leave");
+    expect(next.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")?.props.value).toBe(
+      "Saved after leave",
+    );
     next.unmount();
   });
   it("acknowledges public fields but retains an unsent secret when navigation interrupts its second write", async () => {
     let resolve!: (draft: ChannelSetupDraft) => void;
-    channelApiMocks.updateChannelSetupDraft.mockReturnValueOnce(new Promise<ChannelSetupDraft>((yes) => { resolve = yes; }));
+    channelApiMocks.updateChannelSetupDraft.mockReturnValueOnce(
+      new Promise<ChannelSetupDraft>((yes) => {
+        resolve = yes;
+      }),
+    );
     const renderer = await renderChannelsSection();
     await click(findStepButton(renderer.root, "Paste your connection values"));
-    await changeValue(findHostControl(renderer.root, "input", "channel-discord-draft-1-botToken"), "synthetic-unsent-token");
+    await changeValue(
+      findHostControl(renderer.root, "input", "channel-discord-draft-1-botToken"),
+      "synthetic-unsent-token",
+    );
     await click(findButton(renderer.root, "Save draft"));
     expect(channelApiMocks.updateChannelSetupDraft.mock.lastCall?.[1].draft).not.toHaveProperty("botToken");
     renderer.unmount();
@@ -1164,11 +1352,16 @@ describe("channel confirmed receipts and OAuth scope", () => {
     expect(hasSessionDraft("channel:default:discord-draft-1:setup")).toBe(true);
     const next = await renderChannelsSection();
     await click(findStepButton(next.root, "Paste your connection values"));
-    expect(findHostControl(next.root, "input", "channel-discord-draft-1-botToken").props.value).toBe("synthetic-unsent-token");
+    expect(findHostControl(next.root, "input", "channel-discord-draft-1-botToken").props.value).toBe(
+      "synthetic-unsent-token",
+    );
     next.unmount();
   });
   it("withholds staged Slack OAuth start when the workspace changes during saved-draft preflight", async () => {
-    const slack = { ...discordDefinition, catalog: { ...discordDefinition.catalog, catalogId: "channel.slack", label: "Slack" } };
+    const slack = {
+      ...discordDefinition,
+      catalog: { ...discordDefinition.catalog, catalogId: "channel.slack", label: "Slack" },
+    };
     const slackDraft = { ...discordDraft, draftId: "slack-draft", catalogId: "channel.slack", label: "Slack sandbox" };
     channelApiMocks.fetchChannelSetupDefinitions.mockResolvedValue({ items: [discordDefinition, slack] });
     channelApiMocks.fetchChannelSetupDrafts.mockResolvedValue({ items: [discordDraft, slackDraft] });
@@ -1177,7 +1370,11 @@ describe("channel confirmed receipts and OAuth scope", () => {
     await click(findDraftButton(renderer.root, "Slack sandbox"));
     await click(findStepButton(renderer.root, "Paste your connection values"));
     let resolve!: (draft: ChannelSetupDraft) => void;
-    channelApiMocks.fetchChannelSetupDraft.mockReturnValueOnce(new Promise<ChannelSetupDraft>((yes) => { resolve = yes; }));
+    channelApiMocks.fetchChannelSetupDraft.mockReturnValueOnce(
+      new Promise<ChannelSetupDraft>((yes) => {
+        resolve = yes;
+      }),
+    );
     await click(findButton(renderer.root, "Connect Slack with OAuth"));
     const props = renderer.root.findByType(ChannelsSection).props as ComponentProps<typeof ChannelsSection>;
     await act(async () => renderer.update(<ChannelsSection {...props} activeWorkspaceId="other" />));
@@ -1185,8 +1382,8 @@ describe("channel confirmed receipts and OAuth scope", () => {
     await flushWork();
     expect(oauthApiMocks.startStagedSlackOAuth).not.toHaveBeenCalled();
     renderer.unmount();
-  });});
-
+  });
+});
 
 describe("bound channel setup operations", () => {
   it("saves and tests the exact reviewed advanced JSON without a preliminary client value rewrite", async () => {
@@ -1207,13 +1404,39 @@ describe("bound channel setup operations", () => {
   it("acknowledges optional cleanup on the same draft revision and keeps warn visible", async () => {
     channelApiMocks.testChannelSetupDraft.mockImplementation(async () => {
       currentApiDraft = { ...currentApiDraft, revision: currentApiDraft.revision + 2 };
-      return { ...testResponse, status: "warn", evidenceId: "evidence-original", draftRevision: currentApiDraft.revision,
-        finalizationEligibility: { allowed: false, blockingReasons: ["Acknowledge cleanup"], requiresAcknowledgement: true },
-        probe: { ...testResponse.probe, steps: [{ key: "cleanup", label: "Cleanup", status: "warn", disposition: "advisory", cleanupStatus: "manual_required", providerMessageId: "provider-receipt", message: "Delete the test message manually" }] } };
+      return {
+        ...testResponse,
+        status: "warn",
+        evidenceId: "evidence-original",
+        draftRevision: currentApiDraft.revision,
+        finalizationEligibility: {
+          allowed: false,
+          blockingReasons: ["Acknowledge cleanup"],
+          requiresAcknowledgement: true,
+        },
+        probe: {
+          ...testResponse.probe,
+          steps: [
+            {
+              key: "cleanup",
+              label: "Cleanup",
+              status: "warn",
+              disposition: "advisory",
+              cleanupStatus: "manual_required",
+              providerMessageId: "provider-receipt",
+              message: "Delete the test message manually",
+            },
+          ],
+        },
+      };
     });
-    operationApiMocks.acknowledgeChannelSetupTest.mockImplementation(async (_id, input) => ({ ...testResponse,
-      draftRevision: input.expectedRevision, evidenceId: "evidence-ack", status: "warn",
-      finalizationEligibility: { allowed: true, blockingReasons: [], evidenceId: "evidence-ack" } }));
+    operationApiMocks.acknowledgeChannelSetupTest.mockImplementation(async (_id, input) => ({
+      ...testResponse,
+      draftRevision: input.expectedRevision,
+      evidenceId: "evidence-ack",
+      status: "warn",
+      finalizationEligibility: { allowed: true, blockingReasons: [], evidenceId: "evidence-ack" },
+    }));
     const renderer = await renderChannelsSection();
     await click(findStepButton(renderer.root, "Validate and test the connection"));
     await click(findButton(renderer.root, "Run live test"));
@@ -1224,7 +1447,11 @@ describe("bound channel setup operations", () => {
     expect(operationApiMocks.acknowledgeChannelSetupTest).not.toHaveBeenCalled();
     await click(findButton(renderer.root, "Acknowledge reviewed cleanup warning"));
     await flushWork();
-    expect(operationApiMocks.acknowledgeChannelSetupTest).toHaveBeenCalledWith("discord-draft-1", { expectedRevision: testedRevision, evidenceId: "evidence-original", acknowledgement: "cleanup" });
+    expect(operationApiMocks.acknowledgeChannelSetupTest).toHaveBeenCalledWith("discord-draft-1", {
+      expectedRevision: testedRevision,
+      evidenceId: "evidence-original",
+      acknowledgement: "cleanup",
+    });
     expect(currentApiDraft.revision).toBe(testedRevision);
     expect(textOf(renderer.root)).toContain("Connection test · Warning");
     await click(findStepButton(renderer.root, "Finish setup"));
@@ -1235,13 +1462,38 @@ describe("bound channel setup operations", () => {
   it("leaves unrelated warnings blocking after a valid cleanup acknowledgement", async () => {
     channelApiMocks.testChannelSetupDraft.mockImplementation(async () => {
       currentApiDraft = { ...currentApiDraft, revision: currentApiDraft.revision + 2 };
-      return { ...testResponse, status: "warn", evidenceId: "evidence-original", draftRevision: currentApiDraft.revision,
-        finalizationEligibility: { allowed: false, blockingReasons: ["Unverified transport", "Acknowledge cleanup"], requiresAcknowledgement: true },
-        probe: { ...testResponse.probe, steps: [{ key: "cleanup", label: "Cleanup", status: "warn", disposition: "advisory", cleanupStatus: "manual_required", message: "Delete manually" }] } };
+      return {
+        ...testResponse,
+        status: "warn",
+        evidenceId: "evidence-original",
+        draftRevision: currentApiDraft.revision,
+        finalizationEligibility: {
+          allowed: false,
+          blockingReasons: ["Unverified transport", "Acknowledge cleanup"],
+          requiresAcknowledgement: true,
+        },
+        probe: {
+          ...testResponse.probe,
+          steps: [
+            {
+              key: "cleanup",
+              label: "Cleanup",
+              status: "warn",
+              disposition: "advisory",
+              cleanupStatus: "manual_required",
+              message: "Delete manually",
+            },
+          ],
+        },
+      };
     });
-    operationApiMocks.acknowledgeChannelSetupTest.mockImplementation(async (_id, input) => ({ ...testResponse,
-      status: "warn", draftRevision: input.expectedRevision, evidenceId: "evidence-ack",
-      finalizationEligibility: { allowed: false, blockingReasons: ["Unverified transport"] } }));
+    operationApiMocks.acknowledgeChannelSetupTest.mockImplementation(async (_id, input) => ({
+      ...testResponse,
+      status: "warn",
+      draftRevision: input.expectedRevision,
+      evidenceId: "evidence-ack",
+      finalizationEligibility: { allowed: false, blockingReasons: ["Unverified transport"] },
+    }));
     const renderer = await renderChannelsSection();
     await click(findStepButton(renderer.root, "Validate and test the connection"));
     await click(findButton(renderer.root, "Run live test"));
@@ -1249,91 +1501,261 @@ describe("bound channel setup operations", () => {
     await click(findButton(renderer.root, "Review test message cleanup"));
     await click(findButton(renderer.root, "Acknowledge reviewed cleanup warning"));
     await click(findStepButton(renderer.root, "Finish setup"));
-    expect(findButton(renderer.root, "Finalize connection").props).toMatchObject({ disabled: true, title: "Unverified transport" });
+    expect(findButton(renderer.root, "Finalize connection").props).toMatchObject({
+      disabled: true,
+      title: "Unverified transport",
+    });
     expect(channelApiMocks.createChangePlan).not.toHaveBeenCalled();
     renderer.unmount();
   });
 
   it("stores discovered Telegram candidates until explicit selection, preserving manual targets and their default", async () => {
-    const telegram = { ...discordDefinition, catalog: { ...discordDefinition.catalog, catalogId: "channel.telegram", key: "telegram", label: "Telegram" }, wizard: { ...discordDefinition.wizard, steps: discordDefinition.wizard.steps.map((step) => step.id === "collect-values" ? { ...step, fields: [{ key: "targets", label: "Destinations", type: "target-list" as const, targetAddressKey: "chatId" as const, required: true, explanation: "Choose chats" }] } : step) } };
-    const manual = { id: "manual", label: "Manual home", chatId: "-1000000000000001", default: true, customRoute: "retain" };
-    currentApiDraft = { ...discordDraft, draftId: "telegram-draft", catalogId: "channel.telegram", label: "Telegram sandbox", draft: { botToken: "[REDACTED]", targets: [manual] } };
+    const telegram = {
+      ...discordDefinition,
+      catalog: { ...discordDefinition.catalog, catalogId: "channel.telegram", key: "telegram", label: "Telegram" },
+      wizard: {
+        ...discordDefinition.wizard,
+        steps: discordDefinition.wizard.steps.map((step) =>
+          step.id === "collect-values"
+            ? {
+                ...step,
+                fields: [
+                  {
+                    key: "targets",
+                    label: "Destinations",
+                    type: "target-list" as const,
+                    targetAddressKey: "chatId" as const,
+                    required: true,
+                    explanation: "Choose chats",
+                  },
+                ],
+              }
+            : step,
+        ),
+      },
+    };
+    const manual = {
+      id: "manual",
+      label: "Manual home",
+      chatId: "-1000000000000001",
+      default: true,
+      customRoute: "retain",
+    };
+    // A change to a saved channel: a new Telegram setup goes to its page in Chat instead of this guide.
+    currentApiDraft = {
+      ...discordDraft,
+      draftId: "telegram-draft",
+      catalogId: "channel.telegram",
+      label: "Telegram sandbox",
+      lifecycleMode: "edit",
+      draft: { botToken: "[REDACTED]", targets: [manual] },
+    };
     channelApiMocks.fetchChannelSetupDefinitions.mockResolvedValue({ items: [telegram] });
-    operationApiMocks.discoverTelegramSetupTargets.mockResolvedValue({ items: [{ id: "candidate", label: "New chat", chatId: "-1000000000000002", kind: "group", source: "recent_update" }], warnings: ["Only recent chats appear"], webhookActive: false });
+    operationApiMocks.discoverTelegramSetupTargets.mockResolvedValue({
+      items: [
+        { id: "candidate", label: "New chat", chatId: "-1000000000000002", kind: "group", source: "recent_update" },
+      ],
+      warnings: ["Only recent chats appear"],
+      webhookActive: false,
+    });
     const renderer = await renderChannelsSection("Telegram sandbox");
     await click(findStepButton(renderer.root, "Paste your connection values"));
     await click(findButton(renderer.root, "Detect Telegram chats"));
     await flushWork();
-    expect(operationApiMocks.discoverTelegramSetupTargets).toHaveBeenCalledWith({ source: "draft", draftId: "telegram-draft", expectedRevision: 1, setupCode: undefined });
+    expect(operationApiMocks.discoverTelegramSetupTargets).toHaveBeenCalledWith({
+      source: "draft",
+      draftId: "telegram-draft",
+      expectedRevision: 1,
+      setupCode: undefined,
+    });
     expect(renderer.root.findByType(ChannelSetupWizard).props.values.targets).toEqual([manual]);
     expect(findButton(renderer.root, "Add selected chats without replacing destinations").props.disabled).toBe(true);
-    const candidates = renderer.root.findByProps({ "aria-label": "Discover Telegram destinations" }).findAllByType("input");
+    const candidates = renderer.root
+      .findByProps({ "aria-label": "Discover Telegram destinations" })
+      .findAllByType("input");
     await act(async () => candidates[0]!.props.onChange({ target: { checked: true } }));
     await click(findButton(renderer.root, "Add selected chats without replacing destinations"));
-    expect(renderer.root.findByType(ChannelSetupWizard).props.values.targets).toEqual([manual, { id: "candidate", label: "New chat", chatId: "-1000000000000002", kind: "group", default: false }]);
+    expect(renderer.root.findByType(ChannelSetupWizard).props.values.targets).toEqual([
+      manual,
+      { id: "candidate", label: "New chat", chatId: "-1000000000000002", kind: "group", default: false },
+    ]);
     expect(channelApiMocks.updateChannelSetupDraft).not.toHaveBeenCalled();
     renderer.unmount();
   });
 
+  it("sends a new Telegram setup to its page in Chat instead of the guide", async () => {
+    const telegram = {
+      ...discordDefinition,
+      catalog: { ...discordDefinition.catalog, catalogId: "channel.telegram", key: "telegram", label: "Telegram" },
+    };
+    const unfinished = {
+      ...discordDraft,
+      draftId: "telegram-draft",
+      catalogId: "channel.telegram",
+      label: "Telegram sandbox",
+    };
+    channelApiMocks.fetchChannelSetupDefinitions.mockResolvedValue({ items: [discordDefinition, telegram] });
+    channelApiMocks.fetchChannelSetupDrafts.mockResolvedValue({ items: [unfinished] });
+    const renderer = await renderChannelsSection("Telegram sandbox");
+    expect(renderer.root.findAllByType(ChannelSetupWizard)).toHaveLength(0);
+    const link = renderer.root.findAllByType("a").find((node) => textOf(node) === "Set up Telegram in Chat");
+    expect(link?.props.href).toBe("/chat/messaging/add/telegram?shell=cockpit");
+    expect(renderer.root.findAllByType("button").some((node) => textOf(node) === "Start Telegram setup")).toBe(false);
+    expect(channelApiMocks.createChannelSetupDraft).not.toHaveBeenCalled();
+    renderer.unmount();
+  });
+
   it("withholds a staged OAuth mutation if draft input changes during canonical preflight", async () => {
-    const slack = { ...discordDefinition, catalog: { ...discordDefinition.catalog, catalogId: "channel.slack", key: "slack", label: "Slack" } };
+    const slack = {
+      ...discordDefinition,
+      catalog: { ...discordDefinition.catalog, catalogId: "channel.slack", key: "slack", label: "Slack" },
+    };
     currentApiDraft = { ...discordDraft, draftId: "slack-draft", catalogId: "channel.slack", label: "Slack sandbox" };
     channelApiMocks.fetchChannelSetupDefinitions.mockResolvedValue({ items: [slack] });
     const renderer = await renderChannelsSection("Slack sandbox");
     await click(findStepButton(renderer.root, "Paste your connection values"));
     let resolve!: (draft: ChannelSetupDraft) => void;
-    channelApiMocks.fetchChannelSetupDraft.mockReturnValueOnce(new Promise<ChannelSetupDraft>((yes) => { resolve = yes; }));
+    channelApiMocks.fetchChannelSetupDraft.mockReturnValueOnce(
+      new Promise<ChannelSetupDraft>((yes) => {
+        resolve = yes;
+      }),
+    );
     await click(findButton(renderer.root, "Connect Slack with OAuth"));
-    await changeValue(renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Slack")!, "Changed during preflight");
+    await changeValue(
+      renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Slack")!,
+      "Changed during preflight",
+    );
     await act(async () => resolve(currentApiDraft));
     await flushWork();
     expect(oauthApiMocks.startStagedSlackOAuth).not.toHaveBeenCalled();
-    expect(renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Slack")?.props.value).toBe("Changed during preflight");
+    expect(renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Slack")?.props.value).toBe(
+      "Changed during preflight",
+    );
     renderer.unmount();
   });
 
   it("requires exact Slack workspace/app adoption and never selects a global OAuth connection", async () => {
-    const slack = { ...discordDefinition, catalog: { ...discordDefinition.catalog, catalogId: "channel.slack", key: "slack", label: "Slack" } };
+    const slack = {
+      ...discordDefinition,
+      catalog: { ...discordDefinition.catalog, catalogId: "channel.slack", key: "slack", label: "Slack" },
+    };
     const targets = [{ id: "home", label: "Ops", channel: "#ops", default: true }];
-    currentApiDraft = { ...discordDraft, draftId: "slack-draft", catalogId: "channel.slack", label: "Slack sandbox", draft: { targets } };
+    currentApiDraft = {
+      ...discordDraft,
+      draftId: "slack-draft",
+      catalogId: "channel.slack",
+      label: "Slack sandbox",
+      draft: { targets },
+    };
     channelApiMocks.fetchChannelSetupDefinitions.mockResolvedValue({ items: [slack] });
-    const attempt = { provider: "slack", workspaceId: "default", draftId: "slack-draft", draftRevision: 1, attemptId: "attempt-exact", revision: 1, status: "pending", expiresAt: "2099-01-01T00:00:00Z", createdAt: "2026-10-08T10:00:00Z", updatedAt: "2026-10-08T10:00:00Z" };
-    const install = { installId: "slack:TEXACT:AEXACT", teamId: "TEXACT", teamName: "Reviewed workspace", appId: "AEXACT", botUserId: "BEXACT", scopes: ["chat:write"] };
-    oauthApiMocks.startStagedSlackOAuth.mockResolvedValue({ configured: true, mode: "self_owned", scopes: ["chat:write"], missing: [], authorizationUrl: "https://slack.com/oauth/v2/authorize?state=opaque", state: "opaque", attempt });
+    const attempt = {
+      provider: "slack",
+      workspaceId: "default",
+      draftId: "slack-draft",
+      draftRevision: 1,
+      attemptId: "attempt-exact",
+      revision: 1,
+      status: "pending",
+      expiresAt: "2099-01-01T00:00:00Z",
+      createdAt: "2026-10-08T10:00:00Z",
+      updatedAt: "2026-10-08T10:00:00Z",
+    };
+    const install = {
+      installId: "slack:TEXACT:AEXACT",
+      teamId: "TEXACT",
+      teamName: "Reviewed workspace",
+      appId: "AEXACT",
+      botUserId: "BEXACT",
+      scopes: ["chat:write"],
+    };
+    oauthApiMocks.startStagedSlackOAuth.mockResolvedValue({
+      configured: true,
+      mode: "self_owned",
+      scopes: ["chat:write"],
+      missing: [],
+      authorizationUrl: "https://slack.com/oauth/v2/authorize?state=opaque",
+      state: "opaque",
+      attempt,
+    });
     oauthApiMocks.fetchChannelOAuthAttempt.mockResolvedValue({ ...attempt, revision: 2, status: "ready", install });
     oauthApiMocks.adoptSlackOAuthInstall.mockImplementation(async () => {
-      currentApiDraft = { ...currentApiDraft, revision: 2, draft: { targets, authMode: "oauth", slackTeamId: "TEXACT", slackAppId: "AEXACT" } };
-      return { draft: currentApiDraft, attempt: { ...attempt, revision: 3, status: "adopted", install, adoptedDraftRevision: 2 } };
+      currentApiDraft = {
+        ...currentApiDraft,
+        revision: 2,
+        draft: { targets, authMode: "oauth", slackTeamId: "TEXACT", slackAppId: "AEXACT" },
+      };
+      return {
+        draft: currentApiDraft,
+        attempt: { ...attempt, revision: 3, status: "adopted", install, adoptedDraftRevision: 2 },
+      };
     });
     vi.spyOn(window, "open").mockReturnValue(null);
     const renderer = await renderChannelsSection("Slack sandbox");
     await click(findStepButton(renderer.root, "Paste your connection values"));
     await click(findButton(renderer.root, "Connect Slack with OAuth"));
     await flushWork();
-    expect(oauthApiMocks.startStagedSlackOAuth).toHaveBeenCalledWith({ workspaceId: "default", draftId: "slack-draft", expectedRevision: 1 });
+    expect(oauthApiMocks.startStagedSlackOAuth).toHaveBeenCalledWith({
+      workspaceId: "default",
+      draftId: "slack-draft",
+      expectedRevision: 1,
+    });
     expect(textOf(renderer.root)).toContain("Reviewed workspace");
     expect(textOf(renderer.root)).toContain("AEXACT");
     expect(oauthApiMocks.adoptSlackOAuthInstall).not.toHaveBeenCalled();
     expect(channelApiMocks.fetchSlackOAuthStatus).not.toHaveBeenCalled();
     await click(findButton(renderer.root, "Use this reviewed workspace and app"));
     await flushWork();
-    expect(oauthApiMocks.adoptSlackOAuthInstall).toHaveBeenCalledWith({ workspaceId: "default", draftId: "slack-draft", expectedRevision: 1, attemptId: "attempt-exact" });
-    expect(renderer.root.findByType(ChannelSetupWizard).props.values).toMatchObject({ targets, authMode: "oauth", slackTeamId: "TEXACT", slackAppId: "AEXACT" });
+    expect(oauthApiMocks.adoptSlackOAuthInstall).toHaveBeenCalledWith({
+      workspaceId: "default",
+      draftId: "slack-draft",
+      expectedRevision: 1,
+      attemptId: "attempt-exact",
+    });
+    expect(renderer.root.findByType(ChannelSetupWizard).props.values).toMatchObject({
+      targets,
+      authMode: "oauth",
+      slackTeamId: "TEXACT",
+      slackAppId: "AEXACT",
+    });
     expect(channelApiMocks.createChangePlan).not.toHaveBeenCalled();
     renderer.unmount();
   });
 
   it("does not dispatch Telegram pairing approval after leaving during fresh evidence preflight", async () => {
-    const connection = { connectionId: "telegram-connection", revision: "a".repeat(64), catalogId: "channel.telegram", kind: "channel" as const, key: "telegram", label: "Telegram home", enabled: true, status: "connected" as const, config: {}, createdAt: discordDraft.createdAt, updatedAt: discordDraft.updatedAt };
-    const snapshot = { connectionId: connection.connectionId, connectionRevision: connection.revision, inboundAccessMode: "allowlist", allowedSenders: [], items: [{ actorId: "actor-exact", status: "pending", code: "paired-code", chatId: "123" }] };
+    const connection = {
+      connectionId: "telegram-connection",
+      revision: "a".repeat(64),
+      catalogId: "channel.telegram",
+      kind: "channel" as const,
+      key: "telegram",
+      label: "Telegram home",
+      enabled: true,
+      status: "connected" as const,
+      config: {},
+      createdAt: discordDraft.createdAt,
+      updatedAt: discordDraft.updatedAt,
+    };
+    const snapshot = {
+      connectionId: connection.connectionId,
+      connectionRevision: connection.revision,
+      inboundAccessMode: "allowlist",
+      allowedSenders: [],
+      items: [{ actorId: "actor-exact", status: "pending", code: "paired-code", chatId: "123" }],
+    };
     operationApiMocks.fetchTelegramChannelPairings.mockResolvedValue(snapshot);
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = create(<TelegramPairingPanel connection={connection} />); });
+    await act(async () => {
+      renderer = create(<TelegramPairingPanel connection={connection} />);
+    });
     await flushWork();
     await click(findButton(renderer.root, "Review Telegram approval"));
     expect(operationApiMocks.approveTelegramChannelPairing).not.toHaveBeenCalled();
     let resolve!: (value: typeof connection) => void;
-    channelApiMocks.fetchIntegrationConnection.mockReturnValueOnce(new Promise((yes) => { resolve = yes; }));
+    channelApiMocks.fetchIntegrationConnection.mockReturnValueOnce(
+      new Promise((yes) => {
+        resolve = yes;
+      }),
+    );
     await click(findButton(renderer.root, "Apply reviewed Telegram access change"));
     await act(async () => renderer.unmount());
     await act(async () => resolve(connection));
@@ -1345,23 +1767,65 @@ describe("bound channel setup operations", () => {
 describe("local channel editing while owner writes are blocked", () => {
   it("retains editable advanced text through a phase-bound stale validation and failed review read, then reviews before saving", async () => {
     currentApiDraft = { ...discordDraft, connectionId: "connection-fixture", connectionRevision: "a".repeat(64) };
-    const connection = { connectionId: "connection-fixture", revision: "a".repeat(64), catalogId: "channel.discord", kind: "channel", key: "discord", label: "Base connection", enabled: true, status: "connected", config: {}, createdAt: discordDraft.createdAt, updatedAt: discordDraft.updatedAt };
+    const connection = {
+      connectionId: "connection-fixture",
+      revision: "a".repeat(64),
+      catalogId: "channel.discord",
+      kind: "channel",
+      key: "discord",
+      label: "Base connection",
+      enabled: true,
+      status: "connected",
+      config: {},
+      createdAt: discordDraft.createdAt,
+      updatedAt: discordDraft.updatedAt,
+    };
     channelApiMocks.fetchIntegrationConnections.mockResolvedValue({ items: [connection] });
-    channelApiMocks.fetchIntegrationConnection.mockRejectedValueOnce(new Error("Read unavailable")).mockResolvedValue({ ...connection, revision: "b".repeat(64), label: "Peer connection" });
+    channelApiMocks.fetchIntegrationConnection
+      .mockRejectedValueOnce(new Error("Read unavailable"))
+      .mockResolvedValue({ ...connection, revision: "b".repeat(64), label: "Peer connection" });
     channelApiMocks.isApiRequestError.mockReturnValue(true);
-    channelApiMocks.validateChannelSetupDraft.mockRejectedValueOnce(new ApiRequestError("Review required", { kind: "http", method: "POST", path: "/fixture/validate", status: 409, body: { code: "WRITE_CONFLICT", details: { reason: "CHANNEL_CONNECTION_REVIEW_REQUIRED", mutationPhase: "before_side_effects", draftId: discordDraft.draftId, draftRevision: 2, connectionId: connection.connectionId } } }));
+    channelApiMocks.validateChannelSetupDraft.mockRejectedValueOnce(
+      new ApiRequestError("Review required", {
+        kind: "http",
+        method: "POST",
+        path: "/fixture/validate",
+        status: 409,
+        body: {
+          code: "WRITE_CONFLICT",
+          details: {
+            reason: "CHANNEL_CONNECTION_REVIEW_REQUIRED",
+            mutationPhase: "before_side_effects",
+            draftId: discordDraft.draftId,
+            draftRevision: 2,
+            connectionId: connection.connectionId,
+          },
+        },
+      }),
+    );
     channelApiMocks.reviewChannelSetupConnection.mockImplementation(async (_id, input) => {
-      currentApiDraft = { ...currentApiDraft, revision: currentApiDraft.revision + 1, connectionRevision: input.expectedConnectionRevision }; return currentApiDraft;
+      currentApiDraft = {
+        ...currentApiDraft,
+        revision: currentApiDraft.revision + 1,
+        connectionRevision: input.expectedConnectionRevision,
+      };
+      return currentApiDraft;
     });
     const renderer = await renderChannelsSection();
     await click(findButton(renderer.root, "Advanced JSON"));
-    await changeValue(renderer.root.findByType("textarea"), JSON.stringify({ ...discordDraft.draft, defaultChannelId: "initial-edit" }));
+    await changeValue(
+      renderer.root.findByType("textarea"),
+      JSON.stringify({ ...discordDraft.draft, defaultChannelId: "initial-edit" }),
+    );
     await click(findButton(renderer.root, "Validate"));
     await flushWork();
     expect(textOf(renderer.root)).toContain("Current settings could not be loaded");
     expect(textOf(renderer.root)).not.toContain("Outcome uncertain");
     expect(renderer.root.findByType("textarea").props.disabled).toBe(false);
-    await changeValue(renderer.root.findByType("textarea"), JSON.stringify({ ...discordDraft.draft, defaultChannelId: "edit-after-review-read-failed" }));
+    await changeValue(
+      renderer.root.findByType("textarea"),
+      JSON.stringify({ ...discordDraft.draft, defaultChannelId: "edit-after-review-read-failed" }),
+    );
     expect(findButton(renderer.root, "Save draft").props.disabled).toBe(true);
     expect(findButton(renderer.root, "Run live test").props.disabled).toBe(true);
     await click(findButton(renderer.root, "Reload connection review"));
@@ -1370,7 +1834,13 @@ describe("local channel editing while owner writes are blocked", () => {
     expect(renderer.root.findByType("textarea").props.value).toContain("edit-after-review-read-failed");
     expect(channelApiMocks.testChannelSetupDraft).not.toHaveBeenCalled();
     await click(findButton(renderer.root, "Save draft"));
-    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenLastCalledWith(discordDraft.draftId, expect.objectContaining({ expectedRevision: 3, draft: expect.objectContaining({ defaultChannelId: "edit-after-review-read-failed" }) }));
+    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenLastCalledWith(
+      discordDraft.draftId,
+      expect.objectContaining({
+        expectedRevision: 3,
+        draft: expect.objectContaining({ defaultChannelId: "edit-after-review-read-failed" }),
+      }),
+    );
     renderer.unmount();
   });
 
@@ -1380,7 +1850,9 @@ describe("local channel editing while owner writes are blocked", () => {
     it("keeps advanced text editable while review/unknown outcomes block writes in " + Component.name, async () => {
       const props = createWizardProps({ reviewRequired: true, mutationBlocked: true });
       let renderer!: ReactTestRenderer;
-      await act(async () => { renderer = create(<Component {...props} />); });
+      await act(async () => {
+        renderer = create(<Component {...props} />);
+      });
       await click(findButton(renderer.root, "Advanced JSON"));
       expect(renderer.root.findByType("textarea").props.disabled).toBe(false);
       await changeValue(renderer.root.findByType("textarea"), '{"retained":"editable"}');
@@ -1394,15 +1866,34 @@ describe("local channel editing while owner writes are blocked", () => {
   }
   it("recognizes only explicitly before-side-effects connection review conflicts for the exact owner", () => {
     channelApiMocks.isApiRequestError.mockReturnValue(true);
-    const details = { reason: "CHANNEL_CONNECTION_REVIEW_REQUIRED", mutationPhase: "before_side_effects", draftId: "draft-exact", draftRevision: 7, connectionId: "connection-exact" };
-    const error = (changes = {}, markers = {}) => new ApiRequestError("Review required", { kind: "http", method: "POST", path: "/api/v1/channels/drafts/draft-exact/validate", status: 409, body: { code: "WRITE_CONFLICT", details: { ...details, ...changes }, ...markers } });
+    const details = {
+      reason: "CHANNEL_CONNECTION_REVIEW_REQUIRED",
+      mutationPhase: "before_side_effects",
+      draftId: "draft-exact",
+      draftRevision: 7,
+      connectionId: "connection-exact",
+    };
+    const error = (changes = {}, markers = {}) =>
+      new ApiRequestError("Review required", {
+        kind: "http",
+        method: "POST",
+        path: "/api/v1/channels/drafts/draft-exact/validate",
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { ...details, ...changes }, ...markers },
+      });
     expect(isChannelPrecommitConflict(error(), "draft-exact", "connection-exact", 7)).toBe(true);
-    expect(isChannelPrecommitConflict(error({ mutationPhase: undefined }), "draft-exact", "connection-exact", 7)).toBe(false);
-    expect(isChannelPrecommitConflict(error({ mutationPhase: "after_side_effects" }), "draft-exact", "connection-exact", 7)).toBe(false);
+    expect(isChannelPrecommitConflict(error({ mutationPhase: undefined }), "draft-exact", "connection-exact", 7)).toBe(
+      false,
+    );
+    expect(
+      isChannelPrecommitConflict(error({ mutationPhase: "after_side_effects" }), "draft-exact", "connection-exact", 7),
+    ).toBe(false);
     expect(isChannelPrecommitConflict(error(), "draft-exact", "foreign", 7)).toBe(false);
     expect(isChannelPrecommitConflict(error(), "draft-exact", "connection-exact", 8)).toBe(false);
     expect(isChannelPrecommitConflict(error(), "foreign", "connection-exact", 7)).toBe(false);
-    expect(isChannelPrecommitConflict(error({}, { mutationCommitted: true }), "draft-exact", "connection-exact", 7)).toBe(false);
+    expect(
+      isChannelPrecommitConflict(error({}, { mutationCommitted: true }), "draft-exact", "connection-exact", 7),
+    ).toBe(false);
     expect(isChannelPrecommitConflict(error({ committed: true }), "draft-exact", "connection-exact", 7)).toBe(false);
   });
 });

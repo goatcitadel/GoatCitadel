@@ -1,4 +1,4 @@
-import type { ChannelPickerGroup, ChannelSetupDefinition } from "@goatcitadel/contracts";
+import type { ChannelPickerGroup, ChannelSetupDefinition, ChannelSetupDraft } from "@goatcitadel/contracts";
 import { channelSetupHref } from "../../../app/routes";
 
 /** Channels whose setup runs on its own page in Chat. The rest are set up in Settings. */
@@ -32,6 +32,25 @@ export function settingsChannelSetupHref(catalogId: string): string {
   return `/settings/connections?channel=${encodeURIComponent(catalogId)}#channels`;
 }
 
+/** The Chat page that sets up a channel, for a channel set up there. Settings sets up the rest. */
+export function chatSetupHref(definition: Pick<ChannelSetupDefinition, "catalog">): string | undefined {
+  const { key } = definition.catalog;
+  return CONVERTED_SETUP_CHANNELS.has(key) ? channelSetupHref(key) : undefined;
+}
+
+/**
+ * Where an unfinished new setup goes on, when its channel is set up in Chat: its page there picks the draft up. A
+ * change to a saved channel stays in Settings, and so does a draft for a channel the definitions don't know.
+ */
+export function chatSetupHrefForDraft(
+  draft: Pick<ChannelSetupDraft, "catalogId" | "lifecycleMode" | "connectionId">,
+  definitions: readonly Pick<ChannelSetupDefinition, "catalog">[],
+): string | undefined {
+  if (draft.lifecycleMode !== "create" || draft.connectionId) return undefined;
+  const definition = definitions.find((candidate) => candidate.catalog.catalogId === draft.catalogId);
+  return definition ? chatSetupHref(definition) : undefined;
+}
+
 function tileFor(definition: ChannelSetupDefinition, minutes: number, note: string | undefined): ChannelPickerTile {
   const { key, catalogId, label } = definition.catalog;
   return {
@@ -40,7 +59,7 @@ function tileFor(definition: ChannelSetupDefinition, minutes: number, note: stri
     label,
     minutes,
     ...(note ? { note } : {}),
-    href: CONVERTED_SETUP_CHANNELS.has(key) ? channelSetupHref(key) : settingsChannelSetupHref(catalogId),
+    href: chatSetupHref(definition) ?? settingsChannelSetupHref(catalogId),
   };
 }
 

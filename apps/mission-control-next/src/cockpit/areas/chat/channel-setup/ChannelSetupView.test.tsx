@@ -61,7 +61,7 @@ describe("ChannelSetupView", () => {
   it("opens Telegram's own setup page", async () => {
     await mount("telegram");
     expect(container.querySelector("h1")?.textContent).toBe("Set up Telegram");
-    expect(container.textContent).toContain("Paste the key BotFather sent you");
+    expect(container.textContent).toContain("Paste your bot's key");
     expect(container.textContent).not.toContain("Its steps are in Settings");
     expect(api.fetchChannelSetupDrafts).toHaveBeenCalledWith({ catalogId: "channel.telegram" });
   });
@@ -77,7 +77,7 @@ describe("ChannelSetupView", () => {
     api.fetchChannelSetupDefinitions.mockResolvedValue({ items: [definition("slack", "Slack")] });
     await mount("telegram");
     expect(container.textContent).toContain("This channel isn't available.");
-    expect(container.textContent).not.toContain("Paste the key BotFather sent you");
+    expect(container.textContent).not.toContain("Paste your bot's key");
     expect(api.fetchChannelSetupDrafts).not.toHaveBeenCalled();
   });
 });

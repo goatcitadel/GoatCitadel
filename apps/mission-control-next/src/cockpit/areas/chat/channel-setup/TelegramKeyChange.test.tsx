@@ -115,7 +115,7 @@ async function mount() {
   await settle();
 }
 
-const steps = () => [...container.querySelectorAll<HTMLLIElement>("ol > li")];
+const steps = () => [...container.querySelectorAll<HTMLLIElement>("ol > li[data-state]")];
 const states = () => steps().map((step) => step.getAttribute("data-state"));
 const status = () => container.querySelector('[role="status"]')?.textContent;
 
@@ -623,12 +623,21 @@ describe("TelegramKeyChange", () => {
       expect(inbox?.getAttribute("href")).toContain("approvalId=approval-9");
     });
 
-    it("sends other cases to the channel's setup in Settings", async () => {
-      turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "elsewhere", plan });
+    it("sends a change that waits on more than an approval to its review in Chat", async () => {
+      const setupPlan = {
+        planId: "plan-1",
+        revision: 2,
+        request: { kind: "channel_connection", channelKind: "channel.telegram", draftId: "draft-1" },
+        origin: { workspaceId: "default", surface: "settings" },
+        target: { ownerId: "channel_setup_draft", resourceId: "draft-1" },
+      };
+      turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "elsewhere", plan: setupPlan });
       await toKeyChecked();
       await click(button("Save key"));
-      const settings = link("Finish this in Settings");
-      expect(new URL(settings!.getAttribute("href")!, "http://cockpit.invalid").pathname).toBe("/settings/connections");
+      const review = new URL(link("Finish it in Chat")!.getAttribute("href")!, "http://cockpit.invalid");
+      expect(review.pathname).toBe("/chat");
+      expect(review.searchParams.get("channelPlan")).toBe("plan-1");
+      expect(link("Settings")).toBeUndefined();
     });
 
     it("carries on after a test message that could not be removed, without testing again", async () => {

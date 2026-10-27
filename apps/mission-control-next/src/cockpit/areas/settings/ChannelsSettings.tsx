@@ -7,6 +7,7 @@ import { ChannelEntryControls } from "../../../features/native-routes/settings/c
 import { useChannelReturnNavigation } from "../../../features/native-routes/settings/sections/use-channel-return-navigation";
 import { useChannelSettings } from "../../../features/native-routes/settings/sections/use-channel-settings";
 import { channelPickerHref } from "../../app/routes";
+import { chatSetupHref, chatSetupHrefForDraft } from "../chat/channel-setup/channel-picker-model";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
@@ -30,6 +31,8 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
   const { data, selectedDraft, selectedDefinition, channelDraft, selectedConnection } = owner;
   const disabled = owner.mutation.pending || Boolean(owner.mutation.uncertain) || owner.entryBusy;
   const matches = (label: string) => label.toLowerCase().includes(query.trim().toLowerCase());
+  // A channel with its own setup page in Chat is set up there, from the start or from where a new setup stopped.
+  const createInChat = owner.createDefinition ? chatSetupHref(owner.createDefinition) : undefined;
   return (
     <section
       id="channels"
@@ -113,15 +116,21 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
               </p>
             </>
           ) : null}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="primary"
-              disabled={disabled || !owner.createDefinition}
-              onClick={() => void owner.handleCreate()}
-            >
-              Start guided setup
-            </Button>
-          </div>
+          {createInChat && owner.createDefinition ? (
+            <NativeOwnerLink href={createInChat} scope={workspaceId}>
+              Set up {owner.createDefinition.catalog.label} in Chat
+            </NativeOwnerLink>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="primary"
+                disabled={disabled || !owner.createDefinition}
+                onClick={() => void owner.handleCreate()}
+              >
+                Start guided setup
+              </Button>
+            </div>
+          )}
         </section>
       ) : owner.panel === "editor" ? (
         <>
@@ -290,21 +299,31 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
               {data?.drafts
                 .filter((item) => matches(`${item.label ?? ""} ${item.catalogId}`))
                 .slice(0, limit)
-                .map((item) => (
-                  <li key={item.draftId} className="flex flex-wrap items-center justify-between gap-2 py-3">
-                    <span className="text-sm">
-                      {item.label || item.catalogId} · version {item.revision} · {item.lifecycleMode}
-                    </span>
-                    <Button onClick={() => owner.draftSelectionGuard.requestTransition(item.draftId)}>
-                      Edit {item.label || item.catalogId}
-                    </Button>
-                    <ChannelLifecycleControls
-                      workspaceId={workspaceId}
-                      selection={{ draft: item }}
-                      reload={owner.reload}
-                    />
-                  </li>
-                ))}
+                .map((item) => {
+                  const name = item.label || item.catalogId;
+                  const continueInChat = chatSetupHrefForDraft(item, data.definitions);
+                  return (
+                    <li key={item.draftId} className="flex flex-wrap items-center justify-between gap-2 py-3">
+                      <span className="text-sm">
+                        {name} · version {item.revision} · {item.lifecycleMode}
+                      </span>
+                      {continueInChat ? (
+                        <NativeOwnerLink href={continueInChat} scope={workspaceId}>
+                          Continue {name} in Chat
+                        </NativeOwnerLink>
+                      ) : (
+                        <Button onClick={() => owner.draftSelectionGuard.requestTransition(item.draftId)}>
+                          Edit {name}
+                        </Button>
+                      )}
+                      <ChannelLifecycleControls
+                        workspaceId={workspaceId}
+                        selection={{ draft: item }}
+                        reload={owner.reload}
+                      />
+                    </li>
+                  );
+                })}
             </ul>
           </section>
           {Math.max(data?.connections.length ?? 0, data?.drafts.length ?? 0) > limit ? (
