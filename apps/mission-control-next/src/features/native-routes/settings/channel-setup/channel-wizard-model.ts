@@ -236,7 +236,7 @@ export function isFieldVisible(field: ChannelSetupFieldDefinition, values: Recor
 /**
  * The hosts the channel must be allowed to reach, first occurrence kept: the fixed hosts, then the
  * hosts of conditions that hold, then the hosts of the addresses entered. An address that isn't an
- * http(s) URL names no host.
+ * http or https URL names no host.
  */
 export function channelHosts(
   definition: ChannelSetupDefinition,
