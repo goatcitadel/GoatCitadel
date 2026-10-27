@@ -259,12 +259,13 @@ describe("mcp-server-admin-service", () => {
   // R50: the write owner records a change to what asks first, once the write has committed.
   describe("what asks first", () => {
     const AUDIT_EVENT = "mcp_server_approval_posture_changed";
-
     it("records a change once, after the commit callback and before the sessions close, with the saved value as from", async () => {
       const existing = createServer({
+        connectionRevision: "a".repeat(64),
         policy: { ...createServer().policy, approvalPosture: "reads_free" },
       });
       const host = createHost({ servers: [existing] });
+      replaceConnection(host);
       const order: string[] = [];
       host.captureMcpServerSessionCloser = () => () => {
         order.push("close sessions");
@@ -355,8 +356,9 @@ describe("mcp-server-admin-service", () => {
     });
 
     it("reports a failed audit as a committed change, still reaching the commit callback first and closing the server's sessions", async () => {
-      const existing = createServer();
+      const existing = createServer({ connectionRevision: "a".repeat(64) });
       const host = createHost({ servers: [existing] });
+      replaceConnection(host);
       const onCommitted = vi.fn();
       const closeSessions = vi.fn();
       host.captureMcpServerSessionCloser = () => closeSessions;
@@ -371,7 +373,94 @@ describe("mcp-server-admin-service", () => {
         ),
       ).rejects.toMatchObject({ message: "audit store is down", mutationCommitted: true });
       expect(onCommitted).toHaveBeenCalledTimes(1);
-      // The edit committed, so sessions on the old configuration still close even though the audit write failed.
+      // The edit replaced the connection, so sessions on the old one still close even though the audit write failed.
+      expect(closeSessions).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports a failed audit without closing sessions the edit left connected", async () => {
+      const existing = createServer({ connectionRevision: "a".repeat(64) });
+      const host = createHost({ servers: [existing] });
+      keepConnection(host);
+      const closeSessions = vi.fn();
+      host.captureMcpServerSessionCloser = () => closeSessions;
+      host.appendApprovalsAudit.mockRejectedValueOnce(new Error("audit store is down"));
+
+      await expect(
+        updateMcpServerPolicy(
+          host,
+          "server-1",
+          { approvalPosture: "reads_free" },
+          { expectedRevision: mcpServerRevision(existing) },
+        ),
+      ).rejects.toMatchObject({ message: "audit store is down", mutationCommitted: true });
+      expect(closeSessions).not.toHaveBeenCalled();
+    });
+  });
+
+  // R55: the live sessions belong to the connection, so they close only when the write replaced it.
+  describe("live sessions of an edited server", () => {
+    const connection = "a".repeat(64);
+    const stage = (existing: McpServerRecord) => {
+      const host = createHost({ servers: [existing] });
+      const closeSessions = vi.fn();
+      host.captureMcpServerSessionCloser = () => closeSessions;
+      return { host, closeSessions };
+    };
+    it("stay open when the write kept the connection version, and the change is still audited", async () => {
+      const existing = createServer({ status: "connected", connectionRevision: connection });
+      const { host, closeSessions } = stage(existing);
+      keepConnection(host);
+
+      const saved = await updateMcpServerPolicy(
+        host,
+        "server-1",
+        { approvalPosture: "reads_free" },
+        { expectedRevision: mcpServerRevision(existing), actorId: "token:ab12" },
+      );
+
+      expect(saved.connectionRevision).toBe(connection);
+      expect(closeSessions).not.toHaveBeenCalled();
+      expect(host.appendApprovalsAudit).toHaveBeenCalledExactlyOnceWith({
+        event: "mcp_server_approval_posture_changed",
+        serverId: "server-1",
+        from: null,
+        to: "reads_free",
+        actorId: "token:ab12",
+      });
+    });
+
+    it("close once when the write replaced the connection version", async () => {
+      const existing = createServer({ status: "connected", connectionRevision: connection });
+      const { host, closeSessions } = stage(existing);
+      replaceConnection(host);
+
+      await updateMcpServer(host, "server-1", { args: ["other.mjs"] }, undefined, {
+        expectedRevision: mcpServerRevision(existing),
+      });
+
+      expect(closeSessions).toHaveBeenCalledTimes(1);
+    });
+
+    it("close when the server never had a connection version and the write gave it one", async () => {
+      const existing = createServer({ status: "connected" });
+      const { host, closeSessions } = stage(existing);
+      replaceConnection(host);
+
+      await updateMcpServer(host, "server-1", { enabled: false });
+
+      expect(closeSessions).toHaveBeenCalledTimes(1);
+    });
+
+    it("close when only the connection changed in the same edit as the setting", async () => {
+      const existing = createServer({ status: "connected", connectionRevision: connection });
+      const { host, closeSessions } = stage(existing);
+      replaceConnection(host);
+
+      await updateMcpServer(host, "server-1", {
+        args: ["other.mjs"],
+        policy: { approvalPosture: "reads_free" } as never,
+      });
+
       expect(closeSessions).toHaveBeenCalledTimes(1);
     });
   });
@@ -853,6 +942,24 @@ function createHost(input?: {
     appendApprovalsAudit: vi.fn(async () => undefined),
   };
   return host;
+}
+
+/**
+ * The fake host doesn't make the store's decision, so a test says which connection the next write left behind:
+ * the saved one (keepConnection) or a new one, as when the store disconnected the server (replaceConnection).
+ */
+function keepConnection(host: ReturnType<typeof createHost>): void {
+  host.writeMcpServers.mockImplementationOnce(async (servers: McpServerRecord[]) => {
+    host.servers = [...servers];
+    return host.servers;
+  });
+}
+
+function replaceConnection(host: ReturnType<typeof createHost>): void {
+  host.writeMcpServers.mockImplementationOnce(async (servers: McpServerRecord[]) => {
+    host.servers = servers.map((server) => ({ ...server, connectionRevision: "d".repeat(64) }));
+    return host.servers;
+  });
 }
 
 function createServer(overrides: Partial<McpServerRecord> = {}): McpServerRecord {
