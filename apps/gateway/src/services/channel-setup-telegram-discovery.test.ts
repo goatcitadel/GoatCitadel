@@ -188,31 +188,42 @@ describe("Telegram discovery setup-code sender and webhook clearing", () => {
       chat: { id: 42, type: "private", first_name: "Sam", last_name: "Lee" },
     },
   });
-  /** A Bot API fake: records each method called and answers getUpdates with `updates`. */
-  function bot(options: { updates?: unknown[]; getUpdatesStatus?: number; webhookUrl?: string } = {}) {
+  /**
+   * A Bot API fake: records each call (method and query) and answers getUpdates from a queue of waiting updates. Like
+   * Telegram, a plain getUpdates returns the oldest 100; `offset=-1` returns the newest and forgets every update
+   * before it. `sentAfterSkip` arrives once that has happened.
+   */
+  function bot(
+    options: { updates?: unknown[]; getUpdatesStatus?: number; webhookUrl?: string; sentAfterSkip?: unknown[] } = {},
+  ) {
     let webhookUrl = options.webhookUrl ?? "";
+    let waiting = [...(options.updates ?? [])];
     const methods: string[] = [];
     const urls: string[] = [];
     const fetchWithTimeout = vi.fn(async (url: string) => {
-      const method = url.slice(url.lastIndexOf("/") + 1);
-      methods.push(method);
+      const call = url.slice(url.lastIndexOf("/") + 1);
+      const method = call.split("?", 1)[0]!;
+      methods.push(call);
       urls.push(url);
       if (method === "deleteWebhook") webhookUrl = "";
       if (method === "getUpdates" && options.getUpdatesStatus)
         return new Response(JSON.stringify({ ok: false }), { status: options.getUpdatesStatus });
-      const result =
-        method === "getMe"
-          ? { id: 42, username: "bot" }
-          : method === "getWebhookInfo"
-            ? { url: webhookUrl }
-            : method === "getUpdates"
-              ? (options.updates ?? [])
-              : true;
+      let result: unknown = true;
+      if (method === "getMe") result = { id: 42, username: "bot" };
+      else if (method === "getWebhookInfo") result = { url: webhookUrl };
+      else if (method === "getUpdates" && call.includes("offset=-1")) {
+        result = waiting.slice(-1);
+        waiting = [...waiting.slice(-1), ...(options.sentAfterSkip ?? [])];
+      } else if (method === "getUpdates") result = waiting.slice(0, 100);
       return new Response(JSON.stringify({ ok: true, result }), { status: 200 });
     });
     return { fetchWithTimeout, methods, urls };
   }
-  function draftHost(fetchWithTimeout: ChannelSetupHost["fetchWithTimeout"], token = "test-token"): ChannelSetupHost {
+  function draftHost(
+    fetchWithTimeout: ChannelSetupHost["fetchWithTimeout"],
+    token = "test-token",
+    overrides: Partial<ChannelSetupDraft> = {},
+  ): ChannelSetupHost {
     const h = host(false);
     const values = new Map<string, string>();
     const custody = new ChannelSecretCustodyService({
@@ -233,6 +244,7 @@ describe("Telegram discovery setup-code sender and webhook clearing", () => {
       testVersion: "test",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      ...overrides,
     } as ChannelSetupDraft;
     h.storage.channelSetupDrafts = { get: vi.fn(async () => draft) } as never;
     h.channelSecrets = custody;
@@ -325,13 +337,13 @@ describe("Telegram discovery setup-code sender and webhook clearing", () => {
         `request to https://api.telegram.org/bot123:SECRET/${url.slice(url.lastIndexOf("/") + 1)} failed`,
       );
     });
-    for (const clearWebhook of [false, true]) {
+    for (const asked of [{}, { clearWebhook: true as const }, { skipWaiting: true as const }]) {
       const h = draftHost(leaky as never, "123:SECRET");
       const failure = await discoverChannelSetupTelegramTargets(h, {
         source: "draft",
         draftId,
         expectedRevision: 3,
-        ...(clearWebhook ? { clearWebhook: true as const } : {}),
+        ...asked,
       }).then(
         () => undefined,
         (error: unknown) => error,
@@ -340,5 +352,108 @@ describe("Telegram discovery setup-code sender and webhook clearing", () => {
       expect(String((failure as Error).message)).not.toContain("123:SECRET");
       expect(String((failure as Error).message)).toContain("could not complete");
     }
+  });
+
+  describe("clearing a backlog that hides the hi", () => {
+    const SKIP = "getUpdates?offset=-1&limit=1&timeout=0";
+    const draftInput = { source: "draft" as const, draftId, expectedRevision: 3, setupCode: code };
+    const backlog = () => Array.from({ length: 150 }, (_, index) => startUpdate(index + 1, "hello"));
+
+    it("cannot see the hi past a full page of waiting messages until they are cleared", async () => {
+      const telegram = bot({ updates: backlog(), sentAfterSkip: [startUpdate(151, `/start ${code}`)] });
+      const stuck = await discoverChannelSetupTelegramTargets(draftHost(telegram.fetchWithTimeout), draftInput);
+      expect(stuck.updatesTruncated).toBe(true);
+      expect(stuck.codeSender).toBeUndefined();
+      expect(telegram.methods).toEqual(["getMe", "getWebhookInfo", "getUpdates"]);
+    });
+
+    it("confirms what is waiting once, then looks, and finds a code sent after", async () => {
+      const telegram = bot({ updates: backlog(), sentAfterSkip: [startUpdate(151, `/start ${code}`)] });
+      const response = await discoverChannelSetupTelegramTargets(draftHost(telegram.fetchWithTimeout), {
+        ...draftInput,
+        skipWaiting: true,
+      });
+      expect(telegram.methods).toEqual(["getMe", "getWebhookInfo", SKIP, "getUpdates"]);
+      expect(telegram.urls[2]).toBe(`https://api.telegram.org/bottest-token/${SKIP}`);
+      expect(response.codeSender?.actorId).toBe("42");
+      expect(response.updatesTruncated).toBeUndefined();
+      expect(response.updatesConflict).toBeUndefined();
+    });
+
+    it("skips only after the web address is cleared, when asked to clear it too", async () => {
+      const telegram = bot({
+        webhookUrl: "https://gateway.example/webhook",
+        updates: backlog(),
+        sentAfterSkip: [startUpdate(151, `/start ${code}`)],
+      });
+      const response = await discoverChannelSetupTelegramTargets(draftHost(telegram.fetchWithTimeout), {
+        ...draftInput,
+        clearWebhook: true,
+        skipWaiting: true,
+      });
+      expect(telegram.methods).toEqual(["getMe", "deleteWebhook", "getWebhookInfo", SKIP, "getUpdates"]);
+      expect(response.codeSender?.actorId).toBe("42");
+    });
+
+    it("does not skip unless asked", async () => {
+      const telegram = bot({ updates: backlog() });
+      await discoverChannelSetupTelegramTargets(draftHost(telegram.fetchWithTimeout), draftInput);
+      expect(telegram.methods).toEqual(["getMe", "getWebhookInfo", "getUpdates"]);
+    });
+
+    it("does not skip while a web address is active", async () => {
+      const telegram = bot({ webhookUrl: "https://gateway.example/webhook", updates: backlog() });
+      const response = await discoverChannelSetupTelegramTargets(draftHost(telegram.fetchWithTimeout), {
+        ...draftInput,
+        skipWaiting: true,
+      });
+      expect(telegram.methods).toEqual(["getMe", "getWebhookInfo"]);
+      expect(response.webhookActive).toBe(true);
+    });
+
+    it("does not skip, and reports the other reader, when Telegram answers 409", async () => {
+      const telegram = bot({ getUpdatesStatus: 409, updates: backlog() });
+      const response = await discoverChannelSetupTelegramTargets(draftHost(telegram.fetchWithTimeout), {
+        ...draftInput,
+        skipWaiting: true,
+      });
+      expect(response.updatesConflict).toBe(true);
+      expect(response.warnings).toEqual([
+        "Telegram reports another active update consumer. Keep its delivery mode and choose a configured destination or enter one manually.",
+      ]);
+      expect(response.codeSender).toBeUndefined();
+      expect(telegram.methods).toEqual(["getMe", "getWebhookInfo", SKIP]);
+    });
+
+    it("refuses a draft that belongs to a live connection, before asking Telegram anything", async () => {
+      const telegram = bot({ updates: backlog() });
+      const h = draftHost(telegram.fetchWithTimeout, "test-token", {
+        connectionId: "connection",
+        lifecycleMode: "rotate_secret",
+      });
+      await expect(discoverChannelSetupTelegramTargets(h, { ...draftInput, skipWaiting: true })).rejects.toThrow(
+        "Waiting messages can only be cleared while setting up a new Telegram channel.",
+      );
+      expect(telegram.methods).toEqual([]);
+    });
+
+    it("never puts the bot key in a failure to confirm what is waiting", async () => {
+      const failing = vi.fn(async (url: string) => {
+        if (url.includes("offset=-1")) throw new Error(`request to ${url} failed`);
+        return new Response(JSON.stringify({ ok: true, result: url.endsWith("getMe") ? { id: 42 } : { url: "" } }), {
+          status: 200,
+        });
+      });
+      const failure = await discoverChannelSetupTelegramTargets(draftHost(failing as never, "123:SECRET"), {
+        ...draftInput,
+        skipWaiting: true,
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(Error);
+      expect(String((failure as Error).message)).not.toContain("123:SECRET");
+      expect(String((failure as Error).message)).toContain("could not complete");
+    });
   });
 });

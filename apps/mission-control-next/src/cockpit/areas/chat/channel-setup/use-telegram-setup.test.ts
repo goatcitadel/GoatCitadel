@@ -751,4 +751,154 @@ describe("saying hi", () => {
     expect(JSON.stringify(api.updateChannelSetupDraft.mock.calls)).not.toContain("SECRET-TOKEN");
     expect(JSON.stringify(api.discoverTelegramSetupTargets.mock.calls)).not.toContain("SECRET-TOKEN");
   });
+
+  describe("clearing the waiting messages", () => {
+    /** Listening for a code, with a full page of waiting messages already seen. */
+    async function listeningToAFullPage() {
+      await afterKeyCheck();
+      await run(() => current.newCode());
+      api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ updatesTruncated: true }));
+      await advance(SAY_HI_POLL_MS);
+      expect(current.manyWaiting).toBe(true);
+      api.discoverTelegramSetupTargets.mockClear();
+      return current.code!;
+    }
+
+    it("asks once, with the current code, to skip what is waiting, and goes on listening", async () => {
+      const code = await listeningToAFullPage();
+      api.discoverTelegramSetupTargets.mockResolvedValue(discovery());
+      await run(() => current.clearWaiting());
+
+      expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(1);
+      expect(api.discoverTelegramSetupTargets).toHaveBeenCalledWith({
+        source: "draft",
+        draftId: "draft-1",
+        expectedRevision: 4,
+        setupCode: code,
+        skipWaiting: true,
+      });
+      expect(current).toMatchObject({ manyWaiting: false, sender: null, busy: false, code });
+      expect(current.error).toBeUndefined();
+
+      // The listener carries on, and never skips on its own.
+      await advance(SAY_HI_POLL_MS);
+      expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(2);
+      expect(api.discoverTelegramSetupTargets.mock.calls[1]![0]).not.toHaveProperty("skipWaiting");
+      expect(api.discoverTelegramSetupTargets.mock.calls[1]![0]).toMatchObject({ setupCode: code });
+    });
+
+    it("still says many are waiting while the answer is still a full page", async () => {
+      await listeningToAFullPage();
+      await run(() => current.clearWaiting());
+      expect(current.manyWaiting).toBe(true);
+      expect(current.busy).toBe(false);
+    });
+
+    it("handles a hi found in that same answer exactly as a normal match", async () => {
+      const code = await listeningToAFullPage();
+      api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ codeSender: ADA }));
+      await run(() => current.clearWaiting());
+
+      expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+      expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith("draft-1", {
+        expectedRevision: 4,
+        draft: expect.objectContaining({
+          setupCode: code,
+          allowedSenders: ["777"],
+          ownerActorIds: ["777"],
+          inboundAccessMode: "allowlist",
+        }),
+      });
+      expect(current).toMatchObject({ sender: ADA, manyWaiting: false, busy: false });
+      expect(current.draft?.revision).toBe(5);
+      expect(current.error).toBeUndefined();
+
+      // Listening has stopped, and asking again does nothing.
+      await advance(SETUP_CODE_TTL_MS);
+      expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(1);
+      expect(current.codeExpired).toBe(false);
+    });
+
+    it("saves who said hi once when the listener and the click both find them", async () => {
+      await listeningToAFullPage();
+      let save!: (value: ChannelSetupDraft) => void;
+      api.updateChannelSetupDraft.mockReturnValueOnce(new Promise((resolve) => (save = resolve)));
+      api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ codeSender: ADA }));
+      await advance(SAY_HI_POLL_MS);
+      await run(() => current.clearWaiting());
+      expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        save(draft({ revision: 5, draft: CHECKED_DRAFT, secretState: KEY_STORED }));
+      });
+      expect(current.sender).toEqual(ADA);
+      expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+    });
+
+    it("does nothing without a code to listen for", async () => {
+      await afterKeyCheck();
+      await run(() => current.clearWaiting());
+      expect(api.discoverTelegramSetupTargets).not.toHaveBeenCalled();
+      await run(() => current.newCode());
+      await advance(SETUP_CODE_TTL_MS);
+      expect(current.codeExpired).toBe(true);
+      api.discoverTelegramSetupTargets.mockClear();
+      await run(() => current.clearWaiting());
+      expect(api.discoverTelegramSetupTargets).not.toHaveBeenCalled();
+    });
+
+    it("does nothing while something else is in progress, or while it is already asking", async () => {
+      await listeningToAFullPage();
+      let answer!: (result: ChannelSetupDiscoveryResult) => void;
+      api.discoverTelegramSetupTargets.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+      let first!: Promise<void>;
+      await act(async () => {
+        first = current.clearWaiting();
+        await Promise.resolve();
+      });
+      expect(current.busy).toBe(true);
+      await run(() => current.clearWaiting());
+      expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        answer(discovery());
+        await first;
+      });
+      expect(current).toMatchObject({ busy: false, manyWaiting: false });
+    });
+
+    it("says only the key-check sentence when it fails, and keeps listening", async () => {
+      const code = await listeningToAFullPage();
+      api.discoverTelegramSetupTargets.mockRejectedValueOnce(new Error(`HTTP 502 for bot${TOKEN}`));
+      await run(() => current.clearWaiting());
+
+      expect(current.error).toBe(KEY_FAILED);
+      expect(JSON.stringify(current.error)).not.toContain("502");
+      expect(current).toMatchObject({ busy: false, code, sender: null });
+
+      api.discoverTelegramSetupTargets.mockResolvedValue(discovery());
+      await advance(SAY_HI_POLL_MS);
+      expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(2);
+      expect(current.manyWaiting).toBe(false);
+
+      // Trying again clears the sentence.
+      await run(() => current.clearWaiting());
+      expect(current.error).toBeUndefined();
+    });
+
+    it("drops the answer once the page has gone", async () => {
+      await listeningToAFullPage();
+      let answer!: (result: ChannelSetupDiscoveryResult) => void;
+      api.discoverTelegramSetupTargets.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+      let asked!: Promise<void>;
+      await act(async () => {
+        asked = current.clearWaiting();
+        await Promise.resolve();
+      });
+      act(() => root.unmount());
+      await act(async () => {
+        answer(discovery({ codeSender: ADA }));
+        await asked;
+      });
+      expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    });
+  });
 });

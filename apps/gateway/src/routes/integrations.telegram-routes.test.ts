@@ -66,6 +66,40 @@ describe("integrations Telegram route tails", () => {
     expect((await app.inject({ method: "POST", url, payload: connection })).statusCode).toBe(200);
   });
 
+  it("accepts skipWaiting only on a draft channel discovery request", async () => {
+    const discoverChannelSetupTelegramTargets = vi.fn(async () => ({ items: [], warnings: [], webhookActive: false }));
+    app = Fastify();
+    app.decorate("services", { channelSetup: { discoverChannelSetupTelegramTargets } } as never);
+    registerChannelSetupIntegrationRoutes(app);
+    const url = "/api/v1/channels/telegram/discover-targets";
+    const draft = {
+      source: "draft",
+      draftId: "11111111-1111-1111-1111-111111111111",
+      expectedRevision: 3,
+      setupCode: "Ab3dEf7hJk",
+    };
+    const connection = {
+      source: "connection",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      expectedConnectionRevision: "a".repeat(64),
+    };
+
+    const skipped = await app.inject({ method: "POST", url, payload: { ...draft, skipWaiting: true } });
+    expect(skipped.statusCode).toBe(200);
+    expect(discoverChannelSetupTelegramTargets).toHaveBeenCalledWith({ ...draft, skipWaiting: true });
+
+    discoverChannelSetupTelegramTargets.mockClear();
+    for (const payload of [
+      { ...connection, skipWaiting: true },
+      { ...draft, skipWaiting: false },
+      { ...draft, skipWaiting: "true" },
+    ]) {
+      const rejected = await app.inject({ method: "POST", url, payload });
+      expect(rejected.statusCode).toBe(400);
+    }
+    expect(discoverChannelSetupTelegramTargets).not.toHaveBeenCalled();
+  });
+
   it("keeps Telegram pairing and target-directory routes behind CodeQL-visible rate limits", () => {
     const source = fs.readFileSync(new URL("./integrations-telegram-routes.ts", import.meta.url), "utf8");
     expect(source).toMatch(/const RATE_LIMIT_AUTH_MAX = 60/);

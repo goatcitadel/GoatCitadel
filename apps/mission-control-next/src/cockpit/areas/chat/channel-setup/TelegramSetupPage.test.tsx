@@ -888,18 +888,87 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
     expect(steps()[2]!.getAttribute("data-state")).toBe("done");
   });
 
-  it("says a hi may take a while when the bot has many waiting messages", async () => {
-    await toSayHi();
-    api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ updatesTruncated: true }));
-    await advance(SAY_HI_POLL_MS);
-    await settle();
-    expect(steps()[2]!.textContent).toContain(
-      "Your bot has many waiting messages, so your hi may take a while to show up.",
-    );
-    api.discoverTelegramSetupTargets.mockResolvedValue(discovery());
-    await advance(SAY_HI_POLL_MS);
-    await settle();
-    expect(container.textContent).not.toContain("many waiting messages");
+  describe("when the bot has more waiting messages than can be looked through", () => {
+    const WAITING_NOTE =
+      "Your bot has more waiting messages than GoatCitadel can look through, so it can't see your hi yet. Clear them to continue. GoatCitadel skips them when it turns on anyway.";
+
+    async function toAFullPage() {
+      await toSayHi();
+      api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ updatesTruncated: true }));
+      await advance(SAY_HI_POLL_MS);
+      await settle();
+    }
+
+    it("says it cannot see the hi yet and offers to clear them, until the answer is no longer a full page", async () => {
+      await toAFullPage();
+      expect(steps()[2]!.textContent).toContain(WAITING_NOTE);
+      expect(steps()[2]!.contains(button("Clear waiting messages")!)).toBe(true);
+      expect(container.textContent).not.toContain("hi may take a while");
+
+      api.discoverTelegramSetupTargets.mockResolvedValue(discovery());
+      await advance(SAY_HI_POLL_MS);
+      await settle();
+      expect(container.textContent).not.toContain("more waiting messages than");
+      expect(button("Clear waiting messages")).toBeUndefined();
+    });
+
+    it("has no button, and no note, when the bot's waiting messages fit", async () => {
+      await toSayHi();
+      expect(button("Clear waiting messages")).toBeUndefined();
+      expect(container.textContent).not.toContain("waiting messages");
+    });
+
+    it("clears them with the current code on a click, and keeps waiting for the hi", async () => {
+      await toAFullPage();
+      const code = savedCode()!;
+      api.discoverTelegramSetupTargets.mockClear();
+      api.discoverTelegramSetupTargets.mockResolvedValue(discovery());
+      await click(button("Clear waiting messages"));
+
+      expect(api.discoverTelegramSetupTargets).toHaveBeenCalledTimes(1);
+      expect(api.discoverTelegramSetupTargets).toHaveBeenCalledWith({
+        source: "draft",
+        draftId: "draft-1",
+        expectedRevision: 4,
+        setupCode: code,
+        skipWaiting: true,
+      });
+      expect(button("Clear waiting messages")).toBeUndefined();
+      expect(container.textContent).not.toContain("waiting messages");
+      expect(steps()[2]!.getAttribute("data-state")).toBe("current");
+      expect(steps()[2]!.textContent).toContain("Waiting for your hi…");
+    });
+
+    it("completes the hi when the code is found in that same answer", async () => {
+      await toAFullPage();
+      api.discoverTelegramSetupTargets.mockResolvedValue(discovery({ codeSender: ADA }));
+      await click(button("Clear waiting messages"));
+
+      expect(steps()[2]!.getAttribute("data-state")).toBe("done");
+      expect(status()).toBe("Ada Lovelace said hi. Only they can message your bot for now.");
+      expect(button("Clear waiting messages")).toBeUndefined();
+      expect(button("Turn on")).toBeDefined();
+    });
+
+    it("says the key-check sentence, not Telegram's words, when clearing fails, and offers it again", async () => {
+      await toAFullPage();
+      api.discoverTelegramSetupTargets.mockRejectedValueOnce(new Error(`HTTP 502 for bot${TOKEN}`));
+      await click(button("Clear waiting messages"));
+
+      expect(container.textContent).toContain(KEY_FAILED);
+      expect(container.textContent).not.toContain("HTTP 502");
+      expect(container.textContent).not.toContain("SECRET-TOKEN");
+      expect(button("Clear waiting messages")?.disabled).toBe(false);
+    });
+
+    it("styles the button as a plain secondary action, in no alert, adding no live region", async () => {
+      await toAFullPage();
+      const clear = button("Clear waiting messages")!;
+      expect(clear.className).toContain("border-line-control");
+      expect(clear.className).not.toContain("text-status-failed");
+      expect(liveRegions()).toBe(1);
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+    });
   });
 
   it("offers a new code, and says why, when the code could not be saved", async () => {

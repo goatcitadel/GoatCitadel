@@ -16,6 +16,9 @@ import { readBoundedResponseJson } from "./bounded-response-reader.js";
 
 /** Telegram's default `getUpdates` page size: a full page means older messages may be unread. */
 const TELEGRAM_UPDATES_PAGE_SIZE = 100;
+/** `getUpdates` for the newest update only, without waiting: Telegram forgets every update before it. */
+const SKIP_WAITING_QUERY = "?offset=-1&limit=1&timeout=0";
+const WAITING_CLEAR_REFUSED = "Waiting messages can only be cleared while setting up a new Telegram channel.";
 
 export async function discoverChannelSetupTelegramTargets(
   host: ChannelSetupHost,
@@ -23,6 +26,10 @@ export async function discoverChannelSetupTelegramTargets(
 ): Promise<ChannelSetupDiscoveryResult> {
   const draft = input.source === "draft" ? await host.storage.channelSetupDrafts.get(input.draftId) : undefined;
   if (draft && input.source === "draft") assertDraftRevision(draft, input.expectedRevision);
+  // A draft that edits or rotates a live connection has a poller that owns Telegram's queue: only a new channel's
+  // setup, with no poller yet, may confirm what is waiting.
+  if (draft?.connectionId && input.source === "draft" && input.skipWaiting)
+    throw new ValidationError({ message: WAITING_CLEAR_REFUSED });
   if (draft) await requireReviewedChannelConnection(host, draft);
   const connection = draft
     ? await buildEphemeralChannelConnection(host, hydrateChannelSetupDraftSecrets(host, draft))
@@ -46,9 +53,9 @@ export async function discoverChannelSetupTelegramTargets(
     throw new ValidationError({
       message: "Configure the Telegram bot token through secure input before discovering targets.",
     });
-  const call = async (method: string): Promise<Record<string, unknown>> => {
+  const call = async (method: string, query = ""): Promise<Record<string, unknown>> => {
     try {
-      const response = await host.fetchWithTimeout!(`https://api.telegram.org/bot${token}/${method}`, {
+      const response = await host.fetchWithTimeout!(`https://api.telegram.org/bot${token}/${method}${query}`, {
         signal: AbortSignal.timeout(8_000),
       });
       const body = await readBoundedResponseJson(response, {
@@ -129,7 +136,12 @@ export async function discoverChannelSetupTelegramTargets(
       "Telegram update polling is unavailable while a webhook is active. Showing configured, paired and accepted destinations; the webhook has been preserved.",
     );
   else {
-    const updates = await call("getUpdates");
+    // Only an operator's click on a new channel's draft gets here: asking for the newest update confirms everything
+    // before it. The first poll of a connection skips what is waiting anyway, so none of it is lost. A 409 stands:
+    // another reader owns the queue, and looking would only be refused the same way.
+    const skipped =
+      input.source === "draft" && input.skipWaiting ? await call("getUpdates", SKIP_WAITING_QUERY) : undefined;
+    const updates = skipped?.conflict ? skipped : await call("getUpdates");
     if (updates.conflict) {
       updatesConflict = true;
       warnings.push(

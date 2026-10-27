@@ -35,7 +35,7 @@ export interface TelegramSetupState {
   code: string | null;
   /** The code ran out before anyone sent it. */
   codeExpired: boolean;
-  /** The bot has a full page of waiting messages, so the hi may be a while in showing up. */
+  /** The bot has a full page of waiting messages, so GoatCitadel cannot see past them to the hi. */
   manyWaiting: boolean;
   busy: boolean;
   error?: string;
@@ -44,11 +44,16 @@ export interface TelegramSetupState {
   stopWebAddress(): Promise<void>;
   /** Saves a fresh code on the draft and listens for it, in place of any code before it. */
   newCode(): Promise<void>;
+  /**
+   * Confirms the messages waiting for the bot, once, so a hi sent after them can be seen, then goes on listening.
+   * Only the operator's click does this. It does nothing when no code is being listened for or something else is busy.
+   */
+  clearWaiting(): Promise<void>;
   /** Discards the draft and its stored key. */
   startOver(): Promise<void>;
 }
 
-type Core = Omit<TelegramSetupState, "checkKey" | "stopWebAddress" | "newCode" | "startOver">;
+type Core = Omit<TelegramSetupState, "checkKey" | "stopWebAddress" | "newCode" | "clearWaiting" | "startOver">;
 
 /** Not saying hi: no code, nobody heard from, nothing waiting. */
 const NOT_LISTENING = { sender: null, code: null, codeExpired: false, manyWaiting: false } as const;
@@ -93,7 +98,8 @@ export async function latestDraft(draftId: string): Promise<ChannelSetupDraft | 
  * Saying hi: `newCode` saves a one-time code on the draft and then asks Telegram every few seconds whether anyone has
  * sent it. When they have, the draft is saved once with them as the only allowed sender and the owner, and the asking
  * stops. It also stops when the code expires, when the operator starts over or checks the key again, and when the
- * page goes.
+ * page goes. A bot with a full page of waiting messages hides the hi behind them; `clearWaiting`, the operator's click,
+ * asks once with those skipped, and the listening goes on.
  */
 export function useTelegramSetup(workspaceId: string): TelegramSetupState {
   const [view, setView] = useState<Core>(EMPTY);
@@ -104,6 +110,8 @@ export function useTelegramSetup(workspaceId: string): TelegramSetupState {
   // Changes whenever listening starts or stops, so a reply to a question asked before is dropped the same way.
   const listening = useRef(0);
   const stopAsking = useRef<(() => void) | null>(null);
+  // Asks once, outside the usual rhythm, for the code with the waiting messages skipped. Set only while listening.
+  const clearBacklog = useRef<(() => Promise<void>) | null>(null);
 
   const begin = useCallback((): Setter => {
     const mine = epoch.current;
@@ -118,6 +126,7 @@ export function useTelegramSetup(workspaceId: string): TelegramSetupState {
     listening.current += 1;
     stopAsking.current?.();
     stopAsking.current = null;
+    clearBacklog.current = null;
   }, []);
 
   /** Asks about `code` until it is heard, runs out, or listening stops. */
@@ -126,9 +135,12 @@ export function useTelegramSetup(workspaceId: string): TelegramSetupState {
       const mine = listening.current;
       const stillListening = () => listening.current === mine;
 
+      // The next question and a click on Clear waiting messages can find the same hi at once. It is saved once.
+      let hearing = false;
       const hear = async (sender: ChannelSetupCodeSender) => {
         const draft = core.current.draft;
-        if (!draft) return;
+        if (!draft || hearing) return;
+        hearing = true;
         try {
           const saved = await updateChannelSetupDraft(draft.draftId, {
             expectedRevision: draft.revision,
@@ -141,36 +153,41 @@ export function useTelegramSetup(workspaceId: string): TelegramSetupState {
           // The next question finds the same hi and tries again, from the draft as it is now.
           const latest = await latestDraft(draft.draftId);
           if (stillListening()) set({ ...(latest ? { draft: latest } : {}), error: describeApiError(error).summary });
+        } finally {
+          hearing = false;
         }
       };
 
-      const ask = async () => {
+      /** Asks about the code once and takes what comes back. A failed question throws. */
+      const ask = async (skipWaiting = false) => {
         const draft = core.current.draft;
         if (!draft || !stillListening()) return;
-        try {
-          const found = await discoverTelegramSetupTargets({
-            source: "draft",
-            draftId: draft.draftId,
-            expectedRevision: draft.revision,
-            setupCode: code,
-          });
-          if (!stillListening()) return;
-          if (found.codeSender) {
-            await hear(found.codeSender);
-            return;
-          }
-          const many = found.updatesTruncated === true;
-          if (core.current.manyWaiting !== many) set({ manyWaiting: many });
-        } catch {
-          // Ignored: a question that fails is asked again with the next one.
+        const found = await discoverTelegramSetupTargets({
+          source: "draft",
+          draftId: draft.draftId,
+          expectedRevision: draft.revision,
+          setupCode: code,
+          ...(skipWaiting ? { skipWaiting: true as const } : {}),
+        });
+        if (!stillListening()) return;
+        if (found.codeSender) {
+          await hear(found.codeSender);
+          return;
         }
+        const many = found.updatesTruncated === true;
+        if (core.current.manyWaiting !== many) set({ manyWaiting: many });
       };
 
-      stopAsking.current = listenForHi(ask, () => {
-        if (!stillListening()) return;
-        stopListening();
-        set({ codeExpired: true, manyWaiting: false });
-      });
+      // A question that fails is ignored: it is asked again with the next one.
+      stopAsking.current = listenForHi(
+        () => ask().catch(() => undefined),
+        () => {
+          if (!stillListening()) return;
+          stopListening();
+          set({ codeExpired: true, manyWaiting: false });
+        },
+      );
+      clearBacklog.current = () => ask(true);
     },
     [stopListening],
   );
@@ -294,6 +311,20 @@ export function useTelegramSetup(workspaceId: string): TelegramSetupState {
     }
   }, [begin, listenFor, stopListening]);
 
+  const clearWaiting = useCallback(async () => {
+    const clear = clearBacklog.current;
+    if (!clear || core.current.busy) return;
+    const set = begin();
+    set({ busy: true, error: undefined });
+    try {
+      await clear();
+      set({ busy: false });
+    } catch {
+      // Like a failed key check, the page says so in its own words, never the gateway's.
+      set({ busy: false, error: TELEGRAM_KEY_FAILED });
+    }
+  }, [begin]);
+
   const startOver = useCallback(async () => {
     const { draft, busy } = core.current;
     if (busy) return;
@@ -312,5 +343,5 @@ export function useTelegramSetup(workspaceId: string): TelegramSetupState {
     }
   }, [begin, stopListening]);
 
-  return { ...view, checkKey, stopWebAddress, newCode, startOver };
+  return { ...view, checkKey, stopWebAddress, newCode, clearWaiting, startOver };
 }

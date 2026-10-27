@@ -39,6 +39,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
             expectedRevision: z.number().int().positive(),
             setupCode: z.string().max(128).optional(),
             clearWebhook: z.literal(true).optional(),
+            skipWaiting: z.literal(true).optional(),
           })
           .strict(),
         z

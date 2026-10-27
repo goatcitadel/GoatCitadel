@@ -3,7 +3,15 @@ import type { ChannelSetupTestResult } from "./channel-wizard.js";
 import type { ChannelSetupEvidence } from "./channel-setup-evidence.js";
 
 export type ChannelSetupDiscoveryInput =
-  | { source: "draft"; draftId: string; expectedRevision: number; setupCode?: string; clearWebhook?: true }
+  | {
+      source: "draft";
+      draftId: string;
+      expectedRevision: number;
+      setupCode?: string;
+      clearWebhook?: true;
+      /** Confirms every waiting update before the newest, so a full page of old messages stops hiding the code. */
+      skipWaiting?: true;
+    }
   | { source: "connection"; connectionId: string; expectedConnectionRevision: string; setupCode?: string };
 export interface ChannelSetupDiscoveredTarget {
   id: string;

@@ -63,7 +63,10 @@ public web address and no webhook secret. Delivery to a public HTTPS web address
      and plain text. The private-chat sender who sends it within ten minutes
      becomes the bot's only allowed sender and its recorded owner, and that
      private chat becomes the default destination. **Get a new code** replaces an
-     expired code.
+     expired code. When a full page of waiting messages hides the code, the step
+     says so and offers **Clear waiting messages**, which confirms them once (see
+     Starting and resuming); a hi sent earlier than the newest message may need
+     sending again.
   4. **Turn it on.** The step lists what will change, then sends a test message
      to that chat, removes it and applies the activation Change Plan in place. If
      the approval cannot be given there, the step links to Inbox or Settings.
@@ -189,6 +192,15 @@ structural URL recognition never establishes successful delivery.
   (or bare code) message matches exactly. `updatesTruncated` marks a full page of
   100 updates, so the sender may be further back. The code finds a sender; it
   grants nothing until the setup page saves that sender to the draft.
+- A draft-based request that sets `skipWaiting: true` (the setup page's **Clear
+  waiting messages** click) first calls `getUpdates` with `offset=-1&limit=1&timeout=0`,
+  once, when no webhook is active. Telegram then forgets every update before the
+  newest, and the usual look follows, so a hi sent after it is found. Discovery
+  never acknowledges updates otherwise. It is refused for a draft that belongs to
+  a connection (an edit or key change), whose poller owns the queue, and the
+  connection source rejects the field. A 409 is reported as `updatesConflict`
+  and nothing is skipped. Nothing GoatCitadel would have processed is lost: a
+  connection's first poll skips whatever is already waiting.
 - Telegram pairing list/approve/revoke APIs expose bounded public identities and
   require the current connection revision for writes. Approval and revocation
   update both pairing and sender authorization under one connection CAS. Existing
