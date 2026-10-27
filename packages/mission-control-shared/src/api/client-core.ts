@@ -1,5 +1,10 @@
 import { fetchStartupRead } from "./startup-reads";
-import { getGatewayCallerScope, getGatewayCallerScopeRevision, getGatewayAccessRevision, notifyGatewayAccessChanged } from "./access-scope";
+import {
+  getGatewayCallerScope,
+  getGatewayCallerScopeRevision,
+  getGatewayAccessRevision,
+  notifyGatewayAccessChanged,
+} from "./access-scope";
 export { getGatewayAccessRevision, subscribeGatewayAccessChange } from "./access-scope";
 import type { OnboardingStartupState, UiActionState } from "@goatcitadel/contracts";
 
@@ -16,6 +21,7 @@ import {
   BROWSER_MUTATION_INTENT_VALUE,
   MUTATING_METHODS,
   SAFE_REQUEST_RETRY_DELAYS_MS,
+  SAFE_REQUEST_TIMEOUT_MS,
   SAFE_RETRY_METHODS,
   inferDefaultGatewayBaseUrl,
   inferOriginSurface,
@@ -167,8 +173,26 @@ export function buildGatewayHeaders(
 /**
  * `attemptKey` lets a mutation owner choose (and remember) the Idempotency-Key of one attempt, so a lost response can
  * later be settled from the Gateway's own record of that exact attempt. It must be a UUID and only applies to mutations.
+ *
+ * `timeoutMs` limits each attempt, alongside the caller's own `signal`. GET and HEAD default to
+ * `SAFE_REQUEST_TIMEOUT_MS`; other methods have no default because some run for minutes. `0` turns the limit off.
  */
-export type GatewayRequestInit = RequestInit & { attemptKey?: string };
+export type GatewayRequestInit = RequestInit & { attemptKey?: string; timeoutMs?: number };
+
+function resolveAttemptTimeoutMs(method: string, timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined) return SAFE_RETRY_METHODS.has(method) ? SAFE_REQUEST_TIMEOUT_MS : undefined;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
+    throw new Error("A request timeout must be 0 or a positive number of milliseconds.");
+  return timeoutMs === 0 ? undefined : timeoutMs;
+}
+
+function combineSignals(
+  caller: AbortSignal | null | undefined,
+  timeout: AbortSignal | undefined,
+): AbortSignal | null | undefined {
+  if (!timeout) return caller;
+  return caller ? AbortSignal.any([caller, timeout]) : timeout;
+}
 const ATTEMPT_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 /** The identity of one mutation attempt (never its body), so its owner can later read the Gateway's record of it. */
@@ -229,8 +253,9 @@ async function requestUncoalesced<T>(
   gatewayInit: GatewayRequestInit | undefined,
   method: string,
 ): Promise<T> {
-  const { attemptKey: ownerKey, ...fetchInit } = gatewayInit ?? {};
+  const { attemptKey: ownerKey, timeoutMs, ...fetchInit } = gatewayInit ?? {};
   const init: RequestInit | undefined = gatewayInit ? fetchInit : undefined;
+  const attemptTimeoutMs = resolveAttemptTimeoutMs(method, timeoutMs);
   const sink = MUTATING_METHODS.has(method) ? attemptSink : null;
   const attemptKey = ownerKey ?? (sink ? crypto.randomUUID() : undefined);
   if (sink && attemptKey)
@@ -238,12 +263,16 @@ async function requestUncoalesced<T>(
   const accessRevision = getGatewayAccessRevision();
   const callerRevision = getGatewayCallerScopeRevision();
   const installation = getGatewayApiBaseUrl();
-  const scopeCurrent = () => accessRevision === getGatewayAccessRevision() && callerRevision === getGatewayCallerScopeRevision() && installation === getGatewayApiBaseUrl();
+  const scopeCurrent = () =>
+    accessRevision === getGatewayAccessRevision() &&
+    callerRevision === getGatewayCallerScopeRevision() &&
+    installation === getGatewayApiBaseUrl();
   const assertScopeCurrent = () => {
-    if (!scopeCurrent()) throw new ApiRequestError(
-      "Gateway access changed while this request was in flight. Refresh current caller state.",
-      { kind: "protocol", method, path },
-    );
+    if (!scopeCurrent())
+      throw new ApiRequestError(
+        "Gateway access changed while this request was in flight. Refresh current caller state.",
+        { kind: "protocol", method, path },
+      );
   };
   const correlationId = createCorrelationId();
   const headers = buildGatewayHeaders(path, method, correlationId, filterGatewayExtraHeaders(init?.headers), {
@@ -262,14 +291,21 @@ async function requestUncoalesced<T>(
   let lastError: ApiRequestError | null = null;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     init?.signal?.throwIfAborted();
+    const timeoutSignal = attemptTimeoutMs ? AbortSignal.timeout(attemptTimeoutMs) : undefined;
     try {
-      const res = await fetchStartupRead(buildGatewayUrl(path), {
-        ...init,
-        headers: {
-          ...headers,
+      const res = await fetchStartupRead(
+        buildGatewayUrl(path),
+        {
+          ...init,
+          headers: {
+            ...headers,
+          },
+          method,
+          signal: combineSignals(init?.signal, timeoutSignal),
         },
-        method,
-      }, { installation, accessRevision, caller: getGatewayCallerScope(), callerRevision }, scopeCurrent);
+        { installation, accessRevision, caller: getGatewayCallerScope(), callerRevision },
+        scopeCurrent,
+      );
       init?.signal?.throwIfAborted();
       const responseCorrelationId = res.headers.get("x-goatcitadel-correlation-id") ?? correlationId;
       setDevDiagnosticsActiveCorrelationId(responseCorrelationId);
@@ -362,17 +398,24 @@ async function requestUncoalesced<T>(
       // Navigation cancellation is expected and says nothing about Gateway
       // health. Preserve it without retrying an already-aborted fetch.
       init?.signal?.throwIfAborted();
-      if (error instanceof Error && error.name === "AbortError") throw error;
+      // A stalled Gateway is not retried: a second wait of the same length would not tell the operator more.
+      const timedOut = timeoutSignal?.aborted === true;
+      if (!timedOut && error instanceof Error && error.name === "AbortError") throw error;
       lastError =
         error instanceof ApiRequestError
           ? error
-          : new ApiRequestError(`Network error ${method} ${path}: ${(error as Error).message}`, {
-              kind: "network",
-              method,
-              path,
-              cause: error,
-            });
-      if (shouldRetrySafeRequest(method, lastError) && attempt < maxAttempts - 1) {
+          : timedOut
+            ? new ApiRequestError(
+                `Network error ${method} ${path}: no response within ${Math.round((attemptTimeoutMs ?? 0) / 1000)} s`,
+                { kind: "network", method, path, cause: error },
+              )
+            : new ApiRequestError(`Network error ${method} ${path}: ${(error as Error).message}`, {
+                kind: "network",
+                method,
+                path,
+                cause: error,
+              });
+      if (!timedOut && shouldRetrySafeRequest(method, lastError) && attempt < maxAttempts - 1) {
         recordClientDiagnostic({
           level: "warn",
           category: "api",

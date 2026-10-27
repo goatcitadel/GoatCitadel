@@ -36,8 +36,12 @@ describe("fresh task and agent owner reads", () => {
       const controller = new AbortController();
       const fresh = read(controller.signal);
       expect(transport).toHaveBeenCalledTimes(2);
-      expect(transport.mock.calls[1]?.[1]?.signal).toBe(controller.signal);
+      // The fresh read sends the caller's signal (combined with the client's read timeout).
+      const sent = transport.mock.calls[1]?.[1]?.signal as AbortSignal;
+      expect(sent.aborted).toBe(false);
       await expect(fresh).resolves.toEqual(freshBody);
+      controller.abort();
+      expect(sent.aborted).toBe(true);
       finish(json(oldBody));
       expect(await old).toEqual(await joined);
       expect(await old).toEqual(oldBody);

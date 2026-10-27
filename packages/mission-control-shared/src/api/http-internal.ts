@@ -17,6 +17,8 @@ export const SAFE_RETRY_METHODS = new Set(["GET", "HEAD"]);
 export const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 export const RETRYABLE_HTTP_STATUS_CODES = new Set([408, 429, 502, 503, 504]);
 export const SAFE_REQUEST_RETRY_DELAYS_MS = [250];
+/** Each attempt of a GET or HEAD gives up after this long, so a Gateway that accepts and then stalls surfaces an error. */
+export const SAFE_REQUEST_TIMEOUT_MS = 30_000;
 export const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
 export const BROWSER_MUTATION_INTENT_VALUE = "mutation";
 

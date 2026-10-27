@@ -42,23 +42,25 @@ describe("Inbox owner transport freshness", () => {
     const live = fetchOperatorInbox("w & x", { signal: controller.signal });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/v1/inbox?workspaceId=w+%26+x");
-    expect(fetchMock.mock.calls[1]?.[1]?.signal).toBe(controller.signal);
+    // The live read sends the caller's signal (combined with the client's read timeout).
+    const sent = fetchMock.mock.calls[1]?.[1]?.signal as AbortSignal;
+    expect(sent.aborted).toBe(false);
     await expect(live).resolves.toMatchObject({ items: [{ id: "approval:current" }] });
+    controller.abort();
+    expect(sent.aborted).toBe(true);
     finishEarlier(json({ workspaceId: "w & x", items: [] }));
     await expect(earlier).resolves.toMatchObject({ items: [] });
   });
 });
 
 it("sends bounded reference-only acknowledgement through the shared idempotent transport", async () => {
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockResolvedValue(
-      json({
-        readStatus: { scope: "operator" },
-        acknowledged: [{ id: "update", version: "a".repeat(64) }],
-        skipped: [],
-      }),
-    );
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    json({
+      readStatus: { scope: "operator" },
+      acknowledged: [{ id: "update", version: "a".repeat(64) }],
+      skipped: [],
+    }),
+  );
   vi.stubGlobal("fetch", fetchMock);
   const updates = [{ id: "update", version: "a".repeat(64) }];
   await markOperatorInboxUpdatesRead("workspace-a", updates);
