@@ -5,6 +5,7 @@ import { approvePlanInPlace, ensureHostsAllowed } from "./approve-plan-in-place"
 
 const api = vi.hoisted(() => ({
   fetchChangePlan: vi.fn(),
+  createChangePlan: vi.fn(),
   confirmChangePlan: vi.fn(),
   respondToChangePlan: vi.fn(),
   resolveApproval: vi.fn(),
@@ -14,6 +15,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChangePlan: api.fetchChangePlan,
+  createChangePlan: api.createChangePlan,
   confirmChangePlan: api.confirmChangePlan,
   respondToChangePlan: api.respondToChangePlan,
   resolveApproval: api.resolveApproval,
@@ -360,37 +362,59 @@ describe("ensureHostsAllowed", () => {
     api.fetchSettings.mockResolvedValue(settings(["api.telegram.org", "*.example.com"]));
 
     expect(await ensureHostsAllowed(["api.telegram.org", "bot.example.com"], "w-1")).toEqual({ kind: "allowed" });
+    expect(api.createChangePlan).not.toHaveBeenCalled();
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
 
-  it("adds only the missing hosts, once each", async () => {
+  it("adds only the missing hosts, once each, as a change that is never a Settings save", async () => {
     api.fetchSettings.mockResolvedValue(settings(["api.firecrawl.dev"]));
-    api.patchSettings.mockResolvedValue({ changePlanReceipt: { planId: "s-1", status: "completed" } });
+    api.createChangePlan.mockResolvedValue(plan({ planId: "s-1", kind: "runtime_configuration" }));
+    api.fetchChangePlan.mockResolvedValue(plan({ planId: "s-1", status: "completed", phase: "terminal" }));
 
-    expect(await ensureHostsAllowed(["api.firecrawl.dev", "api.telegram.org", "api.telegram.org"], "w-1")).toEqual({
+    expect(await ensureHostsAllowed(["api.telegram.org", "api.firecrawl.dev", "api.telegram.org"], "w-1")).toEqual({
       kind: "allowed",
     });
-    expect(api.patchSettings).toHaveBeenCalledExactlyOnceWith({
-      expectedRevision: 7,
-      networkAllowlist: ["api.firecrawl.dev", "api.telegram.org"],
+    expect(api.createChangePlan).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "w-1",
+      surface: "settings",
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "network_allowlist", entries: ["api.firecrawl.dev", "api.telegram.org"] },
+      },
+      idempotencyKey: "messaging-allow-hosts:api.telegram.org:7",
     });
+    expect(api.patchSettings).not.toHaveBeenCalled();
   });
 
-  it("allows the host when the save is not governed by a plan", async () => {
-    api.fetchSettings.mockResolvedValue(settings([]));
-    api.patchSettings.mockResolvedValue({});
+  it("names several missing hosts in a sorted key and keeps the list's order", async () => {
+    api.fetchSettings.mockResolvedValue(settings(["a.example.com"]));
+    api.createChangePlan.mockResolvedValue(plan({ planId: "s-1", kind: "runtime_configuration" }));
+    api.fetchChangePlan.mockResolvedValue(plan({ planId: "s-1", status: "completed", phase: "terminal" }));
 
-    expect(await ensureHostsAllowed(["api.telegram.org"], "w-1")).toEqual({ kind: "allowed" });
+    await ensureHostsAllowed(["z.example.org", "api.telegram.org"], "w-1");
+
+    expect(api.createChangePlan).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        request: {
+          kind: "runtime_configuration",
+          change: { operation: "network_allowlist", entries: ["a.example.com", "z.example.org", "api.telegram.org"] },
+        },
+        idempotencyKey: "messaging-allow-hosts:api.telegram.org,z.example.org:7",
+      }),
+    );
   });
 
-  it("approves the host's own change in place and then allows it", async () => {
+  it("confirms, approves and continues the host's own change in the caller's workspace, then allows it", async () => {
+    const other = { workspaceId: "w-2" };
+    const host = { planId: "s-1", kind: "runtime_configuration" as const };
     api.fetchSettings.mockResolvedValue(settings([]));
-    api.patchSettings.mockResolvedValue({ changePlanReceipt: { planId: "s-1", status: "awaiting_approval" } });
+    api.createChangePlan.mockResolvedValue(plan({ ...host, requiredAction: confirmation }));
     api.fetchChangePlan
+      .mockResolvedValueOnce(plan({ ...host, revision: 1, requiredAction: confirmation }))
       .mockResolvedValueOnce(
         plan({
-          planId: "s-1",
-          kind: "runtime_configuration",
+          ...host,
+          revision: 3,
           status: "awaiting_approval",
           phase: "authorization",
           requiredAction: approvalAction,
@@ -398,29 +422,45 @@ describe("ensureHostsAllowed", () => {
       )
       .mockResolvedValueOnce(
         plan({
-          planId: "s-1",
-          kind: "runtime_configuration",
+          ...host,
+          revision: 3,
           status: "awaiting_approval",
           phase: "authorization",
           requiredAction: approvalAction,
         }),
       )
-      .mockResolvedValueOnce(plan({ planId: "s-1", kind: "runtime_configuration", status: "completed" }));
+      .mockResolvedValueOnce(plan({ ...host, revision: 5, status: "completed", phase: "terminal" }));
+    api.confirmChangePlan.mockResolvedValue(plan({ ...host, revision: 2 }));
     api.fetchApproval
       .mockResolvedValueOnce(approval({ payload: { planId: "s-1" }, status: "pending" }))
       .mockResolvedValueOnce(approval({ payload: { planId: "s-1" }, status: "approved" }));
     api.resolveApproval.mockResolvedValue({});
-    api.respondToChangePlan.mockResolvedValue(plan({ planId: "s-1" }));
+    api.respondToChangePlan.mockResolvedValue(plan({ ...host, revision: 4 }));
 
     // Completing the host's change is not the channel's change completing: the caller must carry on.
-    expect(await ensureHostsAllowed(["api.telegram.org"], "w-1")).toEqual({ kind: "allowed" });
-    expect(api.fetchChangePlan).toHaveBeenNthCalledWith(1, "s-1", ctx);
+    expect(await ensureHostsAllowed(["api.telegram.org"], "w-2")).toEqual({ kind: "allowed" });
+
+    expect(api.createChangePlan).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ workspaceId: "w-2" }));
+    expect(api.fetchChangePlan).toHaveBeenCalledTimes(4);
+    for (const [id, context] of api.fetchChangePlan.mock.calls) expect([id, context]).toEqual(["s-1", other]);
+    expect(api.confirmChangePlan).toHaveBeenCalledExactlyOnceWith("s-1", other, {
+      expectedRevision: 1,
+      actionNonce: "nonce-c",
+    });
+    expect(api.fetchApproval).toHaveBeenNthCalledWith(1, "ap-1", other);
     expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("ap-1", "approve");
+    expect(api.respondToChangePlan).toHaveBeenCalledExactlyOnceWith("s-1", other, {
+      expectedRevision: 3,
+      actionId: "act-a",
+      actionNonce: "nonce-a",
+      values: {},
+    });
+    expect(api.patchSettings).not.toHaveBeenCalled();
   });
 
   it("hands the host's change off when the page can't finish it", async () => {
     api.fetchSettings.mockResolvedValue(settings([]));
-    api.patchSettings.mockResolvedValue({ changePlanReceipt: { planId: "s-1", status: "awaiting_approval" } });
+    api.createChangePlan.mockResolvedValue(plan({ planId: "s-1", kind: "runtime_configuration" }));
     api.fetchChangePlan.mockResolvedValue(
       plan({ planId: "s-1", status: "awaiting_approval", phase: "authorization", requiredAction: approvalAction }),
     );
@@ -433,13 +473,26 @@ describe("ensureHostsAllowed", () => {
     });
   });
 
-  it("fails in plain words when the host's change is in some other state", async () => {
+  it("fails when the host's change stops", async () => {
     api.fetchSettings.mockResolvedValue(settings([]));
-    api.patchSettings.mockResolvedValue({ changePlanReceipt: { planId: "s-1", status: "failed" } });
+    api.createChangePlan.mockResolvedValue(plan({ planId: "s-1", kind: "runtime_configuration" }));
+    api.fetchChangePlan.mockResolvedValue(
+      plan({ planId: "s-1", status: "failed", phase: "terminal", result: { summary: "That host isn't allowed." } }),
+    );
 
     expect(await ensureHostsAllowed(["api.telegram.org"], "w-1")).toEqual({
       kind: "failed",
-      message: "GoatCitadel couldn't add api.telegram.org to the hosts it may reach.",
+      message: "That host isn't allowed.",
+    });
+  });
+
+  it("reports a refused change in plain words", async () => {
+    api.fetchSettings.mockResolvedValue(settings([]));
+    api.createChangePlan.mockRejectedValue(httpError(409));
+
+    expect(await ensureHostsAllowed(["api.telegram.org"], "w-1")).toEqual({
+      kind: "failed",
+      message: "This changed somewhere else. Refresh and try again.",
     });
     expect(api.fetchChangePlan).not.toHaveBeenCalled();
   });

@@ -212,26 +212,25 @@ describe("turnOnChannelDraft", () => {
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
 
-  it("adds a missing host first", async () => {
+  it("adds a missing host first, as its own change in the caller's workspace", async () => {
     api.fetchSettings.mockResolvedValue({ revision: 2, networkAllowlist: ["api.firecrawl.dev"] });
-    api.patchSettings.mockResolvedValue({ changePlanReceipt: { planId: "s-1", status: "awaiting_approval" } });
-    api.createChangePlan.mockResolvedValue(plan({ requiredAction: confirmation }));
-    // The host's change (s-1) first, then the channel's change (p-1).
+    api.createChangePlan.mockImplementation(async ({ request }: { request: { kind: string } }) =>
+      request.kind === "runtime_configuration"
+        ? plan({ planId: "s-1", kind: "runtime_configuration", requiredAction: confirmation })
+        : plan({ requiredAction: confirmation }),
+    );
+    // The host's change (s-1) is confirmed, approved and continued; the channel's change (p-1) then reads as done.
     api.fetchChangePlan.mockImplementation(async (planId: string) => {
-      const sequence = api.fetchChangePlan.mock.calls.filter(([id]) => id === planId).length;
-      if (planId === "s-1") {
-        return sequence <= 2
-          ? plan({
-              planId,
-              kind: "runtime_configuration",
-              status: "awaiting_approval",
-              phase: "authorization",
-              requiredAction: approvalAction,
-            })
-          : plan({ planId, kind: "runtime_configuration", status: "completed", phase: "terminal" });
+      if (planId !== "s-1") return plan({ planId, status: "completed", phase: "terminal" });
+      const read = api.fetchChangePlan.mock.calls.filter(([id]) => id === planId).length;
+      const host = { planId, kind: "runtime_configuration" as const };
+      if (read === 1) return plan({ ...host, requiredAction: confirmation });
+      if (read <= 3) {
+        return plan({ ...host, status: "awaiting_approval", phase: "authorization", requiredAction: approvalAction });
       }
-      return plan({ planId, status: "completed", phase: "terminal" });
+      return plan({ ...host, status: "completed", phase: "terminal" });
     });
+    api.confirmChangePlan.mockResolvedValue(plan({ planId: "s-1" }));
     api.fetchApproval.mockImplementation(async (approvalId: string) =>
       approval({
         approvalId,
@@ -242,22 +241,44 @@ describe("turnOnChannelDraft", () => {
     api.resolveApproval.mockResolvedValue({});
     api.respondToChangePlan.mockResolvedValue(plan({ planId: "s-1" }));
 
+    // Completing the host's change must not end Turn on: the channel's own change is the result.
     expect(await turnOnChannelDraft(input)).toMatchObject({ kind: "completed", plan: { planId: "p-1" } });
 
-    expect(api.patchSettings).toHaveBeenCalledExactlyOnceWith({
-      expectedRevision: 2,
-      networkAllowlist: ["api.firecrawl.dev", "api.telegram.org"],
+    expect(api.createChangePlan).toHaveBeenNthCalledWith(1, {
+      workspaceId: "w-1",
+      surface: "settings",
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "network_allowlist", entries: ["api.firecrawl.dev", "api.telegram.org"] },
+      },
+      idempotencyKey: "messaging-allow-hosts:api.telegram.org:2",
     });
+    expect(api.createChangePlan).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ idempotencyKey: "messaging-turn-on:d-1:8" }),
+    );
+    expect(api.patchSettings).not.toHaveBeenCalled();
+    expect(api.fetchChangePlan).toHaveBeenCalledWith("s-1", ctx);
+    expect(api.confirmChangePlan).toHaveBeenCalledExactlyOnceWith("s-1", ctx, {
+      expectedRevision: 1,
+      actionNonce: "nonce-c",
+    });
+    expect(api.fetchApproval).toHaveBeenCalledWith("ap-1", ctx);
     expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("ap-1", "approve");
-    expect(api.patchSettings.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(api.respondToChangePlan).toHaveBeenCalledExactlyOnceWith("s-1", ctx, {
+      expectedRevision: 1,
+      actionId: "act-a",
+      actionNonce: "nonce-a",
+      values: {},
+    });
+    expect(api.resolveApproval.mock.invocationCallOrder[0]).toBeLessThan(
       api.validateChannelSetupDraft.mock.invocationCallOrder[0]!,
     );
-    expect(api.createChangePlan).toHaveBeenCalledOnce();
   });
 
   it("stops when a host's change must be finished elsewhere", async () => {
     api.fetchSettings.mockResolvedValue({ revision: 2, networkAllowlist: [] });
-    api.patchSettings.mockResolvedValue({ changePlanReceipt: { planId: "s-1", status: "awaiting_approval" } });
+    api.createChangePlan.mockResolvedValue(plan({ planId: "s-1", kind: "runtime_configuration" }));
     api.fetchChangePlan.mockResolvedValue(
       plan({ planId: "s-1", status: "awaiting_approval", phase: "authorization", requiredAction: approvalAction }),
     );
@@ -267,8 +288,9 @@ describe("turnOnChannelDraft", () => {
     );
 
     expect(await turnOnChannelDraft(input)).toMatchObject({ kind: "elsewhere", approvalId: "ap-1" });
+    expect(api.createChangePlan).toHaveBeenCalledOnce();
+    expect(api.patchSettings).not.toHaveBeenCalled();
     expect(api.validateChannelSetupDraft).not.toHaveBeenCalled();
-    expect(api.createChangePlan).not.toHaveBeenCalled();
   });
 
   it("stops with the issue messages when the setup doesn't validate", async () => {
@@ -291,13 +313,42 @@ describe("turnOnChannelDraft", () => {
     expect(api.createChangePlan).not.toHaveBeenCalled();
   });
 
-  it("blocks with a plain reason when validation fails without a message", async () => {
-    api.validateChannelSetupDraft.mockResolvedValue(validation({ status: "warn", issues: [] }));
+  it.each(["error", "idle"] as const)(
+    "blocks with a plain reason when validation is %s without a message",
+    async (status) => {
+      api.validateChannelSetupDraft.mockResolvedValue(validation({ status, issues: [] }));
 
-    const outcome = await turnOnChannelDraft(input);
+      const outcome = await turnOnChannelDraft(input);
 
-    expect(outcome).toMatchObject({ kind: "blocked" });
-    expect(outcome.kind === "blocked" && outcome.reasons).toHaveLength(1);
+      expect(outcome).toMatchObject({ kind: "blocked" });
+      expect(outcome.kind === "blocked" && outcome.reasons).toHaveLength(1);
+      expect(api.testChannelSetupDraft).not.toHaveBeenCalled();
+      expect(api.createChangePlan).not.toHaveBeenCalled();
+    },
+  );
+
+  it("blocks when validation is idle, with its messages", async () => {
+    api.validateChannelSetupDraft.mockResolvedValue(
+      validation({ status: "idle", issues: [{ key: "draft", level: "warn", message: "Nothing is set up yet." }] }),
+    );
+
+    expect(await turnOnChannelDraft(input)).toEqual({ kind: "blocked", reasons: ["Nothing is set up yet."] });
+    expect(api.testChannelSetupDraft).not.toHaveBeenCalled();
+  });
+
+  it("goes on to the test and the change when validation only warns", async () => {
+    arrangeEndToEnd();
+    api.validateChannelSetupDraft.mockResolvedValue(
+      validation({ status: "warn", issues: [{ key: "target", level: "warn", message: "No chat is chosen yet." }] }),
+    );
+
+    expect(await turnOnChannelDraft(input)).toMatchObject({ kind: "completed" });
+
+    // The test's own eligibility is the gate, so the warning doesn't stop either call.
+    expect(api.testChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("d-1", 6);
+    expect(api.createChangePlan).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ idempotencyKey: "messaging-turn-on:d-1:8" }),
+    );
   });
 
   it("stops for the test message it couldn't remove", async () => {

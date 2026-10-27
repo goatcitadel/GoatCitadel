@@ -2,9 +2,9 @@ import type { ChangePlanRecord, ChangePlanRequiredAction, ChangePlanStatus } fro
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import {
   confirmChangePlan,
+  createChangePlan,
   fetchChangePlan,
   fetchSettings,
-  patchSettings,
   resolveApproval,
   respondToChangePlan,
 } from "@goatcitadel/mission-control-shared/api/client";
@@ -128,9 +128,11 @@ async function approveOwnApproval(
 }
 
 /**
- * Makes sure GoatCitadel may reach every host a channel needs, adding the missing ones to the outbound allowlist the
- * same way Settings does and approving that change in place. A finished allowlist change is "allowed", never
- * "completed": that word is for the channel's own change.
+ * Makes sure GoatCitadel may reach every host a channel needs. Any missing hosts go into the outbound allowlist as
+ * their own change in the caller's workspace, which is approved in place like the channel's change. It does not use
+ * the Settings save: that route plans in the default workspace and applies with the operator's approval skip, and
+ * Turn on never takes the skip. A finished allowlist change is "allowed", never "completed": that word is for the
+ * channel's own change.
  */
 export async function ensureHostsAllowed(
   hosts: readonly string[],
@@ -143,16 +145,16 @@ export async function ensureHostsAllowed(
       (host) => !isBaseUrlAllowlisted(`https://${host}/`, settings.networkAllowlist),
     );
     if (missing.length === 0) return { kind: "allowed" };
-    const saved = await patchSettings({
-      expectedRevision: settings.revision,
-      networkAllowlist: [...settings.networkAllowlist, ...missing],
+    const plan = await createChangePlan({
+      workspaceId,
+      surface: "settings",
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "network_allowlist", entries: [...settings.networkAllowlist, ...missing] },
+      },
+      idempotencyKey: `messaging-allow-hosts:${[...missing].sort().join(",")}:${settings.revision}`,
     });
-    const receipt = saved.changePlanReceipt;
-    if (!receipt || receipt.status === "completed") return { kind: "allowed" };
-    if (receipt.status !== "awaiting_approval") {
-      return failed(`GoatCitadel couldn't add ${missing.join(", ")} to the hosts it may reach.`);
-    }
-    const outcome = await approvePlanInPlace(receipt.planId, workspaceId);
+    const outcome = await approvePlanInPlace(plan.planId, workspaceId);
     return outcome.kind === "completed" ? { kind: "allowed" } : outcome;
   } catch (error) {
     return failed(describeApiError(error).summary);

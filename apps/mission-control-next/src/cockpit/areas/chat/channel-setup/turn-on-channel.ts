@@ -107,7 +107,8 @@ async function findOpenChange({ workspaceId, draftId }: DraftRef): Promise<Chang
 async function checkSetup(draftId: string): Promise<Checked> {
   const draft = await fetchChannelSetupDraft(draftId);
   const validation = await validateChannelSetupDraft(draftId, draft.revision);
-  if (validation.status !== "ok") return blocked(issueMessages(validation.issues));
+  // A warning doesn't stop the test, as in Settings; the test's own eligibility is the real gate.
+  if (validation.status === "error" || validation.status === "idle") return blocked(issueMessages(validation.issues));
   const tested = await testChannelSetupDraft(draftId, validation.draftRevision);
   const eligibility = tested.finalizationEligibility;
   if (eligibility?.requiresAcknowledgement) {
