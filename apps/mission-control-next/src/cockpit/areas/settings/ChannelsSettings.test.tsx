@@ -149,3 +149,54 @@ describe("Settings channels point to Messaging", () => {
     expect(api.createChannelSetupDraft).not.toHaveBeenCalled();
   });
 });
+
+describe("Telegram is set up in Chat, not here", () => {
+  const linkNamed = (label: string) =>
+    [...container.querySelectorAll("a")].find((candidate) => candidate.textContent === label);
+  const pathOf = (link: HTMLAnchorElement | undefined) =>
+    new URL(link!.getAttribute("href")!, "http://cockpit.invalid").pathname;
+  function draft(catalogId: string, label: string, extra: Record<string, unknown> = {}) {
+    return { draftId: `${catalogId}:${label}`, catalogId, label, revision: 1, lifecycleMode: "create", ...extra };
+  }
+
+  beforeEach(() => {
+    api.fetchChannelSetupDefinitions.mockResolvedValue({
+      items: [definition("telegram", "Telegram"), definition("slack", "Slack")],
+    });
+  });
+
+  it("offers Telegram's Chat page in place of the guided setup", async () => {
+    await mount("?channel=channel.telegram");
+    expect(picker()?.value).toBe("channel.telegram");
+    expect(buttonNamed("Start guided setup")).toBeUndefined();
+    const link = linkNamed("Set up Telegram in Chat");
+    expect(pathOf(link)).toBe("/chat/messaging/add/telegram");
+    expect(api.createChannelSetupDraft).not.toHaveBeenCalled();
+  });
+
+  it("keeps the guided setup for a channel Chat doesn't set up", async () => {
+    await mount("?channel=channel.slack");
+    expect(buttonNamed("Start guided setup")?.disabled).toBe(false);
+    expect(linkNamed("Set up Telegram in Chat")).toBeUndefined();
+  });
+
+  it("continues an unfinished Telegram setup in Chat, and edits the rest here", async () => {
+    api.fetchChannelSetupDrafts.mockResolvedValue({
+      items: [
+        draft("channel.telegram", "New bot"),
+        draft("channel.telegram", "Home bot", { lifecycleMode: "edit", connectionId: "conn-1" }),
+        draft("channel.slack", "Team"),
+      ],
+    });
+    await mount("");
+    expect(buttonNamed("Edit New bot")).toBeUndefined();
+    const resume = linkNamed("Continue New bot in Chat");
+    expect(pathOf(resume)).toBe("/chat/messaging/add/telegram");
+    // The page picks up this very setup, not whichever unfinished one is newest.
+    expect(new URL(resume!.getAttribute("href")!, "http://cockpit.invalid").searchParams.get("draft")).toBe(
+      "channel.telegram:New bot",
+    );
+    expect(buttonNamed("Edit Home bot")).toBeDefined();
+    expect(buttonNamed("Edit Team")).toBeDefined();
+  });
+});

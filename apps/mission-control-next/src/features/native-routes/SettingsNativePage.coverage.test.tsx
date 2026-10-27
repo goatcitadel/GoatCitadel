@@ -26,7 +26,13 @@ import { GCModal } from "@goatcitadel/mission-control-shared/components/ui/GCMod
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { __resetFormDirtyRegistryForTests, hasDirtySections } from "./library/use-form-dirty";
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import type { CapabilityPackManifest, CapabilityPackPreview, WorkspaceCreateInput, WorkspaceUpdateInput, WorkspaceRecord } from "@goatcitadel/contracts";
+import type {
+  CapabilityPackManifest,
+  CapabilityPackPreview,
+  WorkspaceCreateInput,
+  WorkspaceUpdateInput,
+  WorkspaceRecord,
+} from "@goatcitadel/contracts";
 
 const mountedSettingsRenderers: ReactTestRenderer[] = [];
 function create(...args: Parameters<typeof createRenderer>): ReactTestRenderer {
@@ -52,12 +58,23 @@ const settingsMocks = vi.hoisted(() => {
     archivePermissionProfile: fn(),
     activatePermissionProfile: fn(),
     bootstrapDemo: fn(),
-    bootstrapOnboarding: vi.fn<(input: import("@goatcitadel/contracts").OnboardingBootstrapInput) => Promise<unknown>>(),
+    bootstrapOnboarding:
+      vi.fn<(input: import("@goatcitadel/contracts").OnboardingBootstrapInput) => Promise<unknown>>(),
     createExternalSideEffectReplayAuditRun: fn(),
     completeOnboarding: fn(),
     connectMcpServer: fn(),
-    connectReviewedMcpServer: vi.fn(async (_id: string, _review: { expectedRevision: string; expectedConnectionRevision: string | null }): Promise<Record<string, unknown>> => ({})),
-    disconnectReviewedMcpServer: vi.fn(async (_id: string, _review: { expectedRevision: string; expectedConnectionRevision: string | null }): Promise<Record<string, unknown>> => ({})),
+    connectReviewedMcpServer: vi.fn(
+      async (
+        _id: string,
+        _review: { expectedRevision: string; expectedConnectionRevision: string | null },
+      ): Promise<Record<string, unknown>> => ({}),
+    ),
+    disconnectReviewedMcpServer: vi.fn(
+      async (
+        _id: string,
+        _review: { expectedRevision: string; expectedConnectionRevision: string | null },
+      ): Promise<Record<string, unknown>> => ({}),
+    ),
     createChangePlan: vi.fn(async (input: any) => ({
       schemaVersion: 1,
       planId: "plan-oauth-1",
@@ -102,18 +119,41 @@ const settingsMocks = vi.hoisted(() => {
       createdAt: "2026-04-24T12:00:00.000Z",
       updatedAt: "2026-04-24T12:00:00.000Z",
     })),
-    createChannelSetupDraft: vi.fn<(...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").createChannelSetupDraft>) => Promise<unknown>>(),
-    createIntegrationConnection: vi.fn<(...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").createIntegrationConnection>) => Promise<unknown>>(),
+    createChannelSetupDraft:
+      vi.fn<
+        (
+          ...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").createChannelSetupDraft>
+        ) => Promise<unknown>
+      >(),
+    createIntegrationConnection:
+      vi.fn<
+        (
+          ...args: Parameters<
+            typeof import("@goatcitadel/mission-control-shared/api/client").createIntegrationConnection
+          >
+        ) => Promise<unknown>
+      >(),
     createNotificationRule: fn(),
     createNotificationTarget: fn(),
     createLocalOperatorOverride: fn(),
-    createMcpServer: vi.fn<(input: import("@goatcitadel/contracts").McpServerCreateInput) => Promise<unknown>>(async () => ({})),
+    createMcpServer: vi.fn<(input: import("@goatcitadel/contracts").McpServerCreateInput) => Promise<unknown>>(
+      async () => ({}),
+    ),
     createPersonality: fn(),
     createPermissionProfile: fn(),
-    createToolGrant: vi.fn(async (input: Omit<import("@goatcitadel/contracts").ToolGrantCreateInput, "createdBy">) => ({ ...input })),
+    createToolGrant: vi.fn(async (input: Omit<import("@goatcitadel/contracts").ToolGrantCreateInput, "createdBy">) => ({
+      ...input,
+    })),
     createWorkspace: vi.fn<(input: WorkspaceCreateInput) => Promise<unknown>>(),
     createCitadel: fn(),
-    deleteIntegrationConnection: vi.fn<(...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").deleteIntegrationConnection>) => Promise<unknown>>(),
+    deleteIntegrationConnection:
+      vi.fn<
+        (
+          ...args: Parameters<
+            typeof import("@goatcitadel/mission-control-shared/api/client").deleteIntegrationConnection
+          >
+        ) => Promise<unknown>
+      >(),
     deleteMcpServer: vi.fn<(serverId: string, expectedRevision: string) => Promise<unknown>>(async () => ({})),
     deleteOpenAICodexOAuthCredential: fn(),
     deletePersonality: fn(),
@@ -141,7 +181,12 @@ const settingsMocks = vi.hoisted(() => {
     fetchLocalCapabilityPackPreview: fn(),
     fetchChannelSetupDefinitions: fn(),
     fetchChannelSetupDrafts: fn(),
-    fetchChannelSetupDraft: vi.fn<(...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").fetchChannelSetupDraft>) => Promise<unknown>>(),
+    fetchChannelSetupDraft:
+      vi.fn<
+        (
+          ...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").fetchChannelSetupDraft>
+        ) => Promise<unknown>
+      >(),
     fetchChannelRuntimeStatus: fn(),
     fetchAgenticChannelDeliveries: fn({ deliveries: [] }),
     fetchChangePlans: fn({ items: [] }),
@@ -154,7 +199,8 @@ const settingsMocks = vi.hoisted(() => {
     fetchEvidenceEnvelopes: fn(),
     fetchExternalConnectorServices: fn(),
     fetchExternalSideEffectRuns: fn(),
-    fetchDeviceAccessGrants: vi.fn<typeof import("@goatcitadel/mission-control-shared/api/client").fetchDeviceAccessGrants>(),
+    fetchDeviceAccessGrants:
+      vi.fn<typeof import("@goatcitadel/mission-control-shared/api/client").fetchDeviceAccessGrants>(),
     fetchGoogleMeetPrerequisiteStatus: fn(),
     fetchGoogleMeetSessions: fn(),
     fetchInstalledAddons: fn(),
@@ -227,7 +273,10 @@ const settingsMocks = vi.hoisted(() => {
       status: "awaiting_confirmation",
       revision: 2,
       adapter: { adapterId: "provider-connection", version: 3 },
-      request: settingsMocks.createChangePlan.mock.calls.at(-1)?.[0].request ?? { kind: "provider_connection", providerId: "openai-codex" },
+      request: settingsMocks.createChangePlan.mock.calls.at(-1)?.[0].request ?? {
+        kind: "provider_connection",
+        providerId: "openai-codex",
+      },
       target: { ownerId: "provider_connection", resourceId: "openai-codex" },
       title: "Connect OpenAI Codex",
       summary: "The OAuth credential is staged and awaits exact promotion.",
@@ -256,7 +305,8 @@ const settingsMocks = vi.hoisted(() => {
     restoreWorkspace: vi.fn<typeof import("@goatcitadel/mission-control-shared/api/client").restoreWorkspace>(),
     restoreCitadel: fn(),
     revokeAutonomousActivationGrant: fn(),
-    revokeDeviceAccessGrant: vi.fn<typeof import("@goatcitadel/mission-control-shared/api/client").revokeDeviceAccessGrant>(),
+    revokeDeviceAccessGrant:
+      vi.fn<typeof import("@goatcitadel/mission-control-shared/api/client").revokeDeviceAccessGrant>(),
     revokeLocalOperatorOverride: fn(),
     revokeToolGrant: vi.fn(async (grantId: string) => ({ grantId })),
     runMcpServerHealthCheck: fn(),
@@ -279,13 +329,30 @@ const settingsMocks = vi.hoisted(() => {
     stopDaemon: fn(),
     stopLlamaCppRuntime: fn(),
     stopNpuRuntime: fn(),
-    testChannelSetupDraft: vi.fn<(...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").testChannelSetupDraft>) => Promise<unknown>>(),
+    testChannelSetupDraft:
+      vi.fn<
+        (
+          ...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").testChannelSetupDraft>
+        ) => Promise<unknown>
+      >(),
     uninstallAddon: fn(),
     updateAddon: fn(),
-    updateChannelSetupDraft: vi.fn<(...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").updateChannelSetupDraft>) => Promise<unknown>>(),
+    updateChannelSetupDraft:
+      vi.fn<
+        (
+          ...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").updateChannelSetupDraft>
+        ) => Promise<unknown>
+      >(),
     updateExternalConnectorActionReviewState: fn(),
     updateExternalConnectorServiceReviewState: fn(),
-    updateIntegrationConnection: vi.fn<(...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").updateIntegrationConnection>) => Promise<unknown>>(),
+    updateIntegrationConnection:
+      vi.fn<
+        (
+          ...args: Parameters<
+            typeof import("@goatcitadel/mission-control-shared/api/client").updateIntegrationConnection
+          >
+        ) => Promise<unknown>
+      >(),
     updateNotificationRule: fn(),
     updateNotificationTarget: fn(),
     updateMcpServer: vi.fn(
@@ -293,9 +360,15 @@ const settingsMocks = vi.hoisted(() => {
     ),
     updatePersonality: fn(),
     updatePermissionProfile: fn(),
-    updateWorkspace: vi.fn<(workspaceId: string, input: WorkspaceUpdateInput & { expectedRevision: number }) => Promise<unknown>>(),
+    updateWorkspace:
+      vi.fn<(workspaceId: string, input: WorkspaceUpdateInput & { expectedRevision: number }) => Promise<unknown>>(),
     updateCitadel: fn(),
-    validateChannelSetupDraft: vi.fn<(...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").validateChannelSetupDraft>) => Promise<unknown>>(),
+    validateChannelSetupDraft:
+      vi.fn<
+        (
+          ...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").validateChannelSetupDraft>
+        ) => Promise<unknown>
+      >(),
     providerModelCatalog: {
       config: {
         revision: 31,
@@ -322,7 +395,14 @@ const settingsMocks = vi.hoisted(() => {
 });
 
 // The live-test review renders through a portal; render it inline so the reviewed action is reachable.
-vi.mock("../../cockpit/ui/Dialog", () => ({ Dialog: ({ open, children, title }: { open: boolean; children: import("react").ReactNode; title: string }) => open ? <div role="dialog" aria-label={title}>{children}</div> : null }));
+vi.mock("../../cockpit/ui/Dialog", () => ({
+  Dialog: ({ open, children, title }: { open: boolean; children: import("react").ReactNode; title: string }) =>
+    open ? (
+      <div role="dialog" aria-label={title}>
+        {children}
+      </div>
+    ) : null,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/channel-setup-operations", () => ({
   discoverTelegramSetupTargets: settingsMocks.discoverTelegramSetupTargets,
   fetchTelegramChannelPairings: settingsMocks.fetchTelegramChannelPairings,
@@ -333,7 +413,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/channel-setup-operations", () =
   fetchChannelSetupDraftEvidence: settingsMocks.fetchChannelSetupDraftEvidence,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/tasks", async (importOriginal) => ({
-  ...await importOriginal<object>(), fetchTask: settingsMocks.fetchTask,
+  ...(await importOriginal<object>()),
+  fetchTask: settingsMocks.fetchTask,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   archiveWorkspace: settingsMocks.archiveWorkspace,
@@ -611,7 +692,10 @@ const workspaces: WorkspaceRecord[] = [
 ];
 
 function mockSuccessfulProviderSaves() {
-  settingsMocks.fetchSettings.mockImplementation(async () => ({ ...settings, revision: settingsMocks.providerModelCatalog.config.revision }));
+  settingsMocks.fetchSettings.mockImplementation(async () => ({
+    ...settings,
+    revision: settingsMocks.providerModelCatalog.config.revision,
+  }));
   settingsMocks.patchSettings.mockImplementation(async (input: any) => {
     const updated = { ...settings, revision: input.expectedRevision + 1, llm: { ...settings.llm, ...input.llm } };
     if (input.llm?.upsertProvider)
@@ -672,8 +756,17 @@ function setupResponses() {
       },
     ],
   });
-  settingsMocks.createWorkspace.mockImplementation(async (input) => ({ ...workspaces[0], ...input, workspaceId: "created", revision: 1 }));
-  settingsMocks.updateWorkspace.mockImplementation(async (_id, input) => ({ ...workspaces[0], ...input, revision: input.expectedRevision + 1 }));
+  settingsMocks.createWorkspace.mockImplementation(async (input) => ({
+    ...workspaces[0],
+    ...input,
+    workspaceId: "created",
+    revision: 1,
+  }));
+  settingsMocks.updateWorkspace.mockImplementation(async (_id, input) => ({
+    ...workspaces[0],
+    ...input,
+    revision: input.expectedRevision + 1,
+  }));
   settingsMocks.archiveWorkspace.mockResolvedValue({ ...workspaces[0]!, lifecycleStatus: "archived" });
   settingsMocks.restoreWorkspace.mockResolvedValue({ ...workspaces[1]!, lifecycleStatus: "active" });
   settingsMocks.createCitadel.mockResolvedValue({
@@ -1085,18 +1178,36 @@ function setupResponses() {
       },
     ],
   });
+  // A change to a saved Telegram channel: Settings sends a new Telegram setup to its page in Chat instead of this guide.
   let channelOwner = {
-    draftId: "draft-1", revision: 1, catalogId: "channel.telegram", label: "Telegram setup", enabled: true,
-    lifecycleMode: "create", draft: { botTokenEnv: "TELEGRAM_TOKEN", setupCode: "SETUP" } as Record<string, unknown>,
-    secretState: {}, contentVersion: "fixture", adapterVersion: "fixture", validationVersion: "fixture", testVersion: "fixture",
-    createdAt: "2026-04-24T12:00:00.000Z", updatedAt: "2026-04-24T12:00:00.000Z",
+    draftId: "draft-1",
+    revision: 1,
+    catalogId: "channel.telegram",
+    label: "Telegram setup",
+    enabled: true,
+    lifecycleMode: "edit",
+    draft: { botTokenEnv: "TELEGRAM_TOKEN", setupCode: "SETUP" } as Record<string, unknown>,
+    secretState: {},
+    contentVersion: "fixture",
+    adapterVersion: "fixture",
+    validationVersion: "fixture",
+    testVersion: "fixture",
+    createdAt: "2026-04-24T12:00:00.000Z",
+    updatedAt: "2026-04-24T12:00:00.000Z",
   };
   settingsMocks.fetchChannelSetupDrafts.mockImplementation(async () => ({ items: [channelOwner] }));
   settingsMocks.fetchChannelSetupDraft.mockImplementation(async () => channelOwner);
-  settingsMocks.createChannelSetupDraft.mockImplementation(async (input: { catalogId: string; connectionId?: string; lifecycleMode?: string }) => ({
-    ...channelOwner, draftId: "draft-2", revision: 1, catalogId: input.catalogId, connectionId: input.connectionId,
-    lifecycleMode: input.lifecycleMode ?? "create", draft: {},
-  }));
+  settingsMocks.createChannelSetupDraft.mockImplementation(
+    async (input: { catalogId: string; connectionId?: string; lifecycleMode?: string }) => ({
+      ...channelOwner,
+      draftId: "draft-2",
+      revision: 1,
+      catalogId: input.catalogId,
+      connectionId: input.connectionId,
+      lifecycleMode: input.lifecycleMode ?? "create",
+      draft: {},
+    }),
+  );
   settingsMocks.discoverTelegramTargets.mockResolvedValue({
     items: [{ id: "chat-1", label: "Ops Chat", chatId: "123", kind: "group" }],
   });
@@ -1106,22 +1217,56 @@ function setupResponses() {
     warnings: [],
     webhookActive: false,
   });
-  settingsMocks.fetchChannelSetupDraftEvidence.mockImplementation(async (...args: unknown[]) => ({ draftId: args[0], draftRevision: args[1], items: [] }));
-  for (const operation of [settingsMocks.fetchTelegramChannelPairings, settingsMocks.approveTelegramChannelPairing, settingsMocks.revokeTelegramChannelPairing, settingsMocks.acknowledgeChannelSetupTest, settingsMocks.fetchChannelSetupJourney])
+  settingsMocks.fetchChannelSetupDraftEvidence.mockImplementation(async (...args: unknown[]) => ({
+    draftId: args[0],
+    draftRevision: args[1],
+    items: [],
+  }));
+  for (const operation of [
+    settingsMocks.fetchTelegramChannelPairings,
+    settingsMocks.approveTelegramChannelPairing,
+    settingsMocks.revokeTelegramChannelPairing,
+    settingsMocks.acknowledgeChannelSetupTest,
+    settingsMocks.fetchChannelSetupJourney,
+  ])
     operation.mockRejectedValue(new Error("Unavailable in this test"));
-  settingsMocks.updateChannelSetupDraft.mockImplementation(async (_id: string, input: { expectedRevision: number; label?: string; enabled?: boolean; draft?: Record<string, unknown> }) => {
-    channelOwner = { ...channelOwner, revision: input.expectedRevision + 1, label: input.label ?? channelOwner.label,
-      enabled: input.enabled ?? channelOwner.enabled, draft: input.draft ?? channelOwner.draft };
-    return channelOwner;
-  });
+  settingsMocks.updateChannelSetupDraft.mockImplementation(
+    async (
+      _id: string,
+      input: { expectedRevision: number; label?: string; enabled?: boolean; draft?: Record<string, unknown> },
+    ) => {
+      channelOwner = {
+        ...channelOwner,
+        revision: input.expectedRevision + 1,
+        label: input.label ?? channelOwner.label,
+        enabled: input.enabled ?? channelOwner.enabled,
+        draft: input.draft ?? channelOwner.draft,
+      };
+      return channelOwner;
+    },
+  );
   settingsMocks.validateChannelSetupDraft.mockImplementation(async (_id: string, revision: number) => {
     channelOwner = { ...channelOwner, revision: revision + 1 };
-    return { draftId: channelOwner.draftId, draftRevision: channelOwner.revision, status: "ok", levels: ["semantic"], issues: [], checkedAt: "2026-04-24T12:06:00.000Z" };
+    return {
+      draftId: channelOwner.draftId,
+      draftRevision: channelOwner.revision,
+      status: "ok",
+      levels: ["semantic"],
+      issues: [],
+      checkedAt: "2026-04-24T12:06:00.000Z",
+    };
   });
   settingsMocks.testChannelSetupDraft.mockImplementation(async (_id: string, revision: number) => {
     channelOwner = { ...channelOwner, revision: revision + 2 };
-    return { draftId: channelOwner.draftId, draftRevision: channelOwner.revision, status: "warn", levels: ["live-send"],
-      issues: [{ key: "dry-run", level: "warn", message: "Dry run only" }], checkedAt: "2026-04-24T12:07:00.000Z", recommendedNextAction: "Review target." };
+    return {
+      draftId: channelOwner.draftId,
+      draftRevision: channelOwner.revision,
+      status: "warn",
+      levels: ["live-send"],
+      issues: [{ key: "dry-run", level: "warn", message: "Dry run only" }],
+      checkedAt: "2026-04-24T12:07:00.000Z",
+      recommendedNextAction: "Review target.",
+    };
   });
   settingsMocks.finalizeChannelSetupDraft.mockResolvedValue({
     connection: { label: "Telegram ops" },
@@ -1151,15 +1296,28 @@ function setupResponses() {
       },
     ],
   });
-  const grantRecords = (toolGrantRecordsFixture());
+  const grantRecords = toolGrantRecordsFixture();
   settingsMocks.fetchToolGrants.mockImplementation(async () => ({ items: structuredClone(grantRecords) }));
-  settingsMocks.createToolGrant.mockImplementation(async (input: Omit<import("@goatcitadel/contracts").ToolGrantCreateInput, "createdBy">) => {
-    const saved = { ...input, grantType: input.grantType ?? "persistent", scopeRef: input.scope === "global" ? "global" : String(input.scopeRef ?? ""), grantId: "grant-2", createdBy: "operator", createdAt: "2026-09-30T15:00:00.000Z" };
-    grantRecords.push(saved); return structuredClone(saved);
-  });
+  settingsMocks.createToolGrant.mockImplementation(
+    async (input: Omit<import("@goatcitadel/contracts").ToolGrantCreateInput, "createdBy">) => {
+      const saved = {
+        ...input,
+        grantType: input.grantType ?? "persistent",
+        scopeRef: input.scope === "global" ? "global" : String(input.scopeRef ?? ""),
+        grantId: "grant-2",
+        createdBy: "operator",
+        createdAt: "2026-09-30T15:00:00.000Z",
+      };
+      grantRecords.push(saved);
+      return structuredClone(saved);
+    },
+  );
   settingsMocks.revokeToolGrant.mockImplementation(async (grantId: string) => {
     const grant = grantRecords.find((item) => item.grantId === grantId);
-    if (grant) { grant.revokedAt = "2026-09-30T15:01:00.000Z"; grant.revokedBy = "operator"; }
+    if (grant) {
+      grant.revokedAt = "2026-09-30T15:01:00.000Z";
+      grant.revokedBy = "operator";
+    }
     return { revoked: Boolean(grant), grantId, revokedBy: "operator" };
   });
   settingsMocks.fetchDeviceAccessGrants.mockResolvedValue({
@@ -1339,7 +1497,7 @@ function setupResponses() {
   });
   settingsMocks.fetchChatProjects.mockResolvedValue({ items: [demo.project] });
   settingsMocks.fetchChatSessions.mockResolvedValue({ items: [demo.session] });
-  settingsMocks.fetchTask.mockImplementation(async (id) => demo.tasks.find(task => task.taskId === id));
+  settingsMocks.fetchTask.mockImplementation(async (id) => demo.tasks.find((task) => task.taskId === id));
   settingsMocks.fetchProviderSecretStatus.mockResolvedValue({ hasSecret: false, source: "missing" });
   settingsMocks.saveProviderSecret.mockResolvedValue({
     providerId: "openai",
@@ -1606,7 +1764,13 @@ describe("SettingsNativePage broad native sections", () => {
     expect(settingsMocks.updateCitadel).not.toHaveBeenCalled();
     await click(findButton(page.root, "Apply draft to current Citadel"));
     settingsMocks.updateCitadel.mockReset();
-    const savedWinner = { ...winner, name: "Local Citadel draft", description: "", revision: "c".repeat(64), updatedAt: "2026-09-30T01:00:00.000Z" };
+    const savedWinner = {
+      ...winner,
+      name: "Local Citadel draft",
+      description: "",
+      revision: "c".repeat(64),
+      updatedAt: "2026-09-30T01:00:00.000Z",
+    };
     settingsMocks.updateCitadel.mockImplementationOnce(async () => {
       settingsMocks.listCitadels.mockResolvedValue({ items: [savedWinner] });
       return savedWinner;
@@ -1683,7 +1847,12 @@ describe("SettingsNativePage broad native sections", () => {
     );
     await click(findButton(page.root, "Save Citadel"));
     await change(page.root.findByProps({ value: "Submitted draft" }), "Newer typing");
-    const acknowledged = { ...initial, name: "Submitted draft", revision: "b".repeat(64), updatedAt: "2026-09-30T01:00:00.000Z" };
+    const acknowledged = {
+      ...initial,
+      name: "Submitted draft",
+      revision: "b".repeat(64),
+      updatedAt: "2026-09-30T01:00:00.000Z",
+    };
     settingsMocks.listCitadels.mockResolvedValue({ items: [acknowledged] });
     await act(async () => {
       resolveSave(acknowledged);
@@ -1691,7 +1860,12 @@ describe("SettingsNativePage broad native sections", () => {
     await flush();
     expect(page.root.findByProps({ value: "Newer typing" })).toBeTruthy();
     expect(findButton(page.root, "Save Citadel").props.disabled).toBe(false);
-    const nextAcknowledged = { ...acknowledged, name: "Newer typing", revision: "c".repeat(64), updatedAt: "2026-09-30T02:00:00.000Z" };
+    const nextAcknowledged = {
+      ...acknowledged,
+      name: "Newer typing",
+      revision: "c".repeat(64),
+      updatedAt: "2026-09-30T02:00:00.000Z",
+    };
     settingsMocks.updateCitadel.mockImplementationOnce(async () => {
       settingsMocks.listCitadels.mockResolvedValue({ items: [nextAcknowledged] });
       return nextAcknowledged;
@@ -1740,7 +1914,10 @@ describe("SettingsNativePage broad native sections", () => {
       method: "PATCH",
       path: "/api/v1/workspaces/default",
       status: 409,
-      body: { code: "WRITE_CONFLICT", details: { resourceKind: "workspace", resourceId: "default", expectedRevision: 11, currentRevision: 12 } },
+      body: {
+        code: "WRITE_CONFLICT",
+        details: { resourceKind: "workspace", resourceId: "default", expectedRevision: 11, currentRevision: 12 },
+      },
     });
     settingsMocks.updateWorkspace.mockRejectedValueOnce(staleError).mockResolvedValueOnce({
       ...workspaces[0],
@@ -1785,7 +1962,9 @@ describe("SettingsNativePage broad native sections", () => {
 
     const clearedWorkspace = { ...workspaces[0], description: "", revision: 12 };
     settingsMocks.updateWorkspace.mockResolvedValueOnce(clearedWorkspace);
-    settingsMocks.fetchWorkspaces.mockResolvedValueOnce({ items: workspaces }).mockResolvedValue({ items: [clearedWorkspace, workspaces[1]] });
+    settingsMocks.fetchWorkspaces
+      .mockResolvedValueOnce({ items: workspaces })
+      .mockResolvedValue({ items: [clearedWorkspace, workspaces[1]] });
     await click(findButton(page.root, "Save changes"));
 
     expect(settingsMocks.updateWorkspace).toHaveBeenCalledWith("default", {
@@ -1803,28 +1982,56 @@ describe("SettingsNativePage broad native sections", () => {
   it("preserves the public access draft after exact stale rejection and requires a fresh credential for retry", async () => {
     let authOwner = { ...settings, revision: 41 };
     settingsMocks.fetchSettings.mockImplementation(async () => authOwner);
-    settingsMocks.patchGatewayAuthSettings.mockImplementationOnce(async () => {
-      authOwner = { ...authOwner, revision: 42, auth: { ...authOwner.auth, allowLoopbackBypass: true } };
-      throw revisionConflict(41, 42, "/api/v1/auth/settings", "PATCH", "STATE_CONFLICT");
-    }).mockImplementationOnce(async (input: any) => {
-      authOwner = { ...authOwner, revision: 43, auth: { ...authOwner.auth, allowLoopbackBypass: input.allowLoopbackBypass } };
-      return { ...authOwner.auth, revision: 43 };
-    });
+    settingsMocks.patchGatewayAuthSettings
+      .mockImplementationOnce(async () => {
+        authOwner = { ...authOwner, revision: 42, auth: { ...authOwner.auth, allowLoopbackBypass: true } };
+        throw revisionConflict(41, 42, "/api/v1/auth/settings", "PATCH", "STATE_CONFLICT");
+      })
+      .mockImplementationOnce(async (input: any) => {
+        authOwner = {
+          ...authOwner,
+          revision: 43,
+          auth: { ...authOwner.auth, allowLoopbackBypass: input.allowLoopbackBypass },
+        };
+        return { ...authOwner.auth, revision: 43 };
+      });
     const access = await mount("access");
     await click(findButton(access.root, "Configure access"));
     await change(access.root.findByProps({ placeholder: "New credential (only when replacing)" }), "local-token");
     await click(findButton(access.root, "Save access settings"));
     expect(settingsMocks.patchGatewayAuthSettings).not.toHaveBeenCalled();
-    await act(async () => { access.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Apply Gateway authentication changes?")!.props.onConfirm(); }); await flush();
-    expect(settingsMocks.patchGatewayAuthSettings).toHaveBeenNthCalledWith(1, { expectedRevision: 41, mode: "token", allowLoopbackBypass: false, token: "local-token" });
+    await act(async () => {
+      access.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Apply Gateway authentication changes?")!
+        .props.onConfirm();
+    });
+    await flush();
+    expect(settingsMocks.patchGatewayAuthSettings).toHaveBeenNthCalledWith(1, {
+      expectedRevision: 41,
+      mode: "token",
+      allowLoopbackBypass: false,
+      token: "local-token",
+    });
     expect(access.root.findByProps({ placeholder: "New credential (only when replacing)" }).props.value).toBe("");
     expect(collectText(access.root)).toContain("Your public draft is preserved");
     await click(findButton(access.root, "Apply draft to current access"));
     expect(findButton(access.root, "Save access settings").props.disabled).toBe(true);
     await change(access.root.findByProps({ placeholder: "New credential (only when replacing)" }), "local-token");
     await click(findButton(access.root, "Save access settings"));
-    await act(async () => { access.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Apply Gateway authentication changes?")!.props.onConfirm(); }); await flush();
-    expect(settingsMocks.patchGatewayAuthSettings).toHaveBeenNthCalledWith(2, { expectedRevision: 42, mode: "token", allowLoopbackBypass: false, token: "local-token" });
+    await act(async () => {
+      access.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Apply Gateway authentication changes?")!
+        .props.onConfirm();
+    });
+    await flush();
+    expect(settingsMocks.patchGatewayAuthSettings).toHaveBeenNthCalledWith(2, {
+      expectedRevision: 42,
+      mode: "token",
+      allowLoopbackBypass: false,
+      token: "local-token",
+    });
   });
 
   it("preserves the budget draft and retries with the refreshed settings revision after a 409", async () => {
@@ -1889,22 +2096,54 @@ describe("SettingsNativePage broad native sections", () => {
   it("preserves onboarding defaults and retries against the refreshed runtime revision after a 409", async () => {
     let runtime = { ...settings, revision: 71, networkAllowlist: ["api.old.example"] };
     let onboardingBase = {
-      completed: false, checklist: [],
-      settings: { revision: runtime.revision, toolApprovalMode: "approve_risky", budgetMode: "balanced",
-        networkAllowlist: ["api.old.example"], auth: settings.auth, llm: settings.llm,
-        mesh: { enabled: false, mode: "lan", nodeId: "", mdns: true, staticPeers: [], requireMtls: false } },
+      completed: false,
+      checklist: [],
+      settings: {
+        revision: runtime.revision,
+        toolApprovalMode: "approve_risky",
+        budgetMode: "balanced",
+        networkAllowlist: ["api.old.example"],
+        auth: settings.auth,
+        llm: settings.llm,
+        mesh: { enabled: false, mode: "lan", nodeId: "", mdns: true, staticPeers: [], requireMtls: false },
+      },
     };
     settingsMocks.fetchOnboardingState.mockImplementation(async () => structuredClone(onboardingBase));
     settingsMocks.fetchSettings.mockImplementation(async () => structuredClone(runtime));
-    settingsMocks.bootstrapOnboarding.mockImplementationOnce(async () => {
-      runtime = { ...runtime, revision: 72, budgetMode: "power", networkAllowlist: ["api.remote.example"] };
-      onboardingBase = { ...onboardingBase, settings: { ...onboardingBase.settings, revision: runtime.revision, budgetMode: runtime.budgetMode, networkAllowlist: runtime.networkAllowlist } };
-      throw revisionConflict(71, 72, "/api/v1/onboarding/bootstrap", "POST", "STATE_CONFLICT");
-    }).mockImplementationOnce(async input => {
-      runtime = { ...runtime, revision: 73, budgetMode: input.budgetMode!, networkAllowlist: input.networkAllowlist!, toolApprovalMode: input.toolApprovalMode! };
-      onboardingBase = { ...onboardingBase, settings: { ...onboardingBase.settings, revision: runtime.revision, budgetMode: runtime.budgetMode, networkAllowlist: runtime.networkAllowlist, toolApprovalMode: runtime.toolApprovalMode } };
-      return { state: structuredClone(onboardingBase), appliedAt: "2026-09-30T00:00:00.000Z" };
-    });
+    settingsMocks.bootstrapOnboarding
+      .mockImplementationOnce(async () => {
+        runtime = { ...runtime, revision: 72, budgetMode: "power", networkAllowlist: ["api.remote.example"] };
+        onboardingBase = {
+          ...onboardingBase,
+          settings: {
+            ...onboardingBase.settings,
+            revision: runtime.revision,
+            budgetMode: runtime.budgetMode,
+            networkAllowlist: runtime.networkAllowlist,
+          },
+        };
+        throw revisionConflict(71, 72, "/api/v1/onboarding/bootstrap", "POST", "STATE_CONFLICT");
+      })
+      .mockImplementationOnce(async (input) => {
+        runtime = {
+          ...runtime,
+          revision: 73,
+          budgetMode: input.budgetMode!,
+          networkAllowlist: input.networkAllowlist!,
+          toolApprovalMode: input.toolApprovalMode!,
+        };
+        onboardingBase = {
+          ...onboardingBase,
+          settings: {
+            ...onboardingBase.settings,
+            revision: runtime.revision,
+            budgetMode: runtime.budgetMode,
+            networkAllowlist: runtime.networkAllowlist,
+            toolApprovalMode: runtime.toolApprovalMode,
+          },
+        };
+        return { state: structuredClone(onboardingBase), appliedAt: "2026-09-30T00:00:00.000Z" };
+      });
 
     const onboarding = await mount("onboarding");
     await click(findButton(onboarding.root, "First-run defaults"));
@@ -1913,7 +2152,14 @@ describe("SettingsNativePage broad native sections", () => {
     await change(budgetMode, "saver");
     await change(allowlist, "local.example, api.local.example");
     await click(findButton(onboarding.root, "Review defaults"));
-    await act(async () => { const review = onboarding.root.findAllByType(GCModal).find(modal => modal.props.title === "Apply first-run defaults")!; expect(review.props.open, collectText(onboarding.root)).toBe(true); await review.props.onConfirm(); }); await flush();
+    await act(async () => {
+      const review = onboarding.root
+        .findAllByType(GCModal)
+        .find((modal) => modal.props.title === "Apply first-run defaults")!;
+      expect(review.props.open, collectText(onboarding.root)).toBe(true);
+      await review.props.onConfirm();
+    });
+    await flush();
 
     expect(settingsMocks.bootstrapOnboarding).toHaveBeenNthCalledWith(1, {
       expectedRevision: 71,
@@ -1932,7 +2178,14 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(onboarding.root, "Apply draft to current defaults"));
 
     await click(findButton(onboarding.root, "Review defaults"));
-    await act(async () => { const review = onboarding.root.findAllByType(GCModal).find(modal => modal.props.title === "Apply first-run defaults")!; expect(review.props.open, collectText(onboarding.root)).toBe(true); await review.props.onConfirm(); }); await flush();
+    await act(async () => {
+      const review = onboarding.root
+        .findAllByType(GCModal)
+        .find((modal) => modal.props.title === "Apply first-run defaults")!;
+      expect(review.props.open, collectText(onboarding.root)).toBe(true);
+      await review.props.onConfirm();
+    });
+    await flush();
     expect(settingsMocks.bootstrapOnboarding).toHaveBeenNthCalledWith(2, {
       expectedRevision: 72,
       toolApprovalMode: "approve_risky",
@@ -1984,15 +2237,29 @@ describe("SettingsNativePage broad native sections", () => {
   });
 
   it("preserves the llama.cpp draft and retries with the refreshed settings revision after a 409", async () => {
-    settingsMocks.fetchSettings.mockResolvedValueOnce({ ...settings, revision: 81 }).mockResolvedValueOnce({ ...settings, revision: 81 }).mockResolvedValue({
-      ...settings,
-      revision: 82,
-      llamaCpp: { ...settings.llamaCpp, alias: "remote-llama-alias" },
-    });
-    settingsMocks.patchSettings.mockRejectedValueOnce(new ApiRequestError("stale runtime settings", {
-      kind: "http", method: "PATCH", path: "/api/v1/settings", status: 409,
-      body: { code: "STATE_CONFLICT", details: { expectedRevision: 81, currentRevision: 82 } },
-    })).mockResolvedValueOnce({ ...settings, revision: 83, llamaCpp: { ...settings.llamaCpp, alias: "local-llama-alias" } });
+    settingsMocks.fetchSettings
+      .mockResolvedValueOnce({ ...settings, revision: 81 })
+      .mockResolvedValueOnce({ ...settings, revision: 81 })
+      .mockResolvedValue({
+        ...settings,
+        revision: 82,
+        llamaCpp: { ...settings.llamaCpp, alias: "remote-llama-alias" },
+      });
+    settingsMocks.patchSettings
+      .mockRejectedValueOnce(
+        new ApiRequestError("stale runtime settings", {
+          kind: "http",
+          method: "PATCH",
+          path: "/api/v1/settings",
+          status: 409,
+          body: { code: "STATE_CONFLICT", details: { expectedRevision: 81, currentRevision: 82 } },
+        }),
+      )
+      .mockResolvedValueOnce({
+        ...settings,
+        revision: 83,
+        llamaCpp: { ...settings.llamaCpp, alias: "local-llama-alias" },
+      });
 
     const runtime = await mount("runtime");
     await click(findButton(runtime.root, "Configure llama.cpp"));
@@ -2124,7 +2391,9 @@ describe("SettingsNativePage broad native sections", () => {
         modelProbeState: "ready",
       },
     ];
-    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(91, 92, "/api/v1/settings", "PATCH", "STATE_CONFLICT")).mockResolvedValueOnce({});
+    settingsMocks.patchSettings
+      .mockRejectedValueOnce(revisionConflict(91, 92, "/api/v1/settings", "PATCH", "STATE_CONFLICT"))
+      .mockResolvedValueOnce({});
     settingsMocks.reloadProviderCatalog.mockImplementationOnce(async () => {
       settingsMocks.providerModelCatalog.config = {
         ...settingsMocks.providerModelCatalog.config,
@@ -2180,7 +2449,9 @@ describe("SettingsNativePage broad native sections", () => {
         modelProbeState: "ready",
       },
     ];
-    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(93, 94, "/api/v1/settings", "PATCH", "STATE_CONFLICT")).mockResolvedValueOnce({});
+    settingsMocks.patchSettings
+      .mockRejectedValueOnce(revisionConflict(93, 94, "/api/v1/settings", "PATCH", "STATE_CONFLICT"))
+      .mockResolvedValueOnce({});
     settingsMocks.reloadProviderCatalog.mockImplementationOnce(async () => {
       settingsMocks.providerModelCatalog.config = {
         ...settingsMocks.providerModelCatalog.config,
@@ -2223,7 +2494,9 @@ describe("SettingsNativePage broad native sections", () => {
       ...settingsMocks.providerModelCatalog.config,
       revision: 95,
     };
-    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(95, 96, "/api/v1/settings", "PATCH", "STATE_CONFLICT")).mockResolvedValueOnce({});
+    settingsMocks.patchSettings
+      .mockRejectedValueOnce(revisionConflict(95, 96, "/api/v1/settings", "PATCH", "STATE_CONFLICT"))
+      .mockResolvedValueOnce({});
     settingsMocks.reloadProviderCatalog.mockImplementationOnce(async () => {
       settingsMocks.providerModelCatalog.config = {
         ...settingsMocks.providerModelCatalog.config,
@@ -2328,10 +2601,19 @@ describe("SettingsNativePage broad native sections", () => {
     let authOwner = { ...settings };
     settingsMocks.fetchSettings.mockImplementation(async () => authOwner);
     settingsMocks.patchGatewayAuthSettings.mockImplementation(async (input: any) => {
-      authOwner = { ...authOwner, revision: authOwner.revision + 1, auth: { ...authOwner.auth, mode: input.mode, allowLoopbackBypass: input.allowLoopbackBypass } };
+      authOwner = {
+        ...authOwner,
+        revision: authOwner.revision + 1,
+        auth: { ...authOwner.auth, mode: input.mode, allowLoopbackBypass: input.allowLoopbackBypass },
+      };
       return { ...authOwner.auth, revision: authOwner.revision };
     });
-    settingsMocks.resolveGatewayInstallToken.mockResolvedValue({ token: "install-token", source: "generated", persistedToEnv: false, warnings: [] });
+    settingsMocks.resolveGatewayInstallToken.mockResolvedValue({
+      token: "install-token",
+      source: "generated",
+      persistedToEnv: false,
+      warnings: [],
+    });
     const access = await mount("access");
     await click(findButton(access.root, "Configure access"));
     expect(collectText(access.root)).toContain("Gateway access");
@@ -2339,10 +2621,27 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(access.root)).toContain("Mobile approval path");
     await change(access.root.findByProps({ placeholder: "New credential (only when replacing)" }), "new-token");
     await click(findButton(access.root, "Save access settings"));
-    await act(async () => { access.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Apply Gateway authentication changes?")!.props.onConfirm(); }); await flush();
-    expect(settingsMocks.patchGatewayAuthSettings).toHaveBeenCalledWith({ expectedRevision: 29, mode: "token", allowLoopbackBypass: false, token: "new-token" });
+    await act(async () => {
+      access.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Apply Gateway authentication changes?")!
+        .props.onConfirm();
+    });
+    await flush();
+    expect(settingsMocks.patchGatewayAuthSettings).toHaveBeenCalledWith({
+      expectedRevision: 29,
+      mode: "token",
+      allowLoopbackBypass: false,
+      token: "new-token",
+    });
     await click(findButton(access.root, "Generate install token"));
-    await act(async () => { access.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Resolve Gateway install token?")!.props.onConfirm(); }); await flush();
+    await act(async () => {
+      access.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Resolve Gateway install token?")!
+        .props.onConfirm();
+    });
+    await flush();
     expect(access.root.findByProps({ readOnly: true, type: "text" }).props.value).toBe("install-token");
     settingsMocks.fetchSettings.mockImplementation(priorSettingsRead);
     await click(findButton(access.root, "Revoke"));
@@ -2359,17 +2658,33 @@ describe("SettingsNativePage broad native sections", () => {
     const setActiveCitadelId = vi.fn();
     const demo = demoFixture();
     settingsMocks.fetchWorkspaces.mockResolvedValue({ items: [demo.workspace] });
-    const onboarding = await mount("onboarding", { navigate: onboardingNavigate, setActiveWorkspaceId, setActiveCitadelId });
+    const onboarding = await mount("onboarding", {
+      navigate: onboardingNavigate,
+      setActiveWorkspaceId,
+      setActiveCitadelId,
+    });
     expect(collectText(onboarding.root)).toContain("Start Here");
     await click(findButton(onboarding.root, "Try a safe demo"));
     await click(findButton(onboarding.root, "Review demo preparation"));
-    await act(async () => { const review = onboarding.root.findAllByType(GCModal).find(modal => modal.props.title === "Prepare local demo")!; expect(review.props.open, collectText(onboarding.root)).toBe(true); await review.props.onConfirm(); }); await flush();
+    await act(async () => {
+      const review = onboarding.root
+        .findAllByType(GCModal)
+        .find((modal) => modal.props.title === "Prepare local demo")!;
+      expect(review.props.open, collectText(onboarding.root)).toBe(true);
+      await review.props.onConfirm();
+    });
+    await flush();
     expect(settingsMocks.bootstrapDemo).toHaveBeenCalledTimes(1);
     expect(onboardingNavigate).not.toHaveBeenCalled();
     await click(findButton(onboarding.root, "Open recorded demo"));
     expect(setActiveWorkspaceId).toHaveBeenCalledWith(demo.workspace.workspaceId);
     expect(setActiveCitadelId).toHaveBeenCalledWith(demo.workspace.citadelId);
-    expect(onboardingNavigate).toHaveBeenCalledWith({ area: "chat", sessionId: demo.session.sessionId, projectId: demo.project.projectId, theme: "ops" });
+    expect(onboardingNavigate).toHaveBeenCalledWith({
+      area: "chat",
+      sessionId: demo.session.sessionId,
+      projectId: demo.project.projectId,
+      theme: "ops",
+    });
 
     const runtime = await mount("runtime");
     expect(collectText(runtime.root)).toContain("Runtime posture");
@@ -2434,27 +2749,53 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(runtime.root, "Voice setup"));
     await click(findButton(runtime.root, "Install starter model"));
     expect(settingsMocks.installVoiceRuntime).not.toHaveBeenCalled();
-    await act(async () => runtime.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Change the local voice runtime?")!.props.onConfirm()); await flush();
+    await act(async () =>
+      runtime.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Change the local voice runtime?")!
+        .props.onConfirm(),
+    );
+    await flush();
     await click(findButton(runtime.root, "Use Small multilingual"));
-    await act(async () => runtime.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Change the local voice runtime?")!.props.onConfirm()); await flush();
+    await act(async () =>
+      runtime.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Change the local voice runtime?")!
+        .props.onConfirm(),
+    );
+    await flush();
     expect(settingsMocks.installVoiceRuntime).toHaveBeenCalledWith({ modelId: "base", activate: true });
     expect(settingsMocks.selectVoiceRuntimeModel).toHaveBeenCalledWith("small");
 
     const workspaceSetter = vi.fn();
-    let lifecycleRows = [...workspaces, { ...workspaces[0]!, workspaceId: "review-archive", name: "Review workspace", slug: "review-workspace" }];
+    let lifecycleRows = [
+      ...workspaces,
+      { ...workspaces[0]!, workspaceId: "review-archive", name: "Review workspace", slug: "review-workspace" },
+    ];
     settingsMocks.fetchWorkspaces.mockImplementation(async () => ({ items: lifecycleRows, citadelId: "personal" }));
     settingsMocks.archiveWorkspace.mockImplementation(async (id, revision) => {
-      const before = lifecycleRows.find(item => item.workspaceId === id)!;
+      const before = lifecycleRows.find((item) => item.workspaceId === id)!;
       expect(before.revision).toBe(revision);
-      const after = { ...before, revision: revision + 1, lifecycleStatus: "archived" as const, archivedAt: "2026-09-30T00:00:00.000Z", updatedAt: "2026-09-30T00:00:00.000Z" };
-      lifecycleRows = lifecycleRows.map(item => item.workspaceId === id ? after : item);
+      const after = {
+        ...before,
+        revision: revision + 1,
+        lifecycleStatus: "archived" as const,
+        archivedAt: "2026-09-30T00:00:00.000Z",
+        updatedAt: "2026-09-30T00:00:00.000Z",
+      };
+      lifecycleRows = lifecycleRows.map((item) => (item.workspaceId === id ? after : item));
       return after;
     });
     settingsMocks.restoreWorkspace.mockImplementation(async (id, revision) => {
-      const before = lifecycleRows.find(item => item.workspaceId === id)!;
+      const before = lifecycleRows.find((item) => item.workspaceId === id)!;
       expect(before.revision).toBe(revision);
-      const after = { ...before, revision: revision + 1, lifecycleStatus: "active" as const, updatedAt: "2026-09-30T01:00:00.000Z" };
-      lifecycleRows = lifecycleRows.map(item => item.workspaceId === id ? after : item);
+      const after = {
+        ...before,
+        revision: revision + 1,
+        lifecycleStatus: "active" as const,
+        updatedAt: "2026-09-30T01:00:00.000Z",
+      };
+      lifecycleRows = lifecycleRows.map((item) => (item.workspaceId === id ? after : item));
       return after;
     });
     const workspacesPage = await mount("workspaces", { setActiveWorkspaceId: workspaceSetter });
@@ -2618,24 +2959,50 @@ describe("SettingsNativePage broad native sections", () => {
       for (const renderer of mountedSettingsRenderers.splice(0)) renderer.unmount();
     });
     const arena = {
-      addonId: "arena", label: "Arena",
+      addonId: "arena",
+      label: "Arena",
       description: "Optional AI gladiator arena add-on for match play, commentary, and fun agent battles.",
-      owner: "spurnout", repoUrl: "https://github.com/spurnout/goatcitadel-arena",
-      sameOwnerAsGoatCitadel: true, trustTier: "restricted", category: "fun_optional",
-      runtimeType: "separate_repo_app", webEntryMode: "external_local_url",
+      owner: "spurnout",
+      repoUrl: "https://github.com/spurnout/goatcitadel-arena",
+      sameOwnerAsGoatCitadel: true,
+      trustTier: "restricted",
+      category: "fun_optional",
+      runtimeType: "separate_repo_app",
+      webEntryMode: "external_local_url",
       requiresSeparateRepoDownload: true,
       installCommands: [
         { command: "git", args: ["init", "<install-dir>"] },
-        { command: "git", args: ["-C", "<install-dir>", "fetch", "--depth", "1", "--no-tags", "https://github.com/spurnout/goatcitadel-arena", "afce1692c9504aee816423fbb0dcb6bd24496053"] },
-        { command: "git", args: ["-C", "<install-dir>", "checkout", "--detach", "afce1692c9504aee816423fbb0dcb6bd24496053"] },
+        {
+          command: "git",
+          args: [
+            "-C",
+            "<install-dir>",
+            "fetch",
+            "--depth",
+            "1",
+            "--no-tags",
+            "https://github.com/spurnout/goatcitadel-arena",
+            "afce1692c9504aee816423fbb0dcb6bd24496053",
+          ],
+        },
+        {
+          command: "git",
+          args: ["-C", "<install-dir>", "checkout", "--detach", "afce1692c9504aee816423fbb0dcb6bd24496053"],
+        },
         { command: "corepack", args: ["pnpm", "install", "--frozen-lockfile"] },
         { command: "corepack", args: ["pnpm", "-r", "run", "build"] },
       ],
-      healthChecks: [{ key: "provenance", status: "warn", message: "Separate repository owned by the same publisher." }],
+      healthChecks: [
+        { key: "provenance", status: "warn", message: "Separate repository owned by the same publisher." },
+      ],
     } satisfies import("@goatcitadel/contracts").AddonCatalogEntry;
     settingsMocks.fetchAddonsCatalog.mockResolvedValue({ items: [arena] });
     settingsMocks.fetchInstalledAddons.mockResolvedValue({ items: [] });
-    settingsMocks.fetchAddonStatus.mockResolvedValue({ addon: arena, status: "not_installed", healthChecks: arena.healthChecks });
+    settingsMocks.fetchAddonStatus.mockResolvedValue({
+      addon: arena,
+      status: "not_installed",
+      healthChecks: arena.healthChecks,
+    });
     const addons = await mount("addons");
     await flush();
     expect(collectText(addons.root)).toContain("1.0 add-on posture");
@@ -2648,7 +3015,8 @@ describe("SettingsNativePage broad native sections", () => {
     expect(findButton(addons.root, "Launch").props.disabled).toBe(true);
     expect(findButton(addons.root, "Update").props.disabled).toBe(true);
     await click(findButton(addons.root, "Install"));
-    const installReview = addons.root.findAllByType(ConfirmModal)
+    const installReview = addons.root
+      .findAllByType(ConfirmModal)
       .find((modal) => modal.props.open && modal.props.title === "Review add-on install");
     expect(installReview).toBeDefined();
     expect(installReview?.props.message).toContain(arena.repoUrl);
@@ -2657,10 +3025,20 @@ describe("SettingsNativePage broad native sections", () => {
     for (const command of arena.installCommands) {
       expect(installReview?.props.message).toContain([command.command, ...command.args].join(" "));
     }
-    await act(async () => { installReview?.props.onCancel(); await flush(); });
+    await act(async () => {
+      installReview?.props.onCancel();
+      await flush();
+    });
     expect(addons.root.findAllByType(ConfirmModal).some((modal) => modal.props.open)).toBe(false);
-    for (const mutation of [settingsMocks.installAddon, settingsMocks.updateAddon, settingsMocks.enableAddon,
-      settingsMocks.disableAddon, settingsMocks.launchAddon, settingsMocks.stopAddon, settingsMocks.uninstallAddon]) {
+    for (const mutation of [
+      settingsMocks.installAddon,
+      settingsMocks.updateAddon,
+      settingsMocks.enableAddon,
+      settingsMocks.disableAddon,
+      settingsMocks.launchAddon,
+      settingsMocks.stopAddon,
+      settingsMocks.uninstallAddon,
+    ]) {
       expect(mutation).not.toHaveBeenCalled();
     }
     await click(findButton(addons.root, "Capability packs"));
@@ -2698,23 +3076,57 @@ describe("SettingsNativePage broad native sections", () => {
   it("covers integration detail actions and native load warnings", async () => {
     const original = (await settingsMocks.fetchIntegrationConnections()).items[0];
     const ownedConnections = new Map([[original.connectionId, original]]);
-    settingsMocks.fetchIntegrationConnections.mockImplementation(async () => ({ items: [...ownedConnections.values()] }));
+    settingsMocks.fetchIntegrationConnections.mockImplementation(async () => ({
+      items: [...ownedConnections.values()],
+    }));
     settingsMocks.fetchIntegrationConnection.mockImplementation(async (id: string) => {
       const found = ownedConnections.get(id);
-      if (!found) throw new ApiRequestError("Not found", { kind: "http", method: "GET", path: `/api/v1/integrations/connections/${id}`, status: 404, body: { code: "ENTITY_NOT_FOUND" } });
+      if (!found)
+        throw new ApiRequestError("Not found", {
+          kind: "http",
+          method: "GET",
+          path: `/api/v1/integrations/connections/${id}`,
+          status: 404,
+          body: { code: "ENTITY_NOT_FOUND" },
+        });
       return found;
     });
     settingsMocks.createIntegrationConnection.mockImplementation(async (input) => {
-      const created = { ...original, ...input, connectionId: "conn-created", label: input.label ?? "GitHub", revision: "c".repeat(64) };
-      ownedConnections.set(created.connectionId, created); return created;
+      const created = {
+        ...original,
+        ...input,
+        connectionId: "conn-created",
+        label: input.label ?? "GitHub",
+        revision: "c".repeat(64),
+      };
+      ownedConnections.set(created.connectionId, created);
+      return created;
     });
     settingsMocks.updateIntegrationConnection.mockImplementation(async (id, input) => {
       const updated = { ...ownedConnections.get(id), ...input, revision: "b".repeat(64) };
-      delete updated.expectedRevision; ownedConnections.set(id, updated); return updated;
+      delete updated.expectedRevision;
+      ownedConnections.set(id, updated);
+      return updated;
     });
-    settingsMocks.deleteIntegrationConnection.mockImplementation(async (id) => { ownedConnections.delete(id); return { deleted: true }; });
-    settingsMocks.fetchIntegrationConnectionDiagnostics.mockResolvedValue({ connectorType: "integration_connection", connectorId: "conn-1", status: "ok", checkedAt: "2026-04-24T12:30:00.000Z", checks: [] });
-    settingsMocks.invokeIntegrationConnectionAction.mockResolvedValue({ connectionId: "conn-1", catalogId: "github", actionId: "sync-issues", status: "executed", message: "Synced issues.", checkedAt: "2026-04-24T12:30:00.000Z" });
+    settingsMocks.deleteIntegrationConnection.mockImplementation(async (id) => {
+      ownedConnections.delete(id);
+      return { deleted: true };
+    });
+    settingsMocks.fetchIntegrationConnectionDiagnostics.mockResolvedValue({
+      connectorType: "integration_connection",
+      connectorId: "conn-1",
+      status: "ok",
+      checkedAt: "2026-04-24T12:30:00.000Z",
+      checks: [],
+    });
+    settingsMocks.invokeIntegrationConnectionAction.mockResolvedValue({
+      connectionId: "conn-1",
+      catalogId: "github",
+      actionId: "sync-issues",
+      status: "executed",
+      message: "Synced issues.",
+      checkedAt: "2026-04-24T12:30:00.000Z",
+    });
     const integrations = await mount("integrations");
     expect(collectText(integrations.root)).toContain("GitHub");
     await click(findButton(integrations.root, "Add integration"));
@@ -2732,7 +3144,12 @@ describe("SettingsNativePage broad native sections", () => {
       enabled: true,
       config: { tokenEnv: "GH_JSON" },
     });
-    await act(async () => integrations.root.findAllByType(DetailInspector).find((panel) => panel.props.open)!.props.onClose());
+    await act(async () =>
+      integrations.root
+        .findAllByType(DetailInspector)
+        .find((panel) => panel.props.open)!
+        .props.onClose(),
+    );
     await flush();
     await click(findButton(integrations.root, "GitHub"));
     await click(findButton(integrations.root, "Edit connection"));
@@ -2767,7 +3184,12 @@ describe("SettingsNativePage broad native sections", () => {
 
     await click(findExactButton(integrations.root, "Run"));
     expect(settingsMocks.invokeIntegrationConnectionAction).not.toHaveBeenCalled();
-    await act(async () => integrations.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Run reviewed integration action?")!.props.onConfirm());
+    await act(async () =>
+      integrations.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Run reviewed integration action?")!
+        .props.onConfirm(),
+    );
     await flush();
     expect(settingsMocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith("conn-1", "sync-issues", {});
     await click(findButton(integrations.root, "Delete"));
@@ -2888,7 +3310,14 @@ describe("SettingsNativePage broad native sections", () => {
       "api.example.com, localhost",
     );
     await click(findButton(onboarding.root, "Review defaults"));
-    await act(async () => { const review = onboarding.root.findAllByType(GCModal).find(modal => modal.props.title === "Apply first-run defaults")!; expect(review.props.open).toBe(true); await review.props.onConfirm(); }); await flush();
+    await act(async () => {
+      const review = onboarding.root
+        .findAllByType(GCModal)
+        .find((modal) => modal.props.title === "Apply first-run defaults")!;
+      expect(review.props.open).toBe(true);
+      await review.props.onConfirm();
+    });
+    await flush();
     expect(settingsMocks.bootstrapOnboarding).toHaveBeenCalledWith({
       expectedRevision: 29,
       toolApprovalMode: "bypass",
@@ -2924,7 +3353,14 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(onboarding.root, "Back to list"));
     await click(findButton(onboarding.root, "Try a safe demo"));
     await click(findButton(onboarding.root, "Review demo preparation"));
-    await act(async () => { const review = onboarding.root.findAllByType(GCModal).find(modal => modal.props.title === "Prepare local demo")!; expect(review.props.open).toBe(true); await review.props.onConfirm(); }); await flush();
+    await act(async () => {
+      const review = onboarding.root
+        .findAllByType(GCModal)
+        .find((modal) => modal.props.title === "Prepare local demo")!;
+      expect(review.props.open).toBe(true);
+      await review.props.onConfirm();
+    });
+    await flush();
     expect(settingsMocks.bootstrapDemo).toHaveBeenCalledTimes(1);
     expect(setActiveWorkspaceId).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalledWith({ area: "chat", sessionId: "code-demo", theme: "ops" });
@@ -2970,7 +3406,12 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(readyDemo.root)).toContain("reusing or restoring");
     expect(collectText(readyDemo.root)).toContain("Open recorded demo");
     await click(findButton(readyDemo.root, "Review demo preparation"));
-    await act(async () => { const review = readyDemo.root.findAllByType(GCModal).find(modal => modal.props.title === "Prepare local demo")!; expect(review.props.open).toBe(true); await review.props.onConfirm(); }); await flush();
+    await act(async () => {
+      const review = readyDemo.root.findAllByType(GCModal).find((modal) => modal.props.title === "Prepare local demo")!;
+      expect(review.props.open).toBe(true);
+      await review.props.onConfirm();
+    });
+    await flush();
     expect(collectText(readyDemo.root)).toContain("Demo preparation is unconfirmed");
     expect(navigate).not.toHaveBeenCalled();
     settingsMocks.fetchDemoState.mockReset();
@@ -3096,40 +3537,69 @@ describe("SettingsNativePage broad native sections", () => {
     settingsMocks.fetchMcpTools.mockResolvedValue({
       items: [{ toolName: "approval.inspect", description: "Inspect pending approvals" }],
     });
-    let mcpRecords: Array<Record<string, unknown>> = ((await settingsMocks.fetchMcpServers()).items ?? []).map(server => ({ ...server, revision: "a".repeat(64) }));
+    let mcpRecords: Array<Record<string, unknown>> = ((await settingsMocks.fetchMcpServers()).items ?? []).map(
+      (server) => ({ ...server, revision: "a".repeat(64) }),
+    );
     let savedRevision = 2;
     settingsMocks.fetchMcpServers.mockImplementation(async () => ({ items: structuredClone(mcpRecords) }));
-    settingsMocks.fetchMcpServer.mockImplementation(async id => {
-      const current = mcpRecords.find(server => server.serverId === id);
-      if (!current) throw new ApiRequestError("MCP server not found", { kind: "http", method: "GET", path: `/api/v1/mcp/servers/${id}`, status: 404, body: { code: "ENTITY_NOT_FOUND" } });
+    settingsMocks.fetchMcpServer.mockImplementation(async (id) => {
+      const current = mcpRecords.find((server) => server.serverId === id);
+      if (!current)
+        throw new ApiRequestError("MCP server not found", {
+          kind: "http",
+          method: "GET",
+          path: `/api/v1/mcp/servers/${id}`,
+          status: 404,
+          body: { code: "ENTITY_NOT_FOUND" },
+        });
       return structuredClone(current);
     });
     settingsMocks.createMcpServer.mockImplementationOnce(async (input) => {
       const created = { ...createdServer, ...input, status: "disconnected", revision: "c".repeat(64) };
-      mcpRecords.push(created); return structuredClone(created);
+      mcpRecords.push(created);
+      return structuredClone(created);
     });
     settingsMocks.updateMcpServer.mockImplementation(async (id: string, input: Record<string, unknown>) => {
-      const before = mcpRecords.find(server => server.serverId === id)!;
+      const before = mcpRecords.find((server) => server.serverId === id)!;
       expect(input.expectedRevision).toBe(before.revision);
       const { expectedRevision: _review, ...fields } = input;
-      const saved = { ...before, ...fields, status: "disconnected", revision: (++savedRevision).toString(16).padStart(64, "0") };
-      mcpRecords = mcpRecords.map(server => server.serverId === id ? saved : server); return structuredClone(saved);
+      const saved = {
+        ...before,
+        ...fields,
+        status: "disconnected",
+        revision: (++savedRevision).toString(16).padStart(64, "0"),
+      };
+      mcpRecords = mcpRecords.map((server) => (server.serverId === id ? saved : server));
+      return structuredClone(saved);
     });
-    for (const [action, mock] of [["connect", settingsMocks.connectReviewedMcpServer], ["disconnect", settingsMocks.disconnectReviewedMcpServer]] as const) {
+    for (const [action, mock] of [
+      ["connect", settingsMocks.connectReviewedMcpServer],
+      ["disconnect", settingsMocks.disconnectReviewedMcpServer],
+    ] as const) {
       mock.mockImplementation(async (id, reviewed) => {
-        const before = mcpRecords.find(server => server.serverId === id)!;
-        expect(reviewed).toEqual({ expectedRevision: before.revision, expectedConnectionRevision: before.connectionRevision ?? null });
-        const server = { ...before, status: action === "connect" ? "connected" : "disconnected", connectionRevision: (++savedRevision).toString(16).padStart(64, "0") };
-        mcpRecords = mcpRecords.map(item => item.serverId === id ? server : item);
+        const before = mcpRecords.find((server) => server.serverId === id)!;
+        expect(reviewed).toEqual({
+          expectedRevision: before.revision,
+          expectedConnectionRevision: before.connectionRevision ?? null,
+        });
+        const server = {
+          ...before,
+          status: action === "connect" ? "connected" : "disconnected",
+          connectionRevision: (++savedRevision).toString(16).padStart(64, "0"),
+        };
+        mcpRecords = mcpRecords.map((item) => (item.serverId === id ? server : item));
         return { version: 1, action, reviewed, server: structuredClone(server) };
       });
     }
     settingsMocks.deleteMcpServer.mockImplementation(async (id: string, expectedRevision: string) => {
-      expect(expectedRevision).toBe(mcpRecords.find(server => server.serverId === id)?.revision);
-      mcpRecords = mcpRecords.filter(server => server.serverId !== id); return { deleted: true };
+      expect(expectedRevision).toBe(mcpRecords.find((server) => server.serverId === id)?.revision);
+      mcpRecords = mcpRecords.filter((server) => server.serverId !== id);
+      return { deleted: true };
     });
     settingsMocks.runMcpServerHealthCheck.mockResolvedValueOnce({
-      connectorType: "mcp_server", connectorId: "srv-1", checkedAt: "2026-09-30T00:00:00Z",
+      connectorType: "mcp_server",
+      connectorId: "srv-1",
+      checkedAt: "2026-09-30T00:00:00Z",
       status: "ok",
       checks: [{ key: "status", status: "pass", message: "Saved connection state checked." }],
       recommendedNextAction: "Ready.",
@@ -3160,7 +3630,14 @@ describe("SettingsNativePage broad native sections", () => {
       category: "development",
       trustTier: "trusted",
       costTier: "free",
-      policy: { requireFirstToolApproval: true, redactionMode: "basic", allowedToolPatterns: [], blockedToolPatterns: [], allowedEnvKeys: [], notes: undefined },
+      policy: {
+        requireFirstToolApproval: true,
+        redactionMode: "basic",
+        allowedToolPatterns: [],
+        blockedToolPatterns: [],
+        allowedEnvKeys: [],
+        notes: undefined,
+      },
     });
     expect(settingsMocks.fetchMcpServer).toHaveBeenCalledWith("srv-created");
     expect(collectText(mcp.root)).toContain("MCP server Manual Template registered and saved configuration confirmed.");
@@ -3181,17 +3658,10 @@ describe("SettingsNativePage broad native sections", () => {
     const editLabelInput = mcp.root.findAllByType("input").find((input) => input.props.value === "Approval Inbox");
     expect(editLabelInput).toBeTruthy();
     await change(editLabelInput!, "Approval Inbox Renamed");
-    await change(
-      mcp.root.findByProps({ value: "https://mcp.example.test/mcp" }),
-      "https://mcp.example.test/updated",
-    );
+    await change(mcp.root.findByProps({ value: "https://mcp.example.test/mcp" }), "https://mcp.example.test/updated");
     const categorySelect = mcp.root.findAllByType("select")[0]!;
     await change(categorySelect, "automation");
-    await change(
-      mcp.root.findByProps({ "aria-label": "MCP server enabled" }),
-      "",
-      false,
-    );
+    await change(mcp.root.findByProps({ "aria-label": "MCP server enabled" }), "", false);
     await click(findButton(mcp.root, "Save changes"));
     expect(settingsMocks.updateMcpServer).toHaveBeenCalledWith(
       "srv-1",
@@ -3308,10 +3778,15 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(page.root, "GitHub"));
     await click(findButton(page.root, "Edit connection"));
     await change(page.root.findByProps({ value: "GitHub" }), "Retained integration draft");
-    settingsMocks.updateIntegrationConnection.mockRejectedValueOnce(new ApiRequestError("Connection changed", {
-      kind: "http", method: "PATCH", path: "/api/v1/integrations/connections/conn-1", status: 409,
-      body: {code:"WRITE_CONFLICT",details:{reason:"INTEGRATION_CONNECTION_REVISION_CONFLICT"}},
-    }));
+    settingsMocks.updateIntegrationConnection.mockRejectedValueOnce(
+      new ApiRequestError("Connection changed", {
+        kind: "http",
+        method: "PATCH",
+        path: "/api/v1/integrations/connections/conn-1",
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { reason: "INTEGRATION_CONNECTION_REVISION_CONFLICT" } },
+      }),
+    );
     await click(findButton(page.root, "Save changes"));
     expect(page.root.findByProps({ value: "Retained integration draft" })).toBeTruthy();
     expect(collectText(page.root)).toContain("connection changed");
@@ -3527,17 +4002,39 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(page.root, "Capability packs"));
     await click(findButton(page.root, "Import pack"));
     const manifest = (packId: string): CapabilityPackManifest => ({
-      packId, name: `${packId} preview`, version: "1.0.0", description: "Portable evidence fixture",
-      trustTier: "community", tags: [], installWarnings: [],
+      packId,
+      name: `${packId} preview`,
+      version: "1.0.0",
+      description: "Portable evidence fixture",
+      trustTier: "community",
+      tags: [],
+      installWarnings: [],
       provenance: { source: "local_file", publisher: "Verification" },
-      policyDefaults: { requireFirstUseApproval: true, autoRunEnabled: false, memoryWriteAuthority: "operator_controlled", redactionMode: "strict" },
-      assets: [{ id: "local-skill", label: "Local skill", kind: "skill", runtimeSupport: "available", installMode: "review_required" }],
+      policyDefaults: {
+        requireFirstUseApproval: true,
+        autoRunEnabled: false,
+        memoryWriteAuthority: "operator_controlled",
+        redactionMode: "strict",
+      },
+      assets: [
+        {
+          id: "local-skill",
+          label: "Local skill",
+          kind: "skill",
+          runtimeSupport: "available",
+          installMode: "review_required",
+        },
+      ],
     });
     const preview = (value: CapabilityPackManifest): CapabilityPackPreview => ({
-      manifest: value, reviewRequired: true, policyChanges: value.policyDefaults, unsupportedAssets: [],
+      manifest: value,
+      reviewRequired: true,
+      policyChanges: value.policyDefaults,
+      unsupportedAssets: [],
       installPlan: [{ kind: "skill", assetId: "local-skill", reason: "Review required", outcome: "review_required" }],
     });
-    const firstManifest = manifest("first"), secondManifest = manifest("second");
+    const firstManifest = manifest("first"),
+      secondManifest = manifest("second");
     settingsMocks.fetchLocalCapabilityPackPreview.mockResolvedValue(preview(secondManifest));
     let resolvePreview!: (value: unknown) => void;
     settingsMocks.fetchLocalCapabilityPackPreview.mockImplementationOnce(
@@ -3554,13 +4051,20 @@ describe("SettingsNativePage broad native sections", () => {
     await act(async () => resolvePreview(preview(firstManifest)));
     await flush();
     expect(collectText(page.root)).not.toContain("first preview");
-    expect(page.root.findAllByType("button").filter(button => collectText(button) === "Review pack staging")).toHaveLength(0);
+    expect(
+      page.root.findAllByType("button").filter((button) => collectText(button) === "Review pack staging"),
+    ).toHaveLength(0);
     expect(settingsMocks.installLocalCapabilityPack).not.toHaveBeenCalled();
     await click(findButton(page.root, "Preview local pack"));
     settingsMocks.installLocalCapabilityPack.mockRejectedValueOnce(new Error("Staging unavailable"));
     await click(findButton(page.root, "Review pack staging"));
     expect(settingsMocks.installLocalCapabilityPack).not.toHaveBeenCalled();
-    await act(async () => { page.root.findAllByType(ConfirmModal).find(modal => modal.props.open)!.props.onConfirm(); });
+    await act(async () => {
+      page.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.open)!
+        .props.onConfirm();
+    });
     await flush();
     expect(settingsMocks.installLocalCapabilityPack).toHaveBeenCalledWith(secondManifest, { actorId: "operator" });
     expect(page.root.findByType("textarea").props.value).toBe(second);
@@ -3598,7 +4102,9 @@ describe("SettingsNativePage broad native sections", () => {
 
   it("defers specialist MCP reads and retains an edit through refresh and failed saves", async () => {
     const editable = await settingsMocks.fetchMcpServers();
-    settingsMocks.fetchMcpServers.mockResolvedValue({ items: editable.items?.map(item => ({ ...item, url: "https://mcp.example.test/mcp" })) });
+    settingsMocks.fetchMcpServers.mockResolvedValue({
+      items: editable.items?.map((item) => ({ ...item, url: "https://mcp.example.test/mcp" })),
+    });
     const page = await mount("mcp");
     expect(settingsMocks.fetchMcpTemplates).not.toHaveBeenCalled();
     expect(settingsMocks.fetchMcpServerModeManifest).not.toHaveBeenCalled();
@@ -3892,7 +4398,12 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(providers.root)).toContain("Anthropic");
 
     const providerListItem = providers.root
-      .findAll((node) => node.type === "button" && typeof node.props.className === "string" && node.props.className.includes("mc-next-settings-selectable"))
+      .findAll(
+        (node) =>
+          node.type === "button" &&
+          typeof node.props.className === "string" &&
+          node.props.className.includes("mc-next-settings-selectable"),
+      )
       .find((button) => button.findAllByType("strong").some((label) => collectText(label) === "OpenAI"));
     expect(providerListItem).toBeTruthy();
     // Save the staged routing before inspecting another provider.
@@ -4008,7 +4519,8 @@ describe("SettingsNativePage broad native sections", () => {
       providerConfigs: [],
     };
     settingsMocks.fetchOpenAICodexOAuthStatus.mockResolvedValue({
-      providerId: "openai-codex", available: true,
+      providerId: "openai-codex",
+      available: true,
       connected: true,
       requiresReauth: false,
       accountLabel: "operator@example.com",
@@ -4286,7 +4798,9 @@ describe("SettingsNativePage partial gateway responses", () => {
   });
 
   it("renders the access section when the device grant payload is empty", async () => {
-    settingsMocks.fetchDeviceAccessGrants.mockResolvedValue({} as Awaited<ReturnType<typeof settingsMocks.fetchDeviceAccessGrants>>);
+    settingsMocks.fetchDeviceAccessGrants.mockResolvedValue(
+      {} as Awaited<ReturnType<typeof settingsMocks.fetchDeviceAccessGrants>>,
+    );
 
     const access = await mount("access");
     await click(findButton(access.root, "Configure access"));
@@ -4471,5 +4985,16 @@ async function openProviderPanel(
 }
 
 function toolGrantRecordsFixture(): Array<import("@goatcitadel/contracts").ToolGrantRecord> {
-  return [{ grantId: "grant-1", toolPattern: "shell.*", decision: "allow", scope: "workspace", scopeRef: "default", grantType: "persistent", createdBy: "operator", createdAt: "2026-04-24T12:00:00.000Z" }];
+  return [
+    {
+      grantId: "grant-1",
+      toolPattern: "shell.*",
+      decision: "allow",
+      scope: "workspace",
+      scopeRef: "default",
+      grantType: "persistent",
+      createdBy: "operator",
+      createdAt: "2026-04-24T12:00:00.000Z",
+    },
+  ];
 }

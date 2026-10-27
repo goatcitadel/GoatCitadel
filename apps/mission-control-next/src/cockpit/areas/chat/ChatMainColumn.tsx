@@ -18,7 +18,8 @@ function viewKey(view: MessagingView): string {
     case "picker":
       return "picker";
     case "setup":
-      return `setup:${view.channelKey}`;
+      // Another setup of the same channel is another page: what one showed must not carry over to the next.
+      return `setup:${view.channelKey}:${view.draftId ?? ""}`;
     default:
       return `${view.kind}:${view.connectionId}`;
   }

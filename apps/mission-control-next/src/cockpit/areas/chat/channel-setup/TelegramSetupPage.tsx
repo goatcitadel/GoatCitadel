@@ -5,7 +5,6 @@ import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { BotKeyField, keyWorks, OTHER_APP_NOTE, WEB_ADDRESS_NOTE } from "./BotKeyField";
-import { settingsChannelSetupHref } from "./channel-picker-model";
 import { senderName } from "./code-sender";
 import { QrCode } from "./QrCode";
 import { CODE_EXPIRED, SayHiStep, WAITING_FOR_HI } from "./SayHiStep";
@@ -20,12 +19,23 @@ import { useTurnOn, type TurnOnState } from "./use-turn-on";
 
 const BOTFATHER_URL = "https://t.me/BotFather";
 
+/** BotFather asks these in turn; the last answer is the key step 2 takes. */
+const BOTFATHER_STEPS = [
+  "Send /newbot.",
+  "Send a name for your bot. Any name works.",
+  'Send a username for it. It has to end in "bot", like goat_helper_bot.',
+  "BotFather replies with your bot's key, a long line like 123456789:AAH… Copy it.",
+] as const;
+
 function MakeBot() {
   return (
     <div className="flex flex-wrap items-start gap-4">
       <QrCode value={BOTFATHER_URL} label="QR code that opens BotFather" />
       <div className="min-w-48 flex-1 space-y-2 text-sm text-fg-secondary">
-        <p>Scan this with your phone to open BotFather in Telegram. Send /newbot and pick a name.</p>
+        <p>
+          Scan this code with your phone to open BotFather, Telegram&apos;s bot for making bots, or open it on this
+          computer.
+        </p>
         <a
           href={BOTFATHER_URL}
           target="_blank"
@@ -34,6 +44,11 @@ function MakeBot() {
         >
           Open BotFather
         </a>
+        <ol className="list-decimal space-y-1 pl-5">
+          {BOTFATHER_STEPS.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
       </div>
     </div>
   );
@@ -94,12 +109,20 @@ function BotKey({
           <p>{error}</p>
         </Callout>
       ) : null}
+      <p className="text-sm text-fg-secondary">
+        Paste the key from BotFather&apos;s reply. It&apos;s not your bot&apos;s name or username.
+      </p>
       <BotKeyField value={value} onChange={onChange} busy={busy} checking={checking} onCheck={onCheck} />
     </>
   );
 }
 
 const saidHi = (name: string) => `${name} said hi. Only they can message your bot for now.`;
+/** Where each step is done. */
+const IN_TELEGRAM = "In Telegram";
+const ON_THIS_PAGE = "On this page";
+/** Settings' channel list, where a Telegram channel that is on gets its groups, formatting and voice replies. */
+const SETTINGS_CHANNELS_HREF = "/settings/connections#channels";
 /** A second channel for one bot would fight the first for its messages, so the setup stops at the key. */
 const ALREADY_CONNECTED = "This bot is already connected to GoatCitadel.";
 
@@ -130,8 +153,15 @@ function statusLine(
  * Telegram's setup: make a bot, paste its key, say hi, turn it on. Each step checks itself and the next opens when it
  * has. Saying hi makes the person who does it the bot's only allowed sender; turning on finishes the setup in place.
  */
-export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
-  const setup = useTelegramSetup(workspaceId);
+export function TelegramSetupPage({
+  workspaceId,
+  resumeDraftId,
+}: {
+  workspaceId: string;
+  /** The unfinished setup to go on with, when the page was sent to one; else the newest. */
+  resumeDraftId?: string;
+}) {
+  const setup = useTelegramSetup(workspaceId, resumeDraftId);
   const turnOn = useTurnOn(workspaceId, setup.draft?.draftId);
   const requiredHosts = useChannelRequiredHosts(TELEGRAM_CATALOG_ID);
   const [checking, setChecking] = useState(false);
@@ -198,16 +228,22 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
         doneHref={doneHref}
         disabled={!requiredHosts || !hosts.known}
         workspaceId={workspaceId}
-        settingsHref={settingsChannelSetupHref(TELEGRAM_CATALOG_ID)}
         retryHostCheck={hosts.failed ? hosts.retry : undefined}
       />
     ) : undefined;
   const turnedOn = turnOn.state === "done";
   const steps: SetupStepView[] = [
-    { id: "make-bot", title: "Make your bot", state: bot ? "done" : "current", children: <MakeBot /> },
+    {
+      id: "make-bot",
+      title: "Make your bot",
+      place: IN_TELEGRAM,
+      state: bot ? "done" : "current",
+      children: <MakeBot />,
+    },
     {
       id: "bot-key",
-      title: "Paste the key BotFather sent you",
+      title: "Paste your bot's key",
+      place: ON_THIS_PAGE,
       state: ready ? "done" : "current",
       result: bot ? keyWorks(bot.username) : undefined,
       children: (
@@ -225,6 +261,8 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
     {
       id: "say-hi",
       title: "Say hi to your bot",
+      place: IN_TELEGRAM,
+      waitsFor: "Opens when your key works.",
       state: !ready ? "locked" : sender ? "done" : "current",
       result: sender ? saidHi(name) : undefined,
       children: bot ? <SayHiStep username={bot.username} setup={setup} /> : undefined,
@@ -232,6 +270,8 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
     {
       id: "turn-on",
       title: "Turn it on",
+      place: ON_THIS_PAGE,
+      waitsFor: "Opens when your hi arrives.",
       state: !ready || !sender ? "locked" : turnedOn ? "done" : "current",
       result: turnedOn ? turnOnStep : undefined,
       children: turnOnStep,
@@ -259,15 +299,17 @@ export function TelegramSetupPage({ workspaceId }: { workspaceId: string }) {
         </Callout>
       ) : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line-subtle pt-4">
-        {/* Nothing to start over from once the channel is on: the setup is finished. */}
-        {turnedOn ? null : (
+        {/* Nothing to start over from once the channel is on: the setup is finished, and what is left is Settings'.
+            Before then Settings has nothing for this setup: it sends a new Telegram setup here. */}
+        {turnedOn ? (
+          <NativeOwnerLink href={SETTINGS_CHANNELS_HREF} scope={workspaceId} className="text-sm">
+            Add groups, formatting or voice replies in Settings
+          </NativeOwnerLink>
+        ) : (
           <Button variant="ghost" disabled={setup.busy || turnOn.state === "working"} onClick={() => void startOver()}>
             Start over
           </Button>
         )}
-        <NativeOwnerLink href={settingsChannelSetupHref(TELEGRAM_CATALOG_ID)} scope={workspaceId} className="text-sm">
-          More options in Settings
-        </NativeOwnerLink>
       </div>
     </SetupFrame>
   );

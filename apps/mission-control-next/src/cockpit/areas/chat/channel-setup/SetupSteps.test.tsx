@@ -19,7 +19,7 @@ async function mount(steps: readonly SetupStepView[] = STEPS, status?: string) {
   });
 }
 
-const items = () => [...container.querySelectorAll<HTMLLIElement>("ol > li")];
+const items = () => [...container.querySelectorAll<HTMLLIElement>("ol > li[data-state]")];
 
 beforeEach(() => {
   container = document.createElement("div");
@@ -86,6 +86,33 @@ describe("SetupSteps", () => {
     await mount([{ id: "a", title: "Check", state: "current", result: "Key works.", children: <p>Fix it</p> }]);
     expect(items()[0]!.textContent).toContain("Key works.");
     expect(items()[0]!.textContent).toContain("Fix it");
+  });
+
+  it("says where each step is done, beside its title and outside it", async () => {
+    await mount([
+      { id: "a", title: "Make it", state: "current", place: "In Telegram" },
+      { id: "b", title: "Use it", state: "locked", place: "On this page" },
+      { id: "c", title: "Tidy up", state: "locked" },
+    ]);
+    expect(items().map((item) => item.querySelector("[data-place]")?.textContent ?? null)).toEqual([
+      "In Telegram",
+      "On this page",
+      null,
+    ]);
+    expect(items()[0]!.querySelector("h2")?.textContent).toBe("1. Make it");
+  });
+
+  it("says what opens a locked step, and stops saying it once the step is open", async () => {
+    await mount([
+      { id: "a", title: "Check it", state: "current" },
+      { id: "b", title: "Use it", state: "locked", waitsFor: "Opens when your key works." },
+    ]);
+    expect(items()[1]!.textContent).toContain("Opens when your key works.");
+    await mount([
+      { id: "a", title: "Check it", state: "done" },
+      { id: "b", title: "Use it", state: "current", waitsFor: "Opens when your key works." },
+    ]);
+    expect(items()[1]!.textContent).not.toContain("Opens when your key works.");
   });
 
   it("says a step's state in words for those who cannot see the styling", async () => {

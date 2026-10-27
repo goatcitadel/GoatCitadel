@@ -18,6 +18,14 @@ const INPUT = {
   shownHosts: ["api.telegram.org"],
 };
 const plan = { planId: "plan-1" } as never;
+/** A change the setup page made: a channel setup, from Settings' side, for its draft. */
+const setupPlan = {
+  planId: "plan-1",
+  revision: 3,
+  request: { kind: "channel_connection", channelKind: "channel.telegram", draftId: "draft-1" },
+  origin: { workspaceId: "default", surface: "settings" },
+  target: { ownerId: "channel_setup_draft", resourceId: "draft-1" },
+} as never;
 
 let root: Root;
 let container: HTMLDivElement;
@@ -197,18 +205,34 @@ describe("useTurnOn", () => {
     expect(current.state).toBe("done");
   });
 
-  it("keeps the approval when the next step is in Inbox, and none when it is in Settings", async () => {
+  it("keeps the approval when the next step is in Inbox, and none when the change waits on something else", async () => {
     turnOnModule.turnOnChannelDraft.mockResolvedValueOnce({ kind: "elsewhere", plan, approvalId: "approval-9" });
     await mount();
     await run(() => current.turnOn(INPUT));
     expect(current.state).toBe("elsewhere");
     expect(current.approvalId).toBe("approval-9");
+    expect(current.finishHref).toBeUndefined();
 
-    turnOnModule.turnOnChannelDraft.mockResolvedValueOnce({ kind: "elsewhere", plan });
+    turnOnModule.turnOnChannelDraft.mockResolvedValueOnce({ kind: "elsewhere", plan: setupPlan });
     await run(() => current.turnOn(INPUT));
     expect(current.state).toBe("elsewhere");
     expect(current.approvalId).toBeUndefined();
     expect(current.reviewPlanId).toBeUndefined();
+  });
+
+  it("sends a change that waits on a form or a secret to its review in Chat, where Settings sends it too", async () => {
+    turnOnModule.turnOnChannelDraft.mockResolvedValueOnce({ kind: "elsewhere", plan: setupPlan });
+    await mount();
+    await run(() => current.turnOn(INPUT));
+    expect(current.finishHref).toBe(
+      "/chat?channelPlan=plan-1&channelDraft=draft-1&channelRevision=3&channelWorkspace=default",
+    );
+
+    // A change Chat's review can't name still has a place to go: its item in Inbox.
+    turnOnModule.turnOnChannelDraft.mockResolvedValueOnce({ kind: "elsewhere", plan });
+    await run(() => current.turnOn(INPUT));
+    expect(current.finishHref).toBeUndefined();
+    expect(current.reviewPlanId).toBe("plan-1");
   });
 
   it("keeps the change to review in Inbox when this page didn't make it and it waits on no approval", async () => {

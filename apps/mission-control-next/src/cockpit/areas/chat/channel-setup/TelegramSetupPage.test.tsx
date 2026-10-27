@@ -111,7 +111,7 @@ async function mount() {
   await settle();
 }
 
-const steps = () => [...container.querySelectorAll<HTMLLIElement>("ol > li")];
+const steps = () => [...container.querySelectorAll<HTMLLIElement>("ol > li[data-state]")];
 const buttons = () => [...container.querySelectorAll<HTMLButtonElement>("button")];
 
 function button(text: string): HTMLButtonElement | undefined {
@@ -178,14 +178,37 @@ afterEach(() => {
 });
 
 describe("TelegramSetupPage", () => {
-  it("is titled and shows the four steps in order", async () => {
+  it("is titled and shows the four steps in order, each saying where it is done", async () => {
     await mount();
     expect(container.querySelector("h1")?.textContent).toBe("Set up Telegram");
     expect(steps().map((step) => step.querySelector("h2")?.textContent)).toEqual([
       "1. Make your bot",
-      "2. Paste the key BotFather sent you",
+      "2. Paste your bot's key",
       "3. Say hi to your bot",
       "4. Turn it on",
+    ]);
+    expect(steps().map((step) => step.querySelector("[data-place]")?.textContent)).toEqual([
+      "In Telegram",
+      "On this page",
+      "In Telegram",
+      "On this page",
+    ]);
+  });
+
+  it("says what opens each locked step", async () => {
+    await mount();
+    expect(steps()[2]!.textContent).toContain("Opens when your key works.");
+    expect(steps()[3]!.textContent).toContain("Opens when your hi arrives.");
+  });
+
+  it("walks through BotFather's questions, down to the key to copy", async () => {
+    await mount();
+    const answers = [...steps()[0]!.querySelectorAll("ol > li")].map((item) => item.textContent);
+    expect(answers).toEqual([
+      "Send /newbot.",
+      "Send a name for your bot. Any name works.",
+      'Send a username for it. It has to end in "bot", like goat_helper_bot.',
+      "BotFather replies with your bot's key, a long line like 123456789:AAH… Copy it.",
     ]);
   });
 
@@ -193,7 +216,7 @@ describe("TelegramSetupPage", () => {
     await mount();
     const first = steps()[0]!;
     expect(first.textContent).toContain(
-      "Scan this with your phone to open BotFather in Telegram. Send /newbot and pick a name.",
+      "Scan this code with your phone to open BotFather, Telegram's bot for making bots, or open it on this computer.",
     );
     expect(first.querySelector("svg")?.getAttribute("aria-label")).toBe("QR code that opens BotFather");
     const botFather = link("Open BotFather");
@@ -204,6 +227,9 @@ describe("TelegramSetupPage", () => {
 
   it("asks for the key in a labelled field and checks it with a button", async () => {
     await mount();
+    expect(steps()[1]!.textContent).toContain(
+      "Paste the key from BotFather's reply. It's not your bot's name or username.",
+    );
     expect(steps()[1]!.textContent).toContain("Bot key");
     expect(keyField()?.getAttribute("type")).toBe("password");
     expect(button("Check key")).toBeDefined();
@@ -394,14 +420,9 @@ describe("TelegramSetupPage", () => {
     expect(steps()[1]!.contains(callouts[0]!)).toBe(true);
   });
 
-  it("points to Settings for more options", async () => {
+  it("doesn't send a setup in progress to Settings, which would only send it back here", async () => {
     await mount();
-    const more = link("More options in Settings");
-    expect(more).toBeDefined();
-    const target = new URL(more!.getAttribute("href")!, "http://cockpit.invalid");
-    expect(target.pathname).toBe("/settings/connections");
-    expect(target.searchParams.get("channel")).toBe("channel.telegram");
-    expect(target.hash).toBe("#channels");
+    expect([...container.querySelectorAll("a")].some((anchor) => anchor.textContent?.includes("Settings"))).toBe(false);
   });
 
   it("has a way back to the channel list", async () => {
@@ -493,7 +514,10 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
     expect(code).toMatch(CODE);
     const hi = steps()[2]!;
     expect(hi.getAttribute("data-state")).toBe("current");
-    expect(hi.textContent).toContain("Scan this with your phone, or open your bot, then tap Start.");
+    expect(hi.textContent).toContain(
+      "Scan this code with your phone, or open your bot on this computer. Telegram opens a chat with it: tap Start.",
+    );
+    expect(hi.textContent).toContain("This step ticks itself when it arrives.");
     expect(hi.querySelector("svg")?.getAttribute("aria-label")).toBe("QR code that opens your bot");
     const open = link("Open @MyGoatBot");
     expect(open?.getAttribute("href")).toBe(`https://t.me/MyGoatBot?start=${code}`);
@@ -668,6 +692,13 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
     expect(status()).toBe(DONE);
     // Nothing to start over from once it is on.
     expect(button("Start over")).toBeUndefined();
+    // Once it is on, Settings is where groups, formatting and voice replies are added.
+    const more = link("Add groups, formatting or voice replies in Settings");
+    const target = new URL(more!.getAttribute("href")!, "http://cockpit.invalid");
+    expect(target.pathname).toBe("/settings/connections");
+    // Settings' channel list, not its new-setup panel: that would send a Telegram setup back here.
+    expect(target.searchParams.get("channel")).toBeNull();
+    expect(target.hash).toBe("#channels");
   });
 
   it("matches a bot name with or without the @, whatever the case", async () => {
@@ -758,12 +789,21 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
     expect(button("Turn on")).toBeDefined();
   });
 
-  it("sends the operator to Settings when the next step is not an approval", async () => {
-    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "elsewhere", plan });
+  it("sends the operator to the change's review in Chat when the next step is not an approval", async () => {
+    const setupPlan = {
+      planId: "plan-1",
+      revision: 2,
+      request: { kind: "channel_connection", channelKind: "channel.telegram", draftId: "draft-1" },
+      origin: { workspaceId: "default", surface: "settings" },
+      target: { ownerId: "channel_setup_draft", resourceId: "draft-1" },
+    };
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "elsewhere", plan: setupPlan });
     await toSayHi();
     await someoneSaysHi();
     await click(button("Turn on"));
-    expect(link("Finish this in Settings")).toBeDefined();
+    const review = new URL(link("Finish it in Chat")!.getAttribute("href")!, "http://cockpit.invalid");
+    expect(review.pathname).toBe("/chat");
+    expect(review.searchParams.get("channelPlan")).toBe("plan-1");
   });
 
   it("shows why it could not turn on, and says so once in the status line", async () => {

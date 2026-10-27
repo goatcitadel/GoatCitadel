@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ChangePlanRecord } from "@goatcitadel/contracts";
+import {
+  channelPlanReviewHref,
+  createChannelPlanReviewHandoff,
+} from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { acknowledgeCleanupAndTurnOn, turnOnChannelDraft, type TurnOnOutcome } from "./turn-on-channel";
 
@@ -20,6 +25,8 @@ export interface TurnOnState {
   approvalId?: string;
   /** The change to review in Inbox, when this page didn't make it and it waits on no approval. */
   reviewPlanId?: string;
+  /** The change's review in Chat, when it waits on something there (a form, a secret) rather than an approval. */
+  finishHref?: string;
   /** What stops the setup being turned on, one reason each. */
   reasons: readonly string[];
   turnOn(input: TurnOnInput): Promise<void>;
@@ -27,12 +34,24 @@ export interface TurnOnState {
   acknowledgeCleanup(): Promise<void>;
 }
 
-type Shown = Pick<TurnOnState, "state" | "message" | "approvalId" | "reviewPlanId" | "reasons">;
+type Shown = Pick<TurnOnState, "state" | "message" | "approvalId" | "reviewPlanId" | "finishHref" | "reasons">;
 type Target = Pick<TurnOnInput, "draftId" | "catalogId">;
 
 const IDLE: Shown = { state: "idle", reasons: [] };
 const WORKING: Shown = { state: "working", reasons: [] };
 const CLEANUP: Shown = { state: "cleanup", reasons: [] };
+
+/**
+ * Where a change that waits on more than an approval is finished: its review in Chat, the place Settings sends a
+ * finished guide's change too. A change that review can't name is still in Inbox.
+ */
+function finishPlace(plan: ChangePlanRecord): Pick<Shown, "finishHref" | "reviewPlanId"> {
+  try {
+    return { finishHref: channelPlanReviewHref(createChannelPlanReviewHandoff(plan)) };
+  } catch {
+    return { reviewPlanId: plan.planId };
+  }
+}
 
 /** What the page shows for an outcome that ended the click. */
 function shown(outcome: Exclude<TurnOnOutcome, { kind: "needs_cleanup_ack" }>): Shown {
@@ -41,7 +60,8 @@ function shown(outcome: Exclude<TurnOnOutcome, { kind: "needs_cleanup_ack" }>): 
       return { state: "done", reasons: [] };
     case "elsewhere":
       if (outcome.approvalId) return { state: "elsewhere", reasons: [], approvalId: outcome.approvalId };
-      return { state: "elsewhere", reasons: [], ...(outcome.inInbox ? { reviewPlanId: outcome.plan.planId } : {}) };
+      if (outcome.inInbox) return { state: "elsewhere", reasons: [], reviewPlanId: outcome.plan.planId };
+      return { state: "elsewhere", reasons: [], ...finishPlace(outcome.plan) };
     case "failed":
       return { state: "failed", message: outcome.message, reasons: [] };
     case "blocked":

@@ -70,10 +70,15 @@ const EMPTY: Core = {
 
 type Setter = (patch: Partial<Core>) => void;
 
-/** The newest setup that is still unfinished: a Telegram draft that is not changing an existing connection. */
-function newestUnfinished(drafts: readonly ChannelSetupDraft[]): ChannelSetupDraft | null {
-  const updated = (draft: ChannelSetupDraft) => Date.parse(draft.updatedAt) || 0;
+/**
+ * The setup to go on with: the unfinished one the page was sent to, else the newest unfinished one. Unfinished means a
+ * Telegram draft that is not changing an existing connection. When the named one is gone, nothing is: going on with
+ * another bot's setup, where Start over would discard it, is worse than starting fresh.
+ */
+function setupToResume(drafts: readonly ChannelSetupDraft[], draftId?: string): ChannelSetupDraft | null {
   const unfinished = drafts.filter((draft) => draft.catalogId === TELEGRAM_CATALOG_ID && !draft.connectionId);
+  if (draftId) return unfinished.find((draft) => draft.draftId === draftId) ?? null;
+  const updated = (draft: ChannelSetupDraft) => Date.parse(draft.updatedAt) || 0;
   return unfinished.reduce<ChannelSetupDraft | null>(
     (newest, draft) => (!newest || updated(draft) > updated(newest) ? draft : newest),
     null,
@@ -101,7 +106,7 @@ export async function latestDraft(draftId: string): Promise<ChannelSetupDraft | 
  * page goes. A bot with a full page of waiting messages hides the hi behind them; `clearWaiting`, the operator's click,
  * asks once with those skipped, and the listening goes on.
  */
-export function useTelegramSetup(workspaceId: string): TelegramSetupState {
+export function useTelegramSetup(workspaceId: string, resumeDraftId?: string): TelegramSetupState {
   const [view, setView] = useState<Core>(EMPTY);
   // The latest state, readable between renders: a handler must see the draft a previous call just returned.
   const core = useRef<Core>(EMPTY);
@@ -201,7 +206,7 @@ export function useTelegramSetup(workspaceId: string): TelegramSetupState {
       set({ busy: true });
       let found: ChannelSetupDraft | null;
       try {
-        found = newestUnfinished((await fetchChannelSetupDrafts({ catalogId: TELEGRAM_CATALOG_ID })).items);
+        found = setupToResume((await fetchChannelSetupDrafts({ catalogId: TELEGRAM_CATALOG_ID })).items, resumeDraftId);
       } catch {
         // Nothing to resume; the operator starts fresh. A draft left behind is found next time.
         set({ busy: false });
@@ -230,7 +235,7 @@ export function useTelegramSetup(workspaceId: string): TelegramSetupState {
       epoch.current += 1;
       stopListening();
     };
-  }, [workspaceId, begin, stopListening]);
+  }, [workspaceId, resumeDraftId, begin, stopListening]);
 
   const checkKey = useCallback(
     async (token: string) => {

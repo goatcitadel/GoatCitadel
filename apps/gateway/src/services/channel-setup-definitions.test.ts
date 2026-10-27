@@ -85,6 +85,36 @@ describe("channel setup definitions", () => {
     }
   });
 
+  it("publishes a Telegram guide for changing a channel that is already on, never for making one", () => {
+    const definition = requireChannelSetupDefinition("channel.telegram").definition;
+    const steps = definition.wizard.steps;
+    const text = (id: string) => JSON.stringify(steps.find((step) => step.id === id));
+    const fields = steps.flatMap((step) => step.fields ?? []);
+    const field = (key: string) => fields.find((candidate) => candidate.key === key);
+
+    // A new bot is made in Chat › Messaging, so the guide neither makes one nor asks for one first.
+    expect(definition.wizard.introSummary).toContain("Chat › Messaging");
+    expect(definition.wizard.prerequisites[0]).toContain("already on");
+    expect(text("overview")).toContain("Chat › Messaging");
+    expect(steps.map((step) => step.id)).not.toContain("create-bot");
+    // Groups are optional, come before the step that finds them, and say why a message must come first.
+    const groups = steps.findIndex((step) => step.id === "destination");
+    expect(groups).toBeGreaterThanOrEqual(0);
+    expect(groups).toBeLessThan(steps.findIndex((step) => step.id === "collect-values-destinations"));
+    expect(steps[groups]?.title).toContain("(optional)");
+    expect(text("destination")).toContain("after the bot has seen a message");
+    expect(text("destination")).toMatch(/\/setprivacy.*add the bot to the group again/u);
+    // No step makes anyone tick boxes before they can go on.
+    expect(steps.filter((step) => step.checklist?.length)).toEqual([]);
+    // The saved key stays unless a new one is typed; names the setup fills in sit with the expert options.
+    expect(field("botToken")?.explanation).toContain("Leave this empty to keep the key that's saved");
+    expect(["botUsername", "setupCode", "defaultChatId"].map((key) => field(key)?.advanced)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
   it("publishes complete Discord gateway setup and safety guidance", () => {
     const definition = requireChannelSetupDefinition("channel.discord").definition;
     const createBot = definition.wizard.steps.find((step) => step.id === "create-bot");

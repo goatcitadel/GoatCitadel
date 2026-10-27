@@ -32,8 +32,6 @@ const SAVE_KEY_WORDING: TurnOnWording = {
   done: "Saved. Telegram uses the new key now.",
   doneLink: "Back to Telegram's page",
 };
-/** Where Settings has this channel's key, for a change that has to be finished there. */
-const SETTINGS_KEY_HREF = "/settings/connections#channels";
 /** This page cannot clear a bot's web address, so it says what to do instead of offering a button. */
 const WEB_ADDRESS_NOTE =
   "This bot sends its messages to a web address, so GoatCitadel can't read them here. Stop that in the app that set it up, or use a different key.";
@@ -116,7 +114,6 @@ function KeyChangeSteps({ connection, workspaceId }: { connection: IntegrationCo
         doneHref={channelPageHref(connectionId)}
         disabled={!requiredHosts || !hosts.known}
         workspaceId={workspaceId}
-        settingsHref={SETTINGS_KEY_HREF}
         retryHostCheck={hosts.failed ? hosts.retry : undefined}
       />
     </div>

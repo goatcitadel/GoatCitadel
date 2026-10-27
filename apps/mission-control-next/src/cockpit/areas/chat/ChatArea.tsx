@@ -126,7 +126,7 @@ export function ChatAreaView({
   onVisibleSessionChange?: (sessionId: string | undefined) => void;
   gatewayUnavailable?: boolean;
 }) {
-  const { navigate, rest } = useCockpitRoute();
+  const { navigate, rest, search } = useCockpitRoute();
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
   const onboarding = useQuery({ queryKey: ["system", "onboarding"], queryFn: fetchOnboardingState, staleTime: 60_000 });
   const { open, close, content: inspectorContent, register, closeIfOpen, getDismissalGeneration } = useInspector();
@@ -285,7 +285,7 @@ export function ChatAreaView({
         onOpenProjects={openProjects}
         messaging={messaging}
       />
-      <ChatMainColumn messaging={messagingView(rest)} channelConversation={isChannelConversation(session)}>
+      <ChatMainColumn messaging={messagingView(rest, search)} channelConversation={isChannelConversation(session)}>
         <ChatSessionHeader
           input={input}
           active={active}

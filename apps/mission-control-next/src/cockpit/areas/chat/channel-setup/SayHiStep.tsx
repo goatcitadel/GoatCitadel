@@ -48,7 +48,9 @@ export function SayHiStep({
       <div className="flex flex-wrap items-start gap-4">
         <QrCode value={link} label="QR code that opens your bot" />
         <div className="min-w-48 flex-1 space-y-2 text-sm text-fg-secondary">
-          <p>Scan this with your phone, or open your bot, then tap Start.</p>
+          <p>
+            Scan this code with your phone, or open your bot on this computer. Telegram opens a chat with it: tap Start.
+          </p>
           <a
             href={link}
             target="_blank"
@@ -62,7 +64,7 @@ export function SayHiStep({
           </p>
         </div>
       </div>
-      <p className="text-sm text-fg-secondary">{WAITING_FOR_HI}</p>
+      <p className="text-sm text-fg-secondary">{WAITING_FOR_HI} This step ticks itself when it arrives.</p>
       {manyWaiting ? (
         <Callout tone="info" announce={false}>
           <p>{MANY_WAITING_NOTE}</p>

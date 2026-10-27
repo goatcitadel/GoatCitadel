@@ -1,5 +1,8 @@
 import { Plus } from "lucide-react";
-import { createChannelPlanReviewHandoff, channelPlanReviewRouteFields } from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
+import {
+  createChannelPlanReviewHandoff,
+  channelPlanReviewRouteFields,
+} from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
 import { ChannelEntryControls } from "../channel-setup/ChannelEntryControls";
 import { TelegramPairingPanel } from "../channel-setup/TelegramPairingPanel";
 import { useChannelReturnNavigation } from "./use-channel-return-navigation";
@@ -26,15 +29,35 @@ import { DetailInspector } from "../../../../components/DetailInspector";
 import { IntegrationConnectionReview } from "./IntegrationConnectionReview";
 import { useChannelSettings } from "./use-channel-settings";
 import { ChannelOutcomeCheck } from "./ChannelOutcomeCheck";
+import { CockpitOwnerLink } from "../../../../app/CockpitOwnerLink";
+import {
+  chatSetupHref,
+  chatSetupHrefForDraft,
+} from "../../../../cockpit/areas/chat/channel-setup/channel-picker-model";
+
+/** A Cockpit address opened from this Classic page: the same address, asking for the Cockpit shell. */
+function cockpitShellHref(href: string): string {
+  const url = new URL(href, "http://goatcitadel.local");
+  url.searchParams.set("shell", "cockpit");
+  return url.pathname + url.search;
+}
 
 export function ChannelsSection({ activeWorkspaceId, navigate, route }: SettingsSectionProps) {
-  const owner = useChannelSettings(activeWorkspaceId, (plan) => navigate({ area: "chat", theme: route.theme,
-    ...channelPlanReviewRouteFields(createChannelPlanReviewHandoff(plan)) }));
-  useChannelReturnNavigation(owner, new URLSearchParams({
-    ...(route.channelWorkspace ? { channelWorkspace: route.channelWorkspace } : {}),
-    ...(route.channelDraft ? { channelDraft: route.channelDraft } : {}),
-    ...(route.channelConnection ? { channelConnection: route.channelConnection } : {}),
-  }).toString());
+  const owner = useChannelSettings(activeWorkspaceId, (plan) =>
+    navigate({
+      area: "chat",
+      theme: route.theme,
+      ...channelPlanReviewRouteFields(createChannelPlanReviewHandoff(plan)),
+    }),
+  );
+  useChannelReturnNavigation(
+    owner,
+    new URLSearchParams({
+      ...(route.channelWorkspace ? { channelWorkspace: route.channelWorkspace } : {}),
+      ...(route.channelDraft ? { channelDraft: route.channelDraft } : {}),
+      ...(route.channelConnection ? { channelConnection: route.channelConnection } : {}),
+    }).toString(),
+  );
   const {
     loading,
     error,
@@ -78,6 +101,16 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     selectedConnection,
     editConnection,
   } = owner;
+  // A channel with its own setup page in Chat is set up there, from the start or from where a new setup stopped:
+  // each unfinished one is a link to that very setup, and only the rest open this guide.
+  const createInChat = createDefinition ? chatSetupHref(createDefinition) : undefined;
+  const chatDrafts = (data?.drafts ?? []).flatMap((draft) => {
+    const href = chatSetupHrefForDraft(draft, data?.definitions ?? []);
+    return href ? [{ draft, href }] : [];
+  });
+  const guideDrafts = (data?.drafts ?? []).filter(
+    (draft) => !chatDrafts.some((entry) => entry.draft.draftId === draft.draftId),
+  );
   return (
     // Block-render the loader only while there is nothing to show yet. Reloads
     // after save/validate/test keep `data` (useAsyncLoad retains it), and the
@@ -116,19 +149,26 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                   notice={{
                     tone: "info",
                     message:
-                      "Choose a channel, start its guided setup, then save, validate, test, and finalize before runtime use. Slack uses OAuth and Telegram can discover targets.",
+                      "Choose a channel, start its guided setup, then save, validate, test, and finalize before runtime use. Slack uses OAuth. Telegram is set up on its own page in Chat.",
                   }}
                 />
                 <SettingsButtonRow>
-
-                  <NativeButton
-                    variant="default"
-                    disabled={!createCatalogId || owner.mutation.pending || Boolean(owner.mutation.uncertain)}
-                    onClick={() => void handleCreate()}
-                  >
-                    <Plus size={16} />
-                    {createDefinition ? `Start ${createDefinition.catalog.label} setup` : "Start guided setup"}
-                  </NativeButton>
+                  {createInChat && createDefinition ? (
+                    <CockpitOwnerLink
+                      href={cockpitShellHref(createInChat)}
+                      scope={activeWorkspaceId}
+                      label={`Set up ${createDefinition.catalog.label} in Chat`}
+                    />
+                  ) : (
+                    <NativeButton
+                      variant="default"
+                      disabled={!createCatalogId || owner.mutation.pending || Boolean(owner.mutation.uncertain)}
+                      onClick={() => void handleCreate()}
+                    >
+                      <Plus size={16} />
+                      {createDefinition ? `Start ${createDefinition.catalog.label} setup` : "Start guided setup"}
+                    </NativeButton>
+                  )}
                 </SettingsButtonRow>
                 <SettingsActionList
                   ariaLabel="Channel setup definitions"
@@ -283,8 +323,21 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                 />
               </NativeCard>
               <NativeCard title="Drafts" subtitle="Saved setup work, including retained edits.">
+                {chatDrafts.length ? (
+                  <ul aria-label="Setups that go on in Chat">
+                    {chatDrafts.map(({ draft, href }) => (
+                      <li key={draft.draftId}>
+                        <CockpitOwnerLink
+                          href={cockpitShellHref(href)}
+                          scope={activeWorkspaceId}
+                          label={`Continue ${draft.label || draft.catalogId} in Chat`}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 <NativeSelectableList
-                  items={(data.drafts ?? []).map((item) => ({
+                  items={guideDrafts.map((item) => ({
                     id: item.draftId,
                     title: item.label || item.catalogId,
                     meta:
@@ -299,7 +352,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                   onSelect={(draftId) => {
                     draftSelectionGuard.requestTransition(draftId);
                   }}
-                  emptyLabel="No channel drafts yet."
+                  emptyLabel={chatDrafts.length ? "No other drafts." : "No channel drafts yet."}
                 />
               </NativeCard>
             </>
@@ -317,7 +370,10 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                 </p>
                 <p>{selectedConnection.lastError}</p>
                 <NativeButton onClick={() => void editConnection()}>Edit setup</NativeButton>
-                <ChannelJourneyPanel connections={[selectedConnection]} connectorDiagnosticsEnabled={data.connectorDiagnosticsEnabled} />
+                <ChannelJourneyPanel
+                  connections={[selectedConnection]}
+                  connectorDiagnosticsEnabled={data.connectorDiagnosticsEnabled}
+                />
                 <NativeDisclosureCard id="channel-operations" title="Connection operations">
                   <DiscordConnectionOperationsPanel connections={[selectedConnection]} />
                   <TelegramPairingPanel connection={selectedConnection} onUpdated={reload} />

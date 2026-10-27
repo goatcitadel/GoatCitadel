@@ -1,6 +1,12 @@
 import type { ChannelPickerGroup, ChannelSetupDefinition, ChannelSetupPickerHint } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
-import { buildChannelPickerGroups, CONVERTED_SETUP_CHANNELS, settingsChannelSetupHref } from "./channel-picker-model";
+import {
+  buildChannelPickerGroups,
+  chatSetupHref,
+  chatSetupHrefForDraft,
+  CONVERTED_SETUP_CHANNELS,
+  settingsChannelSetupHref,
+} from "./channel-picker-model";
 
 function definition(
   key: string,
@@ -105,5 +111,36 @@ describe("channel picker model", () => {
       definition("a", "Alpha", 5, hint("quickest", 0)),
     ]);
     expect(group!.tiles.map((tile) => tile.label)).toEqual(["Alpha", "Beta"]);
+  });
+});
+
+describe("where a channel is set up", () => {
+  const definitions = [definition("telegram", "Telegram", 8), definition("slack", "Slack", 10)];
+
+  it("names the Chat page for a channel set up there, and nothing for the rest", () => {
+    expect(chatSetupHref(definitions[0]!)).toBe("/chat/messaging/add/telegram");
+    expect(chatSetupHref(definitions[1]!)).toBeUndefined();
+  });
+
+  it("continues an unfinished new setup on its Chat page, naming that setup", () => {
+    const draft = { draftId: "draft-1", catalogId: "channel.telegram", lifecycleMode: "create" as const };
+    expect(chatSetupHrefForDraft(draft, definitions)).toBe("/chat/messaging/add/telegram?draft=draft-1");
+  });
+
+  it("leaves changes to a saved channel, other channels and unknown ones in Settings", () => {
+    const editing = {
+      draftId: "d",
+      catalogId: "channel.telegram",
+      lifecycleMode: "edit" as const,
+      connectionId: "conn-1",
+    };
+    expect(chatSetupHrefForDraft(editing, definitions)).toBeUndefined();
+    // A new setup that already names its connection is past the point Chat's page starts from.
+    const named = { draftId: "d", catalogId: "channel.telegram", lifecycleMode: "create" as const, connectionId: "c" };
+    expect(chatSetupHrefForDraft(named, definitions)).toBeUndefined();
+    const slack = { draftId: "d", catalogId: "channel.slack", lifecycleMode: "create" as const };
+    expect(chatSetupHrefForDraft(slack, definitions)).toBeUndefined();
+    const gone = { draftId: "d", catalogId: "channel.gone", lifecycleMode: "create" as const };
+    expect(chatSetupHrefForDraft(gone, definitions)).toBeUndefined();
   });
 });

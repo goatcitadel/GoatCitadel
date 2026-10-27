@@ -12,6 +12,8 @@ export const TEST_MESSAGE_CHANGE = "GoatCitadel sends a test message to your cha
 export const hostChange = (host: string) => `${host} is added to the hosts GoatCitadel may reach`;
 /** Said when the allowlist couldn't be read: until it is, the step can't list every change, so it can't go ahead. */
 export const HOSTS_UNKNOWN = "GoatCitadel couldn't check which hosts it may reach. Try again.";
+/** Where a change that waits on a form or a secret is finished: its review in Chat. */
+const FINISH_IN_CHAT = "Finish it in Chat";
 
 /** The words of the step's button and its ending, so a page that applies a different change can say its own. */
 export interface TurnOnWording {
@@ -69,7 +71,7 @@ export function turnOnStatus(turnOn: TurnOnState, wording: TurnOnWording = TURN_
       return turnOn.reasons.join(" ");
     case "elsewhere":
       if (turnOn.approvalId) return "Approve it in Inbox";
-      return turnOn.reviewPlanId ? "Review it in Inbox" : "Finish this in Settings";
+      return turnOn.reviewPlanId ? "Review it in Inbox" : FINISH_IN_CHAT;
     default:
       return undefined;
   }
@@ -86,15 +88,7 @@ function inboxPlanHref(planId: string, workspaceId: string): string {
 }
 
 /** Where the last click left things, when it did not finish: the reasons, the failure, or where to go next. */
-function Outcome({
-  turnOn,
-  workspaceId,
-  settingsHref,
-}: {
-  turnOn: TurnOnState;
-  workspaceId: string;
-  settingsHref: string;
-}) {
+function Outcome({ turnOn, workspaceId }: { turnOn: TurnOnState; workspaceId: string }) {
   switch (turnOn.state) {
     case "cleanup":
       return (
@@ -138,11 +132,11 @@ function Outcome({
             >
               Review it in Inbox
             </NativeOwnerLink>
-          ) : (
-            <NativeOwnerLink href={settingsHref} scope={workspaceId}>
-              Finish this in Settings
+          ) : turnOn.finishHref ? (
+            <NativeOwnerLink href={turnOn.finishHref} scope={workspaceId}>
+              {FINISH_IN_CHAT}
             </NativeOwnerLink>
-          )}
+          ) : null}
         </Callout>
       );
     default:
@@ -162,7 +156,6 @@ export function TurnOnStep({
   doneHref,
   disabled,
   workspaceId,
-  settingsHref,
   wording = TURN_ON_WORDING,
   retryHostCheck,
 }: {
@@ -173,8 +166,6 @@ export function TurnOnStep({
   doneHref?: string;
   disabled?: boolean;
   workspaceId: string;
-  /** Where Settings has this channel's setup. */
-  settingsHref: string;
   /** The button and the ending; turning a new channel on unless the page says otherwise. */
   wording?: TurnOnWording;
   /** Given when the hosts GoatCitadel may reach couldn't be read: the step says so, and Try again calls this. */
@@ -209,7 +200,7 @@ export function TurnOnStep({
           </div>
         </Callout>
       ) : null}
-      <Outcome turnOn={turnOn} workspaceId={workspaceId} settingsHref={settingsHref} />
+      <Outcome turnOn={turnOn} workspaceId={workspaceId} />
       {turnOn.state === "cleanup" ? null : (
         <Button
           variant="primary"

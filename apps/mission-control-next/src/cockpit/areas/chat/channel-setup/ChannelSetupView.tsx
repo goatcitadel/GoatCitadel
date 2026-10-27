@@ -46,7 +46,16 @@ function KeyChange({ connectionId, workspaceId }: { connectionId: string; worksp
  * One channel's setup. Telegram has its own page; a channel without one sends the operator to Settings, which has
  * its steps; a channel the picker does not offer is not available here, whatever the address says.
  */
-function ChannelSetup({ channelKey, workspaceId }: { channelKey: string; workspaceId: string }) {
+function ChannelSetup({
+  channelKey,
+  draftId,
+  workspaceId,
+}: {
+  channelKey: string;
+  /** The unfinished setup to go on with, when the address names one. */
+  draftId?: string;
+  workspaceId: string;
+}) {
   const { groups, isError, isPending, refetch } = useChannelPickerGroups();
   const back = { href: channelPickerHref(), label: "Back to channels" };
   if (!groups) {
@@ -75,7 +84,7 @@ function ChannelSetup({ channelKey, workspaceId }: { channelKey: string; workspa
       </Frame>
     );
   }
-  if (tile.channelKey === "telegram") return <TelegramSetupPage workspaceId={workspaceId} />;
+  if (tile.channelKey === "telegram") return <TelegramSetupPage workspaceId={workspaceId} resumeDraftId={draftId} />;
   return (
     <Frame
       title={`Add ${tile.label}`}
@@ -93,7 +102,7 @@ function ChannelSetup({ channelKey, workspaceId }: { channelKey: string; workspa
 /** A channel's setup, or a channel's key change, in Chat beside its Messaging list. */
 export function ChannelSetupView({ view, workspaceId }: { view: ChannelSetupViewTarget; workspaceId: string }) {
   return view.kind === "setup" ? (
-    <ChannelSetup channelKey={view.channelKey} workspaceId={workspaceId} />
+    <ChannelSetup channelKey={view.channelKey} draftId={view.draftId} workspaceId={workspaceId} />
   ) : (
     <KeyChange connectionId={view.connectionId} workspaceId={workspaceId} />
   );

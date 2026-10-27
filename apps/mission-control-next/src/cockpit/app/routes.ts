@@ -49,17 +49,21 @@ const CHANNEL_KEY_PATTERN = /^[a-z][a-z0-9-]{0,39}$/u;
 export type MessagingView =
   | { kind: "channel"; connectionId: string }
   | { kind: "picker" }
-  | { kind: "setup"; channelKey: string }
+  | { kind: "setup"; channelKey: string; draftId?: string }
   | { kind: "change_key"; connectionId: string };
+
+/** The query parameter naming the unfinished setup a channel's setup page goes on with. */
+const SETUP_DRAFT_PARAM = "draft";
 
 /** The page for choosing a channel to add. */
 export function channelPickerHref(): string {
   return `/chat/${CHANNEL_PAGE_SEGMENT}/${ADD_SEGMENT}`;
 }
 
-/** The setup page for one channel, named by its catalog key. */
-export function channelSetupHref(channelKey: string): string {
-  return `/chat/${CHANNEL_PAGE_SEGMENT}/${ADD_SEGMENT}/${encodeURIComponent(channelKey)}`;
+/** The setup page for one channel, named by its catalog key; given a draft, the page goes on with that setup. */
+export function channelSetupHref(channelKey: string, draftId?: string): string {
+  const page = `/chat/${CHANNEL_PAGE_SEGMENT}/${ADD_SEGMENT}/${encodeURIComponent(channelKey)}`;
+  return draftId ? `${page}?${new URLSearchParams({ [SETUP_DRAFT_PARAM]: draftId })}` : page;
 }
 
 /** The page for replacing one connected channel's key. */
@@ -67,32 +71,44 @@ export function channelKeyChangeHref(connectionId: string): string {
   return `/chat/${CHANNEL_PAGE_SEGMENT}/${encodeURIComponent(connectionId)}/${KEY_SEGMENT}`;
 }
 
+/** An id that is not blank, padded or holding control characters. */
+function readableId(id: string): string | null {
+  // eslint-disable-next-line no-control-regex -- ids with control characters are never a record this page can name.
+  return id && id.trim() === id && !/[\u0000-\u001f\u007f]/u.test(id) ? id : null;
+}
+
 /** A connection id read from a path segment: not blank, padded or holding control characters. */
 function readableConnectionId(segment: string): string | null {
-  let id: string;
   try {
-    id = decodeURIComponent(segment);
+    return readableId(decodeURIComponent(segment));
   } catch {
     return null;
   }
-  // eslint-disable-next-line no-control-regex -- ids with control characters are never a record this page can name.
-  return id && id.trim() === id && !/[\u0000-\u001f\u007f]/u.test(id) ? id : null;
+}
+
+/** The one readable draft a setup address names, if it names exactly one. */
+function setupDraftId(search: string): string | undefined {
+  const named = new URLSearchParams(search).getAll(SETUP_DRAFT_PARAM);
+  return named.length === 1 ? (readableId(named[0]!) ?? undefined) : undefined;
 }
 
 /**
  * The Messaging view a Chat route names, or null when it names none:
  * - `messaging/<connectionId>` is that channel's page, with the id readable;
- * - `messaging/add` is the picker, and `messaging/add/<channelKey>` that channel's setup, with a well-formed key;
+ * - `messaging/add` is the picker, and `messaging/add/<channelKey>` that channel's setup, with a well-formed key
+ *   (and, when `?draft=` names one readable setup, that setup to go on with);
  * - `messaging/<connectionId>/key` is the page for changing that channel's key.
  * Anything else, including extra segments, is not a Messaging view.
  */
-export function messagingView(rest: readonly string[]): MessagingView | null {
+export function messagingView(rest: readonly string[], search = ""): MessagingView | null {
   if (rest[0] !== CHANNEL_PAGE_SEGMENT) return null;
   const [, second, third] = rest;
   if (second === undefined || rest.length > 3) return null;
   if (second === ADD_SEGMENT) {
     if (rest.length === 2) return { kind: "picker" };
-    return third !== undefined && CHANNEL_KEY_PATTERN.test(third) ? { kind: "setup", channelKey: third } : null;
+    if (third === undefined || !CHANNEL_KEY_PATTERN.test(third)) return null;
+    const draftId = setupDraftId(search);
+    return { kind: "setup", channelKey: third, ...(draftId ? { draftId } : {}) };
   }
   const connectionId = readableConnectionId(second);
   if (connectionId === null) return null;

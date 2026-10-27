@@ -11,7 +11,6 @@ import {
   definitionFailures,
   paragraph,
   linkBlock,
-  check,
   readString,
   normalizeTelegramTargets,
   normalizeTelegramUsername,
@@ -65,80 +64,63 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect Telegram with a bot-native flow: create a BotFather bot, send a setup message, choose detected chats, then set a home channel for background delivery.",
+        "Change a Telegram channel that's already on: use its bot in groups or channels, choose where it posts by default, and set formatting, voice replies and how messages arrive. A new bot is set up in Chat › Messaging.",
       prerequisites: [
-        "A Telegram account.",
-        "Access to the target chat, group, or channel.",
-        "Permission to add the bot to the destination if needed.",
+        "A Telegram channel that's already on. To add a new bot, go to Chat › Messaging and choose Add.",
+        "For a group or channel: permission to add the bot there.",
         "A public HTTPS address only if you choose web-address delivery.",
       ],
       steps: [
         {
           id: "overview",
           kind: "intro",
-          title: "What this connection does",
+          title: "What you can change here",
           body: [
-            paragraph("GoatCitadel can send messages into Telegram chats and channels using a Telegram bot token."),
             paragraph(
-              "Telegram v1 also supports channel-native commands such as /status, /sethome, /personality, /skills, and /tools. Terminal-capable work can be requested remotely, but it still runs through GoatCitadel approvals and policy.",
+              "This changes a Telegram channel that's already on. To add a new bot, go to Chat › Messaging and choose Add: that page makes the bot, checks its key and turns it on.",
             ),
             paragraph(
-              "Rich sends are preflighted before delivery: photo/document attachment posture, caption fallback, provider evidence, and attachment-count limits are recorded before the Bot API send.",
+              "Here you can use the bot in groups or channels, choose where it posts by default, and change its formatting, voice replies, and how GoatCitadel receives its messages.",
             ),
-          ],
-        },
-        {
-          id: "create-bot",
-          kind: "instruction",
-          title: "Create the Telegram bot in BotFather",
-          body: [
-            paragraph("Open @BotFather in Telegram, run /newbot, then follow the prompts to create your bot."),
             paragraph(
-              "After creation, open the bot and send /start. For groups, add the bot to the group and send a setup message there.",
+              "In Telegram the bot also answers commands such as /status, /sethome, /personality, /skills and /tools. Work started from Telegram still goes through GoatCitadel's approvals and policy.",
             ),
-            linkBlock("Telegram bot tutorial", "https://core.telegram.org/bots/tutorial"),
-            linkBlock("Open BotFather", "https://t.me/BotFather"),
-          ],
-          checklist: [
-            check("botfather", "Open @BotFather"),
-            check("newbot", "Run /newbot and finish the prompts"),
-            check("token", "Copy the bot token"),
           ],
         },
         {
           id: "destination",
           kind: "instruction",
-          title: "Prepare destination chats",
+          title: "Add your bot to a group or channel (optional)",
           body: [
+            paragraph("Skip this step if you only chat with your bot one to one."),
             paragraph(
-              "Add the bot to each chat, group, supergroup, or channel you want GoatCitadel to use. If group privacy blocks regular messages, send a command or make the bot an admin.",
+              "In Telegram, add the bot to the group or channel, then send a message there. GoatCitadel can find a chat only after the bot has seen a message in it; the next step lists the chats it has seen.",
             ),
             paragraph(
-              "After setup, use /sethome in the chat where background results, scheduled work, and cross-platform delivery should land by default.",
+              "In a group, Telegram passes the bot only commands (messages starting with /) and replies to it. To let it read everything, make it an admin of the group, or send /setprivacy to BotFather, turn privacy off, and then add the bot to the group again.",
             ),
-          ],
-          checklist: [
-            check("bot-added", "Add the bot to every target chat or channel"),
-            check("setup-message", "Send /start or a setup code in each target"),
-            check("permissions", "Confirm the bot can post in each target"),
-            check("home-channel", "Plan which chat should become the home channel"),
+            paragraph(
+              "To make a chat the place where background results land, send /sethome there after you save these changes.",
+            ),
+            linkBlock("Telegram: what bots see in groups", "https://core.telegram.org/bots/features#privacy-mode"),
           ],
         },
         {
           id: "collect-values",
           kind: "field-collection",
-          title: "Choose Telegram targets",
+          title: "Choose chats and options",
           fields: [
             {
               key: "botToken",
-              label: "Bot token",
+              label: "Bot key",
               type: "secret",
               required: true,
-              explanation: "The token BotFather generated for your Telegram bot.",
-              whyNeeded: "Used to authenticate GoatCitadel to Telegram.",
-              whereToFind: [paragraph("In the BotFather chat after you create the bot or regenerate the token.")],
+              explanation:
+                "The key BotFather gave your bot. Leave this empty to keep the key that's saved. To change it, use Change key on the channel's page in Chat.",
+              whyNeeded: "GoatCitadel uses it to sign in to Telegram as your bot.",
+              whereToFind: [paragraph("In your chat with BotFather, in its reply when the bot was made.")],
               looksLike: "123456789:AA...",
-              commonMistakes: ["Copying the bot username instead of the token.", "Missing the colon in the token."],
+              commonMistakes: ["Pasting the bot's name or username instead of its key.", "Leaving out the colon."],
               sensitive: true,
               canChangeLater: true,
             },
@@ -147,9 +129,11 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               label: "Bot username",
               type: "text",
               required: false,
-              explanation: "The @username BotFather assigned to your bot.",
-              whyNeeded: "Used for open/add helper links and operator-visible setup clarity.",
-              whereToFind: [paragraph("BotFather shows the bot username after /newbot completes.")],
+              advanced: true,
+              explanation:
+                "Filled in from Telegram when GoatCitadel checks the key. Change it only if you renamed the bot in BotFather.",
+              whyNeeded: "Used for links that open the bot.",
+              whereToFind: [paragraph("Your bot's @username, which ends in bot. It is not the bot's display name.")],
               looksLike: "@goatcitadel_bot",
               canChangeLater: true,
             },
@@ -158,29 +142,32 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               label: "Setup code",
               type: "text",
               required: false,
-              explanation: "Optional code to send in Telegram so GoatCitadel can identify setup messages.",
-              whyNeeded: "Helps auto-detected chats become obvious during setup.",
-              whereToFind: [paragraph("Use any short memorable code, such as goat-setup-home or goat-setup-ops.")],
+              advanced: true,
+              explanation:
+                "Optional. A word to send in a group so the chat stands out when GoatCitadel looks for chats.",
+              whyNeeded: "Helps tell similar group chats apart.",
+              whereToFind: [paragraph("Any short word, such as goat-setup-ops.")],
               looksLike: "goat-setup-ops",
               canChangeLater: true,
             },
             {
               key: "targets",
-              label: "Telegram chat targets",
+              label: "Chats this bot can use",
               type: "textarea",
               required: true,
-              explanation: "Named Telegram chats, groups, or channels this bot can use.",
-              whyNeeded: "Lets one Telegram bot serve multiple chats without repeating setup.",
+              explanation:
+                "The chats, groups and channels this bot posts in. Your own chat with the bot is already here if you set it up in Chat.",
+              whyNeeded: "One bot can serve several chats without setting it up again.",
               whereToFind: [
                 paragraph(
-                  "Use auto-detected chats from recent bot updates, or add chat ids / @channel handles manually.",
+                  "Detect Telegram chats lists the chats the bot has seen a message in. A public channel can also be added by its @name.",
                 ),
               ],
               looksLike: "Default: -1001234567890 or @ops_channel",
               commonMistakes: [
                 "Copying a message id instead of the chat id.",
-                "Adding a group before the bot has been added to that group.",
-                "Forgetting to send /start or the setup code before using target discovery.",
+                "Looking for a group before the bot has been added to it.",
+                "Looking for a chat before anyone has sent a message there.",
               ],
               canChangeLater: true,
             },
@@ -189,9 +176,10 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               label: "Legacy default chat ID or @channel handle",
               type: "id",
               required: false,
-              explanation: "Compatibility fallback for older single-chat Telegram connections.",
-              whyNeeded: "Used only when no target rows are configured.",
-              whereToFind: [paragraph("Use a chat id lookup workflow or the @channel_name for public channels.")],
+              advanced: true,
+              explanation: "Only for older single-chat Telegram channels.",
+              whyNeeded: "Used only when no chats are listed above.",
+              whereToFind: [paragraph("Leave it empty and use the chats above instead.")],
               looksLike: "123456789 or @channel_name",
               commonMistakes: [
                 "Copying a message id instead of the chat id.",
@@ -201,11 +189,11 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
             },
             {
               key: "parseMode",
-              label: "Parse mode",
+              label: "Formatting",
               type: "select",
               required: false,
               defaultValue: "Markdown",
-              explanation: "Optional Telegram formatting mode.",
+              explanation: "How Telegram formats the bot's replies.",
               options: [
                 { value: "Markdown", label: "Markdown" },
                 { value: "MarkdownV2", label: "MarkdownV2" },
@@ -293,34 +281,28 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "test",
           kind: "test",
-          title: "Validate and test the connection",
+          title: "Check and test",
           body: [
             paragraph(
-              "GoatCitadel verifies the token with Telegram and sends a sandbox message plus cleanup probe before you finalize.",
+              "GoatCitadel checks the bot key with Telegram, sends a test message to the default chat, and then removes it.",
             ),
-            paragraph(
-              "Runtime rich-message evidence records whether media is native, document fallback, pending hydration, or blocked before provider delivery.",
-            ),
-            paragraph(
-              "The strongest setup proof is: token validates, the intended chat appears in target discovery, a sandbox message can be sent, and /sethome confirms the delivery target.",
-            ),
+            paragraph("If the test fails, the reason shows here. Nothing changes until you save."),
           ],
           troubleshooting: definitionFailures("token"),
         },
         {
           id: "finish",
           kind: "confirm",
-          title: "Finish setup",
+          title: "Save the changes",
           body: [
             paragraph(
-              "After finalizing, send /status in Telegram, then /sethome in the chat that should receive background results.",
+              "After saving, send your bot a message to check it still answers. In a group, send /sethome where background results should land.",
             ),
           ],
           successCriteria: [
-            "The token validates successfully.",
-            "A default chat target is configured.",
-            "The intended Telegram chat is detected or manually configured.",
-            "The operator has chosen or intentionally skipped the home channel.",
+            "The bot key checks out with Telegram.",
+            "At least one chat is listed, and one is the default.",
+            "The test message reached the default chat.",
           ],
         },
       ],

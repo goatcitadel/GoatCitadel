@@ -40,6 +40,22 @@ describe("cockpit routes", () => {
   it("names the Messaging views: a channel, the picker, a channel's setup and its key change", () => {
     expect(messagingView(["messaging", "add"])).toEqual({ kind: "picker" });
     expect(messagingView(["messaging", "add", "telegram"])).toEqual({ kind: "setup", channelKey: "telegram" });
+    // A setup page can be sent to one unfinished setup; anything unreadable names none.
+    expect(messagingView(["messaging", "add", "telegram"], "?draft=draft-1")).toEqual({
+      kind: "setup",
+      channelKey: "telegram",
+      draftId: "draft-1",
+    });
+    expect(messagingView(["messaging", "add", "telegram"], "?draft=%20padded")).toEqual({
+      kind: "setup",
+      channelKey: "telegram",
+    });
+    expect(messagingView(["messaging", "add", "telegram"], "?draft=a&draft=b")).toEqual({
+      kind: "setup",
+      channelKey: "telegram",
+    });
+    expect(channelSetupHref("telegram", "draft 1")).toBe("/chat/messaging/add/telegram?draft=draft+1");
+    expect(channelSetupHref("telegram")).toBe("/chat/messaging/add/telegram");
     expect(messagingView(["messaging", "add", "nextcloud-talk"])).toEqual({
       kind: "setup",
       channelKey: "nextcloud-talk",

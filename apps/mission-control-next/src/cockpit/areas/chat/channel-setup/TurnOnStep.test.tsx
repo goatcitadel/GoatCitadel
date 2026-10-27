@@ -40,7 +40,6 @@ async function show(
         doneHref={props.doneHref}
         disabled={props.disabled}
         workspaceId="default"
-        settingsHref="/settings/connections?channel=channel.telegram#channels"
       />,
     );
   });
@@ -178,17 +177,19 @@ describe("TurnOnStep", () => {
     expect(target.pathname).toBe("/inbox");
     expect(target.searchParams.get("approvalId")).toBe("approval-9");
     expect(target.searchParams.get("workspaceId")).toBe("default");
-    expect(link("Finish this in Settings")).toBeUndefined();
+    expect(link("Finish it in Chat")).toBeUndefined();
   });
 
-  it("sends the operator to Settings when the next step is not an approval", async () => {
-    await show(turnOnState({ state: "elsewhere" }));
-    const settings = link("Finish this in Settings");
-    expect(settings).toBeDefined();
-    const target = new URL(settings!.getAttribute("href")!, "http://cockpit.invalid");
-    expect(target.pathname).toBe("/settings/connections");
-    expect(target.searchParams.get("channel")).toBe("channel.telegram");
+  it("sends the operator to the change's review in Chat when the next step is not an approval", async () => {
+    const review = "/chat?channelPlan=plan-1&channelDraft=draft-1&channelRevision=3&channelWorkspace=default";
+    await show(turnOnState({ state: "elsewhere", finishHref: review }));
+    const target = new URL(link("Finish it in Chat")!.getAttribute("href")!, "http://cockpit.invalid");
+    expect(target.pathname).toBe("/chat");
+    expect(target.searchParams.get("channelPlan")).toBe("plan-1");
+    expect(target.searchParams.get("channelDraft")).toBe("draft-1");
     expect(link("Approve it in Inbox")).toBeUndefined();
+    // Settings has no way to finish a change, so the step never sends anyone there.
+    expect(link("Settings")).toBeUndefined();
   });
 
   it("sends the operator to a change it didn't make in Inbox", async () => {
@@ -199,7 +200,7 @@ describe("TurnOnStep", () => {
     expect(target.pathname).toBe("/inbox");
     expect(target.searchParams.get("item")).toBe("change_plan:plan-7");
     expect(target.searchParams.get("workspaceId")).toBe("default");
-    expect(link("Finish this in Settings")).toBeUndefined();
+    expect(link("Finish it in Chat")).toBeUndefined();
   });
 
   it("says when it couldn't check the hosts, with Try again, and adds no live region for it", async () => {
@@ -212,7 +213,6 @@ describe("TurnOnStep", () => {
           onTurnOn={() => undefined}
           disabled
           workspaceId="default"
-          settingsHref="/settings/connections"
           retryHostCheck={retry}
         />,
       );
