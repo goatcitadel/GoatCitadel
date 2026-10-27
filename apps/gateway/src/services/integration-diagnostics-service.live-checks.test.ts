@@ -12,7 +12,6 @@ const liveProbeMocks = vi.hoisted(() => ({
   telegram: vi.fn(),
   whatsapp: vi.fn(),
   zalo: vi.fn(),
-  zalouser: vi.fn(),
 }));
 const webhookProbeMock = vi.hoisted(() => vi.fn());
 
@@ -27,7 +26,6 @@ vi.mock("./channel-bot-live-probes.js", () => ({
   runTelegramBotLiveChecks: liveProbeMocks.telegram,
   runWhatsAppCloudLiveChecks: liveProbeMocks.whatsapp,
   runZaloBotLiveChecks: liveProbeMocks.zalo,
-  runZaloUserBridgeLiveChecks: liveProbeMocks.zalouser,
 }));
 
 vi.mock("./channel-webhook-probes.js", () => ({

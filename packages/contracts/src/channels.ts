@@ -205,6 +205,25 @@ export function describeChannelPlatformUnsupported(
 }
 
 /**
+ * Channels GoatCitadel no longer supports, with the operator-facing reason.
+ * A saved connection for one of these stays readable so the operator can
+ * review and delete it, but nothing sends through it. Shared by channel
+ * capability reporting, diagnostics and the outbound executor so all of them
+ * give the same reason.
+ */
+export const RETIRED_CHANNEL_REASONS: ReadonlyMap<string, string> = new Map([
+  [
+    "zalouser",
+    "Zalo Personal is not supported anymore: it used an unofficial personal-account client that can get the account banned. Delete this connection and use Zalo OA (Official Account) instead.",
+  ],
+]);
+
+/** Returns the operator reason when the channel is retired, else undefined. */
+export function describeRetiredChannel(channelKey: string): string | undefined {
+  return RETIRED_CHANNEL_REASONS.get(channelKey);
+}
+
+/**
  * Tag the ntfy outbound publisher stamps on every message it sends. The ntfy
  * inbound stream adapter drops messages carrying this tag so outbound
  * notifications are never echoed back in as inbound turns.

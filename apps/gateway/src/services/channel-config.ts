@@ -14,7 +14,6 @@ const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
   "nextcloud-talk": ["defaultRoomId", "defaultConversationId", "defaultTarget", "target"],
   line: ["defaultTarget", "defaultUserId", "defaultGroupId", "defaultRoomId", "target"],
   zalo: ["defaultRecipientId", "defaultTarget", "target"],
-  zalouser: ["defaultRecipientId", "defaultTarget", "target"],
 };
 
 export function resolveChannelConfigTarget(channelKey: string, config: Record<string, unknown>): string | undefined {

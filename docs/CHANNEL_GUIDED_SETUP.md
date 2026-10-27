@@ -1,6 +1,6 @@
 # Channels guided setup
 
-Channels uses the existing seventeen adapters. The Gateway owns setup drafts,
+Channels uses the existing sixteen adapters. The Gateway owns setup drafts,
 credential custody, checks, evidence and activation; Mission Control renders that
 state. Setup follows prerequisites, account identity, destinations and access,
 reviewed checks, governed activation, then first-message verification.
@@ -61,7 +61,6 @@ form controls.
 | Signal | Existing bridge/account/recipient and outbound receipt. Receiving is available when you turn on `receiveEvents`; see `COMMUNICATION_CHANNEL_SETUP_GUIDE.md`. |
 | iMessage | Callable BlueBubbles bridge, chat/handle and action-specific Private API requirements. Photon/Spectrum remains diagnostics-only. |
 | Zalo OA | Official Account token and eligible recipient; narrow outbound receipt and separate human confirmation. |
-| Zalo User | Authenticated zca bridge, existing linked profile and supported target/media limits; credential aliases remain supported. |
 
 Adapters without an inbound transport omit conversation requirements. A successful
 notification send does not establish human receipt. Attachments, approvals,

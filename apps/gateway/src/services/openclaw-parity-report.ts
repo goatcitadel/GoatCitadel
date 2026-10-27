@@ -15,7 +15,7 @@ import { OPENCLAW_PARITY_COMPLETION_ORDER, OPENCLAW_PARITY_EPICS } from "@goatci
 const BASE_UNSAFE_CLAIMS: string[] = [
   "Discord, Slack, and Telegram still need fresh per-provider operator proof whenever runtime or policy behavior changes.",
   "Google Chat and Teams are outbound webhook lanes only; do not over-claim inbound/runtime parity they do not implement.",
-  "WhatsApp, Signal, iMessage/BlueBubbles, Mattermost, LINE, Zalo OA, and Zalo Personal now have narrower beta lanes with guided live-probe coverage, but each still has explicit capability limits that must stay visible.",
+  "WhatsApp, Signal, iMessage/BlueBubbles, Mattermost, LINE, and Zalo OA now have narrower beta lanes with guided live-probe coverage, but each still has explicit capability limits that must stay visible.",
   "Packaging still requires current clean-install, packaged-startup, and rollback evidence before parity can be called complete.",
 ];
 
@@ -158,7 +158,7 @@ function buildProgramEpicRecord(
       return record(definition, {
         status: resolvedStatus,
         summary:
-          "Mattermost, LINE, Zalo OA, and Zalo Personal now ship with guided setup, live runtime probes, and truthful beta-lane documentation that matches the current bounds of each channel runtime.",
+          "Mattermost, LINE, and Zalo OA now ship with guided setup, live runtime probes, and truthful beta-lane documentation that matches the current bounds of each channel runtime.",
         nextSlice:
           "Keep the Tier-2 operator proof current and only widen provider capabilities when the runtime and docs move together.",
         blockers:
@@ -167,11 +167,11 @@ function buildProgramEpicRecord(
             : [
                 blocker(
                   "repo_runtime",
-                  "Mattermost remains an outbound bot bridge, LINE only ships a narrow send lane plus optional inbound webhook routing, and the Zalo lanes are still limited bridge runtimes.",
+                  "Mattermost remains an outbound bot bridge, LINE only ships a narrow send lane plus optional inbound webhook routing, and Zalo OA is still a narrow outbound lane.",
                 ),
                 blocker(
                   "manual_operator",
-                  "Mattermost, LINE, Zalo OA, and Zalo Personal still need repeatable operator proof that matches their current bounds before any further maturity claims are promoted.",
+                  "Mattermost, LINE, and Zalo OA still need repeatable operator proof that matches their current bounds before any further maturity claims are promoted.",
                 ),
               ],
       });

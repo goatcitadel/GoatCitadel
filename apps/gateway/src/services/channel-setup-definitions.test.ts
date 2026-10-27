@@ -60,9 +60,9 @@ describe("channel setup definitions", () => {
         "channel.nextcloud-talk",
         "channel.line",
         "channel.zalo",
-        "channel.zalouser",
       ]),
     );
+    expect(catalogIds).not.toContain("channel.zalouser");
   });
 
   it("exposes a guided test step followed by a confirm step for every guided definition", () => {
@@ -459,7 +459,6 @@ describe("channel setup definitions", () => {
       { catalogId: "channel.signal", contentVersion: "2026.10.signal.stream.v5" },
       { catalogId: "channel.whatsapp", contentVersion: "2026.08.whatsapp.v3" },
       { catalogId: "channel.zalo", contentVersion: "2026.08.zalo.v2" },
-      { catalogId: "channel.zalouser", contentVersion: "2026.08.zalouser.v2" },
     ] as const;
 
     for (const { catalogId, contentVersion } of expectations) {
@@ -1320,28 +1319,6 @@ describe("channel setup definitions", () => {
     );
   });
 
-  it("rejects malformed Zalo User bridge drafts", () => {
-    const definition = requireChannelSetupDefinition("channel.zalouser");
-    const issues = definition.validate(
-      createDraft("channel.zalouser", {
-        baseUrl: "zca.local",
-      }),
-    );
-
-    expect(issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          fieldKey: "baseUrl",
-          failureCategory: "malformed_value",
-        }),
-        expect.objectContaining({
-          fieldKey: "defaultTarget",
-          failureCategory: "missing_input",
-        }),
-      ]),
-    );
-  });
-
   it("hydrates and normalizes the bridge and webhook tails without exposing saved secrets", () => {
     const googleChat = requireChannelSetupDefinition("channel.google-chat");
     const googleHydrated = googleChat.hydrate(
@@ -1438,38 +1415,6 @@ describe("channel setup definitions", () => {
         hydration: zaloHydrated.hydration,
       }),
     ).toEqual([]);
-
-    const zaloUser = requireChannelSetupDefinition("channel.zalouser");
-    const zaloUserHydrated = zaloUser.hydrate(
-      createConnection({
-        catalogId: "channel.zalouser",
-        key: "zalouser",
-        config: {
-          bridgeUrl: "http://127.0.0.1:56789",
-          authorizationEnv: "ZALOUSER_AUTHORIZATION",
-          profile: "work",
-          defaultTarget: "user:u-123456789",
-        },
-      }),
-    );
-    expect(zaloUserHydrated.hydration.status).toBe("opaque-secret");
-    expect(zaloUserHydrated.hydration.fieldState.authToken).toBe("configured");
-    expect(
-      zaloUser.normalize({
-        ...createDraft("channel.zalouser", { defaultTarget: "user:u-123456789" }, "edit"),
-        hydration: zaloUserHydrated.hydration,
-      }),
-    ).toEqual({
-      baseUrl: "http://127.0.0.1:56789",
-      authorizationEnv: "ZALOUSER_AUTHORIZATION",
-      defaultTarget: "user:u-123456789",
-    });
-    expect(
-      zaloUser.validate({
-        ...createDraft("channel.zalouser", { defaultTarget: "user:u-123456789" }, "edit"),
-        hydration: zaloUserHydrated.hydration,
-      }),
-    ).toEqual([]);
   });
 
   it("normalizes target arrays and legacy targets used by Slack and Telegram setup", () => {
@@ -1548,7 +1493,6 @@ describe("channel setup definitions", () => {
       "channel.imessage",
       "channel.line",
       "channel.zalo",
-      "channel.zalouser",
     ] as const;
 
     for (const catalogId of channels) {

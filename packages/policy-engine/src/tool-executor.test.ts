@@ -117,7 +117,6 @@ describe("executeTool", () => {
     delete process.env.SLACK_BOT_TOKEN;
     delete process.env.WHATSAPP_ACCESS_TOKEN;
     delete process.env.ZALO_ACCESS_TOKEN;
-    delete process.env.ZALOUSER_AUTH_TOKEN;
     await removeTestWorkspace(testWorkspaceRoot);
   });
 
@@ -6510,32 +6509,21 @@ describe("executeTool", () => {
     });
   });
 
-  it("sends channel messages through Zalo Personal zca bridge adapters", async () => {
+  it("refuses sends through a saved Zalo Personal connection before any network call", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.ZALOUSER_AUTH_TOKEN = "zlu-token";
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            messageId: "zlu-msg-123",
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-    );
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ messageId: "unexpected" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    const markFailed = vi.fn();
 
     const commsStorage = {
       integrationConnections: {
         get: vi.fn(() => ({
           connectionId: "conn-zalouser",
           key: "zalouser",
+          // Without the retired guard, `url` would let the generic webhook sender post this message.
           config: {
             baseUrl: "http://127.0.0.1:56789",
-            authTokenEnv: "ZALOUSER_AUTH_TOKEN",
-            profile: "work",
+            url: "http://127.0.0.1:56789/hook",
             defaultTarget: "group:g-987654321",
           },
         })),
@@ -6546,11 +6534,11 @@ describe("executeTool", () => {
           status: "queued",
           channelKey: input.channelKey,
           target: input.target,
-          createdAt: "2026-03-22T00:00:00.000Z",
-          updatedAt: "2026-03-22T00:00:00.000Z",
+          createdAt: "2026-10-26T00:00:00.000Z",
+          updatedAt: "2026-10-26T00:00:00.000Z",
         })),
         markSent: vi.fn(),
-        markFailed: vi.fn(),
+        markFailed,
       },
     } as unknown as Storage & AsyncStorage;
 
@@ -6559,7 +6547,7 @@ describe("executeTool", () => {
         toolName: "channel.send",
         args: {
           connectionId: "conn-zalouser",
-          message: "Zalo personal delivery complete.",
+          message: "Hello from a retired channel.",
         },
         agentId: "operator",
         sessionId: "sess-zalouser",
@@ -6574,116 +6562,10 @@ describe("executeTool", () => {
       commsStorage,
     );
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:56789/api/work/messages/text",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer zlu-token",
-        }),
-      }),
-    );
-    const zaloUserCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
-    const zaloUserBody = (zaloUserCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
-    expect(String(zaloUserBody ?? "")).toContain('"threadId":"g-987654321"');
-    expect(String(zaloUserBody ?? "")).toContain('"isGroup":true');
-    expect(String(zaloUserBody ?? "")).toContain('"message":"Zalo personal delivery complete."');
-    expect(result).toMatchObject({
-      status: "sent",
-      providerMessageId: "zlu-msg-123",
-    });
-  });
-
-  it("routes Zalo Personal image attachments to the zca media endpoint", async () => {
-    mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.ZALOUSER_AUTH_TOKEN = "zlu-token";
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            messageId: "zlu-media-123",
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const commsStorage = {
-      integrationConnections: {
-        get: vi.fn(() => ({
-          connectionId: "conn-zalouser-media",
-          key: "zalouser",
-          config: {
-            baseUrl: "http://127.0.0.1:56789",
-            authTokenEnv: "ZALOUSER_AUTH_TOKEN",
-            profile: "work",
-            defaultTarget: "user:u-123456789",
-          },
-        })),
-      },
-      commsDeliveries: {
-        createQueued: vi.fn((input: Record<string, unknown>) => ({
-          deliveryId: "delivery-zalouser-media",
-          status: "queued",
-          channelKey: input.channelKey,
-          target: input.target,
-          createdAt: "2026-03-22T00:00:00.000Z",
-          updatedAt: "2026-03-22T00:00:00.000Z",
-        })),
-        markSent: vi.fn(),
-        markFailed: vi.fn(),
-      },
-    } as unknown as Storage & AsyncStorage;
-
-    const result = await executeTool(
-      {
-        toolName: "channel.send",
-        args: {
-          connectionId: "conn-zalouser-media",
-          message: "Photo attached.",
-          attachments: [
-            {
-              url: "https://example.com/photo.png",
-              title: "Screenshot",
-              mimeType: "image/png",
-            },
-          ],
-        },
-        agentId: "operator",
-        sessionId: "sess-zalouser-media",
-      },
-      {
-        ...policyConfig,
-        sandbox: {
-          ...policyConfig.sandbox,
-          networkAllowlist: ["127.0.0.1", "example.com"],
-        },
-      },
-      commsStorage,
-    );
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:56789/api/work/messages/image",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer zlu-token",
-        }),
-      }),
-    );
-    const mediaCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
-    const mediaBody = (mediaCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
-    expect(String(mediaBody ?? "")).toContain('"threadId":"u-123456789"');
-    expect(String(mediaBody ?? "")).toContain('"isGroup":false');
-    expect(String(mediaBody ?? "")).toContain('"url":"https://example.com/photo.png"');
-    expect(String(mediaBody ?? "")).toContain('"message":"Photo attached."');
-    expect(result).toMatchObject({
-      status: "sent",
-      providerMessageId: "zlu-media-123",
-    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: "failed", deliveryStatus: "blocked" });
+    expect(String(result.error)).toMatch(/^blocked: Zalo Personal is not supported anymore/);
+    expect(markFailed).toHaveBeenCalledTimes(1);
   });
 
   it("sends channel messages through Zalo bot adapters", async () => {

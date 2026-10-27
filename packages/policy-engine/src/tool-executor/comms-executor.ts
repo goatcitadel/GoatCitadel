@@ -14,6 +14,7 @@ import {
   clampInt,
   coerceRetryAfterMs,
   describeChannelPlatformUnsupported,
+  describeRetiredChannel,
   sanitizeChannelOutboundMessage,
   summarizeGmailMessage,
 } from "@goatcitadel/contracts";
@@ -321,7 +322,11 @@ function hasCanonicalApprovalButtons(value: unknown): boolean {
   });
 }
 
-function assertIntegrationConnectionAvailable(connection: { enabled?: boolean; status?: string }): void {
+function assertIntegrationConnectionAvailable(connection: { key: string; enabled?: boolean; status?: string }): void {
+  const retiredReason = describeRetiredChannel(connection.key);
+  if (retiredReason) {
+    throw new Error(`blocked: ${retiredReason}`);
+  }
   if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
     throw new Error("blocked: Integration connection is disabled or disconnected.");
   }
@@ -552,8 +557,6 @@ async function executeCommsProviderTool(
       return whatsappSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
     case "zalo":
       return zaloSend(connectionConfig, args, allowlist, target, renderedMessage, grantAllowlist);
-    case "zalouser":
-      return zalouserSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
     default:
       break;
   }
@@ -2994,65 +2997,6 @@ async function zaloSend(
   return messageId ?? `zalo-${Date.now()}`;
 }
 
-async function zalouserSend(
-  config: Record<string, unknown>,
-  args: Record<string, unknown>,
-  allowlist: string[],
-  target: string,
-  message: string,
-  attachments: ChannelAttachment[] = [],
-  grantAllowlist?: string[],
-): Promise<string> {
-  const baseUrl = normalizeZcaBaseUrl(
-    asString(config.baseUrl) ?? asString(config.bridgeUrl) ?? asString(config.serverUrl),
-  );
-  const profile =
-    asString(args.profile) ?? asString(config.profile) ?? asString(config.accountId) ?? asString(config.account);
-  const resolvedTarget =
-    asString(args.target) ??
-    normalizeChannelTarget(target, "zalouser") ??
-    resolveDefaultChannelTarget("zalouser", config);
-  const authorization = resolveZcaAuthorizationHeader(config);
-  const outboundMessage = required(message, "Zalo User message");
-  if (!baseUrl) {
-    throw new Error("Missing Zalo User bridge URL");
-  }
-  if (!resolvedTarget) {
-    throw new Error("Missing Zalo User target");
-  }
-
-  const parsedTarget = parseZalouserTarget(resolvedTarget);
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (authorization) {
-    headers.Authorization = authorization;
-  }
-  const profilePrefix = profile ? `/api/${encodeURIComponent(profile)}` : "/api";
-  const richAttachments = attachments.filter((attachment) => Boolean(attachment.url));
-  const inlineOnlyAttachments = attachments.filter((attachment) => !attachment.url);
-  const inlineMessage = renderChannelMessage(outboundMessage, inlineOnlyAttachments);
-
-  if (richAttachments.length === 0) {
-    return zcaSendText(baseUrl, profilePrefix, headers, parsedTarget, inlineMessage, allowlist, grantAllowlist);
-  }
-
-  let lastMessageId: string | undefined;
-  let caption: string | undefined = inlineMessage.trim() ? inlineMessage : undefined;
-  for (const attachment of richAttachments) {
-    lastMessageId = await zcaSendAttachment(
-      baseUrl,
-      profilePrefix,
-      headers,
-      parsedTarget,
-      attachment,
-      caption,
-      allowlist,
-      grantAllowlist,
-    );
-    caption = undefined;
-  }
-  return lastMessageId ?? `zalouser-${Date.now()}`;
-}
-
 function parseJsonRecord(bodyText: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(bodyText) as unknown;
@@ -3118,7 +3062,6 @@ const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
   "nextcloud-talk": ["defaultRoomId", "defaultConversationId", "defaultTarget", "target"],
   line: ["defaultTarget", "defaultUserId", "defaultGroupId", "defaultRoomId", "target"],
   zalo: ["defaultRecipientId", "defaultTarget", "target"],
-  zalouser: ["defaultRecipientId", "defaultTarget", "target"],
 };
 
 type MattermostTarget =
@@ -3131,11 +3074,6 @@ type BlueBubblesTarget =
   | { kind: "chat_guid"; chatGuid: string }
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; address: string; service: "imessage" | "sms" | "auto" };
-
-type ZalouserTarget = {
-  threadId: string;
-  isGroup: boolean;
-};
 
 function normalizeLineTarget(target: string | undefined): string | undefined {
   const trimmed = asString(target);
@@ -3226,17 +3164,6 @@ function normalizeSignalTarget(target: string | undefined): string | undefined {
     return undefined;
   }
   return trimmed.replace(/^signal:/i, "").trim();
-}
-
-function normalizeZcaBaseUrl(baseUrl: string | undefined): string | undefined {
-  const trimmed = asString(baseUrl)?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed.replace(/\/+$/, "");
-  }
-  return `http://${trimmed}`.replace(/\/+$/, "");
 }
 
 function normalizeWhatsAppTarget(target: string | undefined): string | undefined {
@@ -3362,49 +3289,6 @@ function readZaloMessageId(body: Record<string, unknown>): string | undefined {
   );
 }
 
-function stripZalouserTargetPrefix(target: string): string {
-  return target
-    .trim()
-    .replace(/^(zalouser|zlu):/i, "")
-    .trim();
-}
-
-function normalizeZalouserTarget(target: string): string | undefined {
-  const trimmed = target.trim();
-  const stripped = stripZalouserTargetPrefix(trimmed);
-  if (!stripped) {
-    return undefined;
-  }
-  const lowered = stripped.toLowerCase();
-  if (lowered.startsWith("group:")) {
-    const groupId = stripped.slice("group:".length).trim();
-    return groupId ? `group:${groupId}` : undefined;
-  }
-  if (lowered.startsWith("g:")) {
-    const groupId = stripped.slice("g:".length).trim();
-    return groupId ? `group:${groupId}` : undefined;
-  }
-  if (lowered.startsWith("user:")) {
-    const userId = stripped.slice("user:".length).trim();
-    return userId ? `user:${userId}` : undefined;
-  }
-  if (lowered.startsWith("dm:")) {
-    const userId = stripped.slice("dm:".length).trim();
-    return userId ? `user:${userId}` : undefined;
-  }
-  if (lowered.startsWith("u:")) {
-    const userId = stripped.slice("u:".length).trim();
-    return userId ? `user:${userId}` : undefined;
-  }
-  if (/^g-\S+$/i.test(stripped)) {
-    return `group:${stripped}`;
-  }
-  if (/^u-\S+$/i.test(stripped)) {
-    return `user:${stripped}`;
-  }
-  return stripped;
-}
-
 function buildSignalTargetParams(target: string): Record<string, unknown> {
   const trimmed = required(target, "Signal target");
   const lowered = trimmed.toLowerCase();
@@ -3418,155 +3302,6 @@ function buildSignalTargetParams(target: string): Record<string, unknown> {
     return { username: [required(trimmed.slice("u:".length), "Signal username")] };
   }
   return { recipient: [trimmed] };
-}
-
-function parseZalouserTarget(target: string): ZalouserTarget {
-  const normalized = normalizeZalouserTarget(target);
-  if (!normalized) {
-    throw new Error("Zalo User target is required");
-  }
-  const lowered = normalized.toLowerCase();
-  if (lowered.startsWith("group:")) {
-    const threadId = required(normalized.slice("group:".length).trim(), "Zalo User group id");
-    return { threadId, isGroup: true };
-  }
-  if (lowered.startsWith("user:")) {
-    const threadId = required(normalized.slice("user:".length).trim(), "Zalo User user id");
-    return { threadId, isGroup: false };
-  }
-  return { threadId: normalized, isGroup: false };
-}
-
-function resolveZcaAuthorizationHeader(config: Record<string, unknown>): string | undefined {
-  const explicit = secretFrom(config, "authorization", "authorizationEnv")?.trim();
-  if (explicit) {
-    return explicit;
-  }
-  const bearer = secretFrom(config, "authToken", "authTokenEnv") ?? secretFrom(config, "accessToken", "accessTokenEnv");
-  if (bearer) {
-    return `Bearer ${bearer}`;
-  }
-  const basic = secretFrom(config, "basicAuth", "basicAuthEnv")?.trim();
-  if (basic) {
-    return /^Basic\s+/i.test(basic) ? basic : `Basic ${Buffer.from(basic, "utf8").toString("base64")}`;
-  }
-  return undefined;
-}
-
-function extractZcaMessageId(payload: Record<string, unknown>): string | undefined {
-  const roots: Record<string, unknown>[] = [payload];
-  for (const nested of [payload.data, payload.result, payload.message]) {
-    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
-      roots.push(nested as Record<string, unknown>);
-    }
-  }
-  for (const root of roots) {
-    for (const candidate of [root.messageId, root.message_id, root.msgId, root.msg_id, root.id]) {
-      if (typeof candidate === "string" && candidate.trim()) {
-        return candidate.trim();
-      }
-      if (typeof candidate === "number" && Number.isFinite(candidate)) {
-        return String(candidate);
-      }
-    }
-  }
-  return undefined;
-}
-
-async function zcaSendText(
-  baseUrl: string,
-  profilePrefix: string,
-  headers: Record<string, string>,
-  target: ZalouserTarget,
-  message: string,
-  allowlist: string[],
-  grantAllowlist?: string[],
-): Promise<string> {
-  const res = await fetchAllowlisted(
-    `${baseUrl}${profilePrefix}/messages/text`,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        threadId: target.threadId,
-        message,
-        isGroup: target.isGroup,
-      }),
-    },
-    allowlist,
-    undefined,
-    grantAllowlist,
-  );
-  const bodyText = await res.response.text();
-  const body = parseJsonRecord(bodyText);
-  if (!res.response.ok) {
-    const detail = asString(body.error) ?? asString(record(body.error).message) ?? bodyText.trim();
-    throw new Error(`zalouser.send failed (${res.response.status})${detail ? `: ${detail}` : ""}`);
-  }
-  return extractZcaMessageId(body) ?? `zalouser-${Date.now()}`;
-}
-
-async function zcaSendAttachment(
-  baseUrl: string,
-  profilePrefix: string,
-  headers: Record<string, string>,
-  target: ZalouserTarget,
-  attachment: ChannelAttachment,
-  caption: string | undefined,
-  allowlist: string[],
-  grantAllowlist?: string[],
-): Promise<string> {
-  const url = required(attachment.url, "Zalo User attachment URL");
-  const endpoint = classifyZcaAttachmentEndpoint(attachment);
-  const res = await fetchAllowlisted(
-    `${baseUrl}${profilePrefix}/messages/${endpoint}`,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        threadId: target.threadId,
-        url,
-        message: caption,
-        caption,
-        isGroup: target.isGroup,
-      }),
-    },
-    allowlist,
-    undefined,
-    grantAllowlist,
-  );
-  const bodyText = await res.response.text();
-  const body = parseJsonRecord(bodyText);
-  if (!res.response.ok) {
-    const detail = asString(body.error) ?? asString(record(body.error).message) ?? bodyText.trim();
-    throw new Error(`zalouser.send failed (${res.response.status})${detail ? `: ${detail}` : ""}`);
-  }
-  return extractZcaMessageId(body) ?? `zalouser-${Date.now()}`;
-}
-
-function classifyZcaAttachmentEndpoint(attachment: ChannelAttachment): "image" | "video" | "voice" | "link" {
-  const mimeType = attachment.mimeType?.trim().toLowerCase();
-  if (mimeType?.startsWith("image/")) {
-    return "image";
-  }
-  if (mimeType?.startsWith("video/")) {
-    return "video";
-  }
-  if (mimeType?.startsWith("audio/")) {
-    return "voice";
-  }
-  const url = attachment.url?.trim().toLowerCase() ?? "";
-  const pathname = url ? new URL(url).pathname.toLowerCase() : "";
-  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(pathname)) {
-    return "image";
-  }
-  if (/\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(pathname)) {
-    return "video";
-  }
-  if (/\.(mp3|wav|ogg|oga|opus|m4a|aac|flac)$/i.test(pathname)) {
-    return "voice";
-  }
-  return "link";
 }
 
 function normalizeBlueBubblesHandle(raw: string): string {

@@ -32,7 +32,6 @@ const policyAdapterPattern = [
   "covers iMessage validation and unresolved BlueBubbles chat branches",
   "sends channel messages through Nextcloud Talk bot adapters",
   "sends channel messages through LINE bot adapters using shared target keys",
-  "sends channel messages through Zalo Personal zca bridge adapters",
   "sends channel messages through Zalo bot adapters",
 ].join("|");
 

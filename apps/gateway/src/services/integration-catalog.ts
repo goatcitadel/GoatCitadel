@@ -617,36 +617,6 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       bool("enabled", "Enabled", true),
     ],
   },
-  "channel.zalouser": {
-    catalogId: "channel.zalouser",
-    title: "Zalo Personal Connection",
-    description:
-      "Configure an authenticated zca serve bridge for a personal Zalo session and default recipient target.",
-    allowAdvancedJson: true,
-    fields: [
-      text("label", "Connection Label", { defaultValue: "Zalo Personal" }),
-      url("baseUrl", "Bridge URL", {
-        placeholder: "http://127.0.0.1:56789",
-        required: true,
-      }),
-      text("authTokenEnv", "Bearer Token ENV Var", {
-        placeholder: "ZALOUSER_AUTH_TOKEN",
-        required: true,
-        secretRef: true,
-        description:
-          "Required authenticated bridge credential. Supported credential aliases remain available in advanced configuration.",
-      }),
-      text("profile", "Profile", {
-        placeholder: "work",
-        advanced: true,
-      }),
-      text("defaultTarget", "Default Recipient", {
-        placeholder: "user:u-123456789 or group:g-987654321",
-        required: true,
-      }),
-      bool("enabled", "Enabled", true),
-    ],
-  },
   "automation.webhooks": {
     catalogId: "automation.webhooks",
     title: "Webhook Connection",
@@ -1166,15 +1136,6 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "beta",
     ["token"],
     ["chat", "official-account"],
-  ),
-  entry(
-    "channel",
-    "zalouser",
-    "Zalo User",
-    "Zalo user-session bridge integration.",
-    "beta",
-    ["token"],
-    ["chat", "attachments", "direct"],
   ),
 
   // Model providers
