@@ -21,6 +21,8 @@ interface PendingRead {
   resolve: (value: Response) => void;
   reject: (reason: unknown) => void;
   cleanup: () => void;
+  /** Set while this read waits on a shared batch request, so a cancelled read can let that request go. */
+  release?: () => void;
   settled: boolean;
 }
 interface ReadQueue {
@@ -107,10 +109,17 @@ async function dispatch(queue: ReadQueue): Promise<void> {
           return;
         }
         const first = group[0]!;
+        // The batch request outlives no reader: once every read in it is cancelled (or timed out), abort it.
+        const batch = new AbortController();
+        const release = () => {
+          if (group.every((row) => row.settled))
+            batch.abort(new DOMException("Every read in this batch was cancelled", "AbortError"));
+        };
+        for (const row of group) row.release = release;
         const response = await fetch(batchUrl(queue.scope, group), {
           ...first.init,
           method: "GET",
-          signal: undefined,
+          signal: batch.signal,
           cache: "no-store",
         });
         if (response.status === 404 || response.status === 405) {
@@ -235,6 +244,7 @@ export function fetchStartupRead(
     };
     function abort() {
       row.reject(init.signal?.reason ?? new DOMException("Read cancelled", "AbortError"));
+      row.release?.();
     }
     owner.rows.push(row);
     init.signal?.addEventListener("abort", abort, { once: true });

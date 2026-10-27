@@ -65,6 +65,29 @@ it.each([404, 405])(
     ]);
   },
 );
+it("aborts a stalled batch request once every read waiting on it is cancelled", async () => {
+  const fetch = vi.fn(
+    (_url: string, requestInit?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        requestInit?.signal?.addEventListener("abort", () => reject(requestInit.signal?.reason), { once: true });
+      }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  beginStartupReadWindow(scope);
+  const callers = [new AbortController(), new AbortController()];
+  const reads = ["settings", "agents"].map((path, index) =>
+    fetchStartupRead(scope.installation + "/api/v1/" + path, init(callers[index]!.signal), scope, () => true),
+  );
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+  const batchSignal = fetch.mock.calls[0]![1]!.signal!;
+
+  callers[0]!.abort();
+  await expect(reads[0]).rejects.toMatchObject({ name: "AbortError" });
+  expect(batchSignal.aborted).toBe(false);
+  callers[1]!.abort();
+  await expect(reads[1]).rejects.toMatchObject({ name: "AbortError" });
+  expect(batchSignal.aborted).toBe(true);
+});
 it.each([401, 403])("does not retry original routes after an authorization rejection (%s)", async (status) => {
   const fetch = vi.fn().mockResolvedValue(json({ error: "Access denied" }, status));
   vi.stubGlobal("fetch", fetch);
