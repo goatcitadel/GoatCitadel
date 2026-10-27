@@ -607,3 +607,110 @@ describe("current all16 guided definitions in both shells", () => {
     }
   });
 });
+
+describe("what a channel needs and the editing note, in both shells", () => {
+  const slack = definitions.find((item) => item.catalog.catalogId === "channel.slack")!;
+  const propsFor = (definition: ChannelSetupDefinition, draft: ChannelSetupDraft) => ({
+    definition,
+    draft,
+    values: {},
+    label: draft.label ?? "",
+    enabled: true,
+    dirty: false,
+    onValuesChange: vi.fn(),
+    onLabelChange: vi.fn(),
+    onEnabledChange: vi.fn(),
+    onDirty: vi.fn(),
+    onSave: vi.fn(async () => true),
+    onValidate: vi.fn(async () => undefined),
+    onTest: vi.fn(async () => undefined),
+    onFinalize: vi.fn(async () => undefined),
+  });
+  const stepButtons = (root: ReactTestInstance) =>
+    root.findByProps({ "aria-label": "Setup steps" }).findAllByType("button");
+  const editingNotes = (root: ReactTestInstance) =>
+    root.findAll((node) => node.type === "p" && text(node).trim().startsWith("You're changing"));
+  const slackTitle = (id: string) => slack.wizard.steps.find((step) => step.id === id)!.title;
+
+  it("lists the prerequisites under 'What you need', one item each", async () => {
+    expect(slack.wizard.prerequisites.length).toBeGreaterThan(0);
+    for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+      const r = await render(<Component {...propsFor(slack, makeDraft(slack))} />);
+      const needs = r.root.findByProps({ "aria-label": "What you need" });
+      expect(text(needs.findByType("h4")).trim()).toBe("What you need");
+      expect(needs.findAllByType("li").map((item) => text(item).trim())).toEqual(slack.wizard.prerequisites);
+      r.unmount();
+    }
+  });
+  it("shows no 'What you need' list when the channel has no prerequisites", async () => {
+    // A definition without the list at all must also render, because it comes from the Gateway.
+    const noList = { ...slack.wizard, prerequisites: undefined } as unknown as ChannelSetupDefinition["wizard"];
+    for (const bare of [
+      { ...slack, wizard: { ...slack.wizard, prerequisites: [] } },
+      { ...slack, wizard: noList },
+    ] satisfies ChannelSetupDefinition[])
+      for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+        const r = await render(<Component {...propsFor(bare, makeDraft(bare))} />);
+        expect(r.root.findAllByProps({ "aria-label": "What you need" })).toHaveLength(0);
+        expect(text(r.root)).not.toContain("What you need");
+        r.unmount();
+      }
+  });
+  it("starts a new connection at its overview and says nothing about editing", async () => {
+    for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+      const r = await render(<Component {...propsFor(slack, makeDraft(slack))} />);
+      const buttons = stepButtons(r.root);
+      expect(buttons).toHaveLength(slack.wizard.steps.length);
+      expect(text(buttons[0]!)).toContain(slackTitle("overview"));
+      expect(buttons[0]!.props["aria-current"]).toBe("step");
+      expect(text(buttons[1]!)).toContain(slackTitle("prerequisites"));
+      expect(editingNotes(r.root)).toHaveLength(0);
+      expect(text(r.root)).not.toContain("You're changing");
+      r.unmount();
+    }
+  });
+  it("hides the overview and prerequisites when a saved connection is changed, and says so", async () => {
+    for (const lifecycleMode of ["edit", "repair", "rotate_secret", "retest"] as const)
+      for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+        const draft: ChannelSetupDraft = { ...makeDraft(slack), lifecycleMode, label: "" };
+        const r = await render(<Component {...propsFor(slack, draft)} />);
+        const titles = stepButtons(r.root).map((item) => text(item));
+        expect(titles).toHaveLength(slack.wizard.steps.length - 2);
+        expect(titles.some((title) => title.includes(slackTitle("overview")))).toBe(false);
+        expect(titles.some((title) => title.includes(slackTitle("prerequisites")))).toBe(false);
+        const notes = editingNotes(r.root);
+        expect(notes).toHaveLength(1);
+        expect(text(notes[0]!).trim()).toBe("You're changing Slack. The steps for setting it up are hidden.");
+        r.unmount();
+      }
+  });
+  it("names the connection by its label, and falls back to the channel when the label is blank", async () => {
+    for (const [label, name] of [
+      ["Ops workspace", "Ops workspace"],
+      ["  Ops workspace  ", "Ops workspace"],
+      ["   ", "Slack"],
+      [undefined, "Slack"],
+    ] as const)
+      for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+        const draft: ChannelSetupDraft = { ...makeDraft(slack), lifecycleMode: "edit", label };
+        const r = await render(<Component {...propsFor(slack, draft)} />);
+        expect(text(editingNotes(r.root)[0]!).trim()).toBe(
+          `You're changing ${name}. The steps for setting it up are hidden.`,
+        );
+        r.unmount();
+      }
+  });
+  it("adds no live region for the list or the editing note", async () => {
+    for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+      const draft: ChannelSetupDraft = { ...makeDraft(slack), lifecycleMode: "edit" };
+      const r = await render(<Component {...propsFor(slack, draft)} />);
+      const needs = r.root.findByProps({ "aria-label": "What you need" });
+      const [note] = editingNotes(r.root);
+      for (const node of [needs, note!, ...needs.findAll(() => true)]) {
+        expect(node.props.role).toBeUndefined();
+        expect(node.props["aria-live"]).toBeUndefined();
+      }
+      r.unmount();
+    }
+  });
+});

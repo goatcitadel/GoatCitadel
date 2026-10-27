@@ -4,10 +4,8 @@ import { ExtensionConfigurationGuidance } from "../../../../cockpit/areas/settin
 import { ChannelWizardFields } from "./ChannelWizardFieldCollection";
 import { ChannelCheckFeedback } from "./ChannelCheckFeedback";
 import { ChannelDraftEvidencePanel } from "./ChannelDraftEvidencePanel";
-import type {
-  ChannelSetupRichBlock,
-  ChannelSetupStepDefinition,
-} from "@goatcitadel/contracts";
+import { ChannelEditingNote, ChannelNeeds } from "./ChannelNeeds";
+import type { ChannelSetupRichBlock, ChannelSetupStepDefinition } from "@goatcitadel/contracts";
 import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileJson2, Play, Save, ShieldCheck } from "lucide-react";
 import { NativeButton } from "../../primitives";
 import { SettingsButtonRow } from "../SettingsShared";
@@ -65,7 +63,17 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
     handleFinalize,
     moveForward,
   } = useChannelWizard(props);
-  const testSignature = JSON.stringify([props.scopeId, props.definition.catalog.catalogId, props.draft.draftId, props.draft.revision, props.values, advancedMode, advancedJson, props.label, props.enabled]);
+  const testSignature = JSON.stringify([
+    props.scopeId,
+    props.definition.catalog.catalogId,
+    props.draft.draftId,
+    props.draft.revision,
+    props.values,
+    advancedMode,
+    advancedJson,
+    props.label,
+    props.enabled,
+  ]);
   if (!activeStep) {
     return <p className="mc-next-settings-field-note">This channel definition has no setup steps.</p>;
   }
@@ -96,34 +104,36 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
             <dd className={dirty ? "dirty" : "saved"}>{dirty ? "Unsaved changes" : "Saved"}</dd>
           </div>
         </dl>
+        <ChannelNeeds className="col-span-full" items={definition.wizard.prerequisites} />
+        <ChannelEditingNote className="col-span-full" definition={definition} draft={draft} />
       </header>
 
       <details open={definition.wizard.manualModePolicy === "expert-forward" || advancedMode}>
-      <summary>Advanced setup options</summary>
-      <div className="mc-next-channel-wizard-mode" role="group" aria-label="Setup editor mode">
-        <NativeButton
-          variant={advancedMode ? "secondary" : "outline"}
-          aria-pressed={!advancedMode}
-          onClick={switchToGuidedMode}
-          disabled={anyBusy}
-        >
-          <CheckCircle2 size={16} />
-          Guided setup
-        </NativeButton>
-        <NativeButton
-          variant={advancedMode ? "outline" : "secondary"}
-          aria-pressed={advancedMode}
-          onClick={() => {
-            setAdvancedJson(formatJson(values));
-            setAdvancedMode(true);
-            setLocalError(null);
-          }}
-          disabled={anyBusy}
-        >
-          <FileJson2 size={16} />
-          Advanced JSON
-        </NativeButton>
-      </div>
+        <summary>Advanced setup options</summary>
+        <div className="mc-next-channel-wizard-mode" role="group" aria-label="Setup editor mode">
+          <NativeButton
+            variant={advancedMode ? "secondary" : "outline"}
+            aria-pressed={!advancedMode}
+            onClick={switchToGuidedMode}
+            disabled={anyBusy}
+          >
+            <CheckCircle2 size={16} />
+            Guided setup
+          </NativeButton>
+          <NativeButton
+            variant={advancedMode ? "outline" : "secondary"}
+            aria-pressed={advancedMode}
+            onClick={() => {
+              setAdvancedJson(formatJson(values));
+              setAdvancedMode(true);
+              setLocalError(null);
+            }}
+            disabled={anyBusy}
+          >
+            <FileJson2 size={16} />
+            Advanced JSON
+          </NativeButton>
+        </div>
       </details>
 
       <ExtensionConfigurationGuidance guidance={definition.configurationGuidance} />
@@ -237,11 +247,19 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
               values={wizardValuesWithDefaults(definition, values)}
               issues={feedback?.issues ?? []}
               disabled={anyBusy}
-              onChange={(next) => { onValuesChange(next); setLocalError(null); }}
+              onChange={(next) => {
+                onValuesChange(next);
+                setLocalError(null);
+              }}
             />
             <Troubleshooting step={activeStep} />
             <SuccessCriteria items={activeStep.successCriteria} />
-            <ChannelCheckFeedback feedback={feedback} error={localError} disabled={actionsBlocked} onAcknowledge={props.onAcknowledgeTest} />
+            <ChannelCheckFeedback
+              feedback={feedback}
+              error={localError}
+              disabled={actionsBlocked}
+              onAcknowledge={props.onAcknowledgeTest}
+            />
 
             <footer className="mc-next-channel-wizard-footer">
               <NativeButton
@@ -253,18 +271,18 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
                 Back
               </NativeButton>
               <SettingsButtonRow>
-                {activeStep.stage === "identity" || activeStep.stage === "destinations_access" || activeStep.kind === "field-collection" ? supplementaryActions : null}
+                {activeStep.stage === "identity" ||
+                activeStep.stage === "destinations_access" ||
+                activeStep.kind === "field-collection"
+                  ? supplementaryActions
+                  : null}
                 <NativeButton variant="secondary" disabled={actionsBlocked} onClick={() => void handleSave()}>
                   <Save size={16} />
                   {busyAction === "save" ? "Saving…" : "Save draft"}
                 </NativeButton>
                 {activeStep.kind === "test" ? (
                   <>
-                    <NativeButton
-                      variant="secondary"
-                      disabled={actionsBlocked}
-                      onClick={() => void handleValidate()}
-                    >
+                    <NativeButton variant="secondary" disabled={actionsBlocked} onClick={() => void handleValidate()}>
                       <ShieldCheck size={16} />
                       {busyAction === "validate" ? "Validating…" : "Validate"}
                     </NativeButton>
@@ -281,9 +299,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
                 {activeStep.kind === "confirm" ? (
                   <NativeButton
                     variant="default"
-                    disabled={
-                      actionsBlocked || Boolean(finalizeDisabledReason(dirty, feedback))
-                    }
+                    disabled={actionsBlocked || Boolean(finalizeDisabledReason(dirty, feedback))}
                     title={finalizeDisabledReason(dirty, feedback)}
                     onClick={() => void handleFinalize()}
                   >
@@ -301,14 +317,34 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
           </article>
         </div>
       )}
-      <ChannelDraftEvidencePanel evidence={props.draftEvidence} loading={props.draftEvidenceLoading} error={props.draftEvidenceError} />
-      <Dialog open={reviewTest !== null} title="Run a live channel test?"
+      <ChannelDraftEvidencePanel
+        evidence={props.draftEvidence}
+        loading={props.draftEvidenceLoading}
+        error={props.draftEvidenceError}
+      />
+      <Dialog
+        open={reviewTest !== null}
+        title="Run a live channel test?"
         description="Review this draft and destination. The Gateway may post a visible sandbox message; this action does not activate the connection."
-        onOpenChange={(open) => { if (!open) setReviewTest(null); }}>
-        <p>{definition.catalog.label} · {label || "Unnamed draft"} · revision {draft.revision}</p>
-        {reviewTest !== testSignature ? <p role="alert">The reviewed input changed. Close and review the current draft.</p> : null}
-        <NativeButton disabled={actionsBlocked || reviewTest !== testSignature}
-          onClick={() => { setReviewTest(null); void handleTest(); }}>Run reviewed live test</NativeButton>
+        onOpenChange={(open) => {
+          if (!open) setReviewTest(null);
+        }}
+      >
+        <p>
+          {definition.catalog.label} · {label || "Unnamed draft"} · revision {draft.revision}
+        </p>
+        {reviewTest !== testSignature ? (
+          <p role="alert">The reviewed input changed. Close and review the current draft.</p>
+        ) : null}
+        <NativeButton
+          disabled={actionsBlocked || reviewTest !== testSignature}
+          onClick={() => {
+            setReviewTest(null);
+            void handleTest();
+          }}
+        >
+          Run reviewed live test
+        </NativeButton>
         <NativeButton onClick={() => setReviewTest(null)}>Cancel test</NativeButton>
       </Dialog>
     </section>
@@ -367,7 +403,12 @@ function AdvancedJsonEditor({
           spellCheck={false}
         />
       </label>
-      <ChannelCheckFeedback feedback={feedback} error={localError} disabled={disabled || reviewRequired || mutationBlocked} onAcknowledge={onAcknowledgeTest} />
+      <ChannelCheckFeedback
+        feedback={feedback}
+        error={localError}
+        disabled={disabled || reviewRequired || mutationBlocked}
+        onAcknowledge={onAcknowledgeTest}
+      />
       <SettingsButtonRow>
         <NativeButton variant="secondary" disabled={disabled || reviewRequired || mutationBlocked} onClick={onSave}>
           <Save size={16} />

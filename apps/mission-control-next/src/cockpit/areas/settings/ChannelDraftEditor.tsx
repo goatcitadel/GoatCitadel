@@ -10,6 +10,7 @@ import { useChannelWizard } from "../../../features/native-routes/settings/chann
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { ChannelDraftEvidencePanel } from "../../../features/native-routes/settings/channel-setup/ChannelDraftEvidencePanel";
+import { ChannelEditingNote, ChannelNeeds } from "../../../features/native-routes/settings/channel-setup/ChannelNeeds";
 import { ChannelWizardFields, channelInputClass } from "./ChannelWizardFields";
 import { ChannelFeedback, ChannelRichBlocks, ChannelStepHelp } from "./ChannelWizardContent";
 import { ExtensionConfigurationGuidance } from "./ExtensionConfigurationGuidance";
@@ -40,6 +41,8 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
           {props.definition.wizard.difficulty} · about {props.definition.wizard.estimatedMinutes} minutes · draft
           version {props.draft.revision} · {props.dirty ? "Unsaved input" : "Saved draft"}
         </p>
+        <ChannelNeeds className="mt-3" items={props.definition.wizard.prerequisites} />
+        <ChannelEditingNote className="mt-3" definition={props.definition} draft={props.draft} />
       </header>
       <label className="block text-sm">
         Connection label
