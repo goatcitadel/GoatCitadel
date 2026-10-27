@@ -1,5 +1,5 @@
 import { assertMcpAdmissionToolAllowed } from "./mcp-admission-tool-policy-guard.js";
-import { resolveMcpApprovalRelief } from "./mcp-approval-relief.js";
+import { resolveMcpToolPolicyOptions, type McpApprovalReliefPort } from "./mcp-approval-relief.js";
 import { buildChatRuntimeSkillReceipts } from "./chat-skill-selection-runtime.js";
 import { executeApprovedIntegrationDryRunCommit } from "./approved-integration-dry-run-owner.js";
 import { commitProviderSecretGeneration } from "./provider-secret-generation-owner.js";
@@ -81,7 +81,6 @@ import {
   type LocalEmbeddingLeaseRequest,
   type McpToolPolicyBinding,
   type MeshToolPolicyBinding,
-  type ToolPolicyEvaluateOptions,
 } from "@goatcitadel/policy-engine";
 import { listSkillExportTargets, renderSkillExportPreview, SkillsService } from "@goatcitadel/skills";
 import {
@@ -2787,9 +2786,7 @@ export class GatewayService {
       scheduleApprovalExplanationById: async (approvalId) => await this.scheduleApprovalExplanationById(approvalId),
       publishRealtime: async (eventType, source, payload, options) =>
         await this.publishRealtime(eventType, source, payload, options),
-      getDeploymentProfile: () => this.config.assistant.deploymentProfile,
-      requireMcpServer: (serverId) => this.requireMcpServer(serverId),
-      listMcpTools: (serverId) => this.listMcpTools(serverId),
+      ...this.mcpApprovalReliefPort(),
       matchesWildcard: (value, pattern) => wildcardMatch(value, pattern),
       isMcpToolApproved: (serverId, toolName) => this.isMcpToolApproved(serverId, toolName),
       invokeMcpRuntimeTool: async (server, input) => {
@@ -9602,40 +9599,29 @@ export class GatewayService {
     const request = await this.prepareToolAccessEvaluation(input);
     const mesh = await resolveMeshChatToolBinding(this.meshChatBindingDeps(), request, options.meshTurnContext);
     if (mesh) return this.policyEngine.evaluateAccess(request, { meshToolBinding: mesh.schema.policyBinding });
-    const binding = await resolveNativeMcpChatToolBinding(
-      this.storage,
-      request,
-      options.mcpRequesterTurnContext,
-      (handle) => this.restoreNativeAdmissionSchemas(handle),
-    );
-    const mcpOptions = await this.resolveMcpPolicyOptions(request, binding?.policyBinding);
-    return mcpOptions
-      ? this.policyEngine.evaluateAccess(request, mcpOptions)
-      : this.policyEngine.evaluateAccess(request);
+    return this.probeNativeMcpToolAccess("evaluateAccess", request, options.mcpRequesterTurnContext);
   }
 
-  /**
-   * The MCP mapping plus any server-authored approval relief, so advisory probes report the same
-   * decision the canonical invocation will make. Undefined when the request is not an MCP call.
-   */
-  private async resolveMcpPolicyOptions(
-    request: ToolAccessEvaluateRequest,
-    mcpToolBinding: McpToolPolicyBinding | undefined,
-  ): Promise<ToolPolicyEvaluateOptions | undefined> {
-    const mcpApprovalRelief = await resolveMcpApprovalRelief(
-      {
-        getDeploymentProfile: () => this.config.assistant.deploymentProfile,
-        requireMcpServer: (serverId) => this.requireMcpServer(serverId),
-        listMcpTools: (serverId) => this.listMcpTools(serverId),
-      },
-      request,
-      mcpToolBinding,
-    );
-    if (!mcpToolBinding && !mcpApprovalRelief) return undefined;
+  /** The server-owned state MCP approval relief reads; shared with the tool invocation coordinator. */
+  private mcpApprovalReliefPort(): McpApprovalReliefPort {
     return {
-      ...(mcpToolBinding ? { mcpToolBinding } : {}),
-      ...(mcpApprovalRelief ? { mcpApprovalRelief } : {}),
+      getDeploymentProfile: () => this.config.assistant.deploymentProfile,
+      requireMcpServer: (serverId) => this.requireMcpServer(serverId),
+      listMcpTools: (serverId) => this.listMcpTools(serverId),
     };
+  }
+
+  /** The native MCP Chat path both access probes share: its binding plus any server-authored approval relief. */
+  private async probeNativeMcpToolAccess(
+    probe: "evaluateAccess" | "inspectAccess",
+    request: ToolAccessEvaluateRequest,
+    turnContext: ToolInvocationRuntimeOptions["mcpRequesterTurnContext"],
+  ): Promise<ToolAccessEvaluateResponse> {
+    const binding = await resolveNativeMcpChatToolBinding(this.storage, request, turnContext, (handle) =>
+      this.restoreNativeAdmissionSchemas(handle),
+    );
+    const mcpOptions = await resolveMcpToolPolicyOptions(this.mcpApprovalReliefPort(), request, binding?.policyBinding);
+    return mcpOptions ? this.policyEngine[probe](request, mcpOptions) : this.policyEngine[probe](request);
   }
 
   /**
@@ -9663,19 +9649,12 @@ export class GatewayService {
     if (options.mcpCatalogPolicyBinding) {
       return this.policyEngine.inspectAccess(
         request,
-        await this.resolveMcpPolicyOptions(request, options.mcpCatalogPolicyBinding),
+        await resolveMcpToolPolicyOptions(this.mcpApprovalReliefPort(), request, options.mcpCatalogPolicyBinding),
       );
     }
     const mesh = await resolveMeshChatToolBinding(this.meshChatBindingDeps(), request, options.meshTurnContext);
     if (mesh) return this.policyEngine.inspectAccess(request, { meshToolBinding: mesh.schema.policyBinding });
-    const binding = await resolveNativeMcpChatToolBinding(
-      this.storage,
-      request,
-      options.mcpRequesterTurnContext,
-      (handle) => this.restoreNativeAdmissionSchemas(handle),
-    );
-    const mcpOptions = await this.resolveMcpPolicyOptions(request, binding?.policyBinding);
-    return mcpOptions ? this.policyEngine.inspectAccess(request, mcpOptions) : this.policyEngine.inspectAccess(request);
+    return this.probeNativeMcpToolAccess("inspectAccess", request, options.mcpRequesterTurnContext);
   }
 
   private async prepareToolAccessEvaluation(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateRequest> {

@@ -87,6 +87,17 @@ the October 23 **24/0** precedent for `web-search-credential-service.ts`. Every
 original baseline-owner limit remains unchanged; this does not permit future growth
 above this cap.
 
+Additional operator clarification, October 26: resolve the architecture regressions
+that #572, #583 and #601 left on `main`. `chat-stream-runtime.ts` (#583) reads
+storage once in each live-tail function it changed, and `GatewayService` (#601)
+returns within its original line limit by sharing one approval-relief port and one
+native MCP probe path. Record the dependency/host caps of **1/0** for
+`evolution-control-plane-operator-approval-skip.ts`, the Settings approval-skip owner
+added in #572, and **3/0** for `mcp-approval-relief.ts`, the MCP approval-relief
+owner added in #601, as explicit C0 gate-reconciliation scope exceptions. Every
+original baseline-owner limit remains unchanged; this does not permit future growth
+above these caps.
+
 ### 2. Simplify onboarding through the first useful response
 
 Use the existing guided setup and Change Plans to provide one continuous flow:
