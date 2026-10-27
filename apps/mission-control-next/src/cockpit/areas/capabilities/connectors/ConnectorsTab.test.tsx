@@ -162,14 +162,15 @@ describe("Connectors tab", () => {
     expect(linear.querySelector("button")?.textContent).toBe("Try again");
     const notion = [...container.querySelectorAll("li")].find((row) => row.textContent?.includes("Notion"))!;
     expect(notion.textContent).toContain("MCP");
-    expect(notion.querySelector("button")?.textContent).toBe("Set up");
+    expect(notion.querySelector("button")?.textContent).toBe("Install");
+    expect(notion.querySelector("button")?.getAttribute("aria-label")).toBe("Install Notion");
   });
 
   it("opens the row's panel from its button by moving the address to that item", async () => {
     api.fetchCapabilityConnectors.mockResolvedValue(response([SLACK, NOTION]));
     await render();
     await vi.waitFor(() => expect(text()).toContain("Notion"));
-    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Set up Notion"]')?.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Install Notion"]')?.click());
     expect(route.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/connectors?item=mcp-template%3Anotion");
   });
 

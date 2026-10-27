@@ -253,12 +253,19 @@ export function describeConnection(item: CapabilityConnectorItem): ConnectionDes
   }
 }
 
-export type ConnectorActionKind = "install" | "set_up" | "reconnect" | "try_again" | "turn_back_on" | "manage";
+export type ConnectorActionKind =
+  | "install"
+  | "set_up"
+  | "connect"
+  | "reconnect"
+  | "try_again"
+  | "turn_back_on"
+  | "manage";
 
 /**
- * The one button on a row. Every action opens the row's panel; "install" is in the union for the install flow, which
- * does not return it yet. A row that still needs its sign-in is set up the same way a new one is, because the reason
- * line beside the button already says "Sign in to finish setup".
+ * The one button on a row. Every action opens the row's panel, where the action itself runs. Only an MCP template that
+ * isn't installed yet offers Install: one that needs an API key or a sign-in setup is set up in Settings, and other
+ * available rows (services, web search keys) have no install of their own.
  */
 export function connectorAction(item: CapabilityConnectorItem): { kind: ConnectorActionKind; label: string } {
   switch (item.state) {
@@ -268,11 +275,14 @@ export function connectorAction(item: CapabilityConnectorItem): { kind: Connecto
       return { kind: "try_again", label: "Try again" };
     case "sign_in_expired":
       return { kind: "reconnect", label: "Reconnect" };
+    case "needs_sign_in":
+      return { kind: "connect", label: "Connect" };
     case "turned_off":
       return { kind: "turn_back_on", label: "Turn back on" };
-    case "needs_sign_in":
     case "available":
-      return { kind: "set_up", label: "Set up" };
+      return item.source === "mcp_template" && item.reason === "not_installed"
+        ? { kind: "install", label: "Install" }
+        : { kind: "set_up", label: "Set up" };
   }
 }
 

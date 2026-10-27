@@ -26,9 +26,12 @@ interface Failure {
  */
 export function ConnectorServerControls({
   item,
+  panelId = item.id,
   onRemoved,
 }: {
   item: CapabilityConnectorItem;
+  /** The connector the panel was opened for: the template, when the panel shows the server installed from it. */
+  panelId?: string;
   /** Called once the server is gone, before the panel closes. */
   onRemoved?: () => void;
 }) {
@@ -72,7 +75,7 @@ export function ConnectorServerControls({
     const listKey = queryKeys.capabilityConnectors(workspaceId);
     onRemoved?.();
     // The panel is about a server that no longer exists.
-    inspector.closeIfOpen(connectorPanelSource(item.id));
+    inspector.closeIfOpen(connectorPanelSource(panelId));
     client.setQueryData<CapabilityConnectorsResponse>(listKey, (list) =>
       list ? { ...list, items: list.items.filter((row) => row.id !== item.id) } : list,
     );

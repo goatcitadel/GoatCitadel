@@ -391,15 +391,34 @@ describe("connectorSearchSuggestion", () => {
 
 describe("connectorAction", () => {
   it.each<[CapabilityConnectorState, CapabilityConnectorReason, string, string]>([
-    ["available", "not_installed", "set_up", "Set up"],
+    ["available", "not_installed", "install", "Install"],
     ["available", "needs_api_key", "set_up", "Set up"],
-    ["needs_sign_in", "sign_in_needed", "set_up", "Set up"],
+    ["available", "missing_sign_in_setup", "set_up", "Set up"],
+    ["needs_sign_in", "sign_in_needed", "connect", "Connect"],
     ["broken", "error", "try_again", "Try again"],
     ["sign_in_expired", "sign_in_expired", "reconnect", "Reconnect"],
     ["turned_off", "turned_off", "turn_back_on", "Turn back on"],
     ["connected", "ready", "manage", "Manage"],
   ])("offers an action for %s (%s): %s", (state, reason, kind, label) => {
     expect(connectorAction(item({ state, reason }))).toEqual({ kind, label });
+  });
+
+  it.each<[string, Partial<CapabilityConnectorItem>]>([
+    ["a service from the catalog", { id: "integration:automation.notion", source: "integration", kind: "built_in" }],
+    ["a web search key", { id: "web-search:search.brave", source: "web_search", reason: "needs_api_key" }],
+  ])("keeps Set up for %s that has no install", (_label, overrides) => {
+    expect(connectorAction(item({ reason: "not_installed", ...overrides }))).toEqual({
+      kind: "set_up",
+      label: "Set up",
+    });
+  });
+
+  it("asks a saved server that still needs its sign-in to connect", () => {
+    const saved = item({ id: "mcp-server:linear", source: "mcp_server", serverId: "linear" });
+    expect(connectorAction({ ...saved, state: "needs_sign_in", reason: "sign_in_needed" })).toEqual({
+      kind: "connect",
+      label: "Connect",
+    });
   });
 });
 
