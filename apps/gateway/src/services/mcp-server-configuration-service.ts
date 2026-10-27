@@ -86,21 +86,22 @@ export async function writeMcpServerConfiguration(
         delete saved.configurationBindingId;
         const changed = !previous || !sameConfiguration(previous, server);
         const edited = changed || review?.serverId === server.serverId;
-        // A change to only what asks first takes a new revision but not a new connection: nothing about how the
-        // server connects moved. A server mid-connection is still fenced, or its late result would be refused
-        // against the pre-edit record and leave it stuck connecting.
-        const keepsConnection =
-          previous !== undefined && previous.status !== "connecting" && onlyApprovalPostureChanged(previous, server);
+        // A change to only what asks first takes a new revision but keeps the configuration binding, so first-tool
+        // approvals stay: nothing about how the server connects moved. It keeps the connection too, unless the
+        // server is mid-connection. That attempt holds the pre-edit record, so its late result would be refused and
+        // the server would stay stuck connecting; it is disconnected and fenced instead, as a no-op reviewed edit is.
+        const postureOnly = previous !== undefined && onlyApprovalPostureChanged(previous, server);
+        const keepsConnection = postureOnly && previous.status !== "connecting";
         saved.revision = edited || !previous?.revision ? newMcpServerRevision() : previous.revision;
         saved.connectionRevision = previous?.connectionRevision;
         if (resolveMcpServerConnectionMode(saved) === "static") {
           saved.configurationBindingId =
-            previous && (keepsConnection || sameConfiguration(previous, server))
+            previous && (postureOnly || sameConfiguration(previous, server))
               ? (previous.configurationBindingId ?? randomUUID())
               : randomUUID();
         }
-        // Untouched servers keep concurrent runtime updates. An edited configuration
-        // starts disconnected and fences every outstanding discovery attempt.
+        // Untouched servers keep concurrent runtime updates, and so does one that keeps its connection (above).
+        // Any other edit starts disconnected and fences every outstanding discovery attempt.
         if (previous) {
           const disconnects = edited && !keepsConnection;
           saved.status = disconnects ? "disconnected" : previous.status;

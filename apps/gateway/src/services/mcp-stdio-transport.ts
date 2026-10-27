@@ -156,6 +156,9 @@ export async function withStdioMcpClient<T>(
 ): Promise<T> {
   options = await prepareStaticEnvironment(server, options);
   if (session) {
+    // What asks first is decided per call before dispatch and never reaches the child, so changing it must not
+    // replace a live session.
+    const { approvalPosture: _approvalPosture, ...sessionPolicy } = server.policy;
     // Hash effective spawn environment without retaining credentials in the key.
     const binding = createHash("sha256")
       .update(
@@ -163,7 +166,7 @@ export async function withStdioMcpClient<T>(
           command: server.command,
           args: server.args,
           env: buildMcpChildEnv(server, options),
-          policy: server.policy,
+          policy: sessionPolicy,
           trustTier: server.trustTier,
           cwd: process.cwd(),
           timeoutMs,
