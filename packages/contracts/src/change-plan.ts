@@ -68,7 +68,8 @@ export const CHANGE_PLAN_PHASES = [
 
 export type ChangePlanPhase = (typeof CHANGE_PLAN_PHASES)[number];
 export type ChangePlanRisk = "safe" | "caution" | "danger";
-export type ChangePlanOriginSurface = "chat" | "settings" | "system";
+/** `capabilities` plans are the operator's own Capabilities installs; only a server-owned Capabilities route starts one. */
+export type ChangePlanOriginSurface = "chat" | "settings" | "system" | "capabilities";
 
 export type ChangePlanScope =
   | "current_chat"

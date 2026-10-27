@@ -140,6 +140,32 @@ it("widens the origin surface and plan kind while preserving plans, events, link
   }
 });
 
+it("reads a Capabilities-origin plan back through the repository", () => {
+  const db = tempDbs.open({ dbPath: tempDbs.path("goatcitadel-capabilities-plan") });
+  const repo = new ChangePlanRepository(db);
+  const created = repo.create({
+    origin: { surface: "capabilities", workspaceId: "default", actorId: "operator" },
+    request: { kind: "runtime_configuration", change: { operation: "budget_mode", mode: "balanced" } },
+    adapter: { adapterId: "runtime-configuration", version: 1 },
+    target: { ownerId: "runtime_settings", resourceId: "budget_mode" },
+    title: "Install review",
+    summary: "Capabilities save",
+    impact: "Runtime setting",
+    risk: "caution",
+    status: "awaiting_confirmation",
+    requiredAction: {
+      kind: "confirmation",
+      actionId: "install-action",
+      actionNonce: "capabilities-review-nonce",
+      title: "Confirm",
+      confirmationText: "Confirm the install",
+    },
+  });
+
+  assert.equal(created.origin.surface, "capabilities");
+  assert.deepEqual(repo.get(created.planId), created);
+});
+
 it("lets a migrated database store a Capabilities connector install plan", () => {
   const db = tempDbs.open({ dbPath: tempDbs.path("goatcitadel-connector-install-plan") });
   const original = createSettingsPlan(new ChangePlanRepository(db));

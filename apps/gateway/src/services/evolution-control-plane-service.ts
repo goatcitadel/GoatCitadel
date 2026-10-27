@@ -48,7 +48,7 @@ export interface EvolutionControlPlaneRepositoryPort {
 export interface EvolutionControlPlaneActor {
   readonly workspaceId: string;
   readonly actorId: string;
-  readonly surface: "chat" | "settings" | "system";
+  readonly surface: ChangePlanOrigin["surface"];
   readonly sessionId?: string;
   readonly turnId?: string;
   readonly requestId?: string;

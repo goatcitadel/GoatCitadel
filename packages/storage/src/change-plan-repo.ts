@@ -185,7 +185,16 @@ const TRANSITIONS: Readonly<Record<ChangePlanStatus, readonly ChangePlanStatus[]
   applying: ["verifying", "monitoring", "completed", "applied", "manual_required", "failed", "rolling_back"],
   verifying: ["monitoring", "completed", "applied", "manual_required", "failed", "rolling_back"],
   // Reconciliation can refresh owner evidence while child actions remain pending.
-  monitoring: ["monitoring", "completed", "applied", "manual_required", "failed", "rolling_back", "rolled_back", "rollback_failed"],
+  monitoring: [
+    "monitoring",
+    "completed",
+    "applied",
+    "manual_required",
+    "failed",
+    "rolling_back",
+    "rolled_back",
+    "rollback_failed",
+  ],
   completed: ["awaiting_confirmation", "rolling_back"],
   applied: ["awaiting_confirmation", "rolling_back"],
   manual_required: ["awaiting_confirmation", "rolling_back"],
@@ -242,10 +251,14 @@ export class ChangePlanRepository {
       ORDER BY updated_at ASC, plan_id ASC
       LIMIT @limit
     `);
-    const approvalKind = db.dialect === "postgres"
-      ? "required_action_json::jsonb ->> 'kind'" : "json_extract(required_action_json, '$.kind')";
-    const approvalId = db.dialect === "postgres"
-      ? "required_action_json::jsonb ->> 'approvalId'" : "json_extract(required_action_json, '$.approvalId')";
+    const approvalKind =
+      db.dialect === "postgres"
+        ? "required_action_json::jsonb ->> 'kind'"
+        : "json_extract(required_action_json, '$.kind')";
+    const approvalId =
+      db.dialect === "postgres"
+        ? "required_action_json::jsonb ->> 'approvalId'"
+        : "json_extract(required_action_json, '$.approvalId')";
     this.listAwaitingApprovalStmt = db.prepare(`
       SELECT * FROM change_plans
       WHERE status = 'awaiting_approval' AND active_target_key IS NOT NULL
@@ -539,8 +552,12 @@ export class ChangePlanRepository {
 
   /** Current canonical action binding, not historical approval links or payload inference. */
   public listAwaitingApproval(approvalId: string, limit = 100): ChangePlanRecord[] {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new TypeError("Approval wait limit must be between 1 and 500.");
-    const rows = this.listAwaitingApprovalStmt.all({ approvalId: identifier(approvalId, "approvalId"), limit }) as unknown as ChangePlanRow[];
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500)
+      throw new TypeError("Approval wait limit must be between 1 and 500.");
+    const rows = this.listAwaitingApprovalStmt.all({
+      approvalId: identifier(approvalId, "approvalId"),
+      limit,
+    }) as unknown as ChangePlanRow[];
     return rows.map(mapRow);
   }
 
@@ -558,8 +575,11 @@ export class ChangePlanRepository {
         throw new TypeError("Change Plan result is not a bounded secret-free shape.");
       }
       const checkpoint = current.result?.providerProfileCheckpoint;
-      if (input.result?.providerProfileCheckpoint && checkpoint
-        && canonicalJsonString(input.result.providerProfileCheckpoint) !== canonicalJsonString(checkpoint)) {
+      if (
+        input.result?.providerProfileCheckpoint &&
+        checkpoint &&
+        canonicalJsonString(input.result.providerProfileCheckpoint) !== canonicalJsonString(checkpoint)
+      ) {
         throw conflict("The committed provider profile checkpoint cannot change.", current);
       }
       if (input.result?.providerProfileCheckpoint && !checkpoint && !isProviderProfileInputCheckpoint(current, input)) {
@@ -722,7 +742,8 @@ function validateCreateInput(input: ChangePlanRepositoryCreateInput): void {
   validateReferences(input.evidenceRefs);
   validateReferences(input.rollbackRefs);
   if (input.result && !isChangePlanResult(input.result)) throw new TypeError("Change Plan result is invalid.");
-  if (input.result?.providerProfileCheckpoint) throw new TypeError("A new plan cannot claim an already committed provider profile.");
+  if (input.result?.providerProfileCheckpoint)
+    throw new TypeError("A new plan cannot claim an already committed provider profile.");
 }
 
 function validateTransitionTarget(current: ChangePlanTargetRef, next: ChangePlanTargetRef): void {
@@ -973,7 +994,7 @@ function requireRisk(value: string): ChangePlanRisk {
 }
 
 function requireOriginSurface(value: string): ChangePlanOrigin["surface"] {
-  if (value !== "chat" && value !== "settings" && value !== "system")
+  if (value !== "chat" && value !== "settings" && value !== "system" && value !== "capabilities")
     throw new TypeError("Stored Change Plan origin is invalid.");
   return value;
 }

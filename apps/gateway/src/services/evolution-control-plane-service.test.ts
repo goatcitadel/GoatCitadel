@@ -632,8 +632,9 @@ describe("EvolutionControlPlaneService", () => {
     },
   );
 
-  describe("operator Settings approval skip", () => {
+  describe("operator Settings and Capabilities approval skip", () => {
     const settingsActor = { workspaceId: "default", actorId: "operator-1", surface: "settings" as const };
+    const capabilitiesActor = { workspaceId: "default", actorId: "operator-1", surface: "capabilities" as const };
     const flagRequest: ChangePlanRuntimeConfigurationRequest = {
       kind: "runtime_configuration",
       change: { operation: "feature_flag", flag: "codeModeV1Enabled", enabled: true },
@@ -714,6 +715,88 @@ describe("EvolutionControlPlaneService", () => {
       });
 
       expect(waiting.status).toBe("awaiting_approval");
+      expect(adapter.applyCount).toBe(0);
+      expect(allowsOperatorApprovalSkip).not.toHaveBeenCalled();
+    });
+
+    it("skips approval for a Capabilities operator save when the setting is on", async () => {
+      const allowsOperatorApprovalSkip = vi.fn(async () => true);
+      const { service, adapter, createApproval, sync } = fixture("confirmation", { allowsOperatorApprovalSkip });
+      const plan = await service.create({ actor: capabilitiesActor, request: flagRequest });
+      expect(plan.origin.surface).toBe("capabilities");
+
+      const settled = await service.confirm(
+        capabilitiesActor,
+        plan.planId,
+        plan.revision,
+        plan.requiredAction!.actionNonce,
+        { operatorSettingsSave: true },
+      );
+
+      expect(settled.status).toBe("completed");
+      expect(createApproval).not.toHaveBeenCalled();
+      expect(adapter.applyCount).toBe(1);
+      expect(sync.listEvents(plan.planId)).toContainEqual(
+        expect.objectContaining({
+          eventType: "operator_approval_skipped",
+          actorId: "operator-1",
+          payload: { risk: "caution", reason: "settings_approval_skip_enabled" },
+        }),
+      );
+    });
+
+    it("waits in Inbox for a Capabilities save when the setting is off", async () => {
+      const { service, adapter, createApproval } = fixture("confirmation", {
+        allowsOperatorApprovalSkip: async () => false,
+      });
+      const plan = await service.create({ actor: capabilitiesActor, request: flagRequest });
+
+      const waiting = await service.confirm(
+        capabilitiesActor,
+        plan.planId,
+        plan.revision,
+        plan.requiredAction!.actionNonce,
+        { operatorSettingsSave: true },
+      );
+
+      expect(waiting.status).toBe("awaiting_approval");
+      expect(waiting.requiredAction?.kind).toBe("approval");
+      expect(createApproval).toHaveBeenCalledOnce();
+      expect(adapter.applyCount).toBe(0);
+    });
+
+    // The Gateway's owner answers false under remote_hardened even with the setting on
+    // (gateway-service.operator-approval-skip.test.ts); this stand-in shows the owner has the last word.
+    it("always asks under remote_hardened", async () => {
+      for (const operator of [settingsActor, capabilitiesActor]) {
+        const allowsOperatorApprovalSkip = vi.fn(async () => false);
+        const { service, adapter, createApproval } = fixture("confirmation", { allowsOperatorApprovalSkip });
+        const plan = await service.create({ actor: operator, request: flagRequest });
+
+        const waiting = await service.confirm(operator, plan.planId, plan.revision, plan.requiredAction!.actionNonce, {
+          operatorSettingsSave: true,
+        });
+
+        expect(waiting.status).toBe("awaiting_approval");
+        expect(waiting.requiredAction?.kind).toBe("approval");
+        expect(allowsOperatorApprovalSkip).toHaveBeenCalledWith(expect.objectContaining({ planId: plan.planId }));
+        expect(createApproval).toHaveBeenCalledOnce();
+        expect(adapter.applyCount).toBe(0);
+      }
+    });
+
+    it.each(["chat", "system"] as const)("never skips a %s-surface plan", async (surface) => {
+      const allowsOperatorApprovalSkip = vi.fn(async () => true);
+      const { service, adapter } = fixture("confirmation", { allowsOperatorApprovalSkip });
+      const operator = { workspaceId: "default", actorId: "operator-1", surface };
+      const plan = await service.create({ actor: operator, request: flagRequest });
+
+      const waiting = await service.confirm(operator, plan.planId, plan.revision, plan.requiredAction!.actionNonce, {
+        operatorSettingsSave: true,
+      });
+
+      expect(waiting.status).toBe("awaiting_approval");
+      expect(waiting.requiredAction?.kind).toBe("approval");
       expect(adapter.applyCount).toBe(0);
       expect(allowsOperatorApprovalSkip).not.toHaveBeenCalled();
     });

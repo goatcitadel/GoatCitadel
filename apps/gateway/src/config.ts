@@ -123,7 +123,7 @@ export interface FeatureFlagsConfig {
   claudeCliWarmContinuationEnabled?: boolean;
   /** Gateway-owned governed Change Plan authority. Default-on after foundation proof, with an explicit kill switch. */
   evolutionControlPlaneV1Enabled?: boolean;
-  /** Operator opt-in: the operator's own Settings saves apply without a separate approval. Off by default; ignored under remote_hardened. */
+  /** Operator opt-in: the operator's own Settings saves and Capabilities installs apply without a separate approval. Off by default; ignored under remote_hardened. */
   settingsApprovalSkipEnabled?: boolean;
   /** Cheap local improvement signal collection. Enabled only after the control plane rolls out. */
   improvementLocalObservationV1Enabled?: boolean;

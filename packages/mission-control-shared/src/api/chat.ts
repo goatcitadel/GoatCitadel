@@ -1495,7 +1495,8 @@ export interface ChangePlanClientContext {
 }
 
 export interface CreateChangePlanClientInput extends ChangePlanClientContext {
-  surface?: Exclude<ChangePlanCreateInput["origin"]["surface"], "system">;
+  /** The generic create route takes chat or settings only; Capabilities installs have their own route. */
+  surface?: Exclude<ChangePlanCreateInput["origin"]["surface"], "system" | "capabilities">;
   request: ChangePlanRequest;
   idempotencyKey?: string;
 }

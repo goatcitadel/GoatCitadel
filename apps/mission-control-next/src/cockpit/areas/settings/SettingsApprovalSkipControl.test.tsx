@@ -63,7 +63,9 @@ describe("cockpit Settings approval skip", () => {
     const { container, unmount } = await mount();
     try {
       await vi.waitFor(() => expect(container.textContent).toContain("Current: Off"));
-      expect(container.textContent).toContain("Apply my Settings changes without an Inbox approval");
+      expect(container.textContent).toContain("Apply my Settings and Capabilities changes without an Inbox approval");
+      expect(container.textContent).toContain("connectors you install from Capabilities");
+      expect(container.textContent).not.toContain("Apply my Settings changes without");
       expect(container.textContent).toContain("Change requests a model makes in Chat still need your approval.");
       expect(container.textContent).toContain(
         "GoatCitadel sign-in, API keys and other credentials still ask for approval.",

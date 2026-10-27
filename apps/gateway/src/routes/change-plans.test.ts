@@ -59,6 +59,28 @@ describe("Change Plan resource routes", () => {
     await app.close();
   });
 
+  // A Capabilities plan is the operator's own install, so only a server-owned Capabilities route may start one.
+  it("refuses a Capabilities origin on the generic create route", async () => {
+    const create = vi.fn(async () => ({ planId: "plan-1", status: "awaiting_confirmation", revision: 1 }));
+    const app = build({ create });
+    const payload = (surface: string) => ({
+      workspaceId: "default",
+      surface,
+      request: { kind: "session_model", providerId: "openai", model: "gpt-5" },
+    });
+
+    const refused = await app.inject({ method: "POST", url: "/api/v1/change-plans", payload: payload("capabilities") });
+    expect(refused.statusCode).toBe(400);
+    expect(create).not.toHaveBeenCalled();
+
+    const settings = await app.inject({ method: "POST", url: "/api/v1/change-plans", payload: payload("settings") });
+    expect(settings.statusCode).toBe(201);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: expect.objectContaining({ surface: "settings" }) }),
+    );
+    await app.close();
+  });
+
   it("rejects paths, patches, arbitrary settings, and secret-like extra fields before service entry", async () => {
     const create = vi.fn();
     const app = build({ create });

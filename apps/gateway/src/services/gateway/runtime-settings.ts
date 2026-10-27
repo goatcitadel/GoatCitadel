@@ -181,7 +181,7 @@ export interface RuntimeSettings {
     claudeCliWarmContinuationEnabled?: boolean;
     /** Gateway-owned governed Change Plan authority. */
     evolutionControlPlaneV1Enabled?: boolean;
-    /** The operator's own Settings saves apply without a separate approval (opt-in; ignored under remote_hardened). */
+    /** The operator's own Settings saves and Capabilities installs apply without a separate approval (opt-in; ignored under remote_hardened). */
     settingsApprovalSkipEnabled?: boolean;
     /** Default-on only after the Evolution Control Plane rollout. */
     improvementLocalObservationV1Enabled?: boolean;
