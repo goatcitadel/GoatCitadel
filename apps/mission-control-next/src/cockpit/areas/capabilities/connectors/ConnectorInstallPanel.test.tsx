@@ -76,6 +76,8 @@ vi.mock("./use-connector-install", async () => {
         cancel: () => flows.cancel(item.id),
       };
     },
+    useConnectorInstallStatus: (item: CapabilityConnectorItem) =>
+      useSyncExternalStore(flows.subscribe, () => flows.read(item)).state,
   };
 });
 
@@ -495,9 +497,49 @@ describe("Install progress", () => {
       changed: [],
     });
     expect(text()).toContain("Nothing was changed.");
-    expect(steps()[0]).toBe("Approve in Inbox · Didn't finish");
     await act(async () => button("Dismiss")?.click());
     expect(flows.cancel).toHaveBeenCalledExactlyOnceWith(EXAMPLE.id);
+  });
+
+  it("names no step when the install ends after it saved the app", async () => {
+    await renderPanel(LINEAR.id, [LINEAR]);
+    // The save went through and a later write failed: the plan step can't be said to have failed.
+    setFlow(LINEAR, {
+      phase: "failed",
+      step: "plan",
+      message: "The install didn't finish.",
+      changed: [
+        "Allowed mcp.linear.app. Saved Linear, switched off. Couldn't set what asks first. Trying again is safe.",
+      ],
+      detail: "posture write failed",
+    });
+    expect(text()).not.toContain("Couldn't allow and save it.");
+    expect(steps()).toEqual([]);
+    // Said once on the page (the status line reads it out on its own).
+    const said = [...body().querySelectorAll('p:not([role="status"])')].filter(
+      (entry) => entry.textContent === "The install didn't finish.",
+    );
+    expect(said).toHaveLength(1);
+    expect(text()).toContain("Saved Linear, switched off.");
+    expect(status()).toBe("The install didn't finish.");
+  });
+
+  it.each([
+    ["a read that couldn't check it", "plan", "Couldn't check the install. Reload to see where it stands."],
+    [
+      "a finished install whose app wasn't found",
+      "plan",
+      "The install finished, but the new app wasn't found. Reload to see it.",
+    ],
+    ["a Stop that didn't go through", "approval", "Couldn't stop the install. Reload to see where it stands."],
+  ] as const)("says only what happened for %s", async (_label, step, message) => {
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    setFlow(EXAMPLE, { phase: "failed", step, message, changed: [] });
+    expect(text()).not.toContain("Couldn't allow and save it.");
+    expect(text()).not.toContain("Couldn't get it approved.");
+    expect(steps()).toEqual([]);
+    expect(text()).toContain(message);
+    expect(status()).toBe(message);
   });
 
   it("keeps a failure's error text inside Technical details", async () => {
@@ -588,6 +630,116 @@ describe("Saved server sign-in and connect", () => {
   });
 });
 
+describe("Focus through the install", () => {
+  const landing = () => body().querySelector<HTMLElement>("[data-focus-landing]");
+  const busy = () => body().querySelector<HTMLButtonElement>('button[aria-busy="true"]');
+
+  it("stays on the busy button, then lands on the saved server's view when the install is done", async () => {
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    button("Install")?.focus();
+    setFlow(EXAMPLE, { phase: "working", step: "plan" });
+    expect(document.activeElement).toBe(busy());
+    setFlow(EXAMPLE, { phase: "working", step: "connect" }, "srv-1");
+    expect(document.activeElement).toBe(busy());
+    const connected = item({
+      id: "mcp-server:srv-1",
+      source: "mcp_server",
+      state: "connected",
+      reason: "ready",
+      group: "connected",
+      serverId: "srv-1",
+      serverRevision: REVISION,
+    });
+    setFlow(EXAMPLE, { phase: "done", serverId: "srv-1" }, "srv-1");
+    await readListAgain([connected]);
+    expect(body().querySelector('[role="switch"]')).not.toBeNull();
+    expect(document.activeElement).toBe(landing());
+    expect(landing()?.textContent).toContain("Ready to use");
+  });
+
+  it("lands on the header when the saved server's view offers a button of its own", async () => {
+    await renderPanel(LINEAR.id, [LINEAR]);
+    button("Sign in and install")?.focus();
+    setFlow(LINEAR, { phase: "working", step: "connect" }, "srv-1");
+    // The list still has the read from before sign-in finished, so the saved row offers Connect.
+    setFlow(LINEAR, { phase: "done", serverId: "srv-1" }, "srv-1");
+    await readListAgain([SAVED_LINEAR]);
+    expect(button("Connect")).toBeDefined();
+    expect(document.activeElement).toBe(landing());
+  });
+
+  it("moves from Stop to the install button once the install has stopped", async () => {
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
+    button("Stop")?.focus();
+    await act(async () => button("Stop")?.click());
+    // Withdrawing: Stop is gone, and the busy button holds focus.
+    setFlow(EXAMPLE, { phase: "working", step: "approval" });
+    expect(button("Stop")).toBeUndefined();
+    expect(document.activeElement).toBe(busy());
+    setFlow(EXAMPLE, { phase: "stopped", message: "Install stopped. Nothing was changed.", changed: [] });
+    expect(document.activeElement).toBe(button("Install"));
+  });
+
+  it("moves from Dismiss to the install button", async () => {
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    setFlow(EXAMPLE, { phase: "failed", step: "connect", message: "Couldn't connect Example.", changed: [] });
+    button("Dismiss")?.focus();
+    await act(async () => button("Dismiss")?.click());
+    setFlow(EXAMPLE, { phase: "idle" });
+    expect(document.activeElement).toBe(button("Install"));
+  });
+
+  it("moves from Finish signing in to the busy button once the pasted code is taken", async () => {
+    await renderPanel(LINEAR.id, [LINEAR]);
+    setFlow(
+      LINEAR,
+      { phase: "signing_in", authorizeUrl: AUTHORIZE_URL, signInHost: "auth.linear.app", scopes: "read, write" },
+      "srv-1",
+    );
+    await type(field("Authorization code"), "code-1");
+    await type(field("Returned state"), "state-1");
+    button("Finish signing in")?.focus();
+    await act(async () => button("Finish signing in")?.click());
+    setFlow(LINEAR, { phase: "working", step: "finish_sign_in" }, "srv-1");
+    expect(button("Finish signing in")).toBeUndefined();
+    expect(document.activeElement).toBe(busy());
+    expect(busy()?.textContent).toBe("Finishing sign-in…");
+  });
+
+  it("lands on the saved server's view when a dismissed result leaves it no button", async () => {
+    const off = { ...SAVED_LINEAR, state: "turned_off", reason: "turned_off", group: "turned_off" } as const;
+    await renderPanel(off.id, [off]);
+    setFlow(off, { phase: "stopped", message: "Stopped. Linear is saved but switched off.", changed: [] }, "srv-1");
+    button("Dismiss")?.focus();
+    await act(async () => button("Dismiss")?.click());
+    setFlow(off, { phase: "idle" });
+    expect(button("Dismiss")).toBeUndefined();
+    expect(document.activeElement).toBe(landing());
+  });
+
+  it("leaves focus alone when it is somewhere else on the page", async () => {
+    const elsewhere = document.createElement("button");
+    elsewhere.textContent = "Elsewhere";
+    document.body.append(elsewhere);
+    try {
+      await renderPanel(EXAMPLE.id, [EXAMPLE]);
+      setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
+      elsewhere.focus();
+      setFlow(EXAMPLE, { phase: "stopped", message: "Install stopped. Nothing was changed.", changed: [] });
+      setFlow(EXAMPLE, { phase: "idle" });
+      expect(document.activeElement).toBe(elsewhere);
+      // Nothing focused at all (the page itself) isn't the panel's either.
+      elsewhere.blur();
+      setFlow(EXAMPLE, { phase: "failed", step: "connect", message: "Couldn't connect Example.", changed: [] });
+      setFlow(EXAMPLE, { phase: "idle" });
+      expect(document.activeElement).toBe(document.body);
+    } finally {
+      elsewhere.remove();
+    }
+  });
+});
+
 describe("Panel across the install", () => {
   it("keeps the install on screen after the template row leaves the list, then lands on Manage", async () => {
     await renderPanel(LINEAR.id, [LINEAR]);
@@ -627,6 +779,38 @@ describe("Panel across the install", () => {
     expect(body().querySelector('[role="switch"]')).not.toBeNull();
     expect(text().match(/Couldn't switch Linear on\./g)).toHaveLength(1);
     expect(spoken()).toEqual(["Couldn't switch it on."]);
+    expect(steps()).toEqual([
+      "Allow and save · Done",
+      "Sign in · Done",
+      "Switch on · Didn't finish",
+      "Connect · Not started",
+    ]);
+  });
+
+  it("lists a no-sign-in install's own steps on the server it saved", async () => {
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    const failed: ConnectorInstallState = {
+      phase: "failed",
+      step: "switch_on",
+      message: "Couldn't switch Example on. Reload and try again.",
+      changed: ["Allowed mcp.example.com. Saved Example, switched off."],
+    };
+    setFlow(EXAMPLE, failed, "srv-2");
+    const saved = item({
+      id: "mcp-server:srv-2",
+      source: "mcp_server",
+      state: "turned_off",
+      reason: "turned_off",
+      group: "turned_off",
+      networkHosts: ["mcp.example.com"],
+      serverId: "srv-2",
+      serverRevision: REVISION,
+    });
+    setFlow(saved, failed, "srv-2");
+    await readListAgain([saved]);
+    expect(body().querySelector('[role="switch"]')).not.toBeNull();
+    // The app has no sign-in, and the save it did is listed.
+    expect(steps()).toEqual(["Allow and save · Done", "Switch on · Didn't finish", "Connect · Not started"]);
   });
 
   it("reads out the sign-in of a saved server its template's panel turned into", async () => {

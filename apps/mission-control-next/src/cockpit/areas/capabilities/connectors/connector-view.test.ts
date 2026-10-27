@@ -6,6 +6,7 @@ import type {
   CapabilityConnectorState,
 } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
+import type { ConnectorInstallState } from "./connector-install-store";
 import {
   approvalPostureInEffect,
   connectorAction,
@@ -19,6 +20,7 @@ import {
   LETTER_ICON_TONE_COUNT,
   letterIconTone,
   presentConnectorState,
+  withInstallProgress,
 } from "./connector-view";
 
 function item(overrides: Partial<CapabilityConnectorItem> = {}): CapabilityConnectorItem {
@@ -386,6 +388,58 @@ describe("connectorSearchSuggestion", () => {
     expect(connectorSearchSuggestion([])).toBe("automation");
     expect(connectorSearchSuggestion([item({ category: "development" })])).toBe("automation");
     expect(connectorSearchSuggestion([item({ ...connected, category: "search" })])).toBe("automation");
+  });
+});
+
+describe("withInstallProgress", () => {
+  const saved = item({
+    id: "mcp-server:srv-1",
+    source: "mcp_server",
+    serverId: "srv-1",
+    state: "broken",
+    reason: "error",
+  });
+
+  it("says a row waits on you in Inbox, in the waiting tone", () => {
+    const flow = { phase: "waiting_inbox", approvalId: "a-1", planId: "p-1" } as const;
+    expect(withInstallProgress(item(), presentConnectorState(item()), flow)).toEqual({
+      label: "Available",
+      tone: "waiting",
+      reason: "Waiting on you in Inbox",
+    });
+    // A saved row the install already made waits on the same approval.
+    expect(withInstallProgress(saved, presentConnectorState(saved), flow).reason).toBe("Waiting on you in Inbox");
+  });
+
+  it.each([
+    { phase: "working", step: "plan" },
+    { phase: "working", step: "connect" },
+    { phase: "signing_in", authorizeUrl: "https://a.test", signInHost: "a.test", scopes: "read" },
+  ] as const)("says a template row is installing while its flow is %j", (flow) => {
+    expect(withInstallProgress(item(), presentConnectorState(item()), flow)).toEqual({
+      label: "Available",
+      tone: "running",
+      reason: "Installing",
+    });
+  });
+
+  it("says a saved server is connecting, since its flow may be a sign-in or a connect", () => {
+    const base = presentConnectorState(saved);
+    expect(withInstallProgress(saved, base, { phase: "working", step: "sign_in" })).toEqual({
+      ...base,
+      tone: "running",
+      reason: "Connecting",
+    });
+  });
+
+  it.each<ConnectorInstallState>([
+    { phase: "idle" },
+    { phase: "done", serverId: "srv-1" },
+    { phase: "failed", step: "connect", message: "Couldn't connect.", changed: [] },
+    { phase: "stopped", message: "Stopped.", changed: [] },
+  ])("leaves the row's own state alone when its flow is %j", (flow) => {
+    const base = presentConnectorState(saved);
+    expect(withInstallProgress(saved, base, flow)).toBe(base);
   });
 });
 

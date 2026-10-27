@@ -3,7 +3,7 @@ import type { CapabilityConnectorItem, CapabilityConnectorReason } from "@goatci
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { Section } from "../../../ui/Section";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
-import { ConnectorInstallProgress, type InstallStepId } from "./ConnectorInstallProgress";
+import { ConnectorInstallProgress, installSteps } from "./ConnectorInstallProgress";
 import { ChatBlockNote, ConnectionLines, ConnectorHeader, HiddenNote, TechnicalRows } from "./ConnectorPanelParts";
 import { REMOTE_LINE } from "./WhatAsksFirst";
 import { connectorSettingsHref } from "./connector-links";
@@ -40,9 +40,7 @@ export function ConnectorInstallPanel({
   const { state } = install;
   const elsewhere = SET_UP_ELSEWHERE[item.reason];
   const offerChat = !elsewhere && !item.chat.available && item.chat.blockedBy === "mcp_in_chat_off";
-  const oauth = item.auth === "oauth";
-  const steps: InstallStepId[] = ["plan", ...(oauth ? (["sign_in"] as const) : []), "switch_on", "connect"];
-  const label = state.phase === "failed" ? "Try again" : oauth ? "Sign in and install" : "Install";
+  const label = state.phase === "failed" ? "Try again" : item.auth === "oauth" ? "Sign in and install" : "Install";
   // Done, the panel waits for the list to show the saved server; installing again would only be refused.
   const action =
     state.phase === "done"
@@ -102,7 +100,7 @@ export function ConnectorInstallPanel({
         <ConnectorInstallProgress
           install={install}
           scope={item.id}
-          steps={steps}
+          steps={installSteps(item)}
           doneLine="Installed."
           action={action}
         />

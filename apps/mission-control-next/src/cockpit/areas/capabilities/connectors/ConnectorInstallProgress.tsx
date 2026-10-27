@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, type Ref } from "react";
 import { Check, Circle, Hand, LoaderCircle, X, type LucideIcon } from "lucide-react";
+import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
@@ -37,10 +38,13 @@ const BUSY_WORDS: Readonly<Record<ConnectorInstallStep, string>> = {
   switch_on: "Switching on…",
   connect: "Connecting…",
 };
-/** The failed step in plain words; the flow's own message follows it. */
-const FAILED_WORDS: Readonly<Record<ConnectorInstallStep, string>> = {
-  plan: "Couldn't allow and save it.",
-  approval: "Couldn't get it approved.",
+/**
+ * A saved server's failed step in plain words; the flow's own message follows it. A failure at the plan or the approval
+ * names no step: the flow ends there for outcomes that aren't one step failing (a later write after the save, a read
+ * that couldn't check the install, a Stop that didn't go through), so only its own message is shown, and the steps are
+ * left out.
+ */
+const FAILED_WORDS: Readonly<Partial<Record<ConnectorInstallStep, string>>> = {
   sign_in: "Couldn't sign in.",
   finish_sign_in: "Couldn't finish signing in.",
   switch_on: "Couldn't switch it on.",
@@ -54,6 +58,11 @@ const inboxApprovalHref = (approvalId: string) =>
   `/inbox?approvalId=${encodeURIComponent(approvalId)}&workspaceId=default`;
 
 const stepOf = (step: ConnectorInstallStep): InstallStepId => (step === "finish_sign_in" ? "sign_in" : step);
+
+/** The steps an install from a template runs: sign-in only for an app that signs in. */
+export function installSteps(item: Pick<CapabilityConnectorItem, "auth">): InstallStepId[] {
+  return ["plan", ...(item.auth === "oauth" ? (["sign_in"] as const) : []), "switch_on", "connect"];
+}
 
 function currentStep(state: ConnectorInstallState): InstallStepId | undefined {
   switch (state.phase) {
@@ -98,7 +107,7 @@ export function installAnnouncement(state: ConnectorInstallState, doneWords: str
     case "signing_in":
       return state.manualError ?? SIGNING_IN;
     case "failed":
-      return FAILED_WORDS[state.step];
+      return FAILED_WORDS[state.step] ?? state.message;
     case "stopped":
       return state.message;
     case "done":
@@ -110,9 +119,18 @@ export function installAnnouncement(state: ConnectorInstallState, doneWords: str
  * The flow's one live region. It stays on the page for as long as the flow can be shown, so each change is read out
  * once, including the last one when the panel turns into the saved server's view.
  */
-export function InstallStatus({ state, doneWords }: { state: ConnectorInstallState; doneWords: string }) {
+export function InstallStatus({
+  state,
+  doneWords,
+  anchor,
+}: {
+  state: ConnectorInstallState;
+  doneWords: string;
+  /** Points into the panel for `usePanelFocus`; the line is always on the page. */
+  anchor?: Ref<HTMLParagraphElement>;
+}) {
   return (
-    <p role="status" className="sr-only">
+    <p ref={anchor} role="status" className="sr-only">
       {installAnnouncement(state, doneWords)}
     </p>
   );
@@ -190,11 +208,19 @@ function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; sc
       );
     case "signing_in":
       return <ConnectorSignInStep state={state} submit={install.submitManualCode} />;
-    case "failed":
+    case "failed": {
+      const step = FAILED_WORDS[state.step];
       return (
         <div className="space-y-2 text-sm text-fg-secondary">
-          <p className="font-medium text-status-failed">{FAILED_WORDS[state.step]}</p>
-          <p>{state.message}</p>
+          {step ? (
+            <>
+              <p className="font-medium text-status-failed">{step}</p>
+              <p>{state.message}</p>
+            </>
+          ) : (
+            // Whether anything failed may be unknown here (a read that couldn't check it), so no failure colour.
+            <p className="font-medium text-fg">{state.message}</p>
+          )}
           <ChangedList changed={state.changed} emptyLine="Nothing was changed." />
           {state.detail ? (
             <TechnicalDetails label="Error details">
@@ -203,6 +229,7 @@ function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; sc
           ) : null}
         </div>
       );
+    }
     case "stopped":
       return (
         <div className="space-y-2 text-sm text-fg-secondary">
@@ -219,9 +246,10 @@ function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; sc
 
 /**
  * One install's progress, or a saved server's sign-in or connect: the flow's button (busy while it runs), Stop where it
- * can act, the steps with their state in words, and what each phase needs from the operator. A failure names its step,
- * says what already changed and keeps the error text inside Technical details. A finished or stopped result can be
- * dismissed. The flow itself is the hook's (`useConnectorInstall`); nothing here moves it on.
+ * can act, the steps with their state in words, and what each phase needs from the operator. A failure of a saved
+ * server's step names that step; every failure says what already changed and keeps the error text inside Technical
+ * details. A finished or stopped result can be dismissed. The flow itself is the hook's (`useConnectorInstall`);
+ * nothing here moves it on. The flow's button is the panel's focus target when a control it held goes away.
  */
 export function ConnectorInstallProgress({
   install,
@@ -248,7 +276,7 @@ export function ConnectorInstallProgress({
   const listed = STEP_ORDER.filter(
     (step) => steps.includes(step) || step === current || (step === "approval" && waited),
   );
-  const showSteps = isActiveInstallState(state) || state.phase === "failed";
+  const showSteps = isActiveInstallState(state) || (state.phase === "failed" && FAILED_WORDS[state.step] !== undefined);
   const settled = state.phase === "failed" || state.phase === "stopped";
   return (
     <div className="space-y-3">
@@ -256,6 +284,7 @@ export function ConnectorInstallProgress({
         <div className="flex flex-wrap items-center gap-2">
           {action ? (
             <Button
+              data-flow-primary=""
               variant="primary"
               size="sm"
               loading={isActiveInstallState(state)}

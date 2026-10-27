@@ -26,6 +26,7 @@ import { connectorSettingsHref, savedConnectorForTemplate } from "./connector-li
 import { isActiveInstallState } from "./connector-install-store";
 import { approvalPostureInEffect } from "./connector-view";
 import { useConnectorInstall } from "./use-connector-install";
+import { usePanelFocus } from "./use-panel-focus";
 
 /**
  * The tools a saved server offers, as it last listed them, each switched-on tool marked with whether it asks first under
@@ -235,10 +236,13 @@ function TemplateConnectorPanel({
     const saved = savedConnectorForTemplate(items, template.id);
     return saved ? details(saved, false) : NOT_LISTED;
   })();
+  // Turning into the saved server's view, focus lands on its header; in the install panel, on the install button.
+  const anchor = useRef<HTMLParagraphElement>(null);
+  usePanelFocus(anchor, view ? "landing" : "primary");
   return (
     <>
       {view ?? <ConnectorInstallPanel item={template} install={install} reliefAvailable={list.reliefAvailable} />}
-      <InstallStatus state={state} doneWords="Installed." />
+      <InstallStatus anchor={anchor} state={state} doneWords="Installed." />
     </>
   );
 }
@@ -252,6 +256,15 @@ function TemplateConnectorPanel({
  * opens the saved server installed from it.
  */
 export function ConnectorPanel({ itemId, onRemoved }: { itemId: string; onRemoved?: () => void }) {
+  // The root `usePanelFocus` keeps focus inside of.
+  return (
+    <div data-connector-panel>
+      <ConnectorPanelBody itemId={itemId} onRemoved={onRemoved} />
+    </div>
+  );
+}
+
+function ConnectorPanelBody({ itemId, onRemoved }: { itemId: string; onRemoved?: () => void }) {
   const { activeWorkspaceId } = useUiPreferences();
   const live = useQuery({
     ...connectorListQuery(activeWorkspaceId),

@@ -12,6 +12,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { StatusPresentation, StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import type { CategoryOption } from "../CategoryFilter";
+import { isActiveInstallState, type ConnectorInstallState } from "./connector-install-store";
 
 // Wording and ordering for the list the Gateway already built. Nothing here decides what a row is.
 
@@ -207,6 +208,23 @@ export function presentConnectorState(
         ? `${panelLine}${pointer}`
         : REASON_LINES[item.reason];
   return { label, tone, reason };
+}
+
+/**
+ * A row whose install flow is running says so instead of its own reason (R87), read from the flow, never moving it.
+ * Waiting on an Inbox approval reads "Waiting on you in Inbox" in the waiting tone. Any other running phase reads
+ * "Installing" on a template row and "Connecting" on a saved server, whose flow may be its own sign-in or connect rather
+ * than an install; both in the running tone, so the row never looks ready while it isn't. The badge keeps the row's own
+ * state word, and a finished, failed or stopped flow leaves the row as the list has it.
+ */
+export function withInstallProgress(
+  item: CapabilityConnectorItem,
+  state: StatusPresentation & { reason: string },
+  flow: ConnectorInstallState,
+): StatusPresentation & { reason: string } {
+  if (flow.phase === "waiting_inbox") return { ...state, tone: "waiting", reason: "Waiting on you in Inbox" };
+  if (!isActiveInstallState(flow)) return state;
+  return { ...state, tone: "running", reason: item.source === "mcp_server" ? "Connecting" : "Installing" };
 }
 
 /** Said under an on-device program's command: it runs outside the Gateway's own network rules. */

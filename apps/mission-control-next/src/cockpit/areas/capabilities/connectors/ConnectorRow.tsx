@@ -2,11 +2,13 @@ import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { LetterIcon } from "../LetterIcon";
-import { connectorAction, connectorKindLabel, presentConnectorState } from "./connector-view";
+import { connectorAction, connectorKindLabel, presentConnectorState, withInstallProgress } from "./connector-view";
+import { useConnectorInstallStatus } from "./use-connector-install";
 
 /**
  * One connector as a row card: its letter icon, name and kind, a one-line description, its state with the reason, and
- * the one thing to do next. The button opens the row's panel through `onOpen`; the row itself is not a click target.
+ * the one thing to do next. While an install runs for it, the reason says so (R87). The button opens the row's panel
+ * through `onOpen`; the row itself is not a click target.
  */
 export function ConnectorRow({
   item,
@@ -15,7 +17,8 @@ export function ConnectorRow({
   item: CapabilityConnectorItem;
   onOpen: (item: CapabilityConnectorItem) => void;
 }) {
-  const state = presentConnectorState(item);
+  const flow = useConnectorInstallStatus(item);
+  const state = withInstallProgress(item, presentConnectorState(item), flow);
   const action = connectorAction(item);
   return (
     <li className="flex min-w-0 items-start gap-3 rounded-lg border border-line-subtle bg-raised p-3">

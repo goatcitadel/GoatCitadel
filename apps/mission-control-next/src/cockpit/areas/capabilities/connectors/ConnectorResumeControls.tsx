@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { CapabilityConnectorItem, CapabilityConnectorState } from "@goatcitadel/contracts";
-import { ConnectorInstallProgress, InstallStatus, type InstallStepId } from "./ConnectorInstallProgress";
+import { ConnectorInstallProgress, installSteps, InstallStatus, type InstallStepId } from "./ConnectorInstallProgress";
 import { IDLE as SILENT } from "./connector-install-store";
 import { useConnectorInstall } from "./use-connector-install";
+import { usePanelFocus } from "./use-panel-focus";
 
 type ResumeFrom = "sign_in" | "connect";
 
@@ -31,9 +32,13 @@ export function ConnectorResumeControls({
   announce?: boolean;
 }) {
   const install = useConnectorInstall(item);
+  const anchor = useRef<HTMLParagraphElement>(null);
+  usePanelFocus(anchor, "primary");
   const resume = RESUME[item.state];
-  // The steps of the last button pressed here; before that, of the button the state offers.
-  const [from, setFrom] = useState<ResumeFrom>(resume?.from ?? "sign_in");
+  // The button last pressed here says which steps its flow runs. A flow this view didn't start, with no button to
+  // offer, is the install that saved this server, so it lists the install's own steps.
+  const [pressed, setPressed] = useState<ResumeFrom | undefined>(undefined);
+  const steps = pressed ? STEPS[pressed] : resume ? STEPS[resume.from] : installSteps(item);
   // A finished flow has nothing more to say here: the state above already reads Connected.
   const shown = resume !== undefined || (install.state.phase !== "idle" && install.state.phase !== "done");
   return (
@@ -42,13 +47,13 @@ export function ConnectorResumeControls({
         <ConnectorInstallProgress
           install={install}
           scope={item.id}
-          steps={STEPS[from]}
+          steps={steps}
           action={
             resume
               ? {
                   label: resume.label,
                   run: () => {
-                    setFrom(resume.from);
+                    setPressed(resume.from);
                     install.resume(resume.from);
                   },
                 }
@@ -57,7 +62,7 @@ export function ConnectorResumeControls({
         />
       ) : null}
       {/* Kept on the page while silenced, so it reads out the next change once it may speak again. */}
-      <InstallStatus state={announce ? install.state : SILENT} doneWords="Connected." />
+      <InstallStatus anchor={anchor} state={announce ? install.state : SILENT} doneWords="Connected." />
     </>
   );
 }

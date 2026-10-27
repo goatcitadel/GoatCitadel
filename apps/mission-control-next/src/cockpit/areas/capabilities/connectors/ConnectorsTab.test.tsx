@@ -16,6 +16,12 @@ const route = vi.hoisted(() => ({ search: "", navigate: vi.fn() }));
 vi.mock("../../../app/use-cockpit-route", () => ({ useCockpitRoute: () => route }));
 const inspector = vi.hoisted(() => ({ open: vi.fn(), content: null as null | { source?: string } }));
 vi.mock("../../../app/inspector", () => ({ useInspector: () => inspector }));
+// Each row reads its install flow from the store (R87); here a test sets what a row reads.
+const rowFlows = vi.hoisted(() => new Map<string, { phase: string } & Record<string, unknown>>());
+vi.mock("./use-connector-install", async (original) => ({
+  ...(await original<object>()),
+  useConnectorInstallStatus: (entry: { id: string }) => rowFlows.get(entry.id) ?? { phase: "idle" },
+}));
 vi.mock("../../settings/McpServerCreate", () => ({
   McpServerCreate: ({ onClose }: { onClose: () => void }) => (
     <div role="dialog" aria-label="Register MCP server">
@@ -109,6 +115,7 @@ async function type(value: string) {
 
 beforeEach(() => {
   api.fetchCapabilityConnectors.mockReset();
+  rowFlows.clear();
   route.navigate.mockReset();
   route.search = "";
   inspector.open = vi.fn();
@@ -172,6 +179,58 @@ describe("Connectors tab", () => {
     await vi.waitFor(() => expect(text()).toContain("Notion"));
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Install Notion"]')?.click());
     expect(route.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/connectors?item=mcp-template%3Anotion");
+  });
+
+  it("says a row waits on you in Inbox while its install waits there", async () => {
+    rowFlows.set(NOTION.id, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
+    api.fetchCapabilityConnectors.mockResolvedValue(response([SLACK, NOTION]));
+    await render();
+    await vi.waitFor(() => expect(text()).toContain("Notion"));
+    const notion = [...container.querySelectorAll("li")].find((row) => row.textContent?.includes("Notion"))!;
+    expect(notion.textContent).toContain("Waiting on you in Inbox");
+    expect(notion.textContent).not.toContain("Not installed");
+    expect(notion.querySelector("[data-tone]")?.getAttribute("data-tone")).toBe("waiting");
+    // The row's button still opens the panel, which has the Inbox link.
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Install Notion"]')?.click());
+    expect(route.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/connectors?item=mcp-template%3Anotion");
+  });
+
+  it("says a row is installing while its install runs", async () => {
+    rowFlows.set(NOTION.id, { phase: "working", step: "switch_on" });
+    api.fetchCapabilityConnectors.mockResolvedValue(response([SLACK, NOTION]));
+    await render();
+    await vi.waitFor(() => expect(text()).toContain("Notion"));
+    const notion = [...container.querySelectorAll("li")].find((row) => row.textContent?.includes("Notion"))!;
+    expect(notion.textContent).toContain("Installing");
+    expect(notion.querySelector("[data-tone]")?.getAttribute("data-tone")).toBe("running");
+    // A row with no flow keeps its own line.
+    const slack = [...container.querySelectorAll("li")].find((row) => row.textContent?.includes("Slack"))!;
+    expect(slack.textContent).toContain("Ready to use");
+  });
+
+  it("says a saved server is connecting while its sign-in or connect runs, not that it installs", async () => {
+    const saved = item({
+      id: "mcp-server:srv-1",
+      name: "Linear",
+      source: "mcp_server",
+      state: "sign_in_expired",
+      reason: "sign_in_expired",
+      group: "connected",
+      serverId: "srv-1",
+    });
+    rowFlows.set(saved.id, {
+      phase: "signing_in",
+      authorizeUrl: "https://auth.example.test/a",
+      signInHost: "auth.example.test",
+      scopes: "read",
+    });
+    api.fetchCapabilityConnectors.mockResolvedValue(response([saved]));
+    await render();
+    await vi.waitFor(() => expect(text()).toContain("Linear"));
+    const row = container.querySelector("li")!;
+    expect(row.textContent).toContain("Connecting");
+    expect(row.textContent).not.toContain("Installing");
+    expect(row.querySelector("[data-tone]")?.getAttribute("data-tone")).toBe("running");
   });
 
   it("opens the panel the address names once the list has it", async () => {

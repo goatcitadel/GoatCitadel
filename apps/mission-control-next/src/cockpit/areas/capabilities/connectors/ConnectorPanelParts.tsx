@@ -15,12 +15,15 @@ import {
 // The pieces every connector panel shows the same way: the details of a saved or listed connector, and the install
 // panel of a template.
 
-/** The kind and category line, then the state badge with its reason. */
+/**
+ * The kind and category line, then the state badge with its reason. It is where focus lands when the panel changes
+ * under a control that had it (`usePanelFocus`), such as the install panel turning into the saved server's view.
+ */
 export function ConnectorHeader({ item }: { item: CapabilityConnectorItem }) {
   const { showTechnicalDetails } = useUiPreferences();
   const state = presentConnectorState(item, "panel", { technicalDetailsShown: showTechnicalDetails });
   return (
-    <div className="space-y-2">
+    <div data-focus-landing tabIndex={-1} className="space-y-2 outline-none">
       <p className="text-sm text-fg-secondary">
         {connectorKindLabel(item.kind)} · {connectorCategoryLabel(item.category)}
       </p>
