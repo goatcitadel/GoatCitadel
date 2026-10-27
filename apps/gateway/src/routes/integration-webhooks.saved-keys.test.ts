@@ -299,7 +299,7 @@ function secureStoreWith(owner: string, fields: Record<string, string>): Map<str
 
 /** Reads a saved key the way the gateway does: a reference names an account in the secure store. */
 function readSecureStore(secureStore: Map<string, string>) {
-  return vi.fn((secretRef: string): string | undefined => {
+  return vi.fn((_connectionId: string, secretRef: string): string | undefined => {
     try {
       return secureStore.get(parseChannelSecretRef(secretRef).account);
     } catch {
@@ -406,7 +406,8 @@ describe("signed webhooks use the key saved for the connection", () => {
       expect(response.statusCode).toBe(200);
       expectNoSecretLeak(scenario, response);
       expect(ctx.readSecret).toHaveBeenCalled();
-      for (const [secretRef] of ctx.readSecret.mock.calls) {
+      for (const [calledFor, secretRef] of ctx.readSecret.mock.calls) {
+        expect(calledFor).toBe(connectionId);
         expect(secretRef.startsWith(`keychain:goatcitadel:channel-connection:${connectionId}:`)).toBe(true);
       }
     });

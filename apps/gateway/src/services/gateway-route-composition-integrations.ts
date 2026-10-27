@@ -62,6 +62,7 @@ import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-s
 import * as channelSetupService from "./channel-setup-service.js";
 import { composeChannelSetupHost } from "./channel-setup-host-composition.js";
 import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
+import { createConnectionSecretReferenceResolver } from "./channel-secret-resolution.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import {
   createExternalSideEffectReplayRecords,
@@ -334,9 +335,12 @@ export function composeIntegrationChannelRouteDependencies(
     emitChannelActivity: (input) => gateway.commsActivity(input),
     respondToExistingChatMessage: (sessionId, messageId, input) =>
       gateway.respondToExistingChatMessage(sessionId, messageId, input),
-    // A signed webhook is checked against the key the connection saved at setup, never its reference.
-    resolveChannelConnectionSecret: (secretRef) =>
-      gateway.resolveConnectionSecret({ ref: secretRef }, "ref", "refEnv", "channel.webhook"),
+    // A signed webhook is checked against the key the connection saved at setup, never its reference. The port is
+    // bound to the connection: another connection's reference, a draft's and plain text all give no key.
+    resolveChannelConnectionSecret: (connectionId: string, secretRef: string): string | undefined =>
+      createConnectionSecretReferenceResolver(connectionId, (ownReference) =>
+        gateway.resolveConnectionSecret({ ref: ownReference }, "ref", "refEnv", "channel.webhook"),
+      )(secretRef),
     resolveApprovalWithRemoteToken: (input) => gateway.resolveApprovalWithRemoteToken(input),
     resolveApprovalWithRemoteTokenId: (input) => gateway.resolveApprovalWithRemoteTokenId(input),
     // A desk send into a channel conversation; the durable desk question is an inbound channel event.

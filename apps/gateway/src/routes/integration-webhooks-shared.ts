@@ -64,15 +64,16 @@ export function createWebhookReadRouteOptions() {
 
 /**
  * Reads the keys a webhook's connection saved at setup. Pass the connection id the request is for: only that
- * connection's own references resolve, and anything else counts as a missing secret.
+ * connection's own references resolve, and anything else counts as a missing secret. The gateway port checks the
+ * same thing again, so a route that skips this helper still cannot read another connection's key.
  */
 export function createWebhookSecretResolver(
   fastify: { services: { integrationWebhooks: Pick<IntegrationWebhookRouteLike, "resolveChannelConnectionSecret"> } },
   connectionId: string,
 ): ChannelSecretReferenceResolver {
-  return createConnectionSecretReferenceResolver(
-    connectionId,
-    fastify.services.integrationWebhooks.resolveChannelConnectionSecret,
+  const { integrationWebhooks } = fastify.services;
+  return createConnectionSecretReferenceResolver(connectionId, (secretRef) =>
+    integrationWebhooks.resolveChannelConnectionSecret?.(connectionId, secretRef),
   );
 }
 

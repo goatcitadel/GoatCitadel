@@ -48,11 +48,12 @@ export function createConnectionSecretReferenceResolver(
 ): ChannelSecretReferenceResolver {
   const ownPrefix = `${CONNECTION_SECRET_REFERENCE_PREFIX}${connectionId}:`;
   return (secretRef) => {
-    if (!readReference || !secretRef.startsWith(ownPrefix)) {
+    const reference = secretRef.trim();
+    if (!readReference || !reference.startsWith(ownPrefix)) {
       return undefined;
     }
     try {
-      return readReference(secretRef)?.trim() || undefined;
+      return readReference(reference)?.trim() || undefined;
     } catch {
       return undefined;
     }

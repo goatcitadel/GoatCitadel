@@ -22,6 +22,15 @@ describe("createConnectionSecretReferenceResolver", () => {
     expect(readReference).toHaveBeenCalledWith(ownReference);
   });
 
+  it("checks the owner on the trimmed reference and reads with the trimmed reference", () => {
+    const readReference = vi.fn(() => "real-secret");
+
+    expect(createConnectionSecretReferenceResolver(connectionId, readReference)(`  ${ownReference}\n`)).toBe(
+      "real-secret",
+    );
+    expect(readReference).toHaveBeenCalledWith(ownReference);
+  });
+
   it.each([
     ["another connection's reference", otherReference],
     [

@@ -3,7 +3,8 @@ import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeCommsTool } from "./comms-executor.js";
 
-const REF_PREFIX = "keychain:goatcitadel:channel-connection:";
+const KEYCHAIN_PREFIX = "keychain:goatcitadel:";
+const REF_PREFIX = `${KEYCHAIN_PREFIX}channel-connection:`;
 const ZALO_REF = `${REF_PREFIX}conn-1:accessToken:00000000-0000-4000-8000-000000000000`;
 const TELEGRAM_REF = `${REF_PREFIX}conn-1:botToken:00000000-0000-4000-8000-000000000001`;
 const REAL_TOKEN = "real-token";
@@ -30,9 +31,13 @@ function policyConfig(allowlist: string[]): ToolPolicyConfig {
 }
 
 function channelSend(): ToolInvokeRequest {
+  return channelRequest("channel.send", { message: "hello" });
+}
+
+function channelRequest(toolName: string, args: Record<string, unknown>): ToolInvokeRequest {
   return {
-    toolName: "channel.send",
-    args: { connectionId: "conn-1", message: "hello" },
+    toolName,
+    args: { connectionId: "conn-1", ...args },
     agentId: "operator",
     sessionId: "sess-conn-1",
   };
@@ -248,6 +253,131 @@ describe("comms sends use this connection's saved keys", () => {
 
     expect(resolveChannelConnectionSecret).not.toHaveBeenCalledWith(foreignRef);
     expect(result).toMatchObject({ status: "failed" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it.each([
+    ["a draft reference", `${KEYCHAIN_PREFIX}channel-draft:d-1:accessToken:00000000-0000-4000-8000-000000000005`],
+    ["an approval token reference", `${KEYCHAIN_PREFIX}approval-remote-action:00000000-0000-4000-8000-000000000006`],
+    ["a reference with padding around it", `  ${KEYCHAIN_PREFIX}channel-draft:d-1:accessToken:padded  `],
+  ])("fails a send without a request when the credential is %s", async (_name, reference) => {
+    const calls = stubFetch({ error: 0, data: { message_id: "zalo-msg-1" } });
+    const { storage, createQueued, markSent, markFailed } = createChannelStorage("zalo", {
+      accessToken: reference,
+      defaultRecipientId: "123",
+    });
+    const resolveChannelConnectionSecret = vi.fn(() => REAL_TOKEN);
+
+    const result = await executeCommsTool(channelSend(), policyConfig(["openapi.zalo.me"]), storage, undefined, {
+      resolveChannelConnectionSecret,
+    });
+
+    expect(resolveChannelConnectionSecret).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "failed",
+      deliveryStatus: "not_available",
+      error: "The saved zalo credential is unavailable from secure storage.",
+    });
+    expect(calls).toHaveLength(0);
+    const kept = JSON.stringify([result, createQueued.mock.calls, markSent.mock.calls, markFailed.mock.calls]);
+    expect(kept).not.toContain(REAL_TOKEN);
+  });
+});
+
+describe("a stored key that cannot be sent safely", () => {
+  it.each([
+    ["a line feed", "sec\nret-value"],
+    ["a carriage return", "sec\rret-value"],
+    ["a NUL byte", "sec\u0000ret-value"],
+    ["a DEL character", "sec\u007fret-value"],
+  ])("fails the send without a request when the stored key holds %s", async (_name, storedKey) => {
+    const calls = stubFetch({ error: 0, data: { message_id: "zalo-msg-1" } });
+    const { storage, createQueued, markSent, markFailed } = createChannelStorage("zalo", {
+      accessToken: ZALO_REF,
+      defaultRecipientId: "123",
+    });
+    const resolveChannelConnectionSecret = vi.fn(() => storedKey);
+
+    const result = await executeCommsTool(channelSend(), policyConfig(["openapi.zalo.me"]), storage, undefined, {
+      resolveChannelConnectionSecret,
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      deliveryStatus: "not_available",
+      error: "The saved zalo credential is unavailable from secure storage.",
+      fallbackReason: "The saved zalo credential is unavailable from secure storage.",
+    });
+    expect(calls).toHaveLength(0);
+    // Nothing the stored key held, in whole or in part, reaches the result or the delivery ledger.
+    const kept = JSON.stringify([result, createQueued.mock.calls, markSent.mock.calls, markFailed.mock.calls]);
+    expect(kept).not.toContain("ret-value");
+    expect(kept).not.toContain("sec\\nret");
+    expect(kept).not.toContain("sec\\rret");
+  });
+
+  it("still sends a stored key that only has whitespace around it", async () => {
+    const calls = stubFetch({ error: 0, data: { message_id: "zalo-msg-1" } });
+    const { storage } = createChannelStorage("zalo", { accessToken: ZALO_REF, defaultRecipientId: "123" });
+
+    const result = await executeCommsTool(channelSend(), policyConfig(["openapi.zalo.me"]), storage, undefined, {
+      resolveChannelConnectionSecret: () => `\t ${REAL_TOKEN} \n`,
+    });
+
+    expect(result).toMatchObject({ status: "sent" });
+    expect(calls[0]?.headers.access_token).toBe(REAL_TOKEN);
+  });
+});
+
+describe("every Telegram call that carries the bot token uses the stored key", () => {
+  it.each([
+    ["channel.react", { messageId: "1001", reaction: "👀" }, "setMessageReaction"],
+    ["channel.unsend", { messageId: "1001" }, "deleteMessage"],
+  ])("%s sends the stored bot token, never the reference", async (toolName, args, method) => {
+    const calls = stubFetch({ ok: true, result: true });
+    const { storage, createQueued, markSent, markFailed } = createChannelStorage("telegram", {
+      botToken: TELEGRAM_REF,
+      defaultChatId: "555",
+    });
+    const resolveChannelConnectionSecret = vi.fn((ref: string) => (ref === TELEGRAM_REF ? REAL_TOKEN : undefined));
+
+    const result = await executeCommsTool(
+      channelRequest(toolName, args),
+      policyConfig(["api.telegram.org"]),
+      storage,
+      undefined,
+      { resolveChannelConnectionSecret },
+    );
+
+    expect(result).toMatchObject({ status: "sent", deliveryStatus: "sent", providerMessageId: "1001" });
+    expect(resolveChannelConnectionSecret).toHaveBeenCalledWith(TELEGRAM_REF);
+    expect(calls).toHaveLength(1);
+    expect(new URL(calls[0]?.url ?? "").pathname).toBe(`/bot${REAL_TOKEN}/${method}`);
+    expect(JSON.parse(calls[0]?.body ?? "{}")).toMatchObject({ chat_id: "555", message_id: 1001 });
+    expect(everythingSent(calls)).not.toContain("keychain:");
+    const kept = JSON.stringify([result, createQueued.mock.calls, markSent.mock.calls, markFailed.mock.calls]);
+    expect(kept).not.toContain(REAL_TOKEN);
+  });
+
+  it.each([
+    ["channel.react", { messageId: "1001", reaction: "👀" }],
+    ["channel.unsend", { messageId: "1001" }],
+  ])("%s fails without a request when the bot token cannot be read", async (toolName, args) => {
+    const calls = stubFetch({ ok: true, result: true });
+    const { storage } = createChannelStorage("telegram", { botToken: TELEGRAM_REF, defaultChatId: "555" });
+
+    const result = await executeCommsTool(
+      channelRequest(toolName, args),
+      policyConfig(["api.telegram.org"]),
+      storage,
+      undefined,
+      { resolveChannelConnectionSecret: () => undefined },
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: "The saved telegram credential is unavailable from secure storage.",
+    });
     expect(calls).toHaveLength(0);
   });
 });

@@ -71,8 +71,13 @@ interface ApprovalActionSecretRuntime {
   resolveChannelConnectionSecret?: (secretRef: string) => string | undefined;
 }
 
+/** Every GoatCitadel secure-storage reference starts here; on a send, such a value is never a credential itself. */
+const KEYCHAIN_REF_PREFIX = "keychain:goatcitadel:";
 /** Where the secure-storage references of a channel connection start; the connection id and a colon follow. */
-const CHANNEL_CONNECTION_SECRET_REF_PREFIX = "keychain:goatcitadel:channel-connection:";
+const CHANNEL_CONNECTION_SECRET_REF_PREFIX = `${KEYCHAIN_REF_PREFIX}channel-connection:`;
+/** A stored key with one of these cannot travel in a header, and the request layer would quote it in its error. */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point.
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 export async function executeCommsTool(
   request: ToolInvokeRequest,
@@ -378,8 +383,9 @@ async function resolveGoogleWorkspaceToken(
 /**
  * Copies the connection config with each of this connection's secure-storage references swapped for the stored
  * key. Setup saves every secret field as a top-level reference, so only top-level strings are read. A reference
- * to another connection, one nobody can read and a missing reader all fail the send before any request: reference
- * text is never a credential, and no part of it is sent.
+ * to another connection or to a draft, one nobody can read, a missing reader and a stored value that holds a control
+ * character all fail the send before any request: reference text is never a credential, and no part of a stored
+ * key is sent, quoted or recorded (the request layer quotes a rejected header value in its error).
  */
 function resolveSavedChannelSecrets(
   connection: { connectionId: string; key: string; label?: string },
@@ -389,9 +395,9 @@ function resolveSavedChannelSecrets(
   const ownPrefix = `${CHANNEL_CONNECTION_SECRET_REF_PREFIX}${connection.connectionId}:`;
   const resolveValue = (value: unknown): unknown => {
     const reference = typeof value === "string" ? value.trim() : "";
-    if (!reference.startsWith(CHANNEL_CONNECTION_SECRET_REF_PREFIX)) return value;
+    if (!reference.startsWith(KEYCHAIN_REF_PREFIX)) return value;
     const secret = reference.startsWith(ownPrefix) ? runtime.resolveChannelConnectionSecret?.(reference)?.trim() : "";
-    if (!secret) {
+    if (!secret || CONTROL_CHARACTER_PATTERN.test(secret)) {
       throw new Error(
         `The saved ${asString(connection.label) ?? connection.key} credential is unavailable from secure storage.`,
       );

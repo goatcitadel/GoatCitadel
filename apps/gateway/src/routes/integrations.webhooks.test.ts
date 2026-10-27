@@ -2419,7 +2419,7 @@ describe("Nextcloud Talk webhooks signed with a key saved at setup", () => {
 
   /** Reads a saved key the way the gateway does: a reference names an account in the secure store. */
   function readSecureStore(secureStore: Map<string, string>) {
-    return vi.fn((secretRef: string): string | undefined => {
+    return vi.fn((_connectionId: string, secretRef: string): string | undefined => {
       try {
         return secureStore.get(parseChannelSecretRef(secretRef).account);
       } catch {
@@ -2431,7 +2431,7 @@ describe("Nextcloud Talk webhooks signed with a key saved at setup", () => {
   async function postNextcloudWebhook(input: {
     token: string;
     signWith: string;
-    resolveChannelConnectionSecret?: (secretRef: string) => string | undefined;
+    resolveChannelConnectionSecret?: (connectionId: string, secretRef: string) => string | undefined;
   }) {
     const acceptInboundChannelEvent = createDurableAcceptanceMock();
     app = Fastify();
@@ -2488,7 +2488,7 @@ describe("Nextcloud Talk webhooks signed with a key saved at setup", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(resolveChannelConnectionSecret).toHaveBeenCalledWith(savedKeyReference);
+    expect(resolveChannelConnectionSecret).toHaveBeenCalledWith(connectionId, savedKeyReference);
     expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
   });
 
