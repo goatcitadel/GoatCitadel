@@ -18,10 +18,11 @@ import { createLineDefinition } from "./channel-setup-definitions/line.js";
 import { createZaloDefinition } from "./channel-setup-definitions/zalo.js";
 import { createZaloUserDefinition } from "./channel-setup-definitions/zalouser.js";
 import type { ChannelSetupRuntimeDefinition } from "./channel-setup-definitions/common.js";
+import { withPickerHints } from "./channel-setup-definitions/picker-hints.js";
 
 export type { ChannelSetupRuntimeDefinition } from "./channel-setup-definitions/common.js";
 
-const RUNTIME_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = {
+const GUIDED_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = {
   "channel.discord": withGuidedJourney(createDiscordDefinition()),
   "channel.slack": withGuidedJourney(createSlackDefinition()),
   "channel.telegram": withGuidedJourney(createTelegramDefinition()),
@@ -40,6 +41,10 @@ const RUNTIME_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = {
   "channel.zalo": withGuidedJourney(createZaloDefinition()),
   "channel.zalouser": withGuidedJourney(createZaloUserDefinition()),
 };
+
+const RUNTIME_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = Object.fromEntries(
+  Object.entries(GUIDED_DEFINITIONS).map(([catalogId, runtime]) => [catalogId, withPickerHints(runtime)]),
+);
 
 export function getChannelSetupDefinition(catalogId: string): ChannelSetupDefinition | undefined {
   return RUNTIME_DEFINITIONS[catalogId]?.definition;
