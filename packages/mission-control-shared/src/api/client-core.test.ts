@@ -274,10 +274,19 @@ describe("client-core", () => {
 
   it("reports missing credentials separately from rejected stored credentials", async () => {
     clearGatewayAuthState();
-    const listener = vi.fn(); const unsubscribe = subscribeGatewayAuthRejection(listener);
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "Unauthorized", authMode: "basic" }, { status: 401 })));
+    const listener = vi.fn();
+    const unsubscribe = subscribeGatewayAuthRejection(listener);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ error: "Unauthorized", authMode: "basic" }, { status: 401 })),
+    );
     await expect(request("/api/v1/auth/current")).rejects.toMatchObject({ status: 401 });
-    expect(listener).toHaveBeenCalledWith({ authMode: "basic", path: "/api/v1/auth/current", status: 401, hadStoredAuth: false });
+    expect(listener).toHaveBeenCalledWith({
+      authMode: "basic",
+      path: "/api/v1/auth/current",
+      status: 401,
+      hadStoredAuth: false,
+    });
     unsubscribe();
   });
 
@@ -386,6 +395,50 @@ describe("client-core", () => {
     expect(jsonHeaders["Content-Type"]).toBe("application/json");
   });
 
+  it("gives up on a stalled read with a network error instead of loading forever, without retrying", async () => {
+    // Accepts the request, then never answers until the signal aborts it.
+    const fetchMock = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(request("/api/v1/stalled", { timeoutMs: 20 })).rejects.toMatchObject({
+      kind: "network",
+      method: "GET",
+      message: expect.stringContaining("no response within"),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The caller's own cancel still surfaces as a cancel, not a timeout.
+    const caller = new AbortController();
+    const cancelled = request("/api/v1/stalled", { signal: caller.signal });
+    caller.abort();
+    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("limits reads by default but leaves mutations and an explicit 0 unlimited", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(jsonResponse({ success: true, data: { ok: true } })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await request("/api/v1/x");
+    await request("/api/v1/x", { method: "POST", body: "{}" });
+    await request("/api/v1/x", { timeoutMs: 0 });
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchMock.mock.calls[1]?.[1]?.signal).toBeUndefined();
+    expect(fetchMock.mock.calls[2]?.[1]?.signal).toBeUndefined();
+    await expect(request("/api/v1/x", { timeoutMs: -1 })).rejects.toThrow(/timeout/i);
+
+    // A read with its own timeout never joins another caller's in-flight read.
+    fetchMock.mockClear();
+    await Promise.all([request("/api/v1/y"), request("/api/v1/y", { timeoutMs: 0 }), request("/api/v1/y")]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("sends an owner-chosen attempt key as the Idempotency-Key of a mutation", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { ok: true } }));
     vi.stubGlobal("fetch", fetchMock);
@@ -397,8 +450,12 @@ describe("client-core", () => {
   it("refuses a malformed attempt key or one on a read, before dispatch", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { ok: true } }));
     vi.stubGlobal("fetch", fetchMock);
-    await expect(request("/api/v1/x", { method: "POST", body: "{}", attemptKey: "not-a-uuid" })).rejects.toThrow(/attempt key/i);
-    await expect(request("/api/v1/x", { method: "GET", attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b" })).rejects.toThrow(/attempt key/i);
+    await expect(request("/api/v1/x", { method: "POST", body: "{}", attemptKey: "not-a-uuid" })).rejects.toThrow(
+      /attempt key/i,
+    );
+    await expect(
+      request("/api/v1/x", { method: "GET", attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b" }),
+    ).rejects.toThrow(/attempt key/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -694,30 +751,40 @@ describe("client-core", () => {
     await expect(authenticated).resolves.toEqual({ ok: true });
   });
 
-  it.each([false, true])("does not share pending reads across server caller custody changes (returning=%s)", async (returning) => {
-    const resolvers: Array<(response: Response) => void> = [];
-    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => resolvers.push(resolve)));
-    vi.stubGlobal("fetch", fetchMock);
-    setGatewayCallerScope("caller-a");
-    const old = request<{ caller: string }>("/api/v1/coalesce/caller-change");
-    const oldResult = expect(old).rejects.toMatchObject({ kind: "protocol" });
-    setGatewayCallerScope("caller-b");
-    if (returning) setGatewayCallerScope("caller-a");
-    const current = request<{ caller: string }>("/api/v1/coalesce/caller-change");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    resolvers[0]!(jsonResponse({ caller: "old" }));
-    resolvers[1]!(jsonResponse({ caller: "current" }));
-    await oldResult;
-    await expect(current).resolves.toEqual({ caller: "current" });
-    setGatewayCallerScope("");
-  });
+  it.each([false, true])(
+    "does not share pending reads across server caller custody changes (returning=%s)",
+    async (returning) => {
+      const resolvers: Array<(response: Response) => void> = [];
+      const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => resolvers.push(resolve)));
+      vi.stubGlobal("fetch", fetchMock);
+      setGatewayCallerScope("caller-a");
+      const old = request<{ caller: string }>("/api/v1/coalesce/caller-change");
+      const oldResult = expect(old).rejects.toMatchObject({ kind: "protocol" });
+      setGatewayCallerScope("caller-b");
+      if (returning) setGatewayCallerScope("caller-a");
+      const current = request<{ caller: string }>("/api/v1/coalesce/caller-change");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      resolvers[0]!(jsonResponse({ caller: "old" }));
+      resolvers[1]!(jsonResponse({ caller: "current" }));
+      await oldResult;
+      await expect(current).resolves.toEqual({ caller: "current" });
+      setGatewayCallerScope("");
+    },
+  );
 
   it("rejects old caller data when custody changes during body decoding", async () => {
     let enter!: () => void;
-    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
     let finish!: (body: string) => void;
     const response = jsonResponse({});
-    vi.spyOn(response, "text").mockImplementation(() => { enter(); return new Promise<string>((resolve) => { finish = resolve; }); });
+    vi.spyOn(response, "text").mockImplementation(() => {
+      enter();
+      return new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+    });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
     setGatewayCallerScope("caller-a");
     const old = request("/api/v1/coalesce/body-custody");
@@ -730,7 +797,15 @@ describe("client-core", () => {
 
   it("does not retire current access when an old caller receives an authentication rejection", async () => {
     let finish!: (response: Response) => void;
-    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(
+        () =>
+          new Promise<Response>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    );
     setGatewayCallerScope("caller-a");
     const rejection = vi.fn();
     const unsubscribe = subscribeGatewayAuthRejection(rejection);
@@ -743,17 +818,32 @@ describe("client-core", () => {
       await rejected;
       expect(rejection).not.toHaveBeenCalled();
       expect(getGatewayAccessRevision()).toBe(revision);
-    } finally { unsubscribe(); }
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("honors cancellation while a successful response body is decoding", async () => {
-    let enter!: () => void; const entered = new Promise<void>(resolve => { enter = resolve; });
-    let finish!: (body: string) => void; const response = jsonResponse({});
-    vi.spyOn(response, "text").mockImplementation(() => { enter(); return new Promise<string>(resolve => { finish = resolve; }); });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response)); const controller = new AbortController();
-    const pending = request("/api/v1/coalesce/body-cancel", {signal: controller.signal});
-    const rejected = expect(pending).rejects.toMatchObject({name: "AbortError"});
-    await entered; controller.abort(); finish(JSON.stringify({ok: true})); await rejected;
+    let enter!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let finish!: (body: string) => void;
+    const response = jsonResponse({});
+    vi.spyOn(response, "text").mockImplementation(() => {
+      enter();
+      return new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    const controller = new AbortController();
+    const pending = request("/api/v1/coalesce/body-cancel", { signal: controller.signal });
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await entered;
+    controller.abort();
+    finish(JSON.stringify({ ok: true }));
+    await rejected;
   });
 
   it("clears the coalescing entry once a GET settles so later calls re-fetch", async () => {

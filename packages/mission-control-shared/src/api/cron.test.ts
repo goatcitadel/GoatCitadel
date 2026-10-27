@@ -29,10 +29,14 @@ describe("fresh cron owner reads", () => {
     const controller = new AbortController();
     const fresh = read(controller.signal);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1]?.[1]?.signal).toBe(controller.signal);
+    // The fresh read sends the caller's signal (combined with the client's read timeout).
+    const sent = fetchMock.mock.calls[1]?.[1]?.signal as AbortSignal;
+    expect(sent.aborted).toBe(false);
     await expect(fresh).resolves.toEqual(
       kind === "job" ? { jobId: "fresh-job", revision: 2 } : { items: [{ jobId: "fresh-job" }] },
     );
+    controller.abort();
+    expect(sent.aborted).toBe(true);
     finish(json(kind === "job" ? { jobId: "fresh-job", revision: 1 } : { items: [] }));
     expect(await earlier).toEqual(await joined);
   });
