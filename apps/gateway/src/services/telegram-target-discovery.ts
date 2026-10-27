@@ -1,3 +1,4 @@
+import type { ChannelSetupCodeSender } from "@goatcitadel/contracts";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
 
 export interface TelegramDiscoveredTarget {
@@ -57,6 +58,52 @@ export function parseTelegramUpdateTargets(payload: unknown, setupCode?: string)
     }
     return left.label.localeCompare(right.label);
   });
+}
+
+/**
+ * Finds who sent the one-time setup code to the bot: a private-chat message from a person (not a bot)
+ * that is exactly the code, or `/start <code>` / `/start@bot <code>`. The code must match exactly; it is
+ * never searched for inside other text. When several updates match, the latest `update_id` wins (array
+ * order decides when an update carries no numeric id).
+ */
+export function findTelegramStartCodeSender(payload: unknown, setupCode: string): ChannelSetupCodeSender | undefined {
+  if (!setupCode || !isRecord(payload) || !Array.isArray(payload.result)) {
+    return undefined;
+  }
+  let latest: { sender: ChannelSetupCodeSender; updateId?: number } | undefined;
+  for (const update of payload.result) {
+    const sender = readStartCodeSender(update, setupCode);
+    if (!sender) {
+      continue;
+    }
+    const updateId = isRecord(update) && typeof update.update_id === "number" ? update.update_id : undefined;
+    if (latest?.updateId !== undefined && updateId !== undefined && updateId < latest.updateId) {
+      continue;
+    }
+    latest = { sender, updateId };
+  }
+  return latest?.sender;
+}
+
+const START_COMMAND_PATTERN = /^\/start(?:@[A-Za-z0-9_]{1,64})?\s+(\S+)$/;
+
+function readStartCodeSender(update: unknown, setupCode: string): ChannelSetupCodeSender | undefined {
+  const message = readTelegramMessage(update);
+  const chat = isRecord(message?.chat) ? message.chat : undefined;
+  const from = isRecord(message?.from) ? message.from : undefined;
+  const text = typeof message?.text === "string" ? message.text.trim() : "";
+  if (!message || !chat || !from || chat.type !== "private" || from.is_bot) {
+    return undefined;
+  }
+  const code = text === setupCode ? text : START_COMMAND_PATTERN.exec(text)?.[1];
+  const actorId = readChatId(from);
+  const chatId = readChatId(chat);
+  if (code !== setupCode || !actorId || !chatId) {
+    return undefined;
+  }
+  const displayName = [readString(from, "first_name"), readString(from, "last_name")].filter(Boolean).join(" ");
+  const username = readString(from, "username");
+  return { actorId, chatId, ...(displayName ? { displayName } : {}), ...(username ? { username } : {}) };
 }
 
 function readTelegramMessage(update: unknown): Record<string, unknown> | undefined {
