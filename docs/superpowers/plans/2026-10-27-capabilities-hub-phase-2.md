@@ -19,11 +19,11 @@
 
 **Measured facts:** `.superpowers/sdd/2026-10-27-capabilities-hub-phase-2/phase2-facts.md` (gitignored, in the planning worktree). It has file:line evidence for every claim below, measured on `main` at `2bf5044aa`.
 
-## Decisions waiting on the operator
+## Decided by the operator (2026-10-27)
 
-The build starts only after these are answered. Each recommended answer is what the tasks below already implement.
+The operator answered both questions with the recommended option: "Q1: A — off stops the AI only; channel replies, my own sends and Library actions keep working. Q2: follow #572 for switching back on, as recommended." The tasks below implement those answers. The alternatives are kept for the record.
 
-**Q1. When a group is off, do GoatCitadel's own deliveries still work?**
+**Q1. When a group is off, do GoatCitadel's own deliveries still work?** Decided: A.
 
 Some features call tools by name through the same policy engine:
 - replies in connected chat apps go through `channel.send`
@@ -35,7 +35,7 @@ A plain engine deny would switch those off too. For example, turning off Messagi
 - **Recommended (A):** Off stops the AI only. Those own deliveries carry a server-minted marker that lets them past the group switch and nothing else (Task 3).
 - **Alternative (B):** Off blocks the tools everywhere. In that case, drop Task 3 and have the panel warn under Messaging, Documents, Memory and Email and calendar.
 
-**Q2. Does turning a group back on ask for approval?**
+**Q2. Does turning a group back on ask for approval?** Decided: follow #572 (the recommended option).
 
 The spec's Tools section says "no approval request". Its Constraints section says switching follows #572 and `remote_hardened` always asks. Lifting a deny in Settings › Safety today is a caution or danger Change Plan.
 
@@ -188,7 +188,7 @@ The constants `CHANGE_REQUEST_TOOL_NAME`, `RUNTIME_CONFIGURE_TOOL_NAME`, `SUBMIT
 - [ ] **Step 4: Run the new file plus** `src/engine.test.ts` **and** `src/mcp-named-policy.test.ts` **(PASS).**
 - [ ] **Step 5: Commit:** `feat(policy): switch off tool groups in the policy engine`.
 
-### Task 3: GoatCitadel's own deliveries keep working (Q1 = A)
+### Task 3: GoatCitadel's own deliveries keep working (Q1: A, decided)
 
 **Files:**
 - Create: `packages/policy-engine/src/own-delivery.ts`. Export it from the package index.
@@ -296,7 +296,7 @@ export function isOwnDeliveryMarker(value: unknown): value is OwnDeliveryMarker;
 | Change | Risk | Title | Completed summary |
 |---|---|---|---|
 | Off | safe | Switch off the {label} tools | The AI can't use the {label} tools in any chat. |
-| On (Q2 recommended) | caution | Switch the {label} tools back on | The {label} tools are back on. Other safety rules still apply. |
+| On (Q2, decided) | caution | Switch the {label} tools back on | The {label} tools are back on. Other safety rules still apply. |
 
 **Audit.** With Change Plans on (the default, `evolutionControlPlaneV1Enabled ?? true`), the plan's history is the operator audit record, as for every Settings › Safety change:
 - `apply_started`
@@ -477,7 +477,7 @@ export class CapabilityToolsService { list(workspaceId: string): Promise<Capabil
   - `pnpm verify:architecture:metrics`: no new regression, and GatewayService at or under 13132
   - `pnpm docs:check`
   - `git diff --check`
-- [ ] **Step 6: Commit:** `feat(gateway): serve the Capabilities tool groups`. Then open PR 2a, listing Q1 and Q2 as decided and the group table for the operator to check.
+- [ ] **Step 6: Commit:** `feat(gateway): serve the Capabilities tool groups`. Then open PR 2a, quoting the operator's Q1 and Q2 answers and listing the group table for the operator to check.
 
 ---
 
@@ -741,7 +741,7 @@ export function toolBlockHref(block: CapabilityToolBlock): string;
 | `/library/tools` redirects when the Tools tab ships; `/library/capabilities` stays | 9 |
 | Tabs appear as they ship; open on the last tab used, Connectors on the first visit | 9 |
 | Optimistic switch with per-row rollback; "Takes effect in new chats"; conflict reload | 10, 11 |
-| #572 approval skip and `remote_hardened` | 5, 10 (pending Q2) |
+| #572 approval skip and `remote_hardened` | 5, 10 (Q2 decided) |
 | Command palette opens Capabilities | 9 |
 
 **Deliberate limits, and why:**
