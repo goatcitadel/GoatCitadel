@@ -36,6 +36,7 @@ import {
   isOutsideRootWriteTool,
   resolveWebSearchEngineCandidates,
   splitUtf8HeadTail,
+  toolGroupForTool,
   toolNamesSwitchedOff,
   type OutsideRootWriteApprovalDetails,
   type OutsideRootWriteGrantDuration,
@@ -77,7 +78,12 @@ import {
   type McpToolPolicyBinding,
 } from "./mcp-tool-policy-binding.js";
 import { readMcpApprovalRelief, type McpApprovalRelief } from "./mcp-approval-relief.js";
-import { isOwnDeliveryMarker, type OwnDeliveryMarker } from "./own-delivery.js";
+import {
+  isOwnDeliveryMarker,
+  mintOwnDeliveryFromRegistration,
+  ownDeliveryRegistrationFact,
+  type OwnDeliveryMarker,
+} from "./own-delivery.js";
 import {
   readMeshToolPolicyBinding,
   MESH_TOOL_POLICY_DEFINITION,
@@ -774,6 +780,8 @@ export class ToolPolicyEngine {
               reasonCodes: evaluation.reasonCodes,
               wardEffect: evaluation.wardEffect,
               ...(evaluation.outsideRootWrite ? { outsideRootWrite: evaluation.outsideRootWrite } : {}),
+              // Only from a minted marker; executeApprovedAction re-mints from it (P2-R4a).
+              ...ownDeliveryRegistrationFact(options.ownDelivery),
             },
           });
 
@@ -1043,7 +1051,11 @@ export class ToolPolicyEngine {
     }
     const approvedCapabilityPolicy = identity.capabilityPolicy;
     const internalCall = buildInternalToolCall(executionRequest, approvedCapabilityPolicy, startedAt);
-    const evaluation = await this.evaluateInvocationAccess(executionRequest, options, true);
+    const evaluation = await this.evaluateInvocationAccess(
+      executionRequest,
+      { ...options, ownDelivery: await this.resolveApprovedOwnDelivery(approvalId, request.toolName, options) },
+      true,
+    );
 
     if (!evaluation.allowed) {
       const reason = `blocked: ${evaluation.policyReason}`;
@@ -1148,6 +1160,25 @@ export class ToolPolicyEngine {
     return result;
   }
 
+  /**
+   * The approval runtime runs an approved action knowing only its id. A caller's own marker still counts; otherwise
+   * the marker is re-minted only from the own fact this engine recorded when it registered the approval. Read only
+   * while a group is off, the one check a marker skips.
+   */
+  private async resolveApprovedOwnDelivery(
+    approvalId: string,
+    toolName: string,
+    options: { ownDelivery?: OwnDeliveryMarker } | undefined,
+  ): Promise<OwnDeliveryMarker | undefined> {
+    if (isOwnDeliveryMarker(options?.ownDelivery)) {
+      return options.ownDelivery;
+    }
+    if (this.listSwitchedOffToolNames().size === 0) {
+      return undefined;
+    }
+    return mintOwnDeliveryFromRegistration(await this.storage.approvalEvents.listByApprovalId(approvalId), toolName);
+  }
+
   private resolveInvocationPolicy(request: ToolAccessEvaluateRequest, options: ToolPolicyEvaluateOptions = {}) {
     if (options.mcpToolBinding && options.meshToolBinding) {
       throw new ToolExecutionPreconditionError("Remote policy mappings are mutually exclusive");
@@ -1239,14 +1270,15 @@ export class ToolPolicyEngine {
     // override cannot lift it. It sits after the deny gate so a tool that is also denied reports policy_deny,
     // the remedy switching the group on would not fix. Core, MCP and mesh names are never in the map.
     // The switch stops the AI only: a Gateway-minted own-delivery marker skips this one check and nothing else.
+    // The reason can reach the operator (a failed channel delivery, a Chat tool run), so it names the group's label.
     for (const name of isOwnDeliveryMarker(options.ownDelivery) ? [] : toolNames) {
-      const groupId = policy.switchedOffTools?.get(name);
-      if (groupId) {
+      if (policy.switchedOffTools?.has(name)) {
+        const label = toolGroupForTool(name)?.label;
         return withPolicy(
           deny(
             riskLevel,
             "tool_group_off",
-            `tool ${request.toolName} is in a tool group switched off by the operator (${groupId})`,
+            `tool ${request.toolName} is in a tool group switched off by the operator${label ? ` (${label})` : ""}`,
           ),
         );
       }

@@ -161,6 +161,10 @@ export function buildGovernanceBlockGuidance(input: {
  * excluded, because their fix may be a different request or a repair.
  */
 function isToolPolicyBlock(run: ChatToolRunRecord): boolean {
+  // A switched-off group is a policy block on a web or browser tool too; a different URL won't lift it (P2-R20).
+  if (isSwitchedOffRun(run)) {
+    return true;
+  }
   if (run.status !== "blocked" || isWebTool(run.toolName) || isPathBridgeBlock(run)) {
     return false;
   }
@@ -283,8 +287,9 @@ export function buildPolicyBlockedRecoveryText(failedOrBlocked: readonly ChatToo
 
 /**
  * User-facing appendix for failed or blocked tool runs. Only failures and web
- * tool blocks get the URL/query hint; a policy block on another tool is not
- * fixed by a different URL or a narrower query.
+ * tool blocks get the URL/query hint; a policy block on another tool, or on a
+ * web tool in a switched-off group, is not fixed by a different URL or a
+ * narrower query.
  */
 export function buildToolFailureAppendixText(failedOrBlocked: readonly ChatToolRunRecord[]): string | undefined {
   if (failedOrBlocked.length === 0) {
@@ -293,7 +298,9 @@ export function buildToolFailureAppendixText(failedOrBlocked: readonly ChatToolR
   if (failedOrBlocked.every(isMemoryConsentBlock)) {
     return `Note: nothing was saved to memory. Long-term memory is saved only when your message uses an accepted consent phrasing, for example ${MEMORY_CONSENT_EXAMPLES}.`;
   }
-  const policyBlocksOnly = failedOrBlocked.every((run) => run.status === "blocked" && !isWebTool(run.toolName));
+  const policyBlocksOnly = failedOrBlocked.every(
+    (run) => isSwitchedOffRun(run) || (run.status === "blocked" && !isWebTool(run.toolName)),
+  );
   const uniqueTools = [...new Set(failedOrBlocked.map((run) => formatToolLabel(run.toolName)))];
   const outcome = policyBlocksOnly ? "was blocked by policy" : "failed while I was working";
   const opening =

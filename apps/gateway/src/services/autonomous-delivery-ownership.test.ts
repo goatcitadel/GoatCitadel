@@ -146,4 +146,13 @@ describe("autonomous delivery ownership (P2-R19)", () => {
       ).resolves.toBe(false);
     }
   });
+
+  it("treats a commitment follow-up as not own, without failing the enqueue, when its bound channel can't be read", async () => {
+    const { scheduledHost, delivery } = fixture({ config: scheduleConfig({ commitment: COMMITMENT }) });
+    const unreadable = {
+      storage: { chatSessionBindings: { get: async () => Promise.reject(new Error("database is locked")) } },
+      listConnectorRecords: async () => [],
+    } as never;
+    await expect(isOwnAutonomousDelivery(delivery, scheduledHost, unreadable)).resolves.toBe(false);
+  });
 });

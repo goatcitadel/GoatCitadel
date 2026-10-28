@@ -93,7 +93,8 @@ function currentPosture(toolName: string, settings: RuntimeSettings): GlobalTool
 
 /** Off is safe and on is caution: switching a group on can only widen what the AI may try, never lift another rule. */
 export function describeToolGroupChange(change: ToolGroupChange): WriteAccessDescription {
-  const label = TOOL_GROUPS.find((group) => group.id === change.groupId)?.label ?? change.groupId;
+  // Every entry is gated by isToolGroupChange, so the group is found; a raw id never reaches Inbox copy.
+  const label = TOOL_GROUPS.find((group) => group.id === change.groupId)?.label ?? "selected";
   if (change.enabled) {
     return {
       title: `Switch the ${label} tools back on`,

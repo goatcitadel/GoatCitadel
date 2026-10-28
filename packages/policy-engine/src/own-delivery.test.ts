@@ -134,4 +134,99 @@ describe("own delivery in the policy engine", () => {
     expect(withoutMarker.policyReason).toContain(SWITCHED_OFF_PHRASE);
     await expect(fs.stat(path.join(workDir, "ai.txt"))).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  describe("an approval the approval runtime runs later", () => {
+    let workDir: string;
+    let policy: ToolPolicyConfig;
+    let engine: ToolPolicyEngine;
+
+    beforeEach(async () => {
+      workDir = path.join(root, "work");
+      await fs.mkdir(workDir, { recursive: true });
+      policy = config(workDir);
+      policy.tools.approvalMode = "approve_risky";
+      engine = new ToolPolicyEngine(policy, asyncStorage);
+    });
+
+    /** Asks for a write, has the operator approve it, switches Files off, then runs it the way the runtime does. */
+    async function approveThenRunWhileFilesOff(
+      file: string,
+      ask: (write: ToolInvokeRequest) => Promise<{ outcome: string; approvalId?: string }>,
+    ) {
+      const asked = await ask(request("fs.write", { path: path.join(workDir, file), content: "hello" }));
+      expect(asked.outcome).toBe("approval_required");
+      await asyncStorage.approvals.resolve(asked.approvalId!, { decision: "approve", resolvedBy: "operator" });
+      policy.tools.disabledGroups = ["files"];
+      // No marker: the approval runtime knows only the approval id.
+      return { approvalId: asked.approvalId!, result: await engine.executeApprovedAction(asked.approvalId!) };
+    }
+
+    it("runs an own call that asked first once the operator approves it, while its group is off", async () => {
+      const ownDelivery = createOwnDeliveryMarker("operator_action");
+      const { approvalId, result } = await approveThenRunWhileFilesOff("own.txt", (write) =>
+        engine.invoke(write, { ownDelivery }),
+      );
+
+      expect(result?.outcome, result?.policyReason).toBe("executed");
+      await expect(fs.readFile(path.join(workDir, "own.txt"), "utf8")).resolves.toBe("hello");
+      // The fact lives on the engine's registration event, outside the stored request the approval checks match.
+      const pending = await asyncStorage.pendingApprovalActions.find(approvalId);
+      expect(pending?.request).not.toHaveProperty("ownDelivery");
+      const registration = (await asyncStorage.approvalEvents.listByApprovalId(approvalId)).find(
+        (event) => event.eventType === "pending_action_registered",
+      );
+      expect(registration?.payload).toMatchObject({ ownDelivery: "operator_action" });
+    });
+
+    it("keeps the AI's approved call switched off", async () => {
+      const { approvalId, result } = await approveThenRunWhileFilesOff("ai.txt", (write) => engine.invoke(write));
+
+      expect(result?.outcome).toBe("blocked");
+      expect(result?.policyReason).toContain(SWITCHED_OFF_PHRASE);
+      await expect(fs.stat(path.join(workDir, "ai.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+      const registration = (await asyncStorage.approvalEvents.listByApprovalId(approvalId)).find(
+        (event) => event.eventType === "pending_action_registered",
+      );
+      expect(registration?.payload).not.toHaveProperty("ownDelivery");
+    });
+
+    it("records the own fact only from a minted marker, never from the request or a later event", async () => {
+      const lookAlike = { kind: "own_delivery", reason: "operator_action" } as unknown as OwnDeliveryMarker;
+      const forgedAsks: Array<(write: ToolInvokeRequest) => Promise<{ outcome: string; approvalId?: string }>> = [
+        // A look-alike marker in the options.
+        (write) => engine.invoke(write, { ownDelivery: lookAlike }),
+        // The fact, or a real marker, written into the request itself: it is stored with the request and ignored.
+        (write) => engine.invoke({ ...write, ownDelivery: "operator_action" } as unknown as ToolInvokeRequest),
+        (write) =>
+          engine.invoke({
+            ...write,
+            ownDelivery: createOwnDeliveryMarker("operator_action"),
+            policyContext: { ownDelivery: "operator_action" },
+          } as unknown as ToolInvokeRequest),
+      ];
+      for (const [index, ask] of forgedAsks.entries()) {
+        policy.tools.disabledGroups = [];
+        const { result } = await approveThenRunWhileFilesOff(`forged-${index}.txt`, ask);
+        expect(result?.outcome, `forged ask ${index}`).toBe("blocked");
+        expect(result?.policyReason).toContain(SWITCHED_OFF_PHRASE);
+      }
+
+      // A second registration event claiming the fact, even one dated before the engine's, never adds it.
+      policy.tools.disabledGroups = [];
+      const asked = await engine.invoke(request("fs.write", { path: path.join(workDir, "late.txt"), content: "x" }));
+      await asyncStorage.approvalEvents.append({
+        approvalId: asked.approvalId!,
+        eventType: "pending_action_registered",
+        actorId: "system",
+        timestamp: "2000-01-01T00:00:00.000Z",
+        payload: { actionType: "tool.invoke", toolName: "fs.write", ownDelivery: "operator_action" },
+      });
+      await asyncStorage.approvals.resolve(asked.approvalId!, { decision: "approve", resolvedBy: "operator" });
+      policy.tools.disabledGroups = ["files"];
+      const late = await engine.executeApprovedAction(asked.approvalId!);
+      expect(late?.outcome).toBe("blocked");
+      expect(late?.policyReason).toContain(SWITCHED_OFF_PHRASE);
+      await expect(fs.stat(path.join(workDir, "late.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
 });

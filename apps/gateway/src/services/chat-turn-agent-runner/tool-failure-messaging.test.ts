@@ -114,6 +114,25 @@ describe("buildToolFailureAppendixText", () => {
     expect(text).toContain("give me a specific URL or narrower query");
   });
 
+  it("treats a switched-off web or browser run as a policy block, not a web failure", () => {
+    for (const run of [
+      toolRun({
+        toolName: "browser.search",
+        error: "blocked: tool browser.search is in a tool group switched off by the operator (Web search)",
+      }),
+      toolRun({
+        toolName: "http.get",
+        error: "Current deny-wins policy blocks http.get.",
+        result: { policyRevalidation: { status: "blocked", reasonCodes: ["tool_group_off"] } },
+      }),
+    ]) {
+      const text = buildToolFailureAppendixText([run]);
+
+      expect(text, run.toolName).toContain("was blocked by policy");
+      expect(text, run.toolName).not.toMatch(/failed while I was working|URL|narrower query/);
+    }
+  });
+
   it("treats a blocked docs.search as a policy block, not a web tool", () => {
     const text = buildToolFailureAppendixText([toolRun({ toolName: "docs.search", status: "blocked" })]);
 
@@ -169,7 +188,7 @@ describe("buildGovernanceBlockGuidance", () => {
     const guidance = buildGovernanceBlockGuidance({
       toolName: "channel.send",
       status: "blocked",
-      error: "blocked: tool channel.send is in a tool group switched off by the operator (messaging)",
+      error: "blocked: tool channel.send is in a tool group switched off by the operator (Messaging)",
     });
 
     expect(guidance).toContain("channel.send is switched off");
@@ -243,7 +262,7 @@ describe("buildGovernanceBlockGuidance", () => {
       buildGovernanceBlockGuidance({
         toolName: "channel.send",
         status: "failed",
-        error: "tool channel.send is in a tool group switched off by the operator (messaging)",
+        error: "tool channel.send is in a tool group switched off by the operator (Messaging)",
       }),
     ).toBeUndefined();
   });
@@ -320,7 +339,7 @@ describe("buildPolicyBlockedRecoveryText", () => {
     const text = buildPolicyBlockedRecoveryText([
       toolRun({
         toolName: "channel.send",
-        error: "blocked: tool channel.send is in a tool group switched off by the operator (messaging)",
+        error: "blocked: tool channel.send is in a tool group switched off by the operator (Messaging)",
       }),
       toolRun({
         toolRunId: "run-2",
@@ -337,11 +356,24 @@ describe("buildPolicyBlockedRecoveryText", () => {
     expect(text).not.toContain("tools.deny");
   });
 
+  it("sends the operator to Capabilities › Tools for a switched-off web or browser tool too", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({
+        toolName: "browser.interact",
+        error: "blocked: tool browser.interact is in a tool group switched off by the operator (Browser)",
+      }),
+    ]);
+
+    expect(text).toContain("browser.interact is switched off");
+    expect(text).toContain("switch tool groups back on in Capabilities › Tools");
+    expect(text).not.toMatch(/narrower|specific URL/i);
+  });
+
   it("keeps the Settings > Tools pointer when a switched-off block is mixed with another policy block", () => {
     const text = buildPolicyBlockedRecoveryText([
       toolRun({
         toolName: "channel.send",
-        error: "tool channel.send is in a tool group switched off by the operator (messaging)",
+        error: "tool channel.send is in a tool group switched off by the operator (Messaging)",
       }),
       toolRun({ toolRunId: "run-2", toolName: "fs.delete", error: "tool denied by policy" }),
     ]);

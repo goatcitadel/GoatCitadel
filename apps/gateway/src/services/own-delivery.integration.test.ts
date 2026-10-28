@@ -100,6 +100,16 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
     return { toolName, args, agentId: "assistant", sessionId: "own-delivery-ai-session" };
   }
 
+  /** The operator approves in Inbox; the approval runtime then runs the action. Returns the settled pending action. */
+  async function approveAndSettle(live: GatewayService, approvalId: string) {
+    await live.resolveApproval(approvalId, { decision: "approve", resolvedBy: "operator" });
+    return await pollFor(
+      async () => await live.storage.pendingApprovalActions.find(approvalId),
+      (action) => action?.resolutionStatus !== undefined && action.resolutionStatus !== "pending",
+      `approval ${approvalId} to settle`,
+    );
+  }
+
   it("delivers an inbound channel reply while Messaging is off", async () => {
     const { live, connection } = await startGateway();
     switchOff(live, "messaging");
@@ -177,7 +187,7 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
     expect(fakeDiscord!.requests).toHaveLength(0);
   });
 
-  it("blocks an approved AI channel send after Messaging is switched off", async () => {
+  it("keeps an approved AI channel.send blocked while Messaging is off", async () => {
     const { live, connection } = await startGateway();
     live.config.toolPolicy.tools.allow.push("channel.send");
     const approvedSend = async (message: string) => {
@@ -185,27 +195,48 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
       expect(asked.outcome, asked.policyReason).toBe("approval_required");
       return asked.approvalId!;
     };
-    const settle = async (approvalId: string) => {
-      await live.resolveApproval(approvalId, { decision: "approve", resolvedBy: "operator" });
-      return await pollFor(
-        async () => await live.storage.pendingApprovalActions.find(approvalId),
-        (action) => action?.resolutionStatus !== undefined && action.resolutionStatus !== "pending",
-        "the approved channel send to settle",
-      );
-    };
 
     // Control: with Messaging on, the approved AI send reaches Discord.
-    expect((await settle(await approvedSend("Approved while on")))?.resolutionStatus).toBe("executed");
+    expect((await approveAndSettle(live, await approvedSend("Approved while on")))?.resolutionStatus).toBe("executed");
     expect(fakeDiscord!.requests).toHaveLength(1);
 
-    // The operator approves, then switches Messaging off before it runs: the AI's send stays stopped.
-    const approvalId = await approvedSend("Approved, then switched off");
+    // The AI's send asks first; the operator approves it while Messaging is off: the AI's send stays stopped.
+    const approvalId = await approvedSend("Approved while off");
     switchOff(live, "messaging");
-    const stopped = await settle(approvalId);
-    // Stopped by the switch itself, not by some unrelated failure.
+    const stopped = await approveAndSettle(live, approvalId);
+    // Stopped by the switch itself, not by some unrelated failure, and named by the group's label.
     expect(stopped?.resolutionStatus).toBe("failed");
     expect(JSON.stringify(stopped?.result)).toContain(SWITCHED_OFF_PHRASE);
+    expect(JSON.stringify(stopped?.result)).toContain("(Messaging)");
     expect(fakeDiscord!.requests).toHaveLength(1);
+  });
+
+  it("runs an approved Library action while Documents is off", async () => {
+    const { live } = await startGateway();
+    switchOff(live, "documents");
+
+    // The operator ingests a note in Library. On a default install the operator's Library session asks first.
+    const asked = asRecord(
+      await live.routeServices.knowledge.knowledgeDocsIngest({
+        sourceType: "text",
+        source: "Release notes: the own-delivery test document.",
+        namespace: "own-delivery",
+        title: "Release notes",
+      }),
+    );
+    expect(asked.outcome, JSON.stringify(asked)).toBe("approval_required");
+
+    // The operator approves it in Inbox while Documents is still off, and the approval runtime runs it.
+    const settled = await approveAndSettle(live, String(asked.approvalId));
+    expect(settled?.resolutionStatus, JSON.stringify(settled?.result)).toBe("executed");
+    expect(asRecord(settled?.result)).toMatchObject({ outcome: "executed" });
+
+    // The control: the AI's own docs.ingest is still switched off.
+    const aiIngest = await live.invokeTool(
+      aiCall("docs.ingest", { sourceType: "text", source: "From the AI.", namespace: "own-delivery" }),
+    );
+    expect(aiIngest.outcome).toBe("blocked");
+    expect(aiIngest.policyReason).toContain(SWITCHED_OFF_PHRASE);
   });
 
   it("runs Library knowledge actions while Documents is off", async () => {
@@ -213,22 +244,23 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
     const chatAttachments = (
       live as unknown as { buildChatThreadKnowledgeDependencies(): ChatThreadKnowledgeDependencies }
     ).buildChatThreadKnowledgeDependencies();
-    // The Library routes and Chat attachments both reach the engine through the knowledge facade. An executed call
-    // comes back unwrapped; anything else keeps its tool outcome (the install's usual approval mode still applies).
-    const runLibraryActions = async () =>
-      [
-        await live.routeServices.knowledge.knowledgeMemorySearch({ query: "release notes" }),
-        await live.routeServices.knowledge.knowledgeEmbeddingsQuery({ query: "release notes" }),
-        await chatAttachments.knowledgeEmbeddingsQuery({ query: "release notes", sessionId: "own-delivery-chat" }),
-      ].map((result) => String(asRecord(result).outcome ?? "executed"));
-
-    const groupsOn = await runLibraryActions();
     switchOff(live, "documents", "memory");
-    const groupsOff = await runLibraryActions();
+    // The Library routes and Chat attachments both reach the engine through the knowledge facade. An executed call
+    // comes back unwrapped; one that asks first (the install's usual approval mode) keeps its tool outcome.
+    const results = [
+      await live.routeServices.knowledge.knowledgeMemorySearch({ query: "release notes" }),
+      await live.routeServices.knowledge.knowledgeEmbeddingsQuery({ query: "release notes" }),
+      await chatAttachments.knowledgeEmbeddingsQuery({ query: "release notes", sessionId: "own-delivery-chat" }),
+    ];
 
-    // Switching the groups off changes nothing for the operator's own Library actions.
-    expect(groupsOff).toEqual(groupsOn);
-    expect(groupsOff).not.toContain("blocked");
+    // Each one really runs while the groups are off: at once, or once the operator approves it.
+    for (const result of results) {
+      const record = asRecord(result);
+      if (record.outcome === undefined) continue;
+      expect(record.outcome, JSON.stringify(record)).toBe("approval_required");
+      const settled = await approveAndSettle(live, String(record.approvalId));
+      expect(settled?.resolutionStatus, JSON.stringify(settled?.result)).toBe("executed");
+    }
 
     // The AI's own calls to the same tools are switched off.
     for (const toolName of ["memory.search", "embeddings.query"]) {

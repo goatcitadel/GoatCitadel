@@ -82,7 +82,9 @@ describe("switched-off tool groups in the policy engine", () => {
     expect(result.outcome).toBe("blocked");
     expect(result.policyReason).toContain(SWITCHED_OFF_PHRASE);
     expect(result.policyReason).toContain("git.status");
-    expect(result.policyReason).toContain("(git)");
+    // The reason can reach the operator (a failed channel delivery, a Chat tool run), so it names the group's label.
+    expect(result.policyReason).toContain("(Git)");
+    expect(result.policyReason).not.toContain("(git)");
 
     // Other groups and Core are untouched.
     expect((await engine.inspectAccess(request("session.status"))).allowed).toBe(true);

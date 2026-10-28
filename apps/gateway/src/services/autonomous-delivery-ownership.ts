@@ -46,7 +46,13 @@ export async function isOwnAutonomousDelivery(
     return false;
   }
   if (config.commitment) {
-    const boundChannel = await resolveCommitmentDeliveryChannel(autonomousDeps, input.sessionId);
+    let boundChannel: Awaited<ReturnType<typeof resolveCommitmentDeliveryChannel>>;
+    try {
+      boundChannel = await resolveCommitmentDeliveryChannel(autonomousDeps, input.sessionId);
+    } catch {
+      // The bound channel can't be read, so the reply isn't own. It is still enqueued; only a switched-off group stops it.
+      return false;
+    }
     return config.sessionId === input.sessionId && sameChannel(boundChannel, input.deliveryChannel);
   }
   return (

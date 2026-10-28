@@ -364,6 +364,27 @@ describe("dashboard settings routes", () => {
     });
   });
 
+  it("refuses Core or an unknown tool group with a plain message", async () => {
+    const updateSettings = vi.fn();
+    app = Fastify();
+    app.decorate("services", {
+      settings: { updateSettings },
+      evolution: { isEnabled: vi.fn(async () => false) },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    for (const groupId of ["core", "nope", 7]) {
+      const response = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        payload: { expectedRevision: 7, toolGroupChange: { groupId, enabled: false } },
+      });
+      expect(response.statusCode, String(groupId)).toBe(400);
+      expect(response.json(), String(groupId)).toEqual({ error: "That tool group can't be switched off." });
+    }
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
   it("saves directly when Change Plans are off, for a tool group switch", async () => {
     const updateSettings = vi.fn((input: Record<string, unknown>) => ({ revision: 22, ...input }));
     const create = vi.fn();

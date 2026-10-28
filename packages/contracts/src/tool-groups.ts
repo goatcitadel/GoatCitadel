@@ -1,4 +1,7 @@
-/** Built-in tool groups. The operator can switch every group except Core off in Settings. */
+/**
+ * Built-in tool groups. The operator can switch every group except Core off in Capabilities › Tools; the switch
+ * saves through the Settings save.
+ */
 export type ToolGroupId =
   | "core"
   | "files"
