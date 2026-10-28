@@ -538,10 +538,6 @@ export async function executeTool(
     case "mattermost.unsend":
     case "nextcloud-talk.send":
     case "nextcloud-talk.react":
-    case "imessage.send":
-    case "imessage.react":
-    case "imessage.unsend":
-    case "signal.send":
     case "slack.send":
     case "slack.react":
     case "slack.unsend":

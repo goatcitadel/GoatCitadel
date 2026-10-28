@@ -259,23 +259,36 @@ describe("ChannelConnectionChangePlanAdapter", () => {
   });
 });
 
-
 function reviewedSettingsFixture(overrides: Partial<ChannelSetupDraft> = {}) {
   const draft: ChannelSetupDraft = {
-    draftId: "draft-1", revision: 9, catalogId: "channel.slack", lifecycleMode: "create", enabled: true,
+    draftId: "draft-1",
+    revision: 9,
+    catalogId: "channel.slack",
+    lifecycleMode: "create",
+    enabled: true,
     draft: {
       targets: [
         { label: "Primary", channel: "C123", threadTs: "1700.1", default: true },
         { label: "Secondary", channel: "C456", threadTs: "1700.2", default: false },
       ],
-      defaultChannel: "C123", defaultThreadTs: "1700.1", inboundAccessMode: "allowlist",
-      allowedSenders: ["U123", "U456"], authMode: "oauth", slackInstallId: "slack:T1:A1",
-      slackTeamId: "T1", slackScopes: ["chat:write", "channels:read"],
+      defaultChannel: "C123",
+      defaultThreadTs: "1700.1",
+      inboundAccessMode: "allowlist",
+      allowedSenders: ["U123", "U456"],
+      authMode: "oauth",
+      slackInstallId: "slack:T1:A1",
+      slackTeamId: "T1",
+      slackScopes: ["chat:write", "channels:read"],
     },
     secretState: { botToken: { configured: true, custody: "temporary" } },
-    contentVersion: "1", adapterVersion: "1", validationVersion: "1", testVersion: "1",
-    createdAt: "2026-10-08T00:00:00.000Z", updatedAt: "2026-10-08T00:00:00.000Z",
-    lastValidatedAt: "2026-10-08T00:01:00.000Z", lastTestedAt: "2026-10-08T00:02:00.000Z",
+    contentVersion: "1",
+    adapterVersion: "1",
+    validationVersion: "1",
+    testVersion: "1",
+    createdAt: "2026-10-08T00:00:00.000Z",
+    updatedAt: "2026-10-08T00:00:00.000Z",
+    lastValidatedAt: "2026-10-08T00:01:00.000Z",
+    lastTestedAt: "2026-10-08T00:02:00.000Z",
     ...overrides,
   };
   const deps = {
@@ -283,24 +296,48 @@ function reviewedSettingsFixture(overrides: Partial<ChannelSetupDraft> = {}) {
     createDraft: vi.fn(async () => draft),
     getDraft: vi.fn(async () => draft),
     updateDraft: vi.fn(async () => draft),
-    validateDraft: vi.fn(async (): Promise<ChannelSetupValidationResult> => ({ draftId: draft.draftId, draftRevision: draft.revision,
-      status: "ok" as const, levels: [], issues: [], checkedAt: new Date().toISOString() })),
-    finalizeDraft: vi.fn(), discardDraft: vi.fn(async () => true), getConnection: vi.fn(),
+    validateDraft: vi.fn(
+      async (): Promise<ChannelSetupValidationResult> => ({
+        draftId: draft.draftId,
+        draftRevision: draft.revision,
+        status: "ok" as const,
+        levels: [],
+        issues: [],
+        checkedAt: new Date().toISOString(),
+      }),
+    ),
+    finalizeDraft: vi.fn(),
+    discardDraft: vi.fn(async () => true),
+    getConnection: vi.fn(),
   };
-  const ctx: EvolutionControlPlaneAdapterContext = { ...context(), origin: { surface: "settings", workspaceId: "workspace-channels" } };
+  const ctx: EvolutionControlPlaneAdapterContext = {
+    ...context(),
+    origin: { surface: "settings", workspaceId: "workspace-channels" },
+  };
   const adapter = new ChannelConnectionChangePlanAdapter(deps);
   return { draft, deps, ctx, adapter };
 }
 function slackRecord(revision = 9): ChangePlanRecord {
-  return { ...record("awaiting_input", revision), request: { kind: "channel_connection", channelKind: "slack", draftId: "draft-1" } };
+  return {
+    ...record("awaiting_input", revision),
+    request: { kind: "channel_connection", channelKind: "slack", draftId: "draft-1" },
+  };
 }
 
 describe("Settings-origin exact channel review", () => {
   it("prepares a reviewed draft without re-entry, validation or mutation of structured routing and access", async () => {
     const { draft, deps, ctx, adapter } = reviewedSettingsFixture();
     const snapshot = structuredClone(draft);
-    const prepared = await adapter.prepare(ctx, { kind: "channel_connection", channelKind: "slack", draftId: draft.draftId });
-    expect(prepared).toMatchObject({ status: "awaiting_confirmation", target: { resourceId: draft.draftId, expectedRevision: 9 }, requiredAction: { kind: "confirmation" } });
+    const prepared = await adapter.prepare(ctx, {
+      kind: "channel_connection",
+      channelKind: "slack",
+      draftId: draft.draftId,
+    });
+    expect(prepared).toMatchObject({
+      status: "awaiting_confirmation",
+      target: { resourceId: draft.draftId, expectedRevision: 9 },
+      requiredAction: { kind: "confirmation" },
+    });
     expect(prepared.requiredAction).not.toHaveProperty("fields");
     expect(draft).toEqual(snapshot);
     expect(deps.createDraft).not.toHaveBeenCalled();
@@ -316,7 +353,11 @@ describe("Settings-origin exact channel review", () => {
   ])("blocks an untested or unvalidated Settings draft without writing owner state", async (timestamps) => {
     const { draft, deps, ctx, adapter } = reviewedSettingsFixture(timestamps);
     const snapshot = structuredClone(draft);
-    const prepared = await adapter.prepare(ctx, { kind: "channel_connection", channelKind: "slack", draftId: draft.draftId });
+    const prepared = await adapter.prepare(ctx, {
+      kind: "channel_connection",
+      channelKind: "slack",
+      draftId: draft.draftId,
+    });
     expect(prepared.status).toBe("manual_required");
     expect(prepared.requiredAction).toBeUndefined();
     expect(prepared.result?.summary).toContain("checks in Channels");
@@ -330,9 +371,18 @@ describe("Settings-origin exact channel review", () => {
     const { draft, deps, adapter } = reviewedSettingsFixture();
     const adapters = new EvolutionControlPlaneAdapterRegistry();
     adapters.register(adapter);
-    const create = vi.fn(async (input: ChangePlanRepositoryCreateInput) => ({ ...slackRecord(), ...input, revision: 1, planId: "plan-channel", evidenceRefs: [] }));
+    const create = vi.fn(async (input: ChangePlanRepositoryCreateInput) => ({
+      ...slackRecord(),
+      ...input,
+      revision: 1,
+      planId: "plan-channel",
+      evidenceRefs: [],
+    }));
     const service = new EvolutionControlPlaneService({ adapters, repository: { create } as never });
-    const input = { actor: { surface: "settings" as const, workspaceId: "workspace-channels", actorId: "operator" }, request: { kind: "channel_connection" as const, channelKind: "slack", draftId: draft.draftId } };
+    const input = {
+      actor: { surface: "settings" as const, workspaceId: "workspace-channels", actorId: "operator" },
+      request: { kind: "channel_connection" as const, channelKind: "slack", draftId: draft.draftId },
+    };
     await expect(service.create({ ...input, expectedTargetRevision: 8 })).rejects.toThrow("target changed");
     expect(create).not.toHaveBeenCalled();
     const prepared = await service.create({ ...input, expectedTargetRevision: 9 });
@@ -347,15 +397,32 @@ describe("Settings-origin exact channel review", () => {
   it("omits target cards, sender lists, arbitrary arrays and OAuth receipt fields from Chat scalar forms", async () => {
     const { draft, deps, adapter } = reviewedSettingsFixture();
     const baseDefinition = deps.getDefinition("channel.slack");
-    deps.getDefinition.mockReturnValue({ ...baseDefinition, wizard: { ...baseDefinition.wizard, steps: [{ id: "fields", kind: "field-collection", title: "Values", fields: [
-      { key: "defaultChannel", label: "Default", type: "text" },
-      { key: "targets", label: "Targets", type: "target-list" },
-      { key: "allowedSenders", label: "Senders", type: "sender-list" },
-      { key: "legacyMembers", label: "Legacy members", type: "textarea" },
-      ...CHANNEL_SLACK_OAUTH_METADATA_KEYS.map((key) => ({ key, label: key, type: "text" as const })),
-    ] }] } });
+    deps.getDefinition.mockReturnValue({
+      ...baseDefinition,
+      wizard: {
+        ...baseDefinition.wizard,
+        steps: [
+          {
+            id: "fields",
+            kind: "field-collection",
+            title: "Values",
+            fields: [
+              { key: "defaultChannel", label: "Default", type: "text" },
+              { key: "targets", label: "Targets", type: "target-list" },
+              { key: "allowedSenders", label: "Senders", type: "sender-list" },
+              { key: "legacyMembers", label: "Legacy members", type: "textarea" },
+              ...CHANNEL_SLACK_OAUTH_METADATA_KEYS.map((key) => ({ key, label: key, type: "text" as const })),
+            ],
+          },
+        ],
+      },
+    });
     draft.draft.legacyMembers = ["U789"];
-    const prepared = await adapter.prepare(context(), { kind: "channel_connection", channelKind: "slack", draftId: draft.draftId });
+    const prepared = await adapter.prepare(context(), {
+      kind: "channel_connection",
+      channelKind: "slack",
+      draftId: draft.draftId,
+    });
     expect(prepared.requiredAction?.kind).toBe("public_form");
     if (prepared.requiredAction?.kind !== "public_form") throw new Error("Expected public form");
     expect(prepared.requiredAction.fields.map((field) => field.fieldId)).toEqual(["defaultChannel"]);
@@ -363,24 +430,37 @@ describe("Settings-origin exact channel review", () => {
     expect(JSON.stringify(prepared.requiredAction.fields)).not.toContain("1700.1");
   });
 
-  it.each(CHANNEL_SLACK_OAUTH_METADATA_KEYS)("rejects forged OAuth %s before the draft update owner is called", async (key) => {
-    const { deps, ctx, adapter } = reviewedSettingsFixture();
-    await expect(adapter.respond(ctx, slackRecord(), { [key]: "forged" })).rejects.toThrow("not registered");
-    expect(deps.updateDraft).not.toHaveBeenCalled();
-    expect(deps.validateDraft).not.toHaveBeenCalled();
-  });
+  it.each(CHANNEL_SLACK_OAUTH_METADATA_KEYS)(
+    "rejects forged OAuth %s before the draft update owner is called",
+    async (key) => {
+      const { deps, ctx, adapter } = reviewedSettingsFixture();
+      await expect(adapter.respond(ctx, slackRecord(), { [key]: "forged" })).rejects.toThrow("not registered");
+      expect(deps.updateDraft).not.toHaveBeenCalled();
+      expect(deps.validateDraft).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(["targets", "allowedSenders"])("rejects raw JSON text for structured %s without modifying its saved rows", async (key) => {
-    const { draft, deps, ctx, adapter } = reviewedSettingsFixture();
-    const snapshot = structuredClone(draft.draft);
-    await expect(adapter.respond(ctx, slackRecord(), { [key]: "[]" })).rejects.toThrow("not registered");
-    expect(deps.updateDraft).not.toHaveBeenCalled();
-    expect(draft.draft).toEqual(snapshot);
-  });
+  it.each(["targets", "allowedSenders"])(
+    "rejects raw JSON text for structured %s without modifying its saved rows",
+    async (key) => {
+      const { draft, deps, ctx, adapter } = reviewedSettingsFixture();
+      const snapshot = structuredClone(draft.draft);
+      await expect(adapter.respond(ctx, slackRecord(), { [key]: "[]" })).rejects.toThrow("not registered");
+      expect(deps.updateDraft).not.toHaveBeenCalled();
+      expect(draft.draft).toEqual(snapshot);
+    },
+  );
 
   it("returns structured validation corrections to Channels instead of a scalar JSON prompt", async () => {
     const { draft, deps, adapter } = reviewedSettingsFixture();
-    deps.validateDraft.mockResolvedValue({ draftId: draft.draftId, draftRevision: 9, status: "error", levels: [], issues: [{ key: "targets_required", level: "error", fieldKey: "targets", message: "Choose a destination" }], checkedAt: new Date().toISOString() });
+    deps.validateDraft.mockResolvedValue({
+      draftId: draft.draftId,
+      draftRevision: 9,
+      status: "error",
+      levels: [],
+      issues: [{ key: "targets_required", level: "error", fieldKey: "targets", message: "Choose a destination" }],
+      checkedAt: new Date().toISOString(),
+    });
     const result = await adapter.respond(context(), slackRecord(), { defaultChannel: "C789" });
     expect(result).toMatchObject({ status: "manual_required" });
     expect(result.requiredAction).toBeUndefined();
@@ -388,36 +468,76 @@ describe("Settings-origin exact channel review", () => {
   });
 });
 
-
 describe("Settings review summary", () => {
   it("shows exact public routing, defaults, normalized sender count and check times without secrets or endpoints", async () => {
     const f = reviewedSettingsFixture({ label: "Work Slack", enabled: false });
     Object.assign(f.draft.draft, {
-      slackTeamName: "Sandbox workspace", slackAppId: "A1", slackBotUserId: "B1",
+      slackTeamName: "Sandbox workspace",
+      slackAppId: "A1",
+      slackBotUserId: "B1",
       allowedSenders: [" U123 ", "u123", "U456"],
-      botToken: "private-bot-credential", signingSecret: "private-signing-credential",
+      botToken: "private-bot-credential",
+      signingSecret: "private-signing-credential",
       webhookUrl: "https://hooks.slack.com/services/T1/B1/private-webhook-credential",
       baseUrl: "https://private-server.example.test",
     });
     f.draft.secretState.botToken!.secretRef = "keychain:goatcitadel:channel-draft:private-custody-account";
     const snapshot = structuredClone(f.draft);
-    const result = await f.adapter.prepare(f.ctx, { kind: "channel_connection", channelKind: "slack", draftId: f.draft.draftId });
-    for (const value of ["Work Slack", "saved disabled", "draft revision 9", "Primary (C123), thread 1700.1, default", "Secondary (C456), thread 1700.2", "allowlist, 2 allowed senders", "Sandbox workspace (T1)", "app A1", "bot B1", "chat:write", "Validation recorded: 2026-10-08T00:01:00.000Z", "Live check recorded: 2026-10-08T00:02:00.000Z"]) {
+    const result = await f.adapter.prepare(f.ctx, {
+      kind: "channel_connection",
+      channelKind: "slack",
+      draftId: f.draft.draftId,
+    });
+    for (const value of [
+      "Work Slack",
+      "saved disabled",
+      "draft revision 9",
+      "Primary (C123), thread 1700.1, default",
+      "Secondary (C456), thread 1700.2",
+      "allowlist, 2 allowed senders",
+      "Sandbox workspace (T1)",
+      "app A1",
+      "bot B1",
+      "chat:write",
+      "Validation recorded: 2026-10-08T00:01:00.000Z",
+      "Live check recorded: 2026-10-08T00:02:00.000Z",
+    ]) {
       expect(result.summary).toContain(value);
     }
-    for (const value of ["private-bot-credential", "private-signing-credential", "private-webhook-credential", "private-server.example.test", "private-custody-account", "keychain:", "https://"]) expect(result.summary).not.toContain(value);
+    for (const value of [
+      "private-bot-credential",
+      "private-signing-credential",
+      "private-webhook-credential",
+      "private-server.example.test",
+      "private-custody-account",
+      "keychain:",
+      "https://",
+    ])
+      expect(result.summary).not.toContain(value);
     expect(f.draft).toEqual(snapshot);
     expect(f.deps.updateDraft).not.toHaveBeenCalled();
     expect(f.deps.validateDraft).not.toHaveBeenCalled();
   });
 
   it("retains a Telegram forum thread and explicit secondary default in a pure review", async () => {
-    const f = reviewedSettingsFixture({ catalogId: "channel.telegram", label: "Forum bot", draft: {
-      targets: [{ label: "Forum", chatId: "-100123", threadId: "23", default: false }, { label: "Updates", chatId: "@updates_room", threadId: "47", default: true }],
-      inboundAccessMode: "allowlist", allowedSenders: ["777"],
-    } });
+    const f = reviewedSettingsFixture({
+      catalogId: "channel.telegram",
+      label: "Forum bot",
+      draft: {
+        targets: [
+          { label: "Forum", chatId: "-100123", threadId: "23", default: false },
+          { label: "Updates", chatId: "@updates_room", threadId: "47", default: true },
+        ],
+        inboundAccessMode: "allowlist",
+        allowedSenders: ["777"],
+      },
+    });
     const snapshot = structuredClone(f.draft);
-    const result = await f.adapter.prepare(f.ctx, { kind: "channel_connection", channelKind: "telegram", draftId: f.draft.draftId });
+    const result = await f.adapter.prepare(f.ctx, {
+      kind: "channel_connection",
+      channelKind: "telegram",
+      draftId: f.draft.draftId,
+    });
     expect(result.summary).toContain("Forum (-100123), thread 23");
     expect(result.summary).not.toContain("Forum (-100123), thread 23, default");
     expect(result.summary).toContain("Updates (@updates_room), thread 47, default");
@@ -426,10 +546,21 @@ describe("Settings review summary", () => {
   });
 
   it("uses actual Discord server/channel and policy fields rather than unrelated legacy flat flags", async () => {
-    const f = reviewedSettingsFixture({ catalogId: "channel.discord", draft: {
-      defaultGuildId: "987654321098765432", defaultChannelId: "123456789012345678", guildPolicy: "allowlist", inboundDmPolicy: "pairing", dmOnly: true,
-    } });
-    const result = await f.adapter.prepare(f.ctx, { kind: "channel_connection", channelKind: "discord", draftId: f.draft.draftId });
+    const f = reviewedSettingsFixture({
+      catalogId: "channel.discord",
+      draft: {
+        defaultGuildId: "987654321098765432",
+        defaultChannelId: "123456789012345678",
+        guildPolicy: "allowlist",
+        inboundDmPolicy: "pairing",
+        dmOnly: true,
+      },
+    });
+    const result = await f.adapter.prepare(f.ctx, {
+      kind: "channel_connection",
+      channelKind: "discord",
+      draftId: f.draft.draftId,
+    });
     expect(result.summary).toContain("987654321098765432");
     expect(result.summary).toContain("123456789012345678");
     expect(result.summary).toContain("pairing");
@@ -438,8 +569,15 @@ describe("Settings review summary", () => {
   });
 
   it("identifies Discord DM-only from guildPolicy off and retains its pairing requirement", async () => {
-    const f = reviewedSettingsFixture({ catalogId: "channel.discord", draft: { guildPolicy: "off", inboundDmPolicy: "pairing" } });
-    const result = await f.adapter.prepare(f.ctx, { kind: "channel_connection", channelKind: "discord", draftId: f.draft.draftId });
+    const f = reviewedSettingsFixture({
+      catalogId: "channel.discord",
+      draft: { guildPolicy: "off", inboundDmPolicy: "pairing" },
+    });
+    const result = await f.adapter.prepare(f.ctx, {
+      kind: "channel_connection",
+      channelKind: "discord",
+      draftId: f.draft.draftId,
+    });
     expect(result.summary).toContain("DM only");
     expect(result.summary).toContain("pairing");
   });
@@ -447,20 +585,31 @@ describe("Settings review summary", () => {
   it.each([
     ["nextcloud-talk", "defaultRoomId", "room-sandbox"],
     ["whatsapp", "defaultTarget", "+15551234567"],
-    ["signal", "defaultRecipient", "+15557654321"],
     ["zalo", "defaultRecipientId", "oa-user-123"],
-    ["imessage", "defaultHandle", "chat_guid:iMessage;-;+15551234567"],
   ])("shows the registered %s destination using its actual guided field", async (key, field, value) => {
     const f = reviewedSettingsFixture({ catalogId: "channel." + key, draft: { [field]: value } });
-    const result = await f.adapter.prepare(f.ctx, { kind: "channel_connection", channelKind: key, draftId: f.draft.draftId });
+    const result = await f.adapter.prepare(f.ctx, {
+      kind: "channel_connection",
+      channelKind: key,
+      draftId: f.draft.draftId,
+    });
     expect(result.summary).toContain(value);
   });
 
   it("redacts private endpoint and custody text even if pasted into a public target label", async () => {
-    const f = reviewedSettingsFixture({ label: "Bot\nhttps://private-label.example.test/capability", draft: {
-      targets: [{ label: "Ops keychain:goatcitadel:private-reference", channel: "C123", threadTs: "1700.1", default: true }],
-    } });
-    const result = await f.adapter.prepare(f.ctx, { kind: "channel_connection", channelKind: "slack", draftId: f.draft.draftId });
+    const f = reviewedSettingsFixture({
+      label: "Bot\nhttps://private-label.example.test/capability",
+      draft: {
+        targets: [
+          { label: "Ops keychain:goatcitadel:private-reference", channel: "C123", threadTs: "1700.1", default: true },
+        ],
+      },
+    });
+    const result = await f.adapter.prepare(f.ctx, {
+      kind: "channel_connection",
+      channelKind: "slack",
+      draftId: f.draft.draftId,
+    });
     expect(result.summary).toContain("C123");
     expect(result.summary).not.toMatch(/private-label|private-reference|keychain:|https:\/\//);
     expect(result.summary).not.toContain("\n");
@@ -472,7 +621,10 @@ describe("Channel draft cancellation authority", () => {
     const adapters = new EvolutionControlPlaneAdapterRegistry();
     adapters.register(adapter);
     const transition = vi.fn(async () => ({ ...plan, status: "cancelled" as const, revision: plan.revision + 1 }));
-    const service = new EvolutionControlPlaneService({ adapters, repository: { get: vi.fn(async () => plan), transition } as never });
+    const service = new EvolutionControlPlaneService({
+      adapters,
+      repository: { get: vi.fn(async () => plan), transition } as never,
+    });
     const actor = { surface: "chat" as const, workspaceId: "default", sessionId: "session-1", actorId: "operator" };
     return { service, actor, transition };
   }
@@ -505,10 +657,28 @@ describe("Channel draft cancellation authority", () => {
   });
 
   it.each([
-    { name: "wrong owner", alter: (plan: ChangePlanRecord) => ({ ...plan, target: { ...plan.target, ownerId: "integration_connection" } }) },
-    { name: "unreviewed revision", alter: (plan: ChangePlanRecord) => ({ ...plan, target: { ...plan.target, expectedRevision: undefined } }) },
-    { name: "different channel kind", alter: (plan: ChangePlanRecord) => ({ ...plan, request: { kind: "channel_connection" as const, channelKind: "discord", draftId: "draft-1" } }) },
-    { name: "non-channel request", alter: (plan: ChangePlanRecord) => ({ ...plan, request: { kind: "not_a_channel_plan" } as unknown as ChangePlanRecord["request"] }) },
+    {
+      name: "wrong owner",
+      alter: (plan: ChangePlanRecord) => ({ ...plan, target: { ...plan.target, ownerId: "integration_connection" } }),
+    },
+    {
+      name: "unreviewed revision",
+      alter: (plan: ChangePlanRecord) => ({ ...plan, target: { ...plan.target, expectedRevision: undefined } }),
+    },
+    {
+      name: "different channel kind",
+      alter: (plan: ChangePlanRecord) => ({
+        ...plan,
+        request: { kind: "channel_connection" as const, channelKind: "discord", draftId: "draft-1" },
+      }),
+    },
+    {
+      name: "non-channel request",
+      alter: (plan: ChangePlanRecord) => ({
+        ...plan,
+        request: { kind: "not_a_channel_plan" } as unknown as ChangePlanRecord["request"],
+      }),
+    },
   ])("does not discard a current draft bound to $name", async ({ alter }) => {
     const { deps, ctx, adapter } = reviewedSettingsFixture();
     await expect(adapter.discard(ctx, alter(slackRecord()))).rejects.toThrow();
@@ -516,9 +686,21 @@ describe("Channel draft cancellation authority", () => {
   });
 
   it.each([
-    { name: "wrong target owner", alter: (plan: ChangePlanRecord) => ({ ...plan, target: { ...plan.target, ownerId: "integration_connection" } }) },
-    { name: "non-channel request", alter: (plan: ChangePlanRecord) => ({ ...plan, request: { kind: "not_a_channel_plan" } as unknown as ChangePlanRecord["request"] }) },
-    ...[undefined, 0, -1, 1.5].map((expectedRevision) => ({ name: "invalid reviewed revision " + String(expectedRevision), alter: (plan: ChangePlanRecord) => ({ ...plan, target: { ...plan.target, expectedRevision } }) })),
+    {
+      name: "wrong target owner",
+      alter: (plan: ChangePlanRecord) => ({ ...plan, target: { ...plan.target, ownerId: "integration_connection" } }),
+    },
+    {
+      name: "non-channel request",
+      alter: (plan: ChangePlanRecord) => ({
+        ...plan,
+        request: { kind: "not_a_channel_plan" } as unknown as ChangePlanRecord["request"],
+      }),
+    },
+    ...[undefined, 0, -1, 1.5].map((expectedRevision) => ({
+      name: "invalid reviewed revision " + String(expectedRevision),
+      alter: (plan: ChangePlanRecord) => ({ ...plan, target: { ...plan.target, expectedRevision } }),
+    })),
   ])("validates $name before accepting a missing owner as idempotent", async ({ alter }) => {
     const { deps, ctx, adapter } = reviewedSettingsFixture();
     deps.getDraft.mockRejectedValue(new NotFoundError({ entity: "channel_setup_draft", id: "draft-1" }));
@@ -563,7 +745,10 @@ describe("Channel draft cancellation authority", () => {
   it.each([false, true])("propagates discard/custody failures with mutationCommitted=%s", async (mutationCommitted) => {
     const { deps, ctx, adapter } = reviewedSettingsFixture();
     const plan = slackRecord();
-    const failure = Object.assign(new Error(mutationCommitted ? "Post-delete credential cleanup unavailable" : "Draft discard unavailable"), { mutationCommitted });
+    const failure = Object.assign(
+      new Error(mutationCommitted ? "Post-delete credential cleanup unavailable" : "Draft discard unavailable"),
+      { mutationCommitted },
+    );
     deps.discardDraft.mockRejectedValue(failure);
     await expect(adapter.discard(ctx, plan)).rejects.toBe(failure);
     const { service, actor, transition } = serviceFixture(adapter, plan);

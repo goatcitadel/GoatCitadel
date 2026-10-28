@@ -51,18 +51,18 @@ describe("channel setup definitions", () => {
         "channel.google-chat",
         "channel.teams",
         "channel.whatsapp",
-        "channel.signal",
         "channel.mattermost",
         "channel.matrix",
         "channel.qqbot",
         "channel.wecom",
-        "channel.imessage",
         "channel.nextcloud-talk",
         "channel.line",
         "channel.zalo",
       ]),
     );
     expect(catalogIds).not.toContain("channel.zalouser");
+    expect(catalogIds).not.toContain("channel.signal");
+    expect(catalogIds).not.toContain("channel.imessage");
   });
 
   it("exposes a guided test step followed by a confirm step for every guided definition", () => {
@@ -483,10 +483,8 @@ describe("channel setup definitions", () => {
 
   it("ends every previously test-terminal guided wizard on a finalize confirmation step", () => {
     const expectations = [
-      { catalogId: "channel.imessage", contentVersion: "2026.08.imessage.v2" },
       { catalogId: "channel.line", contentVersion: "2026.08.line.v2" },
       { catalogId: "channel.mattermost", contentVersion: "2026.10.mattermost.stream.v3" },
-      { catalogId: "channel.signal", contentVersion: "2026.10.signal.stream.v5" },
       { catalogId: "channel.whatsapp", contentVersion: "2026.08.whatsapp.v3" },
       { catalogId: "channel.zalo", contentVersion: "2026.08.zalo.v2" },
     ] as const;
@@ -792,131 +790,6 @@ describe("channel setup definitions", () => {
     );
   });
 
-  it("rejects incomplete Signal bridge drafts", () => {
-    const definition = requireChannelSetupDefinition("channel.signal");
-    const issues = definition.validate(
-      createDraft("channel.signal", {
-        baseUrl: "not-a-url",
-      }),
-    );
-
-    expect(issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          fieldKey: "baseUrl",
-          failureCategory: "malformed_value",
-        }),
-        expect.objectContaining({
-          fieldKey: "defaultRecipient",
-          failureCategory: "missing_input",
-        }),
-      ]),
-    );
-  });
-
-  it("advertises Signal daemon-event inbound with no-replay honesty and strips legacy polling settings", () => {
-    const signal = requireChannelSetupDefinition("channel.signal");
-    const wizardText = JSON.stringify(signal.definition.wizard);
-
-    expect(signal.definition.wizard.contentVersion).toBe("2026.10.signal.stream.v5.guided-2026-10");
-    expect(signal.definition.wizard.introSummary).not.toContain("outbound-only");
-    expect(wizardText).not.toMatch(/outbound-only|destructive receive/i);
-    expect(wizardText).toContain("signal-cli daemon --http");
-    expect(wizardText).toMatch(/not replayed/);
-    expect(wizardText).toContain('"key":"receiveEvents"');
-    expect(wizardText).not.toContain('"key":"inboundEnabled"');
-    expect(wizardText).not.toContain('"key":"pollIntervalSeconds"');
-
-    const hydrated = signal.hydrate(
-      createConnection({
-        catalogId: "channel.signal",
-        key: "signal",
-        config: {
-          baseUrl: "http://127.0.0.1:8080",
-          accountId: "+15551234567",
-          defaultRecipient: "+15557654321",
-          inboundEnabled: true,
-          pollIntervalSeconds: 5,
-        },
-      }),
-    );
-
-    expect(hydrated.draft).not.toHaveProperty("inboundEnabled");
-    expect(hydrated.draft).not.toHaveProperty("pollIntervalSeconds");
-    expect(hydrated.draft).toMatchObject({
-      baseUrl: "http://127.0.0.1:8080",
-      accountId: "+15551234567",
-      defaultRecipient: "+15557654321",
-      receiveEvents: false,
-    });
-    expect(hydrated.hydration.warnings).toEqual([expect.stringContaining("replaced by receiveEvents")]);
-    const normalized = signal.normalize({
-      ...createDraft("channel.signal", hydrated.draft, "edit"),
-      hydration: hydrated.hydration,
-    });
-    expect(normalized).not.toHaveProperty("inboundEnabled");
-    expect(normalized).not.toHaveProperty("pollIntervalSeconds");
-    expect(normalized).not.toHaveProperty("receiveEvents");
-
-    const legacyIssues = signal.validate(
-      createDraft("channel.signal", {
-        baseUrl: "http://127.0.0.1:8080",
-        defaultRecipient: "+15557654321",
-        inboundEnabled: true,
-        pollIntervalSeconds: 5,
-      }),
-    );
-    expect(legacyIssues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          fieldKey: "inboundEnabled",
-          failureCategory: "malformed_value",
-          message: expect.stringContaining("receiveEvents"),
-        }),
-        expect.objectContaining({ fieldKey: "pollIntervalSeconds", failureCategory: "malformed_value" }),
-      ]),
-    );
-    expect(
-      signal.validate(
-        createDraft("channel.signal", {
-          baseUrl: "http://127.0.0.1:8080",
-          defaultRecipient: "+15557654321",
-        }),
-      ),
-    ).toEqual([]);
-  });
-
-  it("collects the Signal receiveEvents opt-in and forces a default-deny allowlist when it is on", () => {
-    const signal = requireChannelSetupDefinition("channel.signal");
-    const fieldKeys = signal.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
-    expect(fieldKeys).toEqual(expect.arrayContaining(["receiveEvents", "allowedSenders"]));
-
-    for (const legacy of [{ inboundAccessMode: "open_legacy" }, {}]) {
-      const hydrated = signal.hydrate(
-        createConnection({
-          catalogId: "channel.signal",
-          key: "signal",
-          config: { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15557654321", ...legacy },
-        }),
-      );
-      const draft = {
-        ...createDraft("channel.signal", { ...hydrated.draft, receiveEvents: true }, "edit"),
-        hydration: hydrated.hydration,
-      };
-      expect(signal.validate(draft)).toEqual([]);
-      expect(signal.normalize(draft)).toMatchObject({ receiveEvents: true, inboundAccessMode: "allowlist" });
-    }
-    const created = signal.normalize(
-      createDraft("channel.signal", {
-        baseUrl: "http://127.0.0.1:8080",
-        defaultRecipient: "+15557654321",
-        receiveEvents: true,
-      }),
-    );
-    expect(created).toMatchObject({ receiveEvents: true, inboundAccessMode: "allowlist" });
-    expect(created.allowedSenders ?? []).toEqual([]);
-  });
-
   it("preserves env-backed Mattermost auth during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.mattermost");
     const hydrated = definition.hydrate(
@@ -1220,77 +1093,6 @@ describe("channel setup definitions", () => {
     expect(copy).not.toMatch(/anyone can/i);
   });
 
-  it("preserves env-backed iMessage bridge auth during edit flows", () => {
-    const definition = requireChannelSetupDefinition("channel.imessage");
-    const hydrated = definition.hydrate(
-      createConnection({
-        catalogId: "channel.imessage",
-        key: "imessage",
-        label: "iMessage Primary",
-        config: {
-          bridgeProvider: "bluebubbles",
-          bridgeUrl: "http://127.0.0.1:3001",
-          passwordEnv: "IMESSAGE_PASSWORD",
-          defaultHandle: "imessage:+15551234567",
-        },
-      }),
-    );
-    const draft = {
-      ...createDraft("channel.imessage", hydrated.draft, "edit"),
-      hydration: hydrated.hydration,
-    };
-
-    expect(definition.validate(draft)).toEqual([]);
-    expect(definition.normalize(draft)).toEqual(
-      expect.objectContaining({
-        bridgeProvider: "bluebubbles",
-        bridgeUrl: "http://127.0.0.1:3001",
-        passwordEnv: "IMESSAGE_PASSWORD",
-        defaultHandle: "imessage:+15551234567",
-      }),
-    );
-  });
-
-  it("preserves Photon iMessage provider metadata while warning that runtime sends are adapter-gated", () => {
-    const definition = requireChannelSetupDefinition("channel.imessage");
-    const hydrated = definition.hydrate(
-      createConnection({
-        catalogId: "channel.imessage",
-        key: "imessage",
-        label: "Photon iMessage",
-        config: {
-          bridgeProvider: "photon",
-          bridgeUrl: "http://127.0.0.1:4317",
-          passwordEnv: "PHOTON_AUTH_TOKEN",
-          photonSidecarUrl: "http://127.0.0.1:4317",
-          photonAuthEnv: "PHOTON_AUTH_TOKEN",
-          defaultHandle: "imessage:+15551234567",
-        },
-      }),
-    );
-    const draft = {
-      ...createDraft("channel.imessage", hydrated.draft, "edit"),
-      hydration: hydrated.hydration,
-    };
-
-    expect(definition.validate(draft)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: "imessage_photon_preview",
-          level: "warn",
-          fieldKey: "bridgeProvider",
-        }),
-      ]),
-    );
-    expect(definition.normalize(draft)).toEqual(
-      expect.objectContaining({
-        bridgeProvider: "photon",
-        photonSidecarUrl: "http://127.0.0.1:4317",
-        photonAuthEnv: "PHOTON_AUTH_TOKEN",
-      }),
-    );
-  });
-
   it("preserves env-backed Nextcloud Talk auth during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.nextcloud-talk");
     const hydrated = definition.hydrate(
@@ -1383,38 +1185,6 @@ describe("channel setup definitions", () => {
           webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=key&token=token",
         }),
       ),
-    ).toEqual([]);
-
-    const signal = requireChannelSetupDefinition("channel.signal");
-    const signalHydrated = signal.hydrate(
-      createConnection({
-        catalogId: "channel.signal",
-        key: "signal",
-        config: {
-          bridgeUrl: "http://127.0.0.1:8080",
-          accountId: "+15551234567",
-          defaultRecipient: "+15557654321",
-        },
-      }),
-    );
-    expect(signalHydrated.hydration.status).toBe("clean");
-    expect(signalHydrated.hydration.fieldState.baseUrl).toBe("configured");
-    expect(
-      signal.normalize({
-        ...createDraft("channel.signal", { defaultRecipient: "+15557654321" }, "edit"),
-        hydration: signalHydrated.hydration,
-      }),
-    ).toEqual({
-      baseUrl: "http://127.0.0.1:8080",
-      defaultRecipient: "+15557654321",
-      // Signal is a guided inbound channel; a draft with no saved mode defaults to the allowlist.
-      inboundAccessMode: "allowlist",
-    });
-    expect(
-      signal.validate({
-        ...createDraft("channel.signal", { defaultRecipient: "+15557654321" }, "edit"),
-        hydration: signalHydrated.hydration,
-      }),
     ).toEqual([]);
 
     const zalo = requireChannelSetupDefinition("channel.zalo");
@@ -1515,12 +1285,10 @@ describe("channel setup definitions", () => {
       "channel.teams",
       "channel.ntfy",
       "channel.whatsapp",
-      "channel.signal",
       "channel.mattermost",
       "channel.matrix",
       "channel.qqbot",
       "channel.wecom",
-      "channel.imessage",
       "channel.line",
       "channel.zalo",
     ] as const;
@@ -1539,7 +1307,6 @@ describe("channel setup definitions", () => {
       "channel.matrix",
       "channel.qqbot",
       "channel.wecom",
-      "channel.imessage",
       "channel.line",
     ] as const;
 
@@ -1574,12 +1341,10 @@ describe("channel setup definitions", () => {
       "google-chat": ["overview", "create-webhook"],
       teams: ["overview", "create-webhook"],
       whatsapp: ["overview"],
-      signal: ["overview"],
       mattermost: ["overview"],
       matrix: ["overview"],
       qqbot: ["overview"],
       wecom: ["overview"],
-      imessage: ["overview"],
       "nextcloud-talk": ["overview"],
       line: ["overview"],
       zalo: ["overview"],

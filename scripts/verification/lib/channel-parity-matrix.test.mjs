@@ -12,7 +12,7 @@ const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 test("advertised channel parity matrix is complete and internally consistent", () => {
   assert.deepEqual(validateAdvertisedChannelParityMatrix(), []);
-  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 27);
+  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 23);
   assert.deepEqual(
     [...new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.family))].sort(),
     [...REQUIRED_CHANNEL_FAMILIES].sort(),
@@ -35,17 +35,6 @@ test("Slack and Discord variants retain exact inbound and lifecycle posture", ()
 
 test("hard quarantine and provider-callability truths cannot drift green", () => {
   const byId = new Map(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => [row.id, row]));
-  const signal = byId.get("signal.bridge-outbound");
-  assert.equal(signal?.expected.inboundModes[0], "none");
-  assert.equal(signal?.durability.inboundCommitBeforeAck, false);
-  assert.equal(signal?.proof.inboundQuarantine, undefined);
-  const signalStream = byId.get("signal.daemon-events");
-  assert.equal(signalStream?.expected.inboundModes[0], "stream");
-  assert.equal(signalStream?.expected.lifecycle, "persistent");
-  assert.equal(signalStream?.durability.inboundCommitBeforeAck, false);
-  assert.equal(signalStream?.durability.inboundReplay, "none");
-  assert.match(signalStream?.proof.inboundAdapter ?? "", /signal-stream-adapter\.test\.ts$/);
-
   const googleChatWebhook = byId.get("google-chat.webhook");
   assert.deepEqual(googleChatWebhook?.expected.inboundModes, ["none"]);
   assert.equal(googleChatWebhook?.expected.outboundTransport, "webhook");
@@ -54,20 +43,21 @@ test("hard quarantine and provider-callability truths cannot drift green", () =>
   assert.equal(googleChatApp?.expected.outboundTransport, "api");
   assert.equal(googleChatApp?.durability.inboundCommitBeforeAck, true);
   assert.match(googleChatApp?.proof.inboundAdapter ?? "", /integrations\.google-chat-webhook\.test\.ts$/);
+});
 
-  const blueBubbles = byId.get("imessage.bluebubbles");
-  const photon = byId.get("imessage.photon-diagnostics");
-  assert.equal(blueBubbles?.callability, "callable");
-  assert.equal(photon?.callability, "diagnostic_only");
-  assert.equal(photon?.durability.outboundCommitBeforeSend, false);
-  assert.equal(photon?.durability.unknownAfterSend, "blocked_before_send");
-  assert.equal(photon?.liveEnvironment.status, "not_applicable");
-  assert.match(photon?.proof.outboundBlocked ?? "", /tool-executor-channel-failures/);
+test("retired channels have no advertised parity row", () => {
+  for (const family of ["signal", "imessage", "zalouser"]) {
+    assert.equal(REQUIRED_CHANNEL_FAMILIES.includes(family), false, family);
+    assert.equal(
+      ADVERTISED_CHANNEL_PARITY_MATRIX.some((row) => row.family === family || row.channelKey === family),
+      false,
+      family,
+    );
+  }
 });
 
 const NO_PROVIDER_ACK_STREAM_ROWS = new Set([
   "ntfy.publish-and-stream",
-  "signal.daemon-events",
   "mattermost.bot-websocket",
 ]);
 
@@ -76,7 +66,7 @@ const PERSISTED_CURSOR_STREAM_ROWS = new Set(["matrix.sync-stream"]);
 
 test("stream rows without provider acknowledgement or replay state that honestly", () => {
   const byId = new Map(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => [row.id, row]));
-  for (const id of ["signal.daemon-events", "mattermost.bot-websocket"]) {
+  for (const id of ["mattermost.bot-websocket"]) {
     const row = byId.get(id);
     assert.equal(row?.durability.inboundCommitBeforeAck, false, id);
     assert.equal(row?.durability.inboundReplay, "none", id);
@@ -102,10 +92,10 @@ test("the Matrix sync stream states its persisted-cursor replay honestly", () =>
 });
 
 test("an inbound row that drops commit-before-ack without stating replay fails validation", () => {
-  const signalStream = ADVERTISED_CHANNEL_PARITY_MATRIX.find((row) => row.id === "signal.daemon-events");
-  const { inboundReplay: _omitted, ...durability } = signalStream.durability;
-  assert.deepEqual(validateAdvertisedChannelParityMatrix([{ ...signalStream, durability }]).slice(0, 1), [
-    "signal.daemon-events has inbound without commit-before-ack and must state durability.inboundReplay",
+  const mattermostStream = ADVERTISED_CHANNEL_PARITY_MATRIX.find((row) => row.id === "mattermost.bot-websocket");
+  const { inboundReplay: _omitted, ...durability } = mattermostStream.durability;
+  assert.deepEqual(validateAdvertisedChannelParityMatrix([{ ...mattermostStream, durability }]).slice(0, 1), [
+    "mattermost.bot-websocket has inbound without commit-before-ack and must state durability.inboundReplay",
   ]);
 });
 

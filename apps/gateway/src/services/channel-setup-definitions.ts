@@ -7,12 +7,10 @@ import { createNtfyDefinition } from "./channel-setup-definitions/ntfy.js";
 import { createGoogleChatDefinition } from "./channel-setup-definitions/google-chat.js";
 import { createTeamsDefinition } from "./channel-setup-definitions/teams.js";
 import { createWhatsAppDefinition } from "./channel-setup-definitions/whatsapp.js";
-import { createSignalDefinition } from "./channel-setup-definitions/signal.js";
 import { createMattermostDefinition } from "./channel-setup-definitions/mattermost.js";
 import { createMatrixDefinition } from "./channel-setup-definitions/matrix.js";
 import { createQqbotDefinition } from "./channel-setup-definitions/qqbot.js";
 import { createWecomDefinition } from "./channel-setup-definitions/wecom.js";
-import { createIMessageDefinition } from "./channel-setup-definitions/imessage.js";
 import { createNextcloudTalkDefinition } from "./channel-setup-definitions/nextcloud-talk.js";
 import { createLineDefinition } from "./channel-setup-definitions/line.js";
 import { createZaloDefinition } from "./channel-setup-definitions/zalo.js";
@@ -29,12 +27,10 @@ const GUIDED_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = {
   "channel.google-chat": withGuidedJourney(createGoogleChatDefinition()),
   "channel.teams": withGuidedJourney(createTeamsDefinition()),
   "channel.whatsapp": withGuidedJourney(createWhatsAppDefinition()),
-  "channel.signal": withGuidedJourney(createSignalDefinition()),
   "channel.mattermost": withGuidedJourney(createMattermostDefinition()),
   "channel.matrix": withGuidedJourney(createMatrixDefinition()),
   "channel.qqbot": withGuidedJourney(createQqbotDefinition()),
   "channel.wecom": withGuidedJourney(createWecomDefinition()),
-  "channel.imessage": withGuidedJourney(createIMessageDefinition()),
   "channel.nextcloud-talk": withGuidedJourney(createNextcloudTalkDefinition()),
   "channel.line": withGuidedJourney(createLineDefinition()),
   "channel.zalo": withGuidedJourney(createZaloDefinition()),

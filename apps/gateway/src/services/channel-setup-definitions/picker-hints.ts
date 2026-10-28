@@ -31,10 +31,8 @@ export const CHANNEL_PICKER_HINTS: Readonly<Record<string, ChannelPickerHintEntr
   teams: { group: "team_chat", note: "Sends only" },
   "google-chat": { group: "team_chat", note: "Receiving needs a public web address" },
 
-  signal: { group: "phone_apps", note: "Needs signal-cli" },
   whatsapp: { group: "phone_apps", note: "Business account + public web address" },
   line: { group: "phone_apps", note: "Receiving needs a public web address" },
-  imessage: { group: "phone_apps", note: "Sends only, through BlueBubbles on a Mac" },
   wecom: { group: "phone_apps", note: "Receiving needs a public web address" },
   qqbot: { group: "phone_apps", note: "Needs a public web address" },
   zalo: { group: "phone_apps", note: "Sends only, from a Zalo Official Account" },
@@ -70,8 +68,6 @@ export const CHANNEL_HOST_FIELDS: Readonly<Record<string, readonly string[]>> = 
   matrix: Object.freeze(["homeserverUrl"]),
   mattermost: Object.freeze(["serverUrl"]),
   "nextcloud-talk": Object.freeze(["baseUrl"]),
-  signal: Object.freeze(["baseUrl"]),
-  imessage: Object.freeze(["bridgeUrl", "photonSidecarUrl"]),
 });
 
 /**

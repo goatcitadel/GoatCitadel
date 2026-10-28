@@ -2,16 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 
 const runDiscordBotLiveChecksMock = vi.hoisted(() => vi.fn());
-const runIMessageBridgeLiveChecksMock = vi.hoisted(() => vi.fn());
 const runNtfyLiveChecksMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./channel-bot-live-probes.js", () => ({
   runDiscordBotLiveChecks: runDiscordBotLiveChecksMock,
-  runIMessageBridgeLiveChecks: runIMessageBridgeLiveChecksMock,
   runLineBotLiveChecks: vi.fn(),
   runMattermostBotLiveChecks: vi.fn(),
   runNtfyLiveChecks: runNtfyLiveChecksMock,
-  runSignalBridgeLiveChecks: vi.fn(),
   runSlackBotLiveChecks: vi.fn(),
   runTelegramBotLiveChecks: vi.fn(),
   runWhatsAppCloudLiveChecks: vi.fn(),
@@ -96,7 +93,6 @@ function createPort(): IntegrationDiagnosticsPort {
 describe("integration-diagnostics-service contract behavior", () => {
   beforeEach(() => {
     runDiscordBotLiveChecksMock.mockReset();
-    runIMessageBridgeLiveChecksMock.mockReset();
     runNtfyLiveChecksMock.mockReset();
   });
 
@@ -298,37 +294,6 @@ describe("integration-diagnostics-service contract behavior", () => {
       message: expect.stringContaining("inbound is disabled"),
     });
     expect(outboundOnly.some((check) => check.key.startsWith("inbound_access"))).toBe(false);
-  });
-
-  it("blocks Photon iMessage live checks before BlueBubbles probes", async () => {
-    const host = createPort();
-    const connection = createIntegrationConnection("imessage", "channel", {
-      bridgeProvider: "photon",
-      bridgeUrl: "http://127.0.0.1:4317",
-      password: "photon-token",
-      defaultHandle: "imessage:+15551234567",
-    });
-
-    const staticChecks = buildIntegrationConnectionChecks(host, connection);
-    const result = await runIntegrationConnectionLiveChecks(host, connection, { includeSandboxSend: true });
-
-    expect(staticChecks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: "provider",
-          status: "warn",
-          message: expect.stringContaining("Photon/Spectrum"),
-        }),
-      ]),
-    );
-    expect(result.checks).toEqual([
-      expect.objectContaining({
-        key: "imessage_photon_runtime",
-        status: "fail",
-        message: expect.stringContaining("blocked until a Photon adapter is installed"),
-      }),
-    ]);
-    expect(runIMessageBridgeLiveChecksMock).not.toHaveBeenCalled();
   });
 
   it("requires local bridge posture for local-app productivity entries", () => {
@@ -662,11 +627,6 @@ describe("integration-diagnostics-service contract behavior", () => {
           botTokenEnv: "MATTERMOST_TOKEN",
           defaultChannel: "town-square",
         }),
-        createIntegrationConnection("imessage", "channel", {
-          bridgeUrl: "http://127.0.0.1:1234",
-          password: "bridge-password",
-          defaultHandle: "+15551234567",
-        }),
         createIntegrationConnection("nextcloud-talk", "channel", {
           baseUrl: "https://cloud.example.test",
           token: "talk-token",
@@ -689,21 +649,6 @@ describe("integration-diagnostics-service contract behavior", () => {
           ]),
         );
       }
-      expect(
-        buildIntegrationConnectionChecks(
-          host,
-          createIntegrationConnection("signal", "channel", {
-            baseUrl: "http://127.0.0.1:8190",
-            defaultRecipient: "+15551234567",
-          }),
-        ),
-      ).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ key: "url", status: "warn" }),
-          expect.objectContaining({ key: "target", status: "pass" }),
-        ]),
-      );
-
       const automation = [
         createIntegrationConnection("webhooks", "automation", {
           baseUrl: "https://hooks.example.test/inbound",
@@ -890,7 +835,6 @@ describe("integration-diagnostics-service contract behavior", () => {
           inboundStreamEnabled: true,
         },
       ],
-      ["signal", { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15551234567", receiveEvents: true }],
       [
         "ntfy",
         { baseUrl: "https://ntfy.example.test", topic: "ops", tokenEnv: "NTFY_TOKEN", inboundStreamEnabled: true },
@@ -934,23 +878,47 @@ describe("integration-diagnostics-service contract behavior", () => {
     }
   });
 
-  it("reports a saved Zalo Personal connection as retired and runs no live probe for it", async () => {
+  it.each([
+    [
+      "Zalo Personal",
+      "zalouser",
+      { baseUrl: "https://zca.example.test", authToken: "token-1", defaultTarget: "group:thread-1" },
+    ],
+    [
+      "Signal",
+      "signal",
+      {
+        baseUrl: "http://127.0.0.1:8080",
+        defaultRecipient: "+15551234567",
+        receiveEvents: true,
+        inboundAccessMode: "allowlist",
+        allowedSenders: ["operator"],
+      },
+    ],
+    [
+      "iMessage",
+      "imessage",
+      {
+        bridgeProvider: "bluebubbles",
+        bridgeUrl: "http://127.0.0.1:1234",
+        password: "bridge-password",
+        defaultHandle: "imessage:+15551234567",
+      },
+    ],
+  ] as const)("reports a saved %s connection as retired and runs no live probe for it", async (label, key, config) => {
     const host = createPort();
-    const connection = createIntegrationConnection("zalouser", "channel", {
-      baseUrl: "https://zca.example.test",
-      authToken: "token-1",
-      defaultTarget: "group:thread-1",
-    });
+    const connection = createIntegrationConnection(key, "channel", config);
 
     expect(buildIntegrationConnectionChecks(host, connection)).toEqual([
       {
         key: "retired",
         status: "fail",
-        message: expect.stringMatching(/^Zalo Personal is not supported anymore/),
+        message: expect.stringMatching(new RegExp(`^${label} is not supported anymore`)),
       },
     ]);
     const live = await runIntegrationConnectionLiveChecks(host, connection, { includeSandboxSend: true });
     expect(live).toEqual({ checks: [] });
+    expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
   });
 
   it("warns when '*' is present in connection-level allowlist or global networkAllowlist", () => {

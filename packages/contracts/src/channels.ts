@@ -216,6 +216,14 @@ export const RETIRED_CHANNEL_REASONS: ReadonlyMap<string, string> = new Map([
     "zalouser",
     "Zalo Personal is not supported anymore: it used an unofficial personal-account client that can get the account banned. Delete this connection and use Zalo OA (Official Account) instead.",
   ],
+  [
+    "signal",
+    "Signal is not supported anymore: it used signal-cli, an unofficial client that can get the account banned. Delete this connection.",
+  ],
+  [
+    "imessage",
+    "iMessage is not supported anymore: it used BlueBubbles, an unofficial bridge that can get the account banned. Delete this connection.",
+  ],
 ]);
 
 /** Returns the operator reason when the channel is retired, else undefined. */

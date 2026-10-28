@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
-import { executeCommsTool, normalizeBlueBubblesBaseUrl } from "./comms-executor.js";
+import { executeCommsTool } from "./comms-executor.js";
 import { resetGoogleChatAccessTokenCache } from "./google-chat-service-account.js";
 
 const MATTERMOST_CHANNEL_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -151,73 +151,65 @@ describe("comms mutation boundary tracking", () => {
     }
   });
 
-  it("does not report a BlueBubbles read-only POST lookup as the message-send boundary", async () => {
-    const calls: FetchCall[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-        const url = recordFetchCall(calls, input, init);
-        if (url === "https://bluebubbles.example/api/v1/chat/query?password=bb-password") {
-          return new Response("lookup unavailable", { status: 503 });
-        }
-        throw new Error(`unexpected provider mutation ${url}`);
-      }),
-    );
-    const markFailed = vi.fn();
-    const storage = {
-      integrationConnections: {
-        get: vi.fn(() => ({
-          connectionId: "conn-bluebubbles-lookup",
-          key: "imessage",
-          enabled: true,
-          status: "connected",
-          config: {
-            provider: "bluebubbles",
-            bridgeUrl: "https://bluebubbles.example",
-            password: "bb-password",
-          },
-        })),
-      },
-      commsDeliveries: {
-        createQueued: vi.fn(() => ({
-          deliveryId: "delivery-bluebubbles-lookup",
-          status: "queued",
-          channelKey: "imessage",
-          target: "chat:123",
-          createdAt: "2026-03-18T00:00:00.000Z",
-          updatedAt: "2026-03-18T00:00:00.000Z",
-        })),
-        markSent: vi.fn(),
-        markFailed,
-      },
-    } as unknown as Storage & AsyncStorage;
-    const beforeExternalSideEffect = vi.fn();
+  it.each([
+    ["signal", "Signal", "channel.send", { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15551234567" }],
+    ["signal", "Signal", "channel.react", { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15551234567" }],
+    ["signal", "Signal", "channel.unsend", { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15551234567" }],
+    ["imessage", "iMessage", "channel.send", { bridgeUrl: "http://127.0.0.1:1234", password: "bb-password" }],
+    ["imessage", "iMessage", "channel.react", { bridgeUrl: "http://127.0.0.1:1234", password: "bb-password" }],
+    ["imessage", "iMessage", "channel.unsend", { bridgeUrl: "http://127.0.0.1:1234", password: "bb-password" }],
+  ] as const)(
+    "refuses a saved %s connection's %s before any request, as blocked",
+    async (key, label, toolName, savedConfig) => {
+      const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const markFailed = vi.fn();
+      const storage = {
+        integrationConnections: {
+          get: vi.fn(() => ({
+            connectionId: `conn-${key}`,
+            key,
+            enabled: true,
+            status: "connected",
+            // Without the retired guard, `url` would let the generic webhook sender post this message.
+            config: { ...savedConfig, url: "http://127.0.0.1:56789/hook" },
+          })),
+        },
+        commsDeliveries: {
+          createQueued: vi.fn((input: Record<string, unknown>) => ({
+            deliveryId: `delivery-${key}`,
+            status: "queued",
+            channelKey: input.channelKey,
+            target: input.target,
+            createdAt: "2026-10-28T00:00:00.000Z",
+            updatedAt: "2026-10-28T00:00:00.000Z",
+          })),
+          markSent: vi.fn(),
+          markFailed,
+        },
+      } as unknown as Storage & AsyncStorage;
+      const beforeExternalSideEffect = vi.fn();
 
-    const result = await executeCommsTool(
-      {
-        toolName: "imessage.send",
-        args: { connectionId: "conn-bluebubbles-lookup", target: "chat:123", message: "hello" },
-        agentId: "operator",
-        sessionId: "sess-bluebubbles-lookup",
-      },
-      policyConfig(["bluebubbles.example"]),
-      storage,
-      undefined,
-      { beforeExternalSideEffect },
-    );
+      const result = await executeCommsTool(
+        {
+          toolName,
+          args: { connectionId: `conn-${key}`, message: "Hello from a retired channel.", messageId: "1", emoji: "+1" },
+          agentId: "operator",
+          sessionId: `sess-${key}`,
+        },
+        policyConfig(["127.0.0.1"]),
+        storage,
+        undefined,
+        { beforeExternalSideEffect },
+      );
 
-    expect(calls).toEqual([
-      { method: "POST", url: "https://bluebubbles.example/api/v1/chat/query?password=bb-password" },
-    ]);
-    expect(beforeExternalSideEffect).not.toHaveBeenCalled();
-    expect(markFailed).toHaveBeenCalledWith(
-      "delivery-bluebubbles-lookup",
-      expect.not.stringMatching(/unknown_after_send|manual reconciliation/i),
-      expect.any(String),
-      "not_available",
-    );
-    expect(result).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
-  });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(beforeExternalSideEffect).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: "failed", deliveryStatus: "blocked" });
+      expect(String(result.error)).toMatch(new RegExp(`^blocked: ${label} is not supported anymore`));
+      expect(markFailed).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("keeps an attachment 404 pre-dispatch and never contacts a provider mutation endpoint", async () => {
     const calls: FetchCall[] = [];
@@ -517,69 +509,5 @@ describe("google chat app reply references", () => {
     );
     expect(result).toMatchObject({ status: "sent" });
     expect(calls.at(-1)).toMatchObject({ method: "POST" });
-  });
-});
-
-describe("BlueBubbles bridge URL scheme (password travels in the query string)", () => {
-  it("defaults schemeless remote hosts to https and keeps http only for loopback or an explicit http URL", () => {
-    expect(normalizeBlueBubblesBaseUrl("bluebubbles.example")).toBe("https://bluebubbles.example");
-    expect(normalizeBlueBubblesBaseUrl("bluebubbles.example:1234/")).toBe("https://bluebubbles.example:1234");
-    expect(normalizeBlueBubblesBaseUrl("192.168.1.20:1234")).toBe("https://192.168.1.20:1234");
-    expect(normalizeBlueBubblesBaseUrl("127.0.0.1:1234")).toBe("http://127.0.0.1:1234");
-    expect(normalizeBlueBubblesBaseUrl("LOCALHOST:1234")).toBe("http://LOCALHOST:1234");
-    expect(normalizeBlueBubblesBaseUrl("[::1]:1234")).toBe("http://[::1]:1234");
-    expect(normalizeBlueBubblesBaseUrl("http://bluebubbles.lan:1234/")).toBe("http://bluebubbles.lan:1234");
-    expect(normalizeBlueBubblesBaseUrl("https://bluebubbles.example")).toBe("https://bluebubbles.example");
-    expect(normalizeBlueBubblesBaseUrl("  ")).toBeUndefined();
-  });
-
-  it("sends a schemeless remote bridge's password-bearing lookup over https", async () => {
-    const calls: FetchCall[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-        recordFetchCall(calls, input, init);
-        return new Response("lookup unavailable", { status: 503 });
-      }),
-    );
-    const storage = {
-      integrationConnections: {
-        get: vi.fn(() => ({
-          connectionId: "conn-bluebubbles-schemeless",
-          key: "imessage",
-          enabled: true,
-          status: "connected",
-          config: { provider: "bluebubbles", bridgeUrl: "bluebubbles.example", password: "bb-password" },
-        })),
-      },
-      commsDeliveries: {
-        createQueued: vi.fn(() => ({
-          deliveryId: "delivery-bluebubbles-schemeless",
-          status: "queued",
-          channelKey: "imessage",
-          target: "chat:123",
-          createdAt: "2026-03-18T00:00:00.000Z",
-          updatedAt: "2026-03-18T00:00:00.000Z",
-        })),
-        markSent: vi.fn(),
-        markFailed: vi.fn(),
-      },
-    } as unknown as Storage & AsyncStorage;
-
-    await executeCommsTool(
-      {
-        toolName: "imessage.send",
-        args: { connectionId: "conn-bluebubbles-schemeless", target: "chat:123", message: "hello" },
-        agentId: "operator",
-        sessionId: "sess-bluebubbles-schemeless",
-      },
-      policyConfig(["bluebubbles.example"]),
-      storage,
-    );
-
-    expect(calls.length).toBeGreaterThan(0);
-    for (const call of calls) {
-      expect(call.url.startsWith("https://bluebubbles.example/")).toBe(true);
-    }
   });
 });

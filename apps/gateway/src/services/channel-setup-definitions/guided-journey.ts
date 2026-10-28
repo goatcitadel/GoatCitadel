@@ -80,17 +80,6 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     firstMessage:
       "Register the saved connection webhook URL in Meta, complete its verification challenge, and subscribe to messages. Allow trusted wa_id sender values (digits only), send an inbound message and confirm its reply. Personal WhatsApp QR linking is not supported by this adapter.",
   },
-  signal: {
-    summary:
-      "Send Signal messages through a separately configured bridge and, optionally, receive messages from the signal-cli HTTP daemon event stream.",
-    prerequisites: [
-      "A reachable Signal JSON-RPC bridge with an already linked sender account.",
-      "The recipient or group identifier and permission to send to it.",
-      "For inbound, a signal-cli daemon --http bridge and the sender UUIDs allowed to start conversations (senders without a UUID use their number).",
-    ],
-    firstMessage:
-      "Confirm the sandbox message arrives in Signal. For inbound, enable receiveEvents, allow your sender id, send a message and confirm its reply; messages from senders who are not allowed are dropped, and messages sent while the event stream is disconnected are not replayed.",
-  },
   mattermost: {
     summary:
       "Send Mattermost posts, replies and files through a bot account and, optionally, receive posts over the bot WebSocket.",
@@ -139,16 +128,6 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     firstMessage:
       "Confirm the sandbox message arrives in WeCom. For inbound, save the connection webhook URL, Token and EncodingAESKey in the application's message-receiving settings, allow your WeCom userid, message the application, and confirm its reply; messages from users who are not allowed are dropped. Outbound is text-only.",
   },
-  imessage: {
-    summary: "Use a reachable BlueBubbles Mac bridge for outbound iMessage delivery.",
-    prerequisites: [
-      "A Mac running a callable BlueBubbles bridge and its password.",
-      "An existing chat or supported new-handle chat creation.",
-      "Private API support when you need reactions or unsend.",
-    ],
-    firstMessage:
-      "Confirm the message arrives in Messages. Reactions and unsend depend on Private API support. Photon/Spectrum remains diagnostics-only in this build; selecting it does not install a callable adapter.",
-  },
   "nextcloud-talk": {
     summary: "Connect a Nextcloud Talk bot with signed inbound events and outbound replies.",
     prerequisites: [
@@ -189,7 +168,6 @@ const DESTINATION_KEYS = new Set([
   "defaultTarget",
   "defaultRecipient",
   "defaultRecipientId",
-  "defaultHandle",
   "defaultRoomId",
   "topic",
   "subscribeTopic",
@@ -207,8 +185,6 @@ const ADVANCED_KEYS = new Set([
   "dryRun",
   "setupCode",
   "profile",
-  "photonSidecarUrl",
-  "photonAuthEnv",
   "sandbox",
 ]);
 /** Webhook inbound that is always default-deny: the runtime ignores a stored open_legacy mode for these. */
@@ -222,12 +198,6 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
   for (const step of runtime.definition.wizard.steps) {
     if (step.fields?.length) {
       const fields = step.fields.map((field): ChannelSetupFieldDefinition => {
-        if (key === "imessage" && ["bridgeUrl", "password", "passwordEnv", "defaultHandle"].includes(field.key))
-          return {
-            ...field,
-            required: false,
-            visibleWhenFieldEquals: { fieldKey: "bridgeProvider", value: "bluebubbles" },
-          };
         if (key === "whatsapp" && field.key === "phoneNumberId") return { ...field, inputMode: "numeric" };
         if (field.key === "targets")
           return { ...field, type: "target-list", targetAddressKey: key === "telegram" ? "chatId" : "channel" };
@@ -387,8 +357,5 @@ function credentialAlternatives(key: string, alternatives: string[][]): string[]
   if (key === "slack") return [["slackInstallId", "botToken", "botTokenEnv", "webhookUrl", "webhookUrlEnv"]];
   if (key === "discord") return [["botToken", "botTokenEnv", "webhookUrl", "webhookUrlEnv"]];
   if (key === "google-chat") return [["webhookUrl", "webhookUrlEnv", "serviceAccountKeyEnv"]];
-  // Photon is inspectable metadata; its unavailable callable adapter must not
-  // prompt for an unrelated BlueBubbles password. Backend validation owns it.
-  if (key === "imessage") return undefined;
   return alternatives.length ? [alternatives[0]!] : undefined;
 }

@@ -1975,8 +1975,6 @@ Channels to cover when configured:
 - Teams
 - Mattermost
 - WhatsApp
-- Signal
-- iMessage / BlueBubbles
 - Nextcloud Talk
 - LINE
 - Zalo OA

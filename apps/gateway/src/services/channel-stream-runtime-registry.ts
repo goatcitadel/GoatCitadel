@@ -9,7 +9,6 @@ import { createSystemSettingsChannelStreamCursorStore } from "./channel-stream-c
 import { createMatrixStreamAdapter } from "./channel-stream-adapters/matrix-stream-adapter.js";
 import { createMattermostStreamAdapter } from "./channel-stream-adapters/mattermost-stream-adapter.js";
 import { createNtfyStreamAdapter } from "./channel-stream-adapters/ntfy-stream-adapter.js";
-import { createSignalStreamAdapter } from "./channel-stream-adapters/signal-stream-adapter.js";
 import { createTelegramStreamAdapter } from "./channel-stream-adapters/telegram-stream-adapter.js";
 import { ChannelStreamRuntimeService, type ChannelStreamEvent } from "./channel-stream-runtime-service.js";
 import { runTelegramUpdate, type TelegramUpdateDeps } from "./telegram-update-processor.js";
@@ -111,7 +110,6 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost, runtimeKey: object)
       createNtfyStreamAdapter(sharedDeps),
       createMattermostStreamAdapter({ ...sharedDeps, createWebSocket: (url) => new WebSocket(url) }),
       createMatrixStreamAdapter({ ...sharedDeps, cursorStore }),
-      createSignalStreamAdapter({ fetch: sharedDeps.fetch, isUrlAllowlisted: sharedDeps.isUrlAllowlisted }),
       createTelegramStreamAdapter({
         ...sharedDeps,
         cursorStore,

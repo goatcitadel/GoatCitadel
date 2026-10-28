@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { listChannelSetupDefinitions, requireChannelSetupDefinition } from "./channel-setup-definitions.js";
 describe("guided setup progressive metadata", () => {
-  it("stages all 16 adapters without requiring optional auth alternatives", () => {
+  it("stages all 14 adapters without requiring optional auth alternatives", () => {
     const definitions = listChannelSetupDefinitions();
-    expect(definitions).toHaveLength(16);
+    expect(definitions).toHaveLength(14);
     for (const definition of definitions) {
       const stages = definition.wizard.steps.map((step) => step.stage);
       expect(stages).toContain("prerequisites");

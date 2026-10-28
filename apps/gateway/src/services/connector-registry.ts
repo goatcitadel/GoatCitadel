@@ -191,10 +191,6 @@ function describeIntegrationApprovalDelivery(
       return "Set config.defaultThreadKey (webhook mode) or config.defaultSpace (Chat app mode) to enable approval delivery.";
     case "whatsapp":
       return "Set config.defaultTarget or config.defaultRecipient to enable approval delivery.";
-    case "signal":
-      return "Set config.defaultRecipient or config.defaultTarget to enable approval delivery.";
-    case "imessage":
-      return "Set config.defaultHandle or config.defaultTarget to enable approval delivery.";
     case "mattermost":
       return "Set config.defaultChannel or config.defaultTarget to enable approval delivery.";
     case "matrix":

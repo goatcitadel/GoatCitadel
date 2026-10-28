@@ -107,7 +107,7 @@ describe("comms routes", () => {
       url: "/api/v1/comms/send",
       payload: {
         connectionId: "11111111-1111-4111-8111-111111111111",
-        target: "imessage:+15551234567",
+        target: "chat:123",
         attachmentIds: ["22222222-2222-4222-8222-222222222222"],
         message: "",
       },
@@ -171,7 +171,7 @@ describe("comms routes", () => {
       url: "/api/v1/comms/react",
       payload: {
         connectionId: "11111111-1111-4111-8111-111111111111",
-        target: "imessage:+15551234567",
+        target: "chat:123",
         messageId: "msg-123",
         reaction: "love",
       },

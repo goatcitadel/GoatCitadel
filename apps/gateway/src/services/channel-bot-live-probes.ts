@@ -8,7 +8,6 @@ import {
   asRecord,
 } from "./channel-probe-result.js";
 /* eslint-disable max-lines -- Live probe coverage stays in one file so probe heuristics and result shaping remain traceable together. */
-import { randomUUID } from "node:crypto";
 import {
   type ChannelProbeReport,
   type ConnectorDiagnosticReport,
@@ -16,7 +15,6 @@ import {
   type DiscordRuntimeStatus,
 } from "@goatcitadel/contracts";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
-import { normalizeBlueBubblesBaseUrl } from "./channel-typing-adapters.js";
 
 type BotProbeChecks = { checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport };
 
@@ -81,24 +79,6 @@ interface WhatsAppProbeInput {
 
 interface LineProbeInput {
   channelAccessToken: string;
-  defaultTarget?: string;
-  includeSandboxSend: boolean;
-  fetcher: (url: string, init?: RequestInit) => Promise<Response>;
-  checkedAt?: string;
-}
-
-interface IMessageProbeInput {
-  bridgeUrl: string;
-  password: string;
-  defaultHandle?: string;
-  includeSandboxSend: boolean;
-  fetcher: (url: string, init?: RequestInit) => Promise<Response>;
-  checkedAt?: string;
-}
-
-interface SignalProbeInput {
-  baseUrl: string;
-  accountId?: string;
   defaultTarget?: string;
   includeSandboxSend: boolean;
   fetcher: (url: string, init?: RequestInit) => Promise<Response>;
@@ -1072,248 +1052,6 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
   }
 }
 
-export async function runIMessageBridgeLiveChecks(input: IMessageProbeInput): Promise<BotProbeChecks> {
-  const checkedAt = input.checkedAt ?? new Date().toISOString();
-  // BlueBubbles authenticates via ?password=, so schemeless remote hosts default to https.
-  const baseUrl = normalizeBlueBubblesBaseUrl(requireBridgeProbeUrl(input.bridgeUrl));
-  const probe: ChannelProbeReport = {
-    kind: "imessage_bridge",
-    mode: "bluebubbles",
-    checkedAt,
-    steps: [],
-  };
-
-  try {
-    const auth = await input.fetcher(buildBlueBubblesProbeApiUrl(baseUrl, "/api/v1/chat/query", input.password), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        limit: 1,
-        offset: 0,
-        with: ["participants"],
-      }),
-    });
-    if (auth.status < 200 || auth.status >= 300) {
-      const failure = await readJsonResponse(auth);
-      probe.steps.push({
-        key: "imessage_bridge_auth",
-        label: "Bridge auth",
-        status: auth.status >= 500 ? "warn" : "fail",
-        message: failure.detail ?? `BlueBubbles returned HTTP ${auth.status}.`,
-        failureCategory: inferFailureCategory(auth.status),
-      });
-      return { checks: mapProbeStepsToChecks(probe.steps), probe };
-    }
-    probe.steps.push({
-      key: "imessage_bridge_auth",
-      label: "Bridge auth",
-      status: "pass",
-      message: "Bridge query succeeded.",
-    });
-  } catch (error) {
-    probe.steps.push({
-      key: "imessage_bridge_auth",
-      label: "Bridge auth",
-      status: "warn",
-      message: `Probe failed before BlueBubbles responded: ${(error as Error).message}`,
-      failureCategory: "platform_unavailable",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  if (!input.includeSandboxSend) {
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  if (!input.defaultHandle) {
-    probe.steps.push({
-      key: "imessage_sandbox_send",
-      label: "Sandbox send",
-      status: "fail",
-      message: "Default handle is missing.",
-      failureCategory: "destination_mismatch",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  const target = parseIMessageProbeTarget(input.defaultHandle);
-  const probeText = `[GoatCitadel iMessage probe ${checkedAt}] Channel setup smoke check.`;
-  try {
-    const send = await input.fetcher(
-      buildBlueBubblesProbeApiUrl(
-        baseUrl,
-        target.kind === "chat_guid" ? "/api/v1/message/text" : "/api/v1/chat/new",
-        input.password,
-      ),
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          target.kind === "chat_guid"
-            ? {
-                chatGuid: target.chatGuid,
-                message: probeText,
-              }
-            : {
-                addresses: [target.address],
-                message: probeText,
-              },
-        ),
-      },
-    );
-    if (send.status < 200 || send.status >= 300) {
-      const failure = await readJsonResponse(send);
-      probe.steps.push({
-        key: "imessage_sandbox_send",
-        label: "Sandbox send",
-        status: send.status >= 500 ? "warn" : "fail",
-        message: failure.detail ?? `BlueBubbles returned HTTP ${send.status}.`,
-        failureCategory: inferFailureCategory(send.status),
-      });
-      return { checks: mapProbeStepsToChecks(probe.steps), probe };
-    }
-
-    const sendPayload = await readJsonValueResponse(send);
-    probe.steps.push({
-      key: "imessage_sandbox_send",
-      label: "Sandbox send",
-      status: "pass",
-      providerMessageId: extractBlueBubblesProbeMessageId(sendPayload.payload),
-      message: "Sandbox send succeeded.",
-    });
-    const messageId = extractBlueBubblesProbeMessageId(sendPayload.payload);
-    if (!messageId) {
-      probe.steps.push({
-        key: "imessage_sandbox_cleanup",
-        label: "Sandbox cleanup",
-        status: "warn",
-        message: "Message was sent, but BlueBubbles did not return a message id for cleanup.",
-        failureCategory: "unknown",
-      });
-      return { checks: mapProbeStepsToChecks(probe.steps), probe };
-    }
-
-    const cleanup = await input.fetcher(
-      buildBlueBubblesProbeApiUrl(
-        baseUrl,
-        `/api/v1/message/${encodeBlueBubblesMessageId(messageId)}/unsend`,
-        input.password,
-      ),
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      },
-    );
-    if (cleanup.status < 200 || cleanup.status >= 300) {
-      const failure = await readJsonResponse(cleanup);
-      probe.steps.push({
-        key: "imessage_sandbox_cleanup",
-        label: "Sandbox cleanup",
-        status: cleanup.status === 403 ? "warn" : cleanup.status >= 500 ? "warn" : "fail",
-        message: failure.detail ?? `BlueBubbles returned HTTP ${cleanup.status} while unsending the sandbox message.`,
-        failureCategory: cleanup.status === 403 ? "permission_mismatch" : inferFailureCategory(cleanup.status),
-      });
-      return { checks: mapProbeStepsToChecks(probe.steps), probe };
-    }
-    probe.steps.push({
-      key: "imessage_sandbox_cleanup",
-      label: "Sandbox cleanup",
-      status: "pass",
-      message: "Sandbox cleanup unsend succeeded.",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  } catch (error) {
-    probe.steps.push({
-      key: "imessage_sandbox_send",
-      label: "Sandbox send",
-      status: "warn",
-      message: `Probe failed before BlueBubbles responded: ${(error as Error).message}`,
-      failureCategory: "platform_unavailable",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-}
-
-export async function runSignalBridgeLiveChecks(input: SignalProbeInput): Promise<BotProbeChecks> {
-  const checkedAt = input.checkedAt ?? new Date().toISOString();
-  const baseUrl = normalizeBridgeProbeBaseUrl(input.baseUrl);
-  const probe: ChannelProbeReport = {
-    kind: "signal_bridge",
-    mode: "json_rpc",
-    checkedAt,
-    steps: [],
-  };
-
-  if (!input.includeSandboxSend) {
-    probe.steps.push({
-      key: "signal_sandbox_send",
-      label: "Sandbox send",
-      status: "skipped",
-      message: "Sandbox send skipped for non-destructive probe mode.",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  const target = normalizeSignalProbeTarget(input.defaultTarget);
-  if (!target) {
-    probe.steps.push({
-      key: "signal_sandbox_send",
-      label: "Sandbox send",
-      status: "fail",
-      message: "Default Signal recipient is missing.",
-      failureCategory: "missing_input",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  try {
-    const send = await readJsonResponse(
-      await input.fetcher(`${baseUrl}/api/v1/rpc`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "send",
-          params: buildSignalProbeParams(
-            target,
-            input.accountId,
-            `[GoatCitadel Signal probe ${checkedAt}] Channel setup smoke check.`,
-          ),
-          id: randomUUID(),
-        }),
-      }),
-    );
-    if (send.status < 200 || send.status >= 300 || asRecord(send.payload).error) {
-      probe.steps.push({
-        key: "signal_sandbox_send",
-        label: "Sandbox send",
-        status: send.status >= 500 ? "warn" : "fail",
-        message: send.detail ?? `Signal bridge returned HTTP ${send.status}.`,
-        failureCategory: inferFailureCategory(send.status),
-      });
-      return { checks: mapProbeStepsToChecks(probe.steps), probe };
-    }
-    probe.steps.push({
-      key: "signal_sandbox_send",
-      label: "Sandbox send",
-      status: "pass",
-      providerMessageId: asNumber(asRecord(send.payload.result).timestamp)?.toString(),
-      message: "Sandbox bridge send succeeded.",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  } catch (error) {
-    probe.steps.push({
-      key: "signal_sandbox_send",
-      label: "Sandbox send",
-      status: "warn",
-      message: `Probe failed before Signal bridge responded: ${(error as Error).message}`,
-      failureCategory: "platform_unavailable",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-}
-
 /**
  * Exercises ntfy's exact publish path once. ntfy has no non-destructive auth
  * endpoint and no portable delete operation, so non-send and dry-run checks
@@ -1619,41 +1357,6 @@ function normalizeLineProbeTarget(target: string | undefined): string | undefine
     .trim();
 }
 
-function normalizeSignalProbeTarget(target: string | undefined): string | undefined {
-  const trimmed = asString(target);
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.replace(/^signal:/i, "").trim();
-}
-
-function buildSignalProbeParams(
-  target: string,
-  accountId: string | undefined,
-  message: string,
-): Record<string, unknown> {
-  return {
-    ...buildSignalProbeTargetParams(target),
-    message,
-    ...(asString(accountId) ? { account: asString(accountId) } : {}),
-  };
-}
-
-function buildSignalProbeTargetParams(target: string): Record<string, unknown> {
-  const trimmed = target.trim();
-  const lowered = trimmed.toLowerCase();
-  if (lowered.startsWith("group:")) {
-    return { groupId: trimmed.slice("group:".length).trim() };
-  }
-  if (lowered.startsWith("username:")) {
-    return { username: [trimmed.slice("username:".length).trim()] };
-  }
-  if (lowered.startsWith("u:")) {
-    return { username: [trimmed.slice("u:".length).trim()] };
-  }
-  return { recipient: [trimmed] };
-}
-
 function normalizeZaloProbeTarget(target: string | undefined): string | undefined {
   const trimmed = asString(target);
   if (!trimmed) {
@@ -1664,82 +1367,6 @@ function normalizeZaloProbeTarget(target: string | undefined): string | undefine
     .replace(/^oa:/i, "")
     .replace(/^chat:/i, "")
     .trim();
-}
-
-function requireBridgeProbeUrl(baseUrl: string | undefined): string {
-  const trimmed = asString(baseUrl);
-  if (!trimmed) {
-    throw new Error("Bridge URL is missing.");
-  }
-  return trimmed;
-}
-
-function normalizeBridgeProbeBaseUrl(baseUrl: string | undefined): string {
-  const trimmed = requireBridgeProbeUrl(baseUrl);
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed.replace(/\/+$/, "");
-  }
-  return `http://${trimmed}`.replace(/\/+$/, "");
-}
-
-function buildBlueBubblesProbeApiUrl(baseUrl: string, path: string, password: string): string {
-  const url = new URL(path, `${baseUrl.replace(/\/+$/, "")}/`);
-  url.searchParams.set("password", password);
-  return url.toString();
-}
-
-function parseIMessageProbeTarget(
-  target: string,
-): { kind: "handle"; address: string } | { kind: "chat_guid"; chatGuid: string } {
-  const trimmed = target
-    .trim()
-    .replace(/^bluebubbles:/i, "")
-    .trim();
-  const lowered = trimmed.toLowerCase();
-  if (lowered.startsWith("chat_guid:") || lowered.startsWith("chatguid:") || lowered.startsWith("guid:")) {
-    return {
-      kind: "chat_guid",
-      chatGuid: trimmed.replace(/^(chat_guid:|chatguid:|guid:)/i, "").trim(),
-    };
-  }
-  let candidate = trimmed;
-  for (;;) {
-    const next = candidate.replace(/^(imessage:|sms:|auto:)/i, "").trim();
-    if (next === candidate) {
-      break;
-    }
-    candidate = next;
-  }
-  if (candidate.includes("@")) {
-    return {
-      kind: "handle",
-      address: candidate.toLowerCase(),
-    };
-  }
-  return {
-    kind: "handle",
-    address: candidate.replace(/\s+/g, ""),
-  };
-}
-
-function extractBlueBubblesProbeMessageId(payload: unknown): string | undefined {
-  const root = asRecord(payload);
-  const data = asRecord(root.data);
-  for (const source of [data, root]) {
-    for (const candidate of [source.guid, source.messageGuid, source.message_id, source.messageId, source.id]) {
-      if (typeof candidate === "string" && candidate.trim()) {
-        return candidate.trim();
-      }
-    }
-  }
-  return undefined;
-}
-
-function encodeBlueBubblesMessageId(messageId: string): string {
-  return messageId
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
 }
 
 function parseMattermostProbeTarget(target: string): MattermostProbeTarget {

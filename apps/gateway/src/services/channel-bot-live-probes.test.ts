@@ -3,10 +3,8 @@ import type { ChannelSetupTestResult, IntegrationConnection } from "@goatcitadel
 import { describe, expect, it, vi } from "vitest";
 import {
   runDiscordBotLiveChecks,
-  runIMessageBridgeLiveChecks,
   runLineBotLiveChecks,
   runMattermostBotLiveChecks,
-  runSignalBridgeLiveChecks,
   runSlackBotLiveChecks,
   runTelegramBotLiveChecks,
   runWhatsAppCloudLiveChecks,
@@ -498,71 +496,6 @@ describe("channel bot live probes", () => {
     expect(result.checks.every((check) => check.status === "pass")).toBe(true);
   });
 
-  it("runs iMessage bridge auth, sandbox send, and cleanup probes", async () => {
-    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url === "http://127.0.0.1:1234/api/v1/chat/query?password=bb-password") {
-        return new Response(JSON.stringify({ data: [] }), { status: 200 });
-      }
-      if (url === "http://127.0.0.1:1234/api/v1/chat/new?password=bb-password" && init?.method === "POST") {
-        return new Response(JSON.stringify({ data: { guid: "bb-msg-123" } }), { status: 200 });
-      }
-      if (
-        url === "http://127.0.0.1:1234/api/v1/message/bb-msg-123/unsend?password=bb-password" &&
-        init?.method === "POST"
-      ) {
-        return new Response(JSON.stringify({ data: { guid: "bb-msg-123" } }), { status: 200 });
-      }
-      throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
-    });
-
-    const result = await runIMessageBridgeLiveChecks({
-      bridgeUrl: "http://127.0.0.1:1234",
-      password: "bb-password",
-      defaultHandle: "imessage:+15551234567",
-      includeSandboxSend: true,
-      checkedAt: "2026-04-02T12:00:00.000Z",
-      fetcher,
-    });
-
-    expect(result.probe.steps.map((step) => step.key)).toEqual([
-      "imessage_bridge_auth",
-      "imessage_sandbox_send",
-      "imessage_sandbox_cleanup",
-    ]);
-    expect(result.checks.every((check) => check.status === "pass")).toBe(true);
-  });
-
-  it("runs Signal bridge sandbox send probes against the JSON-RPC send path", async () => {
-    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url === "https://signal.example.com/api/v1/rpc" && init?.method === "POST") {
-        return new Response(JSON.stringify({ jsonrpc: "2.0", result: { timestamp: 1712345678 } }), { status: 200 });
-      }
-      throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
-    });
-
-    const result = await runSignalBridgeLiveChecks({
-      baseUrl: "https://signal.example.com",
-      accountId: "+15557654321",
-      defaultTarget: "group:group-123",
-      includeSandboxSend: true,
-      checkedAt: "2026-04-02T12:00:00.000Z",
-      fetcher,
-    });
-
-    expect(result.probe.steps).toEqual([expect.objectContaining({ key: "signal_sandbox_send", status: "pass" })]);
-    const sendCall = fetcher.mock.calls[0];
-    expect(sendCall?.[0]).toBe("https://signal.example.com/api/v1/rpc");
-    expect(JSON.parse(String(sendCall?.[1]?.body))).toMatchObject({
-      jsonrpc: "2.0",
-      method: "send",
-      params: {
-        groupId: "group-123",
-        account: "+15557654321",
-        message: "[GoatCitadel Signal probe 2026-04-02T12:00:00.000Z] Channel setup smoke check.",
-      },
-    });
-  });
-
   it("runs Zalo OA sandbox send probes against the official account send path", async () => {
     const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "https://openapi.zalo.me/v2.0/oa/message" && init?.method === "POST") {
@@ -680,57 +613,6 @@ describe("channel bot live probes", () => {
     });
   });
 
-  it("handles iMessage chat-guid targets and warns when cleanup cannot identify a message", async () => {
-    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url === "http://127.0.0.1:1234/api/v1/chat/query?password=bb-password") {
-        return new Response(JSON.stringify({ data: [] }), { status: 200 });
-      }
-      if (url === "http://127.0.0.1:1234/api/v1/message/text?password=bb-password" && init?.method === "POST") {
-        return new Response(JSON.stringify({ data: {} }), { status: 200 });
-      }
-      throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
-    });
-
-    const result = await runIMessageBridgeLiveChecks({
-      bridgeUrl: "127.0.0.1:1234/",
-      password: "bb-password",
-      defaultHandle: "bluebubbles:chat_guid:chat-ABC",
-      includeSandboxSend: true,
-      fetcher,
-    });
-
-    expect(result.probe.steps).toEqual([
-      expect.objectContaining({ key: "imessage_bridge_auth", status: "pass" }),
-      expect.objectContaining({ key: "imessage_sandbox_send", status: "pass" }),
-      expect.objectContaining({
-        key: "imessage_sandbox_cleanup",
-        status: "warn",
-        failureCategory: "unknown",
-      }),
-    ]);
-    const sendBody = JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body));
-    expect(sendBody).toMatchObject({
-      chatGuid: "chat-ABC",
-    });
-  });
-
-  it("probes a schemeless remote BlueBubbles bridge over https (the password is a query parameter)", async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 }));
-
-    await runIMessageBridgeLiveChecks({
-      bridgeUrl: "bluebubbles.example:1234",
-      password: "bb-password",
-      defaultHandle: "bluebubbles:chat_guid:chat-ABC",
-      includeSandboxSend: false,
-      fetcher,
-    });
-
-    expect(fetcher).toHaveBeenCalled();
-    for (const call of fetcher.mock.calls as unknown as Array<[string]>) {
-      expect(call[0]).toMatch(/^https:\/\/bluebubbles\.example:1234\//);
-    }
-  });
-
   it("resolves Mattermost direct-message and team fallback targets before sandbox send", async () => {
     const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "https://chat.example.com/api/v4/users/me") {
@@ -804,21 +686,7 @@ describe("channel bot live probes", () => {
     ]);
   });
 
-  it("shapes Signal, LINE, and Zalo target failures without sending malformed probes", async () => {
-    const signalFetcher = vi.fn(
-      async () => new Response(JSON.stringify({ jsonrpc: "2.0", result: {} }), { status: 200 }),
-    );
-    const signal = await runSignalBridgeLiveChecks({
-      baseUrl: "https://signal.example.com/",
-      defaultTarget: "username:operator",
-      includeSandboxSend: true,
-      fetcher: signalFetcher,
-    });
-    expect(signal.probe.steps).toEqual([expect.objectContaining({ key: "signal_sandbox_send", status: "pass" })]);
-    expect(JSON.parse(String(signalFetcher.mock.calls[0]?.[1]?.body))).toMatchObject({
-      params: { username: ["operator"] },
-    });
-
+  it("shapes LINE and Zalo target failures without sending malformed probes", async () => {
     const lineFetcher = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     const line = await runLineBotLiveChecks({
       channelAccessToken: "line-token",
@@ -908,21 +776,6 @@ describe("channel bot live probes", () => {
         key: "whatsapp_token_auth",
         status: "warn",
         failureCategory: "platform_unavailable",
-      }),
-    ]);
-
-    const imessageMissingHandle = await runIMessageBridgeLiveChecks({
-      bridgeUrl: "http://127.0.0.1:1234",
-      password: "bb-password",
-      includeSandboxSend: true,
-      fetcher: vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 })),
-    });
-    expect(imessageMissingHandle.probe.steps).toEqual([
-      expect.objectContaining({ key: "imessage_bridge_auth", status: "pass" }),
-      expect.objectContaining({
-        key: "imessage_sandbox_send",
-        status: "fail",
-        failureCategory: "destination_mismatch",
       }),
     ]);
   });

@@ -22,7 +22,7 @@ describe("guided sender authorization", () => {
       expect(hydrateGuidedChannelInboundAccess(key, {})).toEqual({ inboundAccessMode: "open_legacy" });
     },
   );
-  it.each(["ntfy", "mattermost", "signal", "google-chat"])(
+  it.each(["ntfy", "mattermost", "google-chat"])(
     "defaults %s to deny and never hydrates a stored open_legacy posture the runtime ignores",
     (key) => {
       const config = normalizeGuidedChannelInboundAccess(key, { draft: {} });

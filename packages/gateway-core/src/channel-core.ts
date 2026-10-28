@@ -554,49 +554,6 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     ],
     requiredAnyOf: [["phoneNumberId"], ["accessTokenEnv", "accessToken", "tokenEnv", "token"]],
   },
-  signal: {
-    supportedActions: ["channel.send", "channel.react", "channel.unsend", "channel.typing"],
-    resolveInboundModes: (config) => (isSignalInboundEnabled(config) ? ["stream"] : ["none"]),
-    threadCapabilities: {
-      direct: true,
-      groups: true,
-    },
-    chunkingMode: "fallback",
-    supportsStreaming: false,
-    resolveRuntimePosture: (config) =>
-      isSignalInboundEnabled(config)
-        ? {
-            outboundTransport: "api",
-            inboundTransport: "stream",
-            lifecycle: "persistent",
-            inboundReadiness: "ready",
-            operatorSummary:
-              "Signal sends through the signal-cli JSON-RPC bridge and, with receiveEvents enabled, keeps a persistent subscription to the signal-cli HTTP daemon event stream. Self-echo, receipts and typing events are ignored, and the sender plus message timestamp dedupes any reconnect overlap.",
-          }
-        : {
-            outboundTransport: "api",
-            lifecycle: "stateless",
-            inboundReadiness: "unsupported",
-            operatorSummary:
-              "Signal sends through the configured signal-cli JSON-RPC bridge. Inbound is opt-in: enable receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream.",
-          },
-    resolveSupportNotes: (config) => [
-      "Outbound Signal sends use the configured bridge JSON-RPC send path.",
-      "Signal typing indicators use the bridge JSON-RPC sendTyping method for a recipient or a group: target.",
-      "Signal reactions use sendReaction with the target message timestamp as messageId; group reactions also need targetAuthor.",
-      "Signal remote delete (unsend) uses remoteDelete and works only on messages this account sent.",
-      isSignalInboundEnabled(config)
-        ? "Signal inbound subscribes to the signal-cli daemon --http event stream (/api/v1/events); allow the sender UUIDs (or numbers for senders without a UUID) that may start turns, because inbound is default-deny."
-        : "Signal inbound is off; set receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream (/api/v1/events).",
-      "signal-cli acknowledges messages to the Signal server itself, so messages that arrive while the gateway's event stream is disconnected are not replayed and are lost.",
-      ...(isSignalInboundEnabled(config)
-        ? [
-            "signal-cli sends an SSE keepalive (every 15 seconds by default, --sse-keepalive-interval); an event stream silent for 90 seconds is treated as dropped and reconnected, so keep that interval well below 90 seconds.",
-          ]
-        : []),
-    ],
-    requiredAnyOf: [["baseUrl", "bridgeUrl"]],
-  },
   mattermost: {
     supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
     supportedAttachmentSources: ["url", "inline"],
@@ -764,37 +721,6 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       "WeCom reactions and unsend are not supported by this adapter.",
     ],
     requiredAnyOf: [["corpId"], ["agentId"], ["secretEnv", "secret"]],
-  },
-  imessage: {
-    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
-    supportedAttachmentSources: ["url", "inline"],
-    inboundModes: ["none"],
-    threadCapabilities: {
-      replies: true,
-      direct: true,
-      groups: true,
-    },
-    chunkingMode: "fallback",
-    supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "iMessage defaults to a BlueBubbles local bridge. Photon/Spectrum is tracked as a third-party sidecar provider, but it is not the default runtime path and must be explicitly configured with a runnable adapter.",
-    },
-    supportNotes: [
-      "BlueBubbles is the local-first callable provider for this Gateway build.",
-      "Photon/Spectrum provider metadata is recognized for diagnostics, but sends fail closed until a Photon adapter is installed.",
-      "Attachment sends to brand-new handles require BlueBubbles chat creation support.",
-      "Reactions, unsend, and typing indicators require BlueBubbles Private API support.",
-      "Typing indicators post to the BlueBubbles chat typing endpoint and need a chat GUID target (chat_guid:iMessage;-;+15551234567); handles and chat ids are not resolved for typing.",
-      "BlueBubbles authenticates with a ?password= URL query parameter, so use an https:// bridge URL or a loopback bridge (127.0.0.1, localhost, [::1]); a schemeless non-loopback bridge URL defaults to https.",
-    ],
-    requiredAnyOf: [
-      ["bridgeUrl", "baseUrl", "serverUrl"],
-      ["passwordEnv", "password", "apiPasswordEnv", "apiPassword"],
-    ],
   },
   "nextcloud-talk": {
     platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS["nextcloud-talk"],
@@ -1450,11 +1376,6 @@ function isNtfyInboundEnabled(config: Record<string, unknown>): boolean {
     hasAnyConfigured(config, ["baseUrl"]) &&
     hasAnyConfigured(config, ["subscribeTopic", "topic", "defaultTopic"])
   );
-}
-
-/** Mirrors the Signal stream adapter: receiveEvents opt-in and a bridge URL. */
-function isSignalInboundEnabled(config: Record<string, unknown>): boolean {
-  return isExplicitTrue(config.receiveEvents) && hasAnyConfigured(config, ["baseUrl", "bridgeUrl"]);
 }
 
 /** Mirrors the Mattermost stream adapter: opt-in, server URL and a bot token. */

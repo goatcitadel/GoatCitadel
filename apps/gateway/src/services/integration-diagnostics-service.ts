@@ -20,11 +20,9 @@ import type {
 } from "@goatcitadel/contracts";
 import { buildGoogleWorkspaceConfigChecks, buildGoogleWorkspaceSignInChecks } from "./google-workspace-diagnostics.js";
 import {
-  runIMessageBridgeLiveChecks,
   runLineBotLiveChecks,
   runMattermostBotLiveChecks,
   runNtfyLiveChecks,
-  runSignalBridgeLiveChecks,
   runSlackBotLiveChecks,
   runTelegramBotLiveChecks,
   runWhatsAppCloudLiveChecks,
@@ -46,7 +44,6 @@ const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
   "ntfy",
   "mattermost",
   "matrix",
-  "signal",
   "google-chat",
   "qqbot",
   "wecom",
@@ -308,15 +305,6 @@ export function buildIntegrationConnectionChecks(
             "WhatsApp rich-message policy: Cloud API image/video/audio/document delivery is preflighted, text-only fallbacks are labeled, pending attachment hydration is visible, and rich batches are capped at 10 attachments.",
         });
         break;
-      case "signal":
-        checkUrl(
-          "url",
-          "Signal bridge URL",
-          deps.readConnectionConfigValue(config, "baseUrl") ?? deps.readConnectionConfigValue(config, "bridgeUrl"),
-          true,
-        );
-        requireText("target", "Default Signal recipient", resolveChannelConfigTarget(connection.key, config), "warn");
-        break;
       case "mattermost":
         checkUrl("url", "Mattermost server URL", deps.readConnectionConfigValue(config, "serverUrl"), true);
         requireSecretRef("auth", "Mattermost bot token", "botToken", "botTokenEnv");
@@ -352,24 +340,6 @@ export function buildIntegrationConnectionChecks(
           requireText,
           requireSecretRef,
         });
-        break;
-      case "imessage":
-        if (readIMessageBridgeProvider(deps, config) === "photon") {
-          checks.push({
-            key: "provider",
-            status: "warn",
-            message:
-              "Photon/Spectrum iMessage provider metadata is recognized, but this Gateway build blocks Photon sends until a runnable adapter is installed. BlueBubbles remains the callable local path.",
-          });
-        }
-        checkUrl(
-          "url",
-          "iMessage bridge URL",
-          deps.readConnectionConfigValue(config, "bridgeUrl") ?? deps.readConnectionConfigValue(config, "baseUrl"),
-          true,
-        );
-        requireSecretRef("auth", "iMessage bridge password", "password", "passwordEnv");
-        requireText("target", "Default iMessage handle", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
       case "nextcloud-talk":
         checkUrl("url", "Nextcloud base URL", deps.readConnectionConfigValue(config, "baseUrl"), true);
@@ -723,21 +693,6 @@ export async function runIntegrationConnectionLiveChecks(
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
-    case "signal": {
-      const baseUrl =
-        deps.readConnectionConfigValue(config, "baseUrl") ?? deps.readConnectionConfigValue(config, "bridgeUrl");
-      if (!baseUrl) {
-        return { checks: [] };
-      }
-      return runSignalBridgeLiveChecks({
-        baseUrl,
-        accountId:
-          deps.readConnectionConfigValue(config, "accountId") ?? deps.readConnectionConfigValue(config, "account"),
-        defaultTarget: resolveChannelConfigTarget(connection.key, config),
-        includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
-      });
-    }
     case "google-chat":
       if (isGoogleChatAppConfig(deps, config)) {
         return {
@@ -778,37 +733,6 @@ export async function runIntegrationConnectionLiveChecks(
         token,
         defaultChannel: deps.readConnectionConfigValue(config, "defaultChannel"),
         defaultTeam: deps.readConnectionConfigValue(config, "defaultTeam"),
-        includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
-      });
-    }
-    case "imessage": {
-      if (readIMessageBridgeProvider(deps, config) === "photon") {
-        return {
-          checks: [
-            {
-              key: "imessage_photon_runtime",
-              status: "fail",
-              message:
-                "Photon/Spectrum iMessage diagnostics are explicit, but runtime sends are blocked until a Photon adapter is installed. Use BlueBubbles for callable local iMessage sends.",
-            },
-          ],
-        };
-      }
-      const bridgeUrl =
-        deps.readConnectionConfigValue(config, "bridgeUrl") ??
-        deps.readConnectionConfigValue(config, "baseUrl") ??
-        deps.readConnectionConfigValue(config, "serverUrl");
-      const password = resolveSecret("password", "passwordEnv") ?? resolveSecret("apiPassword", "apiPasswordEnv");
-      if (!bridgeUrl || !password) {
-        return { checks: [] };
-      }
-      return runIMessageBridgeLiveChecks({
-        bridgeUrl,
-        password,
-        defaultHandle:
-          deps.readConnectionConfigValue(config, "defaultHandle") ??
-          deps.readConnectionConfigValue(config, "defaultTarget"),
         includeSandboxSend: options.includeSandboxSend,
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
@@ -874,15 +798,6 @@ function hasConnectionEnvValue(
 
 function isHostAllowlisted(deps: IntegrationDiagnosticsPort, hostname: string): boolean {
   return connectionUrlHelpers.isHostAllowlistedInList(hostname, deps.config.toolPolicy.sandbox.networkAllowlist);
-}
-
-function readIMessageBridgeProvider(
-  deps: IntegrationDiagnosticsPort,
-  config: Record<string, unknown>,
-): "bluebubbles" | "photon" {
-  const provider =
-    deps.readConnectionConfigValue(config, "bridgeProvider") ?? deps.readConnectionConfigValue(config, "provider");
-  return provider === "photon" ? "photon" : "bluebubbles";
 }
 
 /**

@@ -3,11 +3,9 @@ import type { IntegrationConnection } from "@goatcitadel/contracts";
 
 const liveProbeMocks = vi.hoisted(() => ({
   discord: vi.fn(),
-  imessage: vi.fn(),
   line: vi.fn(),
   mattermost: vi.fn(),
   ntfy: vi.fn(),
-  signal: vi.fn(),
   slack: vi.fn(),
   telegram: vi.fn(),
   whatsapp: vi.fn(),
@@ -17,11 +15,9 @@ const webhookProbeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./channel-bot-live-probes.js", () => ({
   runDiscordBotLiveChecks: liveProbeMocks.discord,
-  runIMessageBridgeLiveChecks: liveProbeMocks.imessage,
   runLineBotLiveChecks: liveProbeMocks.line,
   runMattermostBotLiveChecks: liveProbeMocks.mattermost,
   runNtfyLiveChecks: liveProbeMocks.ntfy,
-  runSignalBridgeLiveChecks: liveProbeMocks.signal,
   runSlackBotLiveChecks: liveProbeMocks.slack,
   runTelegramBotLiveChecks: liveProbeMocks.telegram,
   runWhatsAppCloudLiveChecks: liveProbeMocks.whatsapp,
@@ -82,15 +78,6 @@ describe("integration diagnostics live-check routing", () => {
         liveProbeMocks.whatsapp,
       ],
       [
-        "signal",
-        {
-          bridgeUrl: "http://127.0.0.1:9000",
-          accountId: "signal-account",
-          defaultRecipient: "+15551234567",
-        },
-        liveProbeMocks.signal,
-      ],
-      [
         "mattermost",
         {
           token: "mattermost-token",
@@ -99,15 +86,6 @@ describe("integration diagnostics live-check routing", () => {
           defaultTeam: "ops",
         },
         liveProbeMocks.mattermost,
-      ],
-      [
-        "imessage",
-        {
-          bridgeUrl: "http://127.0.0.1:4321",
-          apiPassword: "bridge-password",
-          defaultTarget: "+15551234567",
-        },
-        liveProbeMocks.imessage,
       ],
       ["line", { token: "line-token", defaultTarget: "U123" }, liveProbeMocks.line],
       ["zalo", { token: "zalo-token", defaultTarget: "zalo-user" }, liveProbeMocks.zalo],
@@ -148,12 +126,6 @@ describe("integration diagnostics live-check routing", () => {
         serverUrl: "https://mattermost.example.test",
         token: "mattermost-token",
         defaultTeam: "ops",
-      }),
-    );
-    expect(liveProbeMocks.imessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        password: "bridge-password",
-        defaultHandle: "+15551234567",
       }),
     );
   });

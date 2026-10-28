@@ -14,14 +14,13 @@ export const GUIDED_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   "ntfy",
   "mattermost",
   "matrix",
-  "signal",
   "google-chat",
   "qqbot",
   "wecom",
 ]);
 
 /**
- * Channels whose inbound (the ntfy/Mattermost/Signal streams and Google Chat app mode) is new, so the
+ * Channels whose inbound (the ntfy/Mattermost streams and Google Chat app mode) is new, so the
  * legacy-open default never applied: the runtime always forces allowlist for them. Setup, hydration and
  * diagnostics must report that posture rather than a stored open_legacy value the runtime ignores.
  */
@@ -29,7 +28,6 @@ export const FORCED_ALLOWLIST_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   "ntfy",
   "mattermost",
   "matrix",
-  "signal",
   "google-chat",
   "qqbot",
   "wecom",

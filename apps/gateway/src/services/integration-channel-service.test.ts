@@ -325,80 +325,49 @@ describe("integration-channel-service inbound access defaults", () => {
 });
 
 describe("integration-channel-service runtime status", () => {
-  it("ignores a legacy Signal inboundEnabled value: no blocked branch, no retired feature flag read", async () => {
-    const deps = createDeps();
-    const latestAcceptedInboundAt = vi.fn(async () => "2026-07-05T12:30:00.000Z");
-    Object.assign(deps, { latestAcceptedInboundAt });
-    const connection = await createIntegrationConnection(deps, {
-      catalogId: "channel.signal",
-      label: "Signal",
-      config: {
-        baseUrl: "http://127.0.0.1:8080",
-        accountId: "+15550001111",
-        defaultRecipient: "+15550002222",
-        inboundEnabled: " TRUE ",
-      },
-    });
-    await updateIntegrationConnection(deps, connection.connectionId, {
-      status: "connected",
-      lastSyncAt: "2026-07-05T12:00:00.000Z",
-    });
+  it.each([
+    [
+      "channel.signal",
+      "signal",
+      { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15550002222", receiveEvents: true },
+    ],
+    [
+      "channel.imessage",
+      "imessage",
+      { bridgeUrl: "http://127.0.0.1:1234", passwordEnv: "BB_PASSWORD", defaultHandle: "imessage:+15550002222" },
+    ],
+  ] as const)(
+    "refuses a new %s connection, keeps a saved one readable and not ready, and still deletes it",
+    async (catalogId, key, config) => {
+      const deps = createDeps();
+      await expect(createIntegrationConnection(deps, { catalogId, label: key, config })).rejects.toThrow(
+        `Unknown integration catalog id: ${catalogId}`,
+      );
 
-    const status = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+      const saved = await deps.storage.integrationConnections.create({
+        catalogId,
+        kind: "channel",
+        key,
+        label: key,
+        config,
+        status: "connected",
+      });
+      await updateIntegrationConnection(deps, saved.connectionId, {
+        status: "connected",
+        lastSyncAt: "2026-10-27T12:00:00.000Z",
+      });
 
-    expect(status.ready).toBe(true);
-    expect(status.inboundModes).toEqual(["none"]);
-    expect(status.runtimePosture).toMatchObject({
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-    });
-    expect(status.metadata.readinessSource).toBe("last_live_probe");
-    expect(status.metadata).not.toHaveProperty("featureFlag");
-    // Signal is no longer special-cased out of the accepted-inbound timestamp.
-    expect(status.lastInboundAt).toBe("2026-07-05T12:30:00.000Z");
-    expect(deps.isFeatureEnabled).not.toHaveBeenCalledWith("signalInboundV1Enabled");
-  });
+      const status = await getIntegrationConnectionChannelRuntimeStatus(deps, saved.connectionId);
+      expect(status.ready).toBe(false);
+      expect(status.inboundModes).toEqual(["none"]);
+      expect(status.runtimePosture.inboundReadiness).toBe("unsupported");
+      expect(status.metadata.setupDiagnostics).toEqual([expect.stringMatching(/is not supported anymore/)]);
+      expect(deps.getChannelStreamRuntimeStatus).not.toHaveBeenCalled();
 
-  it("reports Signal receiveEvents inbound from the live stream runtime", async () => {
-    const deps = createDeps();
-    const connection = await createIntegrationConnection(deps, {
-      catalogId: "channel.signal",
-      label: "Signal",
-      config: {
-        baseUrl: "http://127.0.0.1:8080",
-        accountId: "+15550001111",
-        defaultRecipient: "+15550003333",
-        receiveEvents: true,
-      },
-    });
-    await updateIntegrationConnection(deps, connection.connectionId, {
-      status: "connected",
-      lastSyncAt: "2026-10-16T12:00:00.000Z",
-    });
-
-    vi.mocked(deps.getChannelStreamRuntimeStatus).mockReturnValue(undefined);
-    const notStarted = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
-    expect(notStarted.ready).toBe(false);
-    expect(notStarted.inboundModes).toEqual(["stream"]);
-    expect(notStarted.metadata).toMatchObject({ readinessSource: "live_runtime", authoritative: true });
-
-    vi.mocked(deps.getChannelStreamRuntimeStatus).mockReturnValue({
-      connectionId: connection.connectionId,
-      channelKey: "signal",
-      ready: true,
-      lastReadyAt: "2026-10-16T12:01:00.000Z",
-      lastInboundAt: "2026-10-16T12:02:00.000Z",
-    });
-    const live = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
-    expect(live.ready).toBe(true);
-    expect(live.lastInboundAt).toBe("2026-10-16T12:02:00.000Z");
-    expect(live.runtimePosture).toMatchObject({
-      lifecycle: "persistent",
-      inboundTransport: "stream",
-      inboundReadiness: "ready",
-    });
-  });
+      expect(await deleteIntegrationConnection(deps, saved.connectionId)).toBe(true);
+      expect(await deps.storage.integrationConnections.list()).toEqual([]);
+    },
+  );
 
   it("reports ntfy stream inbound from the live stream runtime, not the last probe", async () => {
     const deps = createDeps();

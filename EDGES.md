@@ -232,9 +232,9 @@ Channel definitions declare their fields and which are secrets via
 Each token field has an `*Env` sibling (e.g. Telegram `botTokenEnv`,
 `telegram.ts:295`) so you can store the **name of an env var** holding the token
 instead of the token itself; the value is then read from the environment at
-runtime rather than persisted. Other channels exist too (Teams, Signal, Google
-Chat, iMessage, Line, Mattermost, Nextcloud Talk, ntfy, WhatsApp, Zalo) under the
-same `channel-setup-definitions/` directory.
+runtime rather than persisted. Other channels exist too (Teams, Google Chat,
+Line, Mattermost, Matrix, Nextcloud Talk, ntfy, QQBot, WeCom, WhatsApp, Zalo)
+under the same `channel-setup-definitions/` directory.
 
 ### Setup flow (Settings → Channels)
 

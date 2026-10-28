@@ -27,7 +27,7 @@ const DEFINITIONS: ChannelSetupDefinition[] = [
   definition("slack", "Slack", "quickest", 1, { note: "Receiving needs a public web address" }),
   definition("telegram", "Telegram", "quickest", 0, { minutes: 3 }, 8),
   definition("matrix", "Matrix", "team_chat", 0, { note: "Needs a Matrix bot account" }, 15),
-  definition("signal", "Signal", "phone_apps", 0, { note: "Needs signal-cli" }, 25),
+  definition("whatsapp", "WhatsApp", "phone_apps", 0, { note: "Business account + public web address" }, 25),
   {
     catalog: { catalogId: "channel.zalouser", key: "zalouser", label: "Zalo personal" },
     wizard: { estimatedMinutes: 5 },
@@ -97,7 +97,7 @@ describe("ChannelPicker", () => {
       "Telegram",
       "Slack",
       "Matrix",
-      "Signal",
+      "WhatsApp",
     ]);
     expect(container.textContent).not.toContain("Zalo personal");
   });

@@ -6,6 +6,7 @@ All notable changes to GoatCitadel are documented in this file.
 
 ### Removed
 
+- The Signal (`channel.signal`) and iMessage (`channel.imessage`) channels, with the `signal.send`, `imessage.send`, `imessage.react` and `imessage.unsend` tools, the Signal event-stream inbound and both typing indicators. Signal sent through signal-cli and iMessage through a BlueBubbles server. Both are unofficial clients, and that kind of client can get the account banned. A saved Signal or iMessage connection stays listed so you can delete it. Sends, reactions, unsends, typing and approval deliveries through it are refused with that reason, and it no longer receives messages or runs live probes.
 - The Zalo Personal channel (`channel.zalouser`) and its `zalouser.send` tool. It sent through an unofficial personal-account client (a zca bridge), and that kind of client can get the account banned. A saved Zalo Personal connection stays listed so you can delete it, but sends, approval deliveries and live probes through it are refused with that reason. Zalo OA (`channel.zalo`) is the supported Zalo channel.
 
 ### Security

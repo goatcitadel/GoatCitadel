@@ -19,7 +19,7 @@ import {
 const GROUPS: Record<ChannelPickerGroup, string[]> = {
   quickest: ["telegram", "discord", "ntfy", "slack"],
   team_chat: ["mattermost", "matrix", "teams", "google-chat"],
-  phone_apps: ["signal", "whatsapp", "line", "imessage", "wecom", "qqbot", "zalo", "nextcloud-talk"],
+  phone_apps: ["whatsapp", "line", "wecom", "qqbot", "zalo", "nextcloud-talk"],
 };
 
 const NOTES: Record<string, string> = {
@@ -29,10 +29,8 @@ const NOTES: Record<string, string> = {
   matrix: "Needs a Matrix bot account",
   teams: "Sends only",
   "google-chat": "Receiving needs a public web address",
-  signal: "Needs signal-cli",
   whatsapp: "Business account + public web address",
   line: "Receiving needs a public web address",
-  imessage: "Sends only, through BlueBubbles on a Mac",
   wecom: "Receiving needs a public web address",
   qqbot: "Needs a public web address",
   zalo: "Sends only, from a Zalo Official Account",
@@ -51,6 +49,14 @@ describe("channel setup picker hints", () => {
   it("offers every channel in the picker", () => {
     for (const definition of listChannelSetupDefinitions()) {
       expect(definition.wizard.picker, `${definition.catalog.key} has no picker hint`).toBeDefined();
+    }
+  });
+
+  it("has no picker hint or host field for a retired channel", () => {
+    for (const key of ["signal", "imessage", "zalouser"]) {
+      expect(CHANNEL_PICKER_HINTS, key).not.toHaveProperty(key);
+      expect(CHANNEL_HOST_FIELDS, key).not.toHaveProperty(key);
+      expect(CHANNEL_REQUIRED_HOSTS, key).not.toHaveProperty(key);
     }
   });
 
@@ -196,7 +202,7 @@ describe("channel setup picker hints", () => {
       expect(Object.isFrozen(table)).toBe(true);
     }
     expect(Object.isFrozen(CHANNEL_REQUIRED_HOSTS["qqbot"])).toBe(true);
-    expect(Object.isFrozen(CHANNEL_HOST_FIELDS["imessage"])).toBe(true);
+    expect(Object.isFrozen(CHANNEL_HOST_FIELDS["matrix"])).toBe(true);
     expect(Object.isFrozen(CHANNEL_CONDITIONAL_HOSTS["qqbot"])).toBe(true);
     expect(Object.isFrozen(CHANNEL_CONDITIONAL_HOSTS["qqbot"]?.[0])).toBe(true);
     expect(Object.isFrozen(CHANNEL_INBOUND_WEBHOOKS["telegram"])).toBe(true);
@@ -256,8 +262,6 @@ describe("channel hosts and inbound webhooks", () => {
       matrix: ["homeserverUrl"],
       mattermost: ["serverUrl"],
       "nextcloud-talk": ["baseUrl"],
-      signal: ["baseUrl"],
-      imessage: ["bridgeUrl", "photonSidecarUrl"],
     };
     for (const definition of listChannelSetupDefinitions()) {
       expect(definition.wizard.hostFields, definition.catalog.key).toEqual(expected[definition.catalog.key]);
@@ -354,7 +358,7 @@ describe("channel hosts and inbound webhooks", () => {
   });
 
   it("leaves out channels with no inbound webhook route", () => {
-    for (const key of ["discord", "zalo", "teams", "ntfy", "matrix", "mattermost", "signal", "imessage"]) {
+    for (const key of ["discord", "zalo", "teams", "ntfy", "matrix", "mattermost"]) {
       expect(definitionByKey(key).wizard.inboundWebhook, key).toBeUndefined();
     }
   });
