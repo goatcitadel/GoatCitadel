@@ -3,6 +3,7 @@ import type {
   EvolutionControlPlaneRepositoryPort,
   EvolutionControlPlaneServiceDependencies,
 } from "./evolution-control-plane-service.js";
+import { OPERATOR_SAVE_EVIDENCE } from "./evolution-control-plane-operator-approval-skip.js";
 
 /** Canonical parent settlement after the control plane reads a terminal refusal.
  * Apply and rollback are never invoked. Temporary inputs use their existing
@@ -141,6 +142,8 @@ export function isAutoResumeOnApprovalPlan(plan: ChangePlanRecord): boolean {
   if (plan.origin.surface === "capabilities") return plan.request.kind === "connector_install";
   return (
     plan.origin.surface === "settings" &&
+    // Bound to the server-owned Settings save, not the caller-chosen surface the generic create route accepts.
+    plan.evidenceRefs.includes(OPERATOR_SAVE_EVIDENCE) &&
     plan.request.kind === "runtime_configuration" &&
     plan.request.change.operation !== "gateway_auth_configuration"
   );

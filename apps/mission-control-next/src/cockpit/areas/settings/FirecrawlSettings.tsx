@@ -334,7 +334,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
               <Button
                 size="sm"
                 className="mt-2"
-                disabled={allowlistBusy || governed.locked}
+                disabled={allowlistBusy || Boolean(allowlistApproval) || governed.locked}
                 onClick={() => void addHostToAllowlist()}
               >
                 {allowlistBusy ? "Adding…" : `Add ${draftHost} to the outbound allowlist`}

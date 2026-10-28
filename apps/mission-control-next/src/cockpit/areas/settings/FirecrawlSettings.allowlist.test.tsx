@@ -104,6 +104,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("does not offer a second allowlist request while the first waits for its decision", async () => {
+  await addHostAwaitingApproval();
+  expect(button("Add 192.168.0.199:3002 to the outbound allowlist")!.disabled).toBe(true);
+  expect(api.patchSettings).toHaveBeenCalledTimes(1);
+});
+
 it("says a denied allowlist change added nothing, without reading the plan", async () => {
   await addHostAwaitingApproval();
   await act(async () => button("Decide rejected")!.click());

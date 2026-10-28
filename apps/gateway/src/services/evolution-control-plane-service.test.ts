@@ -490,12 +490,39 @@ describe("EvolutionControlPlaneService", () => {
       plan.planId,
       plan.revision,
       plan.requiredAction!.actionNonce,
+      {
+        operatorSettingsSave: true,
+      },
     );
     expect(waiting.status).toBe("awaiting_approval");
     f.approve();
     await f.service.reconcileApproval("approval-final");
     expect((await f.service.get(settingsActor, plan.planId)).status).toBe("completed");
     expect(f.adapter.applyCount).toBe(1);
+  });
+
+  it("keeps a plan that only claims the Settings surface waiting for its continuation", async () => {
+    // The generic create route accepts a caller-chosen surface; only the server-owned Settings save binds auto-apply.
+    const settingsActor = { workspaceId: "default", actorId: "operator-1", surface: "settings" as const };
+    const f = fixture();
+    const plan = await f.service.create({
+      actor: settingsActor,
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "network_allowlist", entries: ["192.168.0.199:3002"] },
+      },
+    });
+    const waiting = await f.service.confirm(
+      settingsActor,
+      plan.planId,
+      plan.revision,
+      plan.requiredAction!.actionNonce,
+    );
+    expect(waiting.evidenceRefs).not.toContain("operator-save:settings");
+    f.approve();
+    expect(await f.service.reconcileApproval("approval-final")).toBe(0);
+    expect(await f.service.get(settingsActor, plan.planId)).toEqual(waiting);
+    expect(f.adapter.applyCount).toBe(0);
   });
 
   it("applies any approved Settings runtime change once the approval is decided, with no separate Continue step", async () => {
@@ -506,7 +533,16 @@ describe("EvolutionControlPlaneService", () => {
     };
     const f = fixture();
     const plan = await f.service.create({ actor: settingsActor, request: allowlistRequest });
-    await f.service.confirm(settingsActor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+    const waiting = await f.service.confirm(
+      settingsActor,
+      plan.planId,
+      plan.revision,
+      plan.requiredAction!.actionNonce,
+      {
+        operatorSettingsSave: true,
+      },
+    );
+    expect(waiting.evidenceRefs).toContain("operator-save:settings");
     f.approve();
     await f.service.reconcileApproval("approval-final");
     expect((await f.service.get(settingsActor, plan.planId)).status).toBe("completed");
@@ -528,6 +564,9 @@ describe("EvolutionControlPlaneService", () => {
       plan.planId,
       plan.revision,
       plan.requiredAction!.actionNonce,
+      {
+        operatorSettingsSave: true,
+      },
     );
     f.approve();
     expect(await f.service.reconcileApproval("approval-final")).toBe(0);
