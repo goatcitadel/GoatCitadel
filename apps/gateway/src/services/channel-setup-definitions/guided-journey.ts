@@ -152,14 +152,15 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Register the saved connection webhook URL with the same shared token, allow your Nextcloud actor ID, and send a room message. Confirm its reply; attachments and unsend are not supported.",
   },
   line: {
-    summary: "Connect a LINE Messaging API bot with optional signed webhook conversations.",
+    summary:
+      "Send LINE messages from your LINE Official Account. Receiving needs a public HTTPS address. Every message is a push message, which counts toward your plan's monthly limit.",
     prerequisites: [
-      "A LINE Messaging API channel and channel access token.",
-      "The bot added to the intended user, room or group.",
-      "For inbound messages, a channel secret and reachable HTTPS Gateway webhook endpoint.",
+      "A LINE Official Account with the Messaging API on, and its long-lived channel access token.",
+      "Your LINE user ID (Developers Console › your channel › Basic settings) with the Official Account added as a friend.",
+      "To receive: a public HTTPS address and the channel secret.",
     ],
     firstMessage:
-      "Enable webhooks in LINE and register the saved connection URL. Allow the sender actor ID separately from the destination user/group/room ID, send an inbound message, and confirm its reply.",
+      "Check the test message arrived. To receive: in LINE Developers Console › Messaging API set Webhook URL to this connection's webhook address, click Verify, turn on Use webhook, and turn off auto-reply and greeting messages in Official Account Manager. Allow your LINE user ID under Who may message this bot.",
   },
   zalo: {
     summary: "Send outbound messages from a Zalo Official Account to eligible recipients.",

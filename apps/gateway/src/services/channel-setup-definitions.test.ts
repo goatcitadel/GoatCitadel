@@ -1359,7 +1359,7 @@ describe("channel setup definitions", () => {
       qqbot: ["overview"],
       wecom: ["overview"],
       "nextcloud-talk": ["overview"],
-      line: ["overview"],
+      line: ["overview", "create-account"],
       zalo: ["overview"],
     };
     const definitions = listChannelSetupDefinitions();
@@ -1605,10 +1605,12 @@ describe("the shared guide builder", () => {
       expect(fieldOf("matrix", "accessToken")?.label).toBe("Access token");
       expect(fieldOf("wecom", "secret")?.label).toBe("Application secret");
       expect(fieldOf("whatsapp", "webhookVerifyToken")?.label).toBe("Webhook verify token");
-      const lineKeys = guide("line")
-        .wizard.steps.find((step) => step.id === "collect-values-identity")
-        ?.fields?.map((field) => field.key);
-      expect(lineKeys).toEqual(["channelAccessToken", "channelAccessTokenEnv", "channelSecret", "channelSecretEnv"]);
+      const lineKeys = (stepId: string) =>
+        guide("line")
+          .wizard.steps.find((step) => step.id === stepId)
+          ?.fields?.map((field) => field.key);
+      expect(lineKeys("collect-values-identity")).toEqual(["channelAccessToken", "channelAccessTokenEnv"]);
+      expect(lineKeys("receive-messages")).toEqual(["channelSecret", "channelSecretEnv"]);
     });
   });
 
@@ -1616,21 +1618,11 @@ describe("the shared guide builder", () => {
     function lineWithLaterSteps(): ChannelSetupRuntimeDefinition {
       const base = createLineDefinition();
       const steps = base.definition.wizard.steps;
-      const collect = steps.find((step) => step.kind === "field-collection");
-      if (!collect) throw new Error("LINE has a field step");
-      const receiveKeys = ["channelSecretEnv", "channelSecret"];
-      const first: ChannelSetupStepDefinition = {
-        ...collect,
-        createOnly: true,
-        fields: (collect.fields ?? []).filter((field) => !receiveKeys.includes(field.key)),
-      };
-      const receive: ChannelSetupStepDefinition = {
-        id: "receive-messages",
-        kind: "field-collection",
-        stage: "destinations_access",
-        title: "Receive messages (optional)",
-        fields: (collect.fields ?? []).filter((field) => receiveKeys.includes(field.key)),
-      };
+      // LINE writes its first field step and its "Receive messages (optional)" step itself; the fixture adds steps after them.
+      const collect = steps.find((step) => step.id === "collect-values");
+      const receive = steps.find((step) => step.id === "receive-messages");
+      if (!collect || !receive) throw new Error("LINE has a first field step and a receive step");
+      const first: ChannelSetupStepDefinition = { ...collect, createOnly: true };
       const unstagedFields: ChannelSetupStepDefinition = {
         id: "more-values",
         kind: "field-collection",
@@ -1651,7 +1643,7 @@ describe("the shared guide builder", () => {
           wizard: {
             ...base.definition.wizard,
             steps: steps.flatMap((step) =>
-              step === collect ? [first, receive, unstagedFields, staged, unstaged] : [step],
+              step === collect ? [first] : step === receive ? [receive, unstagedFields, staged, unstaged] : [step],
             ),
           },
         },
@@ -1662,8 +1654,9 @@ describe("the shared guide builder", () => {
       const steps = withGuidedJourney(lineWithLaterSteps()).definition.wizard.steps;
       const byId = (id: string) => steps.find((step) => step.id === id);
 
-      expect(steps.map((step) => step.id).slice(0, 6)).toEqual([
+      expect(steps.map((step) => step.id).slice(0, 7)).toEqual([
         "overview",
+        "create-account",
         "collect-values-identity",
         "collect-values-destinations",
         "receive-messages",
@@ -1717,10 +1710,13 @@ describe("the shared guide builder", () => {
       const outline = (key: string) =>
         guide(key).wizard.steps.map((step) => `${step.id} | ${step.stage} | ${step.title}`);
 
+      // LINE has a second field step of its own: it is split once, and the second keeps the title and stage it was written with.
       expect(outline("line")).toEqual([
         "overview | prerequisites | What this connection does",
+        "create-account | prerequisites | Create the LINE Official Account",
         "collect-values-identity | identity | Connect the account",
         "collect-values-destinations | destinations_access | Choose destinations and access",
+        "receive-messages | destinations_access | Receive messages (optional)",
         "sender-access | destinations_access | Who may message this bot?",
         "test | checks | Validate the draft",
         "finish | activation | Finish setup",

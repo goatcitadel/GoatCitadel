@@ -2,10 +2,14 @@ import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/con
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
+  PASTED_SECRET_EXPLANATION,
   requireCatalog,
   baseCatalogMeta,
   paragraph,
   note,
+  linkBlock,
+  check,
+  troubleshoot,
   readString,
   hasAnyConfiguredSecret,
   compactRecord,
@@ -23,10 +27,12 @@ export function createLineDefinition(): ChannelSetupRuntimeDefinition {
       estimatedMinutes: 6,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
-      introSummary: "Connect LINE with a channel access token and a default user, room, or group target.",
+      introSummary:
+        "Send LINE messages from your LINE Official Account. Receiving needs a public HTTPS address. Every message is a push message, which counts toward your plan's monthly limit.",
       prerequisites: [
-        "A LINE Messaging API channel with a valid channel access token.",
-        "A sandbox target identifier for manual confirmation.",
+        "A LINE Official Account with the Messaging API on, and its long-lived channel access token.",
+        "Your LINE user ID (Developers Console › your channel › Basic settings) with the Official Account added as a friend.",
+        "To receive: a public HTTPS address and the channel secret.",
       ],
       steps: [
         {
@@ -36,12 +42,45 @@ export function createLineDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph(
-              "GoatCitadel uses the LINE Messaging API for outbound sends and can accept signed inbound webhook events when you configure the channel secret.",
+              "GoatCitadel sends messages from your LINE Official Account through the Messaging API. LINE can send you messages only if it can reach your Gateway over public HTTPS. GoatCitadel doesn't provide that; without it this connection is send-only.",
             ),
+            paragraph(
+              "Every message GoatCitadel sends is a push message. Push messages count toward your plan's monthly limit, and the free plan's limit depends on your country.",
+            ),
+            linkBlock("LINE: Messaging API pricing", "https://developers.line.biz/en/docs/messaging-api/pricing/"),
             note(
               "warning",
-              "LINE is a guided beta lane. Guided setup now runs a live token-auth probe and can post a sandbox push message to the configured default target before finalize.",
+              "LINE is a guided beta lane. The setup test checks your channel access token live and will post a test message to your Default target.",
             ),
+          ],
+        },
+        {
+          id: "create-account",
+          kind: "instruction",
+          createOnly: true,
+          title: "Create the LINE Official Account",
+          body: [
+            paragraph(
+              "You can't create a Messaging API channel straight from the LINE Developers Console any more. It starts from an Official Account.",
+            ),
+            {
+              kind: "list",
+              ordered: true,
+              items: [
+                "In LINE Official Account Manager, create an Official Account.",
+                "Open its settings › Messaging API and turn it on.",
+                "In LINE Developers Console, open the channel's Messaging API tab and issue a long-lived channel access token.",
+              ],
+            },
+            linkBlock(
+              "LINE: Getting started with the Messaging API",
+              "https://developers.line.biz/en/docs/messaging-api/getting-started/",
+            ),
+          ],
+          checklist: [
+            check("account", "Create a LINE Official Account"),
+            check("messaging-api", "Turn on the Messaging API in its settings"),
+            check("token", "Issue a long-lived channel access token"),
           ],
         },
         {
@@ -50,55 +89,103 @@ export function createLineDefinition(): ChannelSetupRuntimeDefinition {
           title: "Paste your connection values",
           fields: [
             {
+              key: "channelAccessToken",
+              label: "Channel access token",
+              type: "secret",
+              required: false,
+              explanation: PASTED_SECRET_EXPLANATION,
+              whyNeeded: "Lets GoatCitadel send messages from your LINE Official Account.",
+              whereToFind: [
+                paragraph(
+                  "Messaging API tab › Channel access token (long-lived). GoatCitadel can't renew short-lived tokens.",
+                ),
+                linkBlock(
+                  "LINE: Channel access tokens",
+                  "https://developers.line.biz/en/docs/basics/channel-access-token/",
+                ),
+              ],
+              looksLike: "A long opaque token string.",
+              commonMistakes: ["Using a short-lived channel access token. It expires and GoatCitadel can't renew it."],
+              sensitive: true,
+              canChangeLater: true,
+            },
+            {
               key: "channelAccessTokenEnv",
               label: "Channel access token env var",
               type: "text",
               required: false,
-              explanation: "Preferred path. Name of the env var that stores the LINE channel access token.",
+              advanced: true,
+              explanation: "Name of the env var that stores the LINE channel access token.",
               looksLike: "LINE_CHANNEL_ACCESS_TOKEN",
               canChangeLater: true,
               placeholder: "LINE_CHANNEL_ACCESS_TOKEN",
-            },
-            {
-              key: "channelAccessToken",
-              label: "Channel access token (manual fallback)",
-              type: "secret",
-              required: false,
-              explanation: "Optional direct token entry if env-backed storage is not ready yet.",
-              sensitive: true,
-              canChangeLater: true,
-              placeholder: "Paste only if you cannot use an env var",
-            },
-            {
-              key: "channelSecretEnv",
-              label: "Channel secret env var",
-              type: "text",
-              required: false,
-              explanation: "Optional but recommended if you want signed inbound webhook routing.",
-              whyNeeded:
-                "LINE signs webhook deliveries with the channel secret. Without it GoatCitadel stays outbound only.",
-              looksLike: "LINE_CHANNEL_SECRET",
-              canChangeLater: true,
-              placeholder: "LINE_CHANNEL_SECRET",
-            },
-            {
-              key: "channelSecret",
-              label: "Channel secret (manual fallback)",
-              type: "secret",
-              required: false,
-              explanation: "Optional direct channel-secret entry if env-backed storage is not ready yet.",
-              sensitive: true,
-              canChangeLater: true,
-              placeholder: "Paste only if you cannot use an env var",
             },
             {
               key: "defaultTarget",
               label: "Default target",
               type: "text",
               required: true,
-              explanation: "Fallback LINE user, room, or group id.",
+              explanation: "The LINE user, room or group that gets the test message and any send that names no one.",
+              whereToFind: [
+                paragraph(
+                  "For a one-to-one chat use your own user ID: LINE Developers Console › your channel › Basic settings › Your user ID (starts with U). Group and room IDs only appear in webhook events.",
+                ),
+                paragraph("If Your user ID isn't shown there, link your Business ID to your LINE account first."),
+                linkBlock(
+                  "LINE: Getting user IDs",
+                  "https://developers.line.biz/en/docs/messaging-api/getting-user-ids/",
+                ),
+              ],
               looksLike: "userId, groupId, or roomId",
+              commonMistakes: ["Using the channel ID or the channel secret instead of a user ID."],
               canChangeLater: true,
+            },
+          ],
+        },
+        {
+          id: "receive-messages",
+          kind: "field-collection",
+          // Receiving is optional and comes after the destination fields, so it keeps the stage it is written with.
+          stage: "destinations_access",
+          title: "Receive messages (optional)",
+          body: [
+            paragraph(
+              "Skip this step if you only want to send. To receive, set the channel secret: LINE signs every message it sends you with it.",
+            ),
+            paragraph(
+              "Receiving also needs a public HTTPS address with a trusted certificate. GoatCitadel doesn't provide one.",
+            ),
+          ],
+          fields: [
+            {
+              key: "channelSecret",
+              label: "Channel secret",
+              type: "secret",
+              required: false,
+              explanation: PASTED_SECRET_EXPLANATION,
+              whyNeeded:
+                "LINE signs every message it sends you with the channel secret. Without it GoatCitadel stays send-only.",
+              whereToFind: [
+                paragraph("LINE Developers Console › your channel › Basic settings tab › Channel secret."),
+                linkBlock(
+                  "LINE: Verifying signatures",
+                  "https://developers.line.biz/en/docs/messaging-api/verify-webhook-signature/",
+                ),
+              ],
+              commonMistakes: ["Using the channel access token here instead of the channel secret."],
+              sensitive: true,
+              canChangeLater: true,
+            },
+            {
+              key: "channelSecretEnv",
+              label: "Channel secret env var",
+              type: "text",
+              required: false,
+              advanced: true,
+              explanation: "Name of the environment variable that holds your channel secret.",
+              looksLike: "LINE_CHANNEL_SECRET",
+              canChangeLater: true,
+              placeholder: "LINE_CHANNEL_SECRET",
             },
           ],
         },
@@ -108,7 +195,34 @@ export function createLineDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "Guided test validates the channel access token live and can post a sandbox push message to the configured default target. Inbound webhook routing still requires the optional channel secret.",
+              "The test checks your channel access token with LINE, then sends one test message to your Default target. Check that it arrived in LINE.",
+            ),
+          ],
+          troubleshooting: [
+            troubleshoot(
+              "token-rejected",
+              "LINE rejected the channel access token",
+              "Paste the long-lived channel access token from the channel's Messaging API tab. A short-lived token expires, and GoatCitadel can't renew it. If you issued a new token, paste the newest one.",
+            ),
+            troubleshoot(
+              "target-rejected",
+              "LINE couldn't send to the Default target",
+              "Use your own user ID from Basic settings › Your user ID (it starts with U), not the channel ID. A group or room ID works only after the bot has joined that group, and it appears only in webhook events.",
+            ),
+            troubleshoot(
+              "host-not-allowed",
+              "It says GoatCitadel can't reach api.line.me yet",
+              "GoatCitadel only reaches hosts you allow. Use Allow these hosts on this step to add api.line.me, then run the test again.",
+            ),
+            troubleshoot(
+              "variable-not-found",
+              "It says the channel access token is missing, and you used an environment variable",
+              "A variable's name must start with LINE_ (for example LINE_CHANNEL_ACCESS_TOKEN), and you must restart GoatCitadel after you set it. Or paste the token instead.",
+            ),
+            troubleshoot(
+              "no-reply",
+              "You message the bot and nothing comes back",
+              "Check these in order. In LINE Developers Console › Messaging API, the Webhook URL must be this connection's webhook address, Verify must show Success, and Use webhook must be on. In Official Account Manager, auto-reply and greeting messages must be off. The channel secret must be set here. Your LINE user ID must be listed under Who may message this bot. And this Gateway must be reachable at a public HTTPS address with a trusted certificate.",
             ),
           ],
         },
@@ -118,13 +232,13 @@ export function createLineDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finalize saves the connection for runtime sends. After finalizing, confirm the sandbox push arrived in the target LINE conversation before relying on this connection.",
+              "Finish saves the connection so GoatCitadel can send from it. To receive messages, the webhook also has to be set up in LINE (the last step shows how).",
             ),
           ],
           successCriteria: [
-            "The channel access token passed the live auth probe.",
-            "The sandbox push message reached the default user, room, or group target.",
-            "The optional channel secret is configured when you want signed inbound webhook routing.",
+            "LINE accepted the channel access token.",
+            "The test message arrived at the Default target.",
+            "To receive messages: the channel secret is set.",
           ],
         },
       ],
@@ -246,9 +360,12 @@ export function createLineDefinition(): ChannelSetupRuntimeDefinition {
       if (!hasConfiguredToken) {
         issues.push({
           key: "line_auth_missing",
+          // The pasted field is where a person goes to fix this, not the expert variable name.
+          fieldKey: "channelAccessToken",
           level: "error",
-          message: "Provide either a LINE channel access token or an env-backed token reference.",
+          message: "Paste the LINE channel access token.",
           failureCategory: "missing_input",
+          nextSteps: ["Paste the long-lived channel access token from the channel's Messaging API tab."],
         });
       }
       if (!readString(draft.draft, "defaultTarget")) {
