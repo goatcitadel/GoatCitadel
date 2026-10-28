@@ -5927,15 +5927,26 @@ export class SessionMutationAdmissionRepository {
       );
     }
     if (run.status !== "completed") {
-      const unexpectedPartialOutput =
+      // A partial trace is a failed turn that may still have streamed its
+      // linked answer (for example after the tool budget ran out). The runtime
+      // strips that answer from the failed seal, so only an exact agent reply in
+      // this session is allowed; any other row is unbound output.
+      const partialOutput =
         run.status === "failed" && authority.material.traceStatus === "partial"
           ? this.db
               .prepare(
-                `SELECT message_id FROM chat_messages
+                `SELECT message_id, session_id, role, actor_type FROM chat_messages
                  WHERE message_id = @messageId${this.db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
               )
-              .get({ messageId: payload.assistantMessageId })
+              .get<{ message_id: string; session_id: string; role: string; actor_type: string | null }>({
+                messageId: payload.assistantMessageId,
+              })
           : undefined;
+      const unexpectedPartialOutput =
+        partialOutput &&
+        (partialOutput.session_id !== payload.sessionId ||
+          partialOutput.role !== "assistant" ||
+          partialOutput.actor_type !== "agent");
       if (
         output ||
         unexpectedPartialOutput ||

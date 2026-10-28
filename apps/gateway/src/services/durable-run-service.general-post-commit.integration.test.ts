@@ -140,16 +140,57 @@ describe("DurableRunService general Chat post-commit integration", () => {
     ).toMatchObject({ status: "active", turnId: "turn-after-failed-partial" });
   });
 
-  it("keeps a failed partial admission active when storage finds output omitted from its authority", async () => {
+  it("releases a failed partial turn that streamed its linked answer before the tool budget ran out", async () => {
+    const harness = createStorageHarness();
+    const parent = seedParent(harness.storage, "failed-partial-tool-budget", "failed");
+    const assistantMessageId = String(parent.payload.assistantMessageId);
+    const answer = "I couldn't finish this. The tool budget ran out after 7 calls.";
+    harness.storage.chatMessages.upsert({
+      messageId: assistantMessageId,
+      sessionId: String(parent.payload.sessionId),
+      role: "assistant",
+      sourceAuthority: "agent_proposed",
+      actorType: "agent",
+      actorId: "assistant",
+      content: answer,
+      timestamp: parent.createdAt,
+    });
+    const reportError = vi.fn();
+    const service = createService(
+      harness.storage,
+      async (_run, progress) => {
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) await progress.runEffect(effect, () => undefined);
+        return { status: "partial" };
+      },
+      undefined,
+      reportError,
+    );
+    service.stopWorker();
+    await expect(service.reconcileGeneralChatPostCommit(parent.runId)).resolves.toBe(true);
+    expect(reportError.mock.calls).toEqual([]);
+    expect(harness.storage.sessionMutationAdmissions.require(String(parent.payload.admissionId))).toMatchObject({
+      status: "cancelled",
+      terminalAuthorityKind: "durable_terminal",
+      terminalDurableRunId: parent.runId,
+      terminalDurableRunStatus: "failed",
+    });
+    const run = harness.storage.durableRuns.getRun(parent.runId);
+    expect(run.status).toBe("failed");
+    expect(run.metadata?.generalChatPostCommitPending).toBeUndefined();
+    expect(run.metadata?.outputText).toBeUndefined();
+    expect(harness.storage.chatMessages.get(assistantMessageId)?.content).toBe(answer);
+  });
+
+  it("keeps a failed partial admission active when its linked output is not an agent reply", async () => {
     const harness = createStorageHarness();
     const parent = seedParent(harness.storage, "failed-partial-unsealed-output", "failed");
     harness.storage.chatMessages.upsert({
       messageId: String(parent.payload.assistantMessageId),
       sessionId: String(parent.payload.sessionId),
       role: "assistant",
-      sourceAuthority: "agent_proposed",
-      actorType: "agent",
-      actorId: "assistant",
+      sourceAuthority: "trusted_lifecycle",
+      actorType: "system",
+      actorId: "system-heartbeat",
       content: "Output that is not bound by the failure checkpoint.",
       timestamp: parent.createdAt,
     });
@@ -175,6 +216,58 @@ describe("DurableRunService general Chat post-commit integration", () => {
     expect(metadata?.generalChatPostCommit).toBeUndefined();
     expect(metadata?.chatTurnAdmissionHandoff).toBeUndefined();
     expect(listPostCommitChildren(harness.storage)).toHaveLength(0);
+  });
+
+  it("backs off recovery sweeps for a failed partial run that keeps conflicting", async () => {
+    const harness = createStorageHarness();
+    const parent = seedParent(harness.storage, "failed-partial-sweep-backoff", "failed");
+    harness.storage.chatMessages.upsert({
+      messageId: String(parent.payload.assistantMessageId),
+      sessionId: String(parent.payload.sessionId),
+      role: "assistant",
+      sourceAuthority: "trusted_lifecycle",
+      actorType: "system",
+      actorId: "system-heartbeat",
+      content: "Output that is not bound by the failure checkpoint.",
+      timestamp: parent.createdAt,
+    });
+    const reportError = vi.fn();
+    const service = createService(
+      harness.storage,
+      async (_run, progress) => {
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) await progress.runEffect(effect, () => undefined);
+        return { status: "partial" };
+      },
+      undefined,
+      reportError,
+    );
+    service.stopWorker();
+    const sweep = () =>
+      (service as unknown as { reconcileRecoverableRuns(): Promise<number> }).reconcileRecoverableRuns();
+    const conflictReports = () =>
+      reportError.mock.calls.filter(
+        ([fields]) =>
+          (fields as { runId?: string; error?: string }).runId === parent.runId &&
+          String((fields as { error?: string }).error).includes("carries output evidence"),
+      );
+    const startMs = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(startMs);
+    try {
+      for (let pass = 0; pass < 6; pass += 1) await sweep();
+      expect(conflictReports()).toHaveLength(3);
+      expect(conflictReports().at(-1)?.[0]).toMatchObject({
+        consecutiveFailures: 3,
+        nextAttemptAt: new Date(startMs + 2_000).toISOString(),
+      });
+      now.mockReturnValue(startMs + 2_001);
+      await sweep();
+      await sweep();
+      expect(conflictReports()).toHaveLength(4);
+      expect(conflictReports().at(-1)?.[0]).toMatchObject({ consecutiveFailures: 4 });
+    } finally {
+      now.mockRestore();
+    }
+    expect(harness.storage.sessionMutationAdmissions.require(String(parent.payload.admissionId)).status).toBe("active");
   });
 
   it.each(["frozen_disabled", "disabled_before_dispatch", "blocked_at_counter"] as const)(
