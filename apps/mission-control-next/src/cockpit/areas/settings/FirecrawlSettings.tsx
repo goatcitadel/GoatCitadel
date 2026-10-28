@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import type { FirecrawlConnectionCheck } from "@goatcitadel/contracts";
-import { fetchSettings, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
+import type {
+  ApprovalStatus,
+  ChangePlanRecord,
+  ChangePlanStatus,
+  FirecrawlConnectionCheck,
+} from "@goatcitadel/contracts";
+import { fetchChangePlan, fetchSettings, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { checkFirecrawlConnection } from "@goatcitadel/mission-control-shared/api/web-search-settings";
@@ -12,6 +17,7 @@ import { cockpitInputClass } from "../../ui/input-class";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { presentChangeStatusLabel } from "./settings-vocabulary";
+import { SettingsApprovalDialog } from "./SettingsApprovalDialog";
 import { useGovernedRuntimeSetting } from "./use-governed-runtime-setting";
 import {
   GovernedSettingChangeStatus,
@@ -42,6 +48,18 @@ const CHECK_PRESENTATION: Record<
   unreachable: { tone: "failed", label: "Unreachable" },
   blocked: { tone: "failed", label: "Not allowlisted" },
 };
+
+const ALLOWLIST_TERMINAL = new Set<ChangePlanStatus>([
+  "completed",
+  "applied",
+  "failed",
+  "cancelled",
+  "manual_required",
+  "rolled_back",
+  "rollback_failed",
+]);
+const ALLOWLIST_SETTLE_ATTEMPTS = 5;
+const ALLOWLIST_SETTLE_DELAY_MS = 1_000;
 
 function summarize(draft: FirecrawlDraft): string {
   if (!draft.enabled) return "Off";
@@ -83,6 +101,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
   const hosted = value.baseUrl.replace(/\/+$/u, "") === HOSTED_FIRECRAWL_BASE_URL;
   const [allowlistBusy, setAllowlistBusy] = useState(false);
   const [allowlistMessage, setAllowlistMessage] = useState<{ tone: "info" | "error"; text: string }>();
+  const [allowlistApproval, setAllowlistApproval] = useState<{ approvalId: string; planId: string; host: string }>();
   const [rebaseAfterRevision, setRebaseAfterRevision] = useState<number>();
   const [check, setCheck] = useState<FirecrawlConnectionCheck>();
   const [checkError, setCheckError] = useState<string>();
@@ -111,8 +130,15 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
         expectedRevision: latest.revision,
         networkAllowlist: [...latest.networkAllowlist, draftHost],
       });
-      const status = response.changePlanReceipt?.status;
+      const receipt = response.changePlanReceipt;
+      const status = receipt?.status;
+      const action = receipt?.requiredAction;
       setRebaseAfterRevision(latest.revision);
+      setAllowlistApproval(
+        receipt && status === "awaiting_approval" && action?.kind === "approval" && action.approvalId
+          ? { approvalId: action.approvalId, planId: receipt.planId, host: draftHost }
+          : undefined,
+      );
       setAllowlistMessage(
         !status || status === "completed"
           ? { tone: "info", text: `${draftHost} is now in the outbound allowlist.` }
@@ -120,7 +146,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
               tone: "info",
               text:
                 status === "awaiting_approval"
-                  ? `Adding ${draftHost} needs approval. Approve the allowlist change in Inbox, then save Firecrawl.`
+                  ? `Adding ${draftHost} needs your approval. Once approved, it is added and you can save Firecrawl.`
                   : `The allowlist change is ${presentChangeStatusLabel(status).toLowerCase()}. Finish it, then save Firecrawl.`,
             },
       );
@@ -132,6 +158,48 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
       });
     } finally {
       setAllowlistBusy(false);
+    }
+  }
+
+  /** Reports the allowlist change's canonical outcome after the in-place decision, never assuming it applied. */
+  async function settleAllowlistApproval(decision: ApprovalStatus | undefined) {
+    const pending = allowlistApproval;
+    if (!pending) return;
+    if (decision === "rejected") {
+      setAllowlistApproval(undefined);
+      setAllowlistMessage({ tone: "info", text: `Denied. ${pending.host} was not added to the outbound allowlist.` });
+      return;
+    }
+    // Approving applies the plan through Gateway reconciliation; read the plan until it settles or the wait ends.
+    let plan: ChangePlanRecord | undefined;
+    for (let attempt = 0; attempt < ALLOWLIST_SETTLE_ATTEMPTS; attempt += 1) {
+      try {
+        plan = await fetchChangePlan(pending.planId, { workspaceId: "default" });
+      } catch {
+        plan = undefined;
+      }
+      if (plan && ALLOWLIST_TERMINAL.has(plan.status)) break;
+      await new Promise((resolve) => setTimeout(resolve, ALLOWLIST_SETTLE_DELAY_MS));
+    }
+    await settings.refetch();
+    if (plan?.status === "completed" || plan?.status === "applied") {
+      setAllowlistApproval(undefined);
+      setAllowlistMessage({
+        tone: "info",
+        text: `${pending.host} is now in the outbound allowlist. Save Firecrawl to finish.`,
+      });
+    } else if (plan && ALLOWLIST_TERMINAL.has(plan.status)) {
+      setAllowlistApproval(undefined);
+      setAllowlistMessage({
+        tone: "error",
+        text: `The allowlist change ${presentChangeStatusLabel(plan.status).toLowerCase()}. ${pending.host} was not added.${plan.result?.summary ? ` ${plan.result.summary}` : ""}`,
+      });
+    } else {
+      setAllowlistApproval(undefined);
+      setAllowlistMessage({
+        tone: "info",
+        text: `The allowlist change has not finished yet${plan ? ` (${presentChangeStatusLabel(plan.status).toLowerCase()})` : ""}. Check Inbox or try again shortly.`,
+      });
     }
   }
 
@@ -266,7 +334,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
               <Button
                 size="sm"
                 className="mt-2"
-                disabled={allowlistBusy || governed.locked}
+                disabled={allowlistBusy || Boolean(allowlistApproval) || governed.locked}
                 onClick={() => void addHostToAllowlist()}
               >
                 {allowlistBusy ? "Adding…" : `Add ${draftHost} to the outbound allowlist`}
@@ -274,6 +342,12 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
             </Callout>
           ) : null}
           {allowlistMessage ? <Callout tone={allowlistMessage.tone}>{allowlistMessage.text}</Callout> : null}
+          {allowlistApproval ? (
+            <SettingsApprovalDialog
+              approvalId={allowlistApproval.approvalId}
+              onResolved={(decision) => settleAllowlistApproval(decision)}
+            />
+          ) : null}
           <GovernedSettingDraftState
             governed={governed}
             unsaved={`Unsaved draft: ${summarize(value)}`}
