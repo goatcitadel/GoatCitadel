@@ -201,8 +201,9 @@ describe("connector registry loop28 coverage", () => {
       });
       const record = records.find((item) => item.connectorId === `integration:conn-${key}`);
 
+      // Out of service for good, so never "active" even though the saved row is enabled and connected.
       expect(record).toMatchObject({
-        status: "active",
+        status: "disabled",
         metadata: {
           approvalDeliveryReady: false,
           approvalDeliveryReason: expect.stringMatching(new RegExp(`^${label} is not supported anymore`)),

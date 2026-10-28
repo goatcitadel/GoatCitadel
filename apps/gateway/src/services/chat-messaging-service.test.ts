@@ -407,6 +407,36 @@ describe("chat messaging service", () => {
     }
   });
 
+  it.each([
+    ["signal", "Signal"],
+    ["imessage", "iMessage"],
+    ["zalouser", "Zalo personal"],
+  ])("shows a saved %s connection as removed even when it is enabled and connected", async (key, label) => {
+    const fixture = createFixture();
+    try {
+      const retired = fixture.addConnection({ key, label, enabled: true, status: "connected" });
+      const session = await fixture.addConversation(retired, {
+        peer: "42",
+        conversation: { kind: "direct", counterpartActorId: "42", title: "Sam Lee" },
+      });
+
+      const overview = await listChatMessaging(fixture.deps, { workspaceId: "default" });
+
+      // Its conversations stay readable, but the channel never reads as able to send.
+      expect(overview.channels).toEqual([
+        {
+          connectionId: retired.connectionId,
+          channelKey: key,
+          label,
+          status: "removed",
+          conversations: [expect.objectContaining({ sessionId: session, title: "Sam Lee" })],
+        },
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("lists conversations of a removed connection under a removed channel", async () => {
     const fixture = createFixture();
     try {
