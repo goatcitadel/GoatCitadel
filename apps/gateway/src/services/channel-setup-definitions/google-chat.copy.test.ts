@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type {
   ChannelSetupFieldDefinition,
@@ -58,6 +61,36 @@ describe("Google Chat setup copy", () => {
 
   it("never claims a public web address for GoatCitadel", () => {
     expect(JSON.stringify(guide().definition.wizard)).not.toMatch(/https:\/\/<your public address>/u);
+  });
+});
+
+describe("Google Chat setup guide: no key-shaped example text", () => {
+  // The secret scanner (trivy) flags this exact JSON key/value pair as a Google service-account key. It tolerates
+  // whitespace and the backslashes a JSON.stringify adds, so this one pattern finds it in source text and in a built guide.
+  const SERVICE_ACCOUNT_KEY_JSON = /type\\?"\s*:\s*\\?"service_account/u;
+
+  it("describes the key file in plain words instead of showing key JSON", () => {
+    expect(field("serviceAccountKey").looksLike).toBe(
+      "The whole JSON key file from Google Cloud: it starts with { and names your project and the service account's email.",
+    );
+  });
+
+  it("holds the service-account JSON pattern in no channel setup guide", () => {
+    const holding = listChannelSetupDefinitions()
+      .filter((definition) => SERVICE_ACCOUNT_KEY_JSON.test(JSON.stringify(definition)))
+      .map((definition) => definition.catalog.key);
+
+    expect(holding).toEqual([]);
+  });
+
+  it("holds the service-account JSON pattern in no channel setup definition source file", () => {
+    const folder = dirname(fileURLToPath(import.meta.url));
+    const sources = readdirSync(folder).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"));
+
+    const holding = sources.filter((name) => SERVICE_ACCOUNT_KEY_JSON.test(readFileSync(join(folder, name), "utf8")));
+
+    expect(sources).toContain("google-chat.ts");
+    expect(holding).toEqual([]);
   });
 });
 

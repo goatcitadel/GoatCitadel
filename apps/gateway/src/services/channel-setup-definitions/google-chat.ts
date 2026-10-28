@@ -174,7 +174,8 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
                 ),
                 linkBlock("Authenticate as a Chat app", AUTHENTICATE_DOC),
               ],
-              looksLike: '{ "type": "service_account", "project_id": "...", ... }',
+              looksLike:
+                "The whole JSON key file from Google Cloud: it starts with { and names your project and the service account's email.",
               commonMistakes: [
                 "Pasting only the private key. Paste the whole file.",
                 "Using an API key or an OAuth client instead of a service-account key.",
