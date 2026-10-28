@@ -125,7 +125,7 @@ export function toolGroupForTool(toolName: string): ToolGroupDefinition | undefi
 export function toolNamesSwitchedOff(disabled: readonly string[] | undefined): ReadonlyMap<string, ToolGroupId>;
 ```
 
-**The map** (105 tools; exact copy):
+**The map** (105 tools as planned; 101 after #620 retired the four Signal and iMessage tools; exact copy):
 
 | id | label | description | tools |
 |---|---|---|---|
@@ -139,7 +139,7 @@ export function toolNamesSwitchedOff(disabled: readonly string[] | undefined): R
 | memory | Memory | Read, search and save what the AI remembers. | memory.read, memory.search, memory.write, memory.upsert |
 | documents | Documents | Index and search your documents, and create documents, slides and artifacts. | docs.ingest, docs.search, embeddings.index, embeddings.query, artifacts.create, documents.create, presentations.create, document.propose_patch |
 | email_and_calendar | Email and calendar | Read and send email, and read and add calendar events. | gmail.read, gmail.send, smtp.send, calendar.list, calendar.create_event |
-| messaging | Messaging | Send, react to and remove messages in your chat apps, and ask for your attention. | notify.request, channel.send, channel.react, channel.unsend, discord.send, discord.react, discord.unsend, imessage.send, imessage.react, imessage.unsend, line.send, mattermost.send, mattermost.react, mattermost.unsend, nextcloud-talk.send, nextcloud-talk.react, telegram.send, telegram.react, telegram.unsend, signal.send, whatsapp.send, whatsapp.react, slack.send, slack.react, slack.unsend, google-chat.send, teams.send, zalo.send |
+| messaging | Messaging | Send, react to and remove messages in your chat apps, and ask for your attention. | notify.request, channel.send, channel.react, channel.unsend, discord.send, discord.react, discord.unsend, line.send, mattermost.send, mattermost.react, mattermost.unsend, nextcloud-talk.send, nextcloud-talk.react, telegram.send, telegram.react, telegram.unsend, whatsapp.send, whatsapp.react, slack.send, slack.react, slack.unsend, google-chat.send, teams.send, zalo.send |
 | webhooks | Webhooks | Send data to your webhooks. | webhook.send |
 | schedules | Schedules | Set up and cancel the AI's own scheduled work. | schedule.manage |
 | subagents | Subagents | Hand parts of a task to up to three subagents. | agent.fanout |
