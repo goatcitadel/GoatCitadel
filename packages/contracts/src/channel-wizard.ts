@@ -109,6 +109,12 @@ export interface ChannelSetupFieldDefinition {
   targetAddressKey?: "channel" | "chatId";
   inputMode?: "text" | "numeric" | "decimal" | "email" | "tel" | "url" | "search" | "none";
   visibleWhenFieldEquals?: { fieldKey: string; value: string | boolean };
+  /**
+   * With `required: true`, the field is asked for only while at least one of these fields has a value (a pasted
+   * value, a variable name, or one already saved). A path that sets none of them never uses the field, so it is not
+   * asked for there. Without this, a required field is asked for on every path.
+   */
+  requiredWhenAnyFieldSet?: string[];
 }
 
 export interface ChannelSetupChecklistItem {

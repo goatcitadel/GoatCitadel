@@ -187,6 +187,49 @@ describe("semantic channel step completion", () => {
     expect(findMissingFieldLabels(definition, draft, step, { botToken: "" })).toEqual(["Token"]);
     expect(findMissingFieldLabels(definition, draft, step, { botTokenEnv: "BOT_TOKEN" })).toEqual([]);
   });
+  it("marks a field required in both editors only while a field its path starts from is set", async () => {
+    const definition = definitionWith([
+      { key: "botToken", label: "Token", type: "secret", required: false, sensitive: true, explanation: "Secret" },
+      { key: "webhookUrl", label: "Webhook", type: "url", required: false, explanation: "Hook" },
+      {
+        key: "serverId",
+        label: "Server",
+        type: "id",
+        required: true,
+        requiredWhenAnyFieldSet: ["botToken"],
+        explanation: "Id",
+      },
+    ]);
+    const labelOf = (root: ReactTestInstance) =>
+      text(root.findAllByType("label").find((item) => text(item).startsWith("Server"))!);
+    for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+      for (const [values, expected] of [
+        [{ webhookUrl: "https://hooks.example.test/x" }, "Server"],
+        [{ botToken: "pasted" }, "Server (required)"],
+      ] as const) {
+        const r = await render(
+          <Component
+            definition={definition}
+            draft={makeDraft(definition)}
+            values={values}
+            label="Saved label"
+            enabled
+            dirty={false}
+            onValuesChange={vi.fn()}
+            onLabelChange={vi.fn()}
+            onEnabledChange={vi.fn()}
+            onDirty={vi.fn()}
+            onSave={vi.fn(async () => true)}
+            onValidate={vi.fn(async () => undefined)}
+            onTest={vi.fn(async () => undefined)}
+            onFinalize={vi.fn(async () => undefined)}
+          />,
+        );
+        expect(labelOf(r.root).trim()).toBe(expected);
+        await act(async () => r.unmount());
+      }
+    }
+  });
   it("validates default and destination identity while preserving distinct threads", () => {
     const definition = definitionWith([targetField]),
       draft = makeDraft(definition),

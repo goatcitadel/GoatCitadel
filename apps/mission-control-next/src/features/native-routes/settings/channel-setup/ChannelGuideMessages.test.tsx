@@ -219,6 +219,46 @@ describe("the missing-values message", () => {
   });
 });
 
+describe("a field that is required only on some paths", () => {
+  const discord = definitions.find((item) => item.catalog.catalogId === "channel.discord")!;
+  const destinations = discord.wizard.steps.find((item) => item.id === "collect-values-destinations")!;
+  const CHANNEL = { defaultChannelId: "123456789012345678" };
+  const WEBHOOK = "https://discord.com/api/webhooks/1/token";
+  const SERVER_ID = "Default server (guild) ID";
+  const missing = (values: Record<string, unknown>, draft = makeDraft(discord)) =>
+    findMissingFieldLabels(discord, draft, destinations, values);
+  const labelTexts = () => [...container.querySelectorAll("label")].map((item) => item.textContent?.trim());
+
+  it("asks a webhook-only setup for no server id, and a bot for one", () => {
+    expect(missing({ ...CHANNEL, webhookUrl: WEBHOOK })).toEqual([]);
+    expect(missing({ ...CHANNEL, botToken: "pasted" })).toEqual([SERVER_ID]);
+    expect(missing({ ...CHANNEL, botTokenEnv: "DISCORD_BOT_TOKEN" })).toEqual([SERVER_ID]);
+    expect(missing({ ...CHANNEL, botToken: "pasted", webhookUrl: WEBHOOK })).toEqual([SERVER_ID]);
+    expect(missing({ ...CHANNEL, botToken: "pasted", defaultGuildId: "987654321098765432" })).toEqual([]);
+  });
+
+  it("counts a bot token that is already saved", () => {
+    const saved = {
+      ...makeDraft(discord),
+      secretState: { botToken: { configured: true, custody: "temporary" as const } },
+    };
+
+    expect(missing(CHANNEL, saved)).toEqual([SERVER_ID]);
+  });
+
+  it("marks the field required on the form only while the path needs it", async () => {
+    await show({ ...propsFor(discord), values: { ...CHANNEL, webhookUrl: WEBHOOK } });
+    await openStep("Choose destinations and access");
+    expect(labelTexts()).toContain("Default channel ID (required)");
+    expect(labelTexts()).toContain(SERVER_ID);
+    expect(container.querySelector<HTMLInputElement>('input[id$="-defaultGuildId"]')?.required).toBe(false);
+
+    await show({ ...propsFor(discord), values: { ...CHANNEL, botToken: "pasted" } });
+    expect(labelTexts()).toContain(SERVER_ID + " (required)");
+    expect(container.querySelector<HTMLInputElement>('input[id$="-defaultGuildId"]')?.required).toBe(true);
+  });
+});
+
 describe("the Classic guide", () => {
   it("labels each step in the list by its stage, not its internal kind", async () => {
     await show(propsFor(slack));

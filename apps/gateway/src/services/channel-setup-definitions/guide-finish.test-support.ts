@@ -95,7 +95,8 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
   }
 
   /**
-   * What Continue would still ask for, as the labels the person sees, step by step: the visible required fields, then
+   * What Continue would still ask for, as the labels the person sees, step by step: the visible required fields (one
+   * that is required only with another field is asked for only while that field is filled), then
    * each "any of" group by the labels of its fields. A key with no field is not named, and a label is named once.
    * Setup-only steps are skipped when a saved connection is changed.
    */
@@ -118,7 +119,13 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
       if (!holds(step.visibleWhenFieldEquals)) return [];
       if (lifecycleMode !== "create" && step.createOnly) return [];
       const missingFields = (step.fields ?? [])
-        .filter((field) => holds(field.visibleWhenFieldEquals) && field.required && !filled(field.key))
+        .filter(
+          (field) =>
+            holds(field.visibleWhenFieldEquals) &&
+            field.required &&
+            (!field.requiredWhenAnyFieldSet || field.requiredWhenAnyFieldSet.some(filled)) &&
+            !filled(field.key),
+        )
         .map((field) => field.label);
       const missingGroups = (step.requiredAnyOf ?? [])
         .filter((group) => !group.some(filled))

@@ -102,7 +102,9 @@ export function findMissingFieldLabels(
   const effectiveValues = wizardValuesWithDefaults(definition, values);
   const fields = (step.fields ?? []).filter((field) => isFieldVisible(field, effectiveValues));
   const missing = fields
-    .filter((field) => field.required && !hasFieldValue(draft, effectiveValues, field.key))
+    .filter(
+      (field) => isFieldRequired(field, draft, effectiveValues) && !hasFieldValue(draft, effectiveValues, field.key),
+    )
     .map((field) => field.label);
   for (const group of step.requiredAnyOf ?? []) {
     if (!group.some((key) => hasFieldValue(draft, effectiveValues, key))) {
@@ -247,6 +249,31 @@ export function wizardValuesWithDefaults(
     ),
     ...values,
   };
+}
+
+/**
+ * Whether the field has to be filled in now. A field that is required only with other fields (`requiredWhenAnyFieldSet`)
+ * is required while one of them has a value; a setup that sets none of them never uses it.
+ */
+export function isFieldRequired(
+  field: ChannelSetupFieldDefinition,
+  draft: ChannelSetupDraft,
+  values: Record<string, unknown>,
+): boolean {
+  if (!field.required) return false;
+  const paths = field.requiredWhenAnyFieldSet;
+  return !paths || paths.some((key) => hasFieldValue(draft, values, key));
+}
+
+/** The fields as the form shows them: each one's `required` is whether it has to be filled in on this path. */
+export function fieldsWithResolvedRequired(
+  fields: ChannelSetupFieldDefinition[] | undefined,
+  draft: ChannelSetupDraft,
+  values: Record<string, unknown>,
+): ChannelSetupFieldDefinition[] | undefined {
+  return fields?.map((field) =>
+    field.requiredWhenAnyFieldSet ? { ...field, required: isFieldRequired(field, draft, values) } : field,
+  );
 }
 
 export function isFieldVisible(field: ChannelSetupFieldDefinition, values: Record<string, unknown>): boolean {

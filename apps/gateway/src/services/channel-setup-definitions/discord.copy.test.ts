@@ -230,6 +230,47 @@ describe("Discord setup guide: where the bot listens (item 2)", () => {
   });
 });
 
+describe("Discord setup guide: the server id belongs to the bot paths (D1 item 6)", () => {
+  const { continueBlockers } = guideFinish("channel.discord");
+  const WEBHOOK = "https://discord.com/api/webhooks/1/token";
+
+  it("stays required, but only once a bot token is given", () => {
+    expect(field("defaultGuildId").required).toBe(true);
+    expect(field("defaultGuildId").requiredWhenAnyFieldSet).toEqual(["botToken", "botTokenEnv"]);
+    expect(field("defaultChannelId").requiredWhenAnyFieldSet).toBeUndefined();
+  });
+
+  it("lets a webhook-only setup finish without a server id, new or being changed", () => {
+    expect(continueBlockers({ webhookUrl: WEBHOOK, defaultChannelId: CHANNEL_ID })).toEqual([]);
+    expect(continueBlockers({ webhookUrl: "[REDACTED]", defaultChannelId: CHANNEL_ID }, "edit")).toEqual([]);
+    expect(
+      guide().validate(draftOf({ runtimeMode: "bridge", webhookUrl: WEBHOOK, defaultChannelId: CHANNEL_ID })),
+    ).toEqual([]);
+  });
+
+  it("still asks every bot path that listens in a server for the server id", () => {
+    const named = ["Default server (guild) ID"];
+
+    expect(continueBlockers({ botToken: "bot-token", defaultChannelId: CHANNEL_ID })).toEqual(named);
+    expect(continueBlockers({ botTokenEnv: "DISCORD_BOT_TOKEN", defaultChannelId: CHANNEL_ID })).toEqual(named);
+    expect(continueBlockers({ botToken: "bot-token", webhookUrl: WEBHOOK, defaultChannelId: CHANNEL_ID })).toEqual(
+      named,
+    );
+    expect(continueBlockers({ botToken: "[REDACTED]", defaultChannelId: CHANNEL_ID }, "edit")).toEqual(named);
+    expect(continueBlockers({ botToken: "bot-token", defaultChannelId: CHANNEL_ID, defaultGuildId: GUILD_ID })).toEqual(
+      [],
+    );
+  });
+
+  it("asks a direct-messages-only bot for neither id", () => {
+    expect(continueBlockers({ botToken: "bot-token", guildPolicy: "off" })).toEqual([]);
+  });
+
+  it("says a webhook-only setup does not use the server id", () => {
+    expect(field("defaultGuildId").explanation).toContain("A webhook-only setup doesn't use it.");
+  });
+});
+
 describe("Discord setup guide: the test note (item 4)", () => {
   it("says the webhook-only path posts a visible message that stays", () => {
     expect(textOf(step("test").body)).toContain(
@@ -312,11 +353,7 @@ describe("Discord setup guide: asks each path to tick only what it needs (R50)",
 
   it("asks a webhook-only setup to tick nothing about a bot, an application or an install", () => {
     expect(
-      continueBlockers({
-        webhookUrl: "https://discord.com/api/webhooks/1/token",
-        defaultChannelId: CHANNEL_ID,
-        defaultGuildId: GUILD_ID,
-      }),
+      continueBlockers({ webhookUrl: "https://discord.com/api/webhooks/1/token", defaultChannelId: CHANNEL_ID }),
     ).toEqual([]);
     expect(boxes().join("\n")).not.toMatch(/bot|application|intent|scope|install/iu);
   });
