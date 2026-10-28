@@ -329,7 +329,7 @@ describe("Google Chat setup guide: the Chat app (items 3 and 6)", () => {
 
   it("says to pick the project number now and, after finishing, paste this connection's address and message the app", () => {
     expect(paragraphs("create-webhook")).toContain(
-      "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which you only get after finishing). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL, then message the app from an allowed sender and check that it replies.",
+      "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which the Verify the first conversation step shows before you finish). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL, then message the app from an allowed sender and check that it replies.",
     );
   });
 
@@ -339,8 +339,20 @@ describe("Google Chat setup guide: the Chat app (items 3 and 6)", () => {
     );
   });
 
-  it("keeps the audience fields honest about the address that does not exist yet", () => {
-    expect(field("audienceType").explanation).toContain("only get after you finish");
+  it("keeps the audience fields honest about where the address is shown: before Finalize, on the step that shows it (N4)", () => {
+    const addressStep = guide().definition.wizard.steps.find((candidate) => candidate.stage === "first_message");
+    const named = `the ${addressStep?.title} step shows before you finish`;
+
+    // That step is the one that shows the Chat app's address, and the address exists once the draft does.
+    expect(addressStep?.id).toBe("first-message");
+    expect(addressStep?.title).toBe("Verify the first conversation");
+    expect(guide().definition.wizard.inboundWebhook?.pathTemplate).toBe(
+      "/api/v1/integrations/connections/{connectionId}/google-chat/webhook",
+    );
+    expect(field("audienceType").explanation).toContain(named);
+    expect(paragraphs("create-webhook").join("\n")).toContain(named);
+    // Nothing still says the address has to wait for Finalize to exist.
+    expect(JSON.stringify(guide().definition.wizard)).not.toMatch(/only get after/iu);
     expect(field("audience").explanation).toBe(
       "The Google Cloud project number. With the endpoint URL type, use this connection's public HTTPS webhook address instead.",
     );

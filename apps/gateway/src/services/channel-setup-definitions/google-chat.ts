@@ -116,7 +116,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
               ],
             },
             paragraph(
-              "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which you only get after finishing). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL, then message the app from an allowed sender and check that it replies.",
+              "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which the Verify the first conversation step shows before you finish). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL, then message the app from an allowed sender and check that it replies.",
             ),
             paragraph(
               "GoatCitadel doesn't provide a public address. A Chat app needs your own public HTTPS address (a reverse proxy or tunnel) in front of this Gateway.",
@@ -214,7 +214,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
               required: false,
               defaultValue: "project_number",
               explanation:
-                "Must match the Chat app's Authentication audience setting in the Google Cloud console. Project number is the easy choice: the endpoint URL option needs this connection's address, which you only get after you finish.",
+                "Must match the Chat app's Authentication audience setting in the Google Cloud console. Project number is the easy choice: the endpoint URL option needs this connection's address, which the Verify the first conversation step shows before you finish.",
               whyNeeded: "Inbound requests are accepted only when Google's bearer token carries this audience.",
               options: [
                 { value: "project_number", label: "Project number", hint: "Recommended" },
