@@ -145,6 +145,49 @@ describe("resolveRealtimeEvent", () => {
     expect(SETTINGS_READER_KEYS).toContainEqual(["mcp", "capability-connectors"]);
   });
 
+  it("refreshes the tool list when tool rules change, and no tool or policy event re-reads the call counts", () => {
+    const prefix = ["tools", "capability-tools"];
+    // The prefix covers the per-workspace key, so a change refreshes whichever workspace is open.
+    expect(queryKeys.capabilityTools("ws-1").slice(0, 2)).toEqual(prefix);
+    expect(queryKeys.capabilityToolUsage().slice(0, 2)).toEqual(["tools", "capability-tool-usage"]);
+    // A grant, a profile or a Citadel Ward change comes from the tools and policy owners.
+    for (const source of ["tools", "policy"]) {
+      const result = resolveRealtimeEvent(event("tool_grant_updated", source));
+      expect(result.kind).toBe("mapped");
+      const keys = result.kind === "mapped" ? result.effect.keys : [];
+      expect(keys).toContainEqual(prefix);
+      // These events name the list's prefix, not the counts' key and not the whole `tools` topic.
+      expect(keys).not.toContainEqual(queryKeys.capabilityToolUsage());
+      expect(keys).not.toContainEqual(["tools"]);
+    }
+    // A replay gap is the one event that re-reads the whole `tools` topic, counts included.
+    const gap = resolveRealtimeEvent(event("replay_gap", "gateway", { payload: { kind: "replay_gap" } }));
+    expect(gap.kind === "mapped" ? gap.effect.keys : []).toContainEqual(["tools"]);
+    // A tool call inside a turn changes no rule, so it refreshes nothing.
+    expect(resolveRealtimeEvent(event("tool_invoked", "tools"))).toEqual({
+      kind: "mapped",
+      effect: { keys: [], refresh: ["tools"] },
+    });
+  });
+
+  it("refreshes the tool list when a runtime settings change plan moves, because a switch saves through Settings", () => {
+    // A group's switch is a Settings change plan, so its settling re-reads the list that shows the switch.
+    expect(SETTINGS_READER_KEYS).toContainEqual(["tools", "capability-tools"]);
+    const result = resolveRealtimeEvent(
+      event("change_plan.completed", "evolution_control_plane", {
+        payload: { targetOwnerId: "runtime_settings", planId: "p-1" },
+      }),
+    );
+    const keys = result.kind === "mapped" ? result.effect.keys : [];
+    expect(keys).toContainEqual(["tools", "capability-tools"]);
+    // Other change plans leave the list alone.
+    const other = resolveRealtimeEvent(
+      event("change_plan.completed", "evolution_control_plane", { payload: { targetOwnerId: "workspace_config" } }),
+    );
+    const otherKeys = other.kind === "mapped" ? other.effect.keys : [];
+    expect(otherKeys).not.toContainEqual(["tools", "capability-tools"]);
+  });
+
   it("refreshes every settings reader when a runtime settings change plan moves", () => {
     for (const targetOwnerId of ["runtime_settings", "runtime_settings.llm_defaults"]) {
       const result = resolveRealtimeEvent(

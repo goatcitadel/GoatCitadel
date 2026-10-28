@@ -16,6 +16,13 @@ export const queryKeys = {
   capabilityConnectorServer: (serverId: string): TopicKey => ["mcp", "capability-connector-server", serverId],
   /** One saved server's tool list, shown in its connector panel. */
   capabilityConnectorTools: (serverId: string): TopicKey => ["mcp", "capability-connector-tools", serverId],
+  /** The Capabilities tool groups for one workspace. Tool and policy events and Settings change plans refresh it. */
+  capabilityTools: (workspaceId: string): TopicKey => ["tools", "capability-tools", workspaceId],
+  /**
+   * A year of tool call counts. No tool or policy event refreshes it; only a replay gap (which re-reads every `tools`
+   * query) and the Tools tab's own refresh do.
+   */
+  capabilityToolUsage: (): TopicKey => ["tools", "capability-tool-usage"],
   pendingApprovals: (): TopicKey => ["approvals", "pending"],
   inboxAll: (): TopicKey => ["approvals", "operator-inbox"],
   inbox: (workspaceId: string): TopicKey => [
@@ -94,4 +101,6 @@ export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["settings", "mcp-template-allowlist"],
   // The Capabilities connector list shows web search keys and Firecrawl, and whether Chat can reach MCP.
   ["mcp", "capability-connectors"],
+  // The Capabilities tool list shows which tool groups are switched off, and a group's switch saves through Settings.
+  ["tools", "capability-tools"],
 ];
