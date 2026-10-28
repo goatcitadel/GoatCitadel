@@ -170,6 +170,18 @@ describe("ChatTurnDetails copy feedback (CH-31)", () => {
     expect(tools().open).toBe(true);
   });
 
+  it("keeps the list open while a turn resumed after an approval is still running, then folds it", () => {
+    const executed = toolRun({ bytesWritten: 1 });
+    const running = { ...turnWith([executed]), trace: { status: "running" } } as unknown as ChatThreadTurnRecord;
+    act(() => root.render(<ChatTurnDetails turn={running} streaming readOnly={false} actions={actions} />));
+    expect(tools().open).toBe(true);
+    // The Gateway resumes an approved turn without a browser stream: not streaming, but not finished either.
+    act(() => root.render(<ChatTurnDetails turn={running} streaming={false} readOnly={false} actions={actions} />));
+    expect(tools().open).toBe(true);
+    render(turnWith([executed]));
+    expect(tools().open).toBe(false);
+  });
+
   it("folds a list that only opened for streaming once the turn settles cleanly", () => {
     const executed = toolRun({ bytesWritten: 1 });
     act(() =>
@@ -193,6 +205,8 @@ describe("ChatTurnDetails tool rows", () => {
     expect(summary.textContent).toContain("Changed hero.css");
     const row = container.querySelector('[data-tool-run-id="tool-run-1"]')!;
     expect(row.querySelector('[title="src/hero.css"]')?.textContent).toBe("hero.css");
+    // A real space, not just a margin, so a screen reader does not run the name and target together.
+    expect(row.textContent).toContain("Edit file hero.css");
     expect(row.textContent).toContain("+2 −1");
     expect(row.textContent).toContain("2 lines added, 1 line removed");
     expect(row.textContent).toContain("1 s");

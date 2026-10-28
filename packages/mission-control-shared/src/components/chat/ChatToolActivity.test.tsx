@@ -178,7 +178,9 @@ describe("ChatTurnActivityRows effect truth presentation", () => {
     expect(textOf(summary)).not.toContain("disposition unknown");
     expect(textOf(summary)).not.toContain("legacy_or_malformed_effect_evidence");
     const technical = renderer.root.findAll(
-      (node) => typeof node.props.className === "string" && node.props.className.split(" ").includes("mc-next-technical-detail"),
+      (node) =>
+        typeof node.props.className === "string" &&
+        node.props.className.split(" ").includes("mc-next-technical-detail"),
     );
     expect(technical.map(textOf).join(" ")).toContain(
       "potential unknown · disposition unknown · outcome uncertain · evidence legacy_or_malformed_effect_evidence",
@@ -254,11 +256,19 @@ describe("deriveLiveActivityPhase", () => {
 
 describe("ChatLiveActivityRail", () => {
   it("keeps late failed tools in the compact settled activity rows", () => {
-    const toolRuns = Array.from({ length: 5 }, (_, index) => createToolRun({
-      toolRunId: `tool-${index}`, toolName: `tool.${index}`, status: index === 4 ? "failed" : "executed",
-    }));
-    const renderer = TestRenderer.create(<ChatTurnActivityRows mode="chat" toolRuns={toolRuns} onOpenRunDetails={vi.fn()} />);
-    expect(renderer.root.findAllByProps({ "aria-label": "Open execution detail for tool.4" })).toHaveLength(1);
+    const toolRuns = Array.from({ length: 5 }, (_, index) =>
+      createToolRun({
+        toolRunId: `tool-${index}`,
+        toolName: `tool.${index}`,
+        status: index === 4 ? "failed" : "executed",
+      }),
+    );
+    const renderer = TestRenderer.create(
+      <ChatTurnActivityRows mode="chat" toolRuns={toolRuns} onOpenRunDetails={vi.fn()} />,
+    );
+    // The accessible name matches the visible one, never the raw registry id.
+    expect(renderer.root.findAllByProps({ "aria-label": "Open execution detail for Tool 4" })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ "aria-label": "Open execution detail for tool.4" })).toHaveLength(0);
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -416,11 +426,11 @@ describe("ChatLiveActivityRail", () => {
     );
     const text = renderedText(renderer);
     expect(text).toContain("+2 earlier steps");
-    // Newest runs (tool-2..tool-5) must be visible; oldest two (tool-0, tool-1) must not.
-    expect(text).toContain("tool-2");
-    expect(text).toContain("tool-5");
-    expect(text).not.toContain("tool-0");
-    expect(text).not.toContain("tool-1");
+    // Newest runs (tool-2..tool-5, shown as "Tool 2".."Tool 5") must be visible; oldest two must not.
+    expect(text).toContain("Tool 2");
+    expect(text).toContain("Tool 5");
+    expect(text).not.toContain("Tool 0");
+    expect(text).not.toContain("Tool 1");
     renderer.unmount();
   });
 
@@ -439,7 +449,7 @@ describe("ChatLiveActivityRail", () => {
     const row = renderer.root.findByProps({ className: "mc-next-live-activity-row" });
     expect(row.type).toBe("button");
     expect(row.props.type).toBe("button");
-    expect(row.props["aria-label"]).toBe("Open execution detail for memory.search");
+    expect(row.props["aria-label"]).toBe("Open execution detail for Search memory");
     TestRenderer.act(() => {
       row.props.onClick();
     });

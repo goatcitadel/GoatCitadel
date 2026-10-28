@@ -137,6 +137,15 @@ describe("tool run change stats", () => {
 
   it("formats a finished call's duration and nothing for an unfinished one", () => {
     expect(toolRunDuration(run("fs.read"))).toBe("2 s");
-    expect(toolRunDuration({ startedAt: "2026-10-28T00:00:00.000Z" })).toBeUndefined();
+    expect(toolRunDuration(run("fs.read", {}, "failed"))).toBe("2 s");
+    expect(toolRunDuration({ status: "executed", startedAt: "2026-10-28T00:00:00.000Z" })).toBeUndefined();
+  });
+
+  it("shows no duration for a call that waited on approval or has not run", () => {
+    // Waiting: the recorded finish is the pause, not the work.
+    expect(toolRunDuration({ ...run("fs.write", {}, "approval_required"), approvalId: "a-1" })).toBeUndefined();
+    // Approved and run: the span includes the wait for the operator.
+    expect(toolRunDuration({ ...run("fs.write"), approvalId: "a-1" })).toBeUndefined();
+    expect(toolRunDuration(run("fs.delete", {}, "blocked"))).toBeUndefined();
   });
 });
