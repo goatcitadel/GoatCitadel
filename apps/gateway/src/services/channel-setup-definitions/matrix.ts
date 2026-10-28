@@ -35,7 +35,7 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
         "Send and receive Matrix messages through a bot account on your homeserver. No public web address is needed: GoatCitadel connects out, and only hears messages while it's running.",
       prerequisites: [
         "A Matrix account for the bot and its access token.",
-        "The bot invited to and joined in a room with encryption off. GoatCitadel can't read encrypted rooms and doesn't accept invites.",
+        "To receive messages or get a test notice: the bot invited to and joined in a room with encryption off. GoatCitadel can't read encrypted rooms and doesn't accept invites.",
         "Your homeserver in the hosts GoatCitadel may reach.",
       ],
       steps: [
@@ -68,7 +68,7 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
               "GoatCitadel signs in as a bot account, so make one first. The menus here are Element's; other Matrix apps differ.",
             ),
             paragraph(
-              "Steps 3 and 4 are only for a room. You can skip them and leave Default room ID empty, but the bot can post only in rooms it has joined.",
+              "Steps 3 and 4 are for a room. You need one to receive messages or to get a test notice. You can skip them to finish setup without one, but the bot can post only in rooms it has joined.",
             ),
             {
               kind: "list",

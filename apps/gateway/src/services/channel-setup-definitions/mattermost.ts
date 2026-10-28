@@ -53,7 +53,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
             ),
             note(
               "warning",
-              "Mattermost is a guided beta lane. The setup test checks the bot token, finds your channel and posts a test post, which it deletes again when the bot may. GoatCitadel can reach your server only once the server is in the hosts GoatCitadel may reach: the setup test has an Allow these hosts button for that. If it isn't, receiving stops until you allow it and restart GoatCitadel.",
+              "Mattermost is a guided beta lane. The setup test checks the bot token, finds your channel and posts a test post, which it deletes again when the bot is allowed to. GoatCitadel can reach your server only once the server is in the hosts GoatCitadel may reach: the setup test has an Allow these hosts button for that. If it isn't, receiving stops until you allow it and restart GoatCitadel.",
             ),
           ],
         },
@@ -64,6 +64,9 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           title: "Create the bot account",
           body: [
             paragraph("Only a Mattermost system admin can create a bot. Ask one if you aren't."),
+            paragraph(
+              "Step 4 is only for channels. You can skip it if the test post goes to @your-username (a direct message) and you won't receive posts from channels.",
+            ),
             {
               kind: "list",
               ordered: true,
@@ -79,13 +82,11 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
               "https://docs.mattermost.com/developers/integrate/reference/bot-accounts",
             ),
           ],
+          // Only what every setup needs. Adding the bot to a team and channels is list item 4 above: a direct-message
+          // setup (@your-username) needs neither, and each box here blocks Continue.
           checklist: [
             check("enable", "Turn on bot account creation"),
             check("add-bot", "Add the bot account and copy its token"),
-            check(
-              "membership",
-              "Add the bot to its team and to each channel it should use (not needed for a direct message)",
-            ),
           ],
         },
         {
@@ -142,7 +143,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
               explanation:
                 "The channel name from its web address (for example town-square), or @your-username to have the bot message you. The bot must already be a member.",
               whyNeeded:
-                "GoatCitadel posts one test post here and deletes it again right away when the bot may, so you may not see it, even in a direct message. A send that names no channel goes here too.",
+                "GoatCitadel posts one test post here and deletes it again right away when the bot is allowed to, so you may not see it, even in a direct message. A send that names no channel goes here too.",
               looksLike: "town-square",
               commonMistakes: [
                 "Using the channel's display name (for example Town Square) instead of the name in its web address.",
@@ -179,7 +180,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "The test checks the bot token with your server, finds the channel you chose and posts one test post there. When the bot may, it deletes that post again right away, so read the result on this step: the post may be gone before you look.",
+              "The test checks the bot token with your server, finds the channel you chose and posts one test post there. When the bot is allowed to, it deletes that post again right away, so read the result on this step: the post may be gone before you look.",
             ),
           ],
           troubleshooting: [

@@ -109,7 +109,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Send and receive Matrix messages through a bot account on your homeserver. No public web address is needed: GoatCitadel connects out, and only hears messages while it's running.",
     prerequisites: [
       "A Matrix account for the bot and its access token.",
-      "The bot invited to and joined in a room with encryption off. GoatCitadel can't read encrypted rooms and doesn't accept invites.",
+      "To receive messages or get a test notice: the bot invited to and joined in a room with encryption off. GoatCitadel can't read encrypted rooms and doesn't accept invites.",
       "Your homeserver in the hosts GoatCitadel may reach.",
     ],
     firstMessage:

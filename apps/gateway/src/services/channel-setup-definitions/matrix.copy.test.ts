@@ -95,9 +95,11 @@ describe("Matrix setup guide: what it says up front (item 6, R48)", () => {
     expect(wizard.introSummary).toBe(
       "Send and receive Matrix messages through a bot account on your homeserver. No public web address is needed: GoatCitadel connects out, and only hears messages while it's running.",
     );
+    // Ruling R50 (same truth rule as the checklist): a room is needed only to receive or to get a test notice, so the
+    // audit's unconditional "The bot invited to and joined in a room" is scoped to those two.
     expect(wizard.prerequisites).toEqual([
       "A Matrix account for the bot and its access token.",
-      "The bot invited to and joined in a room with encryption off. GoatCitadel can't read encrypted rooms and doesn't accept invites.",
+      "To receive messages or get a test notice: the bot invited to and joined in a room with encryption off. GoatCitadel can't read encrypted rooms and doesn't accept invites.",
       "Your homeserver in the hosts GoatCitadel may reach.",
     ]);
     // Ruling R49: the test posts a notice only when a Default room ID is set, so the audit's unconditional
@@ -157,7 +159,7 @@ describe("Matrix setup guide: making the bot account and its room (items 1, 2 an
     });
     expect(paragraphs("create-bot")).toEqual([
       "GoatCitadel signs in as a bot account, so make one first. The menus here are Element's; other Matrix apps differ.",
-      "Steps 3 and 4 are only for a room. You can skip them and leave Default room ID empty, but the bot can post only in rooms it has joined.",
+      "Steps 3 and 4 are for a room. You need one to receive messages or to get a test notice. You can skip them to finish setup without one, but the bot can post only in rooms it has joined.",
     ]);
   });
 

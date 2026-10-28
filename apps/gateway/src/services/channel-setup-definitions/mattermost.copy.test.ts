@@ -47,6 +47,8 @@ const BOT = "botbotbotbotbotbotbotbotbo";
 const TEAM = "teamteamteamteamteamteamte";
 const CHANNEL = "chanchanchanchanchanchanch";
 const POST = "postpostpostpostpostpostpo";
+const PERSON = "personpersonpersonperson1";
+const DIRECT = "directdirectdirectdirect1";
 const USER_ID = "abcdefghijklmnopqrstuvwxyz";
 
 interface ServerBehavior {
@@ -58,7 +60,10 @@ interface ServerBehavior {
   cleanup?: number;
 }
 
-/** A Mattermost server with one team and one channel, "town-square", that the bot may post in. */
+/**
+ * A Mattermost server with one team and one channel, "town-square", that the bot may post in, and one person, "alice",
+ * the bot can open a direct message with.
+ */
 function mattermost({ me = 200, teams = [TEAM], cleanup = 200 }: ServerBehavior = {}): NonNullable<
   GuideFinishOptions["fetch"]
 > {
@@ -69,6 +74,8 @@ function mattermost({ me = 200, teams = [TEAM], cleanup = 200 }: ServerBehavior 
     if (pathname === "/api/v4/users/me") return me === 200 ? json({ id: BOT }) : json({ message: "Invalid token" }, me);
     if (pathname === `/api/v4/users/${BOT}/teams`) return json(teams.map((id) => ({ id })));
     if (pathname === `/api/v4/teams/${TEAM}/channels/name/town-square`) return json({ id: CHANNEL });
+    if (pathname === "/api/v4/users/username/alice") return json({ id: PERSON });
+    if (method === "POST" && pathname === "/api/v4/channels/direct") return json({ id: DIRECT });
     if (method === "POST" && pathname === "/api/v4/posts") return json({ id: POST });
     if (method === "DELETE" && pathname === `/api/v4/posts/${POST}`) return json({ status: "OK" }, cleanup);
     return new Response("{}", { status: 404 });
@@ -85,6 +92,11 @@ const SEND_ONLY_VALUES = {
   serverUrl: SERVER,
   botToken: "secret-reference",
   defaultChannel: "town-square",
+};
+/** The test post goes to a direct message with the person, so no team or channel is involved. */
+const DIRECT_MESSAGE_VALUES = {
+  ...SEND_ONLY_VALUES,
+  defaultChannel: "@alice",
 };
 const RECEIVING_VALUES = {
   ...SEND_ONLY_VALUES,
@@ -180,6 +192,7 @@ describe("Mattermost setup guide: making the bot (item 2)", () => {
   it("says only a system admin can make a bot, then walks through the four steps", () => {
     expect(paragraphs("create-bot")).toEqual([
       "Only a Mattermost system admin can create a bot. Ask one if you aren't.",
+      "Step 4 is only for channels. You can skip it if the test post goes to @your-username (a direct message) and you won't receive posts from channels.",
     ]);
     expect(step("create-bot").body).toContainEqual({
       kind: "list",
@@ -196,12 +209,12 @@ describe("Mattermost setup guide: making the bot (item 2)", () => {
     );
   });
 
-  it("asks only for what a person can do before continuing", () => {
+  it("asks only for what every setup needs: the team and channel step is a plain list item, not a box that blocks Continue (R50)", () => {
     expect((step("create-bot").checklist ?? []).map((item) => item.label)).toEqual([
       "Turn on bot account creation",
       "Add the bot account and copy its token",
-      "Add the bot to its team and to each channel it should use (not needed for a direct message)",
     ]);
+    expect(JSON.stringify(step("create-bot").checklist)).not.toMatch(/team|channel|member/iu);
   });
 });
 
@@ -307,7 +320,7 @@ describe("Mattermost setup guide: where the test post goes (item 3)", () => {
     expect(channel.looksLike).toBe("town-square");
     // A direct message to you is the same probe, so its post is deleted right away too (R49).
     expect(channel.whyNeeded).toBe(
-      "GoatCitadel posts one test post here and deletes it again right away when the bot may, so you may not see it, even in a direct message. A send that names no channel goes here too.",
+      "GoatCitadel posts one test post here and deletes it again right away when the bot is allowed to, so you may not see it, even in a direct message. A send that names no channel goes here too.",
     );
     expect(channel.commonMistakes).toEqual([
       "Using the channel's display name (for example Town Square) instead of the name in its web address.",
@@ -368,7 +381,7 @@ describe("Mattermost setup guide: receiving (items 4 and 6, A7, A8)", () => {
 describe("Mattermost setup guide: the test and finishing", () => {
   it("says what the test does, and that the post is deleted again, so the result is on this step", () => {
     expect(paragraphs("test")).toEqual([
-      "The test checks the bot token with your server, finds the channel you chose and posts one test post there. When the bot may, it deletes that post again right away, so read the result on this step: the post may be gone before you look.",
+      "The test checks the bot token with your server, finds the channel you chose and posts one test post there. When the bot is allowed to, it deletes that post again right away, so read the result on this step: the post may be gone before you look.",
     ]);
   });
 
@@ -569,6 +582,45 @@ describe("Mattermost send-only path: can it finish?", () => {
     const { eligibility } = await working.verdictOf(config);
 
     expect(eligibility.allowed).toBe(false);
+  });
+});
+
+describe("Mattermost send-only path to a direct message (@your-username): can it finish? (R50)", () => {
+  it("lets Continue pass with a server, a bot token and @username, with nothing about a team or channel", () => {
+    expect(continueBlockers(DIRECT_MESSAGE_VALUES)).toEqual([]);
+    expect(guide().validate(draftOf(DIRECT_MESSAGE_VALUES))).toEqual([]);
+  });
+
+  it("asks this path to tick nothing about a team or channel: the setup step's boxes are the bot account and its token", () => {
+    // The shared helper doesn't model checklists, so assert the step's boxes directly. Continue is blocked until each
+    // box is ticked, and a direct-message setup needs no team or channel membership.
+    const boxes = (step("create-bot").checklist ?? []).map((item) => item.label);
+
+    expect(boxes).toEqual(["Turn on bot account creation", "Add the bot account and copy its token"]);
+    expect(boxes.join("\n")).not.toMatch(/team|channel|member/iu);
+  });
+
+  it("is cleared by the setup test even when the bot is in no team: it opens a direct message and never asks for a team", async () => {
+    const config = guide().normalize(draftOf(DIRECT_MESSAGE_VALUES));
+    const { issues, live, deps, eligibility } = await noTeams.verdictOf(config);
+
+    expect(live.probe?.steps.map((candidate) => [candidate.key, candidate.status])).toEqual([
+      ["mattermost_token_auth", "pass"],
+      ["mattermost_channel_access", "pass"],
+      ["mattermost_sandbox_send", "pass"],
+      ["mattermost_sandbox_cleanup", "pass"],
+    ]);
+    const requests = vi.mocked(deps.fetchWithDiagnosticsTimeout).mock.calls;
+    const post = requests.find(([url, init]) => url.endsWith("/api/v4/posts") && init?.method === "POST");
+    expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({ channel_id: DIRECT });
+    expect(requests.some(([url]) => url.includes("/teams"))).toBe(false);
+    expect(issues).toEqual([]);
+    expect(eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
+  });
+
+  it("says in the setup step that the team and channel step can be skipped for a direct message", () => {
+    expect(paragraphs("create-bot").join("\n")).toContain("@your-username (a direct message)");
+    expect(field("defaultChannel").explanation).toContain("@your-username to have the bot message you");
   });
 });
 
