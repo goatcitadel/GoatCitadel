@@ -137,18 +137,19 @@ describe("Zalo OA setup copy", () => {
     expect(wizardText()).not.toMatch(/https:\/\/<your public address>/u);
   });
 
-  it("states no token lifetime, and no refresh GoatCitadel doesn't do (N11)", () => {
-    expect(wizardText()).not.toMatch(/expires? (?:in|after|within)|valid for|lifetime|refresh/iu);
-    // The one "48 hours" in the guide is about what Zalo charges for a message, not about the token.
-    expect(wizardText()).not.toMatch(/25\s*(?:-\s*)?hours?|every day|once a day/iu);
-    expect(wizardText().match(/\b\d+\s*hours?\b/giu)).toEqual(["48 hours"]);
+  it("states the token lifetime Zalo documents, and promises no refresh GoatCitadel doesn't do (R58)", () => {
+    // Zalo's auth page (developers.zalo.me/docs/official-account/bat-dau/xac-thuc-va-uy-quyen-cho-ung-dung-new) says an
+    // OA access token is valid for 25 hours. Its refresh token (3 months, single use) is not something GoatCitadel uses.
+    expect(wizardText()).not.toMatch(/refresh|(?:will|automatically|auto-)\s*renew|every day|once a day|valid for/iu);
+    // The hour figures in the guide: the lifetime in the overview note and in the token's help, and the one 48 hours
+    // that is about what Zalo charges for a message, not about the token.
+    expect(wizardText().match(/\b\d+\s*hours?\b/giu)).toEqual(["25 hours", "25 hours", "48 hours"]);
+    expect(wizardText()).not.toMatch(/\b(?:24|26|1)\s*hours?\b/iu);
   });
 
   it("claims nothing about Zalo's apps or menus that Zalo's pages don't state (R46)", () => {
     // The audit's "Zalo doesn't show this ID in its apps" and "from your Zalo app's settings" are on no Zalo page.
-    expect(wizardText()).not.toMatch(
-      /in its apps|doesn't show this ID|app's settings|Tools & Support|Official Account Manager/iu,
-    );
+    expect(wizardText()).not.toMatch(/in its apps|doesn't show this ID|app's settings|Official Account Manager/iu);
     // The audit's "follows your Official Account" is not a rule of the consultation message: the 7-day interaction is.
     expect(wizardText()).not.toMatch(/follows your Official Account/iu);
   });
@@ -226,11 +227,11 @@ describe("Zalo OA setup guide: what it says up front (items 3, 6, R46, R48, N11)
     );
   });
 
-  it("warns that a token can expire and where to replace it, without a lifetime (N11, item 2)", () => {
+  it("warns how long a token lasts, that GoatCitadel doesn't renew it, and where to replace it (N11, R58, item 2)", () => {
     expect(step("overview").body).toContainEqual({
       kind: "note",
       tone: "warning",
-      text: "Zalo access tokens can expire, and GoatCitadel doesn't renew them. When sending stops working, paste a new token in Edit setup.",
+      text: "A Zalo access token lasts about 25 hours, and GoatCitadel doesn't renew it. When sending stops working, paste a new token in Edit setup.",
     });
   });
 
@@ -277,7 +278,7 @@ describe("Zalo OA setup guide: where each value comes from (items 1, 2, 6, A5)",
       },
       {
         kind: "paragraph",
-        text: "Zalo access tokens can expire. GoatCitadel doesn't renew them, so when sending stops working, paste a new one in Edit setup.",
+        text: "A Zalo access token lasts about 25 hours, and GoatCitadel doesn't renew it. When sending stops working, paste a new one in Edit setup.",
       },
       {
         kind: "link",
@@ -387,7 +388,7 @@ describe("Zalo OA setup guide: when the test fails (A13)", () => {
     expect(title("token-refused")).toBe("It says Zalo refused the access token");
     expect(said).toContain("Zalo refused the access token");
     expect(body("token-refused")).toBe(
-      "The token may have expired, or it belongs to another app or Official Account. Get a new access token the same way as before, paste it again, and run the test again. If you used a variable, check its name below.",
+      "The token may have expired, or it belongs to another app or Official Account. Get a new access token the same way as before, paste it again, and run the test again. If you used an environment variable, see the item about a missing token below.",
     );
   });
 

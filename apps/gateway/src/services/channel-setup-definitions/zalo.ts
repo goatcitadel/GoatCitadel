@@ -48,7 +48,7 @@ export function createZaloDefinition(): ChannelSetupRuntimeDefinition {
             ),
             note(
               "warning",
-              "Zalo access tokens can expire, and GoatCitadel doesn't renew them. When sending stops working, paste a new token in Edit setup.",
+              "A Zalo access token lasts about 25 hours, and GoatCitadel doesn't renew it. When sending stops working, paste a new token in Edit setup.",
             ),
             note(
               "info",
@@ -68,7 +68,8 @@ export function createZaloDefinition(): ChannelSetupRuntimeDefinition {
               required: false,
               explanation: PASTED_SECRET_EXPLANATION,
               // The steps are the ones on Zalo's own page for API Explorer (developers.zalo.me › Official Account API ›
-              // Get started › Authenticate and authorize an app). No lifetime is stated on purpose (N11).
+              // Get started › Authenticate and authorize an app). The same page says an OA access token is valid for 25
+              // hours (R58). Its refresh token is not used here: GoatCitadel doesn't refresh Zalo tokens, so none is promised.
               whereToFind: [
                 paragraph(
                   "On developers.zalo.me open API Explorer. Choose your app, set the token type to OA Access Token, choose your Official Account, allow the permissions it asks for, and copy the access token. You need to be an admin of the Official Account or of the app.",
@@ -77,7 +78,7 @@ export function createZaloDefinition(): ChannelSetupRuntimeDefinition {
                   "Your Zalo app needs permission to send messages and notifications through the Official Account.",
                 ),
                 paragraph(
-                  "Zalo access tokens can expire. GoatCitadel doesn't renew them, so when sending stops working, paste a new one in Edit setup.",
+                  "A Zalo access token lasts about 25 hours, and GoatCitadel doesn't renew it. When sending stops working, paste a new one in Edit setup.",
                 ),
                 linkBlock(
                   "Zalo docs: get an access token",
@@ -140,7 +141,7 @@ export function createZaloDefinition(): ChannelSetupRuntimeDefinition {
             troubleshoot(
               "token-refused",
               "It says Zalo refused the access token",
-              "The token may have expired, or it belongs to another app or Official Account. Get a new access token the same way as before, paste it again, and run the test again. If you used a variable, check its name below.",
+              "The token may have expired, or it belongs to another app or Official Account. Get a new access token the same way as before, paste it again, and run the test again. If you used an environment variable, see the item about a missing token below.",
             ),
             troubleshoot(
               "cant-message-person",
