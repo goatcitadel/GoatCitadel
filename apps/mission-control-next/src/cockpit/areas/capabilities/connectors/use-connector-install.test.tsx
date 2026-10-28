@@ -1126,6 +1126,32 @@ describe("useConnectorInstall", () => {
       }
     });
 
+    // A tab that loaded while this one's Install was in flight may have taken the plan on first: it then goes on there.
+    it("leaves an install it started to another tab that took the plan on first", async () => {
+      vi.useFakeTimers();
+      const restore = withLocks(new Set(["goatcitadel:connector-install:plan-1"]));
+      try {
+        install.installCapabilityConnector.mockResolvedValueOnce(
+          receipt({ status: "awaiting_approval", requiredAction: APPROVAL }),
+        );
+
+        await startInstall();
+        await act(async () => vi.advanceTimersByTimeAsync(5_000));
+
+        expect(latest.state).toEqual({
+          phase: "stopped",
+          message: "Another tab is following this install. It goes on there once you approve it in Inbox.",
+          changed: [],
+          link: { label: "Open in Inbox", href: "/inbox?approvalId=approval-1&workspaceId=default" },
+        });
+        // Only the other tab reads the plan and goes on after approval.
+        expect(plans.fetchChangePlan).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        restore();
+      }
+    });
+
     it("leaves a flow this tab already has alone", async () => {
       vi.useFakeTimers();
       install.installCapabilityConnector.mockResolvedValueOnce(

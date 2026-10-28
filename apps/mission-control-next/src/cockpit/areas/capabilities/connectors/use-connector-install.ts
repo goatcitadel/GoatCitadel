@@ -92,6 +92,7 @@ const NOT_FOUND = "The install finished, but the new app wasn't found. Reload to
 const INSTALL_STOPPED = "Install stopped. Nothing was changed.";
 const STOPPED_STILL_IN_INBOX = `${INSTALL_STOPPED} Its request is still in Inbox, where you can deny it.`;
 const NOT_STOPPED = "Couldn't stop the install. Reload to see where it stands.";
+const FOLLOWED_ELSEWHERE = "Another tab is following this install. It goes on there once you approve it in Inbox.";
 
 type RunContext = Pick<RunStart, "client" | "listKey">;
 
@@ -122,9 +123,19 @@ async function install(id: number, token: number, templateId: string, enableChat
   const receipt = response?.changePlanReceipt;
   if (!receipt?.planId) return fail(id, "plan", UNCHECKED);
   updateInstallFlow(id, { planId: receipt.planId });
-  // This tab pressed Install, so it follows the plan; a tab that loads meanwhile leaves the plan to this one.
-  void holdInstallPlan(receipt.planId);
   const approvalId = approvalIdOf(receipt.requiredAction);
+  // This tab pressed Install, so it follows the plan, unless a tab that loaded while the request was in flight already
+  // took it on: then only that tab goes on after approval.
+  const held = await holdInstallPlan(receipt.planId);
+  if (!isCurrent(id, token)) return;
+  if (!held) {
+    return settle(id, {
+      phase: "stopped",
+      message: FOLLOWED_ELSEWHERE,
+      changed: [],
+      ...(approvalId ? { link: inboxApprovalLink(approvalId) } : {}),
+    });
+  }
   if (receipt.status === "awaiting_approval" && approvalId) return waitInInbox(id, receipt.planId, approvalId);
   await readPlan(id);
 }
