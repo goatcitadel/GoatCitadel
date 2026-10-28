@@ -13,11 +13,18 @@ const api = vi.hoisted(() => ({
   fetchChannelSetupDrafts: vi.fn(),
   fetchIntegrationConnections: vi.fn(),
   fetchSettings: vi.fn(),
+  fetchAgenticChannelDeliveries: vi.fn(),
 }));
+// What a selected connection's panel reads about itself; no test here may reach a real Gateway for it.
+const operations = vi.hoisted(() => ({ fetchChannelSetupJourney: vi.fn(), fetchTelegramChannelPairings: vi.fn() }));
 const route = vi.hoisted(() => ({ search: "", navigate: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
   ...(await original<object>()),
   ...api,
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/channel-setup-operations", async (original) => ({
+  ...(await original<object>()),
+  ...operations,
 }));
 vi.mock("../../app/use-cockpit-route", () => ({
   useCockpitRoute: () => ({ navigate: route.navigate, search: route.search }),
@@ -198,5 +205,89 @@ describe("Telegram is set up in Chat, not here", () => {
     );
     expect(buttonNamed("Edit Home bot")).toBeDefined();
     expect(buttonNamed("Edit Team")).toBeDefined();
+  });
+});
+
+describe("a saved connection shows where its vendor sends messages", () => {
+  const SLACK_ADDRESS = "https://<your public address>/api/v1/integrations/connections/conn-1/slack/webhook";
+  function webhookDefinition(key: string, label: string): ChannelSetupDefinition {
+    const base = definition(key, label);
+    const telegram = key === "telegram";
+    return {
+      ...base,
+      wizard: {
+        ...base.wizard,
+        // Telegram receives on a webhook only when asked to; it polls unless the connection says otherwise.
+        steps: telegram ? [{ id: "values", fields: [{ key: "receiveMode", defaultValue: "poll" }] }] : [],
+        inboundWebhook: {
+          pathTemplate: `/api/v1/integrations/connections/{connectionId}/${key}/webhook`,
+          ...(telegram ? { whenFieldEquals: { fieldKey: "receiveMode", value: "webhook" } } : {}),
+        },
+      },
+    } as unknown as ChannelSetupDefinition;
+  }
+  const connection = (key: string, connectionId: string, config: Record<string, unknown> = {}) => ({
+    connectionId,
+    revision: "r1",
+    catalogId: `channel.${key}`,
+    kind: "channel",
+    key,
+    label: `${key} connection`,
+    enabled: true,
+    status: "connected",
+    config,
+    createdAt: "2026-10-27T10:00:00.000Z",
+    updatedAt: "2026-10-27T10:00:00.000Z",
+  });
+  async function inspect(connections: ReturnType<typeof connection>[], label: string) {
+    api.fetchChannelSetupDefinitions.mockResolvedValue({
+      items: [webhookDefinition("slack", "Slack"), webhookDefinition("telegram", "Telegram")],
+    });
+    api.fetchIntegrationConnections.mockResolvedValue({ items: connections });
+    api.fetchAgenticChannelDeliveries.mockResolvedValue({ deliveries: [] });
+    operations.fetchChannelSetupJourney.mockRejectedValue(new Error("Not under test."));
+    operations.fetchTelegramChannelPairings.mockRejectedValue(new Error("Not under test."));
+    await mount("");
+    await act(async () => buttonNamed(`Inspect ${label}`)!.click());
+    await settle();
+  }
+  const webhookSection = () => container.querySelector('section[aria-label="Webhook address"]');
+  const selected = () => container.querySelector('section[aria-label="Selected channel connection"]');
+
+  it("shows a saved Slack connection's address above its identity", async () => {
+    await inspect([connection("slack", "conn-1")], "slack connection");
+
+    expect(webhookSection()?.querySelector("code")?.textContent).toBe(SLACK_ADDRESS);
+    const identity = [...container.querySelectorAll("summary")].find(
+      (item) => item.textContent === "Connection identity",
+    )!;
+    expect(webhookSection()!.compareDocumentPosition(identity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The identity stays collapsed; the address is not hidden in it.
+    expect(identity.parentElement?.contains(webhookSection())).toBe(false);
+  });
+
+  it("shows no address for a Telegram connection that polls", async () => {
+    await inspect([connection("telegram", "conn-2", { receiveMode: "poll" })], "telegram connection");
+    expect(selected()).not.toBeNull();
+    expect(webhookSection()).toBeNull();
+  });
+
+  it("shows no address for a Telegram connection that never said, since Telegram polls by default", async () => {
+    await inspect([connection("telegram", "conn-2")], "telegram connection");
+    expect(selected()).not.toBeNull();
+    expect(webhookSection()).toBeNull();
+  });
+
+  it("shows the address of a Telegram connection that receives on a webhook", async () => {
+    await inspect([connection("telegram", "conn-2", { receiveMode: "webhook" })], "telegram connection");
+    expect(webhookSection()?.querySelector("code")?.textContent).toBe(
+      "https://<your public address>/api/v1/integrations/connections/conn-2/telegram/webhook",
+    );
+  });
+
+  it("shows no address for a connection whose channel has no definition", async () => {
+    await inspect([connection("carrier-pigeon", "conn-3")], "carrier-pigeon connection");
+    expect(selected()).not.toBeNull();
+    expect(webhookSection()).toBeNull();
   });
 });

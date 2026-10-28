@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelSetupDefinition, ChannelSetupDraft, ChannelSetupWizardContent } from "@goatcitadel/contracts";
-import { channelHosts, inboundWebhookPath, isStepForLifecycle } from "./channel-wizard-model";
+import { channelHosts, inboundWebhookPath, isStepForLifecycle, receivesOnWebhook } from "./channel-wizard-model";
 
 function def(wizard: Partial<ChannelSetupWizardContent> = {}): ChannelSetupDefinition {
   return {
@@ -253,6 +253,43 @@ describe("inboundWebhookPath", () => {
   it("escapes every occurrence of the id placeholder", () => {
     const twice = def({ inboundWebhook: { pathTemplate: "/a/{connectionId}/b/{connectionId}" } });
     expect(inboundWebhookPath(twice, {}, "x y")).toBe("/a/x%20y/b/x%20y");
+  });
+});
+
+describe("receivesOnWebhook", () => {
+  const telegram = def({
+    inboundWebhook: {
+      pathTemplate: "/api/v1/integrations/connections/{connectionId}/telegram/webhook",
+      whenFieldEquals: { fieldKey: "receiveMode", value: "webhook" },
+    },
+    steps: [
+      {
+        id: "collect",
+        kind: "field-collection",
+        title: "Collect",
+        fields: [
+          {
+            key: "receiveMode",
+            label: "How to receive",
+            type: "select",
+            required: false,
+            explanation: "How messages arrive.",
+            defaultValue: "poll",
+          },
+        ],
+      },
+    ],
+  });
+
+  it("is true exactly when the webhook condition holds after defaults, with no connection id needed", () => {
+    expect(receivesOnWebhook(telegram, {})).toBe(false);
+    expect(receivesOnWebhook(telegram, { receiveMode: "poll" })).toBe(false);
+    expect(receivesOnWebhook(telegram, { receiveMode: "webhook" })).toBe(true);
+    expect(receivesOnWebhook(def({ inboundWebhook: { pathTemplate: "/hooks/{connectionId}" } }), {})).toBe(true);
+  });
+
+  it("is false for a channel with no inbound webhook", () => {
+    expect(receivesOnWebhook(def(), {})).toBe(false);
   });
 });
 

@@ -287,6 +287,14 @@ export function inboundWebhookPath(
   return encodedId === undefined ? undefined : inbound.pathTemplate.replaceAll("{connectionId}", () => encodedId);
 }
 
+/**
+ * Whether a connection set up with these values will receive on a webhook, before it has an id to name the path.
+ * It asks `inboundWebhookPath` with a stand-in id, so the condition lives there and nowhere else.
+ */
+export function receivesOnWebhook(definition: ChannelSetupDefinition, values: Record<string, unknown>): boolean {
+  return inboundWebhookPath(definition, values, "connection") !== undefined;
+}
+
 /** `encodeURIComponent` throws on a lone surrogate; an id that can't be encoded names no path. */
 function encodePathSegment(value: string): string | undefined {
   try {

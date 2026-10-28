@@ -22,6 +22,7 @@ import { NativeButton, NativeSelectableList } from "../../primitives";
 import { ChannelSetupWizard } from "../channel-setup/ChannelSetupWizard";
 import { DiscordConnectionOperationsPanel } from "../channel-setup/DiscordConnectionOperationsPanel";
 import { ChannelJourneyPanel } from "../channel-setup/ChannelJourneyPanel";
+import { ChannelConnectionWebhook } from "../channel-setup/ChannelWebhookAddress";
 import { formatDateTime } from "../helpers/input-format";
 import { hasCredentialInput as hasSessionDraft } from "../credential-input-owner";
 import { FocusedDetail } from "../../shared/FocusedDetail";
@@ -367,6 +368,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                   connections={[selectedConnection]}
                   connectorDiagnosticsEnabled={data.connectorDiagnosticsEnabled}
                 />
+                <ChannelConnectionWebhook connection={selectedConnection} definitions={data.definitions} />
                 <NativeDisclosureCard id="channel-operations" title="Connection operations">
                   <DiscordConnectionOperationsPanel connections={[selectedConnection]} />
                   <TelegramPairingPanel connection={selectedConnection} onUpdated={reload} />

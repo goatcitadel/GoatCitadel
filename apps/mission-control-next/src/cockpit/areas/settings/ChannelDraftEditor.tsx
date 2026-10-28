@@ -13,6 +13,7 @@ import { Dialog } from "../../ui/Dialog";
 import { ChannelDraftEvidencePanel } from "../../../features/native-routes/settings/channel-setup/ChannelDraftEvidencePanel";
 import { ChannelHostsCheck } from "../../../features/native-routes/settings/channel-setup/ChannelHostsCheck";
 import { ChannelEditingNote, ChannelNeeds } from "../../../features/native-routes/settings/channel-setup/ChannelNeeds";
+import { ChannelFirstMessageWebhook } from "../../../features/native-routes/settings/channel-setup/ChannelWebhookAddress";
 import { ChannelWizardFields, channelInputClass } from "./ChannelWizardFields";
 import { ChannelFeedback, ChannelRichBlocks, ChannelStepHelp } from "./ChannelWizardContent";
 import { ExtensionConfigurationGuidance } from "./ExtensionConfigurationGuidance";
@@ -175,6 +176,9 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
               onChange={props.onValuesChange}
             />
             <ChannelStepHelp step={step} />
+            {step.stage === "first_message" ? (
+              <ChannelFirstMessageWebhook definition={props.definition} draft={props.draft} values={props.values} />
+            ) : null}
             {step.kind === "test" ? (
               <ChannelHostsCheck
                 hosts={channelHosts(props.definition, props.draft, props.values)}

@@ -6,6 +6,7 @@ import { ChannelCheckFeedback } from "./ChannelCheckFeedback";
 import { ClassicChannelHostsCheck } from "./ClassicChannelHostsCheck";
 import { ChannelDraftEvidencePanel } from "./ChannelDraftEvidencePanel";
 import { ChannelEditingNote, ChannelNeeds } from "./ChannelNeeds";
+import { ChannelFirstMessageWebhook } from "./ChannelWebhookAddress";
 import type { ChannelSetupRichBlock, ChannelSetupStepDefinition } from "@goatcitadel/contracts";
 import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileJson2, Play, Save, ShieldCheck } from "lucide-react";
 import { NativeButton } from "../../primitives";
@@ -257,6 +258,9 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
             />
             <Troubleshooting step={activeStep} />
             <SuccessCriteria items={activeStep.successCriteria} />
+            {activeStep.stage === "first_message" ? (
+              <ChannelFirstMessageWebhook definition={definition} draft={draft} values={values} />
+            ) : null}
             {activeStep.kind === "test" ? (
               <ClassicChannelHostsCheck
                 hosts={channelHosts(definition, draft, values)}

@@ -4,6 +4,7 @@ import {
   channelPlanReviewHref,
 } from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
 import { ChannelEntryControls } from "../../../features/native-routes/settings/channel-setup/ChannelEntryControls";
+import { ChannelConnectionWebhook } from "../../../features/native-routes/settings/channel-setup/ChannelWebhookAddress";
 import { useChannelReturnNavigation } from "../../../features/native-routes/settings/sections/use-channel-return-navigation";
 import { useChannelSettings } from "../../../features/native-routes/settings/sections/use-channel-settings";
 import { channelPickerHref } from "../../app/routes";
@@ -350,6 +351,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                 selection={{ connection: selectedConnection }}
                 reload={owner.reload}
               />
+              <ChannelConnectionWebhook connection={selectedConnection} definitions={data?.definitions} />
               <details className="text-sm">
                 <summary className="cursor-pointer">Connection identity</summary>
                 <p className="break-all">
