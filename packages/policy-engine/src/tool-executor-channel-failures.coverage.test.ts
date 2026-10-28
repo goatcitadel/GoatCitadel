@@ -1187,7 +1187,7 @@ describe("tool executor channel failure coverage", () => {
       if (url.includes("/ocs/v2.php/apps/spreed/api/v1/bot/")) {
         return new Response("nextcloud down", { status: 500 });
       }
-      if (url === "https://openapi.zalo.me/v2.0/oa/message") {
+      if (url === "https://openapi.zalo.me/v3.0/oa/message/cs") {
         return new Response(JSON.stringify({ error: -1, message: "zalo denied" }), { status: 200 });
       }
       throw new Error(`Unexpected Nextcloud/Zalo URL: ${url}`);
@@ -1463,7 +1463,7 @@ describe("tool executor channel failure coverage", () => {
         }
         return new Response(JSON.stringify({ messages: [{}] }), { status: 200 });
       }
-      if (url === "https://openapi.zalo.me/v2.0/oa/message") {
+      if (url === "https://openapi.zalo.me/v3.0/oa/message/cs") {
         return new Response("{malformed", { status: 500 });
       }
       throw new Error(`Unexpected WhatsApp/Zalo URL: ${url}`);

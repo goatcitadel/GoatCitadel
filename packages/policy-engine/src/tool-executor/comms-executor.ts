@@ -2681,7 +2681,7 @@ async function zaloSend(
   let messageId: string | undefined;
   for (const chunk of chunks) {
     const res = await fetchAllowlisted(
-      "https://openapi.zalo.me/v2.0/oa/message",
+      "https://openapi.zalo.me/v3.0/oa/message/cs",
       {
         method: "POST",
         headers: { "Content-Type": "application/json", access_token: accessToken },

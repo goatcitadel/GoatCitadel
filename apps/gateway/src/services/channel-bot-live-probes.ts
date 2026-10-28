@@ -1058,6 +1058,8 @@ const ZALO_TEST_MESSAGE_LABEL = "Test message";
  * Exercises Zalo's Official Account message call once. Zalo has no non-destructive auth endpoint and the message
  * cannot be deleted, so a non-send run stays explicitly skipped instead of being presented as provider proof.
  * The step is keyed `zalo_sandbox_send` for the stored receipts; the person reads it as the test message.
+ * It posts to `v3.0/oa/message/cs`, the same call the real send makes (comms-executor `zaloSend`): Zalo has shut the
+ * V2 message API down (error -240, developers.zalo.me/docs/official-account/phu-luc/ma-loi).
  */
 export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotProbeChecks> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
@@ -1092,7 +1094,7 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
 
   try {
     const send = await readJsonResponse(
-      await input.fetcher("https://openapi.zalo.me/v2.0/oa/message", {
+      await input.fetcher("https://openapi.zalo.me/v3.0/oa/message/cs", {
         method: "POST",
         headers: { "Content-Type": "application/json", access_token: input.accessToken },
         body: JSON.stringify({

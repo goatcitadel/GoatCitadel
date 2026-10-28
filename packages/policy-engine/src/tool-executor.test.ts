@@ -5486,7 +5486,7 @@ describe("executeTool", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://openapi.zalo.me/v2.0/oa/message",
+      "https://openapi.zalo.me/v3.0/oa/message/cs",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({

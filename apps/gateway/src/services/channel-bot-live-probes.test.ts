@@ -498,7 +498,7 @@ describe("channel bot live probes", () => {
 
   it("runs Zalo OA sandbox send probes against the official account send path", async () => {
     const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url === "https://openapi.zalo.me/v2.0/oa/message" && init?.method === "POST") {
+      if (url === "https://openapi.zalo.me/v3.0/oa/message/cs" && init?.method === "POST") {
         return new Response(JSON.stringify({ error: 0, message: "Success", data: { message_id: "msg-123" } }), {
           status: 200,
         });
@@ -516,7 +516,7 @@ describe("channel bot live probes", () => {
 
     expect(result.probe.steps).toEqual([expect.objectContaining({ key: "zalo_sandbox_send", status: "pass" })]);
     const sendCall = fetcher.mock.calls[0];
-    expect(sendCall?.[0]).toBe("https://openapi.zalo.me/v2.0/oa/message");
+    expect(sendCall?.[0]).toBe("https://openapi.zalo.me/v3.0/oa/message/cs");
     expect(sendCall?.[1]?.headers).toMatchObject({ access_token: "zalo-token" });
     expect(JSON.parse(String(sendCall?.[1]?.body))).toEqual({
       recipient: { user_id: "chat-123" },

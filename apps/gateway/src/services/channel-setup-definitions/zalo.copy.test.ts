@@ -65,7 +65,13 @@ const ACCESS_TOKEN = "zalo-oa-access-token-".padEnd(48, "x");
 // The user_id in Zalo's own documentation for the send and user-list calls.
 const USER_ID = "2512523625412515";
 const VALUES = { accessToken: ACCESS_TOKEN, defaultRecipientId: USER_ID };
-const ENDPOINT = "https://openapi.zalo.me/v2.0/oa/message";
+// Zalo documents the text send at v3.0/oa/message/cs and lists the old v2.0/oa/message call as shut down (error -240).
+const ENDPOINT = "https://openapi.zalo.me/v3.0/oa/message/cs";
+const SHUT_DOWN: Refusal = {
+  error: -240,
+  message:
+    "MessageV2 API has been shut down, please switch to MessageV3. See instructions here https://go.zalo.me/api-v3",
+};
 const BAN = /posture|provenance|ingress|egress|sandbox|activation plan/iu;
 
 type Fetcher = NonNullable<GuideFinishOptions["fetch"]>;
@@ -92,7 +98,7 @@ function json(body: unknown, status = 200): Response {
 function zalo(refusal?: Refusal): Fetcher {
   return async (url) => {
     const { hostname, pathname } = new URL(url);
-    if (hostname === "openapi.zalo.me" && pathname === "/v2.0/oa/message") {
+    if (hostname === "openapi.zalo.me" && pathname === "/v3.0/oa/message/cs") {
       return refusal ? json(refusal) : json({ error: 0, message: "Success", data: { message_id: "msg-1" } });
     }
     return json({}, 404);
@@ -578,6 +584,27 @@ describe("Zalo OA: can it finish?", () => {
       message: "User has blocked invitation from OA",
     });
     expect(eligibility.allowed).toBe(false);
+  });
+
+  it("sends the test message through Zalo's current message API, which only the real call can reach (R57)", async () => {
+    // The fake Zalo answers only /v3.0/oa/message/cs and 404s everything else, so a probe that still called the shut-down
+    // v2.0/oa/message would fail here. The real send (comms-executor) is pinned to the same URL in
+    // comms-executor-zalo-endpoint.test.ts.
+    const { deps, eligibility } = await accepting.verdictOf(guide().normalize(draftOf(VALUES)));
+    const urls = vi.mocked(deps.fetchWithDiagnosticsTimeout).mock.calls.map(([url]) => url);
+
+    expect(urls).toEqual(["https://openapi.zalo.me/v3.0/oa/message/cs"]);
+    expect(ENDPOINT).toBe("https://openapi.zalo.me/v3.0/oa/message/cs");
+    expect(eligibility.allowed).toBe(true);
+  });
+
+  it("holds Finalize back and shows Zalo's own words when Zalo says the message API has been shut down (-240)", async () => {
+    const { live, eligibility } = await refusedWith(SHUT_DOWN).verdictOf(guide().normalize(draftOf(VALUES)));
+
+    expect(live.probe?.steps[0]).toMatchObject({ status: "fail", label: "Test message", message: SHUT_DOWN.message });
+    expect(live.checks.map((check) => check.message)).toEqual([`Test message: ${SHUT_DOWN.message}`]);
+    expect(eligibility.allowed).toBe(false);
+    expect(eligibility.blockingReasons.join("\n")).toContain("MessageV2 API has been shut down");
   });
 
   it("holds Finalize back when Zalo can't be reached, in words the guide matches", async () => {
