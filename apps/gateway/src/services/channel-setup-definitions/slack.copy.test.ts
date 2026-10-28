@@ -187,6 +187,26 @@ describe("Slack setup guide: creating the app (item 1)", () => {
     expect(step("oauth-install").checklist).toBeUndefined();
   });
 
+  it("keeps only the boxes every path needs: the workspace and the right to approve the app (R50)", () => {
+    // A box blocks Continue, and a webhook-only setup is a supported path that posts to its own channel.
+    const boxes = guide().definition.wizard.steps.flatMap((candidate) =>
+      (candidate.checklist ?? []).map((item) => `${candidate.id}: ${item.label}`),
+    );
+
+    expect(boxes).toEqual([
+      "prerequisites: Choose the Slack workspace",
+      "prerequisites: Confirm you can approve or request your Slack app",
+    ]);
+    expect(boxes.join("\n")).not.toMatch(/channel|target/iu);
+  });
+
+  it("makes the test channel plain guidance for a bot token, and says a webhook-only setup needs none (R50)", () => {
+    expect(step("prerequisites").checklist?.map((item) => item.id)).not.toContain("sandbox");
+    expect(paragraphs("prerequisites")).toEqual([
+      "With a bot token, pick at least one test channel for the first target. An incoming webhook posts to its own channel, so a webhook-only setup needs none.",
+    ]);
+  });
+
   it("keeps OAuth as an advanced option that names the four settings it needs", () => {
     const oauth = step("oauth-install");
     const text = textOf(oauth.body);

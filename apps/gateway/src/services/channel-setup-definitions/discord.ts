@@ -61,10 +61,15 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           kind: "prerequisites",
           createOnly: true,
           title: "Before you start",
+          body: [
+            paragraph(
+              "A test channel you can safely post in is needed if the bot will answer in a server channel, or if you use a webhook. Direct messages only needs no channel.",
+            ),
+          ],
+          // Only the boxes every path needs: a box blocks Continue, so a path that skips a step can't be asked to tick it.
           checklist: [
             check("discord-account", "Discord account signed in"),
             check("server-access", "Access to the target server"),
-            check("sandbox-channel", "A test channel selected"),
           ],
           troubleshooting: [
             troubleshoot(
@@ -80,6 +85,9 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           createOnly: true,
           title: "Create the Discord application and bot",
           body: [
+            paragraph(
+              "This step and the next are for a bot token. A webhook-only setup (send-only, advanced) has no bot, so skip both.",
+            ),
             paragraph("Open the Discord Developer Portal and create a new application."),
             paragraph(
               "A new application already has a bot. Open Bot › Reset Token and copy the token now; Discord shows it once. On the same page, turn on Message Content Intent.",
@@ -90,11 +98,6 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
             linkBlock("Discord Developer Portal", "https://discord.com/developers/applications"),
             linkBlock("Discord getting-started guide", DISCORD_QUICK_START_URL),
             linkBlock("Discord Gateway intent reference", "https://docs.discord.com/developers/events/gateway"),
-          ],
-          checklist: [
-            check("app-created", "Create a new Discord application"),
-            check("bot-added", "Copy the bot token (Bot › Reset Token)"),
-            check("message-content-intent", "Enable Message Content Intent under Privileged Gateway Intents"),
           ],
           troubleshooting: [
             troubleshoot(
@@ -114,18 +117,14 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               "Open Installation. Set Install Link to Discord Provided Link. Under Default Install Settings › Guild Install, add the scopes applications.commands and bot, and the permissions View Channels, Send Messages, Read Message History. Open the install link and choose Add to server.",
             ),
             paragraph("Install the bot in every server where you want it to answer."),
+            paragraph(
+              "To have the bot answer in a server channel, check that it can View Channel, Send Messages and Read Message History in that channel. A bot for direct messages only doesn't need that.",
+            ),
             note(
               "info",
               "Add Reactions enables GoatCitadel's best-effort seen marker. Send Messages in Threads, Attach Files, and Embed Links are needed only when you want those corresponding capabilities.",
             ),
             linkBlock("Discord getting-started guide", DISCORD_QUICK_START_URL),
-          ],
-          checklist: [
-            check("bot-scope", "Use a server install with the bot scope and application commands enabled"),
-            check("bot-installed", "Install the bot into the target server"),
-            check("channel-visible", "Grant View Channel in the destination channel"),
-            check("channel-send", "Grant Send Messages in the destination channel"),
-            check("channel-history", "Grant Read Message History in the destination channel"),
           ],
         },
         {

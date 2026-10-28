@@ -141,7 +141,9 @@ describe("channel setup definitions", () => {
     const finishStep = definition.wizard.steps.find((step) => step.id === "finish");
     const content = JSON.stringify(definition.wizard);
 
-    expect(createBot?.checklist?.map((item) => item.id)).toContain("message-content-intent");
+    // Message Content Intent is told in the step, not ticked: a webhook-only setup has no bot to turn it on for (R50).
+    expect(createBot?.checklist).toBeUndefined();
+    expect(JSON.stringify(createBot)).toContain("turn on Message Content Intent");
     expect(content).toContain("Message Content Intent");
     expect(JSON.stringify(installBot)).toMatch(/View Channel.*Send Messages.*Read Message History/);
     expect(JSON.stringify(collectValues)).toContain("@mention");

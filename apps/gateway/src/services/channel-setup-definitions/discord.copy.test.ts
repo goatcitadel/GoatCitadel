@@ -8,6 +8,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { runDiscordBotLiveChecks } from "../channel-bot-live-probes.js";
 import { requireChannelSetupDefinition } from "../channel-setup-definitions.js";
+import { guideFinish } from "./guide-finish.test-support.js";
 
 function guide() {
   return requireChannelSetupDefinition("channel.discord");
@@ -269,12 +270,13 @@ describe("Discord setup guide: the vendor steps (item 6)", () => {
     expect(text).not.toContain("add a bot user");
   });
 
-  it("checks off copying the token, not adding a bot", () => {
-    const labels = (step("create-bot").checklist ?? []).map((item) => item.label);
+  it("tells a person to copy the token and turn on Message Content Intent in the steps, not as boxes (R50)", () => {
+    const text = paragraphs("create-bot").join("\n");
 
-    expect(labels).toContain("Copy the bot token (Bot › Reset Token)");
-    expect(labels).not.toContain("Add a bot user in the Bot section");
-    expect((step("create-bot").checklist ?? []).map((item) => item.id)).toContain("message-content-intent");
+    expect(text).toContain("Open Bot › Reset Token and copy the token now");
+    expect(text).toContain("turn on Message Content Intent");
+    expect(text).not.toContain("add a bot user");
+    expect(step("create-bot").checklist).toBeUndefined();
   });
 
   it("walks through the Installation page with the scopes and permissions", () => {
@@ -287,6 +289,57 @@ describe("Discord setup guide: the vendor steps (item 6)", () => {
     for (const id of ["create-bot", "install-bot"]) {
       expect(textOf(step(id).body), id).toContain("https://docs.discord.com/developers/quick-start/getting-started");
     }
+  });
+});
+
+describe("Discord setup guide: asks each path to tick only what it needs (R50)", () => {
+  const { continueBlockers } = guideFinish("channel.discord");
+  // The shared helper doesn't model checklists, so assert the boxes directly. Continue is blocked until each box on
+  // the step is ticked, and a direct-messages-only setup and a webhook-only setup are both supported paths.
+  const boxes = () =>
+    guide().definition.wizard.steps.flatMap((candidate) =>
+      (candidate.checklist ?? []).map((item) => `${candidate.id}: ${item.label}`),
+    );
+
+  it("keeps only the boxes every path needs: a Discord account and access to a server", () => {
+    expect(boxes()).toEqual(["prerequisites: Discord account signed in", "prerequisites: Access to the target server"]);
+  });
+
+  it("asks a direct-messages-only setup to tick nothing about a channel", () => {
+    expect(continueBlockers({ botToken: "bot-token", guildPolicy: "off" })).toEqual([]);
+    expect(boxes().join("\n")).not.toMatch(/channel|permission|message history/iu);
+  });
+
+  it("asks a webhook-only setup to tick nothing about a bot, an application or an install", () => {
+    expect(
+      continueBlockers({
+        webhookUrl: "https://discord.com/api/webhooks/1/token",
+        defaultChannelId: CHANNEL_ID,
+        defaultGuildId: GUILD_ID,
+      }),
+    ).toEqual([]);
+    expect(boxes().join("\n")).not.toMatch(/bot|application|intent|scope|install/iu);
+  });
+
+  it("makes the test channel plain guidance that says which paths need one", () => {
+    expect(step("prerequisites").checklist?.map((item) => item.id)).not.toContain("sandbox-channel");
+    expect(paragraphs("prerequisites")).toEqual([
+      "A test channel you can safely post in is needed if the bot will answer in a server channel, or if you use a webhook. Direct messages only needs no channel.",
+    ]);
+  });
+
+  it("makes the bot steps plain guidance, and says a webhook-only setup skips them", () => {
+    expect(step("create-bot").checklist).toBeUndefined();
+    expect(step("install-bot").checklist).toBeUndefined();
+    expect(paragraphs("create-bot")[0]).toBe(
+      "This step and the next are for a bot token. A webhook-only setup (send-only, advanced) has no bot, so skip both.",
+    );
+  });
+
+  it("makes the channel permissions plain guidance that only a server channel needs", () => {
+    expect(paragraphs("install-bot")).toContain(
+      "To have the bot answer in a server channel, check that it can View Channel, Send Messages and Read Message History in that channel. A bot for direct messages only doesn't need that.",
+    );
   });
 });
 

@@ -62,9 +62,14 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           kind: "prerequisites",
           createOnly: true,
           title: "Before you start",
+          body: [
+            paragraph(
+              "With a bot token, pick at least one test channel for the first target. An incoming webhook posts to its own channel, so a webhook-only setup needs none.",
+            ),
+          ],
+          // Only the boxes every path needs: a box blocks Continue, so a webhook-only setup can't be asked to tick a channel.
           checklist: [
             check("workspace", "Choose the Slack workspace"),
-            check("sandbox", "Pick at least one test channel for the first target"),
             check("permissions", "Confirm you can approve or request your Slack app"),
           ],
         },

@@ -50,8 +50,7 @@ const SOURCES = [...new Set([...PROBE_SOURCES, ...RESULT_SOURCES, ...GUIDE_SOURC
 /** A literal that is exactly a stored key or checklist id. These are contracts, not words an operator reads. */
 const STORED_KEY_SHAPES: readonly RegExp[] = [
   /^[a-z_]*sandbox_(?:send|cleanup)$/u, // step keys, and the `_sandbox_send` tail of a template-built key
-  /^sandbox$/u, // QQ's `sandbox` field key, and Slack's checklist id
-  /^sandbox-channel$/u, // Discord's checklist id
+  /^sandbox$/u, // QQ's `sandbox` field key
 ];
 
 /** Phrases that are someone else's words, removed before the check. Anything left that says "sandbox" fails. */
