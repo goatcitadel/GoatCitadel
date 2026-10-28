@@ -86,7 +86,10 @@ describe("chat API origin surface headers", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { fetchChatSessions } = await import("./chat");
     const controller = new AbortController();
-    await fetchChatSessions({ sessionId: "older/chat", workspaceId: "workspace-a", limit: 1 }, { signal: controller.signal });
+    await fetchChatSessions(
+      { sessionId: "older/chat", workspaceId: "workspace-a", limit: 1 },
+      { signal: controller.signal },
+    );
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("sessionId=older%2Fchat");
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("workspaceId=workspace-a");
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ signal: controller.signal, cache: "no-store" });
@@ -102,7 +105,10 @@ describe("chat API origin surface headers", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toContain("/sessions/session%2Fone/workbench/file-operation/preview");
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", body: JSON.stringify(action) });
     expect(fetchMock.mock.calls[1]?.[0]).toContain("/sessions/session%2Fone/workbench/file-operation");
-    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST", body: JSON.stringify({ ...action, expectedRevision: "a".repeat(64) }) });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ ...action, expectedRevision: "a".repeat(64) }),
+    });
   });
 
   beforeEach(() => {
@@ -732,7 +738,7 @@ describe("chat API origin surface headers", () => {
   });
 
   it(
-    "covers chat stream failures, delegation stream errors, and FileReader attachment encoding",
+    "covers chat stream failures, delegation stream errors, and streamed attachment uploads",
     async () => {
       const chat = await import("./chat");
       const chunks: unknown[] = [];
@@ -780,48 +786,25 @@ describe("chat API origin surface headers", () => {
       vi.stubGlobal("fetch", fetchMock);
       await expect(chat.downloadChatAttachment("attachment-1")).rejects.toThrow("API error 404");
 
-      class SuccessfulFileReader {
-        public error: Error | null = null;
-        public result: string | ArrayBuffer | null = "data:text/plain;base64,Zm9v";
-        public onerror: (() => void) | null = null;
-        public onload: (() => void) | null = null;
-        public readAsDataURL(): void {
-          this.onload?.();
-        }
-      }
       fetchMock = vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { attachmentId: "attachment-2" } }));
       vi.stubGlobal("fetch", fetchMock);
-      vi.stubGlobal("FileReader", SuccessfulFileReader);
-      await chat.uploadChatAttachment({ sessionId: "session-1", file: new File(["foo"], "note.txt", { type: "" }) });
-      expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body))).toMatchObject({
-        bytesBase64: "Zm9v",
+      const file = new File(["foo"], "note.txt", { type: "" });
+      await chat.uploadChatAttachment({ sessionId: "session-1", projectId: "project-1", file });
+      const [uploadUrl, uploadInit] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
+      const sent = new URL(uploadUrl);
+      expect(sent.pathname).toBe("/api/v1/chat/attachments");
+      expect(Object.fromEntries(sent.searchParams)).toEqual({
+        sessionId: "session-1",
+        fileName: "note.txt",
         mimeType: "application/octet-stream",
+        projectId: "project-1",
       });
-
-      class FailingFileReader extends SuccessfulFileReader {
-        public override error = new Error("reader failed");
-        public override readAsDataURL(): void {
-          this.onerror?.();
-        }
-      }
-      vi.stubGlobal("FileReader", FailingFileReader);
-      await expect(
-        chat.uploadChatAttachment({
-          sessionId: "session-1",
-          file: new File(["foo"], "note.txt", { type: "text/plain" }),
-        }),
-      ).rejects.toThrow("reader failed");
-
-      class NonStringFileReader extends SuccessfulFileReader {
-        public override result = new ArrayBuffer(0);
-      }
-      vi.stubGlobal("FileReader", NonStringFileReader);
-      await expect(
-        chat.uploadChatAttachment({
-          sessionId: "session-1",
-          file: new File(["foo"], "note.txt", { type: "text/plain" }),
-        }),
-      ).rejects.toThrow("Failed to encode attachment.");
+      // The File itself is the body, sent as raw bytes. This suite stubs `crypto` without Web Crypto (as on a
+      // plain-HTTP LAN origin), so the optional hash header is skipped rather than failing the upload.
+      expect(uploadInit.body).toBe(file);
+      const uploadHeaders = new Headers(uploadInit.headers);
+      expect(uploadHeaders.get("content-type")).toBe("application/octet-stream");
+      expect(uploadHeaders.get("x-content-sha256")).toBeNull();
     },
     CHAT_API_TEST_TIMEOUT_MS,
   );

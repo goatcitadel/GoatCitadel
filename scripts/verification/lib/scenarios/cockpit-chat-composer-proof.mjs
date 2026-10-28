@@ -173,7 +173,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
                 (response) =>
                   new URL(response.url()).pathname === "/api/v1/chat/attachments" &&
                   response.request().method() === "POST" &&
-                  response.request().postDataJSON()?.fileName === item.fileName,
+                  new URL(response.url()).searchParams.get("fileName") === item.fileName,
               ),
             );
             const picker = observePendingWait(page.waitForEvent("filechooser"));
@@ -212,7 +212,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
               (response) =>
                 new URL(response.url()).pathname === "/api/v1/chat/attachments" &&
                 response.request().method() === "POST" &&
-                response.request().postDataJSON()?.fileName === fileName,
+                new URL(response.url()).searchParams.get("fileName") === fileName,
             ),
           );
           await draft.fill(`@${fileName}`);

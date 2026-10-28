@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
@@ -1636,38 +1637,70 @@ describe("chat routes additional coverage", () => {
     });
   });
 
-  it("accepts attachment payloads larger than Fastify's default JSON body limit", async () => {
-    const uploadChatAttachment = vi.fn(async (input: Record<string, unknown>) => ({
-      attachmentId: "att-1",
-      sessionId: input.sessionId,
-      fileName: input.fileName,
-      mimeType: input.mimeType,
-    }));
-    const largeBase64 = "a".repeat(1_500_000);
+  it("streams large attachments as raw bytes and caps base64 JSON at 1 MiB", async () => {
+    const received: Array<{ input: Record<string, unknown>; bytes: number }> = [];
+    const uploadChatAttachment = vi.fn(async (input: Record<string, unknown>) => {
+      const stream = input.stream as { body: AsyncIterable<Buffer>; declaredBytes: number } | undefined;
+      let bytes = 0;
+      if (stream) for await (const chunk of stream.body) bytes += chunk.length;
+      received.push({
+        input: { ...input, stream: stream ? { declaredBytes: stream.declaredBytes } : undefined },
+        bytes,
+      });
+      return { attachmentId: "att-1", sessionId: input.sessionId, fileName: input.fileName, mimeType: input.mimeType };
+    });
+    const large = Buffer.alloc(1_500_000, 7);
 
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatAttachments: { uploadChatAttachment } } as never);
     await app.register(chatRoutes);
 
-    const response = await app.inject({
+    const streamed = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/attachments?sessionId=sess-1&fileName=large-image.png&mimeType=image%2Fpng",
+      headers: { "content-type": "application/octet-stream" },
+      payload: large,
+    });
+    const json = await app.inject({
       method: "POST",
       url: "/api/v1/chat/attachments",
       payload: {
         sessionId: "sess-1",
         fileName: "large-image.png",
         mimeType: "image/png",
-        bytesBase64: largeBase64,
+        bytesBase64: large.toString("base64"),
       },
     });
-
-    expect(response.statusCode).toBe(201);
-    expect(uploadChatAttachment).toHaveBeenCalledWith({
-      sessionId: "sess-1",
-      fileName: "large-image.png",
-      mimeType: "image/png",
-      bytesBase64: largeBase64,
+    const noLength = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/attachments?sessionId=sess-1&fileName=a.png",
+      headers: { "content-type": "application/octet-stream" },
+      payload: Readable.from([Buffer.from("x")]),
     });
+    const noSession = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/attachments?fileName=a.png",
+      headers: { "content-type": "application/octet-stream" },
+      payload: "x",
+    });
+
+    expect(streamed.statusCode).toBe(201);
+    expect(received).toEqual([
+      {
+        input: {
+          sessionId: "sess-1",
+          fileName: "large-image.png",
+          mimeType: "image/png",
+          stream: { declaredBytes: large.length },
+        },
+        bytes: large.length,
+      },
+    ]);
+    expect(json.statusCode).toBe(413);
+    expect(noLength.statusCode).toBe(411);
+    expect(noSession.statusCode).toBe(400);
+    expect(uploadChatAttachment).toHaveBeenCalledTimes(1);
   });
 
   it.each([

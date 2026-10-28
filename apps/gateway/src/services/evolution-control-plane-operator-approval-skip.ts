@@ -19,6 +19,17 @@ export interface ConfirmOptions {
   readonly operatorSettingsSave?: boolean;
 }
 
+/**
+ * Evidence a server-owned operator save route adds when its plan waits for approval. Approval reconciliation applies
+ * a Settings plan only with it, so a plan that merely claims `surface: "settings"` keeps its explicit continuation.
+ */
+export const OPERATOR_SAVE_EVIDENCE = "operator-save:settings";
+
+/** The evidence to record when this confirmation comes from the operator's own save route, or none. */
+export function operatorSaveEvidence(plan: ChangePlanRecord, options: ConfirmOptions): string[] {
+  return options.operatorSettingsSave === true && plan.origin.surface === "settings" ? [OPERATOR_SAVE_EVIDENCE] : [];
+}
+
 /** The plan event that starts apply; the operator's approval skip records its own. */
 export interface ApplyStartEvent {
   readonly eventType: string;

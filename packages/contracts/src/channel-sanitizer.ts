@@ -1,6 +1,12 @@
 import { redactSecretText } from "./secret-redaction.js";
 
-const REASONING_BLOCK_TAGS = ["think", "thinking", "reasoning", "internal_reasoning", "analysis"];
+export const REASONING_BLOCK_TAGS: readonly string[] = [
+  "think",
+  "thinking",
+  "reasoning",
+  "internal_reasoning",
+  "analysis",
+];
 const INTERNAL_BLOCK_TAGS = ["tool_call", "tool_result", "tool_use", "internal_trace"];
 const INTERNAL_HTML_COMMENT_PREFIXES = ["reasoning", "thinking", "internal"];
 export interface ChannelOutboundSanitizeOptions {

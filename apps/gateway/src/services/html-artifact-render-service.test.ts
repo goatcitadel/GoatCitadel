@@ -65,13 +65,7 @@ async function createDeps(artifact: ChatGeneratedArtifactRecord = artifactFixtur
     return { renders, contentSecurityPolicy: "default-src 'self'" };
   });
   const uploadChatAttachment = vi.fn(
-    async (input: {
-      sessionId: string;
-      projectId?: string;
-      fileName: string;
-      mimeType: string;
-      bytesBase64: string;
-    }) => {
+    async (input: { sessionId: string; projectId?: string; fileName: string; mimeType: string; bytes: Buffer }) => {
       const record: ChatAttachmentRecord = {
         attachmentId: `att-${uploads.length + 1}`,
         sessionId: input.sessionId,
@@ -80,7 +74,7 @@ async function createDeps(artifact: ChatGeneratedArtifactRecord = artifactFixtur
         fileName: input.fileName,
         mimeType: input.mimeType,
         mediaType: "image",
-        sizeBytes: Buffer.from(input.bytesBase64, "base64").byteLength,
+        sizeBytes: input.bytes.byteLength,
         sha256: `sha-${input.fileName}`,
         storageRelPath: `chat/default/attachments/${input.fileName}`,
         extractStatus: "unsupported",
@@ -159,7 +153,7 @@ describe("html-artifact-render-service", () => {
         analysis: "skip",
       }),
     );
-    const uploadedBytes = Buffer.from(fixture.uploadChatAttachment.mock.calls[0]?.[0].bytesBase64 ?? "", "base64");
+    const uploadedBytes = fixture.uploadChatAttachment.mock.calls[0]?.[0].bytes ?? Buffer.alloc(0);
     expect(uploadedBytes.subarray(0, 8).equals(PNG_SIGNATURE)).toBe(true);
 
     const renderInput = fixture.renderHtmlSnapshot.mock.calls[0]?.[0];

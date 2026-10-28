@@ -249,7 +249,8 @@ export class EvolutionControlPlaneService {
     }
     const skipEvent = await operatorApprovalSkip.eventFor(current, options, this.deps);
     if (current.risk !== "safe" && !skipEvent) {
-      return await this.requestCanonicalApproval(actor, current, actionNonce);
+      const evidence = operatorApprovalSkip.operatorSaveEvidence(current, options);
+      return await this.requestCanonicalApproval(actor, current, actionNonce, evidence);
     }
     return await this.executeApply(actor, adapter, current, actionNonce, skipEvent);
   }
@@ -628,6 +629,7 @@ export class EvolutionControlPlaneService {
     actor: EvolutionControlPlaneActor,
     plan: ChangePlanRecord,
     actionNonce: string,
+    evidenceRefs: readonly string[] = [],
   ): Promise<ChangePlanRecord> {
     if (!this.deps.createApproval) {
       throw new ServiceUnavailableError("The canonical approval owner is unavailable for this Change Plan.");
@@ -654,6 +656,7 @@ export class EvolutionControlPlaneService {
         internal: true,
         requiredAction: approvalAction,
         approvalRefs: [approvalId],
+        ...(evidenceRefs.length ? { evidenceRefs } : {}),
         eventType: "canonical_approval_requested",
         actorId: actor.actorId,
         eventPayload: { approvalId },

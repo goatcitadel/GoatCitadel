@@ -107,6 +107,7 @@ import {
   request,
 } from "./client-core.js";
 import { consumeSseResponse, iterateSsePayloads, parseSseJson } from "./streaming.js";
+import { uploadHashHeaders } from "./upload-hash.js";
 import type { OpenAICodexDevicePollResponse, OpenAICodexDeviceStartResponse } from "./platform.js";
 export {
   createChatSessionWorkbenchWorktree,
@@ -1388,16 +1389,18 @@ export async function uploadChatAttachment(input: {
   projectId?: string;
   file: File;
 }): Promise<ChatAttachmentRecord> {
-  const bytesBase64 = await encodeFileBase64(input.file);
-  return request<ChatAttachmentRecord>("/api/v1/chat/attachments", {
+  // The File itself is the body: the browser streams it from disk and the Gateway streams it to disk, so neither
+  // side builds a base64 copy. The details travel in the query string.
+  const query = new URLSearchParams({
+    sessionId: input.sessionId,
+    fileName: input.file.name,
+    mimeType: input.file.type || "application/octet-stream",
+  });
+  if (input.projectId) query.set("projectId", input.projectId);
+  return request<ChatAttachmentRecord>(`/api/v1/chat/attachments?${query.toString()}`, {
     method: "POST",
-    body: JSON.stringify({
-      sessionId: input.sessionId,
-      projectId: input.projectId,
-      fileName: input.file.name,
-      mimeType: input.file.type || "application/octet-stream",
-      bytesBase64,
-    }),
+    body: input.file,
+    ...(await uploadHashHeaders(input.file)),
   });
 }
 
@@ -2069,30 +2072,4 @@ export async function fetchCrossProjectRecentSessions(
     limit: String(Math.max(1, Math.min(20, limit))),
   });
   return request<CrossProjectRecentsResponse>(`/api/v1/chat/sessions/recents?${query.toString()}`);
-}
-
-async function encodeFileBase64(file: File): Promise<string> {
-  if (typeof FileReader !== "undefined") {
-    return new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(reader.error ?? new Error("Failed to read attachment."));
-      reader.onload = () => {
-        if (typeof reader.result !== "string") {
-          reject(new Error("Failed to encode attachment."));
-          return;
-        }
-        const comma = reader.result.indexOf(",");
-        resolve(comma >= 0 ? reader.result.slice(comma + 1) : reader.result);
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = "";
-  const chunk = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
-  }
-  return btoa(binary);
 }

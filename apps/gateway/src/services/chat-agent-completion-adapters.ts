@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { ChatCompletionResponse } from "@goatcitadel/contracts";
+import {
+  createInlineReasoningSplitter,
+  splitInlineReasoning,
+  type ChatCompletionResponse,
+  type InlineReasoningSplitter,
+} from "@goatcitadel/contracts";
 import { readCanonicalStreamRouting } from "./llm-stream-routing.js";
 
 export interface ParsedToolCall {
@@ -42,6 +47,8 @@ export interface CompletionStreamAggregate {
   modelUsageEventIds: Set<string>;
   toolCalls: Map<number, CompletionStreamToolCallState>;
   providerNativeContent: Array<Record<string, unknown>>;
+  /** Routes inline `<think>…</think>` at the start of the reply to reasoning instead of content. */
+  inlineReasoning: InlineReasoningSplitter;
 }
 
 export function readToolCalls(
@@ -307,7 +314,7 @@ export function toProviderToolFunctionName(toolName: string, existing?: Map<stri
 }
 
 export function extractMessageContent(message: Record<string, unknown>): string {
-  return extractStructuredTextContent(message.content).trim();
+  return splitInlineReasoning(extractStructuredTextContent(message.content)).answer.trim();
 }
 
 export function extractStructuredTextContent(content: unknown): string {
@@ -362,6 +369,24 @@ export function createCompletionStreamAggregate(): CompletionStreamAggregate {
     modelUsageEventIds: new Set<string>(),
     toolCalls: new Map<number, CompletionStreamToolCallState>(),
     providerNativeContent: [],
+    inlineReasoning: createInlineReasoningSplitter(),
+  };
+}
+
+/**
+ * Releases text the inline-reasoning splitter is still holding (a half-arrived
+ * tag) once the stream has ended. Call before {@link buildCompletionFromAggregate}
+ * to stream the released text; the builder flushes again, which is then a no-op.
+ */
+export function flushCompletionStreamAggregate(aggregate: CompletionStreamAggregate): {
+  delta?: string;
+  reasoningDelta?: string;
+} {
+  const held = aggregate.inlineReasoning.flush();
+  aggregate.content += held.answer;
+  return {
+    ...(held.answer ? { delta: held.answer } : {}),
+    ...(held.reasoning ? { reasoningDelta: held.reasoning } : {}),
   };
 }
 
@@ -403,10 +428,11 @@ export function absorbCompletionStreamChunk(
         ? (delta.tool_calls as Array<Record<string, unknown>>)
         : [];
     if (message && typeof message === "object") {
-      const messageDelta = extractMessageContent(message);
-      if (messageDelta) {
-        aggregate.content += messageDelta;
-        textDelta += messageDelta;
+      const messageSplit = aggregate.inlineReasoning.push(extractStructuredTextContent(message.content).trim());
+      reasoningDelta += messageSplit.reasoning;
+      if (messageSplit.answer) {
+        aggregate.content += messageSplit.answer;
+        textDelta += messageSplit.answer;
       }
       const fullToolCalls = readStructuredMessageToolCalls(message);
       if (fullToolCalls.length > 0) {
@@ -441,10 +467,11 @@ export function absorbCompletionStreamChunk(
           .map(sanitizeProviderNativeReplayContent),
       );
     }
-    const deltaText = extractContentTextFromDelta(delta.content);
-    if (deltaText) {
-      aggregate.content += deltaText;
-      textDelta += deltaText;
+    const deltaSplit = aggregate.inlineReasoning.push(extractContentTextFromDelta(delta.content));
+    reasoningDelta += deltaSplit.reasoning;
+    if (deltaSplit.answer) {
+      aggregate.content += deltaSplit.answer;
+      textDelta += deltaSplit.answer;
     }
     if (deltaToolCalls.length > 0) {
       sawToolCall = true;
@@ -520,6 +547,7 @@ export function sanitizeProviderNativeReplayContent(content: Record<string, unkn
 }
 
 export function buildCompletionFromAggregate(aggregate: CompletionStreamAggregate): ChatCompletionResponse {
+  flushCompletionStreamAggregate(aggregate);
   const toolCalls = [...aggregate.toolCalls.entries()]
     .sort((left, right) => left[0] - right[0])
     .map(([, toolCall], index) => ({

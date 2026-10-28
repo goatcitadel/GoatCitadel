@@ -161,6 +161,7 @@ export * from "./channels.js";
 export * from "./inbound-channel-events.js";
 export * from "./cron-runs.js";
 export * from "./channel-sanitizer.js";
+export * from "./inline-reasoning.js";
 export * from "./secret-redaction.js";
 export * from "./spawn-env.js";
 export * from "./utf8-truncation.js";

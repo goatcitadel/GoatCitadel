@@ -9,6 +9,7 @@ import type {
 import type { OperatorsResponse } from "./types.js";
 
 import { request } from "./client-core.js";
+import { uploadHashHeaders } from "./upload-hash.js";
 
 export async function fetchOperators(): Promise<OperatorsResponse> {
   return request<OperatorsResponse>("/api/v1/operators");
@@ -85,13 +86,9 @@ export async function createFileFromTemplate(
   );
 }
 
-/** Hashing needs the whole file in memory (Web Crypto cannot hash a stream), so only small uploads carry a hash. */
-const UPLOAD_HASH_MAX_BYTES = 8 * 1024 * 1024;
-
 /**
  * Uploads UTF-8 text as a raw byte stream, so neither the browser nor the Gateway builds a JSON copy of a large file.
- * The Gateway verifies `X-Content-SHA256` when it is sent; it is skipped where Web Crypto is unavailable (plain-HTTP
- * LAN origins) and for large files.
+ * The Gateway verifies `X-Content-SHA256` when it is sent (see {@link uploadHashHeaders}).
  */
 export async function uploadFile(
   relativePath: string,
@@ -101,20 +98,12 @@ export async function uploadFile(
   const body = typeof content === "string" ? new Blob([content], { type: "text/plain;charset=utf-8" }) : content;
   const query = new URLSearchParams({ relativePath });
   if (options.expectAbsent) query.set("expectAbsent", "true");
-  const sha256 = await hashUploadBody(body);
   return request<{ relativePath: string; fullPath: string; bytes: number }>(
     `/api/v1/files/upload?${query.toString()}`,
     {
       method: "POST",
       body,
-      ...(sha256 ? { headers: { "X-Content-SHA256": sha256 } } : {}),
+      ...(await uploadHashHeaders(body)),
     },
   );
-}
-
-async function hashUploadBody(body: Blob): Promise<string | undefined> {
-  const subtle = globalThis.crypto?.subtle;
-  if (!subtle || body.size > UPLOAD_HASH_MAX_BYTES) return undefined;
-  const digest = new Uint8Array(await subtle.digest("SHA-256", await body.arrayBuffer()));
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
