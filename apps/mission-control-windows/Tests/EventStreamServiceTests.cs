@@ -25,11 +25,23 @@ public sealed class EventStreamServiceTests
     }
 
     [TestMethod]
-    public void BuildsEventStreamUrlWithEncodedToken()
+    public void SendsEventStreamTokenAsBearerHeaderNotInUrl()
     {
-        Assert.AreEqual(
-            "http://127.0.0.1:8787/api/v1/events/stream?replay=0&sse_token=abc%20123%2B%2F%3D",
-            EventStreamService.BuildEventStreamUrl("http://127.0.0.1:8787/", "abc 123+/="));
+        using var request = EventStreamService.BuildEventStreamRequest("http://127.0.0.1:8787/", "abc-123_XYZ");
+
+        Assert.AreEqual(HttpMethod.Get, request.Method);
+        Assert.AreEqual("http://127.0.0.1:8787/api/v1/events/stream?replay=0", request.RequestUri?.ToString());
+        Assert.AreEqual("Bearer", request.Headers.Authorization?.Scheme);
+        Assert.AreEqual("abc-123_XYZ", request.Headers.Authorization?.Parameter);
+    }
+
+    [TestMethod]
+    public void OmitsAuthorizationWhenNoEventStreamToken()
+    {
+        using var request = EventStreamService.BuildEventStreamRequest("http://127.0.0.1:8787", " ");
+
+        Assert.AreEqual("http://127.0.0.1:8787/api/v1/events/stream?replay=0", request.RequestUri?.ToString());
+        Assert.IsNull(request.Headers.Authorization);
     }
 
     [TestMethod]
