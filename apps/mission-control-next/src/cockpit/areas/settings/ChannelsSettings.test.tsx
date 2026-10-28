@@ -217,7 +217,7 @@ describe("a saved connection shows where its vendor sends messages", () => {
       ...base,
       wizard: {
         ...base.wizard,
-        // Telegram receives on a webhook only when asked to; it polls unless the connection says otherwise.
+        // Telegram receives on a webhook only when its receive mode is webhook; this fixture's mode defaults to poll.
         steps: telegram ? [{ id: "values", fields: [{ key: "receiveMode", defaultValue: "poll" }] }] : [],
         inboundWebhook: {
           pathTemplate: `/api/v1/integrations/connections/{connectionId}/${key}/webhook`,
@@ -272,7 +272,7 @@ describe("a saved connection shows where its vendor sends messages", () => {
     expect(webhookSection()).toBeNull();
   });
 
-  it("shows no address for a Telegram connection that never said, since Telegram polls by default", async () => {
+  it("shows no address for a Telegram connection whose config sets no receive mode, under a definition that defaults it to poll", async () => {
     await inspect([connection("telegram", "conn-2")], "telegram connection");
     expect(selected()).not.toBeNull();
     expect(webhookSection()).toBeNull();

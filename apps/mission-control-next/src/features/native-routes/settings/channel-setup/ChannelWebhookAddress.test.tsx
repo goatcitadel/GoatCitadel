@@ -210,7 +210,7 @@ describe("ChannelConnectionWebhook", () => {
     expect(container.querySelector("code")?.textContent).toBe(SLACK_ADDRESS);
   });
 
-  it("shows nothing when Telegram is polling, and the address when it is on a webhook", async () => {
+  it("shows nothing for a Telegram connection set to poll or with no receive mode saved (this fixture defaults it to poll), and the address on a webhook", async () => {
     const definitions = [slack, telegram];
     await show(
       <ChannelConnectionWebhook
