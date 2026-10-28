@@ -933,6 +933,33 @@ describe("auth plugin", () => {
     });
   });
 
+  it("refuses a companion streamed upload before signature verification", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+    const verifySignature = vi.fn(() => undefined);
+    (app.gatewayAuth as unknown as { verifyCompanionRequestSignature: unknown }).verifyCompanionRequestSignature =
+      verifySignature;
+    app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
+    app.post("/upload-stream", async () => ({ ok: true }));
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/upload-stream",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+        "content-type": "application/octet-stream",
+        ...COMPANION_SIGNATURE_HEADERS,
+      },
+      payload: Buffer.from("bytes"),
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ authMode: "companion" });
+    expect(verifySignature).not.toHaveBeenCalled();
+  });
+
   it("rejects unsigned companion read requests", async () => {
     // M8 custody fail-open regression: a companion bearer presented WITHOUT the
     // device-key request-signature headers must not read anything — token

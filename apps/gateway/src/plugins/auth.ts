@@ -15,6 +15,7 @@ import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.j
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
 import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
 import { isWhatsAppWebhookPath } from "../services/whatsapp-webhook.js";
+import { isStreamedRequestBody } from "../services/streamed-upload.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 
@@ -357,6 +358,13 @@ export const authPlugin = fp(async (fastify) => {
     if (!request.authCompanionSessionId) {
       return reply.code(401).send({
         error: "Unauthorized",
+        authMode: "companion",
+      });
+    }
+    // The device-key signature covers a parsed JSON body; an unread upload stream cannot be signed.
+    if (isStreamedRequestBody(request.body)) {
+      return reply.code(401).send({
+        error: "Companion requests cannot stream an upload; send the file as JSON.",
         authMode: "companion",
       });
     }

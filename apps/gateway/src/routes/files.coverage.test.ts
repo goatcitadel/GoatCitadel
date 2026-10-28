@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { filesRoutes } from "./files.js";
@@ -194,6 +195,92 @@ describe("files list paging (LB-08)", () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe("streamed file uploads", () => {
+  let app: FastifyInstance | null = null;
+  afterEach(async () => {
+    await app?.close();
+    app = null;
+  });
+
+  it("hands an octet-stream body to the service unread, with its declared length, flag and hash", async () => {
+    const seen: Array<{ path: string; text: string; options: unknown }> = [];
+    const uploadWorkspaceFileStream = vi.fn(async (path: string, body: AsyncIterable<Buffer>, options: unknown) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of body) chunks.push(chunk);
+      seen.push({ path, text: Buffer.concat(chunks).toString(), options });
+      return { relativePath: path, fullPath: path, bytes: 5 };
+    });
+    app = buildApp({ uploadWorkspaceFileStream, uploadWorkspaceFile: vi.fn() });
+    const sha = "A".repeat(64);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/files/upload?relativePath=notes%2Fbig.md&expectAbsent=true",
+      headers: { "content-type": "application/octet-stream", "x-content-sha256": sha },
+      payload: Buffer.from("hello"),
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(seen).toEqual([
+      {
+        path: "notes/big.md",
+        text: "hello",
+        options: { declaredBytes: 5, expectAbsent: true, contentSha256: sha.toLowerCase() },
+      },
+    ]);
+  });
+
+  it("refuses a streamed upload without a length or with bad metadata, and caps JSON uploads at 1 MiB", async () => {
+    const uploadWorkspaceFileStream = vi.fn();
+    const uploadWorkspaceFile = vi.fn(async () => ({ relativePath: "a.md", fullPath: "a.md", bytes: 1 }));
+    app = buildApp({ uploadWorkspaceFileStream, uploadWorkspaceFile });
+    const stream = { "content-type": "application/octet-stream" };
+
+    const chunked = await app.inject({
+      method: "POST",
+      url: "/api/v1/files/upload?relativePath=a.md",
+      headers: stream,
+      payload: Readable.from([Buffer.from("no length")]),
+    });
+    const noPath = await app.inject({ method: "POST", url: "/api/v1/files/upload", headers: stream, payload: "x" });
+    const badHash = await app.inject({
+      method: "POST",
+      url: "/api/v1/files/upload?relativePath=a.md",
+      headers: { ...stream, "x-content-sha256": "not-a-hash" },
+      payload: "x",
+    });
+    const largeJson = await app.inject({
+      method: "POST",
+      url: "/api/v1/files/upload",
+      payload: { relativePath: "a.md", content: "x".repeat(1024 * 1024) },
+    });
+    const smallJson = await app.inject({
+      method: "POST",
+      url: "/api/v1/files/upload",
+      payload: { relativePath: "a.md", content: "x" },
+    });
+
+    expect(chunked.statusCode).toBe(411);
+    expect(noPath.statusCode).toBe(400);
+    expect(badHash.statusCode).toBe(400);
+    expect(largeJson.statusCode).toBe(413);
+    expect(smallJson.statusCode).toBe(201);
+    expect(uploadWorkspaceFileStream).not.toHaveBeenCalled();
+    expect(uploadWorkspaceFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the stream parser to the upload route", async () => {
+    app = buildApp({ createWorkspaceFileFromTemplate: vi.fn() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/files/templates/note/create",
+      headers: { "content-type": "application/octet-stream" },
+      payload: "x",
+    });
+    expect(response.statusCode).toBe(415);
   });
 });
 

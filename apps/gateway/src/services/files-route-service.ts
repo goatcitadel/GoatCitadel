@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { ConflictError, NotFoundError, PayloadTooLargeError, ValidationError } from "@goatcitadel/contracts";
 import { assertExistingPathRealpathAllowed, assertWritePathInJail } from "@goatcitadel/policy-engine";
+import type { Readable } from "node:stream";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
+import { UPLOAD_STAGING_DIR_NAME, commitStagedUpload, receiveUpload } from "./streamed-upload.js";
 
 export const MAX_FILE_UPLOAD_BYTES = resolvePositiveIntEnv("GOATCITADEL_MAX_FILE_UPLOAD_BYTES", 50_000_000);
 export const MAX_INLINE_FILE_DOWNLOAD_BYTES = resolvePositiveIntEnv(
@@ -25,12 +27,20 @@ export const DEFAULT_WORKSPACE_FILE_LIST_IGNORES = new Set([
   "node_modules",
   "playwright-report",
   "test-results",
+  UPLOAD_STAGING_DIR_NAME,
 ]);
 
 export interface FileUploadResult {
   relativePath: string;
   fullPath: string;
   bytes: number;
+}
+
+/** A streamed upload: the body's exact length (its Content-Length) and, optionally, its SHA-256. */
+export interface FileUploadStreamOptions {
+  declaredBytes: number;
+  expectAbsent?: boolean;
+  contentSha256?: string;
 }
 
 export interface FileDownloadResult {
@@ -89,6 +99,7 @@ export const filesRouteMethods = [
   "listWorkspacePathSuggestions",
   "pageWorkspaceFiles",
   "uploadWorkspaceFile",
+  "uploadWorkspaceFileStream",
 ] as const;
 
 export type FilesRouteMethod = (typeof filesRouteMethods)[number];
@@ -110,7 +121,7 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     content: string,
     options: { expectAbsent?: boolean } = {},
   ): Promise<FileUploadResult> => {
-    const normalized = normalizeRelativePath(relativePath);
+    const normalized = normalizeUploadTarget(relativePath);
     const bytes = Buffer.byteLength(content, "utf8");
     if (bytes > MAX_FILE_UPLOAD_BYTES) {
       throw new PayloadTooLargeError("File upload exceeds the configured workspace upload limit", {
@@ -128,18 +139,51 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
       await fs.writeFile(fullPath, content, { encoding: "utf8", flag: options.expectAbsent ? "wx" : "w" });
     } catch (error) {
       if (options.expectAbsent && (error as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new ConflictError({
-          code: "ALREADY_EXISTS",
-          message:
-            "A file already exists at this path, so nothing was written. Review the replacement before uploading.",
-          details: { relativePath: normalized },
-        });
+        throw uploadTargetExists(normalized);
       }
       throw error;
     }
 
+    return publishUpload(normalized, fullPath, bytes);
+  };
+
+  /**
+   * Streams an upload to a staging file and then moves it into place, so a large upload is never held in memory.
+   * The body must be UTF-8 text, as the JSON upload's `content` is; anything else is refused and nothing is written.
+   */
+  const uploadWorkspaceFileStream = async (
+    relativePath: string,
+    body: Readable,
+    options: FileUploadStreamOptions,
+  ): Promise<FileUploadResult> => {
+    const normalized = normalizeUploadTarget(relativePath);
+    const fullPath = path.resolve(deps.rootDir, deps.workspaceDir, normalized);
+    assertWritePathInJail(fullPath, deps.writeJailRoots);
+    const stagingDir = path.resolve(deps.rootDir, deps.workspaceDir, UPLOAD_STAGING_DIR_NAME);
+    assertWritePathInJail(stagingDir, deps.writeJailRoots);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const staged = await receiveUpload(body, {
+      stagingDir,
+      maxBytes: MAX_FILE_UPLOAD_BYTES,
+      declaredBytes: options.declaredBytes,
+      ...(options.contentSha256 ? { expectedSha256: options.contentSha256 } : {}),
+      inspect: (chunk) => decodeUploadText(decoder, chunk),
+      finish: () => decodeUploadText(decoder),
+    }).catch((error: unknown) => {
+      if (error instanceof PayloadTooLargeError) {
+        throw new PayloadTooLargeError(error.message, { ...error.details, relativePath: normalized });
+      }
+      throw error;
+    });
+    if ((await commitStagedUpload(staged.stagingPath, fullPath, options)) === "exists") {
+      throw uploadTargetExists(normalized);
+    }
+    return publishUpload(normalized, fullPath, staged.bytes);
+  };
+
+  const publishUpload = async (relativePath: string, fullPath: string, bytes: number): Promise<FileUploadResult> => {
     const result = {
-      relativePath: normalized,
+      relativePath,
       fullPath: deps.serializeRootPath(fullPath),
       bytes,
     };
@@ -280,6 +324,7 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     },
     listWorkspaceFiles,
     pageWorkspaceFiles,
+    uploadWorkspaceFileStream,
     listWorkspacePathSuggestions: async (root = ".", limit = 150): Promise<string[]> => {
       const maxItems = Math.max(limit * 3, 200);
       const files = await listWorkspaceFiles(root, maxItems);
@@ -333,6 +378,36 @@ function normalizeRelativePath(inputPath: string): string {
     throw new Error(`Absolute paths are not allowed: ${inputPath}`);
   }
   return normalized;
+}
+
+/** An upload target, which may not sit inside the Gateway's own staging folder. */
+function normalizeUploadTarget(inputPath: string): string {
+  const normalized = normalizeRelativePath(inputPath);
+  if (normalized.split("/", 1)[0]!.toLowerCase() === UPLOAD_STAGING_DIR_NAME) {
+    throw new ValidationError({
+      field: "relativePath",
+      message: `${UPLOAD_STAGING_DIR_NAME} is reserved for uploads in progress.`,
+    });
+  }
+  return normalized;
+}
+
+function uploadTargetExists(relativePath: string): ConflictError {
+  return new ConflictError({
+    code: "ALREADY_EXISTS",
+    message: "A file already exists at this path, so nothing was written. Review the replacement before uploading.",
+    details: { relativePath },
+  });
+}
+
+/** Validates a chunk of a text upload as UTF-8; called once more with no chunk to flush a trailing partial character. */
+function decodeUploadText(decoder: TextDecoder, chunk?: Buffer): void {
+  try {
+    if (chunk) decoder.decode(chunk, { stream: true });
+    else decoder.decode();
+  } catch {
+    throw new ValidationError({ message: "File upload must be UTF-8 text." });
+  }
 }
 
 function detectMimeType(filePath: string): string {

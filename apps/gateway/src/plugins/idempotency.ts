@@ -11,6 +11,7 @@ import { isSlackWebhookPath } from "../services/slack-webhook.js";
 import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
 import { isWhatsAppWebhookPath } from "../services/whatsapp-webhook.js";
 import type { MutationIdempotencyStore } from "../services/mutation-idempotency-store.js";
+import { isStreamedRequestBody } from "../services/streamed-upload.js";
 
 interface MutationIdempotencyState {
   method: string;
@@ -504,6 +505,21 @@ function hashMutationPayload(request: FastifyRequest): string {
       path: request.url.split("?", 1)[0] || request.url,
       provider,
       enabled,
+    });
+  }
+  if (isStreamedRequestBody((request as { body?: unknown }).body)) {
+    // A streamed upload's body is still unread here and may be tens of megabytes. Fingerprint
+    // what describes the attempt; the optional client SHA-256 is verified once the bytes arrive.
+    const header = (name: string) => {
+      const value = request.headers[name];
+      return typeof value === "string" ? value.trim().toLowerCase() : null;
+    };
+    return hashCanonicalPayload({
+      kind: "streamed_upload_v1",
+      path: request.url.split("?", 1)[0] || request.url,
+      query: request.query ?? null,
+      contentLength: header("content-length"),
+      contentSha256: header("x-content-sha256"),
     });
   }
   return hashCanonicalPayload(redactSecretFields((request as { body?: unknown }).body ?? null));
