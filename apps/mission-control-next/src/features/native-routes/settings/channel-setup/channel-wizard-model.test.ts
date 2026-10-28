@@ -96,7 +96,18 @@ describe("channelHosts", () => {
   it("names no host for an address it can't read, and lists a loopback bridge", () => {
     const definition = def({ hostFields: ["baseUrl"] });
     expect(channelHosts(definition, draft(), { baseUrl: "ntfy.example.com" })).toEqual([]);
-    expect(channelHosts(definition, draft(), { baseUrl: "http://127.0.0.1:8080" })).toEqual(["127.0.0.1"]);
+    expect(channelHosts(definition, draft(), { baseUrl: "http://127.0.0.1:8080" })).toEqual(["127.0.0.1:8080"]);
+  });
+
+  it("keeps an address's own port, so allowing it opens that port and not every port on the host", () => {
+    const definition = def({ hostFields: ["a", "b", "c"] });
+    expect(
+      channelHosts(definition, draft(), {
+        a: "http://bridge.lan:8080/api",
+        b: "https://chat.example.com:443/hook",
+        c: "http://ntfy.lan:80",
+      }),
+    ).toEqual(["bridge.lan:8080", "chat.example.com", "ntfy.lan"]);
   });
 
   it("names no host for a port-only address without a scheme, and does not throw", () => {
@@ -203,7 +214,7 @@ describe("channelHosts", () => {
         c: "http://[::1]:8080/",
         d: "https://xn--bcher-kva.example/",
       }),
-    ).toEqual(["my-host.example.co.uk", "192.168.0.199", "[::1]", "xn--bcher-kva.example"]);
+    ).toEqual(["my-host.example.co.uk", "192.168.0.199:3002", "[::1]:8080", "xn--bcher-kva.example"]);
   });
 
   it("never changes the definition, draft or values it reads", () => {

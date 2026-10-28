@@ -46,6 +46,13 @@ describe("missingHosts", () => {
     expect(missingHosts(["api.telegram.org"], ["*"])).toEqual([]);
   });
 
+  it("matches a host with a port against that exact entry or the whole host, never another port", () => {
+    expect(missingHosts(["127.0.0.1:8080"], ["127.0.0.1:8080"])).toEqual([]);
+    expect(missingHosts(["127.0.0.1:8080"], ["127.0.0.1"])).toEqual([]);
+    expect(missingHosts(["127.0.0.1:8080"], ["127.0.0.1:9090"])).toEqual(["127.0.0.1:8080"]);
+    expect(missingHosts(["127.0.0.1:8080"], [])).toEqual(["127.0.0.1:8080"]);
+  });
+
   it("names each missing host once", () => {
     expect(missingHosts(["a.example", "b.example", "a.example"], ["b.example"])).toEqual(["a.example"]);
   });

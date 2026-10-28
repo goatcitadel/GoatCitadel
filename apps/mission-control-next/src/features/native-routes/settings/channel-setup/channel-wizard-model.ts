@@ -269,18 +269,20 @@ const DNS_NAME = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/;
 const IPV6_LITERAL = /^\[[0-9a-f:.]+\]$/;
 
 /**
- * The one host an http or https address names. A wildcard such as `*` or `*.example.com` is not a host (the URL
- * parser takes one as a hostname, written plainly or percent-encoded, and the allowlist reads `*` as every host), and
- * neither is anything else that is not a DNS name or an IP address, so none of them is ever returned for the page to
- * offer.
+ * The one host an http or https address names, with its port when the address gives one, so allowing it allows that
+ * port and not every port on the host (the Gateway's allowlist matches `host:port` entries as well as bare hosts). A
+ * wildcard such as `*` or `*.example.com` is not a host (the URL parser takes one as a hostname, written plainly or
+ * percent-encoded, and the allowlist reads `*` as every host), and neither is anything else that is not a DNS name or
+ * an IP address, so none of them is ever returned for the page to offer.
  */
 function hostOfAddress(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-    const host = url.hostname.toLowerCase();
-    return DNS_NAME.test(host) || IPV6_LITERAL.test(host) ? host : undefined;
+    const hostname = url.hostname.toLowerCase();
+    if (!DNS_NAME.test(hostname) && !IPV6_LITERAL.test(hostname)) return undefined;
+    return url.port ? `${hostname}:${url.port}` : hostname;
   } catch {
     return undefined;
   }
