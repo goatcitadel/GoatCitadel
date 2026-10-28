@@ -168,6 +168,8 @@ export interface ChannelSetupInboundWebhook {
   /** The Gateway path the vendor posts to; `{connectionId}` stands for the saved connection's id. */
   pathTemplate: string;
   whenFieldEquals?: { fieldKey: string; value: string | boolean };
+  /** Receives on the webhook only while one of these fields is set; the listed fields are alternatives. */
+  whenAnyFieldSet?: string[];
 }
 
 export interface ChannelSetupWizardContent {

@@ -309,6 +309,33 @@ describe("channel hosts and inbound webhooks", () => {
     }
   });
 
+  it("expects Google Chat's webhook only in Chat app mode, which is when a service-account key is named", () => {
+    expect(definitionByKey("google-chat").wizard.inboundWebhook).toEqual({
+      pathTemplate: "/api/v1/integrations/connections/{connectionId}/google-chat/webhook",
+      whenAnyFieldSet: ["serviceAccountKeyEnv"],
+    });
+    const serviceAccountKey = definitionByKey("google-chat")
+      .wizard.steps.flatMap((step) => step.fields ?? [])
+      .find((field) => field.key === "serviceAccountKeyEnv");
+    expect(serviceAccountKey).toBeDefined();
+    for (const key of ["telegram", "slack", "whatsapp", "line", "qqbot", "wecom", "nextcloud-talk"]) {
+      expect(definitionByKey(key).wizard.inboundWebhook?.whenAnyFieldSet, key).toBeUndefined();
+    }
+  });
+
+  it("copies the fields an inbound webhook waits for rather than sharing the frozen table", () => {
+    const base = requireChannelSetupDefinition("channel.google-chat");
+    const wizard = { ...base.definition.wizard };
+    delete wizard.inboundWebhook;
+    const result = withPickerHints({ ...base, definition: { ...base.definition, wizard } });
+
+    expect(result.definition.wizard.inboundWebhook?.whenAnyFieldSet).toEqual(["serviceAccountKeyEnv"]);
+    expect(result.definition.wizard.inboundWebhook?.whenAnyFieldSet).not.toBe(
+      CHANNEL_INBOUND_WEBHOOKS["google-chat"]?.whenAnyFieldSet,
+    );
+    expect(Object.isFrozen(CHANNEL_INBOUND_WEBHOOKS["google-chat"]?.whenAnyFieldSet)).toBe(true);
+  });
+
   it("only names a Telegram receive mode the guide offers", () => {
     const receiveMode = definitionByKey("telegram")
       .wizard.steps.flatMap((step) => step.fields ?? [])

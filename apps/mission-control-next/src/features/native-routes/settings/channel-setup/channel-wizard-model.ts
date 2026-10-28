@@ -305,7 +305,15 @@ export function unreadableHostFields(
   return [...new Set(labels)];
 }
 
-/** The Gateway path a vendor posts to, for a saved connection whose webhook condition holds. */
+/** A value that counts as set for a webhook condition: some text, or a checked box. */
+function isSetValue(value: unknown): boolean {
+  return value === true || (typeof value === "string" && value.trim().length > 0);
+}
+
+/**
+ * The Gateway path a vendor posts to, for a saved connection whose webhook conditions hold: the field it must equal,
+ * and, when the channel names fields, at least one of them set.
+ */
 export function inboundWebhookPath(
   definition: ChannelSetupDefinition,
   values: Record<string, unknown>,
@@ -313,10 +321,11 @@ export function inboundWebhookPath(
 ): string | undefined {
   const inbound = definition.wizard.inboundWebhook;
   if (!connectionId || !inbound) return undefined;
+  const effectiveValues = wizardValuesWithDefaults(definition, values);
   const condition = inbound.whenFieldEquals;
-  if (condition && wizardValuesWithDefaults(definition, values)[condition.fieldKey] !== condition.value) {
-    return undefined;
-  }
+  if (condition && effectiveValues[condition.fieldKey] !== condition.value) return undefined;
+  const alternatives = inbound.whenAnyFieldSet;
+  if (alternatives?.length && !alternatives.some((key) => isSetValue(effectiveValues[key]))) return undefined;
   const encodedId = encodePathSegment(connectionId);
   return encodedId === undefined ? undefined : inbound.pathTemplate.replaceAll("{connectionId}", () => encodedId);
 }

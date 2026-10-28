@@ -5,7 +5,9 @@ type ChannelPickerHintEntry = Omit<ChannelSetupPickerHint, "order">;
 type FrozenHostRule = Readonly<Omit<ChannelSetupHostRule, "whenAnyFieldSet">> & {
   readonly whenAnyFieldSet: readonly string[];
 };
-type FrozenInboundWebhook = Readonly<ChannelSetupInboundWebhook>;
+type FrozenInboundWebhook = Readonly<Omit<ChannelSetupInboundWebhook, "whenAnyFieldSet">> & {
+  readonly whenAnyFieldSet?: readonly string[];
+};
 
 /**
  * How each channel appears in the channel picker, keyed by catalog key.
@@ -89,6 +91,8 @@ function inboundWebhookRoute(key: string): string {
 /**
  * Channels that receive on a Gateway webhook route (`routes/integration-webhooks-<key>-routes.ts`),
  * keyed by catalog key. Telegram receives on a webhook only when its receive mode is `webhook`.
+ * Google Chat receives only in Chat app mode, which is when a service-account key is named; its
+ * webhook mode only sends.
  */
 export const CHANNEL_INBOUND_WEBHOOKS: Readonly<Record<string, FrozenInboundWebhook>> = Object.freeze({
   telegram: Object.freeze({
@@ -100,7 +104,10 @@ export const CHANNEL_INBOUND_WEBHOOKS: Readonly<Record<string, FrozenInboundWebh
   line: Object.freeze({ pathTemplate: inboundWebhookRoute("line") }),
   qqbot: Object.freeze({ pathTemplate: inboundWebhookRoute("qqbot") }),
   wecom: Object.freeze({ pathTemplate: inboundWebhookRoute("wecom") }),
-  "google-chat": Object.freeze({ pathTemplate: inboundWebhookRoute("google-chat") }),
+  "google-chat": Object.freeze({
+    pathTemplate: inboundWebhookRoute("google-chat"),
+    whenAnyFieldSet: Object.freeze(["serviceAccountKeyEnv"]),
+  }),
   "nextcloud-talk": Object.freeze({ pathTemplate: inboundWebhookRoute("nextcloud-talk") }),
 });
 
@@ -126,9 +133,11 @@ function copyHostRule(rule: FrozenHostRule): ChannelSetupHostRule {
 }
 
 function copyInboundWebhook(webhook: FrozenInboundWebhook): ChannelSetupInboundWebhook {
+  const { whenAnyFieldSet, ...rest } = webhook;
   return {
-    ...webhook,
+    ...rest,
     ...(webhook.whenFieldEquals ? { whenFieldEquals: { ...webhook.whenFieldEquals } } : {}),
+    ...(whenAnyFieldSet ? { whenAnyFieldSet: [...whenAnyFieldSet] } : {}),
   };
 }
 

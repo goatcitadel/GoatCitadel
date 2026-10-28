@@ -163,6 +163,28 @@ describe.each([
     expect(container.textContent).toContain(AFTER_FINISH);
   });
 
+  it("tells a new Google Chat setup where the address will be only in Chat app mode, not in webhook mode", async () => {
+    const googleChat = byKey("google-chat");
+    await show(Component, propsFor(googleChat, {}, { webhookUrl: "https://chat.googleapis.com/v1/spaces/x" }));
+    await openFirstMessage(googleChat);
+    expect(container.textContent).not.toContain("You get this address");
+
+    await show(Component, propsFor(googleChat, {}, { serviceAccountKeyEnv: "GOOGLE_CHAT_KEY" }));
+    expect(container.textContent).toContain(AFTER_FINISH);
+  });
+
+  it("shows a saved Google Chat connection's address only in Chat app mode", async () => {
+    const googleChat = byKey("google-chat");
+    const edit = { lifecycleMode: "edit", connectionId: "conn-4" } as const;
+    await show(Component, propsFor(googleChat, edit, { webhookUrl: "[REDACTED]" }));
+    await openFirstMessage(googleChat);
+    expect(container.querySelector("code")).toBeNull();
+    expect(container.textContent).not.toContain("Webhook address");
+
+    await show(Component, propsFor(googleChat, edit, { serviceAccountKeyEnv: "GOOGLE_CHAT_KEY" }));
+    expect(codeText()).toBe(address("google-chat", "conn-4"));
+  });
+
   it("shows the real address of a saved Slack connection that is being changed", async () => {
     await show(Component, propsFor(byKey("slack"), { lifecycleMode: "edit", connectionId: "conn-1" }));
     await openFirstMessage(byKey("slack"));
@@ -209,7 +231,9 @@ describe("the webhook address on a saved connection in the Classic page", () => 
   });
 
   async function inspect(saved: ReturnType<typeof connection>) {
-    api.fetchChannelSetupDefinitions.mockResolvedValue({ items: [byKey("slack"), byKey("telegram")] });
+    api.fetchChannelSetupDefinitions.mockResolvedValue({
+      items: [byKey("slack"), byKey("telegram"), byKey("google-chat")],
+    });
     api.fetchChannelSetupDrafts.mockResolvedValue({ items: [] });
     api.fetchIntegrationConnections.mockResolvedValue({ items: [saved] });
     api.fetchAgenticChannelDeliveries.mockResolvedValue({ deliveries: [] });
@@ -253,5 +277,16 @@ describe("the webhook address on a saved connection in the Classic page", () => 
   it("shows the address of a Telegram connection that receives on a webhook", async () => {
     await inspect(connection("telegram", "conn-2", { receiveMode: "webhook" }));
     expect(section()?.querySelector("code")?.textContent).toBe(address("telegram", "conn-2"));
+  });
+
+  it("shows no address for a Google Chat connection in webhook mode", async () => {
+    await inspect(connection("google-chat", "conn-3", { webhookUrl: "https://chat.googleapis.com/v1/spaces/x" }));
+    expect(container.querySelector("#channel-operations")).not.toBeNull();
+    expect(section()).toBeNull();
+  });
+
+  it("shows the address of a Google Chat connection in Chat app mode", async () => {
+    await inspect(connection("google-chat", "conn-3", { serviceAccountKeyEnv: "GOOGLE_CHAT_KEY" }));
+    expect(section()?.querySelector("code")?.textContent).toBe(address("google-chat", "conn-3"));
   });
 });

@@ -351,6 +351,77 @@ describe("inboundWebhookPath", () => {
     const twice = def({ inboundWebhook: { pathTemplate: "/a/{connectionId}/b/{connectionId}" } });
     expect(inboundWebhookPath(twice, {}, "x y")).toBe("/a/x%20y/b/x%20y");
   });
+
+  describe("when it waits for a field to be set", () => {
+    const googleChat = def({
+      inboundWebhook: {
+        pathTemplate: "/hooks/{connectionId}/google-chat",
+        whenAnyFieldSet: ["serviceAccountKeyEnv"],
+      },
+    });
+
+    it("gives the path only once a named field is set to text or true", () => {
+      expect(inboundWebhookPath(googleChat, {}, "c-1")).toBeUndefined();
+      expect(inboundWebhookPath(googleChat, { webhookUrl: "https://chat.googleapis.com/v1/x" }, "c-1")).toBeUndefined();
+      for (const empty of ["", "   ", false, 0, null, [], {}]) {
+        expect(inboundWebhookPath(googleChat, { serviceAccountKeyEnv: empty }, "c-1"), String(empty)).toBeUndefined();
+      }
+      expect(inboundWebhookPath(googleChat, { serviceAccountKeyEnv: "GOOGLE_CHAT_KEY" }, "c-1")).toBe(
+        "/hooks/c-1/google-chat",
+      );
+      const flag = def({ inboundWebhook: { pathTemplate: "/hooks/{connectionId}", whenAnyFieldSet: ["enabled"] } });
+      expect(inboundWebhookPath(flag, { enabled: true }, "c-1")).toBe("/hooks/c-1");
+      expect(inboundWebhookPath(flag, { enabled: false }, "c-1")).toBeUndefined();
+    });
+
+    it("takes the listed fields as alternatives", () => {
+      const either = def({
+        inboundWebhook: { pathTemplate: "/hooks/{connectionId}", whenAnyFieldSet: ["keyEnv", "key"] },
+      });
+      expect(inboundWebhookPath(either, { key: "[REDACTED]" }, "c-1")).toBe("/hooks/c-1");
+      expect(inboundWebhookPath(either, { keyEnv: "KEY" }, "c-1")).toBe("/hooks/c-1");
+      expect(inboundWebhookPath(either, {}, "c-1")).toBeUndefined();
+    });
+
+    it("applies a field default before asking whether it is set", () => {
+      const withDefault = def({
+        inboundWebhook: { pathTemplate: "/hooks/{connectionId}", whenAnyFieldSet: ["keyEnv"] },
+        steps: [
+          {
+            id: "collect",
+            kind: "field-collection",
+            title: "Collect",
+            fields: [
+              { key: "keyEnv", label: "Key", type: "text", required: false, explanation: "x", defaultValue: "KEY" },
+            ],
+          },
+        ],
+      });
+      expect(inboundWebhookPath(withDefault, {}, "c-1")).toBe("/hooks/c-1");
+    });
+
+    it("needs both this and the field it equals, when both are given", () => {
+      const both = def({
+        inboundWebhook: {
+          pathTemplate: "/hooks/{connectionId}",
+          whenFieldEquals: { fieldKey: "receiveMode", value: "webhook" },
+          whenAnyFieldSet: ["keyEnv"],
+        },
+      });
+      expect(inboundWebhookPath(both, { receiveMode: "webhook", keyEnv: "KEY" }, "c-1")).toBe("/hooks/c-1");
+      expect(inboundWebhookPath(both, { receiveMode: "webhook" }, "c-1")).toBeUndefined();
+      expect(inboundWebhookPath(both, { receiveMode: "poll", keyEnv: "KEY" }, "c-1")).toBeUndefined();
+    });
+
+    it("treats an empty list as no condition, and changes nothing it reads", () => {
+      const none = def({ inboundWebhook: { pathTemplate: "/hooks/{connectionId}", whenAnyFieldSet: [] } });
+      expect(inboundWebhookPath(none, {}, "c-1")).toBe("/hooks/c-1");
+      const values = { serviceAccountKeyEnv: "KEY" };
+      const before = JSON.stringify([googleChat, values]);
+      inboundWebhookPath(googleChat, values, "c-1");
+      expect(JSON.stringify([googleChat, values])).toBe(before);
+    });
+  });
 });
 
 describe("receivesOnWebhook", () => {
