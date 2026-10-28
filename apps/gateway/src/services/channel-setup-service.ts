@@ -402,7 +402,7 @@ export async function testChannelSetupDraft(
     recommendedNextAction:
       status === "error"
         ? "Review the failing checks, correct the draft, then run the test again."
-        : "Check that the test message arrived, then finalize.",
+        : passedTestNextAction(liveChecks.probe),
     probe: liveChecks.probe,
   };
   const updated = await host.storage.channelSetupDrafts.update(draftId, {
@@ -977,4 +977,19 @@ function defaultNextStepsForFailureCategory(category: ChannelSetupFailureCategor
 
 function firstFailureCategory(issues: ChannelSetupIssue[]): ChannelSetupFailureCategory | undefined {
   return issues.find((issue) => issue.level === "error" || issue.level === "warn")?.failureCategory;
+}
+
+/**
+ * The next step after a test without errors, worded for what the test did with its message: only a message that was
+ * sent and is still there can be looked for. Many probes delete theirs straight away, and some send none (dry run, no
+ * destination, or a mode with no probe).
+ */
+function passedTestNextAction(probe: ConnectorDiagnosticReport["probe"]): string {
+  const steps = probe?.steps ?? [];
+  const passed = (suffix: string) => steps.some((step) => step.key.endsWith(suffix) && step.status === "pass");
+  if (!passed("_sandbox_send")) return "No test message was sent. Finalize when you're ready.";
+  if (passed("_sandbox_cleanup")) {
+    return "The test message was sent and then deleted, so there's nothing to look for. Finalize when you're ready.";
+  }
+  return "Check that the test message arrived, then finalize.";
 }

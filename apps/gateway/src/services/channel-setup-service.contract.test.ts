@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChannelSetupDraft, ChannelSetupEvidenceCreateInput, IntegrationConnection } from "@goatcitadel/contracts";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-diagnostic-checks.js";
+import { mapProbeStepsToChecks } from "./channel-probe-result.js";
 import {
   createChannelSetupDraft,
   discardChannelSetupDraft,
@@ -744,13 +745,50 @@ describe("channel-setup-service contract behavior", () => {
   });
 
   it.each([
-    ["pass", "Check that the test message arrived, then finalize."],
-    ["fail", "Review the failing checks, correct the draft, then run the test again."],
-  ] as const)("words the next step after a live test whose sandbox send is a %s", async (status, nextAction) => {
+    {
+      when: "a message was sent and is still there",
+      steps: [{ key: "ntfy_sandbox_send", status: "pass" }],
+      status: "ok",
+      nextAction: "Check that the test message arrived, then finalize.",
+    },
+    {
+      when: "the message was sent and then deleted",
+      steps: [
+        { key: "ntfy_sandbox_send", status: "pass" },
+        { key: "ntfy_sandbox_cleanup", status: "pass" },
+      ],
+      status: "ok",
+      nextAction:
+        "The test message was sent and then deleted, so there's nothing to look for. Finalize when you're ready.",
+    },
+    {
+      when: "the message was sent but not deleted",
+      steps: [
+        { key: "ntfy_sandbox_send", status: "pass" },
+        { key: "ntfy_sandbox_cleanup", status: "warn" },
+      ],
+      status: "warn",
+      nextAction: "Check that the test message arrived, then finalize.",
+    },
+    {
+      when: "a dry run sent nothing",
+      steps: [{ key: "ntfy_sandbox_send", status: "skipped" }],
+      status: "ok",
+      nextAction: "No test message was sent. Finalize when you're ready.",
+    },
+    {
+      when: "the send failed",
+      steps: [{ key: "ntfy_sandbox_send", status: "fail" }],
+      status: "error",
+      nextAction: "Review the failing checks, correct the draft, then run the test again.",
+    },
+  ] as const)("words the next step after a live test where $when", async ({ steps, status, nextAction }) => {
     const host = createHost();
     host.buildIntegrationConnectionChecks = vi.fn(() => []);
+    const probeSteps = steps.map((step) => ({ ...step, label: step.key, message: "Sandbox notification result." }));
     host.runIntegrationConnectionLiveChecks = vi.fn(async () => ({
-      checks: [{ key: "ntfy_sandbox_send", status, message: "Sandbox notification result." }],
+      checks: mapProbeStepsToChecks(probeSteps),
+      probe: { kind: "ntfy", checkedAt: "2026-10-28T00:00:00.000Z", steps: probeSteps },
     }));
     const created = await createChannelSetupDraft(host, { catalogId: "channel.ntfy", lifecycleMode: "create" });
     const configured = await host.storage.channelSetupDrafts.update(created.draftId, {
@@ -760,7 +798,7 @@ describe("channel-setup-service contract behavior", () => {
 
     const result = await testChannelSetupDraft(host, configured.draftId, configured.revision);
 
-    expect(result.status).toBe(status === "pass" ? "ok" : "error");
+    expect(result.status).toBe(status);
     expect(result.recommendedNextAction).toBe(nextAction);
   });
 
