@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
@@ -26,7 +27,8 @@ export function SettingsApprovalDialog({
 }: {
   approvalId: string;
   workspaceId?: string;
-  onResolved: () => Promise<unknown> | void;
+  /** Called after a decision with the approval's re-read status, so the owner can report a denial as a denial. */
+  onResolved: (status: ApprovalRequest["status"] | undefined) => Promise<unknown> | void;
 }) {
   const access = useProjectAccess(workspaceId);
   const queryClient = useQueryClient();
@@ -53,9 +55,10 @@ export function SettingsApprovalDialog({
     void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
   };
 
+  // Not a live region: the cockpit live-region budget only goes down, and this sits under the change's own status.
   if (query.isError)
     return (
-      <p role="alert" className="text-sm text-status-failed">
+      <p className="text-sm text-status-failed">
         The approval for this change could not be loaded. Use Refresh change status, or decide it in Inbox.
       </p>
     );
@@ -93,7 +96,10 @@ export function SettingsApprovalDialog({
             onResolved={() => {
               setOpen(false);
               settle();
-              void onResolved();
+              void fetchApproval(approvalId, { workspaceId })
+                .then((record) => record.status)
+                .catch(() => undefined)
+                .then((status) => onResolved(status));
             }}
             onInvalidated={(text) =>
               settle(text ?? "The approval changed. Review the refreshed record before deciding.")
