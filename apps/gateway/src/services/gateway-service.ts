@@ -480,6 +480,7 @@ import {
 } from "./runtime-configuration-service.js";
 import { WebSearchCredentialService } from "./web-search-credential-service.js";
 import { composeCapabilityConnectors } from "./capability-connectors-composition.js";
+import { composeCapabilityToolUsage } from "./capability-tools-composition.js";
 import { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
 import { applyRuntimeBrowserBackendDefaults } from "./runtime-browser-backend-defaults.js";
 import { submitEvolutionWebSearchCredential } from "./web-search-credential-change.js";
@@ -3926,6 +3927,7 @@ export class GatewayService {
         deploymentProfile: () => this.config.assistant.deploymentProfile,
         recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       }),
+      capabilityToolUsage: composeCapabilityToolUsage({ chatToolRuns: this.storage.chatToolRuns }),
     };
   }
 
