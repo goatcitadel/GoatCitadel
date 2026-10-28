@@ -115,6 +115,7 @@ export * from "./agents.js";
 export * from "./tools.js";
 export * from "./tool-grants.js";
 export * from "./tool-catalog.js";
+export * from "./tool-groups.js";
 export * from "./tool-effect-truth.js";
 export * from "./internal-tooling.js";
 export * from "./ingestion.js";
