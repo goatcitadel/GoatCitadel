@@ -158,6 +158,16 @@ describe("Telegram receive mode setup", () => {
     expect(field("webhookSecretEnv").visibleWhenFieldEquals).toEqual(visibleWhen);
   });
 
+  it("says plainly what the pasted webhook secret is for, without a storage excuse", () => {
+    const pasted = field("webhookSecret");
+    const copy = `${pasted.explanation} ${pasted.whyNeeded}`;
+
+    expect(pasted.whyNeeded).toBe(
+      "Telegram sends this secret with each message it delivers, once you give Telegram the same secret when you register the web address. GoatCitadel refuses any delivery that doesn't carry it.",
+    );
+    expect(copy).not.toMatch(/env-backed|not available yet/i);
+  });
+
   it("only asks for a public address when web-address delivery is chosen", () => {
     const line = "A public HTTPS address only if you choose web-address delivery.";
     const raw = createTelegramDefinition().definition.wizard.prerequisites;

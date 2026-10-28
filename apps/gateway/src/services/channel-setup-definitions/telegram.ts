@@ -266,7 +266,7 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               visibleWhenFieldEquals: { fieldKey: "receiveMode", value: "webhook" },
               explanation: "Optional direct secret-token entry for Telegram inbound webhook verification.",
               whyNeeded:
-                "Lets GoatCitadel verify Telegram webhook deliveries when env-backed secret storage is not available yet.",
+                "Telegram sends this secret with each message it delivers, once you give Telegram the same secret when you register the web address. GoatCitadel refuses any delivery that doesn't carry it.",
               looksLike: "A long random secret token.",
               commonMistakes: [
                 "Reusing the bot token instead of a separate webhook secret.",
