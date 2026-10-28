@@ -13,6 +13,7 @@ import type {
   ChannelDeliveryRuntimeRecord,
   ChannelDeliveryRuntimeSendInput,
 } from "../channel-delivery-runtime-service.js";
+import type { OwnDeliveryOption } from "../comms-service.js";
 
 const CHANNEL_DELIVERY_DEFAULT_CHUNK_LIMIT = 3_900;
 const CHANNEL_DELIVERY_FAILURE_STATUSES = new Set<ChannelDeliveryStatus>([
@@ -42,7 +43,15 @@ type ToolInvokeResultLike = Omit<ToolInvokeResult, "outcome"> & {
 
 type ChannelDeliverySender = (input: ChannelSendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
 
-export function buildChannelDeliveryPayload(input: ChannelSendInput, channelKey: string): Record<string, unknown> {
+/**
+ * The queued payload uses an explicit field list, so a server-only own-delivery fact (`own`) is persisted as an
+ * internal `ownDelivery: true` and turned back into the option when the queue drains. It never comes from `input`.
+ */
+export function buildChannelDeliveryPayload(
+  input: ChannelSendInput,
+  channelKey: string,
+  own?: OwnDeliveryOption,
+): Record<string, unknown> {
   const interactiveApprovalPayload = JSON.stringify({
     interactiveActions: input.interactiveActions ?? null,
     interactiveActionTemplate: input.interactiveActionTemplate ?? null,
@@ -80,7 +89,13 @@ export function buildChannelDeliveryPayload(input: ChannelSendInput, channelKey:
     permissionProfileId: input.permissionProfileId,
     localOperatorOverrideId: input.localOperatorOverrideId,
     surface: input.surface,
+    ...(own?.ownDelivery === true ? { ownDelivery: true } : {}),
   };
+}
+
+/** The own-delivery option a queued payload was enqueued with; anything but a literal `true` means not own. */
+export function readChannelDeliveryOwnDelivery(payload: Record<string, unknown>): OwnDeliveryOption | undefined {
+  return payload.ownDelivery === true ? { ownDelivery: true } : undefined;
 }
 
 function getChannelDeliveryChunkLimit(channelKey: string): number {
@@ -322,6 +337,7 @@ export function buildChannelDeliveryIdempotencyKey(input: ChannelSendInput, chan
   if (input.effectId?.trim()) {
     return `channel-delivery:effect:${input.effectId.trim()}`;
   }
+  // These hashes leave out the own-delivery fact on purpose: a key names the message, not who may send it.
   if (input.sessionId?.trim() && input.replyToMessageId?.trim()) {
     const hash = createHash("sha256")
       .update(JSON.stringify(buildChannelDeliveryPayload(input, channelKey)))
@@ -359,6 +375,28 @@ export function mapPersistedChannelDeliveryRuntimeStatus(
     : deliveryStatus === "retrying"
       ? "retrying"
       : "queued";
+}
+
+/** The tool-shaped result a channel send returns once its delivery is queued. */
+export function projectQueuedChannelDeliveryResult(queued: ChannelDeliveryRuntimeRecord): Record<string, unknown> {
+  return {
+    deliveryId: queued.deliveryId,
+    status:
+      queued.status === "sent"
+        ? "sent"
+        : queued.status === "failed" || queued.status === "stale" || queued.status === "manual_reconciliation_required"
+          ? "failed"
+          : "queued",
+    deliveryStatus: queued.deliveryStatus ?? (queued.status === "sent" ? "sent" : "retrying"),
+    channelKey: queued.channelKey,
+    target: queued.target,
+    ...(queued.providerMessageId ? { providerMessageId: queued.providerMessageId } : {}),
+    ...(queued.error ? { error: queued.error, fallbackReason: queued.fallbackReason ?? queued.error } : {}),
+    ...(queued.deliveryDiagnostics ? { deliveryDiagnostics: queued.deliveryDiagnostics } : {}),
+    createdAt: queued.createdAt,
+    updatedAt: queued.updatedAt,
+    ...(queued.nextAttemptAt ? { nextAttemptAt: queued.nextAttemptAt } : {}),
+  };
 }
 
 function assertChannelSendOutcome(result: Record<string, unknown>): void {

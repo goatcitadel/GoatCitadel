@@ -18,7 +18,9 @@ function createGatewayHarness() {
 }
 
 const permissionStorages: Storage[] = [];
-afterEach(() => { for (const storage of permissionStorages.splice(0)) storage.close(); });
+afterEach(() => {
+  for (const storage of permissionStorages.splice(0)) storage.close();
+});
 
 function createPermissionGatewayHarness() {
   const gateway = createGatewayHarness();
@@ -30,21 +32,37 @@ function createPermissionGatewayHarness() {
 }
 
 async function createReviewedDefaultProfile(gateway: GatewayService) {
-  const review = await gateway.reviewPermissionProfileSelection({ operation: "defaults", scope: "workspace",
-    scopeRef: "workspace-a", defaultForSurfaces: ["code", "cowork"], createdBy: "operator-a" });
-  return await gateway.createPermissionProfile({ label: "Review", scope: "workspace", scopeRef: "workspace-a",
-    approvalMode: "approve_risky", defaultForSurfaces: ["code", "cowork"], createdBy: "operator-a",
-    expectedSelectionRevision: review.revision });
+  const review = await gateway.reviewPermissionProfileSelection({
+    operation: "defaults",
+    scope: "workspace",
+    scopeRef: "workspace-a",
+    defaultForSurfaces: ["code", "cowork"],
+    createdBy: "operator-a",
+  });
+  return await gateway.createPermissionProfile({
+    label: "Review",
+    scope: "workspace",
+    scopeRef: "workspace-a",
+    approvalMode: "approve_risky",
+    defaultForSurfaces: ["code", "cowork"],
+    createdBy: "operator-a",
+    expectedSelectionRevision: review.revision,
+  });
 }
 
 describe("GatewayService low-hanging facade delegation", () => {
   it.each(["fs.read", "channel.send", "mcp.invoke"])(
-    "blocks approved worker-owned %s before any local executor runs", async (toolName) => {
+    "blocks approved worker-owned %s before any local executor runs",
+    async (toolName) => {
       const gateway = createGatewayHarness();
       gateway.storage = {
         pendingApprovalActions: {
-          find: vi.fn(async () => ({ approvalId: "worker-approval", actionType: "tool.invoke", resolutionStatus: "pending",
-            request: { toolName, runId: "worker-run", turnId: "worker-turn" } })),
+          find: vi.fn(async () => ({
+            approvalId: "worker-approval",
+            actionType: "tool.invoke",
+            resolutionStatus: "pending",
+            request: { toolName, runId: "worker-run", turnId: "worker-turn" },
+          })),
           markResolved: vi.fn(),
         },
         approvals: { get: vi.fn(async () => ({ linkage: { runId: "worker-run", turnId: "worker-turn" } })) },
@@ -55,8 +73,9 @@ describe("GatewayService low-hanging facade delegation", () => {
       };
       gateway.policyEngine = { executeApprovedAction: vi.fn() };
       gateway.executeApprovedExternalRuntimePendingAction = vi.fn();
-      await expect((GatewayService.prototype as any).executeApprovedPendingAction.call(gateway, "worker-approval"))
-        .rejects.toBeInstanceOf(RemoteWorkerApprovalResumeRequiredError);
+      await expect(
+        (GatewayService.prototype as any).executeApprovedPendingAction.call(gateway, "worker-approval"),
+      ).rejects.toBeInstanceOf(RemoteWorkerApprovalResumeRequiredError);
       expect(gateway.policyEngine.executeApprovedAction).not.toHaveBeenCalled();
       expect(gateway.executeApprovedExternalRuntimePendingAction).not.toHaveBeenCalled();
       expect(gateway.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalled();
@@ -461,9 +480,13 @@ describe("GatewayService low-hanging facade delegation", () => {
   it("keeps explicit-context source revalidation bound through the shipped durable workflow host", async () => {
     const gateway = createGatewayHarness();
     gateway.revalidateChatRoutedContextSnapshot = vi.fn(async () => undefined);
-    const host = (GatewayService.prototype as unknown as {
-      buildDurableChatTurnWorkflowHost(this: unknown): { revalidateChatRoutedContextSnapshot(snapshot: unknown): Promise<void> };
-    }).buildDurableChatTurnWorkflowHost.call(gateway);
+    const host = (
+      GatewayService.prototype as unknown as {
+        buildDurableChatTurnWorkflowHost(this: unknown): {
+          revalidateChatRoutedContextSnapshot(snapshot: unknown): Promise<void>;
+        };
+      }
+    ).buildDurableChatTurnWorkflowHost.call(gateway);
     const snapshot = { snapshotId: "admitted-snapshot" };
     await expect(host.revalidateChatRoutedContextSnapshot(snapshot)).resolves.toBeUndefined();
     expect(gateway.revalidateChatRoutedContextSnapshot).toHaveBeenCalledExactlyOnceWith(snapshot);
@@ -960,37 +983,63 @@ describe("GatewayService low-hanging facade delegation", () => {
   it("reconciles reviewed permission profile defaults through the atomic repository owner", async () => {
     const gateway = createPermissionGatewayHarness();
     const profile = await createReviewedDefaultProfile(gateway);
-    const reviewInput = { operation: "defaults" as const, profileId: profile.profileId,
-      defaultForSurfaces: ["chat" as const], createdBy: "operator-a" };
+    const reviewInput = {
+      operation: "defaults" as const,
+      profileId: profile.profileId,
+      defaultForSurfaces: ["chat" as const],
+      createdBy: "operator-a",
+    };
     const review = await gateway.reviewPermissionProfileSelection(reviewInput);
-    expect(review.activeProfiles.filter((item) => item.profile.profileId === profile.profileId)
-      .map((item) => item.activation.surface).sort()).toEqual(["code", "cowork"]);
+    expect(
+      review.activeProfiles
+        .filter((item) => item.profile.profileId === profile.profileId)
+        .map((item) => item.activation.surface)
+        .sort(),
+    ).toEqual(["code", "cowork"]);
 
-    const update = { updatedBy: "operator-a", defaultForSurfaces: ["chat" as const],
-      expectedRevision: profile.revision, expectedSelectionRevision: review.revision };
+    const update = {
+      updatedBy: "operator-a",
+      defaultForSurfaces: ["chat" as const],
+      expectedRevision: profile.revision,
+      expectedSelectionRevision: review.revision,
+    };
     const updated = await gateway.updatePermissionProfile(profile.profileId, update);
     expect(updated.revision).not.toBe(profile.revision);
     const after = await gateway.reviewPermissionProfileSelection(reviewInput);
-    expect(after.activeProfiles.filter((item) => item.profile.profileId === profile.profileId)
-      .map((item) => item.activation.surface)).toEqual(["chat"]);
-    await expect(gateway.updatePermissionProfile(profile.profileId, update)).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    expect(
+      after.activeProfiles
+        .filter((item) => item.profile.profileId === profile.profileId)
+        .map((item) => item.activation.surface),
+    ).toEqual(["chat"]);
+    await expect(gateway.updatePermissionProfile(profile.profileId, update)).rejects.toMatchObject({
+      code: "WRITE_CONFLICT",
+    });
     expect((await gateway.reviewPermissionProfileSelection(reviewInput)).revision).toBe(after.revision);
   });
 
   it("resolves custom permission profile defaults after reviewed create and update", async () => {
     const gateway = createPermissionGatewayHarness();
     const profile = await createReviewedDefaultProfile(gateway);
-    const resolve = (surface: "chat" | "code" | "cowork") => gateway.resolveToolPolicyContext({
-      operatorId: "operator-a", workspaceId: "workspace-a", surface,
-    });
+    const resolve = (surface: "chat" | "code" | "cowork") =>
+      gateway.resolveToolPolicyContext({
+        operatorId: "operator-a",
+        workspaceId: "workspace-a",
+        surface,
+      });
     await expect(resolve("code")).resolves.toMatchObject({ permissionProfileId: profile.profileId });
     await expect(resolve("cowork")).resolves.toMatchObject({ permissionProfileId: profile.profileId });
     await expect(resolve("chat")).resolves.toMatchObject({ permissionProfileId: "safe" });
-    const review = await gateway.reviewPermissionProfileSelection({ operation: "defaults", profileId: profile.profileId,
-      defaultForSurfaces: ["chat"], createdBy: "operator-a" });
+    const review = await gateway.reviewPermissionProfileSelection({
+      operation: "defaults",
+      profileId: profile.profileId,
+      defaultForSurfaces: ["chat"],
+      createdBy: "operator-a",
+    });
     await gateway.updatePermissionProfile(profile.profileId, {
-      updatedBy: "operator-a", defaultForSurfaces: ["chat"],
-      expectedRevision: profile.revision, expectedSelectionRevision: review.revision,
+      updatedBy: "operator-a",
+      defaultForSurfaces: ["chat"],
+      expectedRevision: profile.revision,
+      expectedSelectionRevision: review.revision,
     });
     await expect(resolve("code")).resolves.toMatchObject({ permissionProfileId: "safe" });
     await expect(resolve("cowork")).resolves.toMatchObject({ permissionProfileId: "safe" });
@@ -1064,7 +1113,13 @@ describe("GatewayService low-hanging facade delegation", () => {
           updatedBy: "operator-a",
           label: "Updated",
         }),
-      () => GatewayService.prototype.archivePermissionProfile.call(gateway, profile.profileId, "operator-a", profile.revision),
+      () =>
+        GatewayService.prototype.archivePermissionProfile.call(
+          gateway,
+          profile.profileId,
+          "operator-a",
+          profile.revision,
+        ),
       () =>
         GatewayService.prototype.activatePermissionProfile.call(gateway, {
           profileId: profile.profileId,
@@ -1580,14 +1635,18 @@ describe("GatewayService low-hanging facade delegation", () => {
       "channel.send",
       "system-integration-reply",
     );
-    expect(gateway.commsSend).toHaveBeenCalledWith({
-      connectionId: "discord-1",
-      target: "room-1",
-      message: "reply from assistant",
-      replyToMessageId: "provider-msg-1",
-      sessionId: "session-1",
-      agentId: "assistant",
-    });
+    // The reply is GoatCitadel's own delivery, so a switched-off Messaging group does not stop it.
+    expect(gateway.commsSend).toHaveBeenCalledWith(
+      {
+        connectionId: "discord-1",
+        target: "room-1",
+        message: "reply from assistant",
+        replyToMessageId: "provider-msg-1",
+        sessionId: "session-1",
+        agentId: "assistant",
+      },
+      { ownDelivery: true },
+    );
     expect(gateway.requireExecutedToolResult).toHaveBeenCalledWith("channel.send", {
       outcome: "executed",
       result: {
@@ -1749,6 +1808,7 @@ describe("GatewayService low-hanging facade delegation", () => {
         idempotencyKey: "delivery-key-inbound",
         replyToMessageId: "provider-source-1",
       }),
+      { ownDelivery: true },
     );
     expect(onDeliveryEnqueued).toHaveBeenCalledWith({
       deliveryId: "delivery-1",

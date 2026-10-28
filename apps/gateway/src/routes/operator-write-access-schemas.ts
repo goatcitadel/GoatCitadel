@@ -3,6 +3,7 @@ import {
   CURATED_FS_MUTATION_TOOLS,
   GLOBAL_TOOL_ACCESS_POSTURES,
   OPERATOR_WRITE_ROOT_PRESETS,
+  SWITCHABLE_TOOL_GROUP_IDS,
   isOperatorWriteRootLabel,
   isOperatorWriteRootPathText,
 } from "@goatcitadel/contracts";
@@ -49,3 +50,17 @@ export const globalToolAccessChangeFields = {
 } as const;
 
 export const globalToolAccessChangeSchema = z.object(globalToolAccessChangeFields).strict();
+
+/** The plain refusal for Core, or an id that isn't a switchable group. */
+export const TOOL_GROUP_REFUSAL = "That tool group can't be switched off.";
+
+/** One switchable tool group per save; Core is not in the enum, so it can never be named. */
+export const toolGroupChangeFields = {
+  // A missing id keeps zod's own "required" message.
+  groupId: z.enum(SWITCHABLE_TOOL_GROUP_IDS, {
+    error: (issue) => (issue.input === undefined ? undefined : TOOL_GROUP_REFUSAL),
+  }),
+  enabled: z.boolean(),
+} as const;
+
+export const toolGroupChangeSchema = z.object(toolGroupChangeFields).strict();

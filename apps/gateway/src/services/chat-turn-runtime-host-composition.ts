@@ -209,7 +209,7 @@ function composeTranscriptIngress(source: ChatTurnRuntimeHost): ChatTurnTranscri
 
 function composeIntegrationDispatch(source: ChatTurnRuntimeHost): ChatTurnIntegrationDispatch {
   return {
-    commsSend: (input) => source.commsSend(input),
+    commsSend: (input, options) => source.commsSend(input, options),
     ensureSessionInternalToolGrant: (sessionId, toolName, reason) =>
       source.ensureSessionInternalToolGrant(sessionId, toolName, reason),
     requireExecutedToolResult: (toolName, result) => source.requireExecutedToolResult(toolName, result),

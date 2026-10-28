@@ -480,6 +480,7 @@ import {
 } from "./runtime-configuration-service.js";
 import { WebSearchCredentialService } from "./web-search-credential-service.js";
 import { composeCapabilityConnectors } from "./capability-connectors-composition.js";
+import { composeCapabilityTools, composeCapabilityToolUsage } from "./capability-tools-composition.js";
 import { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
 import { applyRuntimeBrowserBackendDefaults } from "./runtime-browser-backend-defaults.js";
 import { submitEvolutionWebSearchCredential } from "./web-search-credential-change.js";
@@ -795,7 +796,10 @@ import {
   buildChannelDeliveryIdempotencyKey,
   buildChannelDeliveryPayload,
   mapPersistedChannelDeliveryRuntimeStatus,
+  projectQueuedChannelDeliveryResult,
 } from "./gateway/channel-delivery-helpers.js";
+import { buildChannelReplyDeliveryInput } from "./channel-reply-delivery-input.js";
+import { isOwnAutonomousDelivery } from "./autonomous-delivery-ownership.js";
 import {
   assertDeploymentProfileUpdate as assertGatewayDeploymentProfileUpdate,
   assertFirecrawlRuntimeUpdate as assertGatewayFirecrawlRuntimeUpdate,
@@ -926,7 +930,10 @@ import {
   commsGmailSend as commsGmailSendImpl,
   commsCalendarList as commsCalendarListImpl,
   commsCalendarCreate as commsCalendarCreateImpl,
+  OWN_DELIVERY,
   type CommsHost,
+  type CommsInvokeResult,
+  type OwnDeliveryOption,
 } from "./comms-service.js";
 import { buildChannelVoiceReplyAttachment } from "./channel-voice-reply-service.js";
 import { listChatModelSuggestions } from "./chat-model-suggestions.js";
@@ -3203,8 +3210,8 @@ export class GatewayService {
         connectorDelivery: {
           storage: this.storage,
           requireConnectorRecord: async (connectorId) => await this.requireConnectorRecord(connectorId),
-          commsSend: async (input) => await this.commsSend(input),
-          commsReply: async (input) => await this.commsReply(input),
+          commsSend: async (input, options) => await this.commsSend(input, options),
+          commsReply: async (input, options) => await this.commsReply(input, options),
           commsReact: async (input) => await this.commsReact(input),
           commsUnsend: async (input) => await this.commsUnsend(input),
           commsTyping: async (input) => await this.commsTyping(input),
@@ -3720,7 +3727,7 @@ export class GatewayService {
       closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
       collectCapabilityUpgradeSuggestions: async (input) => await this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
-      commsSend: async (input) => await this.commsSend(input),
+      commsSend: async (input, options) => await this.commsSend(input, options),
       completeActiveChatTurnStream: (turnId, registrationId) =>
         this.completeActiveChatTurnStream(turnId, registrationId),
       createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
@@ -3920,6 +3927,14 @@ export class GatewayService {
         deploymentProfile: () => this.config.assistant.deploymentProfile,
         recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       }),
+      capabilityToolUsage: composeCapabilityToolUsage({ chatToolRuns: this.storage.chatToolRuns }),
+      capabilityTools: composeCapabilityTools({
+        tools: this,
+        settings: this,
+        deploymentProfile: () => this.config.assistant.deploymentProfile,
+        safeWriteFallbackDir: () =>
+          path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out"),
+      }),
     };
   }
 
@@ -4018,7 +4033,7 @@ export class GatewayService {
       ensureSessionInternalToolGrant: async (sessionId, toolName, reason) =>
         await this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
       requireExecutedToolResult: (toolName, result) => this.requireExecutedToolResult(toolName, result),
-      commsSend: async (input) => await this.commsSend(input),
+      commsSend: async (input, options) => await this.commsSend(input, options),
       prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
       enqueueAutonomousChannelDelivery: async (input) => await this.enqueueAutonomousChannelDelivery(input),
       cleanupSilentHeartbeatTurn: async (input) => await this.cleanupSilentHeartbeatTurn(input),
@@ -5067,20 +5082,18 @@ export class GatewayService {
           assistantContent,
           wasVoiceInbound,
         );
-        const deliveryInput = {
-          connectionId: binding.connectionId,
-          target: binding.target,
-          message: deliveryPrefix ? `${deliveryPrefix}${assistantContent}` : assistantContent,
-          attachments: voiceReplyAttachment ? [voiceReplyAttachment] : undefined,
-          // An operator-authored message never reached the channel, so there is no channel message to reply to.
-          replyToMessageId:
-            deliveryReplyToMessageId?.trim() ||
-            (userMessage.sourceAuthority === "operator" ? undefined : deliveryFallbackMessageId),
-          sessionId,
-          agentId: "assistant",
-          ...(inboundDurableIdentity ? { idempotencyKey: inboundDurableIdentity.deliveryIdempotencyKey } : {}),
-        };
-        const deliveryResult = this.requireExecutedToolResult("channel.send", await this.commsSend(deliveryInput));
+        const replyInput = buildChannelReplyDeliveryInput(binding.connectionId, binding.target, sessionId, {
+          assistantContent,
+          deliveryPrefix,
+          voiceReplyAttachment,
+          replyToMessageId: deliveryReplyToMessageId,
+          fallbackMessageId: deliveryFallbackMessageId,
+          operatorAuthored: userMessage.sourceAuthority === "operator",
+          idempotencyKey: inboundDurableIdentity?.deliveryIdempotencyKey,
+        });
+        // The reply is GoatCitadel's own delivery: a switched-off Messaging group stops the AI, not this reply.
+        const sent = await this.commsSend(replyInput, OWN_DELIVERY);
+        const deliveryResult = this.requireExecutedToolResult("channel.send", sent);
         await inboundDurableIdentity?.onDeliveryEnqueued?.({
           deliveryId: typeof deliveryResult.deliveryId === "string" ? deliveryResult.deliveryId : undefined,
           providerMessageId:
@@ -5813,11 +5826,8 @@ export class GatewayService {
     if (!connection || !target) {
       return;
     }
-    await this.commsSend({
-      connectionId: connection.connectionId,
-      target,
-      message: [`Watchdog attention needed: ${job.name}`, "", result.summary].join("\n"),
-    });
+    const message = [`Watchdog attention needed: ${job.name}`, "", result.summary].join("\n");
+    await this.commsSend({ connectionId: connection.connectionId, target, message }, OWN_DELIVERY);
   }
 
   public scheduleMemoryMaintenancePostTurnEvaluation(input: {
@@ -10248,6 +10258,7 @@ export class GatewayService {
     }
     const operatorId = input.systemActorId ?? "system-cron";
     const workspaceId = (await this.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const ownDelivery = await isOwnAutonomousDelivery(input, { storage: this.storage }, this.chatAutonomousTurnDeps());
     const createInput: DurableRunCreateRequest = {
       runId: deliveryRunId,
       workflowKey: "connector.delivery",
@@ -10274,6 +10285,7 @@ export class GatewayService {
         ...(input.turnId ? { turnId: input.turnId } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
         ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}),
+        ...(ownDelivery ? { ownDelivery: true } : {}),
       },
     };
     let run: DurableRunRecord;
@@ -11402,44 +11414,26 @@ export class GatewayService {
     };
   }
 
-  public async commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+  /** `options` marks GoatCitadel's own delivery; it is persisted on the queued payload and honored when it drains. */
+  public async commsSend(input: ChannelSendInput, options?: OwnDeliveryOption): Promise<CommsInvokeResult> {
     const connection = await this.storage.integrationConnections.get(input.connectionId);
     const idempotencyKey = buildChannelDeliveryIdempotencyKey(input, connection.key);
     const queued = await this.channelDeliveryRuntimeService.enqueue({
       connectionId: input.connectionId,
       channelKey: connection.key,
       target: input.target,
-      payload: buildChannelDeliveryPayload(input, connection.key),
+      payload: buildChannelDeliveryPayload(input, connection.key, options),
       idempotencyKey,
     });
     this.scheduleChannelDeliveryDrain();
-    return {
-      deliveryId: queued.deliveryId,
-      status:
-        queued.status === "sent"
-          ? "sent"
-          : queued.status === "failed" ||
-              queued.status === "stale" ||
-              queued.status === "manual_reconciliation_required"
-            ? "failed"
-            : "queued",
-      deliveryStatus: queued.deliveryStatus ?? (queued.status === "sent" ? "sent" : "retrying"),
-      channelKey: queued.channelKey,
-      target: queued.target,
-      ...(queued.providerMessageId ? { providerMessageId: queued.providerMessageId } : {}),
-      ...(queued.error ? { error: queued.error, fallbackReason: queued.fallbackReason ?? queued.error } : {}),
-      ...(queued.deliveryDiagnostics ? { deliveryDiagnostics: queued.deliveryDiagnostics } : {}),
-      createdAt: queued.createdAt,
-      updatedAt: queued.updatedAt,
-      ...(queued.nextAttemptAt ? { nextAttemptAt: queued.nextAttemptAt } : {}),
-    };
+    return projectQueuedChannelDeliveryResult(queued);
   }
 
-  public async commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+  public async commsReply(input: ChannelReplyInput, options?: OwnDeliveryOption): Promise<CommsInvokeResult> {
     if (!input.replyToMessageId?.trim()) {
       throw new Error("replyToMessageId is required for channel replies.");
     }
-    return await this.commsSend(input);
+    return await this.commsSend(input, options);
   }
 
   async commsActivity(input: ChannelActivityInput): Promise<ChannelActivityResult> {
@@ -12299,8 +12293,9 @@ export class GatewayService {
   public async invokeAndUnwrap(
     request: ToolInvokeRequest,
     realtimeType: string,
-  ): Promise<ToolInvokeResult | Record<string, unknown>> {
-    const result = await this.invokeTool(request);
+    options?: Pick<ToolInvocationRuntimeOptions, "ownDelivery">,
+  ): Promise<CommsInvokeResult> {
+    const result = await (options ? this.invokeTool(request, options) : this.invokeTool(request));
     if (result.outcome === "executed") {
       await this.publishRealtime("system", "tools", {
         type: realtimeType,

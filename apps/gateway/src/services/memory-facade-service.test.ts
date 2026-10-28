@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { isOwnDeliveryMarker } from "@goatcitadel/policy-engine";
 import {
   KnowledgeFacadeService,
   knowledgeDocsIngest,
@@ -8,6 +9,9 @@ import {
   knowledgeMemoryWrite,
   type KnowledgeFacadePort,
 } from "./memory-facade-service.js";
+
+// Every facade call is the operator's own action, so it carries a minted marker.
+const OPERATOR_ACTION = { ownDelivery: { kind: "own_delivery", reason: "operator_action" } };
 
 describe("memory-facade-service", () => {
   it("routes knowledge memory writes with default session and agent context", async () => {
@@ -40,6 +44,7 @@ describe("memory-facade-service", () => {
         taskId: undefined,
       },
       "knowledge_memory_write",
+      OPERATOR_ACTION,
     );
   });
 
@@ -110,6 +115,7 @@ describe("memory-facade-service", () => {
         taskId: "task-0",
       },
       "knowledge_memory_write",
+      OPERATOR_ACTION,
     );
     expect(deps.invokeAndUnwrap).toHaveBeenNthCalledWith(
       2,
@@ -121,6 +127,7 @@ describe("memory-facade-service", () => {
         taskId: "task-1",
       },
       "knowledge_memory_search",
+      OPERATOR_ACTION,
     );
     expect(deps.invokeAndUnwrap).toHaveBeenNthCalledWith(
       3,
@@ -139,6 +146,7 @@ describe("memory-facade-service", () => {
         taskId: "task-2",
       },
       "knowledge_docs_ingest",
+      OPERATOR_ACTION,
     );
     expect(deps.invokeAndUnwrap).toHaveBeenNthCalledWith(
       4,
@@ -155,6 +163,7 @@ describe("memory-facade-service", () => {
         taskId: "task-3",
       },
       "knowledge_embeddings_index",
+      OPERATOR_ACTION,
     );
     expect(deps.invokeAndUnwrap).toHaveBeenNthCalledWith(
       5,
@@ -166,6 +175,7 @@ describe("memory-facade-service", () => {
         taskId: "task-4",
       },
       "knowledge_embeddings_query",
+      OPERATOR_ACTION,
     );
   });
 
@@ -188,10 +198,12 @@ function fakeDeps(): KnowledgeFacadePort {
 }
 
 it("keeps omitted facade arguments identical through canonical JSON approval persistence", async () => {
-  const deps: KnowledgeFacadePort = { invokeAndUnwrap: vi.fn(async request => {
-    expect(JSON.parse(JSON.stringify(request.args))).toStrictEqual(request.args);
-    return { outcome: "approval_required", approvalId: "review-only" } as never;
-  }) };
+  const deps: KnowledgeFacadePort = {
+    invokeAndUnwrap: vi.fn(async (request) => {
+      expect(JSON.parse(JSON.stringify(request.args))).toStrictEqual(request.args);
+      return { outcome: "approval_required", approvalId: "review-only" } as never;
+    }),
+  };
   await knowledgeMemoryWrite(deps, { namespace: "workspace", title: "Decision", content: "Reviewed content" });
   await knowledgeMemorySearch(deps, { query: "decision" });
   await knowledgeDocsIngest(deps, { namespace: "workspace", sourceType: "text", source: "Document" });
@@ -201,8 +213,40 @@ it("keeps omitted facade arguments identical through canonical JSON approval per
 });
 it("preserves explicitly supplied empty and false arguments instead of treating them as omitted", async () => {
   const deps = fakeDeps();
-  await knowledgeMemoryWrite(deps, { namespace: "workspace", title: "Decision", content: "Content", tags: [], metadata: {} });
+  await knowledgeMemoryWrite(deps, {
+    namespace: "workspace",
+    title: "Decision",
+    content: "Content",
+    tags: [],
+    metadata: {},
+  });
   await knowledgeEmbeddingsIndex(deps, { namespace: "workspace", force: false });
-  expect(deps.invokeAndUnwrap).toHaveBeenNthCalledWith(1, expect.objectContaining({ args: { namespace: "workspace", title: "Decision", content: "Content", tags: [], metadata: {} } }), "knowledge_memory_write");
-  expect(deps.invokeAndUnwrap).toHaveBeenNthCalledWith(2, expect.objectContaining({ args: { namespace: "workspace", force: false } }), "knowledge_embeddings_index");
+  expect(deps.invokeAndUnwrap).toHaveBeenNthCalledWith(
+    1,
+    expect.objectContaining({
+      args: { namespace: "workspace", title: "Decision", content: "Content", tags: [], metadata: {} },
+    }),
+    "knowledge_memory_write",
+    OPERATOR_ACTION,
+  );
+  expect(deps.invokeAndUnwrap).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({ args: { namespace: "workspace", force: false } }),
+    "knowledge_embeddings_index",
+    OPERATOR_ACTION,
+  );
+});
+
+it("hands the policy engine a minted own-delivery marker on every facade call", async () => {
+  const deps = fakeDeps();
+  await knowledgeMemoryWrite(deps, { content: "Content" });
+  await knowledgeMemorySearch(deps, { query: "decision" });
+  await knowledgeDocsIngest(deps, { sourceType: "text", source: "Document" });
+  await knowledgeEmbeddingsIndex(deps, {});
+  await knowledgeEmbeddingsQuery(deps, { query: "decision" });
+  const calls = vi.mocked(deps.invokeAndUnwrap).mock.calls;
+  expect(calls).toHaveLength(5);
+  for (const [, , options] of calls) {
+    expect(isOwnDeliveryMarker(options?.ownDelivery)).toBe(true);
+  }
 });

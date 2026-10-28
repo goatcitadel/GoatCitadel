@@ -820,6 +820,46 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     );
   });
 
+  it("tells the model a group switched off after planning is the operator's switch, not tools.deny", async () => {
+    // The profile froze browser.search as allowed at planning; the operator then switched its group off, so the
+    // call-time probe reports tool_group_off. The runner writes its own error for that, so the guidance has to
+    // come from the probe's reason code rather than from the engine's sentence.
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "release notes" }))
+      .mockResolvedValueOnce({
+        model: "model-a",
+        choices: [{ index: 0, message: { role: "assistant", content: "The search was blocked." } }],
+      });
+    const invokeTool = vi.fn();
+    const profile = buildProfile();
+    const runner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: vi.fn(() => ({
+        allowed: false,
+        requiresApproval: false,
+        reasonCodes: ["tool_group_off"],
+      })),
+    });
+
+    const result = await runner.run(buildInput(profile));
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    const blocked = result.turnTrace.toolRuns.find((run) => run.toolName === "browser.search");
+    expect(blocked).toMatchObject({
+      status: "blocked",
+      result: { policyRevalidation: { reasonCodes: ["tool_group_off"] } },
+    });
+    expect(blocked?.failureGuidance).toContain("browser.search is switched off");
+    expect(blocked?.failureGuidance).toContain("Capabilities › Tools");
+    expect(blocked?.failureGuidance).toContain("Only the operator can switch that group back on");
+    expect(blocked?.failureGuidance).not.toContain("tools.deny");
+  });
+
   it("never drops a frozen approval requirement when current policy becomes broader", async () => {
     const createChatCompletion = vi
       .fn()

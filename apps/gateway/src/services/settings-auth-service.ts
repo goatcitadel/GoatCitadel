@@ -57,6 +57,7 @@ import {
   type OperatorWriteRootChange,
   type RealtimeEvent,
   type ToolApprovalMode,
+  type ToolGroupChange,
   isWebSearchEngineOrder,
   normalizeWebSearchEngineOrder,
 } from "@goatcitadel/contracts";
@@ -122,8 +123,10 @@ import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import {
   applyGlobalToolAccessChange,
   applyOperatorWriteRootChange,
+  applyToolGroupChange,
   projectGlobalToolAccess,
   projectOperatorWriteRoots,
+  projectSwitchedOffToolGroups,
 } from "./settings-operator-write-access.js";
 import {
   deriveApprovalResolutionEffectsResult,
@@ -216,6 +219,7 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
     readOnlyRoots: toolPolicy.sandbox.readOnlyRoots,
     operatorWriteRoots: projectOperatorWriteRoots(toolPolicy),
     globalToolAccess: projectGlobalToolAccess(toolPolicy),
+    switchedOffToolGroups: projectSwitchedOffToolGroups(toolPolicy),
     readAccessMode: toolPolicy.sandbox.readAccessMode ?? "roots_only",
     outsideRootWriteMode: toolPolicy.sandbox.outsideRootWriteMode ?? "deny",
     networkAllowlist: toolPolicy.sandbox.networkAllowlist,
@@ -308,6 +312,8 @@ export interface UpdateSettingsInput {
   operatorWriteRootChange?: OperatorWriteRootChange;
   /** Set the global posture of one curated filesystem mutation tool. */
   globalToolAccessChange?: GlobalToolAccessChange;
+  /** Switch one built-in tool group off or on; Core can never be switched off. */
+  toolGroupChange?: ToolGroupChange;
   auth?: AuthSettingsUpdateInput;
   llm?: {
     activeProviderId?: string;
@@ -548,10 +554,16 @@ export async function updateSettings(
     });
   }
 
-  if (input.operatorWriteRootChange || input.globalToolAccessChange || input.outsideRootWriteMode) {
+  if (
+    input.operatorWriteRootChange ||
+    input.globalToolAccessChange ||
+    input.toolGroupChange ||
+    input.outsideRootWriteMode
+  ) {
     const toolPolicy = deps.config.toolPolicy;
     if (input.operatorWriteRootChange) applyOperatorWriteRootChange(toolPolicy, input.operatorWriteRootChange);
     if (input.globalToolAccessChange) applyGlobalToolAccessChange(toolPolicy, input.globalToolAccessChange);
+    if (input.toolGroupChange) applyToolGroupChange(toolPolicy, input.toolGroupChange);
     if (input.outsideRootWriteMode) toolPolicy.sandbox.outsideRootWriteMode = input.outsideRootWriteMode;
   }
 

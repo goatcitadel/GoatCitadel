@@ -8,6 +8,7 @@ import type {
 import type { ContextSourceAttribution } from "./ingestion.js";
 import type { WardEffect } from "./citadel-wards.js";
 import type { OutsideRootWriteMode } from "./outside-root-write.js";
+import type { ToolGroupId } from "./tool-groups.js";
 
 export type ToolApprovalMode = "approve_all" | "approve_risky" | "bypass";
 
@@ -390,6 +391,11 @@ export interface ToolPolicyConfig {
     profile?: string;
     allow: string[];
     deny: string[];
+    /**
+     * Tool groups the operator switched off. Install-wide: the resolver reads it from
+     * `tools` only and ignores it under `agents[*]`. Core and unknown ids are ignored.
+     */
+    disabledGroups?: string[];
     loopDetection?: ToolLoopDetectionConfig;
   };
   agents: Record<string, { tools?: Partial<ToolPolicyConfig["tools"]> }>;
@@ -515,6 +521,8 @@ export interface EffectiveToolPolicy {
   allowSet: Set<string>;
   denySet: Set<string>;
   effectiveTools: Set<string>;
+  /** Tool name → the switched-off group it belongs to. Deny-wins: beats every allow source. */
+  switchedOffTools?: ReadonlyMap<string, ToolGroupId>;
   readAccessMode?: FilesystemReadAccessMode;
 }
 

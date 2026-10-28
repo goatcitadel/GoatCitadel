@@ -66,6 +66,7 @@ import {
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
+import { OWN_DELIVERY, type OwnDeliveryOption } from "./comms-service.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { readChatTurnControl } from "./chat-turn-control.js";
@@ -173,6 +174,8 @@ export interface AutonomousChannelDeliveryRequest {
   systemActorId?: string;
   reason?: string;
   commitmentId?: string;
+  /** The turn's cron admission identity (server-written run metadata); the delivery's owner reads its source. */
+  cronAdmission?: unknown;
 }
 
 /** Request passed to the gateway-backed silent-heartbeat transcript cleanup. */
@@ -253,8 +256,12 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
     input: GeneralChatPostCommitDurableEffectExecutionInput,
     context: GeneralChatPostCommitEffectExecutionContext,
   ): Promise<Record<string, unknown> | void>;
-  commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
-  commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>>;
+  /** `options` marks GoatCitadel's own delivery (readConnectorDeliveryOwnership); unset is subject to the switch. */
+  commsSend(input: ChannelSendInput, options?: OwnDeliveryOption): Promise<ToolInvokeResult | Record<string, unknown>>;
+  commsReply(
+    input: ChannelReplyInput,
+    options?: OwnDeliveryOption,
+  ): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsUnsend(input: ChannelUnsendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsTyping(input: ChannelTypingInput): Promise<ChannelTypingResult | Record<string, unknown>>;
@@ -472,6 +479,20 @@ function isAutonomousDurableRun(run: DurableRunRecord): boolean {
     (typeof autonomous === "object" && autonomous !== null) ||
     metadata?.deliveryKind === "autonomous.assistant_message"
   );
+}
+
+/**
+ * A connector delivery is GoatCitadel's own, so it keeps working while Messaging is switched off, only when the Gateway
+ * enqueued it as an approval prompt to the operator, or as an autonomous chat reply it marked as own at enqueue time
+ * (P2-R19: an operator-made schedule or a commitment follow-up to the session's bound channel). Anything else,
+ * including a `schedule.manage` schedule's reply, stays subject to the switch.
+ */
+export function readConnectorDeliveryOwnership(run: Pick<DurableRunRecord, "metadata">): OwnDeliveryOption | undefined {
+  const metadata = run.metadata as Record<string, unknown> | undefined;
+  const own =
+    metadata?.deliveryKind === "approval.remote_token" ||
+    (metadata?.deliveryKind === "autonomous.assistant_message" && metadata.ownDelivery === true);
+  return own ? OWN_DELIVERY : undefined;
 }
 
 async function assertAutonomousDurableRunAllowed(
@@ -1531,6 +1552,7 @@ export async function executeDurableConnectorDeliveryRun(
   const operatorId = payload.operatorId ?? payload.authActorId ?? "system-durable";
   const hydratesBrowserApprovalBearer = connector.connectorType === "browser" && Boolean(approvalActionTokenRef);
   const deliveryEffectId = `connector-delivery:${run.runId}`;
+  const own = readConnectorDeliveryOwnership(run);
   const workspaceId = payload.workspaceId ?? (await host.resolveDurableRunHookWorkspaceId(run));
   const sideEffect = await runIdempotentExternalSideEffect({
     mutationStore: storage.mutationIdempotency,
@@ -1565,8 +1587,8 @@ export async function executeDurableConnectorDeliveryRun(
             )
           : payload;
       return await dispatchConnectorDelivery(connector, dispatchPayload, {
-        commsSend: (input) => invokeConnectorDeliveryTransport(() => host.commsSend(input)),
-        commsReply: (input) => invokeConnectorDeliveryTransport(() => host.commsReply(input)),
+        commsSend: (input) => invokeConnectorDeliveryTransport(() => host.commsSend(input, own)),
+        commsReply: (input) => invokeConnectorDeliveryTransport(() => host.commsReply(input, own)),
         commsReact: (input) => invokeConnectorDeliveryTransport(() => host.commsReact(input)),
         commsUnsend: (input) => invokeConnectorDeliveryTransport(() => host.commsUnsend(input)),
         commsTyping: (input) => invokeConnectorDeliveryTransport(() => host.commsTyping(input)),
@@ -3366,6 +3388,7 @@ export async function maybeEnqueueAutonomousDelivery(
     systemActorId: autonomous.systemActorId,
     reason: autonomous.reason,
     commitmentId: autonomous.commitmentId,
+    ...(currentRun.metadata?.cronAdmission ? { cronAdmission: currentRun.metadata.cronAdmission } : {}),
   });
 }
 

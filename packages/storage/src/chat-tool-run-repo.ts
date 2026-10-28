@@ -71,18 +71,37 @@ export interface ChatToolRunPatchInput {
   finishedAt?: string;
 }
 
+/** How often one tool was called, and when it was last started. */
+export interface ChatToolCallCount {
+  toolName: string;
+  calls: number;
+  lastCalledAt: string;
+}
+
 export class ChatToolRunRepository {
   private readonly getStmt;
   private readonly insertStmt;
   private readonly listByTurnStmt;
   private readonly listBySessionStmt;
   private readonly findByApprovalStmt;
+  private readonly countCallsByToolSinceStmt;
   private readonly listByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly patchStmt;
   private readonly compareAndSwapResultStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_tool_runs WHERE tool_run_id = ?");
+    // A call is a run that went out: executed or failed, and not served again from an earlier run. Blocked, waiting
+    // and still-running rows never were calls. No index leads with started_at; the Gateway caches this read.
+    this.countCallsByToolSinceStmt = db.prepare(`
+      SELECT tool_name, COUNT(*) AS calls, MAX(started_at) AS last_called_at
+      FROM chat_tool_runs
+      WHERE started_at >= @since
+        AND status IN ('executed', 'failed')
+        AND (reused IS NULL OR reused = 0)
+      GROUP BY tool_name
+      ORDER BY tool_name ASC
+    `);
     this.insertStmt = db.prepare(`
       INSERT INTO chat_tool_runs (
         tool_run_id, turn_id, session_id, tool_name, status, approval_id, args_json,
@@ -235,13 +254,23 @@ export class ChatToolRunRepository {
   }
 
   /** Uses the existing turn/started_at index; the ID breaks timestamp ties. */
-  public listByTurnPage(turnId: string, after?: { startedAt: string; toolRunId: string }, limit = 32): ChatToolRunRecord[] {
+  public listByTurnPage(
+    turnId: string,
+    after?: { startedAt: string; toolRunId: string },
+    limit = 32,
+  ): ChatToolRunRecord[] {
     const bounded = Number.isSafeInteger(limit) ? Math.max(1, Math.min(32, limit)) : 32;
-    return toChatToolRunRows(this.db.prepare(`
+    return toChatToolRunRows(
+      this.db
+        .prepare(
+          `
       SELECT * FROM chat_tool_runs WHERE turn_id = ?
         AND (started_at > ? OR (started_at = ? AND tool_run_id > ?))
       ORDER BY started_at ASC, tool_run_id ASC LIMIT ?
-    `).all(turnId, after?.startedAt ?? "", after?.startedAt ?? "", after?.toolRunId ?? "", bounded)).map(mapRow);
+    `,
+        )
+        .all(turnId, after?.startedAt ?? "", after?.startedAt ?? "", after?.toolRunId ?? "", bounded),
+    ).map(mapRow);
   }
 
   public listBySession(sessionId: string, limit = 200): ChatToolRunRecord[] {
@@ -258,6 +287,23 @@ export class ChatToolRunRepository {
   public findByApprovalId(sessionId: string, approvalId: string): ChatToolRunRecord | undefined {
     const rows = toChatToolRunRows(this.findByApprovalStmt.all({ sessionId, approvalId }));
     return rows.map(mapRow)[0];
+  }
+
+  /**
+   * Calls started at or after `sinceIso`, per tool. Counts shrink when a chat is deleted, because its runs go with it.
+   * PostgreSQL hands COUNT(*) back as a bigint string, so the count is converted here.
+   */
+  public countCallsByToolSince(sinceIso: string): ChatToolCallCount[] {
+    const rows = this.countCallsByToolSinceStmt.all({ since: sinceIso });
+    return (Array.isArray(rows) ? rows : []).flatMap((row: unknown) => {
+      if (!isRecord(row) || typeof row.tool_name !== "string" || typeof row.last_called_at !== "string") {
+        return [];
+      }
+      const calls = Number(row.calls);
+      return Number.isSafeInteger(calls) && calls > 0
+        ? [{ toolName: row.tool_name, calls, lastCalledAt: row.last_called_at }]
+        : [];
+    });
   }
 
   public listByTurnIds(turnIds: string[]): Map<string, ChatToolRunRecord[]> {
@@ -465,8 +511,12 @@ function isCoherentToolEffectProjection(input: {
     case "pre_dispatch_blocked":
       // Approval replay can fail current policy before dispatch. The runtime
       // owner emits this evidence only after reading its durable boundary event.
-      return (row.status === "blocked" || row.status === "failed") && settled && notReused &&
-        (noApproval || terminalApprovalLinked);
+      return (
+        (row.status === "blocked" || row.status === "failed") &&
+        settled &&
+        notReused &&
+        (noApproval || terminalApprovalLinked)
+      );
     case "approval_wait_before_dispatch":
       return row.status === "approval_required" && settled && notReused && Boolean(row.approval_id);
     case "skipped_before_dispatch":

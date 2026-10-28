@@ -10,6 +10,7 @@ import type {
   OutsideRootWriteMode,
   OperatorWriteRootSummary,
   ToolApprovalMode,
+  ToolGroupId,
 } from "@goatcitadel/contracts";
 
 export interface RuntimeSettings {
@@ -27,6 +28,8 @@ export interface RuntimeSettings {
   operatorWriteRoots: OperatorWriteRootSummary[];
   /** The global tool allow and deny lists (agent and permission-profile lists are separate). */
   globalToolAccess: GlobalToolAccessSummary;
+  /** Built-in tool groups the operator switched off, in the group map's order. Core is never listed. */
+  switchedOffToolGroups: readonly ToolGroupId[];
   readAccessMode: FilesystemReadAccessMode;
   /** Whether writes outside every write root may raise an approval ("deny" by default). */
   outsideRootWriteMode?: OutsideRootWriteMode;

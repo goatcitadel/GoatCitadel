@@ -212,6 +212,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
           inspectableCatalog: await fastify.services.capabilities.listCapabilityCatalog("inspectable"),
           callableCatalog: await fastify.services.capabilities.listCapabilityCatalog("callable"),
           callPreviewAvailable: isMcpServerModeCallPreviewAvailable(fastify.services),
+          switchedOffToolNames: fastify.services.tools.listSwitchedOffToolNames(),
         }),
       ),
     );

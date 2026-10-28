@@ -20,7 +20,12 @@
  * Pure functions only — all inputs are passed in, no I/O. The caller gathers
  * runtime info and feeds the rendered result into `mergeChatSystemInstructions`.
  */
-import type { ChatMode, ChatNormalizationProfile, ChatWebMode } from "@goatcitadel/contracts";
+import {
+  toolGroupForTool,
+  type ChatMode,
+  type ChatNormalizationProfile,
+  type ChatWebMode,
+} from "@goatcitadel/contracts";
 
 export interface BaseAgentRuntimeInfo {
   /** Human-formatted date, e.g. "Saturday, June 21, 2026". Caller formats it. */
@@ -55,6 +60,11 @@ export interface BaseAgentPromptToolset {
   skills?: readonly BaseAgentPromptSkill[];
   /** Catalog tools this turn's policy denies; they are never offered, so the prompt says what is off instead. */
   policyDeniedToolNames?: readonly string[];
+  /**
+   * The denied tools that are off because the operator switched their tool group off in Capabilities › Tools, not
+   * because of tools.deny. These are also in policyDeniedToolNames; a tool that is denied as well never appears here.
+   */
+  switchedOffToolNames?: readonly string[];
   /** Callable tools the turn's policy probe says ask the operator first; absent when no probe ran. */
   approvalRequiredToolNames?: readonly string[];
 }
@@ -146,6 +156,7 @@ function buildToolCatalogSection(toolset: BaseAgentPromptToolset): string | unde
  */
 function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string | undefined {
   const denied = new Set(toolset.policyDeniedToolNames ?? []);
+  const switchedOff = new Set(toolset.switchedOffToolNames ?? []);
   const writesDenied = denied.has("fs.write");
   const shellDenied = denied.has("shell.exec");
   if (!writesDenied && !shellDenied) return undefined;
@@ -156,7 +167,11 @@ function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string 
     "## Writing and running code",
     `This workspace's tool policy turns off ${off}, so you cannot create or change code files or run scripts in this turn. If the user asks for that, say so plainly first. Do not save code through document tools, and do not treat a test, lint or build tool as running their code: those only run the project's own package scripts.`,
   ];
-  if (writesDenied) {
+  if (writesDenied && switchedOff.has("fs.write")) {
+    lines.push(
+      `To allow file writes, the operator switches the ${switchedOffGroupLabel("fs.write")} tools back on in Capabilities › Tools.`,
+    );
+  } else if (writesDenied) {
     const proposal = toolset.toolNames.includes("change.request")
       ? " You can also offer to propose that change with change.request, which they then confirm."
       : "";
@@ -164,10 +179,19 @@ function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string 
       `To allow file writes, an operator sets fs.write to Available in Settings › Tools › Global filesystem tool access; that is a danger-risk change because it applies in every write root.${proposal}`,
     );
   }
-  if (shellDenied) {
+  if (shellDenied && switchedOff.has("shell.exec")) {
+    lines.push(
+      `To allow shell commands, the operator switches the ${switchedOffGroupLabel("shell.exec")} tools back on in Capabilities › Tools.`,
+    );
+  } else if (shellDenied) {
     lines.push("Shell commands can only be turned on by editing the tool policy file; there is no setting for them.");
   }
   return lines.join("\n");
+}
+
+/** The label the operator sees on the tool group switch, so the prompt names the control that exists. */
+function switchedOffGroupLabel(toolName: string): string {
+  return toolGroupForTool(toolName)?.label ?? "tool group";
 }
 
 function buildToolsUnavailableSection(reason: BaseAgentToolsUnavailableReason, webMode?: ChatWebMode): string {

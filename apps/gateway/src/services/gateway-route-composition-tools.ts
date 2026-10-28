@@ -63,6 +63,8 @@ export function composeToolsMcpRouteDependencies(
   const mcpAdminDeps = gateway.mcpAdministration;
   // The port's storage is readonly, so one read serves every use below.
   const storage = gateway.storage;
+  // The engine is assigned once and readonly on the port, so one read serves the catalog and the switch list.
+  const policyEngine = gateway.policyEngine;
   const mcpDiagnosticsDeps: mcpDiagnosticsService.McpDiagnosticsHost = {
     requireFeatureEnabled: (flag) => gateway.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
     listMcpTemplates: async () => await gateway.listMcpTemplates(),
@@ -240,7 +242,8 @@ export function composeToolsMcpRouteDependencies(
         }),
       listPermissionProfiles: (includeArchived) => gateway.listPermissionProfiles(includeArchived),
       listActiveLocalOperatorOverrides: (operatorId) => gateway.listActiveLocalOperatorOverrides(operatorId),
-      listToolCatalog: () => gateway.policyEngine.listCatalog(),
+      listSwitchedOffToolNames: () => policyEngine.listSwitchedOffToolNames(),
+      listToolCatalog: () => policyEngine.listCatalog(),
       listToolGrants: (scope, scopeRef, limit) => gateway.approvalRuntime.listToolGrants(scope, scopeRef, limit),
       resolveToolPolicyContext: (input) => gateway.resolveToolPolicyContext(input),
       revokeLocalOperatorOverride: (overrideId, revokedBy) =>

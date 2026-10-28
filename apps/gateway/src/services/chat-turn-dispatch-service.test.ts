@@ -521,6 +521,8 @@ describe("chat turn dispatch durable ownership", () => {
         localOperatorOverrideId: "override-1",
         surface: "chat",
       }),
+      // The operator's own message keeps working while Messaging is switched off.
+      { ownDelivery: true },
     );
     expect(host.storage.chatTurnTraces.patchIfStatus).toHaveBeenCalledWith(
       "turn-1",

@@ -208,6 +208,7 @@ describe("agentSendChatMessage abort signal coverage", () => {
           message: "hello",
           signal: observedSignal,
         }),
+        { ownDelivery: true },
       );
     });
 

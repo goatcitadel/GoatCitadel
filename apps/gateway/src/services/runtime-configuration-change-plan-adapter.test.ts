@@ -427,6 +427,7 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
       return settings({
         operatorWriteRoots: [],
         globalToolAccess: { allow: ["fs.read"], deny: ["fs.write", "fs.delete"] },
+        switchedOffToolGroups: [],
         ...overrides,
       });
     }
@@ -471,6 +472,114 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
       });
       expect(prepared.risk).toBe(risk);
       expect(prepared.target.resourceId).toBe(`tool_global_access:${toolName}`);
+    });
+
+    it.each([
+      ["files", false, "safe", "Switch off the Files tools", "The AI can't use the Files tools in any chat."],
+      [
+        "shell_and_code",
+        false,
+        "safe",
+        "Switch off the Shell and code tools",
+        "The AI can't use the Shell and code tools in any chat.",
+      ],
+      [
+        "files",
+        true,
+        "caution",
+        "Switch the Files tools back on",
+        "The Files tools are back on. Other safety rules still apply.",
+      ],
+      [
+        "email_and_calendar",
+        true,
+        "caution",
+        "Switch the Email and calendar tools back on",
+        "The Email and calendar tools are back on. Other safety rules still apply.",
+      ],
+    ] as const)(
+      "treats switching off as safe and switching on as caution, in the operator's words (%s, enabled: %s)",
+      async (groupId, enabled, risk, title, completedSummary) => {
+        const { adapter, updateSettings } = writeAccessAdapter(() =>
+          writeAccessSettings({ switchedOffToolGroups: enabled ? [groupId] : [] }),
+        );
+        const request = {
+          kind: "runtime_configuration" as const,
+          change: { operation: "tool_group_access" as const, groupId, enabled },
+        };
+
+        const prepared = await adapter.prepare(context, request);
+
+        expect(prepared.risk).toBe(risk);
+        expect(prepared.title).toBe(title);
+        expect(prepared.target.resourceId).toBe(`tool_group_access:${groupId}`);
+        const applied = await adapter.apply(context, { request, target: prepared.target } as ChangePlanRecord);
+        expect(applied.result?.summary).toBe(completedSummary);
+        expect(updateSettings).toHaveBeenCalledWith({
+          expectedRevision: 7,
+          toolGroupChange: { groupId, enabled },
+        });
+      },
+    );
+
+    it("keeps the written copy for a group switch free of banned cockpit words", async () => {
+      const { adapter } = writeAccessAdapter(() => writeAccessSettings());
+      for (const enabled of [false, true]) {
+        const prepared = await adapter.prepare(context, {
+          kind: "runtime_configuration",
+          change: { operation: "tool_group_access", groupId: "browser", enabled },
+        });
+        const copy = [prepared.title, prepared.summary, prepared.impact].join(" ");
+        expect(copy).not.toMatch(
+          /posture|gateway|revision|evidence|owner|snapshot|canonical|durable|projection|replay/i,
+        );
+        expect(prepared.summary).toContain("Browser");
+      }
+    });
+
+    it("validates a group switch through the settings owner before preparing", async () => {
+      const validateSettingsUpdate = vi.fn(async () => {
+        throw new Error("toolGroupChange must name a tool group other than Core.");
+      });
+      const { adapter } = writeAccessAdapter(() => writeAccessSettings(), validateSettingsUpdate);
+
+      await expect(
+        adapter.prepare(context, {
+          kind: "runtime_configuration",
+          change: { operation: "tool_group_access", groupId: "files", enabled: false },
+        }),
+      ).rejects.toThrow(/toolGroupChange/);
+      expect(validateSettingsUpdate).toHaveBeenCalledWith({
+        expectedRevision: 7,
+        toolGroupChange: { groupId: "files", enabled: false },
+      });
+    });
+
+    it("verifies a group switch against the groups the settings owner reports as off", async () => {
+      let current = writeAccessSettings();
+      const { adapter } = writeAccessAdapter(() => current);
+      const off = {
+        kind: "runtime_configuration" as const,
+        change: { operation: "tool_group_access" as const, groupId: "files" as const, enabled: false },
+      };
+      const on = {
+        kind: "runtime_configuration" as const,
+        change: { operation: "tool_group_access" as const, groupId: "files" as const, enabled: true },
+      };
+      const offPlan = { request: off, target: (await adapter.prepare(context, off)).target } as ChangePlanRecord;
+      const onPlan = { request: on, target: (await adapter.prepare(context, on)).target } as ChangePlanRecord;
+
+      expect((await adapter.verify(context, offPlan)).status).toBe("manual_required");
+      expect((await adapter.verify(context, onPlan)).status).toBe("completed");
+
+      current = writeAccessSettings({ switchedOffToolGroups: ["files", "git"] });
+      expect((await adapter.verify(context, offPlan)).status).toBe("completed");
+      expect((await adapter.verify(context, onPlan)).status).toBe("manual_required");
+
+      // A different group being off says nothing about this one.
+      current = writeAccessSettings({ switchedOffToolGroups: ["git"] });
+      expect((await adapter.verify(context, offPlan)).status).toBe("manual_required");
+      expect((await adapter.verify(context, onPlan)).status).toBe("completed");
     });
 
     it.each([

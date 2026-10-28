@@ -10,6 +10,7 @@ export const toolsRouteMethods = [
   "evaluateToolAccess",
   "listActiveLocalOperatorOverrides",
   "listPermissionProfiles",
+  "listSwitchedOffToolNames",
   "listToolCatalog",
   "listToolGrants",
   "resolveToolPolicyContext",

@@ -1648,6 +1648,72 @@ describe("settings-auth-service operator write access", () => {
     ).rejects.toThrow(/curated filesystem mutation tool/);
     expect(host.config.toolPolicy.tools.deny).toEqual(["fs.*"]);
   });
+
+  it("switches a group off and back on without touching tools.deny or tools.allow", async () => {
+    const { host } = buildWriteAccessHost();
+    const allowBefore = [...host.config.toolPolicy.tools.allow];
+    const denyBefore = [...host.config.toolPolicy.tools.deny];
+
+    const git = await updateSettings(host, { toolGroupChange: { groupId: "git", enabled: false } });
+    expect(git.switchedOffToolGroups).toEqual(["git"]);
+
+    // The list follows the group map's order, not the order the operator switched groups off in.
+    const both = await updateSettings(host, { toolGroupChange: { groupId: "files", enabled: false } });
+    expect(both.switchedOffToolGroups).toEqual(["files", "git"]);
+    expect(host.config.toolPolicy.tools.disabledGroups).toEqual(["files", "git"]);
+
+    // Switching a group off twice, or on when it is already on, leaves one clean entry per group.
+    await updateSettings(host, { toolGroupChange: { groupId: "files", enabled: false } });
+    const gitBack = await updateSettings(host, { toolGroupChange: { groupId: "git", enabled: true } });
+    expect(gitBack.switchedOffToolGroups).toEqual(["files"]);
+    await updateSettings(host, { toolGroupChange: { groupId: "git", enabled: true } });
+
+    const filesBack = await updateSettings(host, { toolGroupChange: { groupId: "files", enabled: true } });
+    expect(filesBack.switchedOffToolGroups).toEqual([]);
+    expect(host.config.toolPolicy.tools.disabledGroups).toEqual([]);
+    expect(host.config.toolPolicy.tools.allow).toEqual(allowBefore);
+    expect(host.config.toolPolicy.tools.deny).toEqual(denyBefore);
+  });
+
+  it("refuses Core and unknown groups", async () => {
+    const { host } = buildWriteAccessHost();
+    host.config.toolPolicy.tools.disabledGroups = ["git"];
+
+    for (const groupId of ["core", "nope", "", "mcp.invoke"]) {
+      for (const enabled of [false, true]) {
+        await expect(updateSettings(host, { toolGroupChange: { groupId: groupId as never, enabled } })).rejects.toThrow(
+          /toolGroupChange/,
+        );
+      }
+    }
+    await expect(
+      updateSettings(host, { toolGroupChange: { groupId: "files", enabled: "off" as never } }),
+    ).rejects.toThrow(/toolGroupChange/);
+    await expect(
+      updateSettings(host, { toolGroupChange: { groupId: "files", enabled: false, scope: "agent" } as never }),
+    ).rejects.toThrow(/toolGroupChange/);
+    expect(host.config.toolPolicy.tools.disabledGroups).toEqual(["git"]);
+  });
+
+  it("reports switched-off groups in the settings response", async () => {
+    const { host } = buildWriteAccessHost();
+    expect((await getSettings(host)).switchedOffToolGroups).toEqual([]);
+
+    // A hand-edited list is reported as the engine reads it: switchable known groups only, once each, in map order.
+    host.config.toolPolicy.tools.disabledGroups = ["messaging", "core", "nope", "files", "files", 7 as never];
+    expect((await getSettings(host)).switchedOffToolGroups).toEqual(["files", "messaging"]);
+
+    // A value that isn't a list switches nothing off, so the response says so rather than failing.
+    for (const handEdited of [5, true, {}, "files"]) {
+      host.config.toolPolicy.tools.disabledGroups = handEdited as never;
+      expect((await getSettings(host)).switchedOffToolGroups).toEqual([]);
+    }
+
+    // The next switch replaces a malformed list with a clean one.
+    const settings = await updateSettings(host, { toolGroupChange: { groupId: "browser", enabled: false } });
+    expect(settings.switchedOffToolGroups).toEqual(["browser"]);
+    expect(host.config.toolPolicy.tools.disabledGroups).toEqual(["browser"]);
+  });
 });
 
 describe("settings-auth-service device access lifecycle", () => {

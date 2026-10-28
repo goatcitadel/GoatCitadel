@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 import type { ChannelDeliveryRuntimeRecord } from "../services/channel-delivery-runtime-service.js";
+import { OWN_DELIVERY } from "../services/comms-service.js";
 import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 
 const channelAttachmentSchema = z.object({
@@ -168,6 +169,10 @@ const calendarCreateSchema = z.object({
   idempotencyKey: z.string().min(1).max(256).optional(),
 });
 
+/**
+ * Every send and read here is the operator's own, so each passes OWN_DELIVERY as its own argument: a switched-off
+ * tool group stops the AI, not these routes. The body schemas strip unknown keys, so a body cannot set or clear it.
+ */
 export const commsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/comms/deliveries", async (request, reply) => {
     const parsed = deliveriesQuerySchema.safeParse(request.query);
@@ -207,10 +212,13 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return reply.send(
       projectPublicSecretValue(
-        await fastify.services.comms.commsSend({
-          ...parsed.data,
-          idempotencyKey: request.idempotencyKey,
-        } as never),
+        await fastify.services.comms.commsSend(
+          {
+            ...parsed.data,
+            idempotencyKey: request.idempotencyKey,
+          } as never,
+          OWN_DELIVERY,
+        ),
       ),
     );
   });
@@ -222,10 +230,13 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     return reply.send(
       projectPublicSecretValue(
-        await fastify.services.comms.commsReply({
-          ...parsed.data,
-          idempotencyKey: request.idempotencyKey,
-        } as never),
+        await fastify.services.comms.commsReply(
+          {
+            ...parsed.data,
+            idempotencyKey: request.idempotencyKey,
+          } as never,
+          OWN_DELIVERY,
+        ),
       ),
     );
   });
@@ -235,7 +246,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsReact(parsed.data)));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsReact(parsed.data, OWN_DELIVERY)));
   });
 
   fastify.post("/api/v1/comms/unsend", async (request, reply) => {
@@ -243,7 +254,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsUnsend(parsed.data)));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsUnsend(parsed.data, OWN_DELIVERY)));
   });
 
   fastify.post("/api/v1/comms/typing", async (request, reply) => {
@@ -321,7 +332,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsGmailRead(parsed.data)));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsGmailRead(parsed.data, OWN_DELIVERY)));
   });
 
   fastify.post("/api/v1/comms/gmail/send", async (request, reply) => {
@@ -329,7 +340,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsGmailSend(parsed.data)));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsGmailSend(parsed.data, OWN_DELIVERY)));
   });
 
   fastify.post("/api/v1/comms/calendar/list", async (request, reply) => {
@@ -337,7 +348,9 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsCalendarList(parsed.data)));
+    return reply.send(
+      projectPublicSecretValue(await fastify.services.comms.commsCalendarList(parsed.data, OWN_DELIVERY)),
+    );
   });
 
   fastify.post("/api/v1/comms/calendar/create", async (request, reply) => {
@@ -345,7 +358,9 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsCalendarCreate(parsed.data)));
+    return reply.send(
+      projectPublicSecretValue(await fastify.services.comms.commsCalendarCreate(parsed.data, OWN_DELIVERY)),
+    );
   });
 };
 

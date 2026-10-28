@@ -176,6 +176,14 @@ describe("Evolution Control Plane Change Plan contract", () => {
     expect(runtime({ operation: "tool_global_access", toolName: "fs.*", posture: "denied" })).toBe(false);
     expect(runtime({ operation: "tool_global_access", toolName: "fs.write", posture: "allowed" })).toBe(false);
 
+    expect(runtime({ operation: "tool_group_access", groupId: "files", enabled: false })).toBe(true);
+    expect(runtime({ operation: "tool_group_access", groupId: "messaging", enabled: true })).toBe(true);
+    expect(runtime({ operation: "tool_group_access", groupId: "core", enabled: false })).toBe(false);
+    expect(runtime({ operation: "tool_group_access", groupId: "nope", enabled: false })).toBe(false);
+    expect(runtime({ operation: "tool_group_access", groupId: "files", enabled: "off" })).toBe(false);
+    expect(runtime({ operation: "tool_group_access", groupId: "files" })).toBe(false);
+    expect(runtime({ operation: "tool_group_access", groupId: "files", enabled: false, extra: true })).toBe(false);
+
     expect(runtime({ operation: "outside_root_write_policy", mode: "approval_required" })).toBe(true);
     expect(runtime({ operation: "outside_root_write_policy", mode: "deny" })).toBe(true);
     expect(runtime({ operation: "outside_root_write_policy", mode: "full_disk" })).toBe(false);

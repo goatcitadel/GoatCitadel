@@ -14,6 +14,8 @@ vi.mock("node:fs/promises", () => ({
 
 vi.mock("@goatcitadel/policy-engine", () => ({
   assertWritePathInJail: mocks.assertWritePathInJail,
+  // The knowledge facade marks Chat attachment calls as the operator's own.
+  createOwnDeliveryMarker: (reason: string) => Object.freeze({ kind: "own_delivery", reason }),
 }));
 
 vi.mock("./agents-route-service.js", () => ({

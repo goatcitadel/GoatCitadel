@@ -41,7 +41,7 @@ export function composeMemoryKnowledgeRouteDependencies(
     listDurableRunsForExport: (scanLimit) => gateway.storage.durableRuns.listRuns(scanLimit),
   };
   const knowledgeFacade = new KnowledgeFacadeService({
-    invokeAndUnwrap: (request, realtimeType) => gateway.invokeAndUnwrap(request, realtimeType),
+    invokeAndUnwrap: (...args) => gateway.invokeAndUnwrap(...args),
   });
   const skillEvaluation = new SkillEvaluationService({
     storage: gateway.storage,

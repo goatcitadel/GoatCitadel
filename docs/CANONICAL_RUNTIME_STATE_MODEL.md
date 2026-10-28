@@ -206,6 +206,24 @@ Notes:
 - Delete-shaped operations need the folder's `allowDelete`; deleting a write root itself, or any folder that contains a protected runtime path, is refused.
 - Without runtime write protection, operator roots are ignored (fail closed).
 - Approvals do not mint path-scoped write grants; only the governed config owners above change write scope.
+- A switched-off Files group (see Tool Groups) stops every model-driven `fs.*` call before these checks.
+
+### Tool Groups
+
+Definition:
+Install-wide switches that stop the AI from using a group of built-in tools. Every built-in tool belongs to exactly one group. Core, which holds `mcp.invoke`, can never be switched off; MCP and mesh tools are never in a group.
+
+Authority:
+- Group map: `packages/contracts/src/tool-groups.ts` (`TOOL_GROUPS`)
+- Config: `toolPolicy.tools.disabledGroups`, install-wide (a per-agent `disabledGroups` neither adds nor lifts a switch)
+- Mutation: only the governed `tool_group_access` Settings change. Capabilities › Tools saves it through `PATCH /api/v1/settings`, which becomes a Change Plan when Change Plans are on, and `applyToolGroupChange` (`apps/gateway/src/services/settings-operator-write-access.ts`) applies it. The model-facing `change.request` does not offer it.
+- Enforcement: the policy engine (`packages/policy-engine/src/engine.ts`, `evaluateAccessInternal`), right after the deny set
+- Read model: `GET /api/v1/capabilities/tools` (`apps/gateway/src/services/capability-tools-service.ts`)
+
+Notes:
+- A switched-off group is deny-wins: it beats `tools.allow`, allow grants and a local operator override. Switching a group on removes only that switch and never lifts a deny from `tools.deny`, a permission profile, a Citadel Ward or a grant. A tool that is also denied reports `policy_deny`, since switching the group on would not run it.
+- The switch stops the AI only. GatewayService's own deliveries (channel replies, the operator's own sends and Library actions) carry a process-local own-delivery marker (`packages/policy-engine/src/own-delivery.ts`) that skips this one check; deny rules, Wards and approvals still apply. An own call that asks first stays own once the operator approves it: the engine records the fact on the approval's `pending_action_registered` event and re-mints the marker when the approval runs.
+- The engine reads the live config, so a save applies to the next call. Core, `mcp.invoke` and unknown ids in a hand-edited list are ignored, and a value that isn't a list switches nothing off.
 
 ### Chat Workspace Exploration and Delegated Scope
 
