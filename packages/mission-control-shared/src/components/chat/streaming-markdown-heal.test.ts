@@ -26,6 +26,12 @@ describe("healStreamingMarkdownTail", () => {
     },
   );
 
+  it("leaves brackets inside code alone", () => {
+    expect(healStreamingMarkdownTail("Use `arr[` to start indexing.")).toBe("Use `arr[` to start indexing.");
+    expect(healStreamingMarkdownTail("Run `arr[0")).toBe("Run `arr[0`");
+    expect(healStreamingMarkdownTail("See `a[b]` and [the do")).toBe("See `a[b]` and the do");
+  });
+
   it("only touches the paragraph still being written", () => {
     expect(healStreamingMarkdownTail("An *open\n\nNow **bold")).toBe("An *open\n\nNow **bold**");
   });

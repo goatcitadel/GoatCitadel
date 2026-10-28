@@ -62,12 +62,25 @@ describe("summarizeTurnToolRuns", () => {
       run("fs.patch", { path: "src/hero.css" }),
       run("shell.exec", { command: "pnpm lint" }, "failed"),
     ];
-    expect(summarizeTurnToolRuns(runs, false)).toBe("Changed hero.css, explored 2 files, ran 2 commands");
+    expect(summarizeTurnToolRuns(runs, false)).toBe(
+      "Changed hero.css, explored 2 files, ran 1 command, tried to run pnpm lint",
+    );
   });
 
   it("speaks in the present tense for the call in progress", () => {
     const runs = [run("fs.read", { path: "a.ts" }), run("shell.exec", { command: "cd x && pnpm build" }, "started")];
     expect(summarizeTurnToolRuns(runs, true)).toBe("Explored a.ts, running pnpm build");
+  });
+
+  it("never describes a call that did not run as done", () => {
+    expect(summarizeTurnToolRuns([run("fs.delete", { path: "important.txt" }, "blocked")], false)).toBe(
+      "Tried to change important.txt",
+    );
+    expect(summarizeTurnToolRuns([run("slack.send", {}, "approval_required")], false)).toBe(
+      "Awaiting approval to send 1 message",
+    );
+    // A call a settled turn left unfinished did not happen either.
+    expect(summarizeTurnToolRuns([run("fs.patch", { path: "a.css" }, "started")], false)).toBe("Tried to change a.css");
   });
 });
 

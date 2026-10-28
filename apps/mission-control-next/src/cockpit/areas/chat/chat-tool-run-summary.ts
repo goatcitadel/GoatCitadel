@@ -18,17 +18,39 @@ const CATEGORY_ORDER: readonly ToolCategory[] = [
   "other",
 ];
 
-const CATEGORY_COPY: Record<ToolCategory, { noun: [string, string]; past: string; present: string }> = {
-  edit: { noun: ["file", "files"], past: "Changed", present: "Changing" },
-  explore: { noun: ["file", "files"], past: "Explored", present: "Exploring" },
-  search: { noun: ["search", "searches"], past: "Searched", present: "Searching" },
-  read: { noun: ["page", "pages"], past: "Read", present: "Reading" },
-  interact: { noun: ["browser action", "browser actions"], past: "Performed", present: "Performing" },
-  run: { noun: ["command", "commands"], past: "Ran", present: "Running" },
-  create: { noun: ["document", "documents"], past: "Created", present: "Creating" },
-  send: { noun: ["message", "messages"], past: "Sent", present: "Sending" },
-  other: { noun: ["tool", "tools"], past: "Used", present: "Using" },
+type CategoryCopy = { noun: [string, string]; base: string; past: string; present: string };
+
+const CATEGORY_COPY: Record<ToolCategory, CategoryCopy> = {
+  edit: { noun: ["file", "files"], base: "change", past: "Changed", present: "Changing" },
+  explore: { noun: ["file", "files"], base: "explore", past: "Explored", present: "Exploring" },
+  search: { noun: ["search", "searches"], base: "search for", past: "Searched", present: "Searching" },
+  read: { noun: ["page", "pages"], base: "read", past: "Read", present: "Reading" },
+  interact: { noun: ["browser action", "browser actions"], base: "perform", past: "Performed", present: "Performing" },
+  run: { noun: ["command", "commands"], base: "run", past: "Ran", present: "Running" },
+  create: { noun: ["document", "documents"], base: "create", past: "Created", present: "Creating" },
+  send: { noun: ["message", "messages"], base: "send", past: "Sent", present: "Sending" },
+  other: { noun: ["tool", "tools"], base: "use", past: "Used", present: "Using" },
 };
+
+/**
+ * What the summary may say happened. Only an executed call is described as done; a call in progress as happening;
+ * anything else (failed, blocked, waiting on approval, or left unfinished by a settled turn) as not having happened.
+ */
+type Outcome = "done" | "running" | "awaiting" | "tried";
+const OUTCOME_ORDER: readonly Outcome[] = ["done", "running", "awaiting", "tried"];
+
+function outcomeOf(run: ChatToolRunRecord, live: boolean): Outcome {
+  if (run.status === "executed") return "done";
+  if (run.status === "started") return live ? "running" : "tried";
+  if (run.status === "approval_required") return "awaiting";
+  return "tried";
+}
+
+function verbFor(copy: CategoryCopy, outcome: Outcome): string {
+  if (outcome === "done") return copy.past;
+  if (outcome === "running") return copy.present;
+  return outcome === "awaiting" ? `Awaiting approval to ${copy.base}` : `Tried to ${copy.base}`;
+}
 
 const TOOL_CATEGORY: Record<string, ToolCategory> = {
   "fs.write": "edit",
@@ -132,33 +154,33 @@ export function toolRunTarget(run: Pick<ChatToolRunRecord, "toolName" | "args">)
   return undefined;
 }
 
-function clause(category: ToolCategory, runs: ChatToolRunRecord[], live: boolean): string {
+function clause(category: ToolCategory, outcome: Outcome, runs: ChatToolRunRecord[]): string {
   const copy = CATEGORY_COPY[category];
-  const verb = live ? copy.present : copy.past;
+  const verb = verbFor(copy, outcome);
   const target = runs.length === 1 ? toolRunTarget(runs[0]!) : undefined;
-  // A settled command reads better as a count; its command line earns the space only while it is the wait.
-  if (target && (live || category !== "run")) return `${verb} ${target.label}`;
+  // A finished command reads better as a count; its command line earns the space only while it is not done.
+  if (target && (outcome !== "done" || category !== "run")) return `${verb} ${target.label}`;
   return `${verb} ${runs.length} ${copy.noun[runs.length === 1 ? 0 : 1]}`;
 }
 
 const lowerFirst = (text: string): string => text.charAt(0).toLowerCase() + text.slice(1);
 
 /**
- * What a turn's tool calls did, as one plain line: "Changed hero.css, explored 3 files, ran 2 commands". While the
- * turn streams, the category of the call in progress (or the latest call) reads in the present tense. It counts
- * every call, whatever its outcome; the outcomes are the status counts shown beside it.
+ * What a turn's tool calls did, as one plain line: "Changed hero.css, explored 3 files, ran 2 commands". Only executed
+ * calls read as done; a call in progress reads in the present tense ("running pnpm build"), and a failed, blocked or
+ * unfinished one as tried ("tried to change important.txt"), so the line never claims an effect that did not happen.
  */
 export function summarizeTurnToolRuns(runs: readonly ChatToolRunRecord[], live: boolean): string {
-  const narrating = live ? (runs.find((run) => run.status === "started") ?? runs.at(-1)) : undefined;
-  const liveCategory = narrating ? toolCategory(narrating.toolName) : null;
-  const byCategory = new Map<ToolCategory, ChatToolRunRecord[]>();
+  const groups = new Map<string, ChatToolRunRecord[]>();
   for (const run of runs) {
-    const category = toolCategory(run.toolName);
-    byCategory.set(category, [...(byCategory.get(category) ?? []), run]);
+    const key = `${outcomeOf(run, live)}:${toolCategory(run.toolName)}`;
+    groups.set(key, [...(groups.get(key) ?? []), run]);
   }
-  const clauses = CATEGORY_ORDER.flatMap((category) => {
-    const group = byCategory.get(category);
-    return group ? [clause(category, group, category === liveCategory)] : [];
-  });
+  const clauses = OUTCOME_ORDER.flatMap((outcome) =>
+    CATEGORY_ORDER.flatMap((category) => {
+      const group = groups.get(`${outcome}:${category}`);
+      return group ? [clause(category, outcome, group)] : [];
+    }),
+  );
   return clauses.map((text, index) => (index === 0 ? text : lowerFirst(text))).join(", ");
 }

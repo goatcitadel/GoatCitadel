@@ -19,6 +19,28 @@ function markerState(masked: string, pattern: RegExp): MarkerState {
   return state;
 }
 
+const PARTIAL_LINK_WITH_URL = /\[([^\]\n]*)\]\([^)\s]*$/;
+const PARTIAL_LINK_TEXT = /\[([^\]\n]*)$/;
+
+/**
+ * The block with inline code blanked out to the same length, so offsets still line up: every closed `code` span,
+ * and with `includeOpen` the still-open one after an unmatched backtick too.
+ */
+function maskInlineCode(block: string, includeOpen: boolean): string {
+  const masked = block.replace(/`[^`\n]*`/g, (code) => "x".repeat(code.length));
+  const open = masked.lastIndexOf("`");
+  if (!includeOpen || open < 0 || (masked.match(/`/g)?.length ?? 0) % 2 === 0) return masked;
+  return masked.slice(0, open) + "x".repeat(masked.length - open);
+}
+
+/** A link still arriving, shown as its words. The match is found outside code, then cut from the real text. */
+function unwrapPartialLink(block: string, pattern: RegExp): string {
+  const match = pattern.exec(maskInlineCode(block, true));
+  if (!match) return block;
+  const textStart = match.index + 1;
+  return block.slice(0, match.index) + block.slice(textStart, textStart + match[1]!.length);
+}
+
 /**
  * The still-arriving end of a streamed reply, made whole for display only: an open **bold**, *italic*, ~~strike~~
  * or `code` is closed for now, a marker with nothing after it yet is hidden, and a link still arriving shows its
@@ -31,10 +53,10 @@ export function healStreamingMarkdownTail(text: string): string {
   let block = text.slice(cut);
   // A marker with nothing after it yet ("Next up: **").
   block = block.replace(/(^|\s)(\*{1,3}|~~|`)$/, "$1");
-  // A link still arriving: its words for now.
-  block = block.replace(/\[([^\]\n]*)\]\([^)\s]*$/, "$1").replace(/\[([^\]\n]*)$/, "$1");
+  // A link still arriving: its words for now. Never inside code ("`arr[`" keeps its bracket).
+  block = unwrapPartialLink(unwrapPartialLink(block, PARTIAL_LINK_WITH_URL), PARTIAL_LINK_TEXT);
   // Inside closed `code` nothing counts; an open one gets closed.
-  const masked = block.replace(/`[^`\n]*`/g, (code) => "x".repeat(code.length));
+  const masked = maskInlineCode(block, false);
   if ((masked.match(/`/g)?.length ?? 0) % 2) return `${head}${block}\``;
   const star = markerState(masked, /\*+/g);
   const strike = markerState(masked, /~~/g).bold;
