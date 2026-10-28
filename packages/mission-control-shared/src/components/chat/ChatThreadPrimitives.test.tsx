@@ -353,7 +353,9 @@ describe("ChatThreadPrimitives", () => {
     expect(text).toContain("Search memory");
     expect(renderer.root.findByProps({ "aria-label": "Open execution detail for memory.search" })).toBeTruthy();
     expect(text).toContain("2 results returned.");
-    expect(text).toContain("artifact.write");
+    // A tool without a display name of its own reads as words, not as its registry id.
+    expect(text).toContain("Artifact write");
+    expect(text).not.toContain("artifact.write");
     expect(text).toContain("approval");
     expect(text).toContain("artifact");
     expect(text).toContain("+1 more");
