@@ -595,6 +595,22 @@ describe("gateway service host guard", () => {
     );
   }, 15_000);
 
+  it("gives the policy engine the Gateway's name rule for a channel's variable", async () => {
+    const files = await readServiceSources();
+    const gatewayService = normalizeSourceForGuard(
+      files.find(({ relativePath }) => relativePath === "gateway-service.ts")?.source ?? "",
+    );
+
+    // Without this hook a variable-backed send reads nothing and quietly reports a missing token, so the rule that
+    // keeps a connection's config from naming an LLM or Gateway key as its token would never run on a send.
+    expect(gatewayService).toMatch(
+      /new ToolPolicyEngine\(config\.toolPolicy, this\.storage, undefined, \{[\s\S]{0,2500}resolveChannelEnvSecret: resolveChannelSendEnvSecret,/,
+    );
+    expect(gatewayService).toMatch(
+      /import \{[^}]*\bresolveChannelSendEnvSecret\b[^}]*\} from "\.\/channel-secret-resolution\.js";/,
+    );
+  }, 15_000);
+
   it("gives the policy engine a saved-key read that is told which connection the send is for", async () => {
     const files = await readServiceSources();
     const gatewayService = normalizeSourceForGuard(

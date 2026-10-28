@@ -1926,6 +1926,10 @@ describe("a saved Discord bot token", () => {
   const STORED = "synthetic-stored-discord-bot-value-0013";
   const UNAVAILABLE = "The saved Discord credential is unavailable from secure storage.";
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   function stubRuntime(token: string) {
     return {
       token,
@@ -2042,8 +2046,79 @@ describe("a saved Discord bot token", () => {
 
     expect(createManagedRuntime).not.toHaveBeenCalled();
     expect(service.getConnectionStatus(CONNECTION_ID)).toMatchObject({ lastError: UNAVAILABLE });
-    vi.unstubAllEnvs();
     await service.close();
+  });
+
+  describe("when one of the two token fields holds a saved key that cannot be read", () => {
+    const PASTED = "synthetic-pasted-discord-value-0015";
+    const OTHER_FIELD_ENV = "synthetic-env-discord-value-0016";
+
+    it.each([
+      ["botToken", "token", { botToken: OWN_REF, token: PASTED }],
+      ["botToken", "token", { botToken: OTHER_REF, token: PASTED }],
+      ["token", "botToken", { token: OWN_REF, botToken: PASTED }],
+      ["token", "botToken", { token: OTHER_REF, botToken: PASTED }],
+      ["botToken", "token variable", { botToken: OWN_REF, tokenEnv: "DISCORD_OTHER_TOKEN" }],
+      ["token", "botToken variable", { token: OWN_REF, botTokenEnv: "DISCORD_OTHER_TOKEN" }],
+      [
+        "botToken",
+        "token",
+        { botToken: OWN_REF, token: `keychain:goatcitadel:channel-connection:${CONNECTION_ID}:token:x` },
+      ],
+    ])("stops instead of falling back from %s to the %s", async (_unreadable, _other, config) => {
+      vi.stubEnv("DISCORD_OTHER_TOKEN", OTHER_FIELD_ENV);
+      const connection = createConnection({ ...config, guilds: {} });
+      const service = createService({ listConnections: () => [connection] });
+      // Nothing is stored for either field, so the saved key (and a second saved key, where there is one) is unreadable.
+      service.setSecretReferenceReader(() => undefined);
+      const createManagedRuntime = vi.spyOn(service as any, "createManagedRuntime");
+
+      await service.sync();
+
+      expect(createManagedRuntime).not.toHaveBeenCalled();
+      const status = service.getConnectionStatus(CONNECTION_ID);
+      expect(status).toMatchObject({ ready: false, lastError: UNAVAILABLE });
+      for (const text of [PASTED, OTHER_FIELD_ENV, OWN_REF, OTHER_REF]) {
+        expect(JSON.stringify(status)).not.toContain(text);
+      }
+      await service.close();
+    });
+
+    it("stops when one field's saved key is readable but the other's is not", async () => {
+      const connection = createConnection({
+        botToken: OWN_REF,
+        token: `keychain:goatcitadel:channel-connection:${CONNECTION_ID}:token:00000000-0000-4000-8000-000000000009`,
+        guilds: {},
+      });
+      const service = createService({ listConnections: () => [connection] });
+      service.setSecretReferenceReader((ref) => (ref === OWN_REF ? STORED : undefined));
+      const createManagedRuntime = vi.spyOn(service as any, "createManagedRuntime");
+
+      await service.sync();
+
+      expect(createManagedRuntime).not.toHaveBeenCalled();
+      expect(service.getConnectionStatus(CONNECTION_ID)).toMatchObject({ ready: false, lastError: UNAVAILABLE });
+      await service.close();
+    });
+
+    it("still logs in with a readable saved key when the other field is empty or holds a pasted key", async () => {
+      for (const config of [
+        { botToken: OWN_REF },
+        { botToken: OWN_REF, token: "   " },
+        { botToken: OWN_REF, token: PASTED },
+      ]) {
+        const connection = createConnection({ ...config, guilds: {} });
+        const service = createService({ listConnections: () => [connection] });
+        service.setSecretReferenceReader((ref) => (ref === OWN_REF ? STORED : undefined));
+        const runtime = stubRuntime(STORED);
+        const createManagedRuntime = vi.spyOn(service as any, "createManagedRuntime").mockReturnValue(runtime);
+
+        await service.sync();
+
+        expect(createManagedRuntime).toHaveBeenCalledWith(STORED, [connection]);
+        await service.close();
+      }
+    });
   });
 
   it("never returns a reference as a secret from readDiscordSecret", () => {

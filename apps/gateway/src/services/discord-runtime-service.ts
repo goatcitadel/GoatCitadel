@@ -173,9 +173,7 @@ export class DiscordRuntimeService {
         connection.connectionId,
         this.secretReferenceReader,
       );
-      const token =
-        readDiscordSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId, resolveReference) ??
-        readDiscordSecret(connection.config, "token", "tokenEnv", connection.catalogId, resolveReference);
+      const token = readDiscordBotToken(connection.config, connection.catalogId, resolveReference);
       if (!token) {
         this.statusByConnectionId.set(connection.connectionId, {
           connectionId: connection.connectionId,
@@ -1170,6 +1168,36 @@ function readDiscordSecret(
     return undefined;
   }
   return process.env[envName]?.trim() || undefined;
+}
+
+/**
+ * The bot token for a connection: `botToken`, else the older `token`. A saved key in either field that cannot be read
+ * stops the connection, the way a send fails on any unreadable saved key: the other field, a pasted key or a variable
+ * must not stand in for a key the operator saved on purpose.
+ */
+function readDiscordBotToken(
+  config: Record<string, unknown>,
+  catalogId: string | undefined,
+  resolveReference: ChannelSecretReferenceResolver,
+): string | undefined {
+  let token: string | undefined;
+  let savedKeyUnavailable = false;
+  for (const [key, envKey] of [
+    ["botToken", "botTokenEnv"],
+    ["token", "tokenEnv"],
+  ] as const) {
+    const direct = readConfigString(config, key);
+    if (direct !== undefined && isSecureStorageReference(direct)) {
+      const saved = resolveReference(direct);
+      if (saved === undefined) {
+        savedKeyUnavailable = true;
+      }
+      token ??= saved;
+      continue;
+    }
+    token ??= readDiscordSecret(config, key, envKey, catalogId, resolveReference);
+  }
+  return savedKeyUnavailable ? undefined : token;
 }
 
 /** The sentence for a saved bot token that cannot be used, or undefined when the config holds no saved key. */
