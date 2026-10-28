@@ -25,7 +25,10 @@ const UNCHECKED_RULES_ISSUE = "Some tools' rules couldn't be checked right now."
 /** Lowest to highest, the order a group's risk is taken in. */
 const RISK_ORDER: readonly ToolRiskLevel[] = ["safe", "caution", "danger", "nuclear"];
 
-/** What each engine denial means to the operator. Any code not listed here is read as unknown. */
+/**
+ * What each engine denial means to the operator. Any code not listed here is read as unknown, including
+ * `tool_group_off`: the group's switch is the group's state, not a rule that blocks the tool.
+ */
 const BLOCK_BY_REASON_CODE: ReadonlyMap<string, CapabilityToolBlock> = new Map([
   ["policy_deny", "safety_rules"],
   ["policy_disallow", "safety_rules"],
@@ -65,11 +68,12 @@ interface ToolVerdict {
   unchecked?: boolean;
 }
 
-const NOT_PROBED: ToolVerdict = { asks: "unknown" };
+const UNKNOWN_VERDICT: ToolVerdict = { asks: "unknown" };
 
 /**
  * The Capabilities Tools tab's list: every tool group with whether it is on, and for each tool whether the AI asks
- * first or a rule blocks it. Each tool in an on group is probed with the same read-only check Chat uses.
+ * first or a rule blocks it. Every tool is probed with the same read-only check Chat uses, in switched-off groups too.
+ * A group's state comes from the Settings switches only, never from what a probe answers.
  *
  * Nothing is cached after a list finishes, so a switch shows on the next request. Requests that arrive while an
  * identical list is being built share it; a request made after a Settings change never joins a list started before it.
@@ -117,20 +121,20 @@ export class CapabilityToolsService {
       if (groupId) catalogByGroup.set(groupId, [...(catalogByGroup.get(groupId) ?? []), tool]);
     }
 
-    // A switched-off group is not probed: the engine would only answer that the switch is why.
-    const probed = TOOL_GROUPS.filter((group) => stateOf(group) !== "off").flatMap(
-      (group) => catalogByGroup.get(group.id) ?? [],
-    );
+    // Every group is probed, switched-off ones too. The engine checks the deny list before the group switch, so a tool
+    // that is also denied still reports its rule, which tells the operator that switching the group on won't be enough.
+    // A tool that is only switched off answers `tool_group_off`, which reads as unknown with no rule named.
+    const probed = TOOL_GROUPS.flatMap((group) => catalogByGroup.get(group.id) ?? []);
     const policyContext = await this.resolvePolicyContext(workspaceId, actor);
     const verdicts = new Map<string, ToolVerdict>();
     const results = await mapWithConcurrency(probed, PROBE_CONCURRENCY, (tool) =>
       this.probe(tool.toolName, workspaceId, policyContext),
     );
-    probed.forEach((tool, index) => verdicts.set(tool.toolName, results[index] ?? NOT_PROBED));
+    probed.forEach((tool, index) => verdicts.set(tool.toolName, results[index] ?? UNKNOWN_VERDICT));
 
     const groups = TOOL_GROUPS.map((group): CapabilityToolGroupItem => {
       const tools = (catalogByGroup.get(group.id) ?? []).map((tool): CapabilityToolItem => {
-        const verdict = verdicts.get(tool.toolName) ?? NOT_PROBED;
+        const verdict = verdicts.get(tool.toolName) ?? UNKNOWN_VERDICT;
         return {
           toolName: tool.toolName,
           description: tool.description,
@@ -211,7 +215,7 @@ function verdictFor(access: ToolAccessEvaluateResponse): ToolVerdict {
     const blockedBy = BLOCK_BY_REASON_CODE.get(reasonCode);
     if (blockedBy) return { asks: "unknown", blockedBy };
   }
-  return NOT_PROBED;
+  return UNKNOWN_VERDICT;
 }
 
 function riskiestOf(tools: readonly CapabilityToolItem[]): ToolRiskLevel {

@@ -52,7 +52,7 @@ export type CapabilityToolGroupState = "on" | "off" | "always_on";
 export type CapabilityToolBlock = "safety_rules" | "permission_profile" | "citadel_ward" | "grant" | "install_profile";
 
 /**
- * Whether the AI asks before using a tool. `unknown` covers a tool in a switched-off group, a tool that is blocked,
+ * Whether the AI asks before using a tool. `unknown` covers a tool that is only switched off, a tool that is blocked,
  * and one whose rules couldn't be checked; it is never a guess.
  */
 export type CapabilityToolAsks = "asks_first" | "runs_freely" | "unknown";
@@ -62,7 +62,10 @@ export interface CapabilityToolItem {
   description: string;
   risk: ToolRiskLevel;
   asks: CapabilityToolAsks;
-  /** Set only when a tool in an on group is blocked by one of the rules above. */
+  /**
+   * Set only when one of the rules above blocks the tool, in an on or a switched-off group. A group's own switch is
+   * its `state`, never a block, so a tool that is only switched off has none.
+   */
   blockedBy?: CapabilityToolBlock;
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   TOOL_GROUPS,
+  toolGroupForTool,
   type CapabilityToolBlock,
   type ToolAccessEvaluateRequest,
   type ToolAccessEvaluateResponse,
@@ -206,31 +207,98 @@ describe("CapabilityToolsService", () => {
     expect(response.issues).toEqual([]);
   });
 
-  it("doesn't probe a switched-off group", async () => {
-    const { service, sources } = build({
+  /**
+   * The engine checks the deny list before the group switch, so a tool that is also denied reports the deny and every
+   * other tool in a switched-off group reports the switch.
+   */
+  function switchedOffFiles(deniedBy: Record<string, string> = {}) {
+    return build({
+      readSettings: vi.fn(async () => ({ revision: 7, switchedOffToolGroups: ["files"] as ToolGroupId[] })),
+      inspectAccess: vi.fn(async (request: ToolAccessEvaluateRequest) => {
+        const rule = deniedBy[request.toolName];
+        if (rule) return denied(rule);
+        return toolGroupForTool(request.toolName)?.id === "files" ? denied("tool_group_off") : access();
+      }),
+    });
+  }
+
+  it("shows a safety-rules block on a switched-off group's denied tool", async () => {
+    const { service, sources } = switchedOffFiles({ "fs.delete": "policy_deny" });
+
+    const response = await service.list("default", ACTOR);
+
+    // Every tool is probed, the switched-off group's included, with the same request shape.
+    const probed = sources.inspectAccess.mock.calls.map(([request]) => request.toolName);
+    expect(probed).toEqual(expect.arrayContaining(["fs.read", "fs.write", "fs.delete", "time.now", "shell.exec"]));
+    expect(probed).toHaveLength(CATALOG.length);
+    expect(sources.inspectAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "fs.delete", sessionId: "capabilities-tools", surface: "chat" }),
+    );
+    const files = response.groups.find((group) => group.groupId === "files");
+    expect(files?.state).toBe("off");
+    expect(files?.tools.find((tool) => tool.toolName === "fs.delete")).toMatchObject({
+      blockedBy: "safety_rules",
+      asks: "unknown",
+    });
+    expect(files?.blockedToolCount).toBe(1);
+  });
+
+  it("gives no block for a tool that's only switched off", async () => {
+    const { service } = switchedOffFiles({ "fs.delete": "policy_deny" });
+
+    const response = await service.list("default", ACTOR);
+
+    const files = response.groups.find((group) => group.groupId === "files");
+    expect(files?.tools.map((tool) => [tool.toolName, tool.asks, tool.blockedBy])).toEqual([
+      ["fs.write", "unknown", undefined],
+      ["fs.read", "unknown", undefined],
+      ["fs.delete", "unknown", "safety_rules"],
+    ]);
+    // The switch is not a rule that blocks the tool, so it isn't counted and it isn't an unreadable answer either.
+    expect(files?.blockedToolCount).toBe(1);
+    expect(response.issues).toEqual([]);
+  });
+
+  it("counts no blocked tool when every tool in a switched-off group is only switched off", async () => {
+    const { service } = switchedOffFiles();
+
+    const response = await service.list("default", ACTOR);
+
+    const files = response.groups.find((group) => group.groupId === "files");
+    expect(files?.tools.every((tool) => tool.asks === "unknown" && tool.blockedBy === undefined)).toBe(true);
+    expect(files?.blockedToolCount).toBe(0);
+    expect(response.issues).toEqual([]);
+  });
+
+  it("takes a group's state from the Settings switches, never from the probe", async () => {
+    // The probe says "allowed" for every tool, yet Files is in the switched-off list and Git is not.
+    const { service } = build({
       readSettings: vi.fn(async () => ({ revision: 7, switchedOffToolGroups: ["files"] as ToolGroupId[] })),
     });
 
     const response = await service.list("default", ACTOR);
 
-    const probed = sources.inspectAccess.mock.calls.map(([request]) => request.toolName);
-    expect(probed).not.toContain("fs.read");
-    expect(probed).not.toContain("fs.write");
-    expect(probed).not.toContain("fs.delete");
-    // Core and the groups that are on are still probed.
-    expect(probed).toEqual(expect.arrayContaining(["time.now", "mcp.invoke", "shell.exec", "browser.search"]));
-    const files = response.groups.find((group) => group.groupId === "files");
-    expect(files?.state).toBe("off");
-    expect(files?.tools.map((tool) => [tool.toolName, tool.asks, tool.blockedBy])).toEqual([
-      ["fs.write", "unknown", undefined],
-      ["fs.read", "unknown", undefined],
-      ["fs.delete", "unknown", undefined],
-    ]);
-    expect(files?.blockedToolCount).toBe(0);
-    expect(sources.isBlockedByInstall).not.toHaveBeenCalledWith("fs.read", expect.anything());
+    expect(response.groups.find((group) => group.groupId === "files")?.state).toBe("off");
+    expect(response.groups.find((group) => group.groupId === "git")?.state).toBe("on");
+    expect(response.groups.find((group) => group.groupId === "core")?.state).toBe("always_on");
   });
 
-  it("probes every tool of an on group once", async () => {
+  it("applies the install's profile guard to a switched-off group's tools too", async () => {
+    const { service } = build({
+      listToolCatalog: vi.fn(() => [entry("browser.cookies.get", "caution"), entry("browser.navigate")]),
+      readSettings: vi.fn(async () => ({ revision: 7, switchedOffToolGroups: ["browser"] as ToolGroupId[] })),
+      isBlockedByInstall: vi.fn((toolName: string) => toolName === "browser.cookies.get"),
+    });
+
+    const response = await service.list("default", ACTOR);
+
+    const browser = response.groups.find((group) => group.groupId === "browser");
+    expect(browser?.state).toBe("off");
+    expect(browser?.tools.find((tool) => tool.toolName === "browser.cookies.get")?.blockedBy).toBe("install_profile");
+    expect(browser?.blockedToolCount).toBe(1);
+  });
+
+  it("probes every tool once", async () => {
     const { service, sources } = build();
 
     await service.list("default", ACTOR);

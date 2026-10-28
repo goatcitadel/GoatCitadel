@@ -17,7 +17,7 @@ export const capabilityToolsRoutes: FastifyPluginAsync = async (fastify) => {
    */
   fastify.get(
     "/api/v1/capabilities/tools",
-    // Each list probes every tool of every group that is on, so this is tighter than the general read bucket.
+    // Each list probes every tool, so this is tighter than the general read bucket.
     { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const query = listQuerySchema.safeParse(request.query);

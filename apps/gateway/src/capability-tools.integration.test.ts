@@ -105,25 +105,34 @@ describe("Capabilities tool groups over the real Gateway", { timeout: 300_000 },
     vi.restoreAllMocks();
   });
 
-  it("shows a group switch on the next request", async () => {
+  it("shows a group switch on the next request, and keeps the other rules on that group's tools", async () => {
     const before = await readList();
-    expect(before.groups.find((group) => group.groupId === "git")?.state).toBe("on");
+    const filesBefore = before.groups.find((group) => group.groupId === "files");
+    expect(filesBefore?.state).toBe("on");
+    // The shipped example config denies the file write tools, whatever the switch says.
+    expect(filesBefore?.tools.find((tool) => tool.toolName === "fs.write")?.blockedBy).toBe("safety_rules");
+    expect(filesBefore?.blockedToolCount).toBeGreaterThan(0);
 
     const saved = await app!.inject({
       method: "PATCH",
       url: "/api/v1/settings",
-      headers: { "idempotency-key": "capability-tools-integration-git-off" },
-      payload: { expectedRevision: before.settingsRevision, toolGroupChange: { groupId: "git", enabled: false } },
+      headers: { "idempotency-key": "capability-tools-integration-files-off" },
+      payload: { expectedRevision: before.settingsRevision, toolGroupChange: { groupId: "files", enabled: false } },
     });
     expect(saved.statusCode, saved.body).toBeLessThan(300);
 
     const after = await readList();
-    const git = after.groups.find((group) => group.groupId === "git");
-    expect(git?.state).toBe("off");
-    // A switched-off group is not checked, so its tools read as unknown and no rule is named.
-    expect(git?.tools.length).toBeGreaterThan(0);
-    expect(git?.tools.every((tool) => tool.asks === "unknown" && tool.blockedBy === undefined)).toBe(true);
+    const files = after.groups.find((group) => group.groupId === "files");
+    expect(files?.state).toBe("off");
+    // A tool that is only switched off reads unknown with no rule named.
+    const read = files?.tools.find((tool) => tool.toolName === "fs.read");
+    expect(read).toMatchObject({ asks: "unknown" });
+    expect(read?.blockedBy).toBeUndefined();
+    // A tool that is also denied keeps its rule, so the operator learns switching the group on won't be enough.
+    expect(files?.tools.find((tool) => tool.toolName === "fs.write")?.blockedBy).toBe("safety_rules");
+    expect(files?.blockedToolCount).toBe(filesBefore?.blockedToolCount);
+    expect(after.issues).toEqual([]);
     expect(after.settingsRevision).toBeGreaterThan(before.settingsRevision);
-    expect(after.groups.find((group) => group.groupId === "files")?.state).toBe("on");
+    expect(after.groups.find((group) => group.groupId === "git")?.state).toBe("on");
   });
 });
