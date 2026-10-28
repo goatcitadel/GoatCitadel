@@ -396,8 +396,17 @@ export function plainSecretLabel(label: string): string {
 }
 
 /**
+ * What a secret is called, for the field that takes the name of a variable holding it. The pasted field's label can end
+ * in a hint on how to paste ("(paste the JSON)"), but the variable holds a name, not the secret, so the hint goes. Only
+ * a trailing hint goes: other parentheses and a hint in the middle of the label stay.
+ */
+export function secretNameForVariable(label: string): string {
+  return label.replace(/\s*\((?:manual fallback|paste\b[^)]*)\)\s*$/iu, "").trim();
+}
+
+/**
  * Label, help and expert-option flag for an environment-variable field. The label names the secret the way the
- * pasted twin does; a field with no twin keeps its own words minus "env var".
+ * pasted twin does, minus any hint on pasting; a field with no twin keeps its own words minus "env var".
  */
 export function secretEnvFieldCopy(
   channelKey: string,
@@ -405,7 +414,7 @@ export function secretEnvFieldCopy(
   pastedTwin?: ChannelSetupFieldDefinition,
 ): Pick<ChannelSetupFieldDefinition, "label" | "explanation" | "advanced"> {
   const name = pastedTwin
-    ? plainSecretLabel(pastedTwin.label)
+    ? secretNameForVariable(pastedTwin.label)
     : field.label.replace(/\s+env(?:ironment)?\s+var(?:iable)?\b/giu, "").trim();
   const help = field.explanation.replace(/^Preferred path\.\s*/iu, "").trim();
   const sentence = help === "" || /[.!?]$/u.test(help) ? help : `${help}.`;

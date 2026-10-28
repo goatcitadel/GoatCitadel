@@ -382,7 +382,8 @@ describe("Google Chat setup guide: the service-account key (item 7, A5)", () => 
     const env = field("serviceAccountKeyEnv");
 
     expect(env.advanced).toBe(true);
-    expect(env.label).toBe("Service-account key (paste the JSON) from an environment variable (advanced)");
+    // The variable holds a name, not the JSON, so its label does not say to paste anything.
+    expect(env.label).toBe("Service-account key from an environment variable (advanced)");
     expect(env.explanation).toBe(
       "Name of the environment variable that holds the whole JSON key. The variable's name must start with GOOGLE_CHAT_ (for example GOOGLE_CHAT_SERVICE_ACCOUNT_KEY). Set it where GoatCitadel starts, then restart GoatCitadel.",
     );
@@ -393,6 +394,21 @@ describe("Google Chat setup guide: the service-account key (item 7, A5)", () => 
 
     expect(alternatives).toEqual(
       expect.arrayContaining(["webhookUrl", "webhookUrlEnv", "serviceAccountKey", "serviceAccountKeyEnv"]),
+    );
+  });
+
+  it("names each way in once when Continue is blocked, without repeating the paste hint", () => {
+    const step1 = step("collect-values-identity");
+    // How the wizard words it: the labels of the alternatives that have a field, joined with " or ".
+    const shown = (step1.requiredAnyOf?.[0] ?? []).flatMap((key) => {
+      const found = guide()
+        .definition.wizard.steps.flatMap((candidate) => candidate.fields ?? [])
+        .find((candidate) => candidate.key === key);
+      return found ? [found.label] : [];
+    });
+
+    expect(shown.join(" or ")).toBe(
+      "Incoming webhook URL or Service-account key (paste the JSON) or Service-account key from an environment variable (advanced)",
     );
   });
 

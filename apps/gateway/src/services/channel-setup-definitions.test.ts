@@ -8,7 +8,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { listChannelSetupDefinitions, requireChannelSetupDefinition } from "./channel-setup-definitions.js";
 import type { ChannelSetupRuntimeDefinition } from "./channel-setup-definitions.js";
-import { requireSecureUrl } from "./channel-setup-definitions/common.js";
+import { plainSecretLabel, requireSecureUrl, secretNameForVariable } from "./channel-setup-definitions/common.js";
 import { withGuidedJourney } from "./channel-setup-definitions/guided-journey.js";
 import { createLineDefinition } from "./channel-setup-definitions/line.js";
 import { isAllowedSecretEnvName } from "./channel-secret-resolution.js";
@@ -1512,9 +1512,69 @@ describe("the shared guide builder", () => {
       );
       // ntfy has no pasted twin yet, so the label keeps its own words minus "env var".
       expect(fieldOf("ntfy", "tokenEnv")?.label).toBe("Token from an environment variable (advanced)");
+      // Its pasted twin is "Service-account key (paste the JSON)", but the variable holds a name, not the JSON.
       expect(fieldOf("google-chat", "serviceAccountKeyEnv")?.label).toBe(
-        "Service-account key (paste the JSON) from an environment variable (advanced)",
+        "Service-account key from an environment variable (advanced)",
       );
+      expect(fieldOf("google-chat", "serviceAccountKey")?.label).toBe("Service-account key (paste the JSON)");
+    });
+
+    it("keeps any paste hint out of the label of the field that takes a variable name", () => {
+      const labels = listChannelSetupDefinitions().flatMap((definition) =>
+        definition.wizard.steps
+          .flatMap((step) => step.fields ?? [])
+          .filter((field) => field.key.endsWith("Env"))
+          .map((field) => field.label),
+      );
+
+      expect(labels.length).toBeGreaterThanOrEqual(17);
+      for (const label of labels) expect(label, label).not.toMatch(/\(paste/iu);
+    });
+
+    it("leaves every other guide's variable label as it was", () => {
+      const labels = Object.fromEntries(
+        listChannelSetupDefinitions().flatMap((definition) =>
+          definition.wizard.steps
+            .flatMap((step) => step.fields ?? [])
+            .filter((field) => field.key.endsWith("Env") && definition.catalog.key !== "google-chat")
+            .map((field) => [`${definition.catalog.key}.${field.key}`, field.label]),
+        ),
+      );
+
+      expect(labels).toMatchObject({
+        "telegram.webhookSecretEnv": "Webhook secret from an environment variable (advanced)",
+        "ntfy.tokenEnv": "Token from an environment variable (advanced)",
+        "nextcloud-talk.tokenEnv": "Token from an environment variable (advanced)",
+        "discord.botTokenEnv": "Bot token from an environment variable (advanced)",
+        "whatsapp.accessTokenEnv": "Access token from an environment variable (advanced)",
+        "whatsapp.appSecretEnv": "App secret from an environment variable (advanced)",
+        "whatsapp.webhookVerifyTokenEnv": "Webhook verify token from an environment variable (advanced)",
+        "mattermost.botTokenEnv": "Bot token from an environment variable (advanced)",
+        "matrix.accessTokenEnv": "Access token from an environment variable (advanced)",
+        "qqbot.appSecretEnv": "App secret from an environment variable (advanced)",
+        "wecom.secretEnv": "Application secret from an environment variable (advanced)",
+        "wecom.callbackTokenEnv": "Callback token from an environment variable (advanced)",
+        "wecom.encodingAesKeyEnv": "EncodingAESKey from an environment variable (advanced)",
+        "line.channelAccessTokenEnv": "Channel access token from an environment variable (advanced)",
+        "line.channelSecretEnv": "Channel secret from an environment variable (advanced)",
+        "zalo.accessTokenEnv": "Access token from an environment variable (advanced)",
+      });
+    });
+
+    it("drops a trailing paste hint, and only that, from a secret's name for its variable field", () => {
+      expect(secretNameForVariable("Service-account key (paste the JSON)")).toBe("Service-account key");
+      expect(secretNameForVariable("Bot token (paste it)")).toBe("Bot token");
+      expect(secretNameForVariable("Access token (Paste)")).toBe("Access token");
+      expect(secretNameForVariable("Access token (manual fallback)")).toBe("Access token");
+      // No hint: unchanged.
+      expect(secretNameForVariable("Bot token")).toBe("Bot token");
+      expect(secretNameForVariable("Channel access token")).toBe("Channel access token");
+      // A parenthetical that does not describe pasting stays, and so does a hint that is not at the end.
+      expect(secretNameForVariable("Webhook URL (send-only)")).toBe("Webhook URL (send-only)");
+      expect(secretNameForVariable("Key (paste it) for sending")).toBe("Key (paste it) for sending");
+      expect(secretNameForVariable("Pasted key")).toBe("Pasted key");
+      // The pasted field itself keeps its hint.
+      expect(plainSecretLabel("Service-account key (paste the JSON)")).toBe("Service-account key (paste the JSON)");
     });
 
     it("makes the pasted secret the first choice and says where it is kept", () => {
