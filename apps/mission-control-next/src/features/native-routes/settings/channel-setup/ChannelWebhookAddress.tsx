@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import type { ChannelSetupDefinition, ChannelSetupDraft, IntegrationConnection } from "@goatcitadel/contracts";
 import { Button } from "../../../../cockpit/ui/Button";
-import { inboundWebhookPath, receivesOnWebhook } from "./channel-wizard-model";
+import { inboundWebhookPath } from "./channel-wizard-model";
 
 /** GoatCitadel does not know its public address, so this placeholder is the only form of it any copy may show. */
 const PUBLIC_ADDRESS_PLACEHOLDER = "https://<your public address>";
@@ -9,8 +9,17 @@ const PUBLIC_ADDRESS_PLACEHOLDER = "https://<your public address>";
 /**
  * The address a vendor posts messages to, as the Gateway path behind the operator's own public address. It adds no
  * live region: Copied is only the button's label, and a clipboard that is missing or refuses leaves it on Copy.
+ * `notLiveYet` is for a new setup, whose address is known before it exists as a connection.
  */
-export function ChannelWebhookAddress({ path, className = "" }: { path: string; className?: string }) {
+export function ChannelWebhookAddress({
+  path,
+  notLiveYet = false,
+  className = "",
+}: {
+  path: string;
+  notLiveYet?: boolean;
+  className?: string;
+}) {
   const address = `${PUBLIC_ADDRESS_PLACEHOLDER}${path}`;
   // The copy belongs to the address it was made for, so a different address starts on Copy again.
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
@@ -42,13 +51,15 @@ export function ChannelWebhookAddress({ path, className = "" }: { path: string; 
           "GoatCitadel doesn't provide a public address. Put your own HTTPS address (a reverse proxy or tunnel) in front of GoatCitadel, then give the vendor this address."
         }
       </p>
+      {notLiveYet ? <p className="text-sm text-fg-secondary">{"This address works once you finish."}</p> : null}
     </section>
   );
 }
 
 /**
- * What the guides' first-message step says about the webhook. A new setup has no connection id yet, so it only says
- * where the address will be; a saved connection that is being changed shows the address itself.
+ * What the guides' first-message step says about the webhook. A new setup keeps its draft's id as its connection's id
+ * when it is finished, so it shows the real address now, and says it works once the setup is finished. A saved
+ * connection that is being changed shows its own address.
  */
 export function ChannelFirstMessageWebhook({
   definition,
@@ -57,20 +68,13 @@ export function ChannelFirstMessageWebhook({
   className = "",
 }: {
   definition: ChannelSetupDefinition;
-  draft: Pick<ChannelSetupDraft, "lifecycleMode" | "connectionId">;
+  draft: Pick<ChannelSetupDraft, "lifecycleMode" | "draftId" | "connectionId">;
   values: Record<string, unknown>;
   className?: string;
 }) {
-  if (draft.lifecycleMode === "create") {
-    if (!receivesOnWebhook(definition, values)) return null;
-    return (
-      <p className={`text-sm text-fg-secondary ${className}`.trim()}>
-        {"You get this address after you finish: Settings › Channels › this connection."}
-      </p>
-    );
-  }
-  const path = inboundWebhookPath(definition, values, draft.connectionId);
-  return path ? <ChannelWebhookAddress path={path} className={className} /> : null;
+  const isNewSetup = draft.lifecycleMode === "create";
+  const path = inboundWebhookPath(definition, values, isNewSetup ? draft.draftId : draft.connectionId);
+  return path ? <ChannelWebhookAddress path={path} notLiveYet={isNewSetup} className={className} /> : null;
 }
 
 /** The address on a saved connection's panel, from its channel's definition and its saved settings. */

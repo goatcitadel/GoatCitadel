@@ -96,7 +96,7 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
               code: ['occ talk:bot:create "GoatCitadel"', "occ talk:bot:setup <bot-id> <room-token>"].join("\n"),
             },
             paragraph(
-              "Receiving (optional), after you finish. No occ command changes a bot's webhook address, so to receive you install the bot again with this connection's address. GoatCitadel shows it after you finish: Settings › Channels › this connection.",
+              "Receiving (optional). No occ command changes a bot's webhook address, so to receive you install the bot again with this connection's address. GoatCitadel shows that address on the Verify the first conversation step, before you finish. It answers once the connection is finished and on.",
             ),
             note(
               "warning",
@@ -117,8 +117,8 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
             linkBlock("Nextcloud Talk: occ commands", "https://nextcloud-talk.readthedocs.io/en/latest/occ/"),
             linkBlock("Nextcloud Talk: bots", "https://nextcloud-talk.readthedocs.io/en/latest/bots/"),
           ],
-          // Only what every setup needs. Installing the bot again with a webhook address is for receiving, after you
-          // finish: it is a list above, not a box, because each box here blocks Continue.
+          // Only what every setup needs. Installing the bot again with a webhook address is for receiving only: it is
+          // a list above, not a box, because each box here blocks Continue.
           checklist: [
             check("create", "Create the bot with the response feature"),
             check("setup-room", "Turn the bot on for the conversation"),
@@ -265,7 +265,7 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
             ),
             // The setup-only step that first lists these is hidden when a saved channel is edited, so they are here too.
             paragraph(
-              "Run these on your Nextcloud server, with your own values in place of the <…> parts. GoatCitadel shows this connection's webhook address in Settings › Channels › this connection.",
+              "Run these on your Nextcloud server, with your own values in place of the <…> parts. GoatCitadel shows this connection's webhook address on the Verify the first conversation step and in Settings › Channels › this connection. It answers once the connection is finished and on.",
             ),
             { kind: "code", language: "shell", code: RECEIVE_REINSTALL_COMMANDS },
           ],

@@ -9,7 +9,7 @@ const SLACK_PATH = "/api/v1/integrations/connections/conn-1/slack/webhook";
 const SLACK_ADDRESS = `https://<your public address>${SLACK_PATH}`;
 const NOTE =
   "GoatCitadel doesn't provide a public address. Put your own HTTPS address (a reverse proxy or tunnel) in front of GoatCitadel, then give the vendor this address.";
-const AFTER_FINISH = "You get this address after you finish: Settings › Channels › this connection.";
+const WORKS_ONCE_FINISHED = "This address works once you finish.";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -143,13 +143,48 @@ describe("ChannelWebhookAddress", () => {
 });
 
 describe("ChannelFirstMessageWebhook", () => {
-  const create = { lifecycleMode: "create" as const };
+  // A new setup has no connection yet, but it keeps its draft's id when it is finished, so the address is known now.
+  const create = { lifecycleMode: "create" as const, draftId: "draft-1" };
+  const draftAddress = (key: string, draftId = "draft-1") =>
+    `https://<your public address>/api/v1/integrations/connections/${draftId}/${key}/webhook`;
+  const worksOnceNotes = () =>
+    [...container.querySelectorAll("p")].filter((item) => item.textContent === WORKS_ONCE_FINISHED);
 
-  it("tells a new setup of a webhook channel where the address will be", async () => {
+  it("shows a new setup of a webhook channel its real address, built from the draft's id, and says it works once the setup is finished", async () => {
     await show(<ChannelFirstMessageWebhook definition={slackLike} draft={create} values={{}} />);
-    expect(container.textContent).toBe(AFTER_FINISH);
-    expect(container.querySelector("code")).toBeNull();
+    expect(container.querySelector("code")?.textContent).toBe(draftAddress("slack"));
+    expect(worksOnceNotes()).toHaveLength(1);
+    expect(container.textContent).not.toContain("after you finish");
+    expect(copyButton()?.textContent).toBe("Copy");
     expect(announces()).toBeNull();
+  });
+
+  it("copies the draft's address", async () => {
+    const writeText = vi.fn(async () => undefined);
+    withClipboard(writeText);
+    await show(<ChannelFirstMessageWebhook definition={slackLike} draft={create} values={{}} />);
+
+    await act(async () => copyButton()!.click());
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(draftAddress("slack"));
+  });
+
+  it("still gives no public address of its own: the placeholder and the note stand", async () => {
+    await show(<ChannelFirstMessageWebhook definition={slackLike} draft={create} values={{}} />);
+    expect(container.querySelector("code")?.textContent).toMatch(/^https:\/\/<your public address>\//u);
+    expect([...container.querySelectorAll("p")].map((item) => item.textContent)).toContain(NOTE);
+  });
+
+  it("escapes the draft's id once", async () => {
+    await show(
+      <ChannelFirstMessageWebhook
+        definition={slackLike}
+        draft={{ lifecycleMode: "create", draftId: "d 1/2" }}
+        values={{}}
+      />,
+    );
+    expect(container.querySelector("code")?.textContent).toBe(draftAddress("slack", "d%201%2F2"));
+    expect(container.querySelector("code")?.textContent).not.toContain("%25");
   });
 
   it("says nothing for a channel that doesn't receive on a webhook", async () => {
@@ -157,7 +192,7 @@ describe("ChannelFirstMessageWebhook", () => {
     expect(container.textContent).toBe("");
   });
 
-  it("follows the condition for Telegram: poll says nothing, webhook says where it will be", async () => {
+  it("follows the condition for Telegram: poll says nothing, webhook shows the address", async () => {
     await show(<ChannelFirstMessageWebhook definition={telegramLike} draft={create} values={{}} />);
     expect(container.textContent).toBe("");
     await show(
@@ -167,28 +202,48 @@ describe("ChannelFirstMessageWebhook", () => {
     await show(
       <ChannelFirstMessageWebhook definition={telegramLike} draft={create} values={{ receiveMode: "webhook" }} />,
     );
-    expect(container.textContent).toBe(AFTER_FINISH);
+    expect(container.querySelector("code")?.textContent).toBe(draftAddress("telegram"));
+    expect(worksOnceNotes()).toHaveLength(1);
   });
 
-  it("shows the address itself for a saved connection that is being changed", async () => {
+  it("shows the address itself for a saved connection that is being changed, with no wait to mention", async () => {
     await show(
       <ChannelFirstMessageWebhook
         definition={slackLike}
-        draft={{ lifecycleMode: "edit", connectionId: "conn-1" }}
+        draft={{ lifecycleMode: "edit", draftId: "draft-9", connectionId: "conn-1" }}
         values={{}}
       />,
     );
     expect(container.querySelector("code")?.textContent).toBe(SLACK_ADDRESS);
-    expect(container.textContent).not.toContain("after you finish");
+    expect(worksOnceNotes()).toHaveLength(0);
+    expect(container.textContent).not.toContain("once you finish");
+  });
+
+  it("builds a change's address from the saved connection's id, never from the change's own draft id", async () => {
+    await show(
+      <ChannelFirstMessageWebhook
+        definition={slackLike}
+        draft={{ lifecycleMode: "repair", draftId: "draft-9", connectionId: "conn-1" }}
+        values={{}}
+      />,
+    );
+    expect(container.querySelector("code")?.textContent).toBe(SLACK_ADDRESS);
+    expect(container.textContent).not.toContain("draft-9");
   });
 
   it("shows no address for a change without a connection id, or whose condition fails", async () => {
-    await show(<ChannelFirstMessageWebhook definition={slackLike} draft={{ lifecycleMode: "edit" }} values={{}} />);
+    await show(
+      <ChannelFirstMessageWebhook
+        definition={slackLike}
+        draft={{ lifecycleMode: "edit", draftId: "draft-9" }}
+        values={{}}
+      />,
+    );
     expect(container.textContent).toBe("");
     await show(
       <ChannelFirstMessageWebhook
         definition={telegramLike}
-        draft={{ lifecycleMode: "edit", connectionId: "conn-1" }}
+        draft={{ lifecycleMode: "edit", draftId: "draft-9", connectionId: "conn-1" }}
         values={{ receiveMode: "poll" }}
       />,
     );

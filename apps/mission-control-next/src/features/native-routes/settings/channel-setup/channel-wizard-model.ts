@@ -318,8 +318,9 @@ function isSetValue(value: unknown): boolean {
 }
 
 /**
- * The Gateway path a vendor posts to, for a saved connection whose webhook conditions hold: the field it must equal,
- * and, when the channel names fields, at least one of them set.
+ * The Gateway path a vendor posts to, for a connection id whose webhook conditions hold: the field it must equal,
+ * and, when the channel names fields, at least one of them set. The id is a saved connection's, or a new setup's draft
+ * id, which the connection keeps when the setup is finished. It is escaped here, once, and nowhere after.
  */
 export function inboundWebhookPath(
   definition: ChannelSetupDefinition,
@@ -335,14 +336,6 @@ export function inboundWebhookPath(
   if (alternatives?.length && !alternatives.some((key) => isSetValue(effectiveValues[key]))) return undefined;
   const encodedId = encodePathSegment(connectionId);
   return encodedId === undefined ? undefined : inbound.pathTemplate.replaceAll("{connectionId}", () => encodedId);
-}
-
-/**
- * Whether a connection set up with these values will receive on a webhook, before it has an id to name the path.
- * It asks `inboundWebhookPath` with a stand-in id, so the condition lives there and nowhere else.
- */
-export function receivesOnWebhook(definition: ChannelSetupDefinition, values: Record<string, unknown>): boolean {
-  return inboundWebhookPath(definition, values, "connection") !== undefined;
 }
 
 /** `encodeURIComponent` throws on a lone surrogate; an id that can't be encoded names no path. */

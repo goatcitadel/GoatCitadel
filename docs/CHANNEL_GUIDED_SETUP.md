@@ -155,6 +155,13 @@ while retaining historical receipts.
 The read-only draft-evidence API returns history separately from the Gateway's
 current eligibility decision; reading it does not run probes or write draft state.
 
+A new connection keeps its draft's ID. Finalization saves it under that ID, so a
+webhook channel's address, which holds the connection ID, is known and shown
+while the setup is still a draft. The address answers only once the connection is
+finished and on. Drafts and connections stay separate records, and a finished
+draft cannot be finalized again. A change to a saved connection keeps the saved
+connection's own ID.
+
 The bounded journey projection follows canonical ingress, turn and delivery
 links. The Gateway stamps accepted ingress with its connection revision. Provider
 retries preserve their original event identity and accepted generation across
