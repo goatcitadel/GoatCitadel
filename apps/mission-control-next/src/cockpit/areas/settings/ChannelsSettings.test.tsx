@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { ChannelSetupDefinition } from "@goatcitadel/contracts";
+import { describeRetiredChannel, type ChannelSetupDefinition } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
 import { __resetChannelMutationStateForTests } from "../../../features/native-routes/settings/sections/channel-setup-state";
@@ -289,5 +289,79 @@ describe("a saved connection shows where its vendor sends messages", () => {
     await inspect([connection("carrier-pigeon", "conn-3")], "carrier-pigeon connection");
     expect(selected()).not.toBeNull();
     expect(webhookSection()).toBeNull();
+  });
+});
+
+describe("a retired channel's saved connection never reads as working", () => {
+  // Saved as enabled and connected, the way it was left when the channel was retired.
+  const saved = (key: string, label: string) => ({
+    connectionId: `conn-${key}`,
+    revision: "r1",
+    catalogId: `channel.${key}`,
+    kind: "channel",
+    key,
+    label,
+    enabled: true,
+    status: "connected",
+    config: {},
+    createdAt: "2026-10-27T10:00:00.000Z",
+    updatedAt: "2026-10-27T10:00:00.000Z",
+  });
+  const rows = () => [...container.querySelectorAll('section[aria-label="Saved channel connections"] li')];
+  const rowOf = (label: string) => rows().find((item) => item.textContent?.includes(label))!;
+  const selected = () => container.querySelector('section[aria-label="Selected channel connection"]');
+
+  async function show(...connections: ReturnType<typeof saved>[]) {
+    api.fetchIntegrationConnections.mockResolvedValue({ items: connections });
+    api.fetchAgenticChannelDeliveries.mockResolvedValue({ deliveries: [] });
+    operations.fetchChannelSetupJourney.mockRejectedValue(new Error("Not under test."));
+    operations.fetchTelegramChannelPairings.mockRejectedValue(new Error("Not under test."));
+    await mount("");
+  }
+
+  it.each([
+    ["signal", "Home Signal"],
+    ["imessage", "Home iMessage"],
+    ["zalouser", "Home Zalo"],
+  ])("lists a saved %s connection as Removed with its reason, not as enabled or connected", async (key, label) => {
+    await show(saved(key, label));
+    const row = rowOf(label);
+    expect(row.textContent).toContain("Removed");
+    expect(row.textContent).toContain(describeRetiredChannel(key));
+    expect(row.textContent).not.toMatch(/enabled|disabled|connected|observed/i);
+    // It stays inspectable, so the operator can still remove it.
+    expect(buttonNamed(`Inspect ${label}`)).toBeDefined();
+  });
+
+  it("keeps a working channel's row as it was, beside a retired one", async () => {
+    await show(saved("signal", "Home Signal"), saved("slack", "Team Slack"));
+    expect(rowOf("Team Slack").textContent).toContain("slack · Enabled · observed connected");
+    expect(rowOf("Team Slack").textContent).not.toContain("Removed");
+  });
+
+  it("opens a retired connection with its reason and only the controls that still make sense", async () => {
+    await show(saved("signal", "Home Signal"));
+    await act(async () => buttonNamed("Inspect Home Signal")!.click());
+    await settle();
+    const panel = selected()!;
+    expect(panel).not.toBeNull();
+    expect(panel.textContent).toContain(describeRetiredChannel("signal"));
+    expect(panel.textContent).not.toContain("No last error recorded");
+    // Nothing that implies it can send, be checked or be switched on.
+    expect(buttonNamed("Edit channel setup")).toBeUndefined();
+    expect(panel.querySelector('section[aria-label="Channel journey"]')).toBeNull();
+    expect(operations.fetchChannelSetupJourney).not.toHaveBeenCalled();
+    expect(buttonNamed("Review disable channel")).toBeUndefined();
+    expect(buttonNamed("Review enable channel")).toBeUndefined();
+    // Removing it is still offered.
+    expect(buttonNamed("Remove channel connection")).toBeDefined();
+  });
+
+  it("keeps a working connection's controls", async () => {
+    await show(saved("slack", "Team Slack"));
+    await act(async () => buttonNamed("Inspect Team Slack")!.click());
+    await settle();
+    expect(buttonNamed("Edit channel setup")).toBeDefined();
+    expect(buttonNamed("Review disable channel")).toBeDefined();
   });
 });

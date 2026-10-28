@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { describeRetiredChannel } from "@goatcitadel/contracts";
+import { presentChannelStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import {
   createChannelPlanReviewHandoff,
   channelPlanReviewHref,
@@ -11,6 +13,7 @@ import { channelPickerHref } from "../../app/routes";
 import { chatSetupHref, chatSetupHrefForDraft } from "../chat/channel-setup/channel-picker-model";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
+import { StatusBadge } from "../../ui/StatusBadge";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { ChannelOutcomeCheck } from "../../../features/native-routes/settings/sections/ChannelOutcomeCheck";
 import { ChannelDraftEditor } from "./ChannelDraftEditor";
@@ -31,6 +34,8 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
   const [limit, setLimit] = useState(20);
   const { data, selectedDraft, selectedDefinition, channelDraft, selectedConnection } = owner;
   const disabled = owner.mutation.pending || Boolean(owner.mutation.uncertain) || owner.entryBusy;
+  // A retired channel's connection can only be removed; nothing about it can be edited, checked or switched on.
+  const selectedRetiredReason = selectedConnection ? describeRetiredChannel(selectedConnection.key) : undefined;
   const matches = (label: string) => label.toLowerCase().includes(query.trim().toLowerCase());
   // A channel with its own setup page in Chat is set up there, from the start or from where a new setup stopped.
   const createInChat = owner.createDefinition ? chatSetupHref(owner.createDefinition) : undefined;
@@ -271,24 +276,38 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
               {data?.connections
                 .filter((item) => matches(`${item.label} ${item.key}`))
                 .slice(0, limit)
-                .map((item) => (
-                  <li key={item.connectionId} className="py-3">
-                    <h4 className="font-medium">{item.label}</h4>
-                    <p className="text-sm text-fg-secondary">
-                      {item.key} · {item.enabled ? "Enabled" : "Disabled"} · observed {item.status}
-                    </p>
-                    <Button
-                      onClick={() =>
-                        owner.leave.request(() => {
-                          owner.setSelectedConnectionId(item.connectionId);
-                          owner.setPanel("connection");
-                        })
-                      }
-                    >
-                      Inspect {item.label}
-                    </Button>
-                  </li>
-                ))}
+                .map((item) => {
+                  // A retired channel's saved state is left as it was; it is out of service whatever that state says.
+                  const retired = describeRetiredChannel(item.key);
+                  return (
+                    <li key={item.connectionId} className="py-3">
+                      <h4 className="font-medium">{item.label}</h4>
+                      {retired ? (
+                        <>
+                          <p className="flex flex-wrap items-center gap-2 text-sm text-fg-secondary">
+                            {item.key}
+                            <StatusBadge status={presentChannelStatus("removed")} />
+                          </p>
+                          <p className="text-sm text-fg-secondary">{retired}</p>
+                        </>
+                      ) : (
+                        <p className="text-sm text-fg-secondary">
+                          {item.key} · {item.enabled ? "Enabled" : "Disabled"} · observed {item.status}
+                        </p>
+                      )}
+                      <Button
+                        onClick={() =>
+                          owner.leave.request(() => {
+                            owner.setSelectedConnectionId(item.connectionId);
+                            owner.setPanel("connection");
+                          })
+                        }
+                      >
+                        Inspect {item.label}
+                      </Button>
+                    </li>
+                  );
+                })}
             </ul>
             {data && !data.connections.length && !data.issues.some((item) => item.label === "Channel connections") ? (
               <p className="text-sm text-fg-muted">No saved channel connections.</p>
@@ -333,25 +352,35 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
           {owner.panel === "connection" && selectedConnection ? (
             <section aria-label="Selected channel connection" className="space-y-3 border-t border-line-subtle pt-4">
               <h3 className="font-semibold">{selectedConnection.label}</h3>
-              <p className="text-sm">
-                {selectedConnection.lastError ?? "No last error recorded. This does not prove current connectivity."}
-              </p>
-              <Button disabled={disabled} onClick={() => void owner.editConnection()}>
-                Edit channel setup
-              </Button>
-              <ChannelOperations
-                key={selectedConnection.connectionId}
-                connection={selectedConnection}
-                onUpdated={owner.reload}
-                connectorDiagnosticsEnabled={data?.connectorDiagnosticsEnabled}
-              />
+              {selectedRetiredReason ? (
+                <p className="text-sm">{selectedRetiredReason}</p>
+              ) : (
+                <>
+                  <p className="text-sm">
+                    {selectedConnection.lastError ??
+                      "No last error recorded. This does not prove current connectivity."}
+                  </p>
+                  <Button disabled={disabled} onClick={() => void owner.editConnection()}>
+                    Edit channel setup
+                  </Button>
+                  <ChannelOperations
+                    key={selectedConnection.connectionId}
+                    connection={selectedConnection}
+                    onUpdated={owner.reload}
+                    connectorDiagnosticsEnabled={data?.connectorDiagnosticsEnabled}
+                  />
+                </>
+              )}
               <ChannelLifecycleControls
                 key={`lifecycle:${selectedConnection.connectionId}`}
                 workspaceId={workspaceId}
                 selection={{ connection: selectedConnection }}
                 reload={owner.reload}
+                removeOnly={Boolean(selectedRetiredReason)}
               />
-              <ChannelConnectionWebhook connection={selectedConnection} definitions={data?.definitions} />
+              {selectedRetiredReason ? null : (
+                <ChannelConnectionWebhook connection={selectedConnection} definitions={data?.definitions} />
+              )}
               <details className="text-sm">
                 <summary className="cursor-pointer">Connection identity</summary>
                 <p className="break-all">

@@ -148,6 +148,23 @@ describe("native integration connections", () => {
     await click(button("Show more integrations"));
     expect(view.root.findAllByType("li")).toHaveLength(25);
   });
+  it("never lists a retired channel's saved connection as an enabled, connected integration", async () => {
+    // Saved as enabled and connected; a channel's connection is kept out of this list whatever its state.
+    items = [
+      connection("one"),
+      connection("signal", {
+        kind: "channel",
+        key: "signal",
+        catalogId: "channel.signal",
+        label: "Home Signal",
+        enabled: true,
+        status: "connected",
+      }),
+    ];
+    await mount();
+    expect(view.root.findAllByType("li")).toHaveLength(1);
+    expect(text(view.root)).not.toContain("Home Signal");
+  });
   it("keeps unknown mutation outcomes visible and locked after a remount", async () => {
     await mount();
     await click(button("Review enable"));

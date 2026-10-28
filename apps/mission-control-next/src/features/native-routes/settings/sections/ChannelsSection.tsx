@@ -1,4 +1,6 @@
 import { Plus } from "lucide-react";
+import { describeRetiredChannel } from "@goatcitadel/contracts";
+import { presentChannelStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import {
   createChannelPlanReviewHandoff,
   channelPlanReviewRouteFields,
@@ -98,6 +100,8 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
   // A channel with its own setup page in Chat is set up there, from the start or from where a new setup stopped:
   // each unfinished one is a link to that very setup, and only the rest open this guide.
   const createInChat = createDefinition ? chatSetupHref(createDefinition) : undefined;
+  // A retired channel's connection stays listed to be read, but nothing about it can be edited or checked.
+  const selectedRetiredReason = selectedConnection ? describeRetiredChannel(selectedConnection.key) : undefined;
   const chatDrafts = (data?.drafts ?? []).flatMap((draft) => {
     const href = chatSetupHrefForDraft(draft, data?.definitions ?? []);
     return href ? [{ draft, href }] : [];
@@ -301,12 +305,23 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                 ]}
               >
                 <NativeSelectableList
-                  items={(data.connections ?? []).map((item) => ({
-                    id: item.connectionId,
-                    title: item.label,
-                    meta: item.status,
-                    body: item.key + " · " + (item.enabled ? "enabled" : "disabled"),
-                  }))}
+                  items={(data.connections ?? []).map((item) => {
+                    // A retired channel's saved state is left as it was; it is out of service whatever that says.
+                    const retired = describeRetiredChannel(item.key);
+                    return retired
+                      ? {
+                          id: item.connectionId,
+                          title: item.label,
+                          status: presentChannelStatus("removed"),
+                          body: retired,
+                        }
+                      : {
+                          id: item.connectionId,
+                          title: item.label,
+                          meta: item.status,
+                          body: item.key + " · " + (item.enabled ? "enabled" : "disabled"),
+                        };
+                  })}
                   selectedId={panel === "connection" ? selectedConnectionId : undefined}
                   onSelect={(id) => {
                     setSelectedConnectionId(id);
@@ -358,17 +373,23 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
           >
             {selectedConnection ? (
               <SettingsStack>
-                <p>
-                  {selectedConnection.key} · {selectedConnection.status} ·{" "}
-                  {selectedConnection.enabled ? "Enabled" : "Disabled"}
-                </p>
-                <p>{selectedConnection.lastError}</p>
-                <NativeButton onClick={() => void editConnection()}>Edit setup</NativeButton>
-                <ChannelJourneyPanel
-                  connections={[selectedConnection]}
-                  connectorDiagnosticsEnabled={data.connectorDiagnosticsEnabled}
-                />
-                <ChannelConnectionWebhook connection={selectedConnection} definitions={data.definitions} />
+                {selectedRetiredReason ? (
+                  <p>{selectedRetiredReason}</p>
+                ) : (
+                  <>
+                    <p>
+                      {selectedConnection.key} · {selectedConnection.status} ·{" "}
+                      {selectedConnection.enabled ? "Enabled" : "Disabled"}
+                    </p>
+                    <p>{selectedConnection.lastError}</p>
+                    <NativeButton onClick={() => void editConnection()}>Edit setup</NativeButton>
+                    <ChannelJourneyPanel
+                      connections={[selectedConnection]}
+                      connectorDiagnosticsEnabled={data.connectorDiagnosticsEnabled}
+                    />
+                    <ChannelConnectionWebhook connection={selectedConnection} definitions={data.definitions} />
+                  </>
+                )}
                 <NativeDisclosureCard id="channel-operations" title="Connection operations">
                   <DiscordConnectionOperationsPanel connections={[selectedConnection]} />
                   <TelegramPairingPanel connection={selectedConnection} onUpdated={reload} />
