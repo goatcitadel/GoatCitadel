@@ -616,7 +616,10 @@ export class TuiApiClient {
     );
   }
 
-  public async deleteIntegrationConnection(connectionId: string, expectedRevision: string): Promise<{ deleted: boolean }> {
+  public async deleteIntegrationConnection(
+    connectionId: string,
+    expectedRevision: string,
+  ): Promise<{ deleted: boolean }> {
     return this.request(
       `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`,
       {
@@ -947,11 +950,13 @@ export class TuiApiClient {
   }
 
   public async uploadFile(relativePath: string, content: string): Promise<Record<string, unknown>> {
+    const query = new URLSearchParams({ relativePath });
     return this.request(
-      "/api/v1/files/upload",
+      `/api/v1/files/upload?${query.toString()}`,
       {
         method: "POST",
-        body: JSON.stringify({ relativePath, content }),
+        headers: { "Content-Type": "application/octet-stream" },
+        body: Buffer.from(content, "utf8"),
       },
       true,
     );
@@ -1329,7 +1334,8 @@ export class TuiApiClient {
     }
 
     const headers = new Headers(init.headers ?? {});
-    headers.set("Content-Type", "application/json");
+    // A file upload sends raw bytes; everything else is JSON.
+    if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 
     if (mutating) {
       headers.set("Idempotency-Key", randomUUID());

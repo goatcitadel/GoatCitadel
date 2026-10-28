@@ -263,6 +263,22 @@ describe("TuiApiClient coverage", () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
+  it("streams file uploads as raw UTF-8 bytes and keeps JSON for everything else", async () => {
+    const client = new TuiApiClient({ baseUrl: "http://127.0.0.1:8787", auth: { mode: "none" } });
+
+    await client.uploadFile(`notes/caf${String.fromCodePoint(0xe9)}.md`, `caf${String.fromCodePoint(0xe9)}`);
+    await client.listFiles({ dir: ".", limit: 5 });
+
+    const [uploadUrl, uploadInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const uploadHeaders = new Headers(uploadInit.headers);
+    expect(uploadUrl).toBe("http://127.0.0.1:8787/api/v1/files/upload?relativePath=notes%2Fcaf%C3%A9.md");
+    expect(uploadHeaders.get("content-type")).toBe("application/octet-stream");
+    expect(uploadHeaders.get("idempotency-key")).toBeTruthy();
+    expect(Buffer.from(uploadInit.body as Uint8Array)).toEqual(Buffer.from(`caf${String.fromCodePoint(0xe9)}`, "utf8"));
+    const listInit = (fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1];
+    expect(new Headers(listInit.headers).get("content-type")).toBe("application/json");
+  });
+
   it("enforces read-only blocking for mutating calls", async () => {
     const readOnlyClient = new TuiApiClient({
       baseUrl: "http://127.0.0.1:8787",
