@@ -20,9 +20,9 @@
 
 **Measured facts:** `.superpowers/sdd/2026-10-28-capabilities-hub-phase-3/phase3-facts.md` (gitignored, in the planning worktree), with file:line evidence for every claim below, measured on `main` at `7f1caaf70`.
 
-## Open questions for the operator
+## Questions the operator answered
 
-Tasks implement the recommended answers. Each alternative names what changes.
+On 2026-10-28 the operator approved the plan with the recommended answer to all three questions: Q1 A, Q2 "Candidates and mesh", Q3 not in Phase 3. The tasks below implement those answers.
 
 **Q1. With your skip setting off, does switching a skill off or pausing it still ask?**
 Today every skill state change is a danger approval in Inbox, in both directions.
