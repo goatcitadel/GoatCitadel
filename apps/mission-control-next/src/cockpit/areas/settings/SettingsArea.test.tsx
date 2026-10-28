@@ -7,6 +7,9 @@ import { SettingsArea } from "./SettingsArea";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { buildSettingsIndex } from "./settings-index";
 import { selectedSettingsSection } from "./SettingsSectionTabs";
+import type { CapabilityToolBlock } from "@goatcitadel/contracts";
+import { SAFETY_RULES_HREF, toolBlockHref } from "../capabilities/tools/tool-links";
+import { TOOL_BLOCK_LINES } from "../capabilities/tools/tool-view";
 
 const owner = vi.hoisted(() => ({ mounted: vi.fn(), unmounted: vi.fn() }));
 const onboarding = vi.hoisted(() => ({ verified: false }));
@@ -371,3 +374,32 @@ it.each(["/settings/unknown?shell=cockpit", "/settings/general?shell=cockpit#unk
     expect(container.textContent).not.toContain("Settings destination unavailable");
   },
 );
+
+// Capabilities › Tools links each blocked tool to the rule that blocks it. Every one of those links has to land on a
+// section SettingsArea accepts, with that section's owner mounted, and never on "Settings destination unavailable".
+const BLOCK_TARGET_OWNERS: Record<string, string> = {
+  "/settings/safety#permission-profile": "Permission owner",
+  "/settings/safety#approval-mode": "Approval owner",
+  "/settings/safety#filesystem-write-roots": "Filesystem write roots owner",
+  "/settings/citadel#citadel-wards": "Wards owner",
+};
+
+describe("the Settings targets of the Tools panel", () => {
+  const blocks = Object.keys(TOOL_BLOCK_LINES) as CapabilityToolBlock[];
+  const hrefs = new Set([
+    SAFETY_RULES_HREF,
+    ...blocks.flatMap((block) => (["files", "git"] as const).map((groupId) => toolBlockHref(block, groupId))),
+  ]);
+
+  it("covers every block and keeps a known owner for each target", () => {
+    expect(blocks).toHaveLength(5);
+    expect([...hrefs].sort()).toEqual(Object.keys(BLOCK_TARGET_OWNERS).sort());
+  });
+
+  it.each(Object.entries(BLOCK_TARGET_OWNERS))("opens %s on its owner", async (href, owner) => {
+    await render(href.replace("#", "?shell=cockpit#"));
+    await vi.waitFor(() => expect(container.textContent).toContain(owner));
+    expect(container.textContent).not.toContain("Settings destination unavailable");
+    expect(container.textContent).not.toContain("does not match");
+  });
+});

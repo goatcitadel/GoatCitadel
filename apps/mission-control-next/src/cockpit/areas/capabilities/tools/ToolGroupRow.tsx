@@ -4,7 +4,7 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Button } from "../../../ui/Button";
 import { RiskBadge } from "../../../ui/RiskBadge";
 import { LetterIcon } from "../LetterIcon";
-import { GroupSwitch, GroupSwitchNotes, GroupSwitchState } from "./GroupSwitchControl";
+import { GroupSwitch, GroupSwitchNotes, GroupSwitchState } from "./GroupSwitchParts";
 import { presentGroupBlockLines } from "./tool-view";
 
 export interface ToolGroupViewProps {

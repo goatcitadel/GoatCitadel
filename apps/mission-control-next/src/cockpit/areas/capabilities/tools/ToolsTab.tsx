@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { ToolGroupId } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { toolListQuery } from "../../../data/capability-tools-query";
@@ -13,24 +12,24 @@ import { NoticeLine } from "../NoticeLine";
 import { MostUsedRow } from "./MostUsedRow";
 import { ToolGroupRow } from "./ToolGroupRow";
 import { filterToolGroups, presentMostUsed, toolSearchSuggestion } from "./tool-view";
+import { useToolGroupPanel } from "./use-tool-group-panel";
 import { useToolUsage } from "./use-tool-usage";
-
-// The group panel comes with its own task. Until then a button has nowhere to open, and says nothing.
-const NO_PANEL = () => undefined;
 
 /**
  * The Tools tab: every built-in tool group with its risk, its tool count, how often the AI called it in the last
  * year, what other rules block, and an on/off switch. A row of four cards (Most used, or Essentials before four groups
  * have been called) sits above the list. The tab only lists and words what the Gateway returned; it never works out a
- * risk, a block or the most used groups itself. A row's button opens that group's panel through `onOpen`.
+ * risk, a block or the most used groups itself. The View button of a row or card opens that group's panel in the
+ * inspector (`?item=group:<id>` in the address).
  */
-export function ToolsTab({ onOpen = NO_PANEL }: { onOpen?: (groupId: ToolGroupId) => void }) {
+export function ToolsTab() {
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
   // The same cache entry the switches write to, so a group reads the same everywhere it shows.
   const query = useQuery(toolListQuery(workspaceId));
   // The loaded list stays while it is read again, and beside a failed recheck.
   const view = recordView(query);
   const counts = useToolUsage();
+  const panel = useToolGroupPanel(view.record?.groups);
   const [search, setSearch] = useState("");
   const searchRegion = useRef<HTMLDivElement>(null);
 
@@ -116,7 +115,7 @@ export function ToolsTab({ onOpen = NO_PANEL }: { onOpen?: (groupId: ToolGroupId
               groups={mostUsed.groups}
               callsFor={counts.callsFor}
               settingsRevision={settingsRevision}
-              onOpen={onOpen}
+              onOpen={panel.open}
             />
           )}
           <Section
@@ -136,7 +135,7 @@ export function ToolsTab({ onOpen = NO_PANEL }: { onOpen?: (groupId: ToolGroupId
                   group={group}
                   calls={counts.callsFor(group)}
                   settingsRevision={settingsRevision}
-                  onOpen={onOpen}
+                  onOpen={panel.open}
                 />
               ))}
             </ul>

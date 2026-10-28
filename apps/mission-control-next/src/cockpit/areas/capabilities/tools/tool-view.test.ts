@@ -7,11 +7,16 @@ import type {
 } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  TOOL_BLOCK_LINES,
   filterToolGroups,
+  firstSentence,
   presentGroupBlock,
   presentGroupBlockLines,
   presentGroupCalls,
   presentMostUsed,
+  presentToolAsks,
+  presentToolGroupState,
+  presentToolLastUse,
   toolSearchSuggestion,
 } from "./tool-view";
 
@@ -226,5 +231,124 @@ describe("toolSearchSuggestion", () => {
 
   it("asks for a search without inventing a term when there is no group", () => {
     expect(toolSearchSuggestion([])).toBe("Search tool groups");
+  });
+});
+
+describe("presentToolAsks", () => {
+  const files = group("files");
+
+  it.each([
+    ["safety_rules", "Blocked by your safety rules"],
+    ["permission_profile", "Blocked by a permission profile"],
+    ["citadel_ward", "Blocked by a Citadel Ward"],
+    ["grant", "Blocked by a grant"],
+    ["install_profile", "Blocked by how this install is set up"],
+  ] as const)("names the rule that blocks a tool: %s", (block, expected) => {
+    expect(presentToolAsks(files, tool({ asks: "unknown", blockedBy: block }))).toEqual({ text: expected, block });
+    expect(TOOL_BLOCK_LINES[block]).toBe(expected);
+  });
+
+  it("gives every block a line, and nothing else", () => {
+    expect(Object.keys(TOOL_BLOCK_LINES).sort()).toEqual([
+      "citadel_ward",
+      "grant",
+      "install_profile",
+      "permission_profile",
+      "safety_rules",
+    ]);
+  });
+
+  it("says whether a free tool asks first", () => {
+    expect(presentToolAsks(files, tool({ asks: "asks_first" }))).toEqual({ text: "Asks first" });
+    expect(presentToolAsks(files, tool({ asks: "runs_freely" }))).toEqual({ text: "Runs freely" });
+  });
+
+  it("says a tool can't be told before it's used only in a group that is on or always on", () => {
+    expect(presentToolAsks(files, tool({ asks: "unknown" }))).toEqual({ text: "Can't tell before it's used" });
+    expect(presentToolAsks(group("core", { state: "always_on" }), tool({ asks: "unknown" }))).toEqual({
+      text: "Can't tell before it's used",
+    });
+  });
+
+  it("says Switched off for a tool of a group that is off, where unknown only means switched off", () => {
+    const off = group("files", { state: "off" });
+    expect(presentToolAsks(off, tool({ asks: "unknown" }))).toEqual({ text: "Switched off" });
+    // Whatever the answer was, a tool that cannot run does not say it asks first.
+    expect(presentToolAsks(off, tool({ asks: "asks_first" }))).toEqual({ text: "Switched off" });
+  });
+
+  it("lets a block beat the switch in a group that is off", () => {
+    const off = group("files", { state: "off" });
+    expect(presentToolAsks(off, tool({ asks: "unknown", blockedBy: "safety_rules" }))).toEqual({
+      text: "Blocked by your safety rules",
+      block: "safety_rules",
+    });
+  });
+});
+
+describe("presentToolLastUse", () => {
+  const NOW = Date.parse("2026-10-28T12:00:00.000Z");
+  const withTools = (...tools: CapabilityToolUsageResponse["tools"]): CapabilityToolUsageResponse => ({
+    ...usage("most_used", []),
+    tools,
+  });
+  const called = (toolName: string, lastCalledAt: string) => ({ toolName, calls: 3, lastCalledAt });
+
+  it("says when a tool was last used", () => {
+    const read = withTools(called("fs.read", "2026-10-28T11:55:00.000Z"));
+    expect(presentToolLastUse(read, "fs.read", NOW)).toBe("Last used 5 minutes ago");
+    expect(presentToolLastUse(withTools(called("fs.read", "2026-10-28T11:59:40.000Z")), "fs.read", NOW)).toBe(
+      "Last used just now",
+    );
+    expect(presentToolLastUse(withTools(called("fs.read", "2026-10-27T12:00:00.000Z")), "fs.read", NOW)).toBe(
+      "Last used yesterday",
+    );
+  });
+
+  it("says Not used yet only when the counts loaded and the tool isn't in them", () => {
+    expect(presentToolLastUse(withTools(called("fs.read", "2026-10-28T11:55:00.000Z")), "fs.write", NOW)).toBe(
+      "Not used yet",
+    );
+    expect(presentToolLastUse(withTools(), "fs.write", NOW)).toBe("Not used yet");
+  });
+
+  it("never says Not used yet without counts", () => {
+    expect(presentToolLastUse(undefined, "fs.write", NOW)).toBe("Last use unknown");
+  });
+
+  it("doesn't make up a time from one it can't read", () => {
+    expect(presentToolLastUse(withTools(called("fs.read", "not a time")), "fs.read", NOW)).toBe("Last use unknown");
+  });
+
+  it("never reads a time ahead of now as in the future", () => {
+    expect(presentToolLastUse(withTools(called("fs.read", "2026-10-28T13:00:00.000Z")), "fs.read", NOW)).toBe(
+      "Last used just now",
+    );
+  });
+});
+
+describe("firstSentence", () => {
+  it.each([
+    ["Read a file. Fails when it is missing.", "Read a file."],
+    ["Read a file", "Read a file"],
+    ["  Read a file.  ", "Read a file."],
+    ["Does it work? Yes.", "Does it work?"],
+    ["Stops at once! Then waits.", "Stops at once!"],
+    ["Read a file.\nAlso lists folders.", "Read a file."],
+    // A dot inside a name or a number is not the end of a sentence.
+    ["Uses fs.read for v1.2 files. More.", "Uses fs.read for v1.2 files."],
+    ["", ""],
+  ])("reads %j as %j", (text, expected) => {
+    expect(firstSentence(text)).toBe(expected);
+  });
+});
+
+describe("presentToolGroupState", () => {
+  it.each([
+    ["on", "On", "done"],
+    ["off", "Off", "neutral"],
+    ["always_on", "Always on", "done"],
+  ] as const)("words %s", (state, label, tone) => {
+    expect(presentToolGroupState(state)).toEqual({ label, tone });
   });
 });

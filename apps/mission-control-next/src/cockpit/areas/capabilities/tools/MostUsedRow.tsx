@@ -3,7 +3,7 @@ import type { CapabilityToolGroupItem } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { Section } from "../../../ui/Section";
 import { LetterIcon } from "../LetterIcon";
-import { GroupSwitch, GroupSwitchNotes, GroupSwitchState } from "./GroupSwitchControl";
+import { GroupSwitch, GroupSwitchNotes, GroupSwitchState } from "./GroupSwitchParts";
 import type { ToolGroupViewProps } from "./ToolGroupRow";
 
 function MostUsedCard({ group, calls, settingsRevision, onOpen }: ToolGroupViewProps) {

@@ -1,15 +1,15 @@
 import type { ReactNode } from "react";
 import type { CapabilityToolGroupItem } from "@goatcitadel/contracts";
-import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { cn } from "../../../lib/cn";
 import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { Switch } from "../../../ui/Switch";
 import { inboxApprovalLink } from "../capability-links";
+import { presentToolGroupState } from "./tool-view";
 import { useToolGroupSwitch, type ToolGroupSwitch } from "./use-tool-group-switch";
 
-const ALWAYS_ON: StatusPresentation = { label: "Always on", tone: "done" };
+const ALWAYS_ON = presentToolGroupState("always_on");
 const ON_NOTE = "Takes effect in new chats.";
 const OFF_NOTE = "The AI can't use these in any chat.";
 const WAITING = "Waiting on you in Inbox";

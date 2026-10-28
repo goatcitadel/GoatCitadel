@@ -30,6 +30,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", async (original) => ({
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeCitadelId: "default", activeWorkspaceId: "ws-1" }),
 }));
+// The panel and the address have their own tests (ToolGroupPanel.test.tsx); here only the hand-off is checked.
+const route = vi.hoisted(() => ({ search: "", navigate: vi.fn() }));
+vi.mock("../../../app/use-cockpit-route", () => ({ useCockpitRoute: () => route }));
+const inspector = vi.hoisted(() => ({ open: vi.fn(), content: null as null | { source?: string } }));
+vi.mock("../../../app/inspector", () => ({ useInspector: () => inspector }));
 
 const LIST_KEY = toolListQuery("ws-1").queryKey;
 const USAGE_KEY = toolUsageQuery().queryKey;
@@ -107,7 +112,6 @@ function deferred<T>() {
 let container: HTMLDivElement;
 let root: Root;
 let client: QueryClient;
-const onOpen = vi.fn();
 
 const text = () => container.textContent ?? "";
 const section = (title: string) =>
@@ -138,7 +142,7 @@ async function render() {
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
-        <ToolsTab onOpen={onOpen} />
+        <ToolsTab />
       </QueryClientProvider>,
     ),
   );
@@ -163,7 +167,10 @@ beforeEach(() => {
   settings.patchSettings.mockReset();
   plans.fetchChangePlan.mockReset();
   plans.fetchChangePlans.mockReset().mockResolvedValue({ items: [] });
-  onOpen.mockReset();
+  route.search = "";
+  route.navigate.mockReset();
+  inspector.open.mockReset();
+  inspector.content = null;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.append(container);
@@ -334,14 +341,15 @@ describe("Tools tab", () => {
 
     await click(rowOf("Git"));
     await click(rowOf("Git").querySelector("h3"));
-    expect(onOpen).not.toHaveBeenCalled();
+    expect(route.navigate).not.toHaveBeenCalled();
 
+    // A button puts the group in the address, and the address opens the panel (use-tool-group-panel.tsx).
     await click(button("View Git", rowOf("Git")));
-    expect(onOpen).toHaveBeenLastCalledWith("git");
+    expect(route.navigate).toHaveBeenLastCalledWith("/capabilities/tools?item=group%3Agit");
     await click(button("View Files, most used"));
-    expect(onOpen).toHaveBeenLastCalledWith("files");
+    expect(route.navigate).toHaveBeenLastCalledWith("/capabilities/tools?item=group%3Afiles");
     await click(button("View Core"));
-    expect(onOpen).toHaveBeenLastCalledWith("core");
+    expect(route.navigate).toHaveBeenLastCalledWith("/capabilities/tools?item=group%3Acore");
   });
 
   it("says under the switch what on and off mean", async () => {
