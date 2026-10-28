@@ -290,6 +290,37 @@ describe("Tools tab", () => {
     expect(rowOf("Git").textContent).toContain("41 calls in the last year");
   });
 
+  it("never lets an older read in flight overwrite the counts a refresh just wrote", async () => {
+    await render();
+    // A background read is already running when the operator presses Refresh counts.
+    const older = deferred<CapabilityToolUsageResponse>();
+    api.fetchCapabilityToolUsage.mockReturnValueOnce(older.promise);
+    await act(async () => void client.invalidateQueries({ queryKey: USAGE_KEY }));
+
+    const fresh = usageOf("most_used", ["memory", "git", "files", "browser"], {
+      memory: 1300,
+      git: 41,
+      files: 2,
+      browser: 21,
+    });
+    api.fetchCapabilityToolUsage.mockResolvedValueOnce(fresh);
+    await click(button("Refresh counts"));
+    expect(rowOf("Git").textContent).toContain("41 calls in the last year");
+
+    // The older read answers last; its counts must not replace the refresh's.
+    const stale = usageOf("most_used", ["memory", "git", "files", "browser"], {
+      memory: 1,
+      git: 39,
+      files: 1,
+      browser: 1,
+    });
+    await act(async () => older.resolve(stale));
+    await settle();
+
+    expect(client.getQueryData(USAGE_KEY)).toEqual(fresh);
+    expect(rowOf("Git").textContent).toContain("41 calls in the last year");
+  });
+
   it("keeps the counts and says so when Refresh counts fails", async () => {
     await render();
     api.fetchCapabilityToolUsage.mockRejectedValue(httpFailure(503));

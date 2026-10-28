@@ -46,7 +46,10 @@ export function useToolUsage(): ToolUsage {
     running.current = true;
     setRefreshing(true);
     const before = client.getQueryState(toolUsageQuery().queryKey)?.dataUpdatedAt;
-    void fetchCapabilityToolUsage({ refresh: true })
+    // A read already in flight would otherwise answer after the refresh and put its older counts back.
+    void client
+      .cancelQueries({ queryKey: toolUsageQuery().queryKey })
+      .then(() => fetchCapabilityToolUsage({ refresh: true }))
       .then((fresh) => {
         client.setQueryData(toolUsageQuery().queryKey, fresh);
         setFailed(undefined);
