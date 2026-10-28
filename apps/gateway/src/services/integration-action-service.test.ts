@@ -736,6 +736,7 @@ describe("integration-action-service", () => {
       "authToken",
       "authTokenEnv",
       connection.catalogId,
+      connection,
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "https://bridge.example.test/v1/integrations/actions",

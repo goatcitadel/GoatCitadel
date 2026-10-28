@@ -24,7 +24,9 @@ describe("the webhook route port's saved-key reader", () => {
 
     expect(port.resolveChannelConnectionSecret(connectionId, ownReference)).toBe(STORED_SECRET);
     expect(readSecret).toHaveBeenCalledTimes(1);
-    expect(readSecret).toHaveBeenCalledWith({ ref: ownReference }, "ref", "refEnv", "channel.webhook");
+    expect(readSecret).toHaveBeenCalledWith({ ref: ownReference }, "ref", "refEnv", "channel.webhook", {
+      connectionId,
+    });
   });
 
   it("trims the reference before it checks the owner and before it reads", () => {
@@ -32,7 +34,9 @@ describe("the webhook route port's saved-key reader", () => {
     const port = composeWebhookPort(readSecret);
 
     expect(port.resolveChannelConnectionSecret(connectionId, `  ${ownReference}\n`)).toBe(STORED_SECRET);
-    expect(readSecret).toHaveBeenCalledWith({ ref: ownReference }, "ref", "refEnv", "channel.webhook");
+    expect(readSecret).toHaveBeenCalledWith({ ref: ownReference }, "ref", "refEnv", "channel.webhook", {
+      connectionId,
+    });
   });
 
   it.each([

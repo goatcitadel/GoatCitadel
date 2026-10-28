@@ -105,7 +105,7 @@ describe("Matrix setup guide: what it says up front (item 6, R48)", () => {
     // Ruling R49: the test posts a notice only when a Default room ID is set, so the audit's unconditional
     // "Check the test notice arrived" is made conditional.
     expect(paragraphs("first-message")).toEqual([
-      "If you set a Default room ID, check the test notice arrived in that room. To receive: turn on Receive messages, allow your Matrix ID (for example @alice:example.com), post in the room, and check the reply.",
+      'If you set a Default room ID, check the test notice arrived in that room. To receive: turn on Receive messages, allow your Matrix ID (for example @alice:example.com), post in the room, and check the reply. If the bot doesn\'t answer your message, open System › Diagnostics, find "Dropped a Matrix message from …", and add that id under Who may message this bot with Edit setup.',
     ]);
   });
 
@@ -330,9 +330,9 @@ describe("Matrix setup guide: receiving (items 5 and 6, A7, A8)", () => {
     expect(fieldKeys("sender-access")).toEqual(["allowedSenders"]);
   });
 
-  it("says the Matrix ID format a sender must be written in", () => {
+  it("says the Matrix ID format a sender must be written in, and where to find it", () => {
     expect(field("allowedSenders").explanation).toBe(
-      "Your Matrix ID with the @ and the server, for example @alice:example.com.",
+      'Your Matrix ID with the @ and the server, for example @alice:example.com. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
     );
   });
 
@@ -456,10 +456,7 @@ describe("Matrix send-only path: can it finish?", () => {
   });
 
   it("asks for those two and nothing about receiving or a room", () => {
-    expect(continueBlockers({})).toEqual([
-      "Homeserver URL",
-      "Access token or Access token from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({})).toEqual(["Homeserver URL", "Access token"]);
   });
 
   it("is cleared by the setup test with no room: the token is checked and no notice is sent", async () => {
@@ -578,9 +575,6 @@ describe("Matrix receiving path: can it finish?", () => {
 
   it("does not make an edit replay the setup-only steps", () => {
     expect(continueBlockers(RECEIVING_VALUES, "edit")).toEqual([]);
-    expect(continueBlockers({ inboundStreamEnabled: true }, "edit")).toEqual([
-      "Homeserver URL",
-      "Access token or Access token from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({ inboundStreamEnabled: true }, "edit")).toEqual(["Homeserver URL", "Access token"]);
   });
 });

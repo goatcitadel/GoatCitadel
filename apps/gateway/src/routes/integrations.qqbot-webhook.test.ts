@@ -304,7 +304,12 @@ describe("QQBot webhook route", () => {
     expect(response.statusCode).toBe(200);
     expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
     expect(ctx.recordDevDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "channel.sender_not_allowlisted" }),
+      expect.objectContaining({
+        event: "channel.sender_not_allowlisted",
+        message: expect.stringContaining(
+          "Dropped a QQBot message from STRANGER: that sender isn't allowed yet. To allow them, add STRANGER under Who may message this bot.",
+        ),
+      }),
     );
   });
 

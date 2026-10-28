@@ -175,8 +175,8 @@ describe("WeCom structural callback readiness", () => {
     corpId: "ww1",
     agentId: "1000002",
     secretEnv: "WECOM_SECRET",
-    callbackTokenEnv: "WECOM_TEST_CB_TOKEN_UNSET",
-    encodingAesKeyEnv: "WECOM_TEST_CB_KEY_UNSET",
+    callbackTokenEnv: "WECOM_TEST_CALLBACK_TOKEN",
+    encodingAesKeyEnv: "WECOM_TEST_ENCODING_AES_KEY",
   };
   function callbackMessage(config: Record<string, unknown>): string | undefined {
     const checks: Array<{ key: string; status: string; message: string }> = [];
@@ -199,13 +199,43 @@ describe("WeCom structural callback readiness", () => {
   });
 
   it("is ready when the callback env values resolve", () => {
-    vi.stubEnv("WECOM_TEST_CB_TOKEN_UNSET", "t");
-    vi.stubEnv("WECOM_TEST_CB_KEY_UNSET", "k");
+    vi.stubEnv("WECOM_TEST_CALLBACK_TOKEN", "t");
+    vi.stubEnv("WECOM_TEST_ENCODING_AES_KEY", "k");
     try {
       expect(callbackMessage(structuralConfig)).toContain("are configured");
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it.each([
+    ["an LLM provider key", "OPENAI_API_KEY"],
+    ["a Gateway key", "GOATCITADEL_AUTH_TOKEN"],
+    ["a name outside the callback's allowlist", "WECOM_TEST_CB_UNSET"],
+    ["a lowercase name", "wecom_test_callback_token"],
+  ])("does not count %s as the callback token or key, even when it is set", (_label, name) => {
+    vi.stubEnv(name, "synthetic-callback-value");
+    try {
+      expect(callbackMessage({ ...structuralConfig, callbackTokenEnv: name, encodingAesKeyEnv: name })).toContain(
+        "is not configured",
+      );
+      vi.stubEnv("WECOM_TEST_CALLBACK_TOKEN", "t");
+      expect(
+        callbackMessage({
+          ...structuralConfig,
+          callbackTokenEnv: "WECOM_TEST_CALLBACK_TOKEN",
+          encodingAesKeyEnv: name,
+        }),
+      ).toContain("is not configured");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("counts a pasted callback token and key without reading any variable", () => {
+    expect(
+      callbackMessage({ ...structuralConfig, callbackToken: "pasted-token", encodingAesKey: "pasted-key" }),
+    ).toContain("are configured");
   });
 });
 

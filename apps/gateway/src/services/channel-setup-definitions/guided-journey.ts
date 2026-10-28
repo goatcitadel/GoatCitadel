@@ -1,5 +1,7 @@
 import type {
+  ChannelSetupDraft,
   ChannelSetupFieldDefinition,
+  ChannelSetupIssue,
   ChannelSetupStage,
   ChannelSetupStepDefinition,
 } from "@goatcitadel/contracts";
@@ -9,10 +11,15 @@ import {
   hydrateGuidedChannelInboundAccess,
   normalizeGuidedChannelInboundAccess,
 } from "../channel-setup-inbound-access.js";
+import { PERMITTED_INTEGRATION_ENV_NAME_PATTERN } from "../gateway/integration-secret-envvar-guard.js";
 import {
+  malformedFieldIssue,
   PASTED_SECRET_EXPLANATION,
   plainSecretLabel,
+  readString,
   secretEnvFieldCopy,
+  secretEnvNameIsReadable,
+  secretEnvVariableRule,
   type ChannelSetupRuntimeDefinition,
 } from "./common.js";
 
@@ -124,7 +131,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     ],
     // QQ's approval for group and direct-message events (audit line) is on no QQ page, so it is not claimed here.
     firstMessage:
-      "In the QQ Bot console set the callback URL to this connection's webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. Message the bot once; it won't answer yet. Add your openid (see Who may message this bot) with Edit setup, then message again. GoatCitadel can't show your openid yet, so you need to know it already.",
+      'In the QQ Bot console set the callback URL to this connection\'s webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. If you already added your openid under Who may message this bot, message the bot and check the reply. If not, message the bot once; it won\'t answer. Open System › Diagnostics, find "Dropped a QQBot message from …" and copy the openid. Add it under Who may message this bot with Edit setup, then message again. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.',
   },
   wecom: {
     // WeCom's callback page allows http or https and recommends https (developer.work.weixin.qq.com/document/path/90238),
@@ -201,6 +208,12 @@ const ADVANCED_KEYS = new Set([
   "setupCode",
   "profile",
 ]);
+/**
+ * Added after each guide's own content version. Setup evidence records the result, so a row tells which guide text the
+ * operator saw. Change it whenever the text of any guide, or the text the guides share, changes. Changing it also makes
+ * older setup test results out of date, so those tests run again.
+ */
+const GUIDED_CONTENT_VERSION_SUFFIX = ".guided-2026-10-28";
 /** A draft value `hydrate` sets when the saved connection was open access. It is never part of the saved config. */
 const OPEN_ACCESS_MARKER = "inboundAccessWasOpen";
 /** Webhook inbound that is always default-deny: the runtime ignores a stored open_legacy mode for these. */
@@ -242,7 +255,7 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
     kind: "instruction",
     stage: "first_message",
     title: takesConversations(key) ? "Verify the first conversation" : "Confirm delivery",
-    body: [{ kind: "paragraph", text: profile.firstMessage }],
+    body: [{ kind: "paragraph", text: firstMessageText(key, runtime.definition.catalog.label, profile.firstMessage) }],
   });
   return {
     ...runtime,
@@ -250,7 +263,7 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
       ...runtime.definition,
       wizard: {
         ...runtime.definition.wizard,
-        contentVersion: runtime.definition.wizard.contentVersion + ".guided-2026-10",
+        contentVersion: runtime.definition.wizard.contentVersion + GUIDED_CONTENT_VERSION_SUFFIX,
         introSummary: profile.summary,
         prerequisites: profile.prerequisites,
         steps,
@@ -284,7 +297,7 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
         : normalized;
     },
     validate(draft) {
-      const issues = runtime.validate(draft);
+      const issues = [...runtime.validate(draft), ...variableNameIssues(runtime, authoredFields, draft)];
       try {
         normalizeGuidedChannelInboundAccess(key, draft, draft.hydration?.rawLegacyConfig ?? {});
       } catch {
@@ -299,6 +312,65 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
       return issues;
     },
   };
+}
+
+/** The shape of a variable name (`PERMITTED_INTEGRATION_ENV_NAME_PATTERN`) in any case: letters, digits and `_`, 3 to 128 characters. */
+const NAME_SHAPED_APART_FROM_CASE = /^[A-Za-z][A-Za-z0-9_]{2,127}$/;
+/** One word of a name: all lowercase, all capitals, or capitalised. A word that mixes case inside (`AbCd`) is a token's. */
+const NAME_WORD = /^(?:[a-z0-9]*|[A-Z0-9]*|[A-Z][a-z0-9]*)$/u;
+const CAPITAL_LETTERS_RULE = "Variable names use capital letters.";
+
+/**
+ * A name typed in the wrong case (`mattermost_bot_token`, `Mattermost_Bot_Token`). Names join words with `_`; many
+ * tokens are one long run of letters and digits (Mattermost) or mix case inside a word (`ghp_AbCd…`, `syt_YWxp…`), and
+ * those keep the token message.
+ */
+function isNameInWrongCase(value: string): boolean {
+  return (
+    NAME_SHAPED_APART_FROM_CASE.test(value) &&
+    value.includes("_") &&
+    value.split("_").every((word) => NAME_WORD.test(word))
+  );
+}
+
+/**
+ * A variable-name field takes the name of a variable the Gateway can read, never the secret itself: a token typed
+ * there would be saved in plain config and never used. A value that is not shaped like a name is told to go to the
+ * pasted field; a name the Gateway would not read (including a name typed in the wrong case) gets the field's own name
+ * rule. The value is never repeated.
+ * Only validation runs this: a connection saved with another name keeps working until it is next edited.
+ */
+function variableNameIssues(
+  runtime: ChannelSetupRuntimeDefinition,
+  authoredFields: readonly ChannelSetupFieldDefinition[],
+  draft: ChannelSetupDraft,
+): ChannelSetupIssue[] {
+  const { key, catalogId } = runtime.definition.catalog;
+  return authoredFields.flatMap((field) => {
+    const name = field.key.endsWith("Env") ? readString(draft.draft, field.key) : undefined;
+    if (!name || isHiddenByChoice(field, draft)) return [];
+    if (!PERMITTED_INTEGRATION_ENV_NAME_PATTERN.test(name)) {
+      // A name written in lowercase or mixed case is a name with the wrong case, not a token: the person could paste the
+      // name itself into the secret field if told it looks like one.
+      if (isNameInWrongCase(name)) {
+        return [malformedFieldIssue(field.key, `${secretEnvVariableRule(key, field.key)} ${CAPITAL_LETTERS_RULE}`)];
+      }
+      const twin = authoredFields.find((candidate) => candidate.key === field.key.slice(0, -"Env".length));
+      const where = twin ? ` Paste it into ${plainSecretLabel(twin.label)} instead.` : "";
+      return [malformedFieldIssue(field.key, `That looks like a token, not a variable name.${where}`)];
+    }
+    return secretEnvNameIsReadable(catalogId, key, field.key, name)
+      ? []
+      : [malformedFieldIssue(field.key, secretEnvVariableRule(key, field.key))];
+  });
+}
+
+/** True when the draft has chosen the other option of the field that shows this one, so the person cannot see it. */
+function isHiddenByChoice(field: ChannelSetupFieldDefinition, draft: ChannelSetupDraft): boolean {
+  const condition = field.visibleWhenFieldEquals;
+  if (!condition) return false;
+  const chosen = draft.draft[condition.fieldKey];
+  return chosen !== undefined && chosen !== "" && chosen !== condition.value;
 }
 
 /** The wizard's field after the shared rules: expert options, optional secrets, and the secret/variable wording. */
@@ -457,6 +529,49 @@ const SENDER_EXPLANATIONS: Readonly<Record<string, string>> = {
 };
 const GENERIC_SENDER_EXPLANATION = "Add trusted platform actor IDs. Empty means every inbound sender is denied.";
 
+/**
+ * Channels whose inbound messages all pass the shared sender gate (channel-inbound-dispatch.ts), which names a dropped
+ * message's sender in its System › Diagnostics message. Telegram pairs people instead, so it has no such line.
+ */
+const SENDER_ID_IN_DIAGNOSTICS: ReadonlySet<string> = new Set([
+  "slack",
+  "whatsapp",
+  "line",
+  "nextcloud-talk",
+  "ntfy",
+  "mattermost",
+  "matrix",
+  "google-chat",
+  "qqbot",
+  "wecom",
+]);
+const FIND_SENDER_ID_LINE =
+  'Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".';
+/**
+ * Diagnostics are off in production mode, which a Docker install runs in; the native desktop hosts don't. With them
+ * off the events list answers 404 and System › Diagnostics shows an alert that begins "Diagnostics unavailable:"
+ * (SystemDiagnostics.tsx), so that is the symptom this names. The sender step comes before Finalize, so it also says
+ * to finish first: the bot can't be messaged until then.
+ */
+const DIAGNOSTICS_ON_DOCKER_NOTE =
+  'If you don\'t know an id yet, finish setup first; you can add it any time with Edit setup. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.';
+
+function senderExplanation(key: string): string {
+  const explanation = SENDER_EXPLANATIONS[key] ?? GENERIC_SENDER_EXPLANATION;
+  return SENDER_ID_IN_DIAGNOSTICS.has(key) ? `${explanation} ${FIND_SENDER_ID_LINE}` : explanation;
+}
+
+/**
+ * The first message is the step where the operator messages the bot after finishing, so it is where a silent bot gets
+ * traced to a dropped sender. QQ's own first message walks the whole path, so it needs no extra sentence. The channel
+ * is named by its catalog label, the name the gateway puts in the dropped message (describeDroppedSender). The Docker
+ * note stays on the sender step: one place per guide.
+ */
+function firstMessageText(key: string, channelLabel: string, firstMessage: string): string {
+  if (!SENDER_ID_IN_DIAGNOSTICS.has(key) || key === "qqbot") return firstMessage;
+  return `${firstMessage} If the bot doesn't answer your message, open System › Diagnostics, find "Dropped a ${channelLabel} message from …", and add that id under Who may message this bot with Edit setup.`;
+}
+
 /** Receiving here is a switch the operator turns on, so the sender step has nothing to say while it is off. */
 const SENDER_STEP_SHOWN_WHEN: Readonly<Record<string, { fieldKey: string; value: string | boolean }>> = {
   ntfy: { fieldKey: "inboundStreamEnabled", value: true },
@@ -474,7 +589,7 @@ function senderAccessStep(key: string): ChannelSetupStepDefinition {
     label: "Allowed sender identities",
     type: "sender-list",
     required: false,
-    explanation: SENDER_EXPLANATIONS[key] ?? GENERIC_SENDER_EXPLANATION,
+    explanation: senderExplanation(key),
     // A forced-allowlist channel has no mode to compare against, so its sender list is always shown.
     ...(forcedAllowlist ? {} : { visibleWhenFieldEquals: { fieldKey: "inboundAccessMode", value: "allowlist" } }),
   };
@@ -506,6 +621,7 @@ function senderAccessStep(key: string): ChannelSetupStepDefinition {
         kind: "paragraph",
         text: "Sender identities control who can start a conversation. Destination selection only chooses where messages are delivered. An empty sender list blocks all inbound conversations.",
       },
+      ...(SENDER_ID_IN_DIAGNOSTICS.has(key) ? [{ kind: "paragraph" as const, text: DIAGNOSTICS_ON_DOCKER_NOTE }] : []),
     ],
     fields: forcedAllowlist ? [allowedSenders] : [accessMode, allowedSenders],
   };

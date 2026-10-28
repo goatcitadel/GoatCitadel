@@ -9,6 +9,7 @@ import {
   type ChangePlanRecord,
   type ChannelSetupDefinition,
   type ChannelSetupDraft,
+  type ChannelSetupFieldDefinition,
   type ChannelSetupFinalizeResult,
   type ChannelSetupValidationResult,
   type IntegrationConnection,
@@ -117,14 +118,21 @@ export class ChannelConnectionChangePlanAdapter implements EvolutionControlPlane
     values: Readonly<Record<string, string | number | boolean>>,
   ): Promise<EvolutionControlPlaneAdapterOutcome> {
     const { definition, draft } = await this.requireCurrentDraft(plan);
-    const allowed = new Set(publicFields(definition, draft).map((field) => field.fieldId));
-    for (const key of Object.keys(values)) {
-      if (!allowed.has(key))
+    const allowed = acceptedFieldIds(definition, draft, values);
+    // The form submits every field it showed. A choice switched in the same submission can hide one of them, so a key
+    // the form did show but the new choices no longer do is dropped, not saved. A key the form never showed is forged.
+    const offered = new Set(publicFields(definition, draft).map((field) => field.fieldId));
+    const accepted: Record<string, string | number | boolean> = {};
+    for (const [key, value] of Object.entries(values)) {
+      if (allowed.has(key)) {
+        accepted[key] = value;
+      } else if (!offered.has(key)) {
         throw new SemanticValidationError(`Channel setup field ${key} is not registered for this adapter.`);
+      }
     }
     const updated = await this.deps.updateDraft(draft.draftId, {
       expectedRevision: draft.revision,
-      draft: { ...draft.draft, ...values },
+      draft: { ...draft.draft, ...accepted },
     });
     return await this.nextInputOrConfirmation(context, definition, updated);
   }
@@ -356,6 +364,9 @@ export class ChannelConnectionChangePlanAdapter implements EvolutionControlPlane
   }
 }
 
+/** A choice can reveal a field that holds a choice itself; this many rounds is far more than any guide nests. */
+const MAX_REVEAL_PASSES = 8;
+
 /** Only registered public identity/routing values belong in the review receipt. */
 function settingsReviewSummary(definition: ChannelSetupDefinition, draft: ChannelSetupDraft): string {
   const clean = (value: unknown): string =>
@@ -471,14 +482,91 @@ function settingsReviewSummary(definition: ChannelSetupDefinition, draft: Channe
   return parts.join(" ").slice(0, 2_000);
 }
 
-function publicFields(definition: ChannelSetupDefinition, draft: ChannelSetupDraft): ChangePlanPublicFormField[] {
+/**
+ * Whether a step or field's `visibleWhenFieldEquals` holds. Like the Settings guide, a condition holds only when the
+ * controlling value is the one named, so a choice nobody has made hides what depends on it.
+ */
+function isShownWhen(
+  condition: { fieldKey: string; value: string | boolean } | undefined,
+  values: Record<string, unknown>,
+) {
+  return !condition || values[condition.fieldKey] === condition.value;
+}
+
+/** The draft's values over the fields' defaults: what the guide reads visibility from. */
+function valuesWithDefaults(definition: ChannelSetupDefinition, draft: ChannelSetupDraft): Record<string, unknown> {
+  const defaults = definition.wizard.steps
+    .flatMap((step) => step.fields ?? [])
+    .filter((field) => field.defaultValue !== undefined)
+    .map((field) => [field.key, field.defaultValue] as const);
+  return { ...Object.fromEntries(defaults), ...draft.draft };
+}
+
+/**
+ * The fields a submitted form may set: those the stored draft shows, then any that a submitted choice reveals, until
+ * nothing more is revealed. Only a value for a field that is already shown counts toward showing another, so a hidden
+ * field, or a value no field registers (such as the marker that a connection was already open access, which only the
+ * stored draft carries), never makes a field visible, and two submitted fields can't show each other.
+ *
+ * The choices must settle. If the shown set is still changing after `MAX_REVEAL_PASSES` rounds, the definition's
+ * conditions chase each other, and no round's guess is trusted: the submission is refused rather than accepting the
+ * last set.
+ */
+function acceptedFieldIds(
+  definition: ChannelSetupDefinition,
+  draft: ChannelSetupDraft,
+  submitted: Readonly<Record<string, unknown>>,
+): Set<string> {
+  const idsOf = (counted: Readonly<Record<string, unknown>>) =>
+    new Set(publicFields(definition, draft, counted).map((field) => field.fieldId));
+  let accepted = idsOf({});
+  for (let pass = 0; pass < MAX_REVEAL_PASSES; pass += 1) {
+    const next = idsOf(Object.fromEntries(Object.entries(submitted).filter(([key]) => accepted.has(key))));
+    if (next.size === accepted.size && [...next].every((id) => accepted.has(id))) return next;
+    accepted = next;
+  }
+  throw new SemanticValidationError(
+    "The choices in this form change which fields it shows, and they don't settle. Nothing was saved.",
+  );
+}
+
+/** Whether a value is set: typed in, already saved, or kept in secure storage (as the guide reads it). */
+function hasDraftValue(draft: ChannelSetupDraft, values: Record<string, unknown>, key: string): boolean {
+  const value = values[key];
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (value && typeof value === "object") return Object.keys(value).length > 0;
+  return draft.hydration?.fieldState[key] === "configured" || draft.secretState?.[key]?.configured === true;
+}
+
+/** Whether the field has to be filled in on this draft's path: a field required only with others is not asked for without them. */
+function isRequiredHere(field: ChannelSetupFieldDefinition, draft: ChannelSetupDraft, values: Record<string, unknown>) {
+  if (!field.required) return false;
+  const paths = field.requiredWhenAnyFieldSet;
+  return !paths || paths.some((key) => hasDraftValue(draft, values, key));
+}
+
+/**
+ * The form's fields: those shown for the draft's values, with `submitted` laid over them. A form is built from the
+ * stored draft alone; `acceptedFieldIds` passes what a submission chose.
+ */
+function publicFields(
+  definition: ChannelSetupDefinition,
+  draft: ChannelSetupDraft,
+  submitted: Readonly<Record<string, unknown>> = {},
+): ChangePlanPublicFormField[] {
   const secretKeys = new Set(definition.adapter.secretFieldKeys);
+  const values = { ...valuesWithDefaults(definition, draft), ...submitted };
   const seen = new Set<string>();
   const fields: ChangePlanPublicFormField[] = [];
   for (const step of definition.wizard.steps) {
+    if (!isShownWhen(step.visibleWhenFieldEquals, values)) continue;
     for (const field of step.fields ?? []) {
       if (
         seen.has(field.key) ||
+        !isShownWhen(field.visibleWhenFieldEquals, values) ||
         secretKeys.has(field.key) ||
         field.type === "secret" ||
         field.sensitive ||
@@ -503,7 +591,7 @@ function publicFields(definition: ChannelSetupDefinition, draft: ChannelSetupDra
               : field.type === "url"
                 ? "url"
                 : "text",
-        required: field.required,
+        required: isRequiredHere(field, draft, values),
         description: field.explanation,
         ...(field.options
           ? {

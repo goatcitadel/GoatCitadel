@@ -9,25 +9,25 @@ For parity status and tranche tracking, see [OPENCLAW_PARITY_STATUS.md](./OPENCL
 
 Guided Mission Control setup is currently available for `channel.discord`, `channel.slack`, `channel.telegram`, `channel.google-chat`, `channel.teams`, `channel.whatsapp`, `channel.mattermost`, `channel.matrix`, `channel.qqbot`, `channel.wecom`, `channel.nextcloud-talk`, `channel.line`, and `channel.zalo`.
 
-Discord, Slack, Telegram, Google Chat, Teams, Mattermost, Matrix, QQBot, WeCom, WhatsApp, LINE, and Zalo OA guided test/retest flows now run live probe coverage before finalize. WhatsApp and Zalo OA still rely on operator-controlled sandbox targets for pre-finalize send checks.
+Discord, Slack, Telegram, Google Chat, Teams, Mattermost, Matrix, QQBot, WeCom, WhatsApp, LINE, and Zalo OA guided test/retest flows now run live probe coverage before finalize. WhatsApp and Zalo OA still rely on operator-controlled test targets for pre-finalize send checks.
 
 ## Guided Channel Setup At A Glance
 
 | Channel | Recommended auth path | Guided test behavior | Manual confirmation still needed |
 |---|---|---|---|
-| `channel.discord` | Bot token | token, channel, sandbox send/delete, runtime readiness in gateway mode | yes |
-| `channel.slack` | Bot User OAuth token | auth plus sandbox send/delete on bot-token path | yes, especially on webhook fallback |
-| `channel.telegram` | BotFather token | auth plus sandbox send/delete | yes |
-| `channel.google-chat` | Incoming webhook, or Chat app service-account key | sandbox webhook probe (webhook mode); Google-signed JWT webhook inbound plus API send/reply/unsend in Chat app mode | yes |
-| `channel.teams` | Incoming webhook | sandbox webhook probe | yes |
-| `channel.mattermost` | Bot token | auth, channel resolution, sandbox send/delete; opt-in bot WebSocket inbound (`inboundStreamEnabled`) | yes |
-| `channel.matrix` | Bot access token | whoami auth, joined-room check, sandbox `m.notice` send; opt-in `/sync` inbound (`inboundStreamEnabled`) | yes |
-| `channel.qqbot` | AppID + AppSecret | token mint, bot identity (`/users/@me`), optional active sandbox message; ed25519-signed webhook inbound | yes |
-| `channel.wecom` | CorpID + AgentId + application Secret | `gettoken`, application lookup, callback-credential check, sandbox text; encrypted callback inbound when the Token and EncodingAESKey are set | yes |
-| `channel.whatsapp` | Cloud API access token + phone-number id | sender auth plus sandbox send; signed inbound webhook runtime when app secret + verify token are configured | yes |
+| `channel.discord` | Bot token | token, channel, test message and delete, runtime readiness in gateway mode | yes |
+| `channel.slack` | Bot User OAuth token | auth plus test message and delete on bot-token path | yes, especially on webhook fallback |
+| `channel.telegram` | BotFather token | auth plus test message and delete | yes |
+| `channel.google-chat` | Incoming webhook, or Chat app service-account key | test message through the webhook (webhook mode); Google-signed JWT webhook inbound plus API send/reply/unsend in Chat app mode | yes |
+| `channel.teams` | Incoming webhook | test card through the webhook | yes |
+| `channel.mattermost` | Bot token | auth, channel resolution, test post and delete; opt-in bot WebSocket inbound (`inboundStreamEnabled`) | yes |
+| `channel.matrix` | Bot access token | whoami auth, joined-room check, test notice (an `m.notice`); opt-in `/sync` inbound (`inboundStreamEnabled`) | yes |
+| `channel.qqbot` | AppID + AppSecret | token mint, bot identity (`/users/@me`), optional active test message; ed25519-signed webhook inbound | yes |
+| `channel.wecom` | CorpID + AgentId + application Secret | `gettoken`, application lookup, callback-credential check, test message; encrypted callback inbound when the Token and EncodingAESKey are set | yes |
+| `channel.whatsapp` | Cloud API access token + phone-number id | sender auth plus test message; signed inbound webhook runtime when app secret + verify token are configured | yes |
 | `channel.nextcloud-talk` | Base URL + Talk token | structural and semantic validation | yes |
-| `channel.line` | Channel access token | token auth plus sandbox push send; signed inbound webhook runtime when channel secret is configured | yes |
-| `channel.zalo` | Official Account access token | sandbox send through the OA send path | yes |
+| `channel.line` | Channel access token | token auth plus test push message; signed inbound webhook runtime when channel secret is configured | yes |
+| `channel.zalo` | Official Account access token | test message through the OA send path | yes |
 
 Zalo Personal (`channel.zalouser`) was removed on 2026-10-26. It sent through an unofficial personal-account client (a zca bridge), and that kind of client can get the account banned. A saved Zalo Personal connection stays listed so you can delete it, but it cannot send. Zalo OA is the supported Zalo channel.
 
@@ -178,7 +178,7 @@ DISCORD_BOT_TOKEN=your_token_here
     - token auth passes
     - channel access passes
     - the channel belongs to the configured server
-    - a visible sandbox message is posted and then deleted
+    - a visible test message is posted and then deleted
 18. Finish the setup. A new Gateway runtime cannot exist before the connection is saved, so initial runtime readiness is deferred until this step. After finalize, confirm diagnostics report:
     - logged in / ready
     - connected bot identity
@@ -203,7 +203,7 @@ The advanced webhook-only Bridge path is outbound-only. The wizard structurally 
 - `401`: token invalid, expired, or copied incorrectly
 - gateway close `4014` or valid token but no ready state: enable `Message Content Intent` on the application's Bot page; verified apps may also need intent approval
 - `404` on channel probe: wrong channel id or wrong target
-- `403` on channel probe or sandbox send: bot is installed, but channel permissions are incomplete
+- `403` on channel probe or test message: bot is installed, but channel permissions are incomplete
 - server/channel match failure: the channel id belongs to a different server; copy both ids again from the same sandbox route
 - bot is online but ignores a normal server message: confirm the server/channel ids match and mention the bot
 - slash command is missing or unavailable: confirm the app was installed with application commands enabled and the member can use application commands in that channel
@@ -298,7 +298,7 @@ TELEGRAM_BOT_TOKEN=123456789:AA...
 - "GoatCitadel isn't allowed to reach api.telegram.org.": add `api.telegram.org` to the network allowlist; Turn on does this for you after its approval
 - your hi is never seen: the code may have expired, so get a new one; only a private chat with the bot counts, not a group
 - send succeeds nowhere: the bot is not actually in the target chat or channel
-- delete probe fails: the bot can post but lacks permission to remove the sandbox message
+- delete probe fails: the bot can post but lacks permission to remove the test message
 - `@channel_name` works inconsistently: prefer the real chat id when available
 
 ## Google Chat
@@ -320,7 +320,7 @@ Google Chat has two modes. Webhook mode posts into one space through an incoming
 5. Paste the webhook URL.
 6. Optionally set a default thread key if you want repeated outbound posts to group into a stable thread.
 7. Run guided test or retest.
-8. Confirm manually that the sandbox post landed in the intended space or thread.
+8. Confirm manually that the test message landed in the intended space or thread.
 
 ### Step-by-step (Chat app mode)
 
@@ -341,9 +341,9 @@ The message resource name (`spaces/.../messages/...`) is the dedupe key, so a re
 ### Google Chat troubleshooting
 
 - validation fails immediately: the value is not a real Google Chat incoming webhook URL
-- sandbox probe fails with `404` or `403`: the webhook was deleted, rotated, or tied to a different space
+- the test message fails with `404` or `403`: the webhook was deleted, rotated, or tied to a different space
 - post lands in an unexpected thread: remove or correct the default thread key
-- duplicated sandbox posts before this release: fixed for unchanged drafts in the same gateway process lifecycle
+- duplicated test messages before this release: fixed for unchanged drafts in the same gateway process lifecycle
 - Chat app requests rejected with `401`: the audience type or audience does not match the Chat app configuration (check the gateway log reason, for example `bad_audience`)
 - Workspace add-on Chat app requests rejected with `401` and log reason `bad_email`: set `addOnProjectNumber` to the add-on's numeric project number (with the `endpoint_url` audience type)
 - Chat app requests rejected with `400`: the connection has no `audienceType`/`audience`
@@ -364,12 +364,12 @@ Official reference:
 5. Paste the webhook URL.
 6. Optionally set a default card title such as `GoatCitadel`.
 7. Run guided test or retest.
-8. Confirm manually that the sandbox card arrived in the intended Teams channel.
+8. Confirm manually that the test card arrived in the intended Teams channel.
 
 ### Teams troubleshooting
 
 - validation fails immediately: the value is not shaped like a Teams webhook URL
-- sandbox webhook probe fails: the connector was removed, rotated, or restricted by the workspace
+- the test card fails to post: the connector was removed, rotated, or restricted by the workspace
 - card formatting looks plain: expected if the destination strips parts of the adaptive-card payload
 - channel mismatch: recreate the webhook from the exact Teams channel you want GoatCitadel to target
 
@@ -413,7 +413,7 @@ On top of the signature check, each inbound sender must pass the connection's se
    - use the same verify token value you configured in step 5
 10. Subscribe to the `messages` webhook field, finalize the connection, and confirm manually that:
     - the Meta challenge succeeds
-    - an inbound sandbox message from an allowlisted sender lands in GoatCitadel
+    - an inbound test message from an allowlisted sender lands in GoatCitadel
     - outbound replies still use the expected phone number id
 
 ### WhatsApp environment example
@@ -456,7 +456,7 @@ Official references:
    - `https://<your-gateway-host>/api/v1/integrations/connections/<connectionId>/line/webhook`
 7. Enable webhooks in LINE, finalize the connection, and confirm manually that:
    - LINE accepts the webhook endpoint
-   - an inbound sandbox message reaches GoatCitadel
+   - an inbound test message reaches GoatCitadel
    - group or room replies route back to the expected thread target
 
 ### LINE troubleshooting
@@ -488,7 +488,7 @@ End-to-end encrypted rooms are not supported: inbound ignores encrypted events a
    - `accessTokenEnv=MATRIX_ACCESS_TOKEN`
    - `defaultRoomId=!roomid:example.com` (optional; sends normally take the room from the target)
 6. Optional inbound: set `inboundStreamEnabled=true` and allow the Matrix user ids that may start turns. Inbound is default-deny and always allowlist-only.
-7. Run the guided test: it checks the token (whoami), that the bot has joined the default room, and sends a sandbox `m.notice` when you run the explicit send. Confirm receipt in the room.
+7. Run the guided test: it checks the token (whoami), that the bot has joined the default room, and posts a test notice (an `m.notice`) when you run the explicit send. Confirm receipt in the room.
 
 ### Matrix troubleshooting
 
@@ -527,7 +527,7 @@ Inbound is a signed webhook. GoatCitadel verifies the ed25519 signature (keyed f
    - `sandbox=true` while the application is unpublished
 5. Save and enable the connection, then in the QQ console set the callback URL to `https://<your-gateway>/api/v1/integrations/connections/<connectionId>/qqbot/webhook` and subscribe to the events you need. QQ sends a validation request (op 13) that GoatCitadel answers with an AppSecret signature; QQ may send it without signature headers, and if it includes them they must verify. Every other event must be signed.
 6. Add the QQ openids that may start turns to `allowedSenders`.
-7. Run the guided test: it mints a token, reads the bot identity and, when you run the explicit send, sends one active sandbox message to the default target. A rejection of that message can be a quota, not a credential problem.
+7. Run the guided test: it mints a token, reads the bot identity and, when you run the explicit send, sends one active test message to the default target. A rejection of that message can be a quota, not a credential problem.
 
 ### QQBot troubleshooting
 
@@ -563,7 +563,7 @@ Inbound is an encrypted callback and stays off until the callback Token and Enco
 5. For inbound, choose a Token and generate an EncodingAESKey in the application's message-receiving settings, export them (for example `WECOM_CALLBACK_TOKEN` and `WECOM_ENCODING_AES_KEY`) and set `callbackTokenEnv` and `encodingAesKeyEnv`.
 6. Save and enable the connection, then set the callback URL in WeCom to `https://<your-gateway>/api/v1/integrations/connections/<connectionId>/wecom/webhook`. WeCom sends an encrypted `echostr` that GoatCitadel verifies and answers.
 7. Add the WeCom userids that may start turns to `allowedSenders`.
-8. Run the guided test: it mints a token, reads the application, reports whether the callback credentials are set (a missing Token or EncodingAESKey only disables inbound) and, when you run the explicit send, sends one sandbox text.
+8. Run the guided test: it mints a token, reads the application, reports whether the callback credentials are set (a missing Token or EncodingAESKey only disables inbound) and, when you run the explicit send, sends one test message.
 
 ### WeCom troubleshooting
 

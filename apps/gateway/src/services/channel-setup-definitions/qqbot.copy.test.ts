@@ -11,6 +11,7 @@ import {
   buildIntegrationConnectionChecks,
   runIntegrationConnectionLiveChecks,
 } from "../integration-diagnostics-service.js";
+import { describeDroppedSender } from "../channel-inbound-dispatch.js";
 import { normalizeQqbotWebhookPayload } from "../qqbot-webhook.js";
 import { guideFinish, type GuideFinishOptions } from "./guide-finish.test-support.js";
 
@@ -132,15 +133,19 @@ describe("QQ Bot setup copy", () => {
     expect(wizardText()).not.toMatch(/must approve|QQ's approval|can only use the sandbox/iu);
   });
 
-  it("claims nothing about what QQ shows or hides: it says only what GoatCitadel can't do yet (R46)", () => {
+  it("claims nothing about what QQ shows or hides: it says only what GoatCitadel does (R46)", () => {
     // No QQ page was checked for "QQ doesn't show your openid", so the guide keeps to what is true of GoatCitadel.
     expect(wizardText()).not.toMatch(/QQ (?:doesn't|does not|never|won't) show/iu);
-    expect(wizardText().match(/GoatCitadel can't show (?:it|your openid) yet/gu)?.length).toBeGreaterThan(0);
+    expect(wizardText()).not.toMatch(/GoatCitadel can't show/iu);
   });
 
-  it("promises no screen that shows the sender's openid: none does yet (A6 waits for C9)", () => {
-    expect(wizardText()).not.toMatch(/Diagnostics/u);
-    expect(issueText()).not.toMatch(/Diagnostics/u);
+  it("sends the person to System › Diagnostics for their openid, and quotes the message GoatCitadel records there (A6, C9)", () => {
+    // The dropped message's diagnostic names its sender, so the openid is on screen. The guide quotes its start.
+    const quoted = describeDroppedSender("qqbot", "OPENID").split("OPENID")[0];
+
+    expect(quoted).toBe("Dropped a QQBot message from ");
+    expect(wizardText()).toContain(`"${quoted}…"`);
+    expect(wizardText()).toContain("System › Diagnostics");
   });
 });
 
@@ -159,11 +164,11 @@ describe("QQ Bot setup guide: what it says up front (items 3, 6, 7, 8, R46, R48)
     ]);
   });
 
-  it("ends with the audit's first message, and says GoatCitadel can't show the openid yet", () => {
-    // Ruling R49: this asks the person to check no test message. The audit's text is kept, with one sentence added
-    // because without A6 the copy must say no screen shows the openid (item 1).
+  it("ends with a first message for a person who knows their openid and one who doesn't, and the Docker note", () => {
+    // Ruling R49: this asks the person to check no test message; the only reply it asks for is the bot's answer to
+    // a message from an allowed sender. Ruling R65: diagnostics are off in a Docker install until switched on.
     expect(paragraphs("first-message")).toEqual([
-      "In the QQ Bot console set the callback URL to this connection's webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. Message the bot once; it won't answer yet. Add your openid (see Who may message this bot) with Edit setup, then message again. GoatCitadel can't show your openid yet, so you need to know it already.",
+      'In the QQ Bot console set the callback URL to this connection\'s webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. If you already added your openid under Who may message this bot, message the bot and check the reply. If not, message the bot once; it won\'t answer. Open System › Diagnostics, find "Dropped a QQBot message from …" and copy the openid. Add it under Who may message this bot with Edit setup, then message again. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.',
     ]);
   });
 
@@ -219,9 +224,9 @@ describe("QQ Bot setup guide: what it says up front (items 3, 6, 7, 8, R46, R48)
     );
   });
 
-  it("says no screen shows the openid yet, and what to do about it (item 1, without A6)", () => {
+  it("says where to find the openid when it isn't known, and what to do when it is (item 1, A6)", () => {
     expect(paragraphs("overview")).toContain(
-      "GoatCitadel can't show your openid yet. Until it can, use this connection for sending unless you already know your openid.",
+      "Don't know your openid? Finish setup, then message the bot once. It won't answer, and System › Diagnostics lists \"Dropped a QQBot message from …\" with your openid in it. If you already know your openid, add it under Who may message this bot.",
     );
   });
 
@@ -312,10 +317,7 @@ describe("QQ Bot setup guide: connecting the app (items 4, 5, 8, A5)", () => {
   });
 
   it("asks for an App ID and either form of the secret, nothing else (Continue)", () => {
-    expect(continueBlockers({})).toEqual([
-      "App ID",
-      "App secret or App secret from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({})).toEqual(["App ID", "App secret"]);
   });
 
   it("says to leave Default target empty at first, why, and the format when you add one (item 4)", () => {
@@ -335,11 +337,17 @@ describe("QQ Bot setup guide: the sender step (item 1, A7, A8)", () => {
     expect(step("sender-access").visibleWhenFieldEquals).toBeUndefined();
   });
 
-  it("keeps the sender help that says what an openid is and promises no screen (A7)", () => {
+  it("keeps the sender help that says what an openid is, and says where to find one (A6, A7)", () => {
     const senders = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(senders?.explanation).toBe(
-      "Add the QQ openids (the ids QQ assigns to senders, not QQ numbers) that may start conversations. Inbound is default-deny; empty means every inbound sender is denied.",
+      'Add the QQ openids (the ids QQ assigns to senders, not QQ numbers) that may start conversations. Inbound is default-deny; empty means every inbound sender is denied. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+    );
+  });
+
+  it("says on the sender step that a Docker install needs diagnostics switched on first (R65)", () => {
+    expect(paragraphs("sender-access")).toContain(
+      'If you don\'t know an id yet, finish setup first; you can add it any time with Edit setup. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.',
     );
   });
 
@@ -673,20 +681,21 @@ describe("QQ Bot receiving path: can it finish?", () => {
     expect(evaluateChannelInboundAccess({ config, actorId: "GROUPOPENID" })).toMatchObject({ allowed: false });
   });
 
-  it("pins the one thing left: nothing in GoatCitadel shows a sender's openid yet, and the guide says so (C9)", () => {
-    // A person who doesn't know their openid can't finish receiving. Part C item C9 (the sender id in the dropped-message
-    // diagnostic, PR 4) is what fixes that; until then the guide says it plainly instead of promising a screen.
-    expect(paragraphs("overview")).toContain(
-      "GoatCitadel can't show your openid yet. Until it can, use this connection for sending unless you already know your openid.",
-    );
-    expect(paragraphs("first-message")[0]).toContain("GoatCitadel can't show your openid yet");
+  it("lets a person who doesn't know their openid finish receiving: the dropped message names it (C9)", () => {
+    // Part C item C9 puts the sender id in the dropped-message diagnostic, so the guide can say where to find it.
+    // The id the diagnostic names is the one the allowlist matches.
+    const config = guide().normalize(draftOf(RECEIVING_VALUES));
+    const dropped = describeDroppedSender("qqbot", "SOMEONEELSE");
+
+    expect(evaluateChannelInboundAccess({ config, actorId: "SOMEONEELSE" })).toMatchObject({ allowed: false });
+    expect(dropped).toContain("from SOMEONEELSE:");
+    expect(dropped).toContain("add SOMEONEELSE under Who may message this bot");
+    expect(paragraphs("overview").join("\n")).toContain("System › Diagnostics");
+    expect(paragraphs("first-message")[0]).toContain("GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true");
   });
 
   it("does not make an edit replay the setup-only steps", () => {
     expect(continueBlockers(RECEIVING_VALUES, "edit")).toEqual([]);
-    expect(continueBlockers({}, "edit")).toEqual([
-      "App ID",
-      "App secret or App secret from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({}, "edit")).toEqual(["App ID", "App secret"]);
   });
 });

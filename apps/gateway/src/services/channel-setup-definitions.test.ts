@@ -12,8 +12,10 @@ import {
   plainSecretLabel,
   requireSecureUrl,
   secretEnvFieldCopy,
+  secretEnvVariableRule,
   secretNameForVariable,
 } from "./channel-setup-definitions/common.js";
+import { describeDroppedSender } from "./channel-inbound-dispatch.js";
 import { withGuidedJourney } from "./channel-setup-definitions/guided-journey.js";
 import { createLineDefinition } from "./channel-setup-definitions/line.js";
 import { isAllowedSecretEnvName } from "./channel-secret-resolution.js";
@@ -478,7 +480,7 @@ describe("channel setup definitions", () => {
     const testStep = definition.wizard.steps.find((step) => step.kind === "test");
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/dry run/i);
-    expect(definition.wizard.contentVersion).toBe("2026.10.ntfy.stream.v3.guided-2026-10");
+    expect(definition.wizard.contentVersion).toBe("2026.10.ntfy.stream.v3.guided-2026-10-28");
   });
 
   it("gives guided Nextcloud Talk setup a test step and a finalize confirmation step", () => {
@@ -498,7 +500,7 @@ describe("channel setup definitions", () => {
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/room/i);
     expect(definition.testing.levels).toContain("live-send");
-    expect(definition.wizard.contentVersion).toBe("2026.08.nextcloud-talk.v2.guided-2026-10");
+    expect(definition.wizard.contentVersion).toBe("2026.08.nextcloud-talk.v2.guided-2026-10-28");
   });
 
   it("ends every previously test-terminal guided wizard on a finalize confirmation step", () => {
@@ -522,8 +524,22 @@ describe("channel setup definitions", () => {
         `${catalogId} confirm step needs success criteria`,
       ).toBeGreaterThan(0);
       expect(definition.wizard.contentVersion, `${catalogId} contentVersion must be bumped`).toBe(
-        contentVersion + ".guided-2026-10",
+        contentVersion + ".guided-2026-10-28",
       );
+    }
+  });
+
+  it("gives every guide the same current guide-text version suffix, after its own version", () => {
+    // Setup evidence records this version. Change the suffix whenever any guide's text, or the text the guides share,
+    // changes, so an evidence row tells which text the operator saw.
+    const definitions = listChannelSetupDefinitions();
+    // Not a count of the guides: a new guide should carry the suffix without this test being edited.
+    expect(definitions).not.toHaveLength(0);
+    for (const definition of definitions) {
+      expect(
+        definition.wizard.contentVersion.endsWith(".guided-2026-10-28"),
+        `${definition.catalog.catalogId} content version ${definition.wizard.contentVersion}`,
+      ).toBe(true);
     }
   });
 
@@ -594,7 +610,7 @@ describe("channel setup definitions", () => {
 
   it("collects Google Chat app (service-account) fields and forces a default-deny sender allowlist", () => {
     const definition = requireChannelSetupDefinition("channel.google-chat");
-    expect(definition.definition.wizard.contentVersion).toBe("2026.10.google-chat.app.v2.guided-2026-10");
+    expect(definition.definition.wizard.contentVersion).toBe("2026.10.google-chat.app.v2.guided-2026-10-28");
     expect(definition.definition.adapter.adapterVersion).toBe("2026.10.google-chat.app.v2");
     expect(definition.definition.validation.validationVersion).toBe("2026.10.google-chat.app.v2");
     const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
@@ -1429,6 +1445,11 @@ function senderStep(key: string): ChannelSetupStepDefinition | undefined {
   return guide(key).wizard.steps.find((step) => step.id === "sender-access");
 }
 
+function firstMessageText(key: string): string {
+  const step = guide(key).wizard.steps.find((candidate) => candidate.id === "first-message");
+  return (step?.body ?? []).flatMap((block) => (block.kind === "paragraph" ? [block.text] : [])).join("\n");
+}
+
 function fieldOf(key: string, fieldKey: string): ChannelSetupFieldDefinition | undefined {
   return allFields(guide(key)).find((field) => field.key === fieldKey);
 }
@@ -1643,6 +1664,253 @@ describe("the shared guide builder", () => {
     });
   });
 
+  describe("variable names a Gateway can read (C5)", () => {
+    const TOKEN = "MTA0NjY3ODkwMTIzNDU2Nzg5MA.Gx1234.abcdefghijklmnopqrstuvwx";
+
+    /**
+     * Which runtime resolvers read each variable-name field. "outbound" is the credential guard that sends and the
+     * setup test go through (`isPermittedIntegrationSecretEnvVarName`), "inbound" is the webhook secret allowlist
+     * (`isAllowedSecretEnvName`), and "both" means a send and a webhook read the same variable.
+     */
+    const READERS: Record<string, "outbound" | "inbound" | "both"> = {
+      "discord.botTokenEnv": "outbound",
+      "google-chat.serviceAccountKeyEnv": "outbound",
+      "line.channelAccessTokenEnv": "outbound",
+      "line.channelSecretEnv": "inbound",
+      "matrix.accessTokenEnv": "outbound",
+      "mattermost.botTokenEnv": "outbound",
+      "nextcloud-talk.tokenEnv": "both",
+      "ntfy.tokenEnv": "outbound",
+      "qqbot.appSecretEnv": "both",
+      "telegram.webhookSecretEnv": "inbound",
+      "wecom.secretEnv": "outbound",
+      "wecom.callbackTokenEnv": "both",
+      "wecom.encodingAesKeyEnv": "both",
+      "whatsapp.accessTokenEnv": "outbound",
+      "whatsapp.appSecretEnv": "inbound",
+      "whatsapp.webhookVerifyTokenEnv": "inbound",
+      "zalo.accessTokenEnv": "outbound",
+    };
+
+    function envFields(): Array<{
+      definition: ChannelSetupDefinition;
+      key: string;
+      field: ChannelSetupFieldDefinition;
+      where: string;
+    }> {
+      return listChannelSetupDefinitions().flatMap((definition) =>
+        allFields(definition)
+          .filter((field) => field.key.endsWith("Env"))
+          .map((field) => ({
+            definition,
+            key: definition.catalog.key,
+            field,
+            where: `${definition.catalog.key}.${field.key}`,
+          })),
+      );
+    }
+
+    /** A draft that shows the field: a field a choice hides (Google Chat's app key, Telegram's webhook secret) gets that choice. */
+    function draftWith(definition: ChannelSetupDefinition, field: ChannelSetupFieldDefinition, value: string) {
+      const condition = field.visibleWhenFieldEquals;
+      return createDraft(definition.catalog.catalogId, {
+        ...(condition ? { [condition.fieldKey]: condition.value } : {}),
+        [field.key]: value,
+      });
+    }
+
+    function issuesFor(definition: ChannelSetupDefinition, field: ChannelSetupFieldDefinition, value: string) {
+      const runtime = requireChannelSetupDefinition(definition.catalog.catalogId);
+      return runtime.validate(draftWith(definition, field, value)).filter((issue) => issue.fieldKey === field.key);
+    }
+
+    function pastedLabel(definition: ChannelSetupDefinition, field: ChannelSetupFieldDefinition): string {
+      const twin = allFields(definition).find((candidate) => candidate.key === field.key.slice(0, -3));
+      return plainSecretLabel(twin?.label ?? "");
+    }
+
+    function upperSnake(camel: string): string {
+      return camel.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toUpperCase();
+    }
+
+    it("refuses a token pasted into any variable-name field, and tells the person where to paste it", () => {
+      let checked = 0;
+      for (const { definition, field, where } of envFields()) {
+        checked += 1;
+        const issues = issuesFor(definition, field, TOKEN);
+        expect(issues, where).toEqual([
+          expect.objectContaining({
+            fieldKey: field.key,
+            level: "error",
+            failureCategory: "malformed_value",
+            message: `That looks like a token, not a variable name. Paste it into ${pastedLabel(definition, field)} instead.`,
+          }),
+        ]);
+        // The pasted text can be a real credential, so no message, detail or key repeats it.
+        expect(JSON.stringify(issues), `${where} does not repeat the pasted value`).not.toContain(TOKEN);
+      }
+      expect(checked).toBeGreaterThanOrEqual(17);
+    });
+
+    it("refuses a well-formed name the Gateway would not read, with the field's own name rule", () => {
+      for (const { definition, key, field, where } of envFields()) {
+        expect(issuesFor(definition, field, "MY_TOKEN"), where).toEqual([
+          expect.objectContaining({
+            fieldKey: field.key,
+            level: "error",
+            failureCategory: "malformed_value",
+            message: secretEnvVariableRule(key, field.key),
+          }),
+        ]);
+      }
+    });
+
+    it("names every variable-name field's runtime reader, so a new field must pick one", () => {
+      expect(
+        envFields()
+          .map((item) => item.where)
+          .sort(),
+      ).toEqual(Object.keys(READERS).sort());
+    });
+
+    it("accepts exactly the names the runtime resolver of each field accepts", () => {
+      for (const { definition, key, field, where } of envFields()) {
+        const reader = READERS[where];
+        const catalogId = definition.catalog.catalogId;
+        const prefix = key.toUpperCase().replaceAll("-", "_");
+        const names = [
+          `${prefix}_${upperSnake(field.key.slice(0, -3))}`,
+          `${prefix}_BOT_TOKEN`,
+          `${prefix}_APP_SECRET`,
+          `${prefix}_ENCODING_AES_KEY`,
+          `${prefix}_KEY`,
+          `${prefix}_NOTES`,
+          `INTEGRATION_${prefix}_TOKEN`,
+          `GC_${prefix}_TOKEN`,
+          `GOATCITADEL_${prefix}_TOKEN`,
+          "MY_TOKEN",
+          "WEBHOOK_SECRET",
+          "CHANNEL_SECRET",
+          "OPENAI_API_KEY",
+          "GITHUB_TOKEN",
+          "AB",
+          `${prefix.toLowerCase()}_bot_token`,
+        ];
+        const readable = (name: string) =>
+          (reader === "inbound" || isPermittedIntegrationSecretEnvVarName(name, catalogId)) &&
+          (reader === "outbound" || isAllowedSecretEnvName(name));
+        const accepted: string[] = [];
+        const refused: string[] = [];
+        for (const name of names) {
+          const issues = issuesFor(definition, field, name);
+          // Same answer as the resolver: no name the resolver reads is refused, and none it refuses is accepted.
+          expect(issues.length === 0, `${where} ${name}`).toBe(readable(name));
+          (issues.length === 0 ? accepted : refused).push(name);
+        }
+        // The table is not vacuous: each field has a name it takes and several it does not.
+        expect(accepted.length, `${where} accepts its own rule's example`).toBeGreaterThanOrEqual(1);
+        expect(refused.length, `${where} refuses what the resolver refuses`).toBeGreaterThanOrEqual(5);
+      }
+    });
+
+    it("says the name rule for a name that has the shape of one, and the token message for anything else", () => {
+      const { definition, field } = envFields().find((item) => item.where === "mattermost.botTokenEnv")!;
+      const messageOf = (value: string) => issuesFor(definition, field, value)[0]?.message;
+      const token = "That looks like a token, not a variable name. Paste it into Bot token instead.";
+
+      for (const notAName of ["xoxb-1234-abcd", "123:ABC-def", "my.token", "AB", "9ABC_DEF", `A${"B".repeat(128)}`]) {
+        expect(messageOf(notAName), notAName).toBe(token);
+      }
+      // A dash or a dot is not in a variable name, so these stay the token message whatever their case.
+      for (const notAName of ["my-bot-token", "Discord-Bot-Token", "my.bot.token"]) {
+        expect(messageOf(notAName), notAName).toBe(token);
+      }
+      // Tokens made only of letters, digits and underscores: one long run (a Mattermost token), or case mixed inside a
+      // word (GitHub, Matrix, Meta). They still point to the pasted field.
+      for (const notAName of [
+        "xuqwrwgstrb3mzrxb83nb357a",
+        "ghp_AbCdEf1234567890abcdEF",
+        "syt_YWxpY2U_HPaSfakefake",
+        "EAAGm0PX4ZCpsBAfakefake",
+        "abc",
+      ]) {
+        expect(messageOf(notAName), notAName).toBe(token);
+      }
+      expect(messageOf("OPENAI_API_KEY")).toBe(secretEnvVariableRule("mattermost", "botTokenEnv"));
+      expect(messageOf("GOATCITADEL_MATTERMOST_TOKEN")).toBe(secretEnvVariableRule("mattermost", "botTokenEnv"));
+      expect(messageOf("MATTERMOST_BOT_TOKEN")).toBeUndefined();
+      // A name with spaces round it is the name; the Gateway trims it too.
+      expect(messageOf("  MATTERMOST_BOT_TOKEN  ")).toBeUndefined();
+    });
+
+    it("does not call a lowercase or mixed-case variable name a token, and says names use capital letters", () => {
+      const { definition, field } = envFields().find((item) => item.where === "mattermost.botTokenEnv")!;
+      const expected = `${secretEnvVariableRule("mattermost", "botTokenEnv")} Variable names use capital letters.`;
+
+      // Words of letters and digits joined by underscores, each in one case or capitalised, are a name in the wrong case.
+      for (const name of [
+        "my_bot_token",
+        "Mattermost_Bot_Token",
+        "mattermost_bot_token",
+        "sk_live_abc",
+        `a_${"b".repeat(126)}`,
+      ]) {
+        const issues = issuesFor(definition, field, name);
+
+        expect(issues, name).toEqual([
+          expect.objectContaining({
+            fieldKey: field.key,
+            level: "error",
+            failureCategory: "malformed_value",
+            message: expected,
+          }),
+        ]);
+        expect(issues[0]?.message, name).not.toMatch(/token, not a variable name/u);
+        expect(JSON.stringify(issues), `${name} is not repeated`).not.toContain(name);
+      }
+    });
+
+    it("says the same for the lowercase form of a name each variable-name field would read", () => {
+      for (const { definition, key, field, where } of envFields()) {
+        const name = `${key.replaceAll("-", "_")}_${field.key.slice(0, -3)}`.toLowerCase();
+        const issues = issuesFor(definition, field, name);
+
+        expect(
+          issues.map((issue) => issue.message),
+          where,
+        ).toEqual([`${secretEnvVariableRule(key, field.key)} Variable names use capital letters.`]);
+      }
+    });
+
+    it("leaves a blank variable name, and a field a choice hides, alone", () => {
+      const googleChat = envFields().find((item) => item.where === "google-chat.serviceAccountKeyEnv")!;
+      const runtime = requireChannelSetupDefinition("channel.google-chat");
+      const webhook = runtime.validate(
+        createDraft("channel.google-chat", {
+          mode: "webhook",
+          webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=k&token=t",
+          serviceAccountKeyEnv: TOKEN,
+        }),
+      );
+      // Webhook mode drops the app key when it saves, so a leftover value in the hidden field is not a problem.
+      expect(webhook.filter((issue) => issue.fieldKey === googleChat.field.key)).toEqual([]);
+
+      for (const { definition, field, where } of envFields()) {
+        expect(issuesFor(definition, field, ""), `${where} blank`).toEqual([]);
+        expect(issuesFor(definition, field, "   "), `${where} spaces`).toEqual([]);
+      }
+    });
+
+    it("checks a bare Google Chat draft that holds only the key's variable, as the app mode it implies", () => {
+      const runtime = requireChannelSetupDefinition("channel.google-chat");
+      const issues = runtime.validate(createDraft("channel.google-chat", { serviceAccountKeyEnv: TOKEN }));
+
+      expect(issues.filter((issue) => issue.fieldKey === "serviceAccountKeyEnv")).toEqual([
+        expect.objectContaining({ failureCategory: "malformed_value" }),
+      ]);
+    });
+  });
+
   describe("steps that are split, kept and staged (A11, A12, A16)", () => {
     function lineWithLaterSteps(): ChannelSetupRuntimeDefinition {
       const base = createLineDefinition();
@@ -1783,30 +2051,115 @@ describe("the shared guide builder", () => {
   });
 
   describe("the sender step (A7, A8)", () => {
+    // The gateway names a dropped message's sender in System › Diagnostics (describeDroppedSender), so these guides
+    // say where to find an id they don't show anywhere else.
+    const FIND_SENDER_ID =
+      'Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".';
+    // With diagnostics off the list route answers 404, and System › Diagnostics shows a red "Diagnostics unavailable: …"
+    // alert (SystemDiagnostics.tsx), not an empty page. The sender step comes before Finalize, so it says to finish first.
+    const DIAGNOSTICS_ON_DOCKER =
+      'If you don\'t know an id yet, finish setup first; you can add it any time with Edit setup. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.';
+    /** What the first message says after the operator finishes and messages the bot (Slack, WhatsApp and the rest). */
+    const FIND_SENDER_ID_AFTER_FINISHING = (name: string) =>
+      `If the bot doesn't answer your message, open System › Diagnostics, find "Dropped a ${name} message from …", and add that id under Who may message this bot with Edit setup.`;
+    const SENDER_ID_IN_DIAGNOSTICS = [
+      "slack",
+      "whatsapp",
+      "line",
+      "nextcloud-talk",
+      "ntfy",
+      "mattermost",
+      "matrix",
+      "google-chat",
+      "qqbot",
+      "wecom",
+    ];
+
     it("explains in each channel's own words what a sender identity looks like", () => {
       const explanations: Record<string, string> = {
-        whatsapp: "Your WhatsApp number with country code, digits only, no plus (for example 15551234567).",
-        matrix: "Your Matrix ID with the @ and the server, for example @alice:example.com.",
-        mattermost:
-          "Mattermost user IDs (26 letters and digits), not usernames. An admin sees them in System Console › User Management › Users.",
-        "nextcloud-talk": "users/ followed by your Nextcloud user name, for example users/alice.",
-        line: "Your LINE user ID (starts with U). For a one-to-one chat it is the same ID as Default target.",
-        slack: "Your Slack member ID (starts with U).",
-        ntfy: "Added for you as ntfy-topic:<subscribe topic>. If you change the topic later, change this too.",
-        // These keep their current text until the "dropped message" sentence can be backed by a screen.
+        whatsapp: `Your WhatsApp number with country code, digits only, no plus (for example 15551234567). ${FIND_SENDER_ID}`,
+        matrix: `Your Matrix ID with the @ and the server, for example @alice:example.com. ${FIND_SENDER_ID}`,
+        mattermost: `Mattermost user IDs (26 letters and digits), not usernames. An admin sees them in System Console › User Management › Users. ${FIND_SENDER_ID}`,
+        "nextcloud-talk": `users/ followed by your Nextcloud user name, for example users/alice. ${FIND_SENDER_ID}`,
+        line: `Your LINE user ID (starts with U). For a one-to-one chat it is the same ID as Default target. ${FIND_SENDER_ID}`,
+        slack: `Your Slack member ID (starts with U). ${FIND_SENDER_ID}`,
+        ntfy: `Added for you as ntfy-topic:<subscribe topic>. If you change the topic later, change this too. ${FIND_SENDER_ID}`,
+        // Telegram pairs people instead of dropping them by sender, so it has no such line.
         telegram:
           "Telegram pairing approval adds the approved user here. A destination chat ID is not permission to message the bot.",
-        "google-chat":
-          "Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied.",
-        qqbot:
-          "Add the QQ openids (the ids QQ assigns to senders, not QQ numbers) that may start conversations. Inbound is default-deny; empty means every inbound sender is denied.",
-        wecom:
-          "Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied.",
+        "google-chat": `Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied. ${FIND_SENDER_ID}`,
+        qqbot: `Add the QQ openids (the ids QQ assigns to senders, not QQ numbers) that may start conversations. Inbound is default-deny; empty means every inbound sender is denied. ${FIND_SENDER_ID}`,
+        wecom: `Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied. ${FIND_SENDER_ID}`,
       };
 
       for (const [key, text] of Object.entries(explanations)) {
         const field = senderStep(key)?.fields?.find((item) => item.key === "allowedSenders");
         expect(field?.explanation, key).toBe(text);
+      }
+    });
+
+    it("tells every channel that drops messages by sender where to find an id, and no other", () => {
+      for (const key of SENDER_ID_IN_DIAGNOSTICS) {
+        const field = senderStep(key)?.fields?.find((item) => item.key === "allowedSenders");
+        expect(field?.explanation, key).toContain(FIND_SENDER_ID);
+      }
+      for (const key of ["telegram", "discord", "teams", "zalo"]) {
+        expect(JSON.stringify(guide(key)), key).not.toContain("System › Diagnostics");
+      }
+    });
+
+    it("says once, on the sender step, that a Docker install needs diagnostics switched on first", () => {
+      for (const key of SENDER_ID_IN_DIAGNOSTICS) {
+        const paragraphs = (senderStep(key)?.body ?? []).flatMap((block) =>
+          block.kind === "paragraph" ? [block.text] : [],
+        );
+        expect(paragraphs, key).toContain(DIAGNOSTICS_ON_DOCKER);
+        expect(paragraphs.join("\n").match(/GOATCITADEL_DEV_DIAGNOSTICS_ENABLED/gu), key).toHaveLength(1);
+      }
+      expect(
+        senderStep("telegram")
+          ?.body?.map((block) => JSON.stringify(block))
+          .join("\n"),
+      ).not.toContain("GOATCITADEL_DEV_DIAGNOSTICS_ENABLED");
+    });
+
+    it("quotes the diagnostic the way the gateway words it", () => {
+      for (const key of SENDER_ID_IN_DIAGNOSTICS) {
+        // The guide's line has the sentence's start and its "from"; the real message has both.
+        const message = describeDroppedSender(key, "THE-ID");
+        expect(message, key).toMatch(/^Dropped a .+ message from THE-ID: /u);
+      }
+    });
+
+    it("tells the person, in the first message after they finish, to look for the dropped message and add its id", () => {
+      for (const key of SENDER_ID_IN_DIAGNOSTICS.filter((candidate) => candidate !== "qqbot")) {
+        const text = firstMessageText(key);
+        // The channel's name in the quote is the one the gateway puts in the real message.
+        const named =
+          describeDroppedSender(key, "THE-ID")
+            .split(" message from ")[0]
+            ?.replace(/^Dropped a /u, "") ?? "";
+
+        expect(text, key).toContain(FIND_SENDER_ID_AFTER_FINISHING(named));
+        expect(text, key).toMatch(new RegExp(`find "Dropped a ${named} message from …"`, "u"));
+        // It asks for the bot's answer to the person's own message, never a test message (R49).
+        expect(text, key).not.toMatch(/Dropped a [^"]*arrived/u);
+      }
+    });
+
+    it("keeps the Docker note to the sender step, so each guide says it once (QQ also repeats it in its walkthrough)", () => {
+      for (const key of SENDER_ID_IN_DIAGNOSTICS) {
+        const occurrences = JSON.stringify(guide(key)).match(/GOATCITADEL_DEV_DIAGNOSTICS_ENABLED/gu) ?? [];
+        expect(occurrences, key).toHaveLength(key === "qqbot" ? 2 : 1);
+      }
+      for (const key of SENDER_ID_IN_DIAGNOSTICS.filter((candidate) => candidate !== "qqbot")) {
+        expect(firstMessageText(key), key).not.toContain("GOATCITADEL_DEV_DIAGNOSTICS_ENABLED");
+      }
+    });
+
+    it("leaves the first message of a channel with no dropped-by-sender path as it was", () => {
+      for (const key of ["telegram", "discord", "teams", "zalo"]) {
+        expect(firstMessageText(key), key).not.toContain("Dropped a");
       }
     });
 

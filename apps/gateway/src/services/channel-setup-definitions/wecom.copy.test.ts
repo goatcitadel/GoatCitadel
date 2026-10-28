@@ -5,6 +5,7 @@ import {
   type ChannelSetupRichBlock,
   type ChannelSetupStepDefinition,
 } from "@goatcitadel/contracts";
+import { describeDroppedSender } from "../channel-inbound-dispatch.js";
 import { isAllowedSecretEnvName } from "../channel-secret-resolution.js";
 import { requireChannelSetupDefinition } from "../channel-setup-definitions.js";
 import {
@@ -169,7 +170,7 @@ describe("WeCom setup guide: what it says up front (items 2, 4, 8, R46, R48)", (
 
   it("asks for the test message only when one was sent: the probe sends nothing without a default target (R49)", () => {
     expect(paragraphs("first-message")).toEqual([
-      "If you set a default target, check the test message arrived. To receive: in the app's receive messages settings enter this connection's webhook address with the same Token and EncodingAESKey, and save. Allow your WeCom userid, message the app, and check the reply.",
+      "If you set a default target, check the test message arrived. To receive: in the app's receive messages settings enter this connection's webhook address with the same Token and EncodingAESKey, and save. Allow your WeCom userid, message the app, and check the reply. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a WeCom message from …\", and add that id under Who may message this bot with Edit setup.",
     ]);
   });
 
@@ -313,11 +314,7 @@ describe("WeCom setup guide: where each value comes from (items 3, 5, 8, A5)", (
   });
 
   it("asks for a Corp ID, an Agent ID and either form of the secret, nothing about receiving (Continue)", () => {
-    expect(continueBlockers({})).toEqual([
-      "Corp ID",
-      "Agent ID",
-      "Application secret or Application secret from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({})).toEqual(["Corp ID", "Agent ID", "Application secret"]);
   });
 });
 
@@ -421,11 +418,11 @@ describe("WeCom setup guide: the sender step (A7, A8)", () => {
     expect(step("sender-access").visibleWhenFieldEquals).toBeUndefined();
   });
 
-  it("keeps the sender help for WeCom userids", () => {
+  it("keeps the sender help for WeCom userids and says where to find one", () => {
     const senders = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(senders?.explanation).toBe(
-      "Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied.",
+      'Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
     );
   });
 });
@@ -763,20 +760,18 @@ describe("WeCom receiving path: can it finish?", () => {
     expect(evaluateChannelInboundAccess({ config, actorId: "lisi" })).toMatchObject({ allowed: false });
   });
 
-  it("tells the person where their userid is, so allowing themselves needs no later fix (unlike QQ)", () => {
-    // WeCom shows a member's userid (the Account) to an administrator under Contacts.
+  it("tells the person where their userid is, so allowing themselves needs no later fix", () => {
+    // WeCom shows a member's userid (the Account) to an administrator under Contacts. Someone who can't see
+    // Contacts can read it from the dropped message's diagnostic (A6, C9), as for QQ.
     expect(textOf(field("defaultTarget").whereToFind)).toContain("Contacts");
     expect(paragraphs("first-message")[0]).toContain("Allow your WeCom userid");
-    expect(wizardText()).not.toMatch(/Diagnostics/u);
+    expect(wizardText()).toContain('find "Dropped a … message from …"');
+    expect(describeDroppedSender("wecom", "zhangsan")).toMatch(/^Dropped a WeCom message from zhangsan: /u);
   });
 
   it("does not make an edit replay the setup-only steps, but still shows the receiving step", () => {
     expect(continueBlockers(RECEIVING_VALUES, "edit")).toEqual([]);
-    expect(continueBlockers({}, "edit")).toEqual([
-      "Corp ID",
-      "Agent ID",
-      "Application secret or Application secret from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({}, "edit")).toEqual(["Corp ID", "Agent ID", "Application secret"]);
     expect(step("receive-messages").createOnly).toBeUndefined();
   });
 });

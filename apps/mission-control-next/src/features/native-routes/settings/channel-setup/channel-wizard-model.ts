@@ -102,14 +102,14 @@ export function findMissingFieldLabels(
   const effectiveValues = wizardValuesWithDefaults(definition, values);
   const fields = (step.fields ?? []).filter((field) => isFieldVisible(field, effectiveValues));
   const missing = fields
-    .filter((field) => field.required && !hasFieldValue(draft, effectiveValues, field.key))
+    .filter(
+      (field) => isFieldRequired(field, draft, effectiveValues) && !hasFieldValue(draft, effectiveValues, field.key),
+    )
     .map((field) => field.label);
   for (const group of step.requiredAnyOf ?? []) {
     if (!group.some((key) => hasFieldValue(draft, effectiveValues, key))) {
-      const allFields = definition.wizard.steps.flatMap((item) => item.fields ?? []);
-      // A key with no field is one the operator cannot see or fill in, so the message does not name it.
-      const labels = new Set(group.flatMap((key) => allFields.find((field) => field.key === key)?.label ?? []));
-      if (labels.size) missing.push([...labels].join(" or "));
+      const labels = alternativeLabels(definition, group, effectiveValues);
+      if (labels.length) missing.push(labels.join(" or "));
     }
   }
   for (const field of fields) {
@@ -135,6 +135,26 @@ export function findMissingFieldLabels(
     missing.unshift("Bot token env var or bot token");
   }
   return missing;
+}
+
+/**
+ * The labels a blocked Continue names for a group of alternatives, each said once. A key with no field is one the
+ * operator cannot see or fill in, and a field they cannot see is no way in either, so neither is named. A variable
+ * field whose pasted twin is also offered is left out: the pasted field's plain label says it.
+ */
+function alternativeLabels(
+  definition: ChannelSetupDefinition,
+  group: readonly string[],
+  values: Record<string, unknown>,
+): string[] {
+  const allFields = definition.wizard.steps.flatMap((item) => item.fields ?? []);
+  const offered = group.flatMap((key) => {
+    const field = allFields.find((candidate) => candidate.key === key);
+    return field && isFieldVisible(field, values) ? [field] : [];
+  });
+  const offeredKeys = new Set(offered.map((field) => field.key));
+  const named = offered.filter((field) => !(field.key.endsWith("Env") && offeredKeys.has(field.key.slice(0, -3))));
+  return [...new Set(named.map((field) => field.label))];
 }
 
 export function hasFieldValue(draft: ChannelSetupDraft, values: Record<string, unknown>, key: string): boolean {
@@ -231,6 +251,31 @@ export function wizardValuesWithDefaults(
   };
 }
 
+/**
+ * Whether the field has to be filled in now. A field that is required only with other fields (`requiredWhenAnyFieldSet`)
+ * is required while one of them has a value; a setup that sets none of them never uses it.
+ */
+export function isFieldRequired(
+  field: ChannelSetupFieldDefinition,
+  draft: ChannelSetupDraft,
+  values: Record<string, unknown>,
+): boolean {
+  if (!field.required) return false;
+  const paths = field.requiredWhenAnyFieldSet;
+  return !paths || paths.some((key) => hasFieldValue(draft, values, key));
+}
+
+/** The fields as the form shows them: each one's `required` is whether it has to be filled in on this path. */
+export function fieldsWithResolvedRequired(
+  fields: ChannelSetupFieldDefinition[] | undefined,
+  draft: ChannelSetupDraft,
+  values: Record<string, unknown>,
+): ChannelSetupFieldDefinition[] | undefined {
+  return fields?.map((field) =>
+    field.requiredWhenAnyFieldSet ? { ...field, required: isFieldRequired(field, draft, values) } : field,
+  );
+}
+
 export function isFieldVisible(field: ChannelSetupFieldDefinition, values: Record<string, unknown>): boolean {
   const condition = field.visibleWhenFieldEquals;
   return !condition || values[condition.fieldKey] === condition.value;
@@ -318,8 +363,9 @@ function isSetValue(value: unknown): boolean {
 }
 
 /**
- * The Gateway path a vendor posts to, for a saved connection whose webhook conditions hold: the field it must equal,
- * and, when the channel names fields, at least one of them set.
+ * The Gateway path a vendor posts to, for a connection id whose webhook conditions hold: the field it must equal,
+ * and, when the channel names fields, at least one of them set. The id is a saved connection's, or a new setup's draft
+ * id, which the connection keeps when the setup is finished. It is escaped here, once, and nowhere after.
  */
 export function inboundWebhookPath(
   definition: ChannelSetupDefinition,
@@ -335,14 +381,6 @@ export function inboundWebhookPath(
   if (alternatives?.length && !alternatives.some((key) => isSetValue(effectiveValues[key]))) return undefined;
   const encodedId = encodePathSegment(connectionId);
   return encodedId === undefined ? undefined : inbound.pathTemplate.replaceAll("{connectionId}", () => encodedId);
-}
-
-/**
- * Whether a connection set up with these values will receive on a webhook, before it has an id to name the path.
- * It asks `inboundWebhookPath` with a stand-in id, so the condition lives there and nowhere else.
- */
-export function receivesOnWebhook(definition: ChannelSetupDefinition, values: Record<string, unknown>): boolean {
-  return inboundWebhookPath(definition, values, "connection") !== undefined;
 }
 
 /** `encodeURIComponent` throws on a lone surrogate; an id that can't be encoded names no path. */

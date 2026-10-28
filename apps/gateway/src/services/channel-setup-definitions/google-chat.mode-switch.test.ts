@@ -168,3 +168,54 @@ describe("Google Chat setup: an edit that keeps its mode keeps what is saved", (
     for (const key of APP_KEYS) expect(config, key).not.toHaveProperty(key);
   });
 });
+
+/**
+ * Validate on a change to a saved connection. A change never carries the saved key: the draft only records that the
+ * connection holds one (the key stays in secure storage under the connection's reference). So a change that leaves
+ * the key alone must not ask for it, and one that moves to the other mode, which holds no key yet, must.
+ */
+describe("Google Chat setup: validating a change to a saved connection", () => {
+  function issueKeysAfter(saved: Record<string, unknown>, chosen: Record<string, unknown>): string[] {
+    const connection = { ...connectionOf(saved), revision: REVISION };
+    const { draft, hydration } = guide().hydrate(connection);
+    const edited = draftOf(
+      { ...draft, ...chosen },
+      { connectionId: connection.connectionId, connectionRevision: REVISION, hydration },
+      "edit",
+    );
+    return guide()
+      .validate(edited)
+      .map((issue) => issue.key);
+  }
+
+  it.each([
+    ["an incoming webhook's saved link", SAVED_WEBHOOK, { defaultThreadKey: "alerts" }],
+    ["a Chat app's saved key", SAVED_APP_WITH_KEY, { defaultSpace: "spaces/BBBB" }],
+    ["a Chat app's key variable", SAVED_APP_WITH_ENV, { defaultSpace: "spaces/BBBB" }],
+  ])("asks for nothing when one setting changes and %s stays", (_label, saved, chosen) => {
+    expect(issueKeysAfter(saved, chosen)).toEqual([]);
+  });
+
+  it("asks for the webhook link when a saved Chat app is switched to an incoming webhook and none is pasted", () => {
+    expect(issueKeysAfter(SAVED_APP_WITH_KEY, { mode: "webhook" })).toEqual(["webhookUrl_required"]);
+  });
+
+  it("asks for the key when a saved incoming webhook is switched to a Chat app and none is given", () => {
+    expect(issueKeysAfter(SAVED_WEBHOOK, { mode: "app", audience: "123456789012" })).toEqual([
+      "serviceAccountKey_required",
+    ]);
+  });
+
+  it("still asks a new setup for the link or the key", () => {
+    expect(
+      guide()
+        .validate(draftOf({ mode: "webhook" }))
+        .map((issue) => issue.key),
+    ).toEqual(["webhookUrl_required"]);
+    expect(
+      guide()
+        .validate(draftOf({ mode: "app", audience: "123456789012" }))
+        .map((issue) => issue.key),
+    ).toEqual(["serviceAccountKey_required"]);
+  });
+});

@@ -1984,7 +1984,7 @@ Steps:
 1. Open `/settings/channels`.
 2. Create or edit connection.
 3. Run guided auth/check/test/retest.
-4. Send sandbox message when supported.
+4. Send a test message when supported.
 5. Inspect capability and diagnostics state.
 6. Test bad token or missing permission.
 

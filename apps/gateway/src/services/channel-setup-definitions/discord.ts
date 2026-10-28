@@ -241,8 +241,10 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               label: "Default server (guild) ID",
               type: "id",
               required: true,
+              // Only a bot listens in a server. A webhook-only setup never uses the id, so it isn't asked for it.
+              requiredWhenAnyFieldSet: ["botToken", "botTokenEnv"],
               explanation:
-                "Required for the recommended server allowlist path. It may be omitted only when Gateway guild traffic is off, such as a DM-only setup, or when an existing advanced connection already has explicit guild rules.",
+                "Required for the recommended server allowlist path. It may be omitted only when Gateway guild traffic is off, such as a DM-only setup, or when an existing advanced connection already has explicit guild rules. A webhook-only setup doesn't use it.",
               whyNeeded:
                 "Pairs with the default channel to create the wizard's inbound guild route and enables immediate guild-scoped slash-command synchronization.",
               whereToFind: [

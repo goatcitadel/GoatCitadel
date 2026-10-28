@@ -130,9 +130,80 @@ describe("the missing-values message", () => {
     };
     const definition = withSteps([step]);
 
-    expect(findMissingFieldLabels(definition, makeDraft(definition), step, {})).toEqual([
-      "Bot token or Token environment",
-    ]);
+    expect(findMissingFieldLabels(definition, makeDraft(definition), step, {})).toEqual(["Bot token"]);
+  });
+
+  it("names a paste-or-variable pair by the pasted field's plain label only", () => {
+    const whatsapp = definitions.find((item) => item.catalog.catalogId === "channel.whatsapp")!;
+    const step = whatsapp.wizard.steps.find((item) => item.requiredAnyOf?.length)!;
+
+    const missing = findMissingFieldLabels(whatsapp, makeDraft(whatsapp), step, {});
+
+    expect(missing).toContain("Access token");
+    expect(missing.join(" ")).not.toMatch(/environment variable/i);
+  });
+
+  it("names only the alternatives that are visible", () => {
+    const step = {
+      id: "values",
+      kind: "field-collection" as const,
+      title: "Values",
+      fields: [
+        { key: "mode", label: "Mode", type: "select" as const, required: false, defaultValue: "bot", explanation: "M" },
+        {
+          key: "botToken",
+          label: "Bot token",
+          type: "secret" as const,
+          required: false,
+          explanation: "Secret",
+          visibleWhenFieldEquals: { fieldKey: "mode", value: "bot" },
+        },
+        {
+          key: "webhookUrl",
+          label: "Webhook URL",
+          type: "url" as const,
+          required: false,
+          explanation: "Hook",
+          visibleWhenFieldEquals: { fieldKey: "mode", value: "webhook" },
+        },
+      ],
+      requiredAnyOf: [["botToken", "webhookUrl"]],
+    };
+    const definition = withSteps([step]);
+    const draft = makeDraft(definition);
+
+    expect(findMissingFieldLabels(definition, draft, step, {})).toEqual(["Bot token"]);
+    expect(findMissingFieldLabels(definition, draft, step, { mode: "webhook" })).toEqual(["Webhook URL"]);
+  });
+
+  it("names the variable field when it is the only visible way in", () => {
+    const step = {
+      id: "values",
+      kind: "field-collection" as const,
+      title: "Values",
+      fields: [
+        { key: "mode", label: "Mode", type: "select" as const, required: false, defaultValue: "env", explanation: "M" },
+        {
+          key: "botToken",
+          label: "Bot token",
+          type: "secret" as const,
+          required: false,
+          explanation: "Secret",
+          visibleWhenFieldEquals: { fieldKey: "mode", value: "paste" },
+        },
+        {
+          key: "botTokenEnv",
+          label: "Bot token from a variable",
+          type: "text" as const,
+          required: false,
+          explanation: "E",
+        },
+      ],
+      requiredAnyOf: [["botToken", "botTokenEnv"]],
+    };
+    const definition = withSteps([step]);
+
+    expect(findMissingFieldLabels(definition, makeDraft(definition), step, {})).toEqual(["Bot token from a variable"]);
   });
 
   it("does not block on a group none of whose alternatives is a field", () => {
@@ -145,6 +216,46 @@ describe("the missing-values message", () => {
     const definition = withSteps([step]);
 
     expect(findMissingFieldLabels(definition, makeDraft(definition), step, {})).toEqual([]);
+  });
+});
+
+describe("a field that is required only on some paths", () => {
+  const discord = definitions.find((item) => item.catalog.catalogId === "channel.discord")!;
+  const destinations = discord.wizard.steps.find((item) => item.id === "collect-values-destinations")!;
+  const CHANNEL = { defaultChannelId: "123456789012345678" };
+  const WEBHOOK = "https://discord.com/api/webhooks/1/token";
+  const SERVER_ID = "Default server (guild) ID";
+  const missing = (values: Record<string, unknown>, draft = makeDraft(discord)) =>
+    findMissingFieldLabels(discord, draft, destinations, values);
+  const labelTexts = () => [...container.querySelectorAll("label")].map((item) => item.textContent?.trim());
+
+  it("asks a webhook-only setup for no server id, and a bot for one", () => {
+    expect(missing({ ...CHANNEL, webhookUrl: WEBHOOK })).toEqual([]);
+    expect(missing({ ...CHANNEL, botToken: "pasted" })).toEqual([SERVER_ID]);
+    expect(missing({ ...CHANNEL, botTokenEnv: "DISCORD_BOT_TOKEN" })).toEqual([SERVER_ID]);
+    expect(missing({ ...CHANNEL, botToken: "pasted", webhookUrl: WEBHOOK })).toEqual([SERVER_ID]);
+    expect(missing({ ...CHANNEL, botToken: "pasted", defaultGuildId: "987654321098765432" })).toEqual([]);
+  });
+
+  it("counts a bot token that is already saved", () => {
+    const saved = {
+      ...makeDraft(discord),
+      secretState: { botToken: { configured: true, custody: "temporary" as const } },
+    };
+
+    expect(missing(CHANNEL, saved)).toEqual([SERVER_ID]);
+  });
+
+  it("marks the field required on the form only while the path needs it", async () => {
+    await show({ ...propsFor(discord), values: { ...CHANNEL, webhookUrl: WEBHOOK } });
+    await openStep("Choose destinations and access");
+    expect(labelTexts()).toContain("Default channel ID (required)");
+    expect(labelTexts()).toContain(SERVER_ID);
+    expect(container.querySelector<HTMLInputElement>('input[id$="-defaultGuildId"]')?.required).toBe(false);
+
+    await show({ ...propsFor(discord), values: { ...CHANNEL, botToken: "pasted" } });
+    expect(labelTexts()).toContain(SERVER_ID + " (required)");
+    expect(container.querySelector<HTMLInputElement>('input[id$="-defaultGuildId"]')?.required).toBe(true);
   });
 });
 

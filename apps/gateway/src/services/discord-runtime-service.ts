@@ -33,6 +33,16 @@ import {
   normalizeChannelApprovalToken,
 } from "./channel-command-contract.js";
 import { buildChannelConversation } from "./channel-conversation.js";
+import {
+  createConnectionSecretReferenceResolver,
+  isSecureStorageReference,
+  type ChannelSecretReferenceReader,
+  type ChannelSecretReferenceResolver,
+} from "./channel-secret-resolution.js";
+import {
+  isPermittedIntegrationSecretEnvVarName,
+  refusedEnvVarNameMessage,
+} from "./gateway/integration-secret-envvar-guard.js";
 
 const log = logger.child("discord-runtime-service");
 
@@ -127,11 +137,20 @@ export class DiscordRuntimeService {
    * pairing or allowlist side effect, exactly as before voice inbound existed.
    */
   private voiceInboundGate: () => Promise<boolean> = async () => false;
+  private secretReferenceReader: ChannelSecretReferenceReader | undefined;
 
   public constructor(private readonly callbacks: DiscordRuntimeCallbacks) {}
 
   public setVoiceInboundGate(gate: () => Promise<boolean>): void {
     this.voiceInboundGate = gate;
+  }
+
+  /**
+   * Reads the key a connection saved in secure storage. Installed by the runtime composition. Unset means no saved key
+   * can be read, so a connection whose bot token is a saved key stays down; its reference is never used as a token.
+   */
+  public setSecretReferenceReader(read: ChannelSecretReferenceReader): void {
+    this.secretReferenceReader = read;
   }
 
   private async isVoiceInboundEnabled(): Promise<boolean> {
@@ -149,9 +168,12 @@ export class DiscordRuntimeService {
       .filter((connection) => getDiscordRuntimeMode(connection.config) === "gateway");
     const nextGroups = new Map<string, IntegrationConnection[]>();
     for (const connection of gatewayConnections) {
-      const token =
-        readDiscordSecret(connection.config, "botToken", "botTokenEnv") ??
-        readDiscordSecret(connection.config, "token", "tokenEnv");
+      // A saved key is read only when it is this connection's own, and its reference is never used as the token.
+      const resolveReference = createConnectionSecretReferenceResolver(
+        connection.connectionId,
+        this.secretReferenceReader,
+      );
+      const token = readDiscordBotToken(connection.config, connection.catalogId, resolveReference);
       if (!token) {
         this.statusByConnectionId.set(connection.connectionId, {
           connectionId: connection.connectionId,
@@ -159,7 +181,10 @@ export class DiscordRuntimeService {
           enabled: connection.enabled,
           ready: false,
           guildIds: [],
-          lastError: "Discord gateway mode requires a bot token or env-backed bot token.",
+          lastError:
+            describeUnavailableDiscordCredential(connection.config) ??
+            describeRefusedDiscordVariable(connection.config, connection.catalogId) ??
+            "Discord gateway mode requires a bot token or env-backed bot token.",
         });
         continue;
       }
@@ -1122,13 +1147,75 @@ function throwIfDiscordRuntimeAborted(signal?: AbortSignal): void {
     : new Error(typeof reason === "string" ? reason : "Discord typing delivery aborted.");
 }
 
-function readDiscordSecret(config: Record<string, unknown>, key: string, envKey: string): string | undefined {
+/**
+ * A pasted bot token wins, and a saved one is read through `resolveReference` (this connection's own key only); a
+ * reference that cannot be read gives nothing, never its own text. Otherwise the variable the config names is read only
+ * when the credential guard allows that name for this connection's catalog entry; with no catalog entry, nothing is.
+ */
+function readDiscordSecret(
+  config: Record<string, unknown>,
+  key: string,
+  envKey: string,
+  catalogId?: string,
+  resolveReference?: ChannelSecretReferenceResolver,
+): string | undefined {
   const direct = readConfigString(config, key);
   if (direct) {
-    return direct;
+    return isSecureStorageReference(direct) ? resolveReference?.(direct) : direct;
   }
   const envName = readConfigString(config, envKey);
-  return envName ? process.env[envName]?.trim() || undefined : undefined;
+  if (!envName || !isPermittedIntegrationSecretEnvVarName(envName, catalogId)) {
+    return undefined;
+  }
+  return process.env[envName]?.trim() || undefined;
+}
+
+/**
+ * The bot token for a connection: `botToken`, else the older `token`. A saved key in either field that cannot be read
+ * stops the connection, the way a send fails on any unreadable saved key: the other field, a pasted key or a variable
+ * must not stand in for a key the operator saved on purpose.
+ */
+function readDiscordBotToken(
+  config: Record<string, unknown>,
+  catalogId: string | undefined,
+  resolveReference: ChannelSecretReferenceResolver,
+): string | undefined {
+  let token: string | undefined;
+  let savedKeyUnavailable = false;
+  for (const [key, envKey] of [
+    ["botToken", "botTokenEnv"],
+    ["token", "tokenEnv"],
+  ] as const) {
+    const direct = readConfigString(config, key);
+    if (direct !== undefined && isSecureStorageReference(direct)) {
+      const saved = resolveReference(direct);
+      if (saved === undefined) {
+        savedKeyUnavailable = true;
+      }
+      token ??= saved;
+      continue;
+    }
+    token ??= readDiscordSecret(config, key, envKey, catalogId, resolveReference);
+  }
+  return savedKeyUnavailable ? undefined : token;
+}
+
+/** The sentence for a saved bot token that cannot be used, or undefined when the config holds no saved key. */
+function describeUnavailableDiscordCredential(config: Record<string, unknown>): string | undefined {
+  const saved = ["botToken", "token"].some((key) => {
+    const value = readConfigString(config, key);
+    return value !== undefined && isSecureStorageReference(value);
+  });
+  return saved ? "The saved Discord credential is unavailable from secure storage." : undefined;
+}
+
+/** The sentence for a bot-token variable the guard refuses, or undefined when none is set or every one is allowed. */
+function describeRefusedDiscordVariable(config: Record<string, unknown>, catalogId?: string): string | undefined {
+  const refused = ["botTokenEnv", "tokenEnv"].some((envKey) => {
+    const envName = readConfigString(config, envKey);
+    return envName !== undefined && !isPermittedIntegrationSecretEnvVarName(envName, catalogId);
+  });
+  return refused ? refusedEnvVarNameMessage(catalogId) : undefined;
 }
 
 function readConfigString(config: Record<string, unknown>, key: string): string | undefined {

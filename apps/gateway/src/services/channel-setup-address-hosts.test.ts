@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
-import { recordAddressHosts, withSavedAddressHosts } from "./channel-setup-address-hosts.js";
+import {
+  reconcileAddressHostsForUpdate,
+  recordAddressHosts,
+  withSavedAddressHosts,
+} from "./channel-setup-address-hosts.js";
 import { requireChannelSetupDefinition } from "./channel-setup-definitions.js";
 import { projectChannelSetupDraftForPublicResponse } from "./channel-setup-public-projection.js";
 import {
@@ -242,6 +246,63 @@ describe("recordAddressHosts", () => {
     expect(
       recordAddressHosts(ntfy, { baseUrl: { configured: true, custody: "temporary", host: "x.example.com" } }, config),
     ).toEqual(config);
+  });
+});
+
+describe("reconcileAddressHostsForUpdate", () => {
+  const teams = requireChannelSetupDefinition("channel.teams").definition;
+  const ntfy = requireChannelSetupDefinition("channel.ntfy").definition;
+  const current = { webhookUrl: "keychain:ref", webhookUrlHost: "old.example.com", cardTitle: "Ops" };
+
+  it("records the host of a new plain address and nothing past hostname[:port]", () => {
+    const next = { ...current, webhookUrl: "https://relay.example.com:8443/hook/path?x=1" };
+
+    expect(reconcileAddressHostsForUpdate(teams, current, next)).toEqual({
+      ...next,
+      webhookUrlHost: "relay.example.com:8443",
+    });
+    expect(next.webhookUrl).toBe("https://relay.example.com:8443/hook/path?x=1");
+  });
+
+  it.each([
+    ["an empty address", ""],
+    ["no address", null],
+    ["an address that names no host", "keychain:other"],
+  ])("clears the host for %s", (_case, webhookUrl) => {
+    expect(reconcileAddressHostsForUpdate(teams, current, { ...current, webhookUrl })).not.toHaveProperty(
+      "webhookUrlHost",
+    );
+  });
+
+  it("keeps the recorded host when the address is left alone, even if the update dropped or forged it", () => {
+    const { webhookUrlHost: _dropped, ...dropped } = current;
+
+    expect(reconcileAddressHostsForUpdate(teams, current, dropped)).toEqual(current);
+    expect(
+      reconcileAddressHostsForUpdate(teams, current, { ...current, webhookUrlHost: "evil.example.com/x" }),
+    ).toEqual(current);
+  });
+
+  it("does not trust a host the update brings for an address it replaced", () => {
+    expect(
+      reconcileAddressHostsForUpdate(teams, current, {
+        ...current,
+        webhookUrl: "keychain:other",
+        webhookUrlHost: "attacker.example.com",
+      }),
+    ).not.toHaveProperty("webhookUrlHost");
+  });
+
+  it("drops a recorded host that is not a host when the address is left alone", () => {
+    const forged = { webhookUrl: "keychain:ref", webhookUrlHost: "*" };
+
+    expect(reconcileAddressHostsForUpdate(teams, forged, { ...forged })).not.toHaveProperty("webhookUrlHost");
+  });
+
+  it("leaves a channel with no secret address field alone", () => {
+    const config = { baseUrl: "https://ntfy.example.com", baseUrlHost: "kept.example.com" };
+
+    expect(reconcileAddressHostsForUpdate(ntfy, config, { ...config })).toEqual(config);
   });
 });
 

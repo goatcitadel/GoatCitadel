@@ -205,6 +205,50 @@ describe("integrations control routes", () => {
     });
   });
 
+  it("keeps the recorded webhook host in step with the webhook address a generic PATCH leaves, replaces or clears", async () => {
+    const rawConnection: IntegrationConnection = {
+      ...createSecretBearingConnection(connectionId),
+      config: { webhookUrl: "keychain:slack-webhook", webhookUrlHost: "hooks.slack.com", channelId: "C-OLD" },
+    };
+    const getIntegrationConnection = vi.fn(() => rawConnection);
+    const updateIntegrationConnection = vi.fn((_connectionId: string, input: { config?: Record<string, unknown> }) => ({
+      ...rawConnection,
+      config: input.config ?? rawConnection.config,
+    }));
+    app = Fastify();
+    decorateIntegrationServices(app, { getIntegrationConnection, updateIntegrationConnection });
+    await app.register(integrationsRoutes);
+    const patch = async (config: Record<string, unknown>) => {
+      const response = await app!.inject({
+        method: "PATCH",
+        url: `/api/v1/integrations/connections/${connectionId}`,
+        payload: { expectedRevision: rawConnection.revision, config },
+      });
+      expect(response.statusCode).toBe(200);
+      return updateIntegrationConnection.mock.calls.at(-1)?.[1].config as Record<string, unknown>;
+    };
+
+    const replaced = await patch({ webhookUrl: "https://relay.example.test:8443/slack/events", channelId: "C-NEW" });
+    expect(replaced).toMatchObject({
+      webhookUrl: "https://relay.example.test:8443/slack/events",
+      webhookUrlHost: "relay.example.test:8443",
+    });
+
+    const cleared = await patch({ webhookUrl: "", channelId: "C-NEW" });
+    expect(cleared).toMatchObject({ webhookUrl: "", channelId: "C-NEW" });
+    expect(cleared).not.toHaveProperty("webhookUrlHost");
+
+    const kept = await patch({ webhookUrl: "[REDACTED]", channelId: "C-NEW" });
+    expect(kept).toMatchObject({ webhookUrl: "keychain:slack-webhook", webhookUrlHost: "hooks.slack.com" });
+
+    const forged = await patch({
+      webhookUrl: "[REDACTED]",
+      webhookUrlHost: "attacker.example.test",
+      channelId: "C-NEW",
+    });
+    expect(forged).toMatchObject({ webhookUrlHost: "hooks.slack.com" });
+  });
+
   it("rejects channel inbound payloads with oversized content-length", async () => {
     const ingestChannelMessage = vi.fn();
     app = Fastify();

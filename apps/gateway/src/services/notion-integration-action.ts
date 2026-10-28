@@ -90,7 +90,7 @@ export async function invokeNotionAction(
   checkedAt: string,
   ward?: IntegrationWardContext,
 ): Promise<IntegrationActionInvokeResult> {
-  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   if (!token) {
     return blocked(
       connection,
@@ -351,7 +351,7 @@ export function buildNotionPageCreateRunInput(
   connection: IntegrationConnection,
   options: NotionRunInputOptions<NotionPageCreatePayload>,
 ): WritebackRunInputParts | NotionRunInputBlocked {
-  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   if (!token) {
     return { blockedReason: "notion_auth_missing", message: "Configure a Notion integration token." };
   }
@@ -398,7 +398,7 @@ export function buildNotionBlockAppendRunInput(
   connection: IntegrationConnection,
   options: NotionRunInputOptions<NotionBlockAppendPayload>,
 ): WritebackRunInputParts | NotionRunInputBlocked {
-  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   if (!token) {
     return { blockedReason: "notion_auth_missing", message: "Configure a Notion integration token." };
   }
@@ -467,7 +467,7 @@ export async function runNotionLiveChecks(
   deps: Pick<IntegrationActionHost, "fetchWithDiagnosticsTimeout" | "resolveConnectionSecret">,
   connection: IntegrationConnection,
 ): Promise<ConnectorDiagnosticReport["checks"]> {
-  const token = deps.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+  const token = deps.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   if (!token) {
     return [
       {

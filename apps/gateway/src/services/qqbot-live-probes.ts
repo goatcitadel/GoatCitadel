@@ -52,7 +52,7 @@ export async function runConfiguredQqbotChecks(
   const config = connection.config;
   const read = (key: string) => deps.readConnectionConfigValue(config, key);
   const appId = read("appId");
-  const appSecret = deps.resolveConnectionSecret(config, "appSecret", "appSecretEnv", connection.catalogId);
+  const appSecret = deps.resolveConnectionSecret(config, "appSecret", "appSecretEnv", connection.catalogId, connection);
   if (!appId || !appSecret) {
     return {
       checks: [

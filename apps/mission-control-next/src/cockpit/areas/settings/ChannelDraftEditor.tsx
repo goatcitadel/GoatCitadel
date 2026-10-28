@@ -6,6 +6,7 @@ import {
   isStepComplete,
   channelStageLabel,
   unreadableHostFields,
+  fieldsWithResolvedRequired,
   wizardValuesWithDefaults,
 } from "../../../features/native-routes/settings/channel-setup/channel-wizard-model";
 import { useChannelWizard } from "../../../features/native-routes/settings/channel-setup/use-channel-wizard";
@@ -170,7 +171,11 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
             })}
             <ChannelWizardFields
               draft={props.draft}
-              fields={step.fields}
+              fields={fieldsWithResolvedRequired(
+                step.fields,
+                props.draft,
+                wizardValuesWithDefaults(props.definition, props.values),
+              )}
               values={wizardValuesWithDefaults(props.definition, props.values)}
               issues={props.feedback?.issues}
               disabled={anyBusy}

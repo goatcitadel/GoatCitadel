@@ -86,8 +86,8 @@ export function composeIntegrationChannelRouteDependencies(
     fetchWithTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
     transcribeVoice: (input) => gateway.mediaVoiceService.transcribeVoice(input),
     isConnectionUrlAllowlisted: (urlValue) => gateway.isConnectionUrlAllowlisted(urlValue),
-    resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
-      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
+    resolveConnectionSecret: (config, directKey, envKey, catalogId, owner) =>
+      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId, owner),
   });
   const externalConnectorCatalog = new ExternalConnectorCatalogService({
     reviewStates: gateway.storage.externalConnectorReviewStates,
@@ -330,7 +330,7 @@ export function composeIntegrationChannelRouteDependencies(
     ingestChannelMessage: (channel, idempotencyKey, input) =>
       gateway.ingestChannelMessage(channel, idempotencyKey, input),
     isVoiceInboundEnabled: async () => (await gateway.isFeatureEnabled("channelVoiceInboundV1Enabled")) === true,
-    transcribeChannelVoice: (input) => channelVoiceInbound.transcribe(input),
+    transcribeChannelVoice: (input, owner) => channelVoiceInbound.transcribe(input, owner),
     parseChatCommand: (sessionId, commandText, options) => gateway.parseChatCommand(sessionId, commandText, options),
     recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
     emitChannelActivity: (input) => gateway.commsActivity(input),
@@ -339,8 +339,8 @@ export function composeIntegrationChannelRouteDependencies(
     // A signed webhook is checked against the key the connection saved at setup, never its reference. The port is
     // bound to the connection: another connection's reference, a draft's and plain text all give no key.
     resolveChannelConnectionSecret: (connectionId: string, secretRef: string): string | undefined =>
-      createConnectionSecretReferenceResolver(connectionId, (ownReference) =>
-        gateway.resolveConnectionSecret({ ref: ownReference }, "ref", "refEnv", "channel.webhook"),
+      createConnectionSecretReferenceResolver(connectionId, (ownReference, owner) =>
+        gateway.resolveConnectionSecret({ ref: ownReference }, "ref", "refEnv", "channel.webhook", owner),
       )(secretRef),
     resolveApprovalWithRemoteToken: (input) => gateway.resolveApprovalWithRemoteToken(input),
     resolveApprovalWithRemoteTokenId: (input) => gateway.resolveApprovalWithRemoteTokenId(input),
@@ -570,8 +570,8 @@ export function createIntegrationDiagnosticsServiceForGateway(
     getDiscordRuntimeStatus: (connectionId) => gateway.discordRuntimeService.getConnectionStatus(connectionId),
     isConnectionUrlAllowlisted: (urlValue) => gateway.isConnectionUrlAllowlisted(urlValue),
     readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
-    resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
-      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
+    resolveConnectionSecret: (config, directKey, envKey, catalogId, owner) =>
+      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId, owner),
     getGoogleWorkspaceOAuthStatus: (connectionId) => gateway.googleWorkspaceOAuth.getStatus(connectionId),
   });
 }
@@ -586,8 +586,8 @@ export function createChannelSetupHostForGateway(
     ...composeChannelSetupHost(gateway, integrationDiagnostics, integrationChannel),
     fetchWithTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
     isConnectionUrlAllowlisted: (url) => gateway.isConnectionUrlAllowlisted(url),
-    resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
-      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
+    resolveConnectionSecret: (config, directKey, envKey, catalogId, owner) =>
+      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId, owner),
     getChannelCapabilities: (id) => integrationChannel.getIntegrationConnectionChannelCapabilities(id),
     getChannelRuntimeStatus: (id) => integrationChannel.getIntegrationConnectionChannelRuntimeStatus(id),
     listChannelDeliveries: async (id) =>
@@ -658,8 +658,8 @@ function createIntegrationChannelPortForGateway(
       await gateway.writeDiscordPairings(records);
     },
     discordRuntimeService,
-    resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
-      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
+    resolveConnectionSecret: (config, directKey, envKey, catalogId, owner) =>
+      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId, owner),
     readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
     isConnectionUrlAllowlisted: (urlValue) => gateway.isConnectionUrlAllowlisted(urlValue),
     fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
@@ -727,8 +727,8 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
     storage,
     fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
     readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
-    resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
-      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
+    resolveConnectionSecret: (config, directKey, envKey, catalogId, owner) =>
+      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId, owner),
     publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     resolveGoogleWorkspaceAccessToken: (connectionId, capability) =>
       gateway.googleWorkspaceOAuth.resolveAccessToken(connectionId, capability),

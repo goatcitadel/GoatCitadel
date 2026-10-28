@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ChannelTypingInput, ChannelTypingResult, IntegrationConnection } from "@goatcitadel/contracts";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
+import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
 
 /**
  * Provider typing indicators for channels that have no dedicated runtime service.
@@ -15,6 +16,7 @@ export interface ChannelTypingAdapterArgs {
     directKey: string,
     envKey: string,
     catalogId: string,
+    owner: ChannelSecretOwner,
   ): string | undefined;
   isAllowlisted(url: string): boolean;
   fetch(url: string, init?: RequestInit): Promise<Response>;
@@ -27,6 +29,7 @@ export interface ChannelTypingAdapterDeps {
     directKey: string,
     envKey: string,
     catalogId: string,
+    owner: ChannelSecretOwner,
   ): string | undefined;
   isConnectionUrlAllowlisted(urlValue: string): boolean;
   fetchWithDiagnosticsTimeout(url: string, init?: RequestInit): Promise<Response>;
@@ -41,8 +44,8 @@ export function emitProviderTypingWithDeps(
   return emitProviderTyping({
     connection,
     input,
-    resolveSecret: (config, directKey, envKey, catalogId) =>
-      deps.resolveConnectionSecret(config, directKey, envKey, catalogId),
+    resolveSecret: (config, directKey, envKey, catalogId, owner) =>
+      deps.resolveConnectionSecret(config, directKey, envKey, catalogId, owner),
     isAllowlisted: (url) => deps.isConnectionUrlAllowlisted(url),
     fetch: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
   });
@@ -97,7 +100,13 @@ export async function emitMatrixTyping(args: ChannelTypingAdapterArgs): Promise<
   try {
     const { connection, input } = args;
     const homeserver = readString(connection.config.homeserverUrl);
-    const token = args.resolveSecret(connection.config, "accessToken", "accessTokenEnv", connection.catalogId);
+    const token = args.resolveSecret(
+      connection.config,
+      "accessToken",
+      "accessTokenEnv",
+      connection.catalogId,
+      connection,
+    );
     if (!homeserver) return unsupported(args, `${connection.label} is missing a Matrix homeserver URL.`);
     if (!token) return unsupported(args, `${connection.label} is missing a Matrix access token.`);
     const roomId = input.target.trim().replace(/^(?:matrix|room):/i, "");
@@ -150,8 +159,8 @@ export async function emitMattermostTyping(args: ChannelTypingAdapterArgs): Prom
     const { connection, input } = args;
     const serverUrl = readString(connection.config.serverUrl) ?? readString(connection.config.baseUrl);
     const token =
-      args.resolveSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId) ??
-      args.resolveSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+      args.resolveSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId, connection) ??
+      args.resolveSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
     if (!serverUrl) return unsupported(args, `${connection.label} is missing a Mattermost server URL.`);
     if (!token) return unsupported(args, `${connection.label} is missing a Mattermost bot token.`);
     const channelId = parseMattermostChannelId(input.target);
@@ -207,8 +216,8 @@ export async function emitWhatsAppTyping(args: ChannelTypingAdapterArgs): Promis
       );
     }
     const accessToken =
-      args.resolveSecret(connection.config, "accessToken", "accessTokenEnv", connection.catalogId) ??
-      args.resolveSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+      args.resolveSecret(connection.config, "accessToken", "accessTokenEnv", connection.catalogId, connection) ??
+      args.resolveSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
     const phoneNumberId = readString(connection.config.phoneNumberId) ?? readString(connection.config.senderId);
     if (!accessToken) return unsupported(args, `${connection.label} is missing a WhatsApp access token.`);
     if (!phoneNumberId) return unsupported(args, `${connection.label} is missing a WhatsApp phone number id.`);
@@ -256,8 +265,8 @@ export async function emitDiscordRestTyping(args: ChannelTypingAdapterArgs): Pro
   try {
     const { connection, input } = args;
     const token =
-      args.resolveSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId) ??
-      args.resolveSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+      args.resolveSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId, connection) ??
+      args.resolveSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
     if (!token) {
       return unsupported(
         args,

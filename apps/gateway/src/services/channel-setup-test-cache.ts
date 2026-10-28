@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { ValidationError, type ChannelSetupDraft, type ChannelSetupTestResult, type IntegrationConnection } from "@goatcitadel/contracts";
+import {
+  ValidationError,
+  type ChannelSetupDraft,
+  type ChannelSetupTestResult,
+  type IntegrationConnection,
+} from "@goatcitadel/contracts";
+import { channelSecretOwnerForDraft, type ChannelSecretOwner } from "./channel-secret-resolution.js";
 
 export interface ChannelSetupRecentTestCacheEntry {
   signature: string;
@@ -17,7 +23,13 @@ export interface ChannelSetupProofSignatureOptions {
   contentVersion?: string;
   validationVersion?: string;
   secretFieldKeys?: readonly string[];
-  resolveConnectionSecret?: (config: Record<string, unknown>, directKey: string, envKey: string, catalogId: string) => string | undefined;
+  resolveConnectionSecret?: (
+    config: Record<string, unknown>,
+    directKey: string,
+    envKey: string,
+    catalogId: string,
+    owner: ChannelSecretOwner,
+  ) => string | undefined;
 }
 
 export function buildChannelSetupRecentTestSignature(
@@ -31,8 +43,21 @@ export function buildChannelSetupRecentTestSignature(
     resolvedCredentials = {};
     for (const key of options.secretFieldKeys ?? []) {
       if (connection.config[key] === undefined && connection.config[key + "Env"] === undefined) continue;
-      try { resolvedCredentials[key] = options.resolveConnectionSecret(connection.config, key, key + "Env", draft.catalogId) ?? null; }
-      catch { throw new ValidationError({ message: "Current channel credentials could not be resolved for setup evidence. Verify credential custody and retest." }); }
+      try {
+        resolvedCredentials[key] =
+          options.resolveConnectionSecret(
+            connection.config,
+            key,
+            key + "Env",
+            draft.catalogId,
+            channelSecretOwnerForDraft(draft),
+          ) ?? null;
+      } catch {
+        throw new ValidationError({
+          message:
+            "Current channel credentials could not be resolved for setup evidence. Verify credential custody and retest.",
+        });
+      }
     }
   }
   return createHash("sha256")
@@ -75,12 +100,17 @@ export function resolveReusableChannelSetupTestResult(input: {
     input.cache.delete(input.draft.draftId);
     return undefined;
   }
-  const signature = input.signature ?? buildChannelSetupRecentTestSignature(input.draft, input.connection, input.testVersion);
+  const signature =
+    input.signature ?? buildChannelSetupRecentTestSignature(input.draft, input.connection, input.testVersion);
   if (cached.signature !== signature) {
     input.cache.delete(input.draft.draftId);
     return undefined;
   }
-  return { ...cached.result, draftRevision: input.draft.revision, proofExpiresAt: channelSetupProofExpiresAt(cached.result.checkedAt) };
+  return {
+    ...cached.result,
+    draftRevision: input.draft.revision,
+    proofExpiresAt: channelSetupProofExpiresAt(cached.result.checkedAt),
+  };
 }
 
 function stableStringifyForCache(value: unknown): string {

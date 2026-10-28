@@ -393,3 +393,33 @@ describe("getChannelStreamRuntime", () => {
     }
   });
 });
+
+describe("stream keys are read as the connection that holds them", () => {
+  it("hands the connection to the Gateway's shared read for every key a stream adapter asks for", async () => {
+    const h = host();
+    const conn = ntfyConnection();
+    (h.value.storage.integrationConnections.list as ReturnType<typeof vi.fn>).mockResolvedValue([conn]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(ndjson([{ id: "m1", event: "message", message: "hello", topic: "ops" }]), { status: 200 }),
+      ),
+    );
+    const runtime = getChannelStreamRuntime(h.value);
+    try {
+      await runtime.sync();
+      await vi.waitFor(() => expect(h.value.resolveConnectionSecret).toHaveBeenCalled());
+      expect(h.value.resolveConnectionSecret).toHaveBeenCalledWith(
+        conn.config,
+        "token",
+        "tokenEnv",
+        "channel.ntfy",
+        expect.objectContaining({ connectionId: "conn-ntfy" }),
+      );
+    } finally {
+      await runtime.close();
+      vi.unstubAllGlobals();
+    }
+  });
+});

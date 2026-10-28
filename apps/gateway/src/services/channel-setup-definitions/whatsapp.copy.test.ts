@@ -86,7 +86,7 @@ describe("WhatsApp setup guide: what it says up front (item 7)", () => {
       "To receive messages: a public HTTPS address with a trusted certificate, the app secret, and a verify token you choose.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "Check the test message arrived. To receive: in Meta's App Dashboard open WhatsApp › Configuration, paste this connection's webhook address and your verify token, verify, and subscribe to messages. Allow your number (digits only, no plus) under Who may message this bot, then send a message and check the reply.",
+      "Check the test message arrived. To receive: in Meta's App Dashboard open WhatsApp › Configuration, paste this connection's webhook address and your verify token, verify, and subscribe to messages. Allow your number (digits only, no plus) under Who may message this bot, then send a message and check the reply. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a WhatsApp message from …\", and add that id under Who may message this bot with Edit setup.",
     ]);
   });
 
@@ -225,7 +225,7 @@ describe("WhatsApp setup guide: who may message the bot (item 4, A7, A8)", () =>
     const allowed = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(allowed?.explanation).toBe(
-      "Your WhatsApp number with country code, digits only, no plus (for example 15551234567).",
+      'Your WhatsApp number with country code, digits only, no plus (for example 15551234567). Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
     );
   });
 
@@ -367,11 +367,7 @@ describe("WhatsApp send-only path: can it finish?", () => {
   });
 
   it("asks for those three and nothing about receiving", () => {
-    expect(continueBlockers({})).toEqual([
-      "Phone number ID",
-      "Access token or Access token from an environment variable (advanced)",
-      "Default recipient",
-    ]);
+    expect(continueBlockers({})).toEqual(["Phone number ID", "Access token", "Default recipient"]);
   });
 
   it("is cleared by the setup test: the token check and the test message both pass", async () => {

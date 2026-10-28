@@ -150,7 +150,7 @@ describe("Nextcloud Talk setup guide: what it says up front (items 6 and 9, R48)
     ]);
     // Ruling R49: the test posts one visible message into the room and does not delete it, so asking for it is true.
     expect(paragraphs("first-message")).toEqual([
-      "Check the test message arrived. To receive: reinstall the bot with this connection's webhook address and the same secret, turn it on for the room again, allow users/<your user name>, and send a message. Talk sends every message posted in the room to that address, so use only an address you control.",
+      "Check the test message arrived. To receive: reinstall the bot with this connection's webhook address and the same secret, turn it on for the room again, allow users/<your user name>, and send a message. Talk sends every message posted in the room to that address, so use only an address you control. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a Nextcloud Talk message from …\", and add that id under Who may message this bot with Edit setup.",
     ]);
   });
 
@@ -260,10 +260,31 @@ describe("Nextcloud Talk setup guide: adding the bot (items 1 and 2)", () => {
   it("gives the two phases as a short sending line and a receiving paragraph, with no run-on instructions (R53)", () => {
     expect(paragraphs("install-bot").slice(1)).toEqual([
       "Sending is all a send-only setup needs:",
-      "Receiving (optional), after you finish. No occ command changes a bot's webhook address, so to receive you install the bot again with this connection's address. GoatCitadel shows it after you finish: Settings › Channels › this connection.",
+      "Receiving (optional). No occ command changes a bot's webhook address, so to receive you install the bot again with this connection's address. GoatCitadel shows that address on the Verify the first conversation step, before you finish. It answers once the connection is finished and on.",
     ]);
     // Every instruction is a numbered list item; no paragraph is a chain of steps.
     expect((step("install-bot").body ?? []).filter((block) => block.kind === "list")).toHaveLength(2);
+  });
+
+  it("points at the step that really shows the address, before Finalize, and says when it answers (N4)", () => {
+    const steps = guide().definition.wizard.steps;
+    const addressStep = steps.find((candidate) => candidate.stage === "first_message");
+
+    // That step is the one Mission Control shows the webhook address on, and the address exists once the draft does.
+    expect(addressStep?.id).toBe("first-message");
+    expect(steps.at(-1)?.id).toBe("first-message");
+    expect(addressStep?.title).toBe("Verify the first conversation");
+    expect(guide().definition.wizard.inboundWebhook?.pathTemplate).toBe(
+      "/api/v1/integrations/connections/{connectionId}/nextcloud-talk/webhook",
+    );
+    // Both places that send the person to the address name that step by its title.
+    expect(paragraphs("install-bot").join("\n")).toContain(`on the ${addressStep?.title} step`);
+    expect(paragraphs("finish").join("\n")).toContain(`on the ${addressStep?.title} step`);
+    // Nothing still says the address has to wait for Finalize to exist.
+    expect(wizardText()).not.toMatch(/shows it after you finish|get this address|only get after|after you finish/iu);
+    // It still answers only once the connection is finished and on, and the guide says so where it sends the person.
+    expect(paragraphs("install-bot").join("\n")).toContain("It answers once the connection is finished and on.");
+    expect(paragraphs("finish").join("\n")).toContain("It answers once the connection is finished and on.");
   });
 
   it("never says any web address works, never suggests a placeholder, and never calls it harmless, anywhere it speaks (R53)", () => {
@@ -476,7 +497,9 @@ describe("Nextcloud Talk setup guide: receiving (items 4 and 6, A7, A8)", () => 
     expect(fieldKeys("sender-access")).toContain("allowedSenders");
     const senders = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
-    expect(senders?.explanation).toBe("users/ followed by your Nextcloud user name, for example users/alice.");
+    expect(senders?.explanation).toBe(
+      'users/ followed by your Nextcloud user name, for example users/alice. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+    );
   });
 
   it("matches the id Talk sends, users/alice, and not a bare name", () => {
@@ -528,7 +551,7 @@ describe("Nextcloud Talk setup guide: the test and finishing (item 10, R49)", ()
   it("finishes by saving for sending, and gives the receiving commands right there instead of pointing at a step", () => {
     expect(paragraphs("finish")).toEqual([
       "Finish saves the connection so GoatCitadel can send from it. To receive messages, install the bot again with this connection's webhook address and the same secret. Talk sends every message posted in the conversation to that address, so use only an address you control.",
-      "Run these on your Nextcloud server, with your own values in place of the <…> parts. GoatCitadel shows this connection's webhook address in Settings › Channels › this connection.",
+      "Run these on your Nextcloud server, with your own values in place of the <…> parts. GoatCitadel shows this connection's webhook address on the Verify the first conversation step and in Settings › Channels › this connection. It answers once the connection is finished and on.",
     ]);
     expect(JSON.stringify(step("finish"))).not.toMatch(/last step/iu);
     expect((step("finish").body ?? []).filter((block) => block.kind === "code")).toEqual([
@@ -665,11 +688,7 @@ describe("Nextcloud Talk send-only path: can it finish?", () => {
   });
 
   it("asks for those three and nothing about receiving", () => {
-    expect(continueBlockers({})).toEqual([
-      "Base URL",
-      "Bot secret or Bot secret from an environment variable (advanced)",
-      "Room token",
-    ]);
+    expect(continueBlockers({})).toEqual(["Base URL", "Bot secret", "Room token"]);
   });
 
   it("is cleared by the setup test once the bot is created and turned on for the room", async () => {
@@ -812,10 +831,6 @@ describe("Nextcloud Talk receiving path: can it finish?", () => {
   it("does not make an edit replay the setup-only steps", () => {
     expect(step("install-bot").createOnly).toBe(true);
     expect(continueBlockers(RECEIVING_VALUES, "edit")).toEqual([]);
-    expect(continueBlockers({}, "edit")).toEqual([
-      "Base URL",
-      "Bot secret or Bot secret from an environment variable (advanced)",
-      "Room token",
-    ]);
+    expect(continueBlockers({}, "edit")).toEqual(["Base URL", "Bot secret", "Room token"]);
   });
 });

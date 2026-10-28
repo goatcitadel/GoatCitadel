@@ -133,7 +133,7 @@ describe("Slack setup guide: what it says up front (items 4 and 5)", () => {
       "To receive messages: an OAuth install from here with message history scopes, and a public HTTPS address for this Gateway.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot.",
+      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a Slack message from …\", and add that id under Who may message this bot with Edit setup.",
     ]);
   });
 
@@ -301,7 +301,9 @@ describe("Slack setup guide: who may message the bot (item 6, A7, A8)", () => {
   it("says what a Slack sender identity looks like", () => {
     const allowed = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
-    expect(allowed?.explanation).toBe("Your Slack member ID (starts with U).");
+    expect(allowed?.explanation).toBe(
+      'Your Slack member ID (starts with U). Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+    );
   });
 
   it("offers the open-access choice only for a connection that was saved open", () => {

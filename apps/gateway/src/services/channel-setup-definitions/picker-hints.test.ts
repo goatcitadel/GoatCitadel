@@ -239,7 +239,6 @@ describe("channel hosts and inbound webhooks", () => {
     const expected: Record<string, string[] | undefined> = {
       telegram: ["api.telegram.org"],
       discord: ["discord.com"],
-      slack: ["slack.com"],
       whatsapp: ["graph.facebook.com"],
       line: ["api.line.me"],
       zalo: ["openapi.zalo.me"],
@@ -301,9 +300,16 @@ describe("channel hosts and inbound webhooks", () => {
     ]);
   });
 
+  it("adds Slack's API host only while a bot token or an OAuth install is set, as a webhook never contacts it", () => {
+    expect(definitionByKey("slack").wizard.requiredHosts).toBeUndefined();
+    expect(definitionByKey("slack").wizard.conditionalHosts).toEqual([
+      { host: "slack.com", whenAnyFieldSet: ["botToken", "slackInstallId"] },
+    ]);
+  });
+
   it("has no conditional hosts on any other channel", () => {
     for (const definition of listChannelSetupDefinitions()) {
-      if (definition.catalog.key === "qqbot" || definition.catalog.key === "google-chat") continue;
+      if (["qqbot", "google-chat", "slack"].includes(definition.catalog.key)) continue;
       expect(definition.wizard.conditionalHosts, definition.catalog.key).toBeUndefined();
     }
   });

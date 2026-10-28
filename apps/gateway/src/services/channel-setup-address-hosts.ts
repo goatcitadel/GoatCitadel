@@ -57,6 +57,28 @@ export function recordAddressHosts(
   return next;
 }
 
+/**
+ * The config a generic update of a saved connection is written with: for each secret address, the host it names, never
+ * more than hostname[:port]. A plain address in the update is read where it is. An address the update left alone (the
+ * saved secret reference) keeps the host the connection recorded, if that is still a host, and gains none. Any other
+ * address, or none, has no host. Nothing here reads secure storage, and a host the update itself carries for an address is never trusted.
+ */
+export function reconcileAddressHostsForUpdate(
+  definition: ChannelSetupDefinition,
+  current: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const reconciled = { ...next };
+  for (const key of secretAddressFields(definition)) {
+    const address = next[key];
+    const leftAlone = Boolean(address) && address === current[key];
+    const host = leftAlone ? current[hostConfigKey(key)] : channelAddressHost(address);
+    if (isChannelAddressHost(host)) reconciled[hostConfigKey(key)] = host;
+    else delete reconciled[hostConfigKey(key)];
+  }
+  return reconciled;
+}
+
 /** The hosts a saved connection recorded for the secret addresses it holds, by field key. */
 function savedAddressHosts(
   definition: ChannelSetupDefinition,

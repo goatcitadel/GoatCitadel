@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 
 const runDiscordBotLiveChecksMock = vi.hoisted(() => vi.fn());
@@ -21,6 +21,13 @@ import {
   runIntegrationConnectionLiveChecks,
   type IntegrationDiagnosticsPort,
 } from "./integration-diagnostics-service.js";
+import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
+import { requireChannelSetupDefinition } from "./channel-setup-definitions.js";
+import { guideFinish } from "./channel-setup-definitions/guide-finish.test-support.js";
+import { CHANNEL_CONDITIONAL_HOSTS, CHANNEL_REQUIRED_HOSTS } from "./channel-setup-definitions/picker-hints.js";
+// The model the guide's "Allow these hosts" button is built on, used as it is so the two halves can't drift apart.
+import { channelHosts } from "../../../mission-control-next/src/features/native-routes/settings/channel-setup/channel-wizard-model.js";
+import { isBaseUrlAllowlisted } from "../../../mission-control-next/src/cockpit/areas/settings/web-search-state.js";
 
 function createDiscordConnection(config: Record<string, unknown>): IntegrationConnection {
   return {
@@ -83,17 +90,253 @@ function createPort(): IntegrationDiagnosticsPort {
       const value = config[key];
       return typeof value === "string" ? value : undefined;
     }),
-    resolveConnectionSecret: vi.fn((config: Record<string, unknown>, key: string) => {
-      const value = config[key];
-      return typeof value === "string" ? value : undefined;
-    }),
+    resolveConnectionSecret: vi.fn(resolveLikeTheGateway),
   };
+}
+
+/**
+ * What `GatewayService.resolveConnectionSecret` does with a plain config: the direct value, else the variable the
+ * config names, but only when the credential guard permits that name for the connection's catalog entry.
+ */
+function resolveLikeTheGateway(
+  config: Record<string, unknown>,
+  directKey: string,
+  envKey: string,
+  catalogId?: string,
+): string | undefined {
+  const direct = config[directKey];
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const envName = config[envKey];
+  if (typeof envName !== "string" || !envName.trim()) return undefined;
+  return isPermittedIntegrationSecretEnvVarName(envName, catalogId) ? process.env[envName.trim()] : undefined;
 }
 
 describe("integration-diagnostics-service contract behavior", () => {
   beforeEach(() => {
     runDiscordBotLiveChecksMock.mockReset();
     runNtfyLiveChecksMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  describe("a channel's variable is checked through the name rule its sends use (C6)", () => {
+    const SECRET = "must-not-leak-this-value";
+    const authOf = (connection: IntegrationConnection, port = createPort()) =>
+      buildIntegrationConnectionChecks(port, connection).find((check) => check.key === "auth");
+
+    it("fails a variable that is set but whose name the Gateway refuses, naming the prefix it needs", () => {
+      vi.stubEnv("MY_TOKEN", SECRET);
+      const port = createPort();
+      const connection = createIntegrationConnection("mattermost", "channel", {
+        serverUrl: "https://chat.example.test",
+        botTokenEnv: "MY_TOKEN",
+        defaultChannel: "town-square",
+      });
+
+      const checks = buildIntegrationConnectionChecks(port, connection);
+
+      expect(checks.find((check) => check.key === "auth")).toEqual({
+        key: "auth",
+        status: "fail",
+        message: "The variable name must start with MATTERMOST_. Rename it and restart GoatCitadel.",
+      });
+      // It asks the same resolver the live probes ask, with the connection's catalog entry, as the connection that owns the config.
+      expect(port.resolveConnectionSecret).toHaveBeenCalledWith(
+        connection.config,
+        "botToken",
+        "botTokenEnv",
+        "channel.mattermost",
+        connection,
+      );
+      expect(JSON.stringify(checks)).not.toContain(SECRET);
+    });
+
+    it("also names the suffix when the field is one a webhook reads too", () => {
+      vi.stubEnv("MY_SECRET", SECRET);
+      const qqbot = authOf(
+        createIntegrationConnection("qqbot", "channel", { appId: "102000", appSecretEnv: "MY_SECRET" }),
+      );
+      const nextcloud = authOf(
+        createIntegrationConnection("nextcloud-talk", "channel", {
+          baseUrl: "https://cloud.example.test",
+          tokenEnv: "MY_SECRET",
+        }),
+      );
+
+      expect(qqbot).toEqual({
+        key: "auth",
+        status: "fail",
+        message:
+          "The variable name must start with QQBOT_. Rename it and restart GoatCitadel. The name must also end in _TOKEN or _SECRET.",
+      });
+      expect(nextcloud?.message).toBe(
+        "The variable name must start with NEXTCLOUD_TALK_. Rename it and restart GoatCitadel. The name must also end in _TOKEN or _SECRET.",
+      );
+      expect(JSON.stringify([qqbot, nextcloud])).not.toContain(SECRET);
+    });
+
+    it("passes a variable whose name the Gateway reads, and says which one", () => {
+      vi.stubEnv("MATTERMOST_BOT_TOKEN", SECRET);
+      const auth = authOf(
+        createIntegrationConnection("mattermost", "channel", {
+          serverUrl: "https://chat.example.test",
+          botTokenEnv: "MATTERMOST_BOT_TOKEN",
+        }),
+      );
+
+      expect(auth).toEqual({
+        key: "auth",
+        status: "pass",
+        message: "Mattermost bot token is configured via MATTERMOST_BOT_TOKEN.",
+      });
+    });
+
+    it("says a rightly named variable is missing when it is not set, and still fails a wrong name that is not set", () => {
+      const connection = (name: string) =>
+        createIntegrationConnection("mattermost", "channel", {
+          serverUrl: "https://chat.example.test",
+          botTokenEnv: name,
+        });
+
+      expect(authOf(connection("MATTERMOST_BOT_TOKEN"))).toMatchObject({
+        status: "fail",
+        message: "Mattermost bot token is missing.",
+      });
+      expect(authOf(connection("NOT_SET_ANYWHERE"))).toMatchObject({
+        status: "fail",
+        message: expect.stringContaining("MATTERMOST_"),
+      });
+    });
+
+    it("lets a direct value win, whatever the variable is called", () => {
+      vi.stubEnv("MY_TOKEN", SECRET);
+
+      expect(
+        authOf(
+          createIntegrationConnection("mattermost", "channel", {
+            serverUrl: "https://chat.example.test",
+            botToken: "keychain:goatcitadel:channel-connection:x:botToken",
+            botTokenEnv: "MY_TOKEN",
+          }),
+        ),
+      ).toMatchObject({ status: "pass" });
+    });
+
+    it("does not name the variable when a direct value is what answered", () => {
+      vi.stubEnv("MATTERMOST_BOT_TOKEN", SECRET);
+
+      expect(
+        authOf(
+          createIntegrationConnection("mattermost", "channel", {
+            serverUrl: "https://chat.example.test",
+            botToken: "pasted-direct-value",
+            botTokenEnv: "MATTERMOST_BOT_TOKEN",
+          }),
+        ),
+      ).toEqual({ key: "auth", status: "pass", message: "Mattermost bot token is configured." });
+    });
+
+    it.each([
+      ["a token pasted into the name field while a direct value answers", { botToken: "pasted-direct-value" }],
+      ["a token pasted into the name field and nothing else", {}],
+    ])("never prints %s", (_label, direct) => {
+      const pasted = "xoxb-pasted-token-0005-not-a-name";
+      vi.stubEnv(pasted, SECRET);
+      const auth = authOf(
+        createIntegrationConnection("mattermost", "channel", {
+          serverUrl: "https://chat.example.test",
+          botTokenEnv: pasted,
+          ...direct,
+        }),
+      );
+
+      expect(auth).toBeDefined();
+      expect(JSON.stringify(auth)).not.toContain(pasted);
+      expect(JSON.stringify(auth)).not.toContain(SECRET);
+      if (Object.keys(direct).length > 0) {
+        expect(auth).toMatchObject({ status: "pass", message: "Mattermost bot token is configured." });
+      } else {
+        expect(auth).toMatchObject({ status: "fail", message: expect.stringContaining("MATTERMOST_") });
+      }
+    });
+
+    it("keeps a model provider's key variable a plain is-it-set check, since no resolver reads it", () => {
+      vi.stubEnv("OPENAI_API_KEY", SECRET);
+      const connection = (apiKeyEnv: string) =>
+        createIntegrationConnection("openai", "model_provider", {
+          baseUrl: "https://api.openai.example.test/v1",
+          model: "gpt-test",
+          apiKeyEnv,
+        });
+
+      // The form suggests the provider's own variable, which the credential guard forbids for an integration secret.
+      expect(authOf(connection("OPENAI_API_KEY"))).toMatchObject({ status: "pass", message: "API key is configured." });
+      expect(authOf(connection("NOT_SET_ANYWHERE"))).toMatchObject({ status: "fail", message: "API key is missing." });
+    });
+
+    it("applies the same rule to the variables that GIF search, Trello and a remote bridge read", () => {
+      vi.stubEnv("GIF_API_KEY", SECRET);
+      vi.stubEnv("GIPHY_API_KEY", SECRET);
+      vi.stubEnv("TRELLO_KEY", SECRET);
+      vi.stubEnv("TRELLO_TOKEN", SECRET);
+      vi.stubEnv("MY_BRIDGE_TOKEN", SECRET);
+      const bridge = (authTokenEnv: string) =>
+        buildIntegrationConnectionChecks(
+          createPort(),
+          createIntegrationConnection("peekaboo-screen", "automation", {
+            bridgeUrl: "https://remote-screen.example.test",
+            authTokenEnv,
+          }),
+        ).find((check) => check.key === "bridge_auth");
+
+      expect(
+        authOf(
+          createIntegrationConnection("gif-search", "automation", { provider: "giphy", apiKeyEnv: "GIF_API_KEY" }),
+        ),
+      ).toMatchObject({ status: "fail" });
+      expect(
+        authOf(
+          createIntegrationConnection("gif-search", "automation", { provider: "giphy", apiKeyEnv: "GIPHY_API_KEY" }),
+        ),
+      ).toMatchObject({ status: "pass" });
+      expect(
+        authOf(
+          createIntegrationConnection("trello", "productivity", {
+            apiKeyEnv: "TRELLO_KEY",
+            tokenEnv: "MY_BRIDGE_TOKEN",
+          }),
+        ),
+      ).toMatchObject({ status: "fail" });
+      expect(
+        authOf(
+          createIntegrationConnection("trello", "productivity", { apiKeyEnv: "TRELLO_KEY", tokenEnv: "TRELLO_TOKEN" }),
+        ),
+      ).toMatchObject({ status: "pass" });
+      expect(bridge("MY_BRIDGE_TOKEN")).toMatchObject({ status: "warn" });
+    });
+
+    it("applies the same rule to a Slack or Discord bot token variable", () => {
+      vi.stubEnv("MY_TOKEN", SECRET);
+      vi.stubEnv("DISCORD_BOT_TOKEN", SECRET);
+      vi.stubEnv("SLACK_BOT_TOKEN", SECRET);
+
+      expect(authOf(createIntegrationConnection("discord", "channel", { botTokenEnv: "MY_TOKEN" }))).toMatchObject({
+        status: "fail",
+        message: "Discord bot token or webhook is missing.",
+      });
+      expect(
+        authOf(createIntegrationConnection("discord", "channel", { botTokenEnv: "DISCORD_BOT_TOKEN" })),
+      ).toMatchObject({ status: "pass" });
+      expect(authOf(createIntegrationConnection("slack", "channel", { botTokenEnv: "MY_TOKEN" }))).toMatchObject({
+        status: "fail",
+        message: "Slack bot token or webhook is missing.",
+      });
+      expect(authOf(createIntegrationConnection("slack", "channel", { botTokenEnv: "SLACK_BOT_TOKEN" }))).toMatchObject(
+        { status: "pass" },
+      );
+    });
   });
 
   it("marks remote plain-http webhook URLs as unsafe while still recognizing configured auth", () => {
@@ -294,6 +537,87 @@ describe("integration-diagnostics-service contract behavior", () => {
       message: expect.stringContaining("inbound is disabled"),
     });
     expect(outboundOnly.some((check) => check.key.startsWith("inbound_access"))).toBe(false);
+  });
+
+  it("asks an incoming Google Chat webhook for nothing but its link: the thread key is optional", () => {
+    const host = createPort();
+    host.isConnectionUrlAllowlisted = vi.fn(() => true);
+    // Google Chat's own host is on the allowlist, as it is once the guide's Allow these hosts button has been used.
+    host.config.toolPolicy.sandbox.networkAllowlist = ["chat.googleapis.com"];
+    const webhook = "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=k&token=t";
+
+    const checks = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("google-chat", "channel", { webhookUrl: webhook }),
+    );
+
+    expect(checks.map((check) => check.key)).not.toContain("target");
+    expect(checks.filter((check) => check.status !== "pass")).toEqual([]);
+  });
+
+  it("still asks a Google Chat app for its default space, as a warning that does not fail the check", () => {
+    const host = createPort();
+    const app = {
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "project_number",
+      audience: "123456789012",
+    };
+
+    const without = buildIntegrationConnectionChecks(host, createIntegrationConnection("google-chat", "channel", app));
+    const withSpace = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("google-chat", "channel", { ...app, defaultSpace: "spaces/AAAA" }),
+    );
+
+    expect(without.find((check) => check.key === "target")).toMatchObject({ status: "warn" });
+    expect(withSpace.find((check) => check.key === "target")).toMatchObject({ status: "pass" });
+  });
+
+  describe("a Slack connection saved with the legacy token fields", () => {
+    const checksFor = (config: Record<string, unknown>) =>
+      buildIntegrationConnectionChecks(createPort(), createIntegrationConnection("slack", "channel", config));
+
+    it("is a bot connection, so it is asked for a default channel as one saved with botToken is", () => {
+      vi.stubEnv("SLACK_BOT_TOKEN", "synthetic-slack-token");
+      const saved = [{ botToken: "xoxb-synthetic" }, { token: "xoxb-synthetic" }, { tokenEnv: "SLACK_BOT_TOKEN" }];
+
+      for (const config of saved) {
+        const checks = checksFor(config);
+        expect(
+          checks.find((check) => check.key === "auth"),
+          JSON.stringify(Object.keys(config)),
+        ).toMatchObject({
+          status: "pass",
+        });
+        expect(
+          checks.find((check) => check.key === "target"),
+          JSON.stringify(Object.keys(config)),
+        ).toMatchObject({
+          status: "warn",
+          message: "Default Slack channel is missing.",
+        });
+        expect(JSON.stringify(checks)).not.toContain("synthetic-slack-token");
+        expect(JSON.stringify(checks)).not.toContain("xoxb-synthetic");
+      }
+      expect(
+        checksFor({ token: "xoxb-synthetic", defaultChannel: "#ops" }).find((c) => c.key === "target"),
+      ).toMatchObject({ status: "pass" });
+    });
+
+    it("does not count a legacy variable the credential guard refuses", () => {
+      vi.stubEnv("MY_TOKEN", "synthetic-slack-token");
+
+      expect(checksFor({ tokenEnv: "MY_TOKEN" }).find((check) => check.key === "auth")).toMatchObject({
+        status: "fail",
+      });
+      expect(checksFor({ tokenEnv: "MY_TOKEN" }).map((check) => check.key)).not.toContain("target");
+    });
+
+    it("still asks a webhook-only connection for no default channel", () => {
+      expect(
+        checksFor({ webhookUrl: "https://hooks.slack.com/services/T0/B0/x" }).map((check) => check.key),
+      ).not.toContain("target");
+    });
   });
 
   it("requires local bridge posture for local-app productivity entries", () => {
@@ -578,13 +902,13 @@ describe("integration-diagnostics-service contract behavior", () => {
       MATTERMOST_TOKEN: process.env.MATTERMOST_TOKEN,
       TRELLO_KEY: process.env.TRELLO_KEY,
       TRELLO_TOKEN: process.env.TRELLO_TOKEN,
-      GIF_API_KEY: process.env.GIF_API_KEY,
+      GIPHY_API_KEY: process.env.GIPHY_API_KEY,
     };
     process.env.TELEGRAM_BOT_TOKEN = "telegram-token";
     process.env.MATTERMOST_TOKEN = "mattermost-token";
     process.env.TRELLO_KEY = "trello-key";
     process.env.TRELLO_TOKEN = "trello-token";
-    process.env.GIF_API_KEY = "gif-key";
+    process.env.GIPHY_API_KEY = "gif-key";
     try {
       const telegram = buildIntegrationConnectionChecks(
         host,
@@ -655,7 +979,7 @@ describe("integration-diagnostics-service contract behavior", () => {
         }),
         createIntegrationConnection("gif-search", "automation", {
           provider: "giphy",
-          apiKeyEnv: "GIF_API_KEY",
+          apiKeyEnv: "GIPHY_API_KEY",
         }),
         createIntegrationConnection("peekaboo-screen", "automation", {
           bridgeUrl: "https://remote-screen.example.test",
@@ -946,6 +1270,266 @@ describe("integration-diagnostics-service contract behavior", () => {
     expect(connectionWarn).toMatchObject({
       status: "warn",
       message: expect.stringContaining("Connection-level urlAllowlist contains a wildcard"),
+    });
+  });
+
+  describe("a channel's fixed provider hosts must be on the network allowlist (C7, R67)", () => {
+    const WEBHOOK_URL = "https://hooks.slack.com/services/T000/B000/XXXX";
+    const hostsCheckOf = (connection: IntegrationConnection, allowlist: string[]) => {
+      const port = createPort();
+      port.config.toolPolicy.sandbox.networkAllowlist = allowlist;
+      return buildIntegrationConnectionChecks(port, connection).find((check) => check.key === "provider_hosts");
+    };
+    /** The hosts a message names: every dotted name in it. The messages are plain sentences, so nothing else matches. */
+    const hostsNamedIn = (message: string) => message.match(/[a-z0-9-]+(?:\.[a-z0-9-]+)+/gu) ?? [];
+
+    /** One connection per way a channel can be set up, with the hosts a real send needs for it. */
+    const CASES: ReadonlyArray<{ label: string; key: string; config: Record<string, unknown>; hosts: string[] }> = [
+      { label: "Discord", key: "discord", config: { botToken: "discord-bot-token" }, hosts: ["discord.com"] },
+      {
+        label: "Slack with a bot token",
+        key: "slack",
+        config: { botToken: "xoxb-test", defaultChannel: "#ops" },
+        hosts: ["slack.com"],
+      },
+      {
+        label: "Slack with a bot token variable",
+        key: "slack",
+        config: { botTokenEnv: "SLACK_BOT_TOKEN", defaultChannel: "#ops" },
+        hosts: ["slack.com"],
+      },
+      {
+        label: "Slack connected with OAuth",
+        key: "slack",
+        config: { slackInstallId: "slack:T000", defaultChannel: "#ops" },
+        hosts: ["slack.com"],
+      },
+      { label: "Slack with only a webhook", key: "slack", config: { webhookUrl: WEBHOOK_URL }, hosts: [] },
+      {
+        label: "WhatsApp",
+        key: "whatsapp",
+        config: { accessToken: "wa-token", phoneNumberId: "phone-1", defaultTarget: "15551234567" },
+        hosts: ["graph.facebook.com"],
+      },
+      {
+        label: "LINE",
+        key: "line",
+        config: { channelAccessToken: "line-token", defaultTarget: "U123" },
+        hosts: ["api.line.me"],
+      },
+      {
+        label: "Zalo",
+        key: "zalo",
+        config: { accessToken: "zalo-token", defaultTarget: "user-1" },
+        hosts: ["openapi.zalo.me"],
+      },
+      {
+        label: "QQ",
+        key: "qqbot",
+        config: { appId: "1024", appSecretEnv: "QQBOT_APP_SECRET", defaultTarget: "openid" },
+        hosts: ["bots.qq.com", "api.bot.qq.com"],
+      },
+      {
+        label: "QQ in Test mode",
+        key: "qqbot",
+        config: { appId: "1024", appSecretEnv: "QQBOT_APP_SECRET", defaultTarget: "openid", sandbox: true },
+        hosts: ["bots.qq.com", "api.bot.qq.com", "sandbox.api.sgroup.qq.com"],
+      },
+      {
+        label: "WeCom",
+        key: "wecom",
+        config: { corpId: "ww1", agentId: "1000002", secretEnv: "WECOM_SECRET" },
+        hosts: ["qyapi.weixin.qq.com"],
+      },
+      { label: "Google Chat incoming webhook", key: "google-chat", config: {}, hosts: ["chat.googleapis.com"] },
+      {
+        label: "Google Chat app",
+        key: "google-chat",
+        config: {
+          serviceAccountKeyEnv: "GOOGLE_CHAT_SERVICE_ACCOUNT_KEY",
+          audience: "https://example.test",
+          defaultSpace: "spaces/AAA",
+        },
+        hosts: ["chat.googleapis.com", "oauth2.googleapis.com"],
+      },
+    ];
+
+    it.each([
+      ["zalo", { accessToken: "zalo-token", defaultTarget: "user-1" }, "openapi.zalo.me"],
+      ["slack", { botToken: "xoxb-test", defaultChannel: "#ops" }, "slack.com"],
+      ["whatsapp", { accessToken: "wa-token", phoneNumberId: "phone-1", defaultTarget: "1555" }, "graph.facebook.com"],
+      ["line", { channelAccessToken: "line-token", defaultTarget: "U123" }, "api.line.me"],
+    ])("warns on a %s connection when its host is not allowed, and says what clears it", (key, config, host) => {
+      const check = hostsCheckOf(createIntegrationConnection(key, "channel", config), ["discord.com"]);
+
+      expect(check).toEqual({
+        key: "provider_hosts",
+        status: "warn",
+        message: `Real sends need ${host} on the network allowlist. Use Allow these hosts in the guide, or add it in Settings.`,
+      });
+    });
+
+    it("passes when the host is on the allowlist, however the entry is written", () => {
+      const connection = createIntegrationConnection("zalo", "channel", { accessToken: "t", defaultTarget: "u" });
+
+      for (const allowlist of [["openapi.zalo.me"], ["OpenAPI.Zalo.me"], ["*.zalo.me"], ["*"]]) {
+        expect(hostsCheckOf(connection, allowlist), allowlist.join()).toEqual({
+          key: "provider_hosts",
+          status: "pass",
+          message: "Provider host openapi.zalo.me is on the network allowlist.",
+        });
+      }
+    });
+
+    it("gives a Slack webhook-only connection no slack.com warning, as it never contacts slack.com", () => {
+      const connection = createIntegrationConnection("slack", "channel", { webhookUrl: WEBHOOK_URL });
+      const port = createPort();
+      port.config.toolPolicy.sandbox.networkAllowlist = ["discord.com"];
+
+      const checks = buildIntegrationConnectionChecks(port, connection);
+
+      expect(checks.find((check) => check.key === "provider_hosts")).toBeUndefined();
+      expect(checks.map((check) => check.message).join(" ")).not.toMatch(/(^|\s)slack\.com/u);
+    });
+
+    it("names only the hosts still missing, and all of them in one warning", () => {
+      const testMode = CASES.find((testCase) => testCase.label === "QQ in Test mode")!;
+      const connection = createIntegrationConnection("qqbot", "channel", testMode.config);
+
+      expect(hostsCheckOf(connection, ["bots.qq.com"])?.message).toBe(
+        "Real sends need api.bot.qq.com and sandbox.api.sgroup.qq.com on the network allowlist. Use Allow these hosts in the guide, or add them in Settings.",
+      );
+      expect(hostsCheckOf(connection, [])?.message).toBe(
+        "Real sends need bots.qq.com, api.bot.qq.com and sandbox.api.sgroup.qq.com on the network allowlist. Use Allow these hosts in the guide, or add them in Settings.",
+      );
+      expect(hostsCheckOf(connection, ["*.qq.com", "sandbox.api.sgroup.qq.com"])?.status).toBe("pass");
+    });
+
+    it("leaves Telegram to its own check, and the channels whose host is an address to the address check", () => {
+      const checks = (key: string, config: Record<string, unknown>) => {
+        const port = createPort();
+        port.config.toolPolicy.sandbox.networkAllowlist = ["discord.com"];
+        return buildIntegrationConnectionChecks(port, createIntegrationConnection(key, "channel", config));
+      };
+
+      const telegram = checks("telegram", { botToken: "123:abc", defaultChatId: "1" });
+      expect(telegram.filter((check) => check.key === "provider_hosts")).toEqual([]);
+      expect(telegram.find((check) => check.key === "url")).toEqual({
+        key: "url",
+        status: "warn",
+        message: "Telegram API host is not allowlisted.",
+      });
+      for (const [key, config] of [
+        ["mattermost", { serverUrl: "https://chat.example.test", botToken: "t", defaultChannel: "town-square" }],
+        [
+          "matrix",
+          { homeserverUrl: "https://matrix.example.test", accessToken: "t", defaultRoomId: "!r:example.test" },
+        ],
+        ["ntfy", { baseUrl: "https://ntfy.example.test", topic: "alerts" }],
+        ["nextcloud-talk", { baseUrl: "https://cloud.example.test", token: "t", defaultTarget: "room" }],
+        ["teams", { webhookUrl: "https://example.logic.azure.com/workflows/1" }],
+      ] as const) {
+        expect(
+          checks(key, config).filter((check) => check.key === "provider_hosts"),
+          key,
+        ).toEqual([]);
+      }
+    });
+
+    it("does not report a host twice when the address the operator gave is on it (a Discord or Google Chat webhook)", () => {
+      for (const [key, webhookUrl] of [
+        ["discord", "https://discord.com/api/webhooks/123/token"],
+        ["google-chat", "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=k&token=t"],
+      ] as const) {
+        const checks = (allowlist: string[]) => {
+          const port = createPort();
+          port.config.toolPolicy.sandbox.networkAllowlist = allowlist;
+          return buildIntegrationConnectionChecks(port, createIntegrationConnection(key, "channel", { webhookUrl }));
+        };
+
+        expect(
+          checks(["slack.com"]).filter((check) => check.key === "provider_hosts"),
+          key,
+        ).toEqual([]);
+        // The address check is the one that warns, so there is one warning for the one host.
+        expect(
+          checks(["slack.com"]).filter((check) => check.key === "url" && check.status === "warn"),
+          key,
+        ).toHaveLength(1);
+      }
+    });
+
+    it.each(CASES)("names, for $label, exactly the hosts the guide's Allow these hosts button adds", (testCase) => {
+      const connection = createIntegrationConnection(testCase.key, "channel", testCase.config);
+      const check = hostsCheckOf(connection, []);
+
+      // The button's side: the guide's own model, run on the draft the Gateway makes of this connection.
+      const runtime = requireChannelSetupDefinition(connection.catalogId);
+      const hydrated = runtime.hydrate(connection);
+      const draft = guideFinish(connection.catalogId).draftOf(hydrated.draft, { hydration: hydrated.hydration });
+      const offered = channelHosts(runtime.definition, draft, hydrated.draft);
+      const button = offered.filter((host) => !isBaseUrlAllowlisted(`https://${host}/`, []));
+
+      expect(button).toEqual(testCase.hosts);
+      expect(check === undefined ? [] : hostsNamedIn(check.message)).toEqual(button);
+    });
+
+    it("has a case for every channel with fixed hosts, so a new one can't skip the agreement test", () => {
+      const covered = new Set(CASES.map((testCase) => testCase.key));
+      // A channel whose hosts depend on how it is set up (Slack, Google Chat, QQ) is in the conditional table, and one
+      // of those can be in no other table, so both tables count.
+      const fixed = [...new Set([...Object.keys(CHANNEL_REQUIRED_HOSTS), ...Object.keys(CHANNEL_CONDITIONAL_HOSTS)])]
+        .filter((key) => key !== "telegram")
+        .sort();
+
+      expect(fixed.filter((key) => !covered.has(key))).toEqual([]);
+      expect(fixed).toContain("slack");
+      expect(CHANNEL_REQUIRED_HOSTS.telegram).toEqual(["api.telegram.org"]);
+    });
+
+    it("leaves the hosts check out, warns once by catalog id, and keeps every other check when a guide cannot say its hosts", () => {
+      const runtime = requireChannelSetupDefinition("channel.zalo");
+      const hydrate = vi.spyOn(runtime, "hydrate").mockImplementation(() => {
+        throw new Error("synthetic hydrate failure holding synthetic-secret-token");
+      });
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const port = createPort();
+        port.config.toolPolicy.sandbox.networkAllowlist = [];
+
+        const checks = buildIntegrationConnectionChecks(
+          port,
+          createIntegrationConnection("zalo", "channel", { accessToken: "zalo-token", defaultTarget: "user-1" }),
+        );
+
+        expect(hydrate).toHaveBeenCalled();
+        expect(checks.find((check) => check.key === "provider_hosts")).toBeUndefined();
+        expect(checks.map((check) => check.key)).toEqual(expect.arrayContaining(["actions", "auth", "target"]));
+        const logged = stderr.mock.calls.map(([chunk]) => String(chunk));
+        expect(logged.filter((line) => line.includes("provider hosts"))).toHaveLength(1);
+        expect(logged.join("")).toContain("channel.zalo");
+        expect(logged.join("")).not.toContain("synthetic-secret-token");
+        expect(logged.join("")).not.toContain("zalo-token");
+      } finally {
+        stderr.mockRestore();
+        hydrate.mockRestore();
+      }
+    });
+
+    it("says nothing about the hosts of a channel that has no guide", () => {
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const port = createPort();
+        const checks = buildIntegrationConnectionChecks(
+          port,
+          createIntegrationConnection("no-such-channel", "channel", { token: "t", defaultTarget: "x" }),
+        );
+
+        expect(checks.find((check) => check.key === "provider_hosts")).toBeUndefined();
+        expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join("")).not.toContain("provider hosts");
+      } finally {
+        stderr.mockRestore();
+      }
     });
   });
 });

@@ -1,5 +1,6 @@
 import {
   ConflictError,
+  describeRetiredChannel,
   redactStructuredSecrets,
   type ChannelActivityInput,
   type ChannelActivityResult,
@@ -133,10 +134,24 @@ export async function dispatchConnectorDelivery(
 
 function requireActiveConnector(connector: ConnectorRecord): void {
   if (connector.status !== "active") {
+    // A retired channel's connection is "disabled" in the registry because it is out of service for good, not because
+    // it was switched off. Say so; which deliveries are refused is unchanged.
+    const retiredReason = describeRetiredChannelConnector(connector);
     throw new ConflictError({
-      message: `Connector ${connector.connectorId} is ${connector.status} and cannot accept durable deliveries.`,
+      message: retiredReason
+        ? `Connector ${connector.connectorId} cannot accept durable deliveries. ${retiredReason}`
+        : `Connector ${connector.connectorId} is ${connector.status} and cannot accept durable deliveries.`,
     });
   }
+}
+
+/** The operator reason when the connector is a saved connection of a retired channel, else undefined. */
+function describeRetiredChannelConnector(connector: ConnectorRecord): string | undefined {
+  if (connector.connectorType !== "integration_connection" || connector.metadata?.kind !== "channel") {
+    return undefined;
+  }
+  const key = connector.metadata.key;
+  return typeof key === "string" ? describeRetiredChannel(key) : undefined;
 }
 
 function requireConnectorCapability(

@@ -86,6 +86,8 @@ export function createChannelSetupTestHost(): ChannelSetupHost & {
   createConnectionMock: ReturnType<typeof vi.fn>;
   updateConnectionMock: ReturnType<typeof vi.fn>;
   diagnostics: ReturnType<typeof vi.fn>;
+  /** The names of the entries in secure storage, never their values: a test can see an entry added or removed. */
+  secretAccounts: () => string[];
 } {
   const draftStore = createDraftStore();
   const connections = new Map<string, IntegrationConnection>();
@@ -171,5 +173,6 @@ export function createChannelSetupTestHost(): ChannelSetupHost & {
     createConnectionMock,
     updateConnectionMock,
     diagnostics,
+    secretAccounts: () => [...secretValues.keys()].sort(),
   };
 }

@@ -40,10 +40,13 @@ export function ChannelLifecycleControls({
   workspaceId,
   selection,
   reload,
+  removeOnly = false,
 }: {
   workspaceId: string;
   selection: Selection;
   reload: () => Promise<unknown>;
+  /** A connection that can only be removed (a retired channel's): no enable or disable review is offered. */
+  removeOnly?: boolean;
 }) {
   const { draft, connection } = selection;
   const id = draft?.draftId ?? connection!.connectionId;
@@ -184,7 +187,7 @@ export function ChannelLifecycleControls({
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
-        {connection ? (
+        {connection && !removeOnly ? (
           <Button disabled={locked} onClick={() => setReview({ action: "toggle", identity, epoch: epoch.current })}>
             Review {connection.enabled ? "disable" : "enable"} channel
           </Button>

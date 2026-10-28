@@ -9,6 +9,7 @@ import {
 import type { ChannelSetupHost } from "./channel-setup-service.js";
 import { assertDraftRevision, hydrateChannelSetupDraftSecrets } from "./channel-setup-draft-security.js";
 import { requireReviewedChannelConnection } from "./channel-setup-connection-review.js";
+import { channelSecretOwnerForDraft } from "./channel-secret-resolution.js";
 import { buildEphemeralChannelConnection } from "./channel-setup-helpers.js";
 import { buildTelegramTargetDirectory } from "./channel-target-directory.js";
 import { findTelegramStartCodeSender, parseTelegramUpdateTargets } from "./telegram-target-discovery.js";
@@ -48,7 +49,9 @@ export async function discoverChannelSetupTelegramTargets(
   // `host.fetchWithTimeout` (the diagnostics fetch) still enforces that posture.
   if (!host.fetchWithTimeout || !host.resolveConnectionSecret)
     throw new ValidationError({ message: "Governed Telegram target discovery is unavailable." });
-  const token = host.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId);
+  // A draft reads as the connection it will have and as itself; a saved connection reads as itself.
+  const owner = draft ? channelSecretOwnerForDraft(draft) : connection;
+  const token = host.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId, owner);
   if (!token)
     throw new ValidationError({
       message: "Configure the Telegram bot token through secure input before discovering targets.",

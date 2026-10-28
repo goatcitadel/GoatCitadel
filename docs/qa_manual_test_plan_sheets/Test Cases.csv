@@ -686,7 +686,7 @@ LINE
 Zalo OA","Open /settings/channels.
 Create or edit connection.
 Run guided auth/check/test/retest.
-Send sandbox message when supported.
+Send a test message when supported.
 Inspect capability and diagnostics state.
 Test bad token or missing permission.",Action: use a sandbox connection. Test message body: QA channel canary from GoatCitadel manual test. Bad-token edge: replace token env with QA_BAD_TOKEN.,"Channel capability metadata agrees between UI and API.
 Bad token/missing permission errors are readable.

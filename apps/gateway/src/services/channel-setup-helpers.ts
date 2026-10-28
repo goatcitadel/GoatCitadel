@@ -7,6 +7,7 @@ import type {
   ChannelSetupValidationResult,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
+import { channelSecretOwnerForDraft, type ChannelSecretOwner } from "./channel-secret-resolution.js";
 import { normalizeGuidedChannelInboundAccess } from "./channel-setup-inbound-access.js";
 import { INTEGRATION_CATALOG } from "./integration-catalog.js";
 import { requireChannelSetupDefinition } from "./channel-setup-definitions.js";
@@ -24,6 +25,7 @@ export interface ChannelSetupHost {
     directKey: string,
     envKey: string,
     catalogId: string,
+    owner: ChannelSecretOwner,
   ) => string | undefined;
 }
 
@@ -96,7 +98,7 @@ export async function buildEphemeralChannelConnection(
     ...normalizeGuidedChannelInboundAccess(catalog.key, draft, currentConfig),
   };
   return {
-    connectionId: draft.connectionId ?? draft.draftId,
+    connectionId: channelSecretOwnerForDraft(draft).connectionId,
     // Validation-only records cannot be used as a persisted connection review.
     revision: `ephemeral:${draft.draftId}:${draft.revision}`,
     catalogId: catalog.catalogId,

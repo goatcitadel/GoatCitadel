@@ -24,10 +24,13 @@ export function ManageSection({
   connection,
   workspaceId,
   reload,
+  removeOnly = false,
 }: {
   connection: IntegrationConnection;
   workspaceId: string;
   reload: () => Promise<unknown>;
+  /** A retired channel's connection can only be removed: no switch and no key change, which imply it can work. */
+  removeOnly?: boolean;
 }) {
   const lifecycle = useChannelLifecycle(connection, reload);
   const [confirming, setConfirming] = useState(false);
@@ -39,17 +42,19 @@ export function ManageSection({
   };
   const turningOff = connection.enabled;
   return (
-    <Section title="Turn off or remove">
+    <Section title={removeOnly ? "Remove" : "Turn off or remove"}>
       <div className="space-y-3">
         <div className="flex flex-wrap gap-2">
-          <Button
-            disabled={lifecycle.locked && lifecycle.busy !== "toggle"}
-            loading={lifecycle.busy === "toggle"}
-            loadingLabel={turningOff ? "Turning off…" : "Turning on…"}
-            onClick={() => void lifecycle.toggle()}
-          >
-            {turningOff ? "Turn off" : "Turn on"}
-          </Button>
+          {removeOnly ? null : (
+            <Button
+              disabled={lifecycle.locked && lifecycle.busy !== "toggle"}
+              loading={lifecycle.busy === "toggle"}
+              loadingLabel={turningOff ? "Turning off…" : "Turning on…"}
+              onClick={() => void lifecycle.toggle()}
+            >
+              {turningOff ? "Turn off" : "Turn on"}
+            </Button>
+          )}
           <Button
             variant="danger"
             aria-label={`Remove ${connection.label}`}
@@ -60,9 +65,11 @@ export function ManageSection({
           </Button>
         </div>
         {lifecycle.note ? <ChannelActionNote message={lifecycle.note} fresh /> : null}
-        <NativeOwnerLink href={keyChangeHref(connection)} scope={workspaceId} className="block text-sm">
-          Change the key
-        </NativeOwnerLink>
+        {removeOnly ? null : (
+          <NativeOwnerLink href={keyChangeHref(connection)} scope={workspaceId} className="block text-sm">
+            Change the key
+          </NativeOwnerLink>
+        )}
       </div>
       <Dialog
         open={confirming}

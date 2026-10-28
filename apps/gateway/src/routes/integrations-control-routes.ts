@@ -16,6 +16,8 @@ import {
   projectIntegrationConnectionsForPublicResponse,
 } from "../services/integration-connection-public-projection.js";
 import { projectPublicSecretValue } from "../services/public-secret-projection.js";
+import { reconcileAddressHostsForUpdate } from "../services/channel-setup-address-hosts.js";
+import { getChannelSetupDefinition } from "../services/channel-setup-definitions.js";
 import { assertIntegrationPublicInput } from "../services/integration-public-input.js";
 import {
   catalogParamsSchema,
@@ -323,6 +325,11 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
         const current = await fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
         assertIntegrationPublicInput(current.catalogId, parsed.data.config, current.config);
         update = preserveIntegrationConnectionSecretsForPublicUpdate(current, parsed.data);
+        // A new or cleared webhook address must not leave the host recorded for the old one.
+        const definition = getChannelSetupDefinition(current.catalogId);
+        if (definition && update.config) {
+          update = { ...update, config: reconcileAddressHostsForUpdate(definition, current.config, update.config) };
+        }
       }
       const updated = await fastify.services.integrations.updateIntegrationConnection(
         params.data.connectionId,

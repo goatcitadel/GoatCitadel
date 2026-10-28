@@ -5,8 +5,10 @@ import {
   type ChatChannelConversation,
 } from "@goatcitadel/contracts";
 import type { ChatCommandOptions } from "./chat-command-service.js";
+import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
 import type { ChannelVoiceInboundRequest, ChannelVoiceTranscriptionResult } from "./channel-voice-inbound-service.js";
 import { ChannelBotLoopGuard, type BotLoopGuardConfig } from "./channel-bot-loop-guard.js";
+import { INTEGRATION_CATALOG } from "./integration-catalog.js";
 
 /**
  * Shared inbound-channel dispatch seam.
@@ -173,7 +175,10 @@ export type IntegrationWebhookRouteLike = {
    * cannot silently drop them.
    */
   isVoiceInboundEnabled?: () => boolean | Promise<boolean>;
-  transcribeChannelVoice?: (input: ChannelVoiceInboundRequest) => Promise<ChannelVoiceTranscriptionResult>;
+  transcribeChannelVoice?: (
+    input: ChannelVoiceInboundRequest,
+    owner: ChannelSecretOwner,
+  ) => Promise<ChannelVoiceTranscriptionResult>;
   /**
    * Canonical production ingress owner. When present, provider callbacks return
    * after this method commits a bounded durable envelope; model execution and
@@ -338,6 +343,32 @@ export async function dispatchInboundWebhookBatch(
   };
 }
 
+const CHANNEL_NAMES_BY_KEY: ReadonlyMap<string, string> = new Map(
+  INTEGRATION_CATALOG.filter((entry) => entry.kind === "channel").map((entry) => [entry.key, entry.label]),
+);
+
+/** A sender id comes from outside, so the message keeps it to one line of a length a person can read. */
+const MAX_SENDER_ID_CHARS = 256;
+
+function readableSenderId(actorId: string | undefined): string {
+  const oneLine = (actorId ?? "").replace(/\p{Cc}+/gu, " ").trim();
+  return oneLine.length > MAX_SENDER_ID_CHARS ? `${oneLine.slice(0, MAX_SENDER_ID_CHARS)}…` : oneLine;
+}
+
+/**
+ * The text System › Diagnostics shows when a message is dropped because its sender isn't allowed. The setup guides
+ * send an operator who doesn't know their own sender id here, and that page shows the message and not the event's
+ * context, so the id has to be in the message itself. The channel is named the way Settings names it.
+ */
+export function describeDroppedSender(channel: string, actorId: string | undefined): string {
+  const channelName = CHANNEL_NAMES_BY_KEY.get(channel) ?? channel;
+  const senderId = readableSenderId(actorId);
+  if (!senderId) {
+    return `Dropped a ${channelName} message that came with no sender id, so it can't match anyone under Who may message this bot.`;
+  }
+  return `Dropped a ${channelName} message from ${senderId}: that sender isn't allowed yet. To allow them, add ${senderId} under Who may message this bot.`;
+}
+
 /**
  * Sender trust gate. Unlike the bot-loop guard, this runs before
  * ingest/binding: a sender that fails the active trust posture must never
@@ -380,11 +411,9 @@ function evaluateInboundWebhookAccess(
         : hasInvalidConfig
           ? "channel.inbound_access_invalid_config"
           : "channel.sender_not_allowlisted",
-      message: hasEmptyAllowlist
-        ? "Dropped an inbound channel message because allowlist mode is enabled with no permitted senders."
-        : hasInvalidConfig
-          ? "Dropped an inbound channel message because its inbound access config is malformed."
-          : "Dropped an inbound channel message because the sender is not on the connection allowlist.",
+      message: hasInvalidConfig
+        ? "Dropped an inbound channel message because its inbound access config is malformed."
+        : describeDroppedSender(options.channel, options.message.actorId),
       context: {
         channel: options.channel,
         connectionId: options.connectionId,
