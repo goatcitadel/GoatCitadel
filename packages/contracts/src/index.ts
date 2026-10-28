@@ -20,6 +20,7 @@ export * from "./skills.js";
 export * from "./skill-governance.js";
 export * from "./skill-hub-lifecycle.js";
 export * from "./skill-packs.js";
+export * from "./skill-categories.js";
 export * from "./journey.js";
 export * from "./journey-timeline.js";
 export * from "./governed-mutations.js";
