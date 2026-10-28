@@ -294,7 +294,12 @@ describe("WeCom webhook route", () => {
     expect(response.body).toBe("success");
     expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
     expect(ctx.recordDevDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "channel.sender_not_allowlisted" }),
+      expect.objectContaining({
+        event: "channel.sender_not_allowlisted",
+        message: expect.stringContaining(
+          "Dropped a WeCom message from stranger: that sender isn't allowed yet. To allow them, add stranger under Who may message this bot.",
+        ),
+      }),
     );
   });
 

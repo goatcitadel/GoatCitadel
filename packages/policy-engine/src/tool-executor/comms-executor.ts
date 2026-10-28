@@ -59,7 +59,29 @@ const commsRequestBoundaryContext = new AsyncLocalStorage<{
   mutationResponseReceived: boolean;
   externalBoundaryReported: boolean;
   beforeExternalSideEffect?: () => void | Promise<void>;
+  /** Reads a variable the connection names, through the Gateway's name rule. Set once the connection is known. */
+  readChannelEnvSecret?: (field: string, envName: string) => ChannelEnvSecretResolution;
 }>();
+
+/** A variable a connection names for one of its secrets, and the connection it is read for. */
+export interface ChannelEnvSecretRequest {
+  /** The connection's catalog entry, such as `channel.mattermost`: the name rule is bound to it. */
+  catalogId: string;
+  channelKey: string;
+  /** The config field that names the variable, such as `botTokenEnv`. */
+  field: string;
+  envName: string;
+}
+
+/**
+ * What the Gateway made of the name. `refusal` is a plain sentence for the operator that says how the name must
+ * look; it never holds the name or a value. `value` is set only when the name is allowed and the variable is set.
+ * Neither set means the name is allowed but nothing is set under it.
+ */
+export interface ChannelEnvSecretResolution {
+  value?: string;
+  refusal?: string;
+}
 
 interface ApprovalActionSecretRuntime {
   resolveApprovalActionTokenSecret?: (secretRef: string) => string;
@@ -67,8 +89,16 @@ interface ApprovalActionSecretRuntime {
   isApprovalActionConnectorReady?: (connectionId: string) => Promise<boolean>;
   beforeExternalSideEffect?: () => void | Promise<void>;
   resolveGoogleWorkspaceAccessToken?: (input: { connectionId: string; toolName: string }) => Promise<string>;
-  /** Reads the key a channel connection saved in secure storage; undefined when nothing is stored for it. */
-  resolveChannelConnectionSecret?: (secretRef: string) => string | undefined;
+  /**
+   * Reads the key a channel connection saved in secure storage, for that connection only; undefined when nothing is
+   * stored for it or the reference was saved for another connection.
+   */
+  resolveChannelConnectionSecret?: (connectionId: string, secretRef: string) => string | undefined;
+  /**
+   * Reads the variable a channel connection names for a secret, only when the Gateway's name rule allows that name.
+   * Absent means no variable is read: the send fails as if the secret were missing, never from `process.env`.
+   */
+  resolveChannelEnvSecret?: (input: ChannelEnvSecretRequest) => ChannelEnvSecretResolution;
 }
 
 /** Every GoatCitadel secure-storage reference starts here; on a send, such a value is never a credential itself. */
@@ -126,6 +156,7 @@ async function executeCommsToolWithBoundaryTracking(
     throw new Error(`The canonical ${scopedKey} connection scope changed before dispatch.`);
   }
   const connectionConfig = record(connection.config);
+  bindChannelEnvSecretReader(connection, approvalActionSecrets);
   const target =
     asString(args.target) ?? resolveDefaultChannelTarget(connection.key, connectionConfig) ?? connection.key;
   const message = asString(args.message) ?? "";
@@ -402,7 +433,9 @@ function resolveSavedChannelSecrets(
   const resolveValue = (field: string, value: unknown): unknown => {
     const reference = typeof value === "string" ? value.trim() : "";
     if (!reference.startsWith(KEYCHAIN_REF_PREFIX)) return value;
-    const secret = reference.startsWith(ownPrefix) ? runtime.resolveChannelConnectionSecret?.(reference)?.trim() : "";
+    const secret = reference.startsWith(ownPrefix)
+      ? runtime.resolveChannelConnectionSecret?.(connection.connectionId, reference)?.trim()
+      : "";
     if (!secret || (!STRUCTURED_SECRET_FIELDS.has(field) && CONTROL_CHARACTER_PATTERN.test(secret))) {
       throw new Error(
         `The saved ${asString(connection.label) ?? connection.key} credential is unavailable from secure storage.`,
@@ -3771,13 +3804,42 @@ function composeAbortSignal(timeoutMs: number, signal?: AbortSignal): AbortSigna
   return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
 
+/**
+ * A pasted or saved value wins. Otherwise the variable the config names is read through the Gateway's name rule
+ * (`readChannelEnvSecret`) and never straight from `process.env`: a connection config must not be able to carry an
+ * LLM or Gateway key to the server address it names.
+ */
 function secretFrom(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined {
   const direct = asString(readOwn(config, directKey));
   if (direct) return direct;
   const envName = asString(readOwn(config, envKey));
   if (!envName) return undefined;
-  const envValue = process.env[envName];
-  return envValue?.trim() || undefined;
+  return readChannelEnvSecret(envKey, envName);
+}
+
+/**
+ * Asks the Gateway, for the connection being sent through, whether it reads this variable. A refused name fails the
+ * send before any request with the Gateway's sentence, which holds neither the name nor a value. With no hook there
+ * is no variable to read, so the secret is missing.
+ */
+function readChannelEnvSecret(field: string, envName: string): string | undefined {
+  const resolution = commsRequestBoundaryContext.getStore()?.readChannelEnvSecret?.(field, envName);
+  if (resolution?.refusal) {
+    throw new Error(`blocked: ${resolution.refusal}`);
+  }
+  return resolution?.value?.trim() || undefined;
+}
+
+/** Points the readers above at the Gateway's hook for this one connection; with no hook, nothing is bound. */
+function bindChannelEnvSecretReader(
+  connection: { catalogId: string; key: string },
+  runtime: ApprovalActionSecretRuntime,
+): void {
+  const store = commsRequestBoundaryContext.getStore();
+  const resolve = runtime.resolveChannelEnvSecret;
+  if (!store || !resolve) return;
+  store.readChannelEnvSecret = (field, envName) =>
+    resolve({ catalogId: connection.catalogId, channelKey: connection.key, field, envName });
 }
 
 function chunkText(text: string, targetChars: number, overlap: number, maxChunks: number): string[] {

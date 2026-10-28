@@ -3,11 +3,12 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ChannelRuntimeStatus,
-  ChatMessagingChannel,
-  ChatMessagingOverview,
-  IntegrationConnection,
+import {
+  describeRetiredChannel,
+  type ChannelRuntimeStatus,
+  type ChatMessagingChannel,
+  type ChatMessagingOverview,
+  type IntegrationConnection,
 } from "@goatcitadel/contracts";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { __resetIntegrationConnectionMutationsForTests } from "../../../features/native-routes/settings/integration-connection-mutation";
@@ -715,6 +716,98 @@ describe("ChannelPage turning off and removing", () => {
     expect(container.textContent).toContain(
       "The connection changed or was deleted. Review its current saved state before retrying.",
     );
+  });
+});
+
+describe("ChannelPage for a retired channel's saved connection", () => {
+  // Saved as enabled and connected, the way it was left when the channel was retired.
+  const retiredConnection = (key: string, label: string) =>
+    connection({
+      catalogId: `channel.${key}`,
+      key,
+      label,
+      config: { targets: [{ label: "Family", target: "+15550123", default: true }], allowFrom: ["+15550123"] },
+    });
+  function loadRetired(key: string, label: string) {
+    load({
+      connection: retiredConnection(key, label),
+      overview: overviewOf(channel({ channelKey: key, label, status: "removed" })),
+      runtime: runtime({ channelKey: key }),
+    });
+  }
+  const headings = () => [...container.querySelectorAll("h2")].map((item) => item.textContent);
+  const linkNamed = (label: string) =>
+    [...container.querySelectorAll("a")].find((candidate) => candidate.textContent === label);
+
+  it.each([
+    ["signal", "Home Signal"],
+    ["imessage", "Home iMessage"],
+    ["zalouser", "Home Zalo"],
+  ])(
+    "shows a saved %s connection as Removed, with its reason, and nothing that implies it works",
+    async (key, label) => {
+      loadRetired(key, label);
+      await mount();
+
+      expect(container.querySelector("h1")?.textContent).toBe(label);
+      expect(container.querySelector('[data-tone="neutral"]')?.textContent).toBe("Removed");
+      expect(container.textContent).toContain(describeRetiredChannel(key));
+      expect(container.textContent).toContain("Its conversations stay readable under Messaging.");
+      expect(linkNamed("Messaging")).toBeDefined();
+
+      // No runtime check, people, posting places, or switch that implies it can send.
+      expect(headings()).not.toContain("Whether it's working");
+      expect(headings()).not.toContain("Who can message it");
+      expect(headings()).not.toContain("Where it posts");
+      expect(container.textContent).not.toContain("GoatCitadel is connected to");
+      expect(container.textContent).not.toContain("Checking this channel");
+      expect(container.textContent).not.toContain("Family");
+      expect(api.fetchChannelRuntimeStatus).not.toHaveBeenCalled();
+      const names = [...container.querySelectorAll("button")].map((item) => item.textContent);
+      expect(names).not.toContain("Check now");
+      expect(names).not.toContain("Turn off");
+      expect(names).not.toContain("Turn on");
+      expect(keyLinks()).toEqual([]);
+    },
+  );
+
+  it("still offers Remove, the only red action, and removes the connection after confirmation", async () => {
+    loadRetired("signal", "Home Signal");
+    await mount();
+    const red = [...container.querySelectorAll("button")].filter((item) => item.className.includes("status-failed"));
+    expect(red.map((item) => item.textContent)).toEqual(["Remove"]);
+
+    await click(button("Remove"));
+    const dialog = container.querySelector('section[aria-label="Remove Home Signal?"]')!;
+    expect(dialog.textContent).toContain(REMOVE_CONSEQUENCE);
+    expect(api.deleteIntegrationConnection).not.toHaveBeenCalled();
+
+    api.fetchIntegrationConnection.mockResolvedValueOnce(retiredConnection("signal", "Home Signal"));
+    api.deleteIntegrationConnection.mockResolvedValue({ deleted: true });
+    api.fetchIntegrationConnection.mockRejectedValue(notFound());
+    api.fetchIntegrationConnections.mockResolvedValue({ items: [] });
+    await click(button("Remove channel", dialog));
+    expect(api.deleteIntegrationConnection).toHaveBeenCalledExactlyOnceWith("conn-1", REVISION);
+  });
+
+  it("shows the reason even before the overview has caught up", async () => {
+    load({
+      connection: retiredConnection("imessage", "Home iMessage"),
+      overview: overviewOf(),
+    });
+    await mount();
+    expect(container.querySelector('[data-tone="neutral"]')?.textContent).toBe("Removed");
+    expect(container.textContent).toContain(describeRetiredChannel("imessage"));
+    expect(headings()).not.toContain("Whether it's working");
+    expect(api.fetchChannelRuntimeStatus).not.toHaveBeenCalled();
+  });
+
+  it("keeps the full page for a working channel beside it", async () => {
+    load({});
+    await mount();
+    expect(headings()).toContain("Whether it's working");
+    expect(headings()).toContain("Where it posts");
+    expect(container.textContent).not.toContain("not supported anymore");
   });
 });
 

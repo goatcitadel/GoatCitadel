@@ -4,7 +4,6 @@ import {
   channelHosts,
   inboundWebhookPath,
   isStepForLifecycle,
-  receivesOnWebhook,
   SECRET_REDACTION_MARKER,
   unreadableHostFields,
 } from "./channel-wizard-model";
@@ -386,11 +385,27 @@ describe("inboundWebhookPath", () => {
     },
   });
 
-  it("gives the webhook path only for a saved connection whose condition holds, escaping the id once", () => {
+  it("gives the webhook path only for a connection id whose condition holds, escaping the id once", () => {
     expect(inboundWebhookPath(telegram, { receiveMode: "poll" }, "c-1")).toBeUndefined();
     expect(inboundWebhookPath(telegram, { receiveMode: "webhook" }, undefined)).toBeUndefined();
     expect(inboundWebhookPath(telegram, { receiveMode: "webhook" }, "c 1/2")).toBe(
       "/api/v1/integrations/connections/c%201%2F2/telegram/webhook",
+    );
+  });
+
+  it("escapes an id once and only once: a path built from an escaped id is not escaped again", () => {
+    const always = def({ inboundWebhook: { pathTemplate: "/hooks/{connectionId}" } });
+    const once = inboundWebhookPath(always, {}, "a b%c");
+    expect(once).toBe("/hooks/a%20b%25c");
+    // The id `%` stays `%25`; it never becomes `%2525`, and a space never becomes `%2520`.
+    expect(once).not.toContain("%2520");
+    expect(once).not.toContain("%2525");
+  });
+
+  it("builds a new setup's path from its draft id the way it does a saved connection's", () => {
+    const draftId = "3f2b8c1e-0a4d-4b6e-9c57-1d2e3f4a5b6c";
+    expect(inboundWebhookPath(telegram, { receiveMode: "webhook" }, draftId)).toBe(
+      `/api/v1/integrations/connections/${draftId}/telegram/webhook`,
     );
   });
 
@@ -515,43 +530,6 @@ describe("inboundWebhookPath", () => {
       inboundWebhookPath(googleChat, values, "c-1");
       expect(JSON.stringify([googleChat, values])).toBe(before);
     });
-  });
-});
-
-describe("receivesOnWebhook", () => {
-  const telegram = def({
-    inboundWebhook: {
-      pathTemplate: "/api/v1/integrations/connections/{connectionId}/telegram/webhook",
-      whenFieldEquals: { fieldKey: "receiveMode", value: "webhook" },
-    },
-    steps: [
-      {
-        id: "collect",
-        kind: "field-collection",
-        title: "Collect",
-        fields: [
-          {
-            key: "receiveMode",
-            label: "How to receive",
-            type: "select",
-            required: false,
-            explanation: "How messages arrive.",
-            defaultValue: "poll",
-          },
-        ],
-      },
-    ],
-  });
-
-  it("is true exactly when the webhook condition holds after defaults, with no connection id needed", () => {
-    expect(receivesOnWebhook(telegram, {})).toBe(false);
-    expect(receivesOnWebhook(telegram, { receiveMode: "poll" })).toBe(false);
-    expect(receivesOnWebhook(telegram, { receiveMode: "webhook" })).toBe(true);
-    expect(receivesOnWebhook(def({ inboundWebhook: { pathTemplate: "/hooks/{connectionId}" } }), {})).toBe(true);
-  });
-
-  it("is false for a channel with no inbound webhook", () => {
-    expect(receivesOnWebhook(def(), {})).toBe(false);
   });
 });
 

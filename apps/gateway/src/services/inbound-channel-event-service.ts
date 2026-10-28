@@ -14,6 +14,7 @@ import {
   type InboundChannelEventRecord,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
 import type { ChannelVoiceInboundRequest, ChannelVoiceTranscriptionResult } from "./channel-voice-inbound-service.js";
 import {
   VOICE_TRANSCRIPT_CONTENT_PREFIX,
@@ -138,7 +139,10 @@ export interface InboundChannelEventServiceDeps {
       inboundDurableIdentity: InboundChannelDeterministicIdentity;
     },
   ) => Promise<ChatSendMessageResponse>;
-  transcribeChannelVoice: (input: ChannelVoiceInboundRequest) => Promise<ChannelVoiceTranscriptionResult>;
+  transcribeChannelVoice: (
+    input: ChannelVoiceInboundRequest,
+    owner: ChannelSecretOwner,
+  ) => Promise<ChannelVoiceTranscriptionResult>;
   executeInboundCommand: (input: InboundChannelCommandExecutionInput) => Promise<{ resultText: string }>;
   decideBotLoop: (input: {
     scope: string;
@@ -514,7 +518,10 @@ export class InboundChannelEventService {
 
     const desk = isOperatorDeskEvent(claim.event);
     const messageId = stableInboundId("message", claim.event.eventId);
-    const content = await this.resolveMessageContent(payload, connection.config);
+    // The connection the claim names is the one whose config is read, so it is the owner of any key that config holds.
+    const content = await this.resolveMessageContent(payload, connection.config, {
+      connectionId: claim.event.connectionId,
+    });
     assertCurrent();
     const route = {
       channel: claim.event.channelKey,
@@ -821,6 +828,7 @@ export class InboundChannelEventService {
   private async resolveMessageContent(
     payload: StoredInboundPayload,
     connectionConfig: Record<string, unknown>,
+    owner: ChannelSecretOwner,
   ): Promise<string> {
     if (!payload.voiceRequest) {
       return payload.message.content;
@@ -830,7 +838,7 @@ export class InboundChannelEventService {
       connectionConfig,
     } as ChannelVoiceInboundRequest;
     try {
-      const result = await this.deps.transcribeChannelVoice(request);
+      const result = await this.deps.transcribeChannelVoice(request, owner);
       if (result.ok) {
         // The transcript keeps its untrusted framing; the typed caption (the
         // user's own text) follows on its own line so it is not lost.

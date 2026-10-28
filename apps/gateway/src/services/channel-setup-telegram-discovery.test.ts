@@ -50,6 +50,42 @@ describe("credential-safe Telegram discovery", () => {
     expect(h.fetchWithTimeout).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(response)).not.toContain("keychain");
     expect(JSON.stringify(response)).not.toContain("test-token");
+    // A saved connection reads its own keys, as the owner of its own references.
+    expect(h.resolveConnectionSecret).toHaveBeenCalledWith(
+      expect.anything(),
+      "botToken",
+      "botTokenEnv",
+      "channel.telegram",
+      expect.objectContaining({ connectionId: "connection" }),
+    );
+  });
+  it("reads an edit draft's keys as its saved connection's and its own", async () => {
+    const h = host();
+    const draftId = "22222222-2222-2222-2222-222222222222";
+    const draft = {
+      draftId,
+      connectionId: "connection",
+      connectionRevision: revision,
+      revision: 3,
+      catalogId: "channel.telegram",
+      lifecycleMode: "edit",
+      draft: { defaultChatId: "123", inboundAccessMode: "allowlist" },
+      secretState: {},
+      enabled: true,
+      contentVersion: "content",
+      testVersion: "test",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } as ChannelSetupDraft;
+    h.storage.channelSetupDrafts = { get: vi.fn(async () => draft) } as never;
+    await discoverChannelSetupTelegramTargets(h, { source: "draft", draftId, expectedRevision: 3 });
+    expect(h.resolveConnectionSecret).toHaveBeenCalledWith(
+      expect.anything(),
+      "botToken",
+      "botTokenEnv",
+      "channel.telegram",
+      { connectionId: "connection", draftId },
+    );
   });
   it("discovers from a revision-bound new draft using secure custody without re-entering credentials", async () => {
     const h = host();
@@ -78,11 +114,13 @@ describe("credential-safe Telegram discovery", () => {
     h.channelSecrets = custody;
     const response = await discoverChannelSetupTelegramTargets(h, { source: "draft", draftId, expectedRevision: 3 });
     expect(response.botIdentity?.id).toBe("42");
+    // A new draft reads its own keys: its id is the id of the connection it will become, and the draft is its owner.
     expect(h.resolveConnectionSecret).toHaveBeenCalledWith(
       expect.objectContaining({ botToken: "test-token" }),
       "botToken",
       "botTokenEnv",
       "channel.telegram",
+      { connectionId: draftId, draftId },
     );
     expect(h.getIntegrationConnection).not.toHaveBeenCalled();
     expect(JSON.stringify(response)).not.toContain(secretRef);

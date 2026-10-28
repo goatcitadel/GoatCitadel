@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { ChatMessagingChannelStatus } from "@goatcitadel/contracts";
+import { describeRetiredChannel, type ChatMessagingChannelStatus } from "@goatcitadel/contracts";
 import { presentChannelStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_COLUMN } from "../../ui/area-layout";
@@ -58,6 +58,28 @@ export function ChannelPage({ connectionId, workspaceId }: { connectionId: strin
   const status = channel?.status;
 
   if (connection) {
+    // A retired channel's connection stays saved as it was left, so the Gateway's overview may not say "removed" yet.
+    // It is out of service for good: its past conversations stay readable and the connection can be removed, nothing
+    // else (no runtime check, people, posting places, switch or key change, which would imply it can send).
+    const retiredReason = describeRetiredChannel(connection.key);
+    if (retiredReason) {
+      return (
+        <PageFrame title={connection.label} status="removed" workspaceId={workspaceId}>
+          <ChannelLockNote connectionId={connection.connectionId} reload={reload} />
+          <Callout announce={false}>
+            <p>{retiredReason}</p>
+          </Callout>
+          <p className="text-base text-fg-secondary">
+            Its conversations stay readable under{" "}
+            <NativeOwnerLink href="/chat" scope={workspaceId}>
+              Messaging
+            </NativeOwnerLink>
+            .
+          </p>
+          <ManageSection connection={connection} workspaceId={workspaceId} reload={reload} removeOnly />
+        </PageFrame>
+      );
+    }
     return (
       <PageFrame
         title={connection.label}

@@ -105,6 +105,36 @@ describe("cockpit Diagnostics", () => {
     }
   });
 
+  it("says Diagnostics unavailable, in an alert, when the gateway has diagnostics switched off", async () => {
+    // A production-mode gateway (a Docker install) answers the events list with 404 until
+    // GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true is set. The channel setup guides quote this lead text, so it is pinned.
+    api.fetchDevDiagnostics.mockRejectedValue(new Error("Development diagnostics are disabled."));
+    api.fetchDaemonLogs.mockResolvedValue({ items: [] });
+    api.fetchOperatorInbox.mockResolvedValue({ workspaceId: "ws-1", items: [], coverage: [] });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    try {
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <SystemDiagnostics />
+          </QueryClientProvider>,
+        ),
+      );
+      await vi.waitFor(() => expect(container.textContent).toContain("Diagnostics unavailable:"));
+      const alert = [...container.querySelectorAll('[role="alert"]')].find((node) =>
+        node.textContent?.startsWith("Diagnostics unavailable:"),
+      );
+      expect(alert).toBeDefined();
+    } finally {
+      act(() => root.unmount());
+      client.clear();
+      container.remove();
+    }
+  });
+
   it("does not show recovery records from a mixed-workspace projection", async () => {
     api.fetchDevDiagnostics.mockResolvedValue({ items: [] });
     api.fetchDaemonLogs.mockResolvedValue({ items: [] });

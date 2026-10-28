@@ -1,5 +1,10 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import type { ChatThreadTurnRecord, ChatToolRunRecord, DesignAdvisory } from "@goatcitadel/contracts";
+import {
+  isChatTurnTerminalStatus,
+  type ChatThreadTurnRecord,
+  type ChatToolRunRecord,
+  type DesignAdvisory,
+} from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
 import { getChatToolRunDiagnostics } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
 import { projectChatToolEffectTruth } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-effect-truth";
@@ -12,7 +17,7 @@ import { ChatToolRunSummary } from "./ChatToolRunSummary";
 import { ChatToolApprovalLine } from "./ChatToolApprovalLine";
 import { useAutoOpenDisclosure } from "./use-auto-open-disclosure";
 import { groupToolRunRetries } from "./chat-tool-run-groups";
-import { summarizeTurnToolRuns, toolRunTarget } from "./chat-tool-run-summary";
+import { summarizeTurnToolRuns, toolRunTarget, type ToolRunTarget } from "./chat-tool-run-summary";
 import { toolRunDuration, toolRunLineChanges } from "./chat-tool-run-change-stats";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
@@ -62,6 +67,21 @@ function toolRunSummaryText(tool: ChatToolRunRecord): string {
 }
 
 /** The failed tries before a tool's latest one: folded under its row, never dropped. */
+/** What a call touched, after its name. The leading space keeps name and target apart for screen readers too. */
+function ToolTarget({ target }: { target: ToolRunTarget }) {
+  return (
+    <>
+      {" "}
+      <span
+        title={target.full}
+        className={`ml-1 text-fg-muted wrap-anywhere ${target.kind === "command" ? "font-mono" : ""}`}
+      >
+        {target.label}
+      </span>
+    </>
+  );
+}
+
 function EarlierTries({ tries }: { tries: ChatToolRunRecord[] }) {
   return (
     <details className="w-full">
@@ -76,14 +96,7 @@ function EarlierTries({ tries }: { tries: ChatToolRunRecord[] }) {
             <li key={tool.toolRunId} data-tool-run-id={tool.toolRunId}>
               <p className="text-fg-secondary">
                 Try {index + 1} · {activityLabel(tool)}
-                {target ? (
-                  <span
-                    title={target.full}
-                    className={`ml-2 text-fg-muted wrap-anywhere ${target.kind === "command" ? "font-mono" : ""}`}
-                  >
-                    {target.label}
-                  </span>
-                ) : null}
+                {target ? <ToolTarget target={target} /> : null}
               </p>
               {tool.approvalId ? <ChatToolApprovalLine tool={tool} /> : null}
               {summary ? <ChatToolRunSummary text={summary} /> : null}
@@ -146,10 +159,13 @@ export function ChatTurnDetails({
       setCopy({ status: "Copy failed. Select the answer text to copy it.", copied: false });
     }
   };
-  // CH-39: opens while streaming or when a tool needs attention, and stays open once the operator opened it.
-  // A list that only opened for streaming folds shut when the turn settles cleanly.
+  // A turn is live until its status is final. `streaming` alone is not enough: after an approval the Gateway resumes
+  // the turn without a browser stream, and the turn is still working.
+  const turnLive = streaming || !isChatTurnTerminalStatus(turn.trace.status);
+  // CH-39: opens while the turn is live or when a tool needs attention, and stays open once the operator opened it.
+  // A list that only opened for a live turn folds shut when the turn settles cleanly.
   const toolDisclosure = useAutoOpenDisclosure(
-    streaming ||
+    turnLive ||
       turn.toolRuns.some((tool) => tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal),
     { closeWhenSettled: true },
   );
@@ -191,7 +207,7 @@ export function ChatTurnDetails({
       {turn.toolRuns.length ? (
         <details {...toolDisclosure} aria-label="Tool activity for this turn">
           <summary className="cursor-pointer text-accent">
-            {summarizeTurnToolRuns(turn.toolRuns, streaming)}
+            {summarizeTurnToolRuns(turn.toolRuns, turnLive)}
             <span className="text-fg-muted">
               {" · "}
               {plural(turn.toolRuns.length, "tool call")} · {activitySummary}
@@ -209,15 +225,8 @@ export function ChatTurnDetails({
                 <li key={key} data-tool-run-id={tool.toolRunId} className="flex flex-wrap justify-between gap-2 py-2">
                   <span className="min-w-0 text-fg-secondary">
                     {chatToolDisplayName(tool)}
-                    {target ? (
-                      <span
-                        title={target.full}
-                        className={`ml-2 text-fg-muted wrap-anywhere ${target.kind === "command" ? "font-mono" : ""}`}
-                      >
-                        {target.label}
-                      </span>
-                    ) : null}
-                    {earlier.length ? <span className="ml-2 text-fg-muted">{earlier.length + 1} tries</span> : null}
+                    {target ? <ToolTarget target={target} /> : null}
+                    {earlier.length ? <span className="ml-1 text-fg-muted"> {earlier.length + 1} tries</span> : null}
                   </span>
                   <span className="inline-flex items-center gap-2">
                     {changes ? (

@@ -1,4 +1,5 @@
-const PERMITTED_INTEGRATION_ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/;
+/** The shape a variable name must have before any other rule applies. Setup reuses it to tell a pasted token from a name. */
+export const PERMITTED_INTEGRATION_ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/;
 const FORBIDDEN_INTEGRATION_ENV_NAMES = new Set<string>([
   // LLM provider keys - never resolvable as an integration secret because
   // an attacker-controlled connection config could otherwise exfiltrate
@@ -36,6 +37,7 @@ const FORBIDDEN_INTEGRATION_ENV_PREFIXES = ["GOATCITADEL_", "POSTGRES_", "AWS_"]
 
 const CATALOG_ENV_PREFIX_ALIASES: Readonly<Record<string, readonly string[]>> = {
   "automation.gif-search": ["GIPHY_", "TENOR_"],
+  "automation.imap-smtp": ["SMTP_", "IMAP_"],
   "channel.qqbot": ["QQBOT_"],
 };
 
@@ -49,6 +51,40 @@ const CATALOG_ENV_EXACT_ALIASES: Readonly<Record<string, readonly string[]>> = {
   "productivity.bear": ["LOCAL_AGENT_AUTH_TOKEN"],
   "productivity.things3": ["LOCAL_AGENT_AUTH_TOKEN"],
 };
+
+/** Shown or logged in place of a variable name that does not have the shape of one: a token pasted into a name field. */
+export const NOT_A_VARIABLE_NAME = "(not a variable name)";
+
+/** The name itself when it has the shape of a variable name, so it is safe to print or log; undefined otherwise. */
+export function printableEnvVarName(value: string | undefined): string | undefined {
+  const name = value?.trim();
+  return name && PERMITTED_INTEGRATION_ENV_NAME_PATTERN.test(name) ? name : undefined;
+}
+
+/** The name to put in a log line: the name when it has the shape of one, otherwise a fixed marker. */
+export function envNameForLog(value: string): string {
+  return printableEnvVarName(value) ?? NOT_A_VARIABLE_NAME;
+}
+
+/**
+ * The sentence a refused variable name gets. The prefixes are ones `isPermittedIntegrationSecretEnvVarName` accepts: the
+ * catalog entry's own aliases when it has any (the mail connection takes SMTP_ and IMAP_), otherwise its key in capitals.
+ * So the sentence cannot drift from the rule. It holds no name and no value.
+ */
+export function refusedEnvVarNameMessage(catalogId: string | undefined): string {
+  const normalizedCatalogId = catalogId?.trim().toLowerCase();
+  const catalogKey = normalizedCatalogId
+    ?.split(".")
+    .at(-1)
+    ?.replace(/[^a-z0-9]+/gu, "_")
+    .toUpperCase();
+  if (!normalizedCatalogId || !catalogKey) {
+    return "That variable name is not allowed for this connection. Rename it and restart GoatCitadel.";
+  }
+  const aliases = CATALOG_ENV_PREFIX_ALIASES[normalizedCatalogId] ?? [];
+  const prefixes = aliases.length > 0 ? aliases : [`${catalogKey}_`];
+  return `The variable name must start with ${prefixes.join(" or ")}. Rename it and restart GoatCitadel.`;
+}
 
 export function isPermittedIntegrationSecretEnvVarName(envName: string, catalogId?: string): boolean {
   const normalized = envName.trim();

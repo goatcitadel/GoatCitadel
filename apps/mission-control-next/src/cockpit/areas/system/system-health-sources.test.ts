@@ -50,6 +50,40 @@ describe("system health reads", () => {
     expect(check?.detail).not.toContain("Last known");
     expect(check?.lastKnown).toContain("Last known (Channels, checked ");
   });
+  describe("a retired channel's saved connection", () => {
+    // Saved as enabled, the way it was left when the channel was retired.
+    const retired = (key: string, connectionId: string) => ({ connectionId, kind: "channel", key, enabled: true });
+    beforeEach(() => {
+      api.fetchHealthSummary.mockResolvedValue({ daemonStatus: {}, backups: {} });
+    });
+
+    it.each(["signal", "imessage", "zalouser"])(
+      "is left out of the runtime checks: a retired %s connection is out of service, not unhealthy",
+      async (key) => {
+        api.fetchIntegrationConnections.mockResolvedValue({ items: [channel, retired(key, "gone")] });
+        const sources = await loadSystemHealthSources("w");
+        expect(api.fetchChannelRuntimeStatus).toHaveBeenCalledTimes(1);
+        expect(api.fetchChannelRuntimeStatus).toHaveBeenCalledWith("c1");
+        expect(api.fetchChannelRuntimeStatus).not.toHaveBeenCalledWith("gone");
+        expect(sources.channels).toMatchObject({ state: "current", value: { enabledCount: 1 } });
+        const check = deriveSystemHealthChecks(sources, null).find((item) => item.id === "channels");
+        expect(check?.status).toEqual({ label: "Ready", tone: "done" });
+        expect(check?.detail).toContain("1 enabled channel runtime reports ready");
+      },
+    );
+
+    it("does not make the Channels check read as failing when it is the only enabled channel", async () => {
+      api.fetchIntegrationConnections.mockResolvedValue({ items: [retired("signal", "gone")] });
+      api.fetchChannelRuntimeStatus.mockResolvedValue({ ready: false });
+      const sources = await loadSystemHealthSources("w");
+      expect(api.fetchChannelRuntimeStatus).not.toHaveBeenCalled();
+      expect(sources.channels).toMatchObject({ state: "current", value: { enabledCount: 0, checked: [] } });
+      const check = deriveSystemHealthChecks(sources, null).find((item) => item.id === "channels");
+      expect(check?.detail).toBe("No channel connection is enabled.");
+      expect(check?.status.tone).not.toBe("waiting");
+      expect(check?.status.tone).not.toBe("failed");
+    });
+  });
   it("the digest makes exactly four reads and defers channels and workers", async () => {
     const digest = await loadSystemHealthDigest();
     const calls = Object.values(api).reduce((total, mock) => total + mock.mock.calls.length, 0);

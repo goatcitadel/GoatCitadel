@@ -34,7 +34,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/channel-setup-operations", asyn
 
 const definitions = (await Object.values(runtimeDefinitions)[0]!()).listChannelSetupDefinitions();
 const byKey = (key: string) => definitions.find((item) => item.catalog.key === key)!;
-const AFTER_FINISH = "You get this address after you finish: Settings › Channels › this connection.";
+const WORKS_ONCE_FINISHED = "This address works once you finish and the connection is on.";
 const address = (key: string, connectionId: string) =>
   `https://<your public address>/api/v1/integrations/connections/${connectionId}/${key}/webhook`;
 
@@ -132,45 +132,58 @@ describe.each([
 ] as const)("the webhook address in the %s", (_name, Component) => {
   const codeText = () => container.querySelector("code")?.textContent;
 
-  it("says where a new Slack setup will get its address, without making one up", async () => {
+  it("shows a new Slack setup its real address, built from the draft's id, before it is finished", async () => {
     await show(Component, propsFor(byKey("slack")));
-    expect(container.textContent).not.toContain(AFTER_FINISH);
+    expect(container.textContent).not.toContain(WORKS_ONCE_FINISHED);
 
     await openFirstMessage(byKey("slack"));
 
-    expect(container.textContent).toContain(AFTER_FINISH);
-    expect(container.querySelector("code")).toBeNull();
-    expect(container.textContent).not.toContain("Webhook address");
+    expect(codeText()).toBe(address("slack", "fixture-slack"));
+    expect(container.textContent).toContain("Webhook address");
+    expect(container.textContent).toContain(WORKS_ONCE_FINISHED);
+    expect(container.textContent).not.toContain("after you finish");
+    expect([...container.querySelectorAll("button")].some((item) => item.textContent === "Copy")).toBe(true);
   });
 
   it("says nothing on a channel that doesn't receive on a webhook", async () => {
     expect(byKey("discord").wizard.inboundWebhook).toBeUndefined();
     await show(Component, propsFor(byKey("discord")));
     await openFirstMessage(byKey("discord"));
-    expect(container.textContent).not.toContain("You get this address");
+    expect(container.textContent).not.toContain(WORKS_ONCE_FINISHED);
     expect(container.textContent).not.toContain("Webhook address");
   });
 
-  it("follows Telegram's receive mode: poll says nothing, webhook says where the address will be", async () => {
+  it("follows Telegram's receive mode: poll shows no address, webhook shows the draft's", async () => {
     await show(Component, propsFor(byKey("telegram")));
     await openFirstMessage(byKey("telegram"));
-    expect(container.textContent).not.toContain("You get this address");
+    expect(container.textContent).not.toContain(WORKS_ONCE_FINISHED);
 
     await show(Component, propsFor(byKey("telegram"), {}, { receiveMode: "poll" }));
-    expect(container.textContent).not.toContain("You get this address");
+    expect(container.textContent).not.toContain(WORKS_ONCE_FINISHED);
 
     await show(Component, propsFor(byKey("telegram"), {}, { receiveMode: "webhook" }));
-    expect(container.textContent).toContain(AFTER_FINISH);
+    expect(codeText()).toBe(address("telegram", "fixture-telegram"));
+    expect(container.textContent).toContain(WORKS_ONCE_FINISHED);
   });
 
-  it("tells a new Google Chat setup where the address will be only in Chat app mode, not in webhook mode", async () => {
+  it("shows a new Google Chat setup the address only in Chat app mode, not in webhook mode", async () => {
     const googleChat = byKey("google-chat");
     await show(Component, propsFor(googleChat, {}, { webhookUrl: "https://chat.googleapis.com/v1/spaces/x" }));
     await openFirstMessage(googleChat);
-    expect(container.textContent).not.toContain("You get this address");
+    expect(container.querySelector("code")).toBeNull();
+    expect(container.textContent).not.toContain(WORKS_ONCE_FINISHED);
 
     await show(Component, propsFor(googleChat, {}, { serviceAccountKeyEnv: "GOOGLE_CHAT_KEY" }));
-    expect(container.textContent).toContain(AFTER_FINISH);
+    expect(codeText()).toBe(address("google-chat", "fixture-google-chat"));
+    expect(container.textContent).toContain(WORKS_ONCE_FINISHED);
+  });
+
+  it("shows a new Nextcloud Talk setup its address before it is finished: the bot is installed with it", async () => {
+    await show(Component, propsFor(byKey("nextcloud-talk")));
+    await openFirstMessage(byKey("nextcloud-talk"));
+
+    expect(codeText()).toBe(address("nextcloud-talk", "fixture-nextcloud-talk"));
+    expect(container.textContent).toContain(WORKS_ONCE_FINISHED);
   });
 
   it("shows a saved Google Chat connection's address only in Chat app mode", async () => {
@@ -191,7 +204,7 @@ describe.each([
 
     expect(codeText()).toBe(address("slack", "conn-1"));
     expect(container.textContent).toContain("Webhook address");
-    expect(container.textContent).not.toContain("You get this address");
+    expect(container.textContent).not.toContain(WORKS_ONCE_FINISHED);
     expect([...container.querySelectorAll("button")].some((item) => item.textContent === "Copy")).toBe(true);
   });
 
@@ -211,7 +224,7 @@ describe.each([
   it("keeps it to the first-message step", async () => {
     await show(Component, propsFor(byKey("slack"), { lifecycleMode: "edit", connectionId: "conn-1" }));
     expect(container.querySelector("code")).toBeNull();
-    expect(container.textContent).not.toContain("You get this address");
+    expect(container.textContent).not.toContain(WORKS_ONCE_FINISHED);
   });
 });
 

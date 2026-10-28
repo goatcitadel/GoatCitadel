@@ -6,6 +6,7 @@ import {
   type ChannelStreamRunContext,
 } from "../channel-stream-runtime-service.js";
 import { BoundedResponseReadError, readBoundedResponseJson } from "../bounded-response-reader.js";
+import type { ChannelSecretOwner } from "../channel-secret-resolution.js";
 
 /**
  * Mattermost inbound over the bot's WebSocket (`/api/v4/websocket`).
@@ -30,7 +31,8 @@ export interface MattermostStreamAdapterDeps {
     config: Record<string, unknown>,
     directKey: string,
     envKey: string,
-    catalogId?: string,
+    catalogId: string | undefined,
+    owner: ChannelSecretOwner,
   ): string | undefined;
   isUrlAllowlisted(url: string): boolean;
   createWebSocket(url: string): MattermostWebSocketLike;
@@ -109,10 +111,11 @@ export function createMattermostStreamAdapter(
   options: MattermostStreamAdapterOptions = {},
 ): ChannelStreamAdapter {
   const pingIntervalMs = options.pingIntervalMs ?? MATTERMOST_PING_INTERVAL_MS;
-  function resolveToken(config: Record<string, unknown>): string | undefined {
+  function resolveToken(connection: IntegrationConnection): string | undefined {
+    const { config } = connection;
     return (
-      deps.resolveSecret(config, "botToken", "botTokenEnv", "channel.mattermost") ??
-      deps.resolveSecret(config, "token", "tokenEnv", "channel.mattermost")
+      deps.resolveSecret(config, "botToken", "botTokenEnv", "channel.mattermost", connection) ??
+      deps.resolveSecret(config, "token", "tokenEnv", "channel.mattermost", connection)
     );
   }
 
@@ -220,7 +223,7 @@ export function createMattermostStreamAdapter(
       if (!deps.isUrlAllowlisted(httpSocketUrl) || !deps.isUrlAllowlisted(`${base}/api/v4/users/me`)) {
         throw new ChannelStreamAuthError("Mattermost host is not in the outbound allowlist");
       }
-      const token = resolveToken(config);
+      const token = resolveToken(ctx.connection);
       if (!token) throw new ChannelStreamAuthError("Mattermost bot token could not be resolved");
       const botUserId = await fetchBotUserId(base, token, ctx.signal);
       if (ctx.signal.aborted) return;

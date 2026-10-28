@@ -90,12 +90,12 @@ describe("channel setup definition loop28 tails", () => {
         key: "nextcloud-talk",
         config: {
           baseUrl: "https://nextcloud.local",
-          botSecretEnv: "NEXTCLOUD_BOT_SECRET",
+          botSecretEnv: "NEXTCLOUD_TALK_BOT_SECRET",
           defaultRoomId: "room-1",
         },
         expected: {
           baseUrl: "https://nextcloud.local",
-          tokenEnv: "NEXTCLOUD_BOT_SECRET",
+          tokenEnv: "NEXTCLOUD_TALK_BOT_SECRET",
           defaultRoomId: "room-1",
         },
       },
@@ -139,7 +139,7 @@ describe("channel setup definition loop28 tails", () => {
       },
       {
         catalogId: "channel.nextcloud-talk",
-        draft: { baseUrl: "nextcloud.local", tokenEnv: "NEXTCLOUD_TOKEN" },
+        draft: { baseUrl: "nextcloud.local", tokenEnv: "NEXTCLOUD_TALK_TOKEN" },
         keys: ["baseUrl_malformed", "defaultRoomId_required"],
       },
     ];

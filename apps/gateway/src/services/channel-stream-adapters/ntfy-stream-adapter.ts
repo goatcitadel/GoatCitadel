@@ -4,6 +4,7 @@ import {
   type ChannelStreamAdapter,
   type ChannelStreamRunContext,
 } from "../channel-stream-runtime-service.js";
+import type { ChannelSecretOwner } from "../channel-secret-resolution.js";
 import { readStreamLines } from "./stream-line-reader.js";
 
 /**
@@ -26,7 +27,8 @@ export interface NtfyStreamAdapterDeps {
     config: Record<string, unknown>,
     directKey: string,
     envKey: string,
-    catalogId?: string,
+    catalogId: string | undefined,
+    owner: ChannelSecretOwner,
   ): string | undefined;
   isUrlAllowlisted(url: string): boolean;
 }
@@ -127,7 +129,7 @@ export function createNtfyStreamAdapter(deps: NtfyStreamAdapterDeps): ChannelStr
       if (!deps.isUrlAllowlisted(url)) {
         throw new ChannelStreamAuthError("ntfy host is not in the outbound allowlist");
       }
-      const token = deps.resolveSecret(config, "token", "tokenEnv", "channel.ntfy");
+      const token = deps.resolveSecret(config, "token", "tokenEnv", "channel.ntfy", ctx.connection);
       if (!token) {
         throw new ChannelStreamAuthError("ntfy token could not be resolved");
       }

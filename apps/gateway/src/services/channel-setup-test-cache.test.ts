@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChannelSetupDraft, ChannelSetupTestResult, IntegrationConnection } from "@goatcitadel/contracts";
 import {
   buildChannelSetupRecentTestSignature,
@@ -53,7 +53,10 @@ describe("channel setup recent-test cache", () => {
       testVersion: draft.testVersion,
     });
 
-    expect(reusable).toEqual({ ...result, proofExpiresAt: new Date(Date.parse(result.checkedAt) + 300000).toISOString() });
+    expect(reusable).toEqual({
+      ...result,
+      proofExpiresAt: new Date(Date.parse(result.checkedAt) + 300000).toISOString(),
+    });
     expect(result).not.toHaveProperty("proofExpiresAt");
     expect(cache.size).toBe(1);
   });
@@ -80,7 +83,11 @@ describe("channel setup recent-test cache", () => {
     });
 
     expect(reusable).not.toBe(result);
-    expect(reusable).toEqual({ ...result, draftRevision: draft.revision, proofExpiresAt: new Date(Date.parse(result.checkedAt) + 300000).toISOString() });
+    expect(reusable).toEqual({
+      ...result,
+      draftRevision: draft.revision,
+      proofExpiresAt: new Date(Date.parse(result.checkedAt) + 300000).toISOString(),
+    });
     expect(cache.size).toBe(1);
   });
 
@@ -136,6 +143,33 @@ describe("channel setup recent-test cache", () => {
 
     expect(reusable).toBeUndefined();
     expect(cache.has(draft.draftId)).toBe(true);
+  });
+});
+
+describe("channel setup proof signature reads credentials as the draft's own", () => {
+  it("asks for each secret field as the draft that is being tested, under the connection id it will have", () => {
+    const resolveConnectionSecret = vi.fn(() => "resolved");
+    const create = createDraft();
+    const edit = { ...createDraft(), lifecycleMode: "edit" as const, connectionId: "conn-saved" };
+    const connection = createConnection({ config: { token: "keychain:x", tokenEnv: "SLACK_TOKEN_ENV" } });
+
+    buildChannelSetupRecentTestSignature(create, connection, create.testVersion, {
+      secretFieldKeys: ["token"],
+      resolveConnectionSecret,
+    });
+    buildChannelSetupRecentTestSignature(edit, connection, edit.testVersion, {
+      secretFieldKeys: ["token"],
+      resolveConnectionSecret,
+    });
+
+    expect(resolveConnectionSecret).toHaveBeenNthCalledWith(1, connection.config, "token", "tokenEnv", "slack", {
+      connectionId: "draft-1",
+      draftId: "draft-1",
+    });
+    expect(resolveConnectionSecret).toHaveBeenNthCalledWith(2, connection.config, "token", "tokenEnv", "slack", {
+      connectionId: "conn-saved",
+      draftId: "draft-1",
+    });
   });
 });
 

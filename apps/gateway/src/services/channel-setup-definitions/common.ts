@@ -9,7 +9,9 @@ import type {
   IntegrationCatalogEntry,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
+import { isAllowedSecretEnvName } from "../channel-secret-resolution.js";
 import { isConnectionUrlRemoteSafe } from "../connection-url-helpers.js";
+import { isPermittedIntegrationSecretEnvVarName } from "../gateway/integration-secret-envvar-guard.js";
 import { INTEGRATION_CATALOG } from "../integration-catalog.js";
 
 export interface ChannelSetupRuntimeDefinition {
@@ -376,8 +378,53 @@ const INBOUND_SECRET_ENV_SUFFIXES: Readonly<Record<string, string>> = {
   encodingAesKeyEnv: "_AES_KEY",
 };
 
+/**
+ * Variable-name fields only a webhook reads. No send and no setup check resolves them, so the webhook allowlist is the
+ * only rule on their names. Every other variable-name field is read by the credential guard that sends and the setup
+ * test go through; the ones listed above that are not listed here (Nextcloud Talk, QQBot, WeCom's callback pair) are
+ * read by that guard and by a webhook, and a name must satisfy both.
+ */
+const WEBHOOK_ONLY_SECRET_ENV_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  telegram: ["webhookSecretEnv"],
+  whatsapp: ["appSecretEnv", "webhookVerifyTokenEnv"],
+  line: ["channelSecretEnv"],
+};
+
 function upperSnake(camel: string): string {
   return camel.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toUpperCase();
+}
+
+/** What a channel's variable names start with, before the underscore: the channel key in capitals. */
+export function secretEnvPrefix(channelKey: string): string {
+  return channelKey.toUpperCase().replaceAll("-", "_");
+}
+
+/**
+ * The sentence that says how an inbound webhook secret's variable name must end, or nothing for a field whose name
+ * has no suffix rule. "It" would read as GoatCitadel (the subject of the sentence before), so it names the variable's name.
+ */
+export function secretEnvSuffixRule(channelKey: string, envFieldKey: string): string | undefined {
+  if (!INBOUND_WEBHOOK_SECRET_ENV_FIELDS[channelKey]?.includes(envFieldKey)) return undefined;
+  return `The name must also end in ${INBOUND_SECRET_ENV_SUFFIXES[envFieldKey] ?? "_TOKEN or _SECRET"}.`;
+}
+
+/**
+ * Whether the Gateway would read a variable with this name for this field. It asks the same predicates the readers do:
+ * the credential guard (`isPermittedIntegrationSecretEnvVarName`) for what a send or the setup test reads, and the webhook
+ * allowlist (`isAllowedSecretEnvName`) for what an inbound webhook reads. A field read by both takes only a name both accept.
+ */
+export function secretEnvNameIsReadable(
+  catalogId: string,
+  channelKey: string,
+  envFieldKey: string,
+  name: string,
+): boolean {
+  const readByWebhook = INBOUND_WEBHOOK_SECRET_ENV_FIELDS[channelKey]?.includes(envFieldKey) ?? false;
+  const readOnlyByWebhook = WEBHOOK_ONLY_SECRET_ENV_FIELDS[channelKey]?.includes(envFieldKey) ?? false;
+  return (
+    (readOnlyByWebhook || isPermittedIntegrationSecretEnvVarName(name, catalogId)) &&
+    (!readByWebhook || isAllowedSecretEnvName(name))
+  );
 }
 
 /**
@@ -386,14 +433,11 @@ function upperSnake(camel: string): string {
  * `integration-secret-envvar-guard.ts`. Inbound webhook secrets also name the suffix the Gateway needs.
  */
 export function secretEnvVariableRule(channelKey: string, envFieldKey: string): string {
-  const prefix = channelKey.toUpperCase().replaceAll("-", "_");
+  const prefix = secretEnvPrefix(channelKey);
   const example = `${prefix}_${upperSnake(envFieldKey.replace(/Env$/u, ""))}`;
   const rule = `The variable's name must start with ${prefix}_ (for example ${example}). Set it where GoatCitadel starts, then restart GoatCitadel.`;
-  if (!INBOUND_WEBHOOK_SECRET_ENV_FIELDS[channelKey]?.includes(envFieldKey)) {
-    return rule;
-  }
-  // "It" would read as GoatCitadel (the subject of the sentence before), so the sentence names the variable's name.
-  return `${rule} The name must also end in ${INBOUND_SECRET_ENV_SUFFIXES[envFieldKey] ?? "_TOKEN or _SECRET"}.`;
+  const suffixRule = secretEnvSuffixRule(channelKey, envFieldKey);
+  return suffixRule ? `${rule} ${suffixRule}` : rule;
 }
 
 /** The pasted field's label without the old "(manual fallback)" tag. */

@@ -5,9 +5,10 @@ import { runConfiguredMatrixChecks } from "./matrix-live-probes.js";
 import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.js";
 import { appendQqbotStructuralChecks, runConfiguredQqbotChecks } from "./qqbot-live-probes.js";
 import { appendWecomStructuralChecks, runConfiguredWecomChecks } from "./wecom-live-probes.js";
-import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
+import { describeChannelCapabilities, logger } from "@goatcitadel/gateway-core";
 import {
   GOOGLE_WORKSPACE_CATALOG_ID,
+  channelAddressHost,
   describeRetiredChannel,
   evaluateChannelInboundAccess,
 } from "@goatcitadel/contracts";
@@ -29,12 +30,27 @@ import {
   runZaloBotLiveChecks,
 } from "./channel-bot-live-probes.js";
 import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-diagnostic-checks.js";
+import {
+  isChannelSecretReference,
+  isSecureStorageReference,
+  type ChannelSecretOwner,
+} from "./channel-secret-resolution.js";
 import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
 import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel-config.js";
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import { evaluateHostEgress } from "@goatcitadel/policy-engine";
+import { findChannelSetupDefinition } from "./channel-setup-definitions.js";
+import { secretEnvSuffixRule } from "./channel-setup-definitions/common.js";
+import { connectionFixedHosts } from "./channel-setup-definitions/picker-hints.js";
 import { FORCED_ALLOWLIST_INBOUND_CHANNELS } from "./channel-setup-inbound-access.js";
+import {
+  isPermittedIntegrationSecretEnvVarName,
+  printableEnvVarName,
+  refusedEnvVarNameMessage,
+} from "./gateway/integration-secret-envvar-guard.js";
+
+const log = logger.child("integration-diagnostics");
 
 const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
   "slack",
@@ -63,11 +79,13 @@ export interface IntegrationDiagnosticsPort {
   ): Pick<DiscordRuntimeStatus, "ready" | "lastError" | "connectedBotTag"> | undefined;
   isConnectionUrlAllowlisted(urlValue: string): boolean;
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
+  /** `owner` is the connection the config belongs to: a saved key is read only for the connection that saved it. */
   resolveConnectionSecret(
     config: Record<string, unknown>,
     directKey: string,
     envKey: string,
     catalogId: string,
+    owner: ChannelSecretOwner,
   ): string | undefined;
   /** Google sign-in readiness for a Gmail and Google Calendar connection, read from the OS keychain. */
   getGoogleWorkspaceOAuthStatus?(connectionId: string): Promise<GoogleWorkspaceOAuthStatus>;
@@ -101,15 +119,22 @@ export function buildIntegrationConnectionChecks(
     connection.kind === "channel" ? describeChannelFeatureMetadata(connection.key, config) : undefined;
   const channelCapabilities =
     connection.kind === "channel" ? describeChannelCapabilities(connection.key, config) : undefined;
+  // Presence is decided by the resolver the live probes use, so a variable whose name the Gateway refuses to read does
+  // not pass here and then give a live check with nothing to check. Only names are reported, never a resolved value.
   const requireSecretRef = (key: string, label: string, directKey: string, envKey: string) => {
-    const direct = deps.readConnectionConfigValue(config, directKey);
     const envName = deps.readConnectionConfigValue(config, envKey);
-    const envPresent = envName ? Boolean(process.env[envName]) : false;
+    if (deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId, connection)) {
+      // The name is printed only when the variable is what answered, and only when it has the shape of a name: an old
+      // connection can hold a token in the name field, and a direct value can answer while a stale name sits there.
+      const via = deps.readConnectionConfigValue(config, directKey) ? undefined : printableEnvVarName(envName);
+      checks.push({ key, status: "pass", message: `${label} is configured${via ? ` via ${via}` : ""}.` });
+      return;
+    }
+    const refused = envName !== undefined && !isPermittedIntegrationSecretEnvVarName(envName, connection.catalogId);
     checks.push({
       key,
-      status: direct || envPresent ? "pass" : "fail",
-      message:
-        direct || envPresent ? `${label} is configured${envName ? ` via ${envName}` : ""}.` : `${label} is missing.`,
+      status: "fail",
+      message: refused ? refusedVariableNameMessage(connection, envKey) : `${label} is missing.`,
     });
   };
   const requireText = (key: string, label: string, value: string | undefined, status: "warn" | "fail" = "fail") => {
@@ -119,9 +144,15 @@ export function buildIntegrationConnectionChecks(
       message: value ? `${label} is set.` : `${label} is missing.`,
     });
   };
+  // The hosts of the addresses `checkUrl` has reported on, so the provider hosts check doesn't report them twice.
+  const addressHosts = new Set<string>();
   const checkUrl = (key: string, label: string, urlValue: string | undefined, required = false) => {
     if (!urlValue && !required) {
       return;
+    }
+    const addressHost = channelAddressHost(urlValue);
+    if (addressHost) {
+      addressHosts.add(addressHost);
     }
     const safeRemote = !urlValue || connectionUrlHelpers.isConnectionUrlRemoteSafe(urlValue);
     const allowlisted = !urlValue || deps.isConnectionUrlAllowlisted(urlValue);
@@ -133,9 +164,24 @@ export function buildIntegrationConnectionChecks(
         : !safeRemote
           ? `${label} uses non-local plain HTTP.`
           : allowlisted
-            ? `${label} is reachable under current allowlist posture.`
+            ? `${label} host is on the network allowlist.`
             : `${label} host is not in the current outbound allowlist.`,
     });
+  };
+  // A pasted webhook address is a secret: it is kept in secure storage and the config holds a reference to it. The
+  // address check reads the address that a channel reference points to, for this connection only. Any other reference
+  // (or one that gives no address) is a missing address, never an insecure one, and the check then runs as required
+  // even when the channel's webhook is optional: a saved address that can't be read must not pass silently. Only the
+  // check sees the address; nothing here reports it.
+  const checkSavedAddress = (key: string, label: string, field: string, required: boolean) => {
+    const value = deps.readConnectionConfigValue(config, field);
+    const wasReference = value !== undefined && isSecureStorageReference(value);
+    const address = !wasReference
+      ? value
+      : isChannelSecretReference(value)
+        ? deps.resolveConnectionSecret(config, field, `${field}Env`, connection.catalogId, connection)
+        : undefined;
+    checkUrl(key, label, address, required || wasReference);
   };
 
   // Check for "*" wildcard in any connection-level allowlist configuration fields
@@ -196,8 +242,12 @@ export function buildIntegrationConnectionChecks(
     }
     switch (connection.key) {
       case "slack": {
+        // The legacy `token` / `tokenEnv` pair is a bot token too: Slack's sends read it after `botToken`.
         const slackBotToken = Boolean(
-          deps.readConnectionConfigValue(config, "botToken") || hasConnectionEnvValue(deps, config, "botTokenEnv"),
+          deps.readConnectionConfigValue(config, "botToken") ||
+          hasConnectionEnvValue(deps, connection, "botTokenEnv") ||
+          deps.readConnectionConfigValue(config, "token") ||
+          hasConnectionEnvValue(deps, connection, "tokenEnv"),
         );
         const slackAuthSet = slackBotToken || Boolean(deps.readConnectionConfigValue(config, "webhookUrl"));
         checks.push({
@@ -207,7 +257,7 @@ export function buildIntegrationConnectionChecks(
             ? "Slack bot token or webhook is configured."
             : "Slack bot token or webhook is missing.",
         });
-        checkUrl("url", "Slack webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), false);
+        checkSavedAddress("url", "Slack webhook URL", "webhookUrl", false);
         // An incoming webhook posts to the one channel it was made for, so only a bot token needs a default channel.
         if (slackBotToken) {
           requireText("target", "Default Slack channel", resolveChannelConfigTarget(connection.key, config), "warn");
@@ -220,17 +270,17 @@ export function buildIntegrationConnectionChecks(
           status:
             deps.readConnectionConfigValue(config, "webhookUrl") ||
             deps.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(deps, config, "botTokenEnv")
+            hasConnectionEnvValue(deps, connection, "botTokenEnv")
               ? "pass"
               : "fail",
           message:
             deps.readConnectionConfigValue(config, "webhookUrl") ||
             deps.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(deps, config, "botTokenEnv")
+            hasConnectionEnvValue(deps, connection, "botTokenEnv")
               ? "Discord bot token or webhook is configured."
               : "Discord bot token or webhook is missing.",
         });
-        checkUrl("url", "Discord webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), false);
+        checkSavedAddress("url", "Discord webhook URL", "webhookUrl", false);
         requireText("target", "Default Discord channel", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
       case "telegram":
@@ -281,16 +331,11 @@ export function buildIntegrationConnectionChecks(
           );
           break;
         }
-        checkUrl("url", "Google Chat webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), true);
-        requireText(
-          "target",
-          "Default Google Chat thread key",
-          resolveChannelConfigTarget(connection.key, config),
-          "warn",
-        );
+        // An incoming webhook is already bound to its space, and its thread key is optional, so nothing asks for one.
+        checkSavedAddress("url", "Google Chat webhook URL", "webhookUrl", true);
         break;
       case "teams":
-        checkUrl("url", "Teams webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), true);
+        checkSavedAddress("url", "Teams webhook URL", "webhookUrl", true);
         break;
       case "whatsapp":
         requireSecretRef("auth", "WhatsApp access token", "accessToken", "accessTokenEnv");
@@ -367,19 +412,23 @@ export function buildIntegrationConnectionChecks(
         requireSecretRef("auth", "Channel token", "token", "tokenEnv");
         break;
     }
+    const providerHosts = buildProviderHostsCheck(deps, connection, addressHosts);
+    if (providerHosts) {
+      checks.push(providerHosts);
+    }
   } else if (connection.kind === "model_provider") {
     checkUrl("url", "Provider base URL", deps.readConnectionConfigValue(config, "baseUrl"), true);
     requireText("target", "Default model", deps.readConnectionConfigValue(config, "model"), "warn");
     const isLocal = connectionUrlHelpers.isConnectionValueLocalUrl(deps.readConnectionConfigValue(config, "baseUrl"));
+    // No resolver reads a model provider connection's key variable, and its form suggests the provider's own variable
+    // (OPENAI_API_KEY), which the credential guard forbids. So this one stays a plain check that the variable is set.
+    const apiKeySet = deps.readConnectionConfigValue(config, "apiKey") || hasProcessEnvValue(deps, config, "apiKeyEnv");
     checks.push({
       key: "auth",
-      status:
-        isLocal || deps.readConnectionConfigValue(config, "apiKey") || hasConnectionEnvValue(deps, config, "apiKeyEnv")
-          ? "pass"
-          : "fail",
+      status: isLocal || apiKeySet ? "pass" : "fail",
       message: isLocal
         ? "Local model endpoint does not require an API key."
-        : deps.readConnectionConfigValue(config, "apiKey") || hasConnectionEnvValue(deps, config, "apiKeyEnv")
+        : apiKeySet
           ? "API key is configured."
           : "API key is missing.",
     });
@@ -395,11 +444,11 @@ export function buildIntegrationConnectionChecks(
       checks.push({
         key: "auth",
         status:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv") || deps.readConnectionConfigValue(config, "apiKey")
+          hasConnectionEnvValue(deps, connection, "apiKeyEnv") || deps.readConnectionConfigValue(config, "apiKey")
             ? "pass"
             : "fail",
         message:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv") || deps.readConnectionConfigValue(config, "apiKey")
+          hasConnectionEnvValue(deps, connection, "apiKeyEnv") || deps.readConnectionConfigValue(config, "apiKey")
             ? "GIF search API key is configured."
             : "GIF search API key is missing.",
       });
@@ -413,12 +462,13 @@ export function buildIntegrationConnectionChecks(
         status:
           connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl) ||
           deps.readConnectionConfigValue(config, "authToken") ||
-          hasConnectionEnvValue(deps, config, "authTokenEnv")
+          hasConnectionEnvValue(deps, connection, "authTokenEnv")
             ? "pass"
             : "warn",
         message: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl)
           ? "Local bridge URL is configured."
-          : deps.readConnectionConfigValue(config, "authToken") || hasConnectionEnvValue(deps, config, "authTokenEnv")
+          : deps.readConnectionConfigValue(config, "authToken") ||
+              hasConnectionEnvValue(deps, connection, "authTokenEnv")
             ? "Remote bridge authentication is configured."
             : "Remote bridge authentication is not configured.",
       });
@@ -428,11 +478,11 @@ export function buildIntegrationConnectionChecks(
       checks.push({
         key: "auth",
         status:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv") && hasConnectionEnvValue(deps, config, "tokenEnv")
+          hasConnectionEnvValue(deps, connection, "apiKeyEnv") && hasConnectionEnvValue(deps, connection, "tokenEnv")
             ? "pass"
             : "fail",
         message:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv") && hasConnectionEnvValue(deps, config, "tokenEnv")
+          hasConnectionEnvValue(deps, connection, "apiKeyEnv") && hasConnectionEnvValue(deps, connection, "tokenEnv")
             ? "Trello API credentials are configured."
             : "Trello API credentials are missing.",
       });
@@ -612,7 +662,7 @@ export async function runIntegrationConnectionLiveChecks(
   }
   const config = connection.config;
   const resolveSecret = (directKey: string, envKey: string) =>
-    deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId);
+    deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId, connection);
   switch (connection.key) {
     case "slack": {
       const token = resolveSecret("botToken", "botTokenEnv") ?? resolveSecret("token", "tokenEnv");
@@ -704,7 +754,7 @@ export async function runIntegrationConnectionLiveChecks(
               key: "google_chat_app_live_send",
               status: "warn",
               message:
-                "Chat app (service-account) mode can't send a test message. Message the app from an allowed sender and confirm its reply in Google Chat.",
+                "GoatCitadel can't send a test message in Chat app mode. After you finish, message the app from an allowed sender and check that it replies.",
             },
           ],
         };
@@ -790,8 +840,23 @@ function readBoolean(value: unknown): boolean {
   return value === true || (typeof value === "string" && value.trim().toLowerCase() === "true");
 }
 
+/**
+ * Whether the variable the config names under `key` can be read: it asks the resolver the live probes use, with only
+ * that variable's name, so a name the Gateway refuses counts as missing and a direct value never answers for it.
+ */
 function hasConnectionEnvValue(
   deps: IntegrationDiagnosticsPort,
+  connection: IntegrationConnection,
+  key: string,
+): boolean {
+  const envName = deps.readConnectionConfigValue(connection.config, key);
+  if (!envName) return false;
+  return Boolean(deps.resolveConnectionSecret({ [key]: envName }, "", key, connection.catalogId, connection)?.trim());
+}
+
+/** Whether the variable the config names under `key` is set, whatever its name. Only for a field no resolver reads. */
+function hasProcessEnvValue(
+  deps: Pick<IntegrationDiagnosticsPort, "readConnectionConfigValue">,
   config: Record<string, unknown>,
   key: string,
 ): boolean {
@@ -799,8 +864,73 @@ function hasConnectionEnvValue(
   return Boolean(envName && process.env[envName]?.trim());
 }
 
+/** What to tell the operator about a variable name the Gateway will not read, from the same rule the setup guide gives. */
+function refusedVariableNameMessage(
+  connection: Pick<IntegrationConnection, "catalogId" | "key">,
+  envKey: string,
+): string {
+  const rule = refusedEnvVarNameMessage(connection.catalogId);
+  const suffixRule = secretEnvSuffixRule(connection.key, envKey);
+  return suffixRule ? `${rule} ${suffixRule}` : rule;
+}
+
 function isHostAllowlisted(deps: IntegrationDiagnosticsPort, hostname: string): boolean {
   return connectionUrlHelpers.isHostAllowlistedInList(hostname, deps.config.toolPolicy.sandbox.networkAllowlist);
+}
+
+/** "a", "a and b", "a, b and c". */
+function listHosts(hosts: readonly string[]): string {
+  return hosts.length > 1 ? `${hosts.slice(0, -1).join(", ")} and ${hosts[hosts.length - 1]}` : (hosts[0] ?? "");
+}
+
+/**
+ * Whether the network allowlist has the fixed provider hosts a real send to this channel needs. The setup test reaches
+ * the provider through a fetcher that allows any public host, so without this check it passes and then the first real
+ * send is blocked. The hosts are the ones the guide's "Allow these hosts" button adds for this connection
+ * (`connectionFixedHosts`), so one click clears the warning. A host the operator gave as an address is left to the
+ * address check (`reportedAddressHosts`: a Discord webhook is on discord.com, which is also Discord's fixed host), and
+ * Telegram keeps its own check on `api.telegram.org`.
+ */
+function buildProviderHostsCheck(
+  deps: IntegrationDiagnosticsPort,
+  connection: IntegrationConnection,
+  reportedAddressHosts: ReadonlySet<string>,
+): ConnectorDiagnosticReport["checks"][number] | undefined {
+  if (connection.key === "telegram") {
+    return undefined;
+  }
+  const runtime = findChannelSetupDefinition(connection.catalogId);
+  if (!runtime) {
+    return undefined;
+  }
+  let fixedHosts: string[];
+  try {
+    fixedHosts = connectionFixedHosts(runtime, connection);
+  } catch {
+    // The guide's own read of this connection failed. That must not take down every other check, so the hosts check is
+    // left out. The error is dropped (it could hold part of the config); the catalog id is enough to find the guide.
+    log.warn("Could not work out a channel's provider hosts, so the provider hosts check was left out.", {
+      catalogId: connection.catalogId,
+    });
+    return undefined;
+  }
+  const hosts = fixedHosts.filter((host) => !reportedAddressHosts.has(host));
+  if (hosts.length === 0) {
+    return undefined;
+  }
+  const missing = hosts.filter((host) => !isHostAllowlisted(deps, host));
+  if (missing.length === 0) {
+    return {
+      key: "provider_hosts",
+      status: "pass",
+      message: `Provider ${hosts.length === 1 ? "host" : "hosts"} ${listHosts(hosts)} ${hosts.length === 1 ? "is" : "are"} on the network allowlist.`,
+    };
+  }
+  return {
+    key: "provider_hosts",
+    status: "warn",
+    message: `Real sends need ${listHosts(missing)} on the network allowlist. Use Allow these hosts in the guide, or add ${missing.length === 1 ? "it" : "them"} in Settings.`,
+  };
 }
 
 /**

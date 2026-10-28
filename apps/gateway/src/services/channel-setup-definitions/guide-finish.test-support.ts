@@ -19,6 +19,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { requireChannelSetupDefinition } from "../channel-setup-definitions.js";
 import { evaluateChannelSetupEligibility } from "../channel-setup-eligibility.js";
+import { isPermittedIntegrationSecretEnvVarName } from "../gateway/integration-secret-envvar-guard.js";
 import {
   buildIntegrationConnectionChecks,
   runIntegrationConnectionLiveChecks,
@@ -32,6 +33,11 @@ const TIMESTAMP = "2026-03-29T00:00:00.000Z";
 export interface GuideFinishOptions {
   /** The fake network. Without it every request is answered with 200 and `{}`. */
   fetch?: IntegrationDiagnosticsPort["fetchWithDiagnosticsTimeout"];
+  /**
+   * The Gateway's network allowlist. Without it, every fixed host the guide lists for the channel is allowed, as the
+   * "Allow these hosts" button leaves it; a test of the hosts check passes the list it wants.
+   */
+  networkAllowlist?: string[];
 }
 
 /** Whether the wizard counts a value as filled in (`hasFieldValue`, without the saved-secret state). */
@@ -89,8 +95,10 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
   }
 
   /**
-   * What Continue would still ask for, as the labels the person sees, step by step: the visible required fields, then
-   * each "any of" group by the labels of its fields. A key with no field is not named, and a label is named once.
+   * What Continue would still ask for, as the labels the person sees, step by step: the visible required fields (one
+   * that is required only with another field is asked for only while that field is filled), then
+   * each "any of" group by the labels of its visible fields, the pasted field alone for a paste-or-variable pair (the
+   * message operators see). A key with no field is not named, and a label is named once.
    * Setup-only steps are skipped when a saved connection is changed.
    */
   function continueBlockers(
@@ -108,22 +116,45 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
     const filled = (key: string) => isFilled(effective[key]);
     const holds = (condition: { fieldKey: string; value: unknown } | undefined) =>
       !condition || effective[condition.fieldKey] === condition.value;
+    // Mission Control's rule (alternativeLabels): only visible fields are named, and a variable field is left out when
+    // its pasted twin is offered too. A key with no field is not named, and a label is named once.
+    const alternativeLabels = (group: readonly string[]): string[] => {
+      const offered = group.flatMap((key) => {
+        const field = allFields.find((candidate) => candidate.key === key);
+        return field && holds(field.visibleWhenFieldEquals) ? [field] : [];
+      });
+      const offeredKeys = new Set(offered.map((field) => field.key));
+      const named = offered.filter((field) => !(field.key.endsWith("Env") && offeredKeys.has(field.key.slice(0, -3))));
+      return [...new Set(named.map((field) => field.label))];
+    };
     return steps.flatMap((step) => {
       if (!holds(step.visibleWhenFieldEquals)) return [];
       if (lifecycleMode !== "create" && step.createOnly) return [];
       const missingFields = (step.fields ?? [])
-        .filter((field) => holds(field.visibleWhenFieldEquals) && field.required && !filled(field.key))
+        .filter(
+          (field) =>
+            holds(field.visibleWhenFieldEquals) &&
+            field.required &&
+            (!field.requiredWhenAnyFieldSet || field.requiredWhenAnyFieldSet.some(filled)) &&
+            !filled(field.key),
+        )
         .map((field) => field.label);
       const missingGroups = (step.requiredAnyOf ?? [])
         .filter((group) => !group.some(filled))
-        .map((group) => [...new Set(group.flatMap((key) => allFields.find((field) => field.key === key)?.label ?? []))])
+        .map((group) => alternativeLabels(group))
         .filter((labels) => labels.length > 0)
         .map((labels) => labels.join(" or "));
       return [...missingFields, ...missingGroups];
     });
   }
 
-  /** The Gateway's diagnostics port with a fake network and every host allowed. */
+  /** The fixed hosts the guide lists for the channel, whatever the mode: the allowlist a finished setup has. */
+  function fixedHosts(): string[] {
+    const { requiredHosts = [], conditionalHosts = [] } = runtime().definition.wizard;
+    return [...new Set([...requiredHosts, ...conditionalHosts.map((rule) => rule.host)])];
+  }
+
+  /** The Gateway's diagnostics port with a fake network, the fixed hosts allowed and every address allowed. */
   function port(): IntegrationDiagnosticsPort {
     const readString = (values: Record<string, unknown>, key: string) => {
       const value = values[key];
@@ -131,7 +162,10 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
     };
     return {
       config: {
-        toolPolicy: { tools: { profile: "default" }, sandbox: { networkAllowlist: [] } },
+        toolPolicy: {
+          tools: { profile: "default" },
+          sandbox: { networkAllowlist: [...(options.networkAllowlist ?? fixedHosts())] },
+        },
       } as unknown as IntegrationDiagnosticsPort["config"],
       fetchWithDiagnosticsTimeout: vi.fn(
         options.fetch ?? (async () => new Response("{}", { status: 200 })),
@@ -139,7 +173,13 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
       getDiscordRuntimeStatus: vi.fn(() => undefined),
       isConnectionUrlAllowlisted: vi.fn(() => true),
       readConnectionConfigValue: vi.fn(readString),
-      resolveConnectionSecret: vi.fn(readString),
+      // Like GatewayService.resolveConnectionSecret: the direct value, else the variable the config names, if the guard permits that name.
+      resolveConnectionSecret: vi.fn((values, directKey, envKey, catalogId) => {
+        const direct = readString(values, directKey)?.trim();
+        if (direct) return direct;
+        const envName = readString(values, envKey)?.trim();
+        return envName && isPermittedIntegrationSecretEnvVarName(envName, catalogId) ? process.env[envName] : undefined;
+      }),
     };
   }
 

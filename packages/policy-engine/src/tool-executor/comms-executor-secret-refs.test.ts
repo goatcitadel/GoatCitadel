@@ -108,7 +108,9 @@ describe("comms sends use this connection's saved keys", () => {
       accessToken: ZALO_REF,
       defaultRecipientId: "123",
     });
-    const resolveChannelConnectionSecret = vi.fn((ref: string) => (ref === ZALO_REF ? REAL_TOKEN : undefined));
+    const resolveChannelConnectionSecret = vi.fn((_connectionId: string, ref: string) =>
+      ref === ZALO_REF ? REAL_TOKEN : undefined,
+    );
 
     const result = await executeCommsTool(channelSend(), policyConfig(["openapi.zalo.me"]), storage, undefined, {
       resolveChannelConnectionSecret,
@@ -116,7 +118,8 @@ describe("comms sends use this connection's saved keys", () => {
 
     expect(result).toMatchObject({ status: "sent", deliveryStatus: "sent", providerMessageId: "zalo-msg-1" });
     expect(resolveChannelConnectionSecret).toHaveBeenCalledTimes(1);
-    expect(resolveChannelConnectionSecret).toHaveBeenCalledWith(ZALO_REF);
+    // The read is told which connection the send is for, so it can refuse a key saved for another one.
+    expect(resolveChannelConnectionSecret).toHaveBeenCalledWith("conn-1", ZALO_REF);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe("https://openapi.zalo.me/v3.0/oa/message/cs");
     expect(calls[0]?.headers.access_token).toBe(REAL_TOKEN);
@@ -132,7 +135,7 @@ describe("comms sends use this connection's saved keys", () => {
     const { storage } = createChannelStorage("telegram", { botToken: TELEGRAM_REF, defaultChatId: "555" });
 
     const result = await executeCommsTool(channelSend(), policyConfig(["api.telegram.org"]), storage, undefined, {
-      resolveChannelConnectionSecret: (ref) => (ref === TELEGRAM_REF ? REAL_TOKEN : undefined),
+      resolveChannelConnectionSecret: (_connectionId, ref) => (ref === TELEGRAM_REF ? REAL_TOKEN : undefined),
     });
 
     expect(result).toMatchObject({ status: "sent", deliveryStatus: "sent" });
@@ -253,7 +256,7 @@ describe("comms sends use this connection's saved keys", () => {
       resolveChannelConnectionSecret,
     });
 
-    expect(resolveChannelConnectionSecret).not.toHaveBeenCalledWith(foreignRef);
+    expect(resolveChannelConnectionSecret).not.toHaveBeenCalledWith(expect.anything(), foreignRef);
     expect(result).toMatchObject({ status: "failed" });
     expect(calls).toHaveLength(0);
   });
@@ -365,7 +368,7 @@ describe("a stored key that cannot be sent safely", () => {
       policyConfig(["chat.googleapis.com", "oauth2.googleapis.com"]),
       storage,
       undefined,
-      { resolveChannelConnectionSecret: (ref) => (ref === keyRef ? prettyKey : undefined) },
+      { resolveChannelConnectionSecret: (_connectionId, ref) => (ref === keyRef ? prettyKey : undefined) },
     );
 
     expect(result).toMatchObject({ status: "sent" });
@@ -385,7 +388,9 @@ describe("every Telegram call that carries the bot token uses the stored key", (
       botToken: TELEGRAM_REF,
       defaultChatId: "555",
     });
-    const resolveChannelConnectionSecret = vi.fn((ref: string) => (ref === TELEGRAM_REF ? REAL_TOKEN : undefined));
+    const resolveChannelConnectionSecret = vi.fn((_connectionId: string, ref: string) =>
+      ref === TELEGRAM_REF ? REAL_TOKEN : undefined,
+    );
 
     const result = await executeCommsTool(
       channelRequest(toolName, args),
@@ -396,7 +401,7 @@ describe("every Telegram call that carries the bot token uses the stored key", (
     );
 
     expect(result).toMatchObject({ status: "sent", deliveryStatus: "sent", providerMessageId: "1001" });
-    expect(resolveChannelConnectionSecret).toHaveBeenCalledWith(TELEGRAM_REF);
+    expect(resolveChannelConnectionSecret).toHaveBeenCalledWith("conn-1", TELEGRAM_REF);
     expect(calls).toHaveLength(1);
     expect(new URL(calls[0]?.url ?? "").pathname).toBe(`/bot${REAL_TOKEN}/${method}`);
     expect(JSON.parse(calls[0]?.body ?? "{}")).toMatchObject({ chat_id: "555", message_id: 1001 });

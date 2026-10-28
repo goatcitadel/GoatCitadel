@@ -1,8 +1,9 @@
 import type { ChannelSetupJourney, ConnectorDiagnosticReport } from "@goatcitadel/contracts";
+import { plainCheckName } from "../diagnostic-check-names";
 const timestamp = (value?: string, fallback = "Not observed") =>
   value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : fallback;
 /** A check key as plain words. Keys such as `slack_sandbox_send` are stored contracts, so only the display changes. */
-const checkName = (key: string) => key.replaceAll("_sandbox_", "_test_").replaceAll("_", " ");
+const checkName = (key: string) => plainCheckName(key) ?? key.replaceAll("_sandbox_", "_test_").replaceAll("_", " ");
 const stateLabel = {
   verified: "Verified",
   pending: "Pending",

@@ -4,13 +4,34 @@ All notable changes to GoatCitadel are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Channel setup warns when a channel's provider hosts aren't allowed on the network.
+- A new connection's webhook address shows before Finalize.
+- The diagnostic for a dropped message names the sender.
+- Google Chat can finish setup in webhook mode without a thread key, and in Chat app mode with a note that no test message is sent.
+
+### Changed
+
+- Slack setups that only use an incoming webhook no longer need slack.com.
+- A saved connection whose variable name breaks the channel's rule stops sending until you rename it. The setup check says how.
+- The guides' content version changed, so a setup test run before this update runs again.
+
 ### Removed
 
-- The Signal (`channel.signal`) and iMessage (`channel.imessage`) channels, with the `signal.send`, `imessage.send`, `imessage.react` and `imessage.unsend` tools, the Signal event-stream inbound and both typing indicators. Signal sent through signal-cli and iMessage through a BlueBubbles server. Both are unofficial clients, and that kind of client can get the account banned. A saved Signal or iMessage connection stays listed so you can delete it. Sends, reactions and unsends through it are refused with that reason. Typing reports that the channel doesn't advertise typing, and a delivery queued for it fails because the connection is disabled. Approval deliveries to it are turned off, and its approval status gives that reason. It no longer receives messages or runs live probes.
+- The Signal (`channel.signal`) and iMessage (`channel.imessage`) channels, with the `signal.send`, `imessage.send`, `imessage.react` and `imessage.unsend` tools, the Signal event-stream inbound and both typing indicators. Signal sent through signal-cli and iMessage through a BlueBubbles server. Both are unofficial clients, and that kind of client can get the account banned. A saved Signal or iMessage connection stays listed so you can delete it. Sends, reactions and unsends through it are refused with that reason. Typing reports that the channel doesn't advertise typing, and a delivery queued for it fails with that reason. Approval deliveries to it are turned off, and its approval status gives that reason. It no longer receives messages or runs live probes.
 - The Zalo Personal channel (`channel.zalouser`) and its `zalouser.send` tool. It sent through an unofficial personal-account client (a zca bridge), and that kind of client can get the account banned. A saved Zalo Personal connection stays listed so you can delete it, but sends, approval deliveries and live probes through it are refused with that reason. Zalo OA (`channel.zalo`) is the supported Zalo channel.
+
+### Fixed
+
+- Editing a channel keeps its saved key. Google Chat and the webhook channels asked for it again.
+- The Discord bot logs in with its saved token, not its secure-storage reference.
+- Retired channels (Signal, iMessage, Zalo Personal) show as retired everywhere, and deliveries to them fail with the retired reason.
 
 ### Security
 
+- Channel sends (and SMTP) read a variable only when its name matches the channel's rule, and a refused name fails the send.
+- A saved key is only read for the connection or draft that owns it. Any other secure-storage reference gives no key and is never sent.
 - The example tool policies (`config/tool-policy.example.json` and `config/goatcitadel.example.json`) now also deny `fs.patch` and `shell.exec_background`. Deny patterns match tool names exactly, so denying `fs.write` and `shell.exec` never covered these sibling tools. Operators who copied an earlier example should add both entries to `tools.deny` in their own config if they want the same posture.
 - `shell.exec_background` now raises the same approval request as `shell.exec` when a command matches `sandbox.riskyShellPatterns`. Before, the risk check ran only at execution time and failed without creating an approval.
 - Chat guidance for a tool blocked by `tools.deny`, the allow list or permission profile, a Citadel Ward, or the write roots now names the operator setting to change (for example `tools.deny` or `sandbox.operatorWriteRoots`). It no longer suggests retrying with narrower input or writing to a fallback path.

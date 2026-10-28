@@ -548,7 +548,12 @@ describe("matrix stream adapter", () => {
     await runtime.sync();
     await vi.waitFor(() =>
       expect(recordDevDiagnostic).toHaveBeenCalledWith(
-        expect.objectContaining({ event: "channel.sender_not_allowlisted" }),
+        expect.objectContaining({
+          event: "channel.sender_not_allowlisted",
+          message: expect.stringMatching(
+            /^Dropped a Matrix message from @\S+:example\.test: that sender isn't allowed yet\. To allow them, add @\S+:example\.test under Who may message this bot\.$/,
+          ),
+        }),
       ),
     );
     await runtime.close();

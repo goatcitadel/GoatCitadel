@@ -390,6 +390,49 @@ describe("ChannelVoiceInboundService — slack", () => {
     expect(transcribeVoice).toHaveBeenCalledWith(expect.objectContaining({ mimeType: "audio/webm" }));
   });
 
+  it("reads the bot token as the connection the voice message arrived on, and passes no key of another", async () => {
+    const owner = { connectionId: "conn-slack" };
+    const resolveConnectionSecret = vi.fn((config: Record<string, unknown>, directKey: string) =>
+      // Stands in for the Gateway's shared read: only this connection's own reference gives a key.
+      config[directKey] === "keychain:goatcitadel:channel-connection:conn-slack:botToken:n1"
+        ? "xoxb-own-key"
+        : undefined,
+    );
+    const { service, fetchWithTimeout } = createService({ resolveConnectionSecret });
+    fetchWithTimeout.mockResolvedValueOnce(bytesResponse(OGG_BYTES));
+    const request = (botToken: string) => ({
+      channel: "slack" as const,
+      connectionConfig: { botToken },
+      fileId: "F0VOICE01",
+      downloadUrl: SLACK_URL,
+      mimeType: "audio/webm",
+    });
+
+    const foreign = await service.transcribe(
+      request("keychain:goatcitadel:channel-connection:conn-other:botToken:n2"),
+      owner,
+    );
+    expect(foreign).toMatchObject({ ok: false, reason: "missing_credentials" });
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+
+    const own = await service.transcribe(
+      request("keychain:goatcitadel:channel-connection:conn-slack:botToken:n1"),
+      owner,
+    );
+    expect(own).toEqual({ ok: true, transcript: "hello from voice" });
+    expect(resolveConnectionSecret).toHaveBeenCalledWith(
+      expect.anything(),
+      "botToken",
+      "botTokenEnv",
+      "channel.slack",
+      owner,
+    );
+    expect(fetchWithTimeout).toHaveBeenCalledWith(
+      SLACK_URL,
+      expect.objectContaining({ headers: { Authorization: "Bearer xoxb-own-key" } }),
+    );
+  });
+
   it("refuses a non-Slack download host without sending the token anywhere", async () => {
     const { service, fetchWithTimeout } = createService();
     for (const downloadUrl of [

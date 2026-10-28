@@ -7,10 +7,21 @@ import type {
 
 /** Optional default-target config key per channel: its absence only defers the target warning. */
 const OPTIONAL_DEFAULT_TARGET_KEYS: Readonly<Record<string, string>> = {
+  // Chat app mode only. An incoming webhook is bound to its space and raises no target warning at all.
+  "google-chat": "defaultSpace",
   matrix: "defaultRoomId",
   qqbot: "defaultTarget",
   wecom: "defaultTarget",
 };
+
+/**
+ * Channel-scoped warnings that have no probe step behind them, because GoatCitadel has no check it can run there.
+ * They tell the person what to verify by hand after finishing and never gate setup. The same warning from any
+ * other channel stays blocking.
+ */
+const NON_BLOCKING_ADVISORY_WARN_ISSUES: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["google-chat", new Set(["google_chat_app_live_send"])],
+]);
 
 /** Advisory probe warnings that describe an optional capability (WeCom inbound) and never gate setup. */
 const NON_BLOCKING_ADVISORY_WARN_STEPS: ReadonlySet<string> = new Set(["wecom_callback", "qqbot_bot"]);
@@ -66,6 +77,10 @@ export function evaluateChannelSetupEligibility(
       issue.level !== "error"
     ) {
       issue.disposition = "deferred";
+      continue;
+    }
+    if (issue.level !== "error" && NON_BLOCKING_ADVISORY_WARN_ISSUES.get(connection.key)?.has(issue.key)) {
+      issue.disposition = "advisory";
       continue;
     }
     const step = result.probe?.steps.find((candidate) => candidate.key === issue.key);

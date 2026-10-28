@@ -386,7 +386,12 @@ describe("mattermost stream adapter", () => {
     socket.push(posted(post()));
     await vi.waitFor(() =>
       expect(recordDevDiagnostic).toHaveBeenCalledWith(
-        expect.objectContaining({ event: "channel.sender_not_allowlisted" }),
+        expect.objectContaining({
+          event: "channel.sender_not_allowlisted",
+          message: expect.stringMatching(
+            /^Dropped a Mattermost message from \S+: that sender isn't allowed yet\. To allow them, add \S+ under Who may message this bot\.$/,
+          ),
+        }),
       ),
     );
     await runtime.close();

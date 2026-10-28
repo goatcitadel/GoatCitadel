@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { ToolPolicyEngine } from "./engine.js";
+import { channelEnvSecretStandIn } from "./tool-executor/channel-env-secret.test-support.js";
 
 let storage: AsyncStorage;
 let directory: string;
@@ -80,7 +81,14 @@ async function fixture(options: { homeserverUrl?: string } = {}) {
   vi.stubGlobal("fetch", fetch);
   const readGrant = async () =>
     (await storage.toolGrants.list("workspace", workspace.workspaceId)).find((item) => item.grantId === grant.grantId);
-  return { grant, connection, request, fetch, readGrant, engine: new ToolPolicyEngine(config, storage) };
+  return {
+    grant,
+    connection,
+    request,
+    fetch,
+    readGrant,
+    engine: new ToolPolicyEngine(config, storage, undefined, { resolveChannelEnvSecret: channelEnvSecretStandIn }),
+  };
 }
 
 describe("canonical Matrix homeserver host constraints", () => {

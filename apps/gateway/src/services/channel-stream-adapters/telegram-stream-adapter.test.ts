@@ -460,6 +460,8 @@ describe("telegram stream adapter", () => {
       "botToken",
       "botTokenEnv",
       "channel.telegram",
+      // The stream reads the key as the connection that holds the config.
+      missing.ctx().connection,
     );
 
     const malformed = harness({ token: "not-a-bot-key" });

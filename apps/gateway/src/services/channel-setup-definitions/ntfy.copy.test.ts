@@ -91,7 +91,7 @@ describe("ntfy setup guide: what it says up front (items 1, 3, 7, R49)", () => {
 
   it("asks for the test notification only when something was sent: with dry run on the probe sends nothing (R49)", () => {
     expect(paragraphs("first-message")).toEqual([
-      "If dry run is off, check the test notification arrived. If dry run is on, nothing was sent: turn it off in Edit setup and test again. To receive: post to the subscribe topic from another device and check the reply.",
+      'If dry run is off, check the test notification arrived. If dry run is on, nothing was sent: turn it off in Edit setup and test again. To receive: post to the subscribe topic from another device and check the reply. If the bot doesn\'t answer your message, open System › Diagnostics, find "Dropped a ntfy message from …", and add that id under Who may message this bot with Edit setup.',
     ]);
   });
 
@@ -365,7 +365,7 @@ describe("ntfy setup guide: receiving and dry run (items 3, 5, 6, A7, A8)", () =
     const senders = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(senders?.explanation).toBe(
-      "Added for you as ntfy-topic:<subscribe topic>. If you change the topic later, change this too.",
+      'Added for you as ntfy-topic:<subscribe topic>. If you change the topic later, change this too. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
     );
   });
 

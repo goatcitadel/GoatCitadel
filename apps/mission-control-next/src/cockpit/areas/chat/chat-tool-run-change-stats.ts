@@ -99,8 +99,15 @@ export function toolRunLineChanges(run: ChatToolRunRecord): LineChangeStats | un
   return undefined;
 }
 
-/** How long a finished call took, or undefined when it has not finished or its times are not recorded. */
-export function toolRunDuration(run: Pick<ChatToolRunRecord, "startedAt" | "finishedAt">): string | undefined {
+/**
+ * How long a finished call took. Undefined when it has not finished (a call waiting on approval has a finish time
+ * for the pause, not for its work), when its times are not recorded, or when it waited on an approval: its recorded
+ * span then includes the wait for the operator, which is not how long the call took.
+ */
+export function toolRunDuration(
+  run: Pick<ChatToolRunRecord, "status" | "startedAt" | "finishedAt" | "approvalId">,
+): string | undefined {
+  if ((run.status !== "executed" && run.status !== "failed") || run.approvalId) return undefined;
   const started = Date.parse(run.startedAt);
   const finished = run.finishedAt ? Date.parse(run.finishedAt) : Number.NaN;
   if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return undefined;

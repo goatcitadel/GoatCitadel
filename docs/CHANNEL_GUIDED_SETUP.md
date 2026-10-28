@@ -118,9 +118,9 @@ public web address and no webhook secret. Delivery to a public HTTPS web address
 | Google Chat | Space/thread incoming webhook and reviewed card delivery; provider acceptance and human receipt are separate. |
 | Teams | Signed Workflows webhook with Anyone trigger authentication, explicit flow owner/co-owner and reviewed Adaptive Card delivery. Tenant-authenticated triggers need bearer support that this adapter does not provide. Retired connector URLs require migration; provider acceptance and visible destination receipt remain separate. |
 | Mattermost | Server, bot, team/channel and permissions; action-specific outbound receipts. |
-| Matrix | Homeserver URL, bot account access token and joined room; whoami and joined-room checks plus a sandbox notice. Opt-in `/sync` inbound stays allowlist-only and resumes from a persisted sync token (a homeserver-rejected token re-primes and skips the gap). Outbound is text-only. |
-| QQBot | AppID, AppSecret in an environment variable and the QQ hosts in the network allowlist; token mint and bot-identity checks plus an optional active sandbox message. The signed (ed25519) webhook is default-deny by QQ openid, replies are passive replies to the inbound message id, and outbound is text-only. |
-| WeCom | CorpID, AgentId and application Secret, with the gateway IP on the application's trusted IP list; token and application checks plus a sandbox text. The encrypted callback (Token and EncodingAESKey) is optional, default-deny by WeCom userid, and outbound is text-only. |
+| Matrix | Homeserver URL, bot account access token and joined room; whoami and joined-room checks plus a test notice. Opt-in `/sync` inbound stays allowlist-only and resumes from a persisted sync token (a homeserver-rejected token re-primes and skips the gap). Outbound is text-only. |
+| QQBot | AppID, AppSecret in an environment variable and the QQ hosts in the network allowlist; token mint and bot-identity checks plus an optional active test message. The signed (ed25519) webhook is default-deny by QQ openid, replies are passive replies to the inbound message id, and outbound is text-only. |
+| WeCom | CorpID, AgentId and application Secret, with the gateway IP on the application's trusted IP list; token and application checks plus a test message. The encrypted callback (Token and EncodingAESKey) is optional, default-deny by WeCom userid, and outbound is text-only. |
 | Zalo OA | Official Account token and eligible recipient; narrow outbound receipt and separate human confirmation. |
 
 Adapters without an inbound transport omit conversation requirements. A successful
@@ -142,7 +142,7 @@ that ordering atomically rather than trusting a process cache.
 
 The Gateway computes finalization eligibility. Required failures, unknown
 warnings, skipped required checks and ambiguous sends block activation. Optional
-sandbox cleanup can remain advisory only when a successful provider receipt and
+test message cleanup can remain advisory only when a successful provider receipt and
 an explicit acknowledgement exist. Acknowledging cleanup preserves warning
 severity. Legitimate post-activation checks remain deferred rather than becoming
 fabricated passes. Fresh unchanged-input evidence can be restored after restart;
@@ -154,6 +154,13 @@ extend it. An open editor disables preparation and acknowledgement at expiry
 while retaining historical receipts.
 The read-only draft-evidence API returns history separately from the Gateway's
 current eligibility decision; reading it does not run probes or write draft state.
+
+A new connection keeps its draft's ID. Finalization saves it under that ID, so a
+webhook channel's address, which holds the connection ID, is known and shown
+while the setup is still a draft. The address answers only once the connection is
+finished and on. Drafts and connections stay separate records, and a finished
+draft cannot be finalized again. A change to a saved connection keeps the saved
+connection's own ID.
 
 The bounded journey projection follows canonical ingress, turn and delivery
 links. The Gateway stamps accepted ingress with its connection revision. Provider

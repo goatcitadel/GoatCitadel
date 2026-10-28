@@ -1,5 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ChannelRuntimeStatus, DiscordPairingRecord, TelegramChannelPairingList } from "@goatcitadel/contracts";
+import {
+  describeRetiredChannel,
+  type ChannelRuntimeStatus,
+  type DiscordPairingRecord,
+  type TelegramChannelPairingList,
+} from "@goatcitadel/contracts";
 import { fetchChannelRuntimeStatus, fetchDiscordPairings } from "@goatcitadel/mission-control-shared/api/client";
 import { fetchTelegramChannelPairings } from "@goatcitadel/mission-control-shared/api/channel-setup-operations";
 import { queryKeys } from "../../data/query-keys";
@@ -17,10 +22,12 @@ export function useChannelPageData(connectionId: string, workspaceId: string) {
   const overview = useMessagingOverview(workspaceId);
   const channel = overview.data?.channels.find((item) => item.connectionId === connectionId);
   const present = Boolean(connection);
+  // A retired channel's connection is out of service for good, so there is nothing to check.
+  const retired = connection ? describeRetiredChannel(connection.key) : undefined;
   const runtime = useQuery({
     queryKey: queryKeys.chatChannelRuntime(connectionId),
     queryFn: (): Promise<ChannelRuntimeStatus> => fetchChannelRuntimeStatus(connectionId),
-    enabled: present,
+    enabled: present && !retired,
   });
   const key = connection?.key;
   const senderRecords = useQuery({

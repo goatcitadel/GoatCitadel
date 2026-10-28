@@ -1,8 +1,7 @@
-// Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
-// per-section settings decomposition.
 import type { ConnectorDiagnosticReport } from "@goatcitadel/contracts";
 import { SettingsActionList, SettingsCodeBlock } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
+import { plainCheckName } from "../diagnostic-check-names";
 
 export function DiagnosticsPanel({ report, ariaLabel }: { report: ConnectorDiagnosticReport; ariaLabel: string }) {
   return (
@@ -15,7 +14,7 @@ export function DiagnosticsPanel({ report, ariaLabel }: { report: ConnectorDiagn
       <SettingsActionList
         ariaLabel={ariaLabel}
         items={report.checks.map((check) => ({
-          label: check.key,
+          label: plainCheckName(check.key) ?? check.key,
           description: check.message,
           meta: check.status,
         }))}

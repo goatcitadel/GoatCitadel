@@ -469,7 +469,6 @@ import { acquireBoundLlamaCppEmbeddingLease, acquireBoundLlamaCppLease } from ".
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
 import { ProviderSecretStaging } from "./provider-secret-staging.js";
-import { parseChannelSecretRef } from "./channel-secret-custody-service.js";
 import { enqueueMobilePushApprovalRefresh, MobilePushService } from "./mobile-push-service.js";
 import { createConfiguredMobilePushProvider } from "./mobile-push-provider.js";
 import { startMobilePushDeliveryScheduler } from "./mobile-push-scheduler.js";
@@ -804,7 +803,6 @@ import {
   assertDeploymentProfileUpdate as assertGatewayDeploymentProfileUpdate,
   assertFirecrawlRuntimeUpdate as assertGatewayFirecrawlRuntimeUpdate,
 } from "./gateway/runtime-settings-guards.js";
-import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
 import {
   executeApprovedExternalRuntimePendingAction as executeApprovedExternalRuntimePendingActionWithPort,
   isApprovedExternalRuntimePendingAction,
@@ -913,7 +911,12 @@ import {
   policyContextHasOperatorApproval,
 } from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
-import { isTelegramApprovalActionConnectorReady } from "./channel-secret-resolution.js";
+import {
+  isTelegramApprovalActionConnectorReady,
+  resolveChannelSendEnvSecret,
+  resolveConnectionConfigSecret,
+  type ChannelSecretOwner,
+} from "./channel-secret-resolution.js";
 import {
   recordInboundChannelMessage,
   routeOperatorDeskSend,
@@ -1360,8 +1363,8 @@ export class GatewayService {
       fetchWithTimeout: async (url, init) => await this.fetchWithDiagnosticsTimeout(url, init),
       transcribeVoice: (input) => this.mediaVoiceService.transcribeVoice(input),
       isConnectionUrlAllowlisted: (urlValue) => this.isConnectionUrlAllowlisted(urlValue),
-      resolveConnectionSecret: (connectionConfig, directKey, envKey, catalogId) =>
-        this.resolveConnectionSecret(connectionConfig, directKey, envKey, catalogId),
+      resolveConnectionSecret: (connectionConfig, directKey, envKey, catalogId, owner) =>
+        this.resolveConnectionSecret(connectionConfig, directKey, envKey, catalogId, owner),
     });
     this.eventIngestService = new EventIngestService(this.storage);
     this.inboundChannelEventService = new InboundChannelEventService({
@@ -1385,7 +1388,7 @@ export class GatewayService {
       hasRunningTurn: async (sessionId) => await this.hasRunningTurn(sessionId),
       respondToExistingChatMessage: async (sessionId, eventId, options) =>
         await this.respondToExistingChatMessage(sessionId, eventId, options),
-      transcribeChannelVoice: (input) => this.channelVoiceInboundService.transcribe(input),
+      transcribeChannelVoice: (input, owner) => this.channelVoiceInboundService.transcribe(input, owner),
       executeInboundCommand: (input) =>
         input.channel === "telegram"
           ? executeTelegramInboundCommand(this, input)
@@ -1483,8 +1486,9 @@ export class GatewayService {
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
       isApprovalActionConnectorReady: (connectionId) =>
         isTelegramApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
-      // A real send reads the key the connection saved at setup, the way the setup test does.
-      resolveChannelConnectionSecret: (ref) => this.resolveConnectionSecret({ ref }, "ref", "refEnv"),
+      resolveChannelConnectionSecret: (connectionId, ref) =>
+        this.resolveConnectionSecret({ ref }, "ref", "refEnv", undefined, { connectionId }),
+      resolveChannelEnvSecret: resolveChannelSendEnvSecret,
       resolveGoogleWorkspaceAccessToken: (input) => this.googleWorkspaceOAuth.resolveToolAccessToken(input),
       acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
       prepareEmbeddingUsageDispatch: (input) => this.llmService.prepareScopedModelUsageDispatch(input),
@@ -12032,47 +12036,15 @@ export class GatewayService {
     return trimmed.length > 0 ? trimmed : undefined;
   }
 
+  /** `owner` is the connection (or setup draft) whose config this is; a saved reference is read only for its owner. */
   public resolveConnectionSecret(
     config: Record<string, unknown>,
     directKey: string,
     envKey: string,
-    catalogId?: string,
+    catalogId: string | undefined,
+    owner: ChannelSecretOwner,
   ): string | undefined {
-    const direct = this.readConnectionConfigValue(config, directKey);
-    if (direct) {
-      if (direct.startsWith("keychain:goatcitadel:channel-")) {
-        try {
-          const account = parseChannelSecretRef(direct).account;
-          return this.secretStore.getSecret(account)?.trim() || undefined;
-        } catch {
-          log.warn("Refusing to resolve an invalid channel credential reference.", { directKey, catalogId });
-          return undefined;
-        }
-      }
-      return direct;
-    }
-    const envName = this.readConnectionConfigValue(config, envKey);
-    if (!envName) {
-      return undefined;
-    }
-    // SECURITY (codex finding #13, #23): The `envKey` field on integration
-    // connections used to accept arbitrary env-var names. Lower-privileged
-    // authenticated principals could create a productivity.apple-notes or
-    // Matrix connection with `authTokenEnv: "OPENAI_API_KEY"` and then
-    // trigger an action/diagnostic that sent `Authorization: Bearer
-    // <OPENAI_API_KEY>` to an attacker-controlled URL. Until per-catalog
-    // schemas land (PR-3 follow-up), bind env-var names to the connection's
-    // catalog convention and refuse broadly-scoped gateway/infra secrets.
-    if (!isPermittedIntegrationSecretEnvVarName(envName, catalogId)) {
-      log.warn("Refusing to resolve integration secret from an unbound env var name (codex finding #13/#23).", {
-        envName,
-        directKey,
-        envKey,
-        catalogId,
-      });
-      return undefined;
-    }
-    return process.env[envName];
+    return resolveConnectionConfigSecret(this.secretStore, config, directKey, envKey, catalogId, owner);
   }
 
   public async readDiscordPairings(): Promise<DiscordPairingRecord[]> {

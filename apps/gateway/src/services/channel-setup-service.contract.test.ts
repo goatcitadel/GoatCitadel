@@ -316,11 +316,13 @@ describe("channel-setup-service contract behavior", () => {
       const result = await validateChannelSetupDraft(host, created.draftId, created.revision);
       const stored = await host.storage.channelSetupDrafts.get(created.draftId);
 
+      // The edit draft reads the saved connection's keys and its own, and nobody else's.
       expect(host.resolveConnectionSecret).toHaveBeenCalledWith(
         expect.any(Object),
         "webhookUrl",
         "webhookUrlEnv",
         "channel.teams",
+        { connectionId: saved.connectionId, draftId: created.draftId },
       );
       expect(result).toMatchObject({
         status: "warn",
@@ -492,6 +494,28 @@ describe("channel-setup-service contract behavior", () => {
     });
     expect(() => host.storage.channelSetupDrafts.get(created.draftId)).toThrow(/Missing draft/);
     expect(host.recentChannelSetupTests.has(created.draftId)).toBe(false);
+  });
+
+  it("keeps a new connection's draft id as its own, so its webhook address is known before Finalize (N4)", async () => {
+    const host = createHost();
+    const created = await createChannelSetupDraft(host, {
+      catalogId: "channel.nextcloud-talk",
+      lifecycleMode: "create",
+    });
+    const configured = await updateChannelSetupDraft(host, created.draftId, {
+      expectedRevision: created.revision,
+      draft: { baseUrl: "https://cloud.example.com", defaultRoomId: "a1b2c3d4" },
+    });
+    const secured = await setChannelSetupDraftSecrets(host, created.draftId, {
+      expectedRevision: configured.revision,
+      values: { token: "synthetic-nextcloud-bot-secret-0123456789abcdef" },
+    });
+    expect(created.connectionId).toBeUndefined();
+
+    const result = await finalizeChannelSetupDraft(host, created.draftId, secured.revision);
+
+    expect(result.connection.connectionId).toBe(created.draftId);
+    expect(host.createConnectionMock).toHaveBeenCalledWith(expect.objectContaining({ connectionId: created.draftId }));
   });
 
   it("defers Discord runtime readiness until a new gateway draft has a durable connection", async () => {

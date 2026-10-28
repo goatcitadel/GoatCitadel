@@ -16,7 +16,7 @@ export async function runConfiguredMatrixChecks(
 ) {
   const config = connection.config;
   const homeserverUrl = deps.readConnectionConfigValue(config, "homeserverUrl");
-  const token = deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv", connection.catalogId);
+  const token = deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv", connection.catalogId, connection);
   if (!homeserverUrl || !token) {
     return {
       checks: [

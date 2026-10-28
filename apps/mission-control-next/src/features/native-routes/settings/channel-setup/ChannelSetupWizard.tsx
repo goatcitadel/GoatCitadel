@@ -17,6 +17,7 @@ import {
   isStepComplete,
   channelStageLabel,
   unreadableHostFields,
+  fieldsWithResolvedRequired,
   wizardValuesWithDefaults,
   finalizeDisabledReason,
   formatJson,
@@ -247,7 +248,11 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
             />
             <ChannelWizardFields
               draft={draft}
-              fields={activeStep.fields}
+              fields={fieldsWithResolvedRequired(
+                activeStep.fields,
+                draft,
+                wizardValuesWithDefaults(definition, values),
+              )}
               values={wizardValuesWithDefaults(definition, values)}
               issues={feedback?.issues ?? []}
               disabled={anyBusy}

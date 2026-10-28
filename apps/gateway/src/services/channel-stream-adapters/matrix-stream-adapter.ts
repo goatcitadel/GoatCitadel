@@ -1,6 +1,7 @@
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { isMatrixInboundEnabled } from "@goatcitadel/gateway-core";
 import { readBoundedResponseJson } from "../bounded-response-reader.js";
+import type { ChannelSecretOwner } from "../channel-secret-resolution.js";
 import type { ChannelStreamCursorStore } from "../channel-stream-cursor-store.js";
 import { isConnectionUrlRemoteSafe } from "../connection-url-helpers.js";
 import {
@@ -47,7 +48,8 @@ export interface MatrixStreamAdapterDeps {
     config: Record<string, unknown>,
     directKey: string,
     envKey: string,
-    catalogId?: string,
+    catalogId: string | undefined,
+    owner: ChannelSecretOwner,
   ): string | undefined;
   isUrlAllowlisted(url: string): boolean;
   cursorStore: ChannelStreamCursorStore;
@@ -226,7 +228,7 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
       const homeserver = readString(config, "homeserverUrl");
       if (!homeserver) throw new ChannelStreamAuthError("Matrix homeserver URL is required");
       const base = homeserver.replace(/\/+$/, "");
-      const token = deps.resolveSecret(config, "accessToken", "accessTokenEnv", "channel.matrix");
+      const token = deps.resolveSecret(config, "accessToken", "accessTokenEnv", "channel.matrix", ctx.connection);
       if (!token) throw new ChannelStreamAuthError("Matrix access token could not be resolved");
       const connectionId = ctx.connection.connectionId;
       const requestTimeoutMs = longPollTimeoutMs + MATRIX_REQUEST_SLACK_MS;

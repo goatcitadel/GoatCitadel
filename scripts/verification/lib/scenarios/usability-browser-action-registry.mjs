@@ -1000,7 +1000,7 @@ const STEPS = [
       clickPattern("Verification webhook diagnostics"),
       click("Run diagnostics"),
       text("Gateway diagnostics received. Inspect each check before using the connection."),
-      text("Webhook base URL is reachable under current allowlist posture."),
+      text("Webhook base URL host is on the network allowlist."),
     ],
   ),
   step(

@@ -107,7 +107,7 @@ async function prepare(page, { stub }) {
     .filter({ hasText: "DISPLAY_SMOKE_TOOL:" })
     .locator(".mc-next-turn-evidence-summary > summary")
     .click();
-  const failureRow = page.getByRole("button", { name: "Open execution detail for fs.read", exact: true });
+  const failureRow = page.getByRole("button", { name: "Open execution detail for Read file", exact: true });
   await failureRow.waitFor();
   assert.match(await failureRow.innerText(), /failed/i, "failed tool remains visible with its truthful failure answer");
 

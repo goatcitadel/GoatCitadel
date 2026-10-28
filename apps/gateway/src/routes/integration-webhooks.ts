@@ -22,6 +22,7 @@ import {
   readHeaderValue,
   validateWebhookHostHeader,
 } from "./webhook-handler-factory.js";
+import { describeDroppedSender } from "../services/channel-inbound-dispatch.js";
 import {
   deriveGenericChannelInboundIdempotencyKey,
   verifyGenericChannelInboundSignature,
@@ -162,11 +163,9 @@ export const integrationWebhookRoutes: FastifyPluginAsync<IntegrationWebhookRout
             : hasInvalidConfig
               ? "channel.inbound_access_invalid_config"
               : "channel.sender_not_allowlisted",
-          message: hasEmptyAllowlist
-            ? "Dropped an inbound generic channel message because allowlist mode is enabled with no permitted senders."
-            : hasInvalidConfig
-              ? "Dropped an inbound generic channel message because its inbound access config is malformed."
-              : "Dropped an inbound generic channel message because the sender is not on the connection allowlist.",
+          message: hasInvalidConfig
+            ? "Dropped an inbound generic channel message because its inbound access config is malformed."
+            : describeDroppedSender(params.data.channel, parsed.data.actorId),
           context: {
             channel: params.data.channel,
             connectionId: params.data.connectionId,

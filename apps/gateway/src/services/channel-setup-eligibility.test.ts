@@ -183,3 +183,78 @@ describe("Gateway channel finalization eligibility", () => {
     expect(evaluateChannelSetupEligibility(other, wecom).allowed).toBe(false);
   });
 });
+
+describe("Gateway channel finalization eligibility: Google Chat", () => {
+  const appConfig = {
+    serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+    audienceType: "project_number",
+    audience: "123456789012",
+  };
+  const app = (extra: Record<string, unknown> = {}) =>
+    ({ key: "google-chat", config: { ...appConfig, ...extra } }) as unknown as IntegrationConnection;
+  const appOnlyWarns = (...issues: ChannelSetupTestResult["issues"]) => result({ status: "warn", issues });
+  const liveSend = {
+    key: "google_chat_app_live_send",
+    level: "warn" as const,
+    message: "GoatCitadel can't send a test message in Chat app mode.",
+  };
+
+  it("lets an incoming-webhook connection with no thread key finish", () => {
+    const webhook = {
+      key: "google-chat",
+      config: { webhookUrl: "https://chat.googleapis.com/v1/spaces/x/messages?key=k" },
+    } as unknown as IntegrationConnection;
+    const test = result({
+      probe: {
+        kind: "google_chat_webhook",
+        checkedAt: new Date().toISOString(),
+        steps: [{ key: "google_chat_sandbox_send", label: "Test send", status: "pass", message: "Accepted" }],
+      },
+    });
+
+    expect(evaluateChannelSetupEligibility(test, webhook)).toMatchObject({ allowed: true, blockingReasons: [] });
+  });
+
+  it("lets a Chat app finish when its only warning is that no test message can be sent, and calls that advisory", () => {
+    const test = appOnlyWarns(liveSend);
+
+    expect(evaluateChannelSetupEligibility(test, app({ defaultSpace: "spaces/AAAAxxxx" }))).toMatchObject({
+      allowed: true,
+      blockingReasons: [],
+    });
+    expect(test.issues[0]!.disposition).toBe("advisory");
+  });
+
+  it("defers an empty Chat app default space, but keeps the warning blocking once a space is set", () => {
+    const missing = appOnlyWarns({ key: "target", level: "warn", message: "Default Google Chat space is missing." });
+
+    expect(evaluateChannelSetupEligibility(missing, app()).allowed).toBe(true);
+    expect(missing.issues[0]!.disposition).toBe("deferred");
+
+    const set = appOnlyWarns({ key: "target", level: "warn", message: "Default Google Chat space is missing." });
+    expect(evaluateChannelSetupEligibility(set, app({ defaultSpace: "spaces/AAAAxxxx" })).allowed).toBe(false);
+  });
+
+  it("never lets the Chat app advisory waive a failure, or an audience that is missing", () => {
+    const failed = result({
+      status: "error",
+      issues: [liveSend, { key: "auth", level: "error", message: "Google Chat service-account key is missing." }],
+    });
+    const noAudience = appOnlyWarns(liveSend, {
+      key: "audience",
+      level: "warn",
+      message: "Google Chat app audience is missing.",
+    });
+
+    expect(evaluateChannelSetupEligibility(failed, app()).allowed).toBe(false);
+    expect(evaluateChannelSetupEligibility(noAudience, app()).allowed).toBe(false);
+  });
+
+  it("makes the no-test-message warning advisory for Google Chat only", () => {
+    for (const key of ["teams", "slack", "telegram"]) {
+      const other = { key, config: {} } as IntegrationConnection;
+
+      expect(evaluateChannelSetupEligibility(appOnlyWarns(liveSend), other).allowed, key).toBe(false);
+    }
+  });
+});

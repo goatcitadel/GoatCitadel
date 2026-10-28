@@ -559,7 +559,7 @@ function resolveChannelSecret(
   keys: string[],
 ): string | undefined {
   for (const key of keys) {
-    const secret = deps.resolveConnectionSecret(connection.config, key, `${key}Env`, connection.catalogId);
+    const secret = deps.resolveConnectionSecret(connection.config, key, `${key}Env`, connection.catalogId, connection);
     if (secret) {
       return secret;
     }
