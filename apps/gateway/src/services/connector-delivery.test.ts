@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  ChannelReplyInput,
-  ChannelSendInput,
-  ConnectorDeliveryWorkflowPayload,
-  ConnectorRecord,
-  McpInvokeRequest,
-  McpInvokeResponse,
-  ToolInvokeResult,
+import {
+  describeRetiredChannel,
+  type ChannelReplyInput,
+  type ChannelSendInput,
+  type ConnectorDeliveryWorkflowPayload,
+  type ConnectorRecord,
+  type IntegrationConnection,
+  type McpInvokeRequest,
+  type McpInvokeResponse,
+  type ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import { buildGatewayConnectorRecords } from "./connector-registry.js";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
 
 describe("dispatchConnectorDelivery", () => {
@@ -883,6 +886,106 @@ describe("dispatchConnectorDelivery with [[as_document]] directives", () => {
     expect(replyArgs.attachments?.[0]?.title).toBe("note.md");
     expect(replyArgs.attachments?.[0]?.dataBase64).toBe(Buffer.from("hello", "utf-8").toString("base64"));
     expect(replyArgs.message).not.toMatch(/as_document/);
+  });
+});
+
+describe("dispatchConnectorDelivery for a connector that cannot accept deliveries", () => {
+  // The record the Gateway really builds for a saved connection, so the refusal reads what the registry reports.
+  function recordFor(key: string, overrides: Partial<IntegrationConnection> = {}): ConnectorRecord {
+    const connection: IntegrationConnection = {
+      connectionId: "conn-1",
+      catalogId: `channel.${key}`,
+      kind: "channel",
+      key,
+      label: "Connection",
+      enabled: true,
+      status: "connected",
+      config: {},
+      createdAt: "2026-10-27T10:00:00.000Z",
+      updatedAt: "2026-10-27T10:00:00.000Z",
+      ...overrides,
+    };
+    return buildGatewayConnectorRecords({ integrationConnections: [connection], mcpServers: [], mcpTools: [] }).find(
+      (item) => item.connectorId === "integration:conn-1",
+    )!;
+  }
+  function depsWithSpies() {
+    const commsSend = vi.fn();
+    const commsReply = vi.fn();
+    return {
+      spies: { commsSend, commsReply },
+      deps: {
+        commsSend,
+        commsReply,
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        commsTyping: vi.fn(async () => createTypingResult()),
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    };
+  }
+
+  it.each(["signal", "imessage", "zalouser"])(
+    "refuses a delivery to a retired %s connection with the retired reason, not a generic disabled",
+    async (key) => {
+      const { deps, spies } = depsWithSpies();
+      const attempt = dispatchConnectorDelivery(
+        recordFor(key),
+        createPayload("channel.send", { target: "someone", message: "hello" }),
+        deps,
+      );
+      await expect(attempt).rejects.toThrow(describeRetiredChannel(key)!);
+      await expect(attempt).rejects.not.toThrow(/is disabled/);
+      expect(spies.commsSend).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a retired connection's reply with the same reason", async () => {
+    const { deps, spies } = depsWithSpies();
+    await expect(
+      dispatchConnectorDelivery(
+        recordFor("signal"),
+        createPayload("channel.reply", { target: "someone", message: "hello", replyToMessageId: "m1" }),
+        deps,
+      ),
+    ).rejects.toThrow(describeRetiredChannel("signal")!);
+    expect(spies.commsReply).not.toHaveBeenCalled();
+  });
+
+  it("gives the retired reason whatever state the retired connection was saved in", async () => {
+    const { deps } = depsWithSpies();
+    for (const saved of [{ enabled: false }, { status: "disconnected" as const }, { lastError: "boom" }]) {
+      await expect(
+        dispatchConnectorDelivery(
+          recordFor("imessage", saved),
+          createPayload("channel.send", { target: "someone", message: "hello" }),
+          deps,
+        ),
+      ).rejects.toThrow(describeRetiredChannel("imessage")!);
+    }
+  });
+
+  it("keeps the generic reason for a working channel that is switched off", async () => {
+    const { deps } = depsWithSpies();
+    await expect(
+      dispatchConnectorDelivery(
+        recordFor("slack", { enabled: false }),
+        createPayload("channel.send", { target: "#ops", message: "hello" }),
+        deps,
+      ),
+    ).rejects.toThrow("Connector integration:conn-1 is disabled and cannot accept durable deliveries.");
+  });
+
+  it("keeps the generic reason for a working channel that is not connected", async () => {
+    const { deps } = depsWithSpies();
+    await expect(
+      dispatchConnectorDelivery(
+        recordFor("slack", { status: "disconnected" }),
+        createPayload("channel.send", { target: "#ops", message: "hello" }),
+        deps,
+      ),
+    ).rejects.toThrow("Connector integration:conn-1 is degraded and cannot accept durable deliveries.");
   });
 });
 
