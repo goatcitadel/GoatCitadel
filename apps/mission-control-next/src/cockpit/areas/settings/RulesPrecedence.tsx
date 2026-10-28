@@ -5,13 +5,18 @@ import { isModifiedClick } from "../../lib/modified-click";
 export const RULES_PRECEDENCE_HREF = "/settings/safety#permission-profile";
 
 /**
- * How the four rule pages combine, in the order the Gateway policy engine checks them
+ * How the five places that hold rules combine, in the order the Gateway policy engine checks them
  * (`packages/policy-engine/src/engine.ts` › evaluateAccessInternal). Keep this copy in step with that order.
  */
 export const RULES_PRECEDENCE_STEPS = [
   {
     title: "Deny lists",
     detail: "A deny in settings or in the permission profile blocks the tool. Nothing else can allow it.",
+  },
+  {
+    title: "Tool groups",
+    detail:
+      "A group switched off in Capabilities › Tools blocks its tools for the AI. Allow rules and grants can't lift it.",
   },
   {
     title: "Permissions · profile limit",
@@ -44,8 +49,8 @@ export function RulesPrecedenceExplainer() {
         How allow and deny rules combine
       </h4>
       <p className="text-sm text-fg-secondary">
-        Four pages hold rules: Permissions, Tools, Trust & policy, and Rules · Wards. Deny always wins: one matching
-        deny blocks the action, whatever else allows it. They are checked in this order:
+        Five places hold rules: Permissions, Tools, Trust & policy, Rules · Wards and the tool groups in Capabilities.
+        Deny always wins: one matching deny blocks the action, whatever else allows it. They are checked in this order:
       </p>
       <ol className="list-inside list-decimal space-y-1 text-sm text-fg-secondary">
         {RULES_PRECEDENCE_STEPS.map((step) => (
@@ -63,12 +68,12 @@ export function RulesPrecedenceExplainer() {
   );
 }
 
-/** One line on Tools, Trust & policy and Rules · Wards that points at the explanation on Permissions. */
+/** One line on the other rule pages that points at the explanation on Permissions. */
 export function RulesPrecedenceLink() {
   const { navigate } = useCockpitNavigation();
   return (
     <p className="text-sm text-fg-secondary">
-      Deny always wins across Permissions, Tools, Trust & policy and Rules · Wards.{" "}
+      Deny always wins across Permissions, Tools, Trust & policy, Rules · Wards and the tool groups in Capabilities.{" "}
       <a
         href={RULES_PRECEDENCE_HREF}
         onClick={(event) => {

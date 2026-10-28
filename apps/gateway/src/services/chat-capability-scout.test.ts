@@ -170,6 +170,56 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
     );
   });
 
+  it("says in plain words that a tool's group is switched off, and leaves other reasons as they were", async () => {
+    const reviewReason = async (reasonCodes: string[]) => {
+      const suggestions = await scoutCapabilityUpgradeSuggestions({
+        content: "Search the web for the latest docs",
+        assistantText: "I can't search the web because web access is not available.",
+        sessionId: "session-1",
+        trace: createTrace(),
+        policyContext: {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          permissionProfileId: "safe",
+          surface: "chat",
+        },
+        deps: {
+          listToolCatalog: createToolCatalog,
+          evaluateToolAccess: vi.fn(async () => ({
+            toolName: "browser.search",
+            allowed: false,
+            reasonCodes,
+            requiresApproval: false,
+            riskLevel: "safe" as const,
+          })),
+          listSkills: async () => [],
+          resolveSkillActivation: async () => ({ suppressed: [] }),
+          listSkillSources: async () => ({ generatedAt: new Date().toISOString(), providers: [], items: [] }),
+          lookupSkillSources: async (query) => ({
+            query,
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [],
+          }),
+          listMcpTemplates: async () => [],
+          listMcpTemplateDiscovery: async () => [],
+        },
+      });
+      return suggestions.find((item) => item.recommendedAction === "review_tool_access")?.reason;
+    };
+
+    expect(await reviewReason(["tool_group_off"])).toBe("This tool's group is switched off in Capabilities › Tools.");
+    expect(await reviewReason(["policy_deny", "tool_group_off"])).toBe(
+      "This tool's group is switched off in Capabilities › Tools.",
+    );
+    expect(await reviewReason(["policy_deny"])).toBe(
+      "Current tool access policy blocked this capability: policy_deny.",
+    );
+    expect(await reviewReason(["permission_profile_upper_bound", "grant_deny"])).toBe(
+      "Current tool access policy blocked this capability: permission_profile_upper_bound, grant_deny.",
+    );
+  });
+
   it("does not propose another capability after an operator closes tool use", async () => {
     const trace = createTrace();
     trace.routing = {
