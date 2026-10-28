@@ -18,6 +18,7 @@ import {
   SemanticValidationError,
   ServiceUnavailableError,
   ValidationError,
+  canonicalJsonString,
   isChangePlanRequest,
   redactSecretText,
   type ChangePlanOrigin,
@@ -169,15 +170,21 @@ export class EvolutionControlPlaneService {
   }
 
   /**
-   * The plan an earlier request with this idempotency key made, if one did, so a route can answer a retry with that
-   * plan instead of preparing a new one. A plan the actor can't see is never returned.
+   * The plan an earlier request with this idempotency key made, when this request is its retry, so a route can answer
+   * it with that plan instead of preparing a new one. A retry is the same request from the same actor on the same
+   * surface; a key reused for anything else is refused. A plan the actor can't see is never returned.
    */
-  public async findByIdempotencyKey(actor: EvolutionControlPlaneActor, key: string) {
+  public async findReplay(actor: EvolutionControlPlaneActor, key: string, request: ChangePlanRequest) {
     const plan = await this.deps.repository.findByIdempotency?.(
       requireIdentifier(actor.workspaceId, "workspaceId"),
       key,
     );
-    if (plan) assertVisible(plan, actor);
+    if (!plan) return undefined;
+    assertVisible(plan, actor);
+    const sameRequest = canonicalJsonString(plan.request) === canonicalJsonString(request);
+    if (!sameRequest || plan.origin.surface !== actor.surface || plan.origin.actorId !== actor.actorId) {
+      throw new ConflictError({ message: "This request was already used for a different change. Try again." });
+    }
     return plan;
   }
 

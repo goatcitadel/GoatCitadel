@@ -1,12 +1,12 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import {
-  ConflictError,
   ServiceUnavailableError,
   type ChangePlanRecord,
   type ChangePlanReceipt,
   type ConnectorInstallResponse,
 } from "@goatcitadel/contracts";
+import { awaitsApplyConfirmation } from "../services/evolution-control-plane-action-guards.js";
 import { sendRouteError } from "./_error-handler.js";
 
 const querySchema = z.object({ workspaceId: z.string().min(1).max(200) }).strict();
@@ -59,20 +59,18 @@ export const capabilityConnectorsRoutes: FastifyPluginAsync = async (fastify) =>
           requestId: request.id,
         };
         const idempotencyKey = `capabilities:install:${request.idempotencyKey || request.id}:${body.data.templateId}`;
+        const installRequest = { kind: "connector_install" as const, ...body.data };
         // A retry of a request whose answer was lost finds the plan its first try made, and gets its receipt (M8).
         const plan =
-          (await replayOf(evolution, actor, idempotencyKey, body.data)) ??
-          (await evolution.create({ actor, request: { kind: "connector_install", ...body.data }, idempotencyKey }));
-        // Only the install's own apply confirmation is confirmed here. A plan an earlier try made that has moved on (or
-        // waits on anything else) is answered with its receipt, which says where it stands now.
-        const action = plan.requiredAction;
-        const settled =
-          plan.status === "awaiting_confirmation" && action?.kind === "confirmation" && action.purpose !== "rollback"
-            ? // This route is the operator's own install, so it may ask for the opt-in approval skip.
-              await evolution.confirm(actor, plan.planId, plan.revision, action.actionNonce, {
-                operatorSettingsSave: true,
-              })
-            : plan;
+          (await evolution.findReplay(actor, idempotencyKey, installRequest)) ??
+          (await evolution.create({ actor, request: installRequest, idempotencyKey }));
+        // A plan an earlier try made that has moved on is answered with its receipt, which says where it stands now.
+        const settled = awaitsApplyConfirmation(plan)
+          ? // This route is the operator's own install, so it may ask for the opt-in approval skip.
+            await evolution.confirm(actor, plan.planId, plan.revision, plan.requiredAction.actionNonce, {
+              operatorSettingsSave: true,
+            })
+          : plan;
         const response: ConnectorInstallResponse = {
           templateId: body.data.templateId,
           changePlanReceipt: receiptFor(settled),
@@ -103,31 +101,6 @@ async function requireEvolution(fastify: FastifyInstance) {
     });
   }
   return evolution;
-}
-
-type Evolution = Awaited<ReturnType<typeof requireEvolution>>;
-
-/** The plan a first try with this key made, when this is its retry. A key reused for a different install is refused. */
-async function replayOf(
-  evolution: Evolution,
-  actor: Parameters<Evolution["create"]>[0]["actor"],
-  idempotencyKey: string,
-  body: z.infer<typeof installBodySchema>,
-): Promise<ChangePlanRecord | undefined> {
-  const plan = await evolution.findByIdempotencyKey(actor, idempotencyKey);
-  if (!plan) return undefined;
-  const asked = plan.request.kind === "connector_install" ? plan.request : undefined;
-  if (
-    asked?.templateId !== body.templateId ||
-    asked.enableChatConnectors !== body.enableChatConnectors ||
-    plan.origin.surface !== actor.surface ||
-    plan.origin.actorId !== actor.actorId
-  ) {
-    throw new ConflictError({
-      message: "This request was already used for a different install. Try installing again.",
-    });
-  }
-  return plan;
 }
 
 function receiptFor(plan: ChangePlanRecord): ChangePlanReceipt {

@@ -417,6 +417,14 @@ it.each([
     "not_allowed",
     "auth.example:8443",
   ],
+  // A bracketed IPv6 host is named as the network guard names it.
+  [
+    "start",
+    { field: "oauth", reason: "host_not_allowlisted", host: "[2606:4700:4700::1111]:8443" },
+    NOT_ALLOWLISTED,
+    "not_allowed",
+    "[2606:4700:4700::1111]:8443",
+  ],
   // A host that isn't one (a path, a scheme) is dropped, and the refusal still says the site isn't allowed.
   [
     "start",

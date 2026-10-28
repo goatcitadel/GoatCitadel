@@ -61,6 +61,17 @@ export function requireArtifactReviewAction(
   return action;
 }
 
+/**
+ * Whether a plan still waits for its own apply confirmation, the one confirmation a route that makes and confirms a
+ * plan in one request may give. A rollback confirmation, or a plan that has moved on, is answered with its receipt.
+ */
+export function awaitsApplyConfirmation(
+  plan: ChangePlanRecord,
+): plan is ChangePlanRecord & { readonly requiredAction: Extract<ChangePlanRequiredAction, { kind: "confirmation" }> } {
+  const action = plan.requiredAction;
+  return plan.status === "awaiting_confirmation" && action?.kind === "confirmation" && action.purpose !== "rollback";
+}
+
 export function isOwnerInputActionKind(value: string): value is EvolutionControlPlaneOwnerInputReceipt["actionKind"] {
   return value === "secure_input" || value === "oauth" || value === "native_path_picker";
 }

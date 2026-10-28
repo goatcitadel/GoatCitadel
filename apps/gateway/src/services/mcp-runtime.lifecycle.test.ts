@@ -476,4 +476,33 @@ describe("mcp runtime stdio client abort and close paths", () => {
     expect(error.message.split("boom: config missing")).toHaveLength(2);
     expect(kill).not.toHaveBeenCalled();
   });
+
+  // A server may print a credential it was given; an unlabeled value matches no secret pattern, so it is taken out by
+  // value before stderr reaches any error (and so a server's saved last error).
+  it("takes the values of the environment keys it passed through out of the stderr in its errors", async () => {
+    setPlatform("linux");
+    const previous = process.env.FIXTURE_LIFECYCLE_TOKEN;
+    process.env.FIXTURE_LIFECYCLE_TOKEN = "fx-77q2";
+    try {
+      const { child, stdin, stderr, emitClose } = createFakeChild({ pid: 6262 });
+      spawnMock.mockReturnValue(child);
+      const server = { ...TEST_SERVER, policy: { ...TEST_SERVER.policy, allowedEnvKeys: ["FIXTURE_LIFECYCLE_TOKEN"] } };
+
+      const clientRun = withStdioMcpClient(server, 1000, async () => "unreachable");
+      await waitForRequest(stdin, "initialize");
+      stderr.emit("data", "auth failed for key fx-77q2\nexiting");
+      emitClose(1);
+
+      const error = (await clientRun.then(
+        () => undefined,
+        (reason: unknown) => reason,
+      )) as Error;
+      expect(error.message).toContain("exited before responding");
+      expect(error.message).toContain("auth failed for key [REDACTED_ENV:FIXTURE_LIFECYCLE_TOKEN]");
+      expect(error.message).not.toContain("fx-77q2");
+    } finally {
+      if (previous === undefined) delete process.env.FIXTURE_LIFECYCLE_TOKEN;
+      else process.env.FIXTURE_LIFECYCLE_TOKEN = previous;
+    }
+  });
 });

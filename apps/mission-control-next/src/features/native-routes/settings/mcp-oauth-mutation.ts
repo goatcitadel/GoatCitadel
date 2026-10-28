@@ -64,8 +64,11 @@ function discoveryRejection(error: unknown): string | undefined {
   if (details?.field === "oauthRegistration") return `${sentence} Review authorization again when ready.`;
   return undefined;
 }
-/** A host as the Gateway names one the network allowlist refused: lower-case, with any port, nothing else. */
-const BARE_HOST = /^[a-z0-9.-]+(?::\d{1,5})?$/u;
+/**
+ * A host as the Gateway names one the network allowlist refused: lower-case, a name or a bracketed IPv6 address, with
+ * any port, nothing else.
+ */
+const BARE_HOST = /^(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::\d{1,5})?$/u;
 /**
  * Which refusal `discoveryRejection` worded, by the field the Gateway named and the step it refused. A sign-in host
  * off the network allowlist comes as data (`reason` and `host`), so the wording is never read for it.

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
+import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 import type { McpRuntimeTransportOptions, JsonRpcEnvelope } from "./mcp-runtime.js";
 import type { McpStdioSessionPool, McpStdioResourceOwner } from "./mcp-stdio-session-pool.js";
 import { terminateProcessTree } from "./process-tree-killer.js";
@@ -210,10 +211,11 @@ export async function createStdioMcpClient(
   if (options.staticEnvironment) await assertMcpStaticEnvironmentCurrent(options.staticEnvironment, server);
   signal?.throwIfAborted();
   const spawnSpec = reviewed ?? resolveSpawnSpec(command, server.args ?? []);
+  const childEnv = buildMcpChildEnv(server, options);
   const child = spawn(spawnSpec.command, spawnSpec.args, {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: process.cwd(),
-    env: buildMcpChildEnv(server, options),
+    env: childEnv,
     windowsHide: true,
     ...(retained ? {} : { timeout: Math.ceil(timeoutMs * 1.5) }),
   });
@@ -228,6 +230,8 @@ export async function createStdioMcpClient(
   let nextId = 1;
   let stdoutBuffer = "";
   let stderrBuffer = "";
+  // Every error that carries stderr gets it with the child's passed-through credentials taken out.
+  const childOutput = () => redactChildOutput(server, childEnv, stderrBuffer.trim());
   let closed = false;
 
   const rejectAll = (reason: Error) => {
@@ -305,7 +309,7 @@ export async function createStdioMcpClient(
     if (pending.size > 0) {
       rejectAll(
         new Error(
-          `MCP server ${server.label} exited before responding (code=${code ?? "null"}, signal=${signal ?? "null"}). ${stderrBuffer.trim()}`.trim(),
+          `MCP server ${server.label} exited before responding (code=${code ?? "null"}, signal=${signal ?? "null"}). ${childOutput()}`.trim(),
         ),
       );
     }
@@ -341,9 +345,7 @@ export async function createStdioMcpClient(
       const timer = setTimeout(() => {
         pending.delete(id);
         cleanupAbort();
-        reject(
-          new Error(`Timed out waiting for MCP ${method} response from ${server.label}. ${stderrBuffer.trim()}`.trim()),
-        );
+        reject(new Error(`Timed out waiting for MCP ${method} response from ${server.label}. ${childOutput()}`.trim()));
       }, timeoutMs);
       const wrappedResolve = (value: JsonRpcEnvelope) => {
         cleanupAbort();
@@ -402,7 +404,7 @@ export async function createStdioMcpClient(
       }
     },
     isClosed: () => closed,
-    readStderr: () => stderrBuffer.trim(),
+    readStderr: childOutput,
   };
 
   try {
@@ -424,6 +426,23 @@ export async function createStdioMcpClient(
     client.close();
     throw enrichStdioError(error, client);
   }
+}
+
+/** Shorter values are too common to take out of free text without mangling it. */
+const MIN_REDACTED_ENV_VALUE = 4;
+
+/**
+ * Text a stdio child printed, with the values of the environment keys its policy passes through taken out by value: a
+ * server may print a credential it was given, and an unlabeled value matches no secret pattern.
+ */
+export function redactChildOutput(server: McpServerRecord, env: NodeJS.ProcessEnv, text: string): string {
+  let redacted = text;
+  for (const name of normalizeSafeEnvKeyNames(server.policy.allowedEnvKeys)) {
+    const value = env[name]?.trim();
+    if (value && value.length >= MIN_REDACTED_ENV_VALUE)
+      redacted = redacted.split(value).join(`[REDACTED_ENV:${name}]`);
+  }
+  return redacted;
 }
 
 export function enrichStdioError(error: unknown, client: StdioClient): Error {

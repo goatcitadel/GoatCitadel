@@ -141,7 +141,7 @@ describe("capability connectors route", () => {
     function mockedEvolution(settled: Partial<ChangePlanRecord>) {
       return {
         isEnabled: vi.fn(async () => true),
-        findByIdempotencyKey: vi.fn(async () => undefined),
+        findReplay: vi.fn(async () => undefined),
         create: vi.fn(async () => ({
           planId: "plan-install",
           status: "awaiting_confirmation",
@@ -240,7 +240,7 @@ describe("capability connectors route", () => {
         server.inject({ method: "POST", url: INSTALL, payload: { templateId: "linear", enableChatConnectors: true } });
 
       const rollback = mockedEvolution({ status: "completed" });
-      rollback.findByIdempotencyKey.mockResolvedValueOnce(replay({ ...CONFIRMATION, purpose: "rollback" }) as never);
+      rollback.findReplay.mockResolvedValueOnce(replay({ ...CONFIRMATION, purpose: "rollback" }) as never);
       const refused = await send(await build({ evolution: rollback }));
       expect(refused.statusCode).toBe(202);
       expect(refused.json().changePlanReceipt).toMatchObject({
@@ -252,7 +252,7 @@ describe("capability connectors route", () => {
       await app?.close();
 
       const pending = mockedEvolution({ status: "completed" });
-      pending.findByIdempotencyKey.mockResolvedValueOnce(replay({ ...CONFIRMATION, purpose: "apply" }) as never);
+      pending.findReplay.mockResolvedValueOnce(replay({ ...CONFIRMATION, purpose: "apply" }) as never);
       const confirmed = await send(await build({ evolution: pending }));
       expect(confirmed.statusCode).toBe(202);
       expect(pending.confirm).toHaveBeenCalledOnce();
@@ -492,9 +492,9 @@ describe("capability connectors route", () => {
           expect(plane.sync.list({ workspaceId: "default" })).toHaveLength(1);
         });
 
-        it("is refused by the route too when a reused key asks for a different install", async () => {
+        it("is refused by the control plane too when a reused key asks for a different install", async () => {
           const plane = controlPlane(false);
-          // Without the attempt record, the route's own check of the plan the key made still holds.
+          // Without the attempt record, the control plane's own check of the plan the key made still holds.
           const server = await build({ evolution: plane.service }, { idempotency: {} });
 
           await attempt(server, "attempt-unrecorded", true);
@@ -503,6 +503,31 @@ describe("capability connectors route", () => {
           expect(changed.statusCode).toBe(409);
           expect(plane.createApproval).toHaveBeenCalledOnce();
           expect(plane.sync.list({ workspaceId: "default" })).toHaveLength(1);
+        });
+
+        it("is a retry only for the same request from the same actor on the same surface", async () => {
+          const plane = controlPlane(false);
+          const server = await build({ evolution: plane.service }, { idempotency: {} });
+          await attempt(server, "attempt-owned", true);
+          const key = "capabilities:install:attempt-owned:linear";
+          const request = { kind: "connector_install", templateId: "linear", enableChatConnectors: true } as const;
+          const owner = { workspaceId: "default", actorId: "operator-test", surface: "capabilities" } as const;
+
+          await expect(plane.service.findReplay(owner, key, request)).resolves.toMatchObject({
+            status: "awaiting_approval",
+          });
+          await expect(plane.service.findReplay(owner, "capabilities:install:unknown:linear", request)).resolves.toBe(
+            undefined,
+          );
+          for (const actor of [
+            { ...owner, actorId: "someone-else" },
+            { ...owner, surface: "settings" as const },
+          ]) {
+            await expect(plane.service.findReplay(actor, key, request)).rejects.toBeInstanceOf(ConflictError);
+          }
+          await expect(
+            plane.service.findReplay(owner, key, { ...request, enableChatConnectors: false }),
+          ).rejects.toBeInstanceOf(ConflictError);
         });
       });
 
