@@ -284,7 +284,9 @@ describe("integration-catalog", () => {
     expect(mattermost.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
 
     const teams = requireCatalogEntry("channel.teams");
-    expect(teams.capabilities).toEqual(expect.arrayContaining(["attachments", "threads"]));
+    // A Workflows webhook posts cards into a channel; it cannot start or reply in a thread.
+    expect(teams.capabilities).toEqual(expect.arrayContaining(["attachments"]));
+    expect(teams.capabilities).not.toContain("threads");
 
     const whatsapp = requireCatalogEntry("channel.whatsapp");
     expect(whatsapp.capabilities).toEqual(expect.arrayContaining(["attachments", "direct", "reactions"]));

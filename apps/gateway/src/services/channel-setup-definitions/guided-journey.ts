@@ -72,14 +72,15 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Webhook mode: confirm the test card appears in the selected Space and thread; webhook mode cannot receive messages. Chat app mode: allow your users/... id, message the app (or @mention it in a space), and confirm its threaded reply.",
   },
   teams: {
-    summary: "Send outbound Adaptive Cards to a Microsoft Teams webhook destination.",
+    summary:
+      "Post cards to a Microsoft Teams channel through a Workflows webhook. Sends only: Teams can't message GoatCitadel. No public web address is needed.",
     prerequisites: [
-      "A Teams Workflows webhook with Anyone trigger authentication; tenant-only Microsoft Entra triggers are unsupported.",
-      "A workflow owner and co-owner who can maintain its Teams connection.",
-      "Permission to post Adaptive Cards in the chosen channel and confirm a live sandbox card. Retired Office 365 connector URLs must be replaced.",
+      "A Teams Workflows webhook whose trigger allows Anyone. Tenant-only triggers don't work.",
+      "A co-owner on the workflow is recommended.",
+      "Old Office 365 connector URLs stopped working in May 2026; make a new Workflows webhook.",
     ],
     firstMessage:
-      "Confirm the sandbox card appears in the intended Teams channel. This adapter sends notifications; it does not install a conversational Teams bot.",
+      "Check the test card appeared in the channel. If it didn't, open the workflow's run history in Teams.",
   },
   whatsapp: {
     summary: "Connect WhatsApp Business Cloud API with a sender identity and optional signed inbound webhooks.",

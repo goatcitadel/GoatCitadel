@@ -388,7 +388,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
     fields: [
       text("label", "Connection Label", { defaultValue: "Teams" }),
       url("webhookUrl", "Webhook URL", {
-        placeholder: "https://outlook.office.com/webhook/...",
+        placeholder: "https://<environment>.environment.api.powerplatform.com/...",
         required: true,
       }),
       text("cardTitle", "Card Title", {
@@ -1008,10 +1008,10 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "channel",
     "teams",
     "Microsoft Teams",
-    "Teams bot/webhook integration.",
+    "Send Adaptive Card notifications to a Teams channel through a Workflows webhook. Sends only.",
     "beta",
     ["webhook"],
-    ["chat", "threads", "attachments"],
+    ["chat", "attachments"],
     { pluginId: "msteams" },
   ),
   entry(
