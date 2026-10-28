@@ -95,14 +95,14 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
   },
   mattermost: {
     summary:
-      "Send Mattermost posts, replies and files through a bot account and, optionally, receive posts over the bot WebSocket.",
+      "Send and receive Mattermost posts through a bot account. No public web address is needed: GoatCitadel connects out, and only hears posts while it's running.",
     prerequisites: [
-      "A reachable Mattermost server and bot token.",
-      "The bot joined to the intended team/channel, with posting permissions.",
-      "For inbound, the bot must be a member of each channel you want it to hear, and you need the Mattermost user ids allowed to start conversations (in Mattermost, open a person's profile and choose Copy user ID).",
+      "A bot account and its token. Only a Mattermost system admin can create bots.",
+      "The bot added to the team and to each channel it should use.",
+      "Your Mattermost server in the hosts GoatCitadel may reach.",
     ],
     firstMessage:
-      "Confirm the test post arrives in the chosen channel. For inbound, allow your Mattermost user id, post in a channel the bot has joined, and confirm its reply; inbound posts from users who are not allowed are dropped.",
+      "Check the test post arrived. To receive: turn on Receive posts, allow your user ID, post in a channel the bot is in, and check the reply.",
   },
   matrix: {
     summary:

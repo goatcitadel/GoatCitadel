@@ -3,10 +3,14 @@ import { isExplicitTrue as isTruthyFlag } from "@goatcitadel/gateway-core";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
+  PASTED_SECRET_EXPLANATION,
   requireCatalog,
   baseCatalogMeta,
   paragraph,
   note,
+  linkBlock,
+  check,
+  troubleshoot,
   readString,
   looksLikeHttpUrl,
   hasAnyConfiguredSecret,
@@ -14,6 +18,7 @@ import {
   readLegacyString,
   requiredFieldIssue,
   malformedFieldIssue,
+  requireSecureUrl,
 } from "./common.js";
 
 export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
@@ -27,10 +32,11 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect Mattermost using a reachable server URL, a bot token, and a default channel target, with optional inbound posts over the bot WebSocket.",
+        "Send and receive Mattermost posts through a bot account. No public web address is needed: GoatCitadel connects out, and only hears posts while it's running.",
       prerequisites: [
-        "A Mattermost workspace with a bot account or bot token.",
-        "A sandbox channel where the bot can post.",
+        "A bot account and its token. Only a Mattermost system admin can create bots.",
+        "The bot added to the team and to each channel it should use.",
+        "Your Mattermost server in the hosts GoatCitadel may reach.",
       ],
       steps: [
         {
@@ -39,14 +45,44 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           createOnly: true,
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel uses Mattermost bot-token auth for outbound sends, replies, reactions, and unsend."),
             paragraph(
-              "Optionally, GoatCitadel keeps the bot's WebSocket open so posts in channels the bot has joined can start conversations. Inbound is opt-in and default-deny: only the Mattermost user ids you allow can start turns.",
+              "GoatCitadel signs in to your Mattermost server with a bot token. It can post, reply, react, send files, show typing and delete its own posts.",
+            ),
+            paragraph(
+              "Receiving is optional and off by default. When it is on, GoatCitadel connects out to your server and listens for posts in channels the bot belongs to, so no public web address is needed. It only hears posts while it's running, and posts sent while it isn't are not recovered. Only user IDs you allow can start conversations.",
             ),
             note(
               "warning",
-              "Mattermost is a guided beta lane. Guided setup now runs live auth, channel access, and sandbox send/delete probes before finalize.",
+              "Mattermost is a guided beta lane. The setup test checks the bot token, finds your channel and posts a test post, which it deletes again when the bot may. GoatCitadel can reach your server only once the server is in the hosts GoatCitadel may reach: the setup test has an Allow these hosts button for that. If it isn't, receiving stops until you allow it and restart GoatCitadel.",
             ),
+          ],
+        },
+        {
+          id: "create-bot",
+          kind: "instruction",
+          createOnly: true,
+          title: "Create the bot account",
+          body: [
+            paragraph("Only a Mattermost system admin can create a bot. Ask one if you aren't."),
+            {
+              kind: "list",
+              ordered: true,
+              items: [
+                "In System Console › Integrations › Bot Accounts, turn on Enable Bot Account Creation.",
+                "In the Product menu, open Integrations › Bot Accounts and choose Add Bot Account.",
+                "Copy the token. It is shown once.",
+                "Add the bot to the team and to each channel it should use. It doesn't join on its own.",
+              ],
+            },
+            linkBlock(
+              "Mattermost: Bot accounts",
+              "https://docs.mattermost.com/developers/integrate/reference/bot-accounts",
+            ),
+          ],
+          checklist: [
+            check("enable", "Turn on bot account creation"),
+            check("add-bot", "Add the bot account and copy its token"),
+            check("membership", "Add the bot to its team and to each channel"),
           ],
         },
         {
@@ -59,8 +95,29 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
               label: "Server URL",
               type: "url",
               required: true,
-              explanation: "Reachable Mattermost server base URL.",
+              explanation:
+                "The address of your Mattermost server, without a team or channel. Use https://. Plain http:// works only for this computer (127.0.0.1 or localhost).",
               looksLike: "https://chat.example.com",
+              canChangeLater: true,
+            },
+            {
+              key: "botToken",
+              label: "Bot token",
+              type: "secret",
+              required: false,
+              explanation: PASTED_SECRET_EXPLANATION,
+              whyNeeded: "Lets GoatCitadel post as the bot.",
+              whereToFind: [
+                paragraph(
+                  "Mattermost shows it once, when you add the bot account (Product menu › Integrations › Bot Accounts › Add Bot Account). Copy it before you close that screen.",
+                ),
+                linkBlock(
+                  "Mattermost: Bot accounts",
+                  "https://docs.mattermost.com/developers/integrate/reference/bot-accounts",
+                ),
+              ],
+              commonMistakes: ["Closing the screen before copying the token. Mattermost doesn't show it again."],
+              sensitive: true,
               canChangeLater: true,
             },
             {
@@ -68,40 +125,36 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
               label: "Bot token env var",
               type: "text",
               required: false,
-              explanation: "Preferred path. Name of the env var that stores the Mattermost bot token.",
+              advanced: true,
+              explanation: "Name of the env var that stores the Mattermost bot token.",
               looksLike: "MATTERMOST_BOT_TOKEN",
               canChangeLater: true,
               placeholder: "MATTERMOST_BOT_TOKEN",
             },
             {
-              key: "botToken",
-              label: "Bot token (manual fallback)",
-              type: "secret",
-              required: false,
-              explanation: "Optional direct bot-token entry if env-backed storage is not ready yet.",
-              sensitive: true,
-              canChangeLater: true,
-              placeholder: "Paste only if you cannot use an env var",
-            },
-            {
               key: "defaultChannel",
-              label: "Default channel",
+              label: "Where should the test post go?",
               type: "text",
               required: true,
-              explanation: "Fallback Mattermost channel slug or id.",
-              looksLike: "town-square or channel-id",
+              explanation:
+                "The channel name from its web address (for example town-square), or @your-username to have the bot message you. The bot must already be a member.",
+              whyNeeded: "GoatCitadel posts one test post here. A send that names no channel goes here too.",
+              looksLike: "town-square",
+              commonMistakes: [
+                "Using the channel's display name (for example Town Square) instead of the name in its web address.",
+              ],
               canChangeLater: true,
             },
             {
               key: "inboundStreamEnabled",
-              label: "Receive posts over the bot WebSocket",
+              label: "Receive posts",
               type: "boolean",
               required: false,
               defaultValue: false,
               explanation:
-                "Keep a persistent WebSocket open so posts in channels the bot belongs to can start conversations.",
+                "Listen for posts in channels the bot belongs to, so people can start conversations with it.",
               whyNeeded:
-                "Mattermost has no inbound webhook path here; the bot WebSocket is how new posts reach GoatCitadel. Inbound stays off unless you opt in, and only allowed Mattermost user ids can start turns. Posts sent while the socket is disconnected are not recovered.",
+                "GoatCitadel connects out to your server to hear new posts, so no public web address is needed. Receiving stays off unless you turn it on, and only allowed user IDs can start conversations. Posts sent while GoatCitadel isn't running are not recovered.",
               canChangeLater: true,
             },
             {
@@ -109,6 +162,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
               label: "Default team",
               type: "text",
               required: false,
+              advanced: true,
               explanation: "Optional team slug for channel resolution when channel names are ambiguous.",
               looksLike: "goatcitadel",
               canChangeLater: true,
@@ -121,7 +175,44 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "Guided test authenticates the bot token live, resolves the configured channel target, and posts a sandbox message that is deleted automatically when cleanup permissions are available.",
+              "The test checks the bot token with your server, finds the channel you chose and posts one test post there. When the bot may, it deletes that post again right away, so read the result on this step: the post may be gone before you look.",
+            ),
+          ],
+          troubleshooting: [
+            troubleshoot(
+              "token-rejected",
+              "Mattermost rejected the bot token",
+              "Paste the bot's token. Mattermost shows it only once, when you add the bot account. If you didn't keep it, ask a system admin to create a new token for the bot.",
+            ),
+            troubleshoot(
+              "channel-not-found",
+              "It can't find the channel for the test post",
+              "Use the channel name from its web address (for example town-square), not its display name, or @your-username to have the bot message you. The bot must already be a member of the team and the channel, so add it to the team and the channel first.",
+            ),
+            troubleshoot(
+              "post-refused",
+              "Mattermost refused the test post",
+              "The bot must be a member of the channel and allowed to post in it. Add it to the channel from your own account, then run the test again.",
+            ),
+            troubleshoot(
+              "cleanup-failed",
+              "It says the test post was sent but couldn't be deleted",
+              "The bot isn't allowed to delete its own post. Delete the test post yourself in Mattermost, then acknowledge it when the guide asks.",
+            ),
+            troubleshoot(
+              "host-not-allowed",
+              "It says GoatCitadel can't reach your Mattermost server yet",
+              "GoatCitadel only reaches hosts you allow. Use Allow these hosts on this step to add your server, then run the test again.",
+            ),
+            troubleshoot(
+              "variable-not-found",
+              "It says the bot token is missing, and you used an environment variable",
+              "A variable's name must start with MATTERMOST_ (for example MATTERMOST_BOT_TOKEN), and you must restart GoatCitadel after you set it. Or paste the token instead.",
+            ),
+            troubleshoot(
+              "no-reply",
+              "You post in a channel and nothing comes back",
+              "Check these in order. Receive posts must be on. Your Mattermost user ID (not your username) must be listed under Who may message this bot. The bot must be a member of the channel. GoatCitadel must be running: it only hears posts while it's running. And your server must be in the hosts GoatCitadel may reach: if it isn't, receiving stops until you allow it and restart GoatCitadel.",
             ),
           ],
         },
@@ -131,13 +222,13 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finalize saves the connection for runtime sends and, when enabled, the inbound WebSocket. After finalizing, post a sandbox message to the default channel and confirm the bot delivers before relying on this connection.",
+              "Finish saves the connection so GoatCitadel can post from it. To receive posts, turn on Receive posts and allow your user ID (the last step shows how).",
             ),
           ],
           successCriteria: [
-            "The bot token authenticated live against the configured server URL.",
-            "The configured default channel resolved and accepted the sandbox post.",
-            "The sandbox message was cleaned up automatically, or you removed it manually where cleanup permissions were unavailable.",
+            "Your Mattermost server accepted the bot token.",
+            "The channel you chose was found and accepted the test post.",
+            "The test post was deleted, or you deleted it yourself where the bot couldn't.",
           ],
         },
       ],
@@ -172,7 +263,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
       supportsRetest: true,
     },
     volatility: {
-      officialDocsUrl: "https://developers.mattermost.com/integrate/reference/server/server-reference/",
+      officialDocsUrl: "https://docs.mattermost.com/developers/integrate/reference/bot-accounts",
       lastReviewedAt: "2026-04-01",
       volatility: "medium",
       deprecationRisk: "low",
@@ -243,15 +334,25 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
       );
       if (!serverUrl) {
         issues.push(requiredFieldIssue("serverUrl", "Server URL is required."));
-      } else if (!looksLikeHttpUrl(serverUrl)) {
-        issues.push(malformedFieldIssue("serverUrl", "Server URL should start with http:// or https://."));
+      } else {
+        // Plain http is refused the same way the live test refuses it. That rule lets "ftp://localhost" through, so the
+        // scheme is checked here too.
+        const insecure = requireSecureUrl(serverUrl, "serverUrl", "Server URL");
+        if (insecure) {
+          issues.push(insecure);
+        } else if (!looksLikeHttpUrl(serverUrl)) {
+          issues.push(malformedFieldIssue("serverUrl", "Server URL should start with https://."));
+        }
       }
       if (!hasConfiguredToken) {
         issues.push({
           key: "mattermost_auth_missing",
+          // The pasted field is where a person goes to fix this, not the expert variable name.
+          fieldKey: "botToken",
           level: "error",
-          message: "Provide either a Mattermost bot token or an env-backed bot-token reference.",
+          message: "Paste the Mattermost bot token.",
           failureCategory: "missing_input",
+          nextSteps: ["Paste the bot's token. Mattermost shows it only once, when you add the bot account."],
         });
       }
       if (!readString(draft.draft, "defaultChannel")) {

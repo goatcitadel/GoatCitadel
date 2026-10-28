@@ -1354,7 +1354,7 @@ describe("channel setup definitions", () => {
       "google-chat": ["overview", "create-webhook"],
       teams: ["overview", "create-webhook"],
       whatsapp: ["overview"],
-      mattermost: ["overview"],
+      mattermost: ["overview", "create-bot"],
       matrix: ["overview", "create-bot"],
       qqbot: ["overview"],
       wecom: ["overview"],
