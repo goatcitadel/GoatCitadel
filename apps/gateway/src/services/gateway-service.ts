@@ -798,6 +798,7 @@ import {
   projectQueuedChannelDeliveryResult,
 } from "./gateway/channel-delivery-helpers.js";
 import { buildChannelReplyDeliveryInput } from "./channel-reply-delivery-input.js";
+import { isOwnAutonomousDelivery } from "./autonomous-delivery-ownership.js";
 import {
   assertDeploymentProfileUpdate as assertGatewayDeploymentProfileUpdate,
   assertFirecrawlRuntimeUpdate as assertGatewayFirecrawlRuntimeUpdate,
@@ -10248,6 +10249,7 @@ export class GatewayService {
     }
     const operatorId = input.systemActorId ?? "system-cron";
     const workspaceId = (await this.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const ownDelivery = await isOwnAutonomousDelivery(input, { storage: this.storage }, this.chatAutonomousTurnDeps());
     const createInput: DurableRunCreateRequest = {
       runId: deliveryRunId,
       workflowKey: "connector.delivery",
@@ -10274,6 +10276,7 @@ export class GatewayService {
         ...(input.turnId ? { turnId: input.turnId } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
         ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}),
+        ...(ownDelivery ? { ownDelivery: true } : {}),
       },
     };
     let run: DurableRunRecord;

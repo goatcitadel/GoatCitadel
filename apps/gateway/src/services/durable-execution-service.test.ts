@@ -1616,14 +1616,14 @@ describe("durable-execution-service orchestration workflow", () => {
     );
   });
 
-  it("sends approval prompts and autonomous replies as GoatCitadel's own delivery, and nothing else", async () => {
+  it("sends approval prompts and autonomous replies marked own as GoatCitadel's own delivery, and nothing else", async () => {
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
       await deps.markExternalCallStarted?.();
       await deps.commsSend({ connectionId: "channel-1", target: "#ops", message: "hello" });
       await deps.commsReply({ connectionId: "channel-1", target: "#ops", message: "hi", replyToMessageId: "m-1" });
       return { capabilityId: "outbound_messages", dispatchKind: "integration_channel_send", result: {} } as never;
     });
-    const deliver = async (deliveryKind: string | undefined) => {
+    const deliver = async (metadata: Record<string, unknown> | undefined) => {
       const run = {
         ...buildRunWithPayload("connector.delivery", {
           version: "connector.delivery.v1",
@@ -1631,7 +1631,7 @@ describe("durable-execution-service orchestration workflow", () => {
           action: "channel.send",
           payload: { target: "#ops", message: "hello" },
         }),
-        ...(deliveryKind ? { metadata: { deliveryKind } } : {}),
+        ...(metadata ? { metadata } : {}),
       };
       const host = {
         requireConnectorRecord: vi.fn(() => ({
@@ -1652,16 +1652,25 @@ describe("durable-execution-service orchestration workflow", () => {
       return host;
     };
 
-    for (const deliveryKind of ["approval.remote_token", "autonomous.assistant_message"]) {
-      const host = await deliver(deliveryKind);
-      expect(host.commsSend, deliveryKind).toHaveBeenCalledWith(expect.any(Object), { ownDelivery: true });
-      expect(host.commsReply, deliveryKind).toHaveBeenCalledWith(expect.any(Object), { ownDelivery: true });
+    // An approval prompt is own; an autonomous reply is own only when the Gateway marked it own at enqueue time.
+    for (const metadata of [
+      { deliveryKind: "approval.remote_token" },
+      { deliveryKind: "autonomous.assistant_message", ownDelivery: true },
+    ]) {
+      const host = await deliver(metadata);
+      expect(host.commsSend, JSON.stringify(metadata)).toHaveBeenCalledWith(expect.any(Object), { ownDelivery: true });
+      expect(host.commsReply, JSON.stringify(metadata)).toHaveBeenCalledWith(expect.any(Object), { ownDelivery: true });
     }
-    // Any other connector delivery stays subject to a switched-off group.
-    for (const deliveryKind of [undefined, "operator.custom"]) {
-      const host = await deliver(deliveryKind);
-      expect(host.commsSend, String(deliveryKind)).toHaveBeenCalledWith(expect.any(Object), undefined);
-      expect(host.commsReply, String(deliveryKind)).toHaveBeenCalledWith(expect.any(Object), undefined);
+    // Any other connector delivery, including an unmarked autonomous reply, stays subject to a switched-off group.
+    for (const metadata of [
+      undefined,
+      { deliveryKind: "operator.custom", ownDelivery: true },
+      { deliveryKind: "autonomous.assistant_message" },
+      { deliveryKind: "autonomous.assistant_message", ownDelivery: "true" },
+    ]) {
+      const host = await deliver(metadata);
+      expect(host.commsSend, JSON.stringify(metadata)).toHaveBeenCalledWith(expect.any(Object), undefined);
+      expect(host.commsReply, JSON.stringify(metadata)).toHaveBeenCalledWith(expect.any(Object), undefined);
     }
     expect(readConnectorDeliveryOwnership({ metadata: { deliveryKind: { toString: () => "x" } } })).toBeUndefined();
   });

@@ -401,8 +401,9 @@ export async function runCommitmentSweep(deps: ChatAutonomousTurnDeps): Promise<
   } satisfies CommitmentSweepCoreDeps);
 }
 
-async function resolveCommitmentDeliveryChannel(
-  deps: ChatAutonomousTurnDeps,
+/** The session's own bound channel: its writable integration binding and that connection's active channel key. */
+export async function resolveCommitmentDeliveryChannel(
+  deps: Pick<ChatAutonomousTurnDeps, "storage" | "listConnectorRecords">,
   sessionId: string,
 ): Promise<CronAgentTurnConfig["deliveryChannel"] | undefined> {
   const binding = await deps.storage.chatSessionBindings.get(sessionId);

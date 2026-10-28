@@ -174,6 +174,8 @@ export interface AutonomousChannelDeliveryRequest {
   systemActorId?: string;
   reason?: string;
   commitmentId?: string;
+  /** The turn's cron admission identity (server-written run metadata); the delivery's owner reads its source. */
+  cronAdmission?: unknown;
 }
 
 /** Request passed to the gateway-backed silent-heartbeat transcript cleanup. */
@@ -479,19 +481,18 @@ function isAutonomousDurableRun(run: DurableRunRecord): boolean {
   );
 }
 
-/** Connector deliveries GoatCitadel itself enqueues: approval prompts to the operator and autonomous chat replies. */
-const OWN_CONNECTOR_DELIVERY_KINDS: ReadonlySet<unknown> = new Set([
-  "approval.remote_token",
-  "autonomous.assistant_message",
-]);
-
 /**
- * A connector delivery is GoatCitadel's own when the Gateway enqueued it as an approval prompt or an autonomous
- * chat reply, so it keeps working while Messaging is switched off. Any other kind stays subject to the switch.
+ * A connector delivery is GoatCitadel's own, so it keeps working while Messaging is switched off, only when the Gateway
+ * enqueued it as an approval prompt to the operator, or as an autonomous chat reply it marked as own at enqueue time
+ * (P2-R19: an operator-made schedule or a commitment follow-up to the session's bound channel). Anything else,
+ * including a `schedule.manage` schedule's reply, stays subject to the switch.
  */
 export function readConnectorDeliveryOwnership(run: Pick<DurableRunRecord, "metadata">): OwnDeliveryOption | undefined {
   const metadata = run.metadata as Record<string, unknown> | undefined;
-  return OWN_CONNECTOR_DELIVERY_KINDS.has(metadata?.deliveryKind) ? OWN_DELIVERY : undefined;
+  const own =
+    metadata?.deliveryKind === "approval.remote_token" ||
+    (metadata?.deliveryKind === "autonomous.assistant_message" && metadata.ownDelivery === true);
+  return own ? OWN_DELIVERY : undefined;
 }
 
 async function assertAutonomousDurableRunAllowed(
@@ -3387,6 +3388,7 @@ export async function maybeEnqueueAutonomousDelivery(
     systemActorId: autonomous.systemActorId,
     reason: autonomous.reason,
     commitmentId: autonomous.commitmentId,
+    ...(currentRun.metadata?.cronAdmission ? { cronAdmission: currentRun.metadata.cronAdmission } : {}),
   });
 }
 

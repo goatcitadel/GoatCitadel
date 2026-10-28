@@ -337,6 +337,7 @@ export function buildChannelDeliveryIdempotencyKey(input: ChannelSendInput, chan
   if (input.effectId?.trim()) {
     return `channel-delivery:effect:${input.effectId.trim()}`;
   }
+  // These hashes leave out the own-delivery fact on purpose: a key names the message, not who may send it.
   if (input.sessionId?.trim() && input.replyToMessageId?.trim()) {
     const hash = createHash("sha256")
       .update(JSON.stringify(buildChannelDeliveryPayload(input, channelKey)))

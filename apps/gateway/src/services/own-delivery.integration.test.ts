@@ -29,6 +29,9 @@ const ENV_KEYS = [
   "GOATCITADEL_DATABASE_DRIVER",
   "GOATCITADEL_RATE_LIMIT_ENABLED",
   "GOATCITADEL_ROOT_DIR",
+  "GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED",
+  "GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED",
+  "GOATCITADEL_FEATURE_SCHEDULED_CHAT_TURNS_V1_ENABLED",
 ] as const;
 const SWITCHED_OFF_PHRASE = "tool group switched off";
 const DISCORD_TARGET = "discord-channel-1";
@@ -56,7 +59,9 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
     }
   });
 
-  async function startGateway(): Promise<{ live: GatewayService; connection: IntegrationConnection }> {
+  async function startGateway(
+    options: { scheduledTurns?: boolean } = {},
+  ): Promise<{ live: GatewayService; connection: IntegrationConnection }> {
     fakeProvider = await startFakeOpenAiCompatibleServer(replyWith("REPLY_OK"));
     fakeDiscord = await startFakeDiscordWebhookServer();
     const root = createIsolatedConfigRoot(fakeProvider.baseUrl);
@@ -64,6 +69,11 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
     process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
     process.env.GOATCITADEL_RATE_LIMIT_ENABLED = "false";
     process.env.GOATCITADEL_ROOT_DIR = root;
+    if (options.scheduledTurns) {
+      process.env.GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED = "true";
+      process.env.GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED = "false";
+      process.env.GOATCITADEL_FEATURE_SCHEDULED_CHAT_TURNS_V1_ENABLED = "true";
+    }
     gateway = new GatewayService(await loadGatewayConfig(root));
     await gateway.initCritical();
     const connection = await gateway.routeServices.integrations.createIntegrationConnection({
@@ -191,7 +201,10 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
     // The operator approves, then switches Messaging off before it runs: the AI's send stays stopped.
     const approvalId = await approvedSend("Approved, then switched off");
     switchOff(live, "messaging");
-    expect((await settle(approvalId))?.resolutionStatus).not.toBe("executed");
+    const stopped = await settle(approvalId);
+    // Stopped by the switch itself, not by some unrelated failure.
+    expect(stopped?.resolutionStatus).toBe("failed");
+    expect(JSON.stringify(stopped?.result)).toContain(SWITCHED_OFF_PHRASE);
     expect(fakeDiscord!.requests).toHaveLength(1);
   });
 
@@ -223,6 +236,99 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
       expect(result.outcome, toolName).toBe("blocked");
       expect(result.policyReason).toContain(SWITCHED_OFF_PHRASE);
     }
+  });
+
+  it("executes Library knowledge actions while Documents and Memory are off when approvals are bypassed", async () => {
+    const { live } = await startGateway();
+    // Without approvals in the way, "keeps working" means the call really runs, not just that it is unchanged.
+    live.config.toolPolicy.tools.approvalMode = "bypass";
+    switchOff(live, "documents", "memory");
+    const chatAttachments = (
+      live as unknown as { buildChatThreadKnowledgeDependencies(): ChatThreadKnowledgeDependencies }
+    ).buildChatThreadKnowledgeDependencies();
+
+    const results = [
+      await live.routeServices.knowledge.knowledgeMemorySearch({ query: "release notes" }),
+      await live.routeServices.knowledge.knowledgeEmbeddingsQuery({ query: "release notes" }),
+      await chatAttachments.knowledgeEmbeddingsQuery({ query: "release notes", sessionId: "own-delivery-chat" }),
+    ];
+    for (const result of results) {
+      // An executed call comes back unwrapped; a refusal or approval request keeps its tool outcome.
+      expect(asRecord(result).outcome, JSON.stringify(result)).toBeUndefined();
+    }
+    // The control: the AI's own call to the same tool is still switched off under the same settings.
+    const aiSearch = await live.invokeTool(aiCall("memory.search", { query: "release notes" }));
+    expect(aiSearch.outcome).toBe("blocked");
+    expect(aiSearch.policyReason).toContain(SWITCHED_OFF_PHRASE);
+  });
+
+  /**
+   * Fires one scheduled agent turn whose reply goes to the Discord channel, with Messaging switched off, and returns
+   * the reply's channel delivery once it settles. The job is created the way each real owner creates it: the
+   * operator's cron route stamps an `authenticated_operator` creator receipt, and `schedule.manage` (the AI's tool)
+   * stamps `admitted_chat` (chat-autonomous-turn-service.ts scheduleManage).
+   */
+  async function runScheduledReply(creatorSource: "authenticated_operator" | "admitted_chat") {
+    const { live, connection } = await startGateway({ scheduledTurns: true });
+    switchOff(live, "messaging");
+    const session = await live.createChatSession({ title: "Scheduled reply" });
+    // The session may send to its channel without asking (the grant inbound replies use), so the Messaging switch
+    // is the only thing that can stop the reply.
+    await live.ensureSessionInternalToolGrant(session.sessionId, "channel.send", "own-delivery-test");
+    const actorId = "operator-1";
+    const jobId = `own-delivery-${creatorSource.replace("_", "-")}`;
+    await live.routeServices.cron.createCronJob(
+      {
+        jobId,
+        name: "Scheduled reply",
+        action: "agent_turn",
+        schedule: "0 0 * * * UTC",
+        enabled: true,
+        actionConfig: {
+          agentTurn: {
+            prompt: "Reply with exactly: REPLY_OK",
+            sessionId: session.sessionId,
+            deliveryChannel: { channelKey: "discord", target: DISCORD_TARGET },
+            deliverMode: "always",
+            createdBy: {
+              operatorId: actorId,
+              authActorId: actorId,
+              permissionProfileId: "trusted_local_power",
+              depth: 0,
+            },
+          },
+        },
+      },
+      { actorId, source: creatorSource },
+    );
+    await live.routeServices.cron.runCronJobNow(jobId);
+    const delivery = await pollFor(
+      async () => (await live.storage.commsDeliveries.list(connection.connectionId, 50))[0],
+      (candidate) =>
+        candidate?.status === "sent" ||
+        candidate?.status === "failed" ||
+        candidate?.deliveryStatus === "waiting_approval",
+      `the ${creatorSource} schedule's reply delivery to settle`,
+      90_000,
+    );
+    return { delivery, discordRequests: fakeDiscord!.requests };
+  }
+
+  it("delivers an operator schedule's reply while Messaging is off", async () => {
+    const { delivery, discordRequests } = await runScheduledReply("authenticated_operator");
+
+    expect(delivery?.status, delivery?.error).toBe("sent");
+    expect(delivery?.payload).toMatchObject({ ownDelivery: true });
+    expect(discordRequests.map((request) => asRecord(request.body).content)).toEqual(["REPLY_OK"]);
+  });
+
+  it("stops a schedule.manage schedule's reply while Messaging is off", async () => {
+    const { delivery, discordRequests } = await runScheduledReply("admitted_chat");
+
+    expect(delivery?.status).toBe("failed");
+    expect(delivery?.error).toContain(SWITCHED_OFF_PHRASE);
+    expect(delivery?.payload).not.toHaveProperty("ownDelivery");
+    expect(discordRequests).toHaveLength(0);
   });
 });
 
