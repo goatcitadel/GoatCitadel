@@ -161,6 +161,7 @@ import {
   buildCompletionFromAggregate,
   createCompletionStreamAggregate,
   extractMessageContent,
+  flushCompletionStreamAggregate,
   inspectToolCallProtocolIssues,
   readToolCalls,
   toProviderToolFunctionName,
@@ -4579,13 +4580,30 @@ export class ChatTurnAgentRunner {
                     };
                   }
                 }
-                const heldThinking = explorerThinkingProjector?.flush();
+                // Release text still held behind a half-arrived inline reasoning tag.
+                const heldStream = flushCompletionStreamAggregate(aggregate);
+                const heldReasoning = thinkingStreamEnabled ? (heldStream.reasoningDelta ?? "") : "";
+                const heldThinking =
+                  (heldReasoning && explorerThinkingProjector
+                    ? explorerThinkingProjector.push(heldReasoning)
+                    : heldReasoning) + (explorerThinkingProjector?.flush() ?? "");
                 if (heldThinking) {
+                  streamedThinking = true;
                   yield {
                     type: "thinking_delta",
                     sessionId: input.sessionId,
                     turnId: input.turnId,
                     delta: heldThinking,
+                  };
+                }
+                if (heldStream.delta && aggregate.toolCalls.size === 0 && !readOnlyExplorerScopeRoot) {
+                  streamYieldedVisibleChunk = true;
+                  yield {
+                    type: "delta",
+                    sessionId: input.sessionId,
+                    turnId: input.turnId,
+                    messageId: input.outputMessageId,
+                    delta: heldStream.delta,
                   };
                 }
                 completion = buildCompletionFromAggregate(aggregate);

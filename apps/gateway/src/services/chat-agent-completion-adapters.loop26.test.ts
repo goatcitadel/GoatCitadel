@@ -4,7 +4,9 @@ import {
   absorbCompletionStreamChunk,
   buildCompletionFromAggregate,
   createCompletionStreamAggregate,
+  extractMessageContent,
   extractStructuredTextContent,
+  flushCompletionStreamAggregate,
   inspectToolCallProtocolIssues,
   parseSerializedToolCalls,
   readToolCalls,
@@ -493,5 +495,52 @@ describe("absorbCompletionStreamChunk reasoning deltas", () => {
     });
     expect(both.reasoningDelta).toBe("A");
     expect(structured.reasoningDelta).toBeUndefined();
+  });
+
+  it("routes inline <think> reasoning from streamed content to reasoning, not the answer", () => {
+    const aggregate = createCompletionStreamAggregate();
+    const pieces = ["<thi", "nk>Let me ", "weigh this.</th", "ink>\n\nThe answer", " is 42."];
+    const streamed = pieces.map((content) =>
+      absorbCompletionStreamChunk(aggregate, { choices: [{ delta: { content } }] }),
+    );
+
+    expect(streamed[0]?.delta).toBeUndefined();
+    expect(streamed.map((item) => item.delta ?? "").join("")).toBe("The answer is 42.");
+    expect(streamed.map((item) => item.reasoningDelta ?? "").join("")).toBe("Let me weigh this.");
+    expect(flushCompletionStreamAggregate(aggregate)).toEqual({});
+    expect(buildCompletionFromAggregate(aggregate).choices?.[0]?.message?.content).toBe("The answer is 42.");
+  });
+
+  it("releases an unclosed inline reasoning block as reasoning when the stream ends", () => {
+    const aggregate = createCompletionStreamAggregate();
+    const streamed = absorbCompletionStreamChunk(aggregate, {
+      choices: [{ delta: { content: "<thinking>still going</thin" } }],
+    });
+    expect(streamed).toEqual({ delta: undefined, reasoningDelta: "still going", sawToolCall: false });
+    expect(flushCompletionStreamAggregate(aggregate)).toEqual({ reasoningDelta: "</thin" });
+    expect(buildCompletionFromAggregate(aggregate).choices?.[0]?.message?.content).toBe("");
+  });
+
+  it("keeps an answer that only starts like a reasoning tag", () => {
+    const aggregate = createCompletionStreamAggregate();
+    const first = absorbCompletionStreamChunk(aggregate, { choices: [{ delta: { content: "<th" } }] });
+    const second = absorbCompletionStreamChunk(aggregate, { choices: [{ delta: { content: ">Header</th> cell" } }] });
+    expect(first.delta).toBeUndefined();
+    expect(second.delta).toBe("<th>Header</th> cell");
+    expect(
+      absorbCompletionStreamChunk(aggregate, { choices: [{ delta: { content: "<think>x</think>" } }] }).delta,
+    ).toBe("<think>x</think>");
+
+    const short = createCompletionStreamAggregate();
+    absorbCompletionStreamChunk(short, { choices: [{ delta: { content: "<an" } }] });
+    expect(flushCompletionStreamAggregate(short)).toEqual({ delta: "<an" });
+    expect(buildCompletionFromAggregate(short).choices?.[0]?.message?.content).toBe("<an");
+  });
+
+  it("strips inline reasoning from a non-streamed message but not a mid-answer tag", () => {
+    expect(extractMessageContent({ content: "<think>\nplan\n</think>\n\nFinal answer." })).toBe("Final answer.");
+    expect(extractMessageContent({ content: "Use the <analysis> tag in your XML." })).toBe(
+      "Use the <analysis> tag in your XML.",
+    );
   });
 });
