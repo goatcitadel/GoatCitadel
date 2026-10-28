@@ -1,5 +1,5 @@
 import { cn } from "../../lib/cn";
-import { letterIconTone } from "./connectors/connector-view";
+import { letterIconTone } from "./letter-icon-tone";
 
 /*
  * Each look pairs a surface with the text colour made for it, and every pair is 4.5:1 or better in both themes

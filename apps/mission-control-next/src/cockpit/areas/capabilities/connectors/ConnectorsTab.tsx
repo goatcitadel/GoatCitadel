@@ -1,6 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { TriangleAlert } from "lucide-react";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../../data/record-view";
@@ -11,6 +10,7 @@ import { EmptyState } from "../../../ui/EmptyState";
 import { Section } from "../../../ui/Section";
 import { CapabilitySearch } from "../CapabilitySearch";
 import { CategoryFilter } from "../CategoryFilter";
+import { NoticeLine } from "../NoticeLine";
 import { ConnectorRow } from "./ConnectorRow";
 import {
   connectorCategoryOptions,
@@ -25,16 +25,6 @@ import { useConnectorPanel } from "./use-connector-panel";
 const McpServerCreate = lazy(async () => ({
   default: (await import("../../settings/McpServerCreate")).McpServerCreate,
 }));
-
-/** One plain line of caution above the list: a source that failed, or a recheck that did. Not announced. */
-function NoticeLine({ children }: { children: ReactNode }) {
-  return (
-    <p className="flex items-start gap-1.5 text-sm text-fg-secondary">
-      <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-status-waiting" />
-      <span className="min-w-0 flex-1">{children}</span>
-    </p>
-  );
-}
 
 /**
  * The Connectors tab: every app the AI can use, in the Gateway's own groups (Connected, On this device, Available,

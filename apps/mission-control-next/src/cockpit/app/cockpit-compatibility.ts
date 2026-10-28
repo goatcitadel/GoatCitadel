@@ -23,8 +23,10 @@ const systemViews = new Set([
   "improvement",
   "runtime",
 ]);
-// Phase 1 ships the Connectors tab only; the other Capabilities tabs resolve missing until they exist.
-const capabilitiesViews = new Set(["connectors"]);
+// Connectors and Tools are the shipped Capabilities tabs; the other tabs resolve missing until they exist.
+const capabilitiesViews = new Set(["connectors", "tools"]);
+// The catalog filters the old Library tools address could carry. Tools has no such filters, so they stay behind.
+const libraryCatalogFilterParams = ["q", "type", "status", "trust"];
 const libraryViews = new Set([
   "capabilities",
   "memory",
@@ -221,13 +223,18 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
       url.searchParams.set("noteId", parts[2]!);
       return native("/library/notes");
     }
+    // Tools moved to the Capabilities area. The catalog filters and the fragment mean nothing there; the workspace and
+    // the shell keep travelling. (An explicit Classic rollback returned earlier and stays on the Library.)
+    if (section === "tools" && parts.length === 2) {
+      for (const key of libraryCatalogFilterParams) url.searchParams.delete(key);
+      url.hash = "";
+      return native("/capabilities/tools");
+    }
     if (parts.length === 1 || (parts.length === 2 && libraryViews.has(section!))) return native();
     const catalog = readCatalogLocation(parts.slice(1), url.search);
     if (
       !catalog.invalidSelection &&
-      (catalog.selection
-        ? Object.hasOwn(catalogKinds, catalog.selection.kind)
-        : section === "skills" || section === "tools")
+      (catalog.selection ? Object.hasOwn(catalogKinds, catalog.selection.kind) : section === "skills")
     )
       return native();
   }

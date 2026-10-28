@@ -62,6 +62,9 @@ const TOOL_KEYS: readonly QueryKey[] = [
   ["settings", "local-operator-overrides"],
   ["settings", "permission-selection"],
   ["approvals", "workspace-tools-profile"],
+  // The Capabilities tool list shows each tool's rules (grants, profile, Ward). The prefix covers every workspace's list
+  // but not the call counts, which sit under their own key.
+  ["tools", "capability-tools"],
 ];
 // The Capabilities connector list merges MCP servers, integrations, channels and web search, so each owner refreshes it.
 // The prefix covers every workspace's list.

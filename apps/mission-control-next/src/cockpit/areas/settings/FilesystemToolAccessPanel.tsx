@@ -12,6 +12,7 @@ import {
   toolAccessRisk,
   wildcardDenyEntries,
 } from "./filesystem-write-access";
+import { FilesToolsOffNote } from "./FilesystemWriteAccessParts";
 import type { FilesystemWriteAccess } from "./use-filesystem-write-access";
 
 export interface ToolAccessReviewRequest {
@@ -39,6 +40,7 @@ export function FilesystemToolAccessPanel({
         Denied blocks a tool everywhere. Available lets Chat call it in every write root. Not listed leaves the decision
         to permission profiles and agent policy.
       </p>
+      <FilesToolsOffNote switchedOffToolGroups={settings.data?.switchedOffToolGroups} />
       {wildcards.length ? (
         <p className="mt-2 text-sm text-status-waiting">
           A wildcard deny rule ({wildcards.join(", ")}) still blocks matching tools. Edit it in the config file; these

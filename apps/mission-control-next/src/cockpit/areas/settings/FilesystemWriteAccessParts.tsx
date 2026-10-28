@@ -1,6 +1,9 @@
+import type { ToolGroupId } from "@goatcitadel/contracts";
 import { settingsChangeIsConfirmed } from "../../../features/native-routes/settings/use-settings-change";
+import { toolGroupItemHref } from "../capabilities/tools/tool-links";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { ApprovedSettingsContinuation } from "./ApprovedSettingsContinuation";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { presentChangeStatusLabel } from "./settings-vocabulary";
@@ -146,5 +149,28 @@ export function ConfiguredFolders({ title, paths }: { title: string; paths: read
         <p className="mt-1 text-xs text-fg-muted">None configured.</p>
       )}
     </div>
+  );
+}
+
+/**
+ * One line at the top of the Files tools' access settings when the group is switched off in Capabilities › Tools.
+ * Those tool settings still save, but nothing reads them until the group is back on, so the page says so rather than
+ * implying the AI can use them. It belongs to the tool list only: write roots and the outside-root mode also govern
+ * document, slide and browser outputs, which belong to other groups.
+ */
+export function FilesToolsOffNote({
+  switchedOffToolGroups,
+}: {
+  switchedOffToolGroups: readonly ToolGroupId[] | undefined;
+}) {
+  if (!switchedOffToolGroups?.includes("files")) return null;
+  return (
+    <p className="mt-2 text-sm text-status-waiting">
+      The Files tools are switched off in{" "}
+      <NativeOwnerLink scope="files" href={toolGroupItemHref("files")}>
+        Capabilities › Tools
+      </NativeOwnerLink>
+      , so these settings have no effect until they're back on.
+    </p>
   );
 }

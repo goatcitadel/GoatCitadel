@@ -15,9 +15,8 @@ export const WORKSPACE_CAPABILITIES_HREF = "/settings/citadel#workspace-capabili
 /** The Connectors tab, without a panel open. */
 export const CONNECTORS_HREF = "/capabilities/connectors";
 
-/** The Inbox page for one approval. Install plans are made in the installation's own workspace. */
-export const inboxApprovalHref = (approvalId: string) =>
-  `/inbox?approvalId=${encodeURIComponent(approvalId)}&workspaceId=default`;
+// The Inbox links moved to a file every tab shares; the Connectors files keep importing them from here.
+export { inboxApprovalHref, inboxApprovalLink } from "../capability-links";
 
 /**
  * The link that goes with a sentence pointing somewhere (DESIGN.md: it links there, in the same element), named by
@@ -32,10 +31,6 @@ export interface ConnectorNextLink {
 export const MCP_SETTINGS_LINK: ConnectorNextLink = { label: "Open in Settings", href: MCP_SERVERS_HREF };
 /** Where the network allowlist is changed: the first-run page in Settings, under Change installation defaults. */
 export const NETWORK_ALLOWLIST_LINK: ConnectorNextLink = { label: "Open in Settings", href: "/settings/first-run" };
-export const inboxApprovalLink = (approvalId: string): ConnectorNextLink => ({
-  label: "Open in Inbox",
-  href: inboxApprovalHref(approvalId),
-});
 
 /** The Settings section that owns a connector's detailed setup ("Advanced setup in Settings"). */
 export function connectorSettingsHref(item: CapabilityConnectorItem): string {

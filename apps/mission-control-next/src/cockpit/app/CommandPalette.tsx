@@ -11,6 +11,7 @@ import { THEME_SEARCH_TERMS } from "./theme-options";
 import { buildSettingsIndex } from "../areas/settings/settings-index";
 import { resourceTitle } from "../areas/library/resource-title";
 import { LIBRARY_SECTION_LABELS } from "../areas/library/library-sections";
+import { CAPABILITIES_TABS } from "../areas/capabilities/capabilities-tabs";
 import { SYSTEM_VIEWS } from "../areas/system/system-views";
 import { WORK_VIEWS } from "../areas/work/work-views";
 import { Dialog } from "../ui/Dialog";
@@ -37,6 +38,7 @@ const SETTINGS = buildSettingsIndex({ discovery: true }).flatMap((page) => page.
 const TAB_DESTINATIONS = [
   ...SYSTEM_VIEWS.map((view) => ({ area: "system", label: `System › ${view.label}`, path: view.path })),
   ...WORK_VIEWS.map((view) => ({ area: "work", label: `Work › ${view.label}`, path: view.href })),
+  ...CAPABILITIES_TABS.map((tab) => ({ area: "capabilities", label: `Capabilities › ${tab.label}`, path: tab.href })),
   ...Object.entries(LIBRARY_SECTION_LABELS).map(([section, label]) => ({
     area: "library",
     label: `Library › ${label}`,

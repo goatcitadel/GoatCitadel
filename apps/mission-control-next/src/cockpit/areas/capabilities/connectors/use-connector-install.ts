@@ -4,7 +4,6 @@ import type {
   CapabilityConnectorItem,
   ChangePlanRecord,
   ChangePlanRequiredAction,
-  ChangePlanStatus,
   ConnectorInstallResponse,
 } from "@goatcitadel/contracts";
 import { fetchApproval, resolveApproval } from "@goatcitadel/mission-control-shared/api/approvals";
@@ -14,6 +13,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../../data/query-keys";
+import { DONE, ENDED } from "../change-plan-outcome";
 import { connectServer, startSignIn, submitSignInCode, switchOn } from "./connector-install-server-steps";
 import { inboxApprovalLink, MCP_SETTINGS_LINK, type ConnectorNextLink } from "./connector-links";
 import {
@@ -58,15 +58,6 @@ const APPLY_POLL_ROUNDS = 12;
 /** How many plans waiting in Inbox one read after a reload looks through (R88's flows are this app session's only). */
 const RECOVERY_LIMIT = 100;
 const SERVER_REF = "mcp_server:";
-
-const DONE: ReadonlySet<ChangePlanStatus> = new Set(["completed", "applied", "monitoring"]);
-const ENDED: ReadonlySet<ChangePlanStatus> = new Set([
-  "failed",
-  "cancelled",
-  "rolled_back",
-  "rollback_failed",
-  "manual_required",
-]);
 
 type Refusal = { readonly words: string; readonly link?: ConnectorNextLink };
 /** The install route's 409 refusals, by the field it names (R69); words that send the operator somewhere link there. */

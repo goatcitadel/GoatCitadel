@@ -101,6 +101,14 @@ const POLICY_ACCESS_DENIAL_REASONS = new Set([
   "tool_group_off",
 ]);
 
+/** A switched-off tool group gets a plain sentence; every other denial keeps its raw reason codes. */
+function describeAccessDenial(reasonCodes: readonly string[]): string {
+  if (reasonCodes.includes("tool_group_off")) return "This tool's group is switched off in Capabilities › Tools.";
+  return reasonCodes.length > 0
+    ? `Current tool access policy blocked this capability: ${reasonCodes.join(", ")}.`
+    : "Current tool access policy is blocking this capability.";
+}
+
 export async function scoutCapabilityUpgradeSuggestions(
   input: CapabilityScoutInput,
 ): Promise<ChatCapabilityUpgradeSuggestion[]> {
@@ -189,10 +197,7 @@ export async function scoutCapabilityUpgradeSuggestions(
         kind: "existing_but_disabled",
         title: `${tool.toolName} exists but is not currently allowed`,
         summary: tool.description,
-        reason:
-          access.reasonCodes.length > 0
-            ? `Current tool access policy blocked this capability: ${access.reasonCodes.join(", ")}.`
-            : "Current tool access policy is blocking this capability.",
+        reason: describeAccessDenial(access.reasonCodes),
         riskLevel: tool.riskLevel === "danger" || tool.riskLevel === "nuclear" ? "high" : "medium",
         recommendedAction: "review_tool_access",
         candidateId: tool.toolName,

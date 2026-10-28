@@ -25,7 +25,10 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // 896: Channel setup page status line (SetupSteps).
 // 897: a connector install's status line (InstallStatus), one per panel, which reads out each step the install or a
 // saved server's sign-in and connect reaches.
-export const LIVE_REGION_BUDGET = 897;
+// 898: the Capabilities Tools tab announces the one outcome that replaces its whole page, a first read that failed.
+// 899: a tool group's switch announces the note under it (what on and off mean, or that the change waits in Inbox).
+// 900: a tool group's switch announces why a change did not happen. A group shown twice announces in one place only.
+export const LIVE_REGION_BUDGET = 900;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

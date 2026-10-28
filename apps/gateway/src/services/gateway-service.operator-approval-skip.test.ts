@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChangePlanRuntimeFeatureFlag, ToolGroupChange } from "@goatcitadel/contracts";
 import { loadGatewayConfig } from "../config.js";
 import type { EvolutionControlPlaneActor } from "./evolution-control-plane-service.js";
@@ -237,6 +237,32 @@ describe("GatewayService tool group switches", () => {
       await setApprovalSkip(true);
     }
   });
+
+  // The approval is the operator's last word on a switch they flipped themselves, so approving applies it (#496).
+  it("switches on once the operator approves it in Inbox", async () => {
+    await saveGroupSwitch({ groupId: "email_and_calendar", enabled: false });
+    await setApprovalSkip(false);
+    try {
+      const waiting = await saveGroupSwitch({ groupId: "email_and_calendar", enabled: true });
+      expect(waiting.status).toBe("awaiting_approval");
+      const approvalId = waiting.requiredAction?.kind === "approval" ? waiting.requiredAction.approvalId : undefined;
+      expect(approvalId).toBeTruthy();
+
+      await gateway!.resolveApproval(approvalId!, { decision: "approve", resolvedBy: "operator" });
+
+      await vi.waitFor(
+        async () => {
+          const plan = await gateway!.evolutionControlPlaneService.get(settingsActor, waiting.planId);
+          expect(plan.status).toBe("completed");
+        },
+        { timeout: 8_000, interval: 100 },
+      );
+      expect(await switchedOffGroups()).not.toContain("email_and_calendar");
+      expect(await reasonCodesFor("calendar.list")).not.toContain("tool_group_off");
+    } finally {
+      await setApprovalSkip(true);
+    }
+  }, 30_000);
 
   it("switches on straight away when the approval skip is on", async () => {
     await saveGroupSwitch({ groupId: "schedules", enabled: false });

@@ -18,13 +18,17 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 }));
 
 type Root_ = { path: string; allowDelete: boolean; preset?: "os_temp"; label?: string; addedAt?: string };
-function settingsAt(revision: number, overrides: { roots?: Root_[]; deny?: string[]; allow?: string[] } = {}) {
+function settingsAt(
+  revision: number,
+  overrides: { roots?: Root_[]; deny?: string[]; allow?: string[]; switchedOffToolGroups?: string[] } = {},
+) {
   return {
     revision,
     writeJailRoots: ["/srv/goat/workspace", "/srv/goat/data"],
     readOnlyRoots: ["/srv/goat/skills"],
     operatorWriteRoots: overrides.roots ?? [],
     globalToolAccess: { deny: overrides.deny ?? ["fs.delete"], allow: overrides.allow ?? [] },
+    ...(overrides.switchedOffToolGroups ? { switchedOffToolGroups: overrides.switchedOffToolGroups } : {}),
   };
 }
 
@@ -379,6 +383,46 @@ describe("global filesystem tool access", () => {
     expect(button("Apply fs.copy")).toBeUndefined();
     expect(toolSelect("fs.move").value).toBe("denied");
     expect(button("Apply fs.move")).toBeDefined();
+  });
+
+  it("says the Files tools are switched off in Capabilities", async () => {
+    api.fetchSettings.mockResolvedValue(settingsAt(4, { switchedOffToolGroups: ["files"] }));
+    await render();
+    expect(text()).toContain(
+      "The Files tools are switched off in Capabilities › Tools, so these settings have no effect until they're back on.",
+    );
+    const links = [...container.querySelectorAll<HTMLAnchorElement>('a[href^="/capabilities/tools"]')];
+    expect(links).toHaveLength(1);
+    const target = new URL(links[0]!.getAttribute("href")!, "http://cockpit.invalid");
+    expect(target.pathname).toBe("/capabilities/tools");
+    expect(target.searchParams.get("item")).toBe("group:files");
+    expect(links[0]!.getAttribute("href")).toContain("item=group%3Afiles");
+    // The note sits inside the Files tools' access panel, between its heading and its tool list. Write roots and the
+    // outside-root mode also govern document, slide and browser outputs, so the note is not above them.
+    const note = links[0]!.closest("p")!;
+    const toolAccessTitle = container.querySelector("#filesystem-tool-access-title")!;
+    const toolAccessList = container.querySelector('ul[aria-labelledby="filesystem-tool-access-title"]')!;
+    const toolAccessPanel = toolAccessTitle.parentElement!;
+    expect(toolAccessPanel.contains(note)).toBe(true);
+    expect(toolAccessPanel.contains(toolAccessList)).toBe(true);
+    expect(toolAccessTitle.compareDocumentPosition(note)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(note.compareDocumentPosition(toolAccessList)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    const writeRootsTitle = container.querySelector("#operator-write-roots-title")!;
+    expect(toolAccessPanel.contains(writeRootsTitle)).toBe(false);
+    expect(writeRootsTitle.compareDocumentPosition(note)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(toolAccessPanel.contains(container.querySelector("#outside-root-writes-title")!)).toBe(false);
+    // The settings stay editable; the note is information, not a lock.
+    expect(pathInput().disabled).toBe(false);
+  });
+
+  it.each([
+    ["no groups are reported", undefined],
+    ["only another group is off", ["web_search"]],
+  ])("says nothing about Capabilities when %s", async (_name, switchedOffToolGroups) => {
+    api.fetchSettings.mockResolvedValue(settingsAt(4, { switchedOffToolGroups }));
+    await render();
+    expect(text()).not.toContain("switched off in Capabilities");
+    expect(container.querySelector('a[href^="/capabilities/tools"]')).toBeNull();
   });
 
   it("refuses to offer changes when the gateway omits write-access settings", async () => {
