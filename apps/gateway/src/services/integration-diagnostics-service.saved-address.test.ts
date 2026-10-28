@@ -22,26 +22,22 @@ const CHANNELS = [
     catalogId: "channel.google-chat",
     label: "Google Chat webhook URL",
     address: "https://chat.googleapis.com/v1/spaces/AAAAxxxx/messages?key=synthetic-key&token=synthetic-saved-address",
-    required: true,
   },
   {
     catalogId: "channel.teams",
     label: "Teams webhook URL",
     address:
       "https://defaultenvironment.00.environment.api.powerplatform.com/powerautomate/automations/direct/cu/20/workflows/0123456789abcdef0123456789abcdef/triggers/manual/paths/invoke?api-version=1&sig=synthetic-saved-address",
-    required: true,
   },
   {
     catalogId: "channel.slack",
     label: "Slack webhook URL",
     address: "https://hooks.slack.com/services/T0000/B0000/synthetic-saved-address",
-    required: false,
   },
   {
     catalogId: "channel.discord",
     label: "Discord webhook URL",
     address: "https://discord.com/api/webhooks/123456789012345678/synthetic-saved-address",
-    required: false,
   },
 ] as const;
 
@@ -63,7 +59,7 @@ function urlCheckFor(
   return { check: checks.find((check) => check.key === "url"), checks, read };
 }
 
-describe.each(CHANNELS)("the $label check on a saved connection", ({ catalogId, label, address, required }) => {
+describe.each(CHANNELS)("the $label check on a saved connection", ({ catalogId, label, address }) => {
   it("reads the address its own reference points to", () => {
     const { check, checks } = urlCheckFor(
       catalogId,
@@ -74,7 +70,7 @@ describe.each(CHANNELS)("the $label check on a saved connection", ({ catalogId, 
     expect(check).toEqual({
       key: "url",
       status: "pass",
-      message: `${label} is reachable under current allowlist posture.`,
+      message: `${label} host is on the network allowlist.`,
     });
     expect(JSON.stringify(checks)).not.toContain("synthetic-saved-address");
     expect(JSON.stringify(checks)).not.toContain(referenceFor(OWN_ID));
@@ -109,15 +105,43 @@ describe.each(CHANNELS)("the $label check on a saved connection", ({ catalogId, 
     );
 
     expect(read).not.toHaveBeenCalled();
-    if (required) expect(check).toEqual({ key: "url", status: "fail", message: `${label} is missing.` });
-    else expect(check).toBeUndefined();
+    // A saved address that can't be read is a missing address, whether or not the channel needs one: the setup used to
+    // say nothing about it for the optional webhooks of Slack and Discord.
+    expect(check).toEqual({ key: "url", status: "fail", message: `${label} is missing.` });
   });
 
   it("calls the address missing when secure storage no longer holds it", () => {
     const { check } = urlCheckFor(catalogId, { webhookUrl: referenceFor(OWN_ID) }, {});
 
-    if (required) expect(check).toEqual({ key: "url", status: "fail", message: `${label} is missing.` });
-    else expect(check).toBeUndefined();
+    expect(check).toEqual({ key: "url", status: "fail", message: `${label} is missing.` });
+  });
+
+  it("calls the address missing for a reference that is not a channel reference, and never reads it", () => {
+    const { check, checks, read } = urlCheckFor(
+      catalogId,
+      { webhookUrl: "keychain:goatcitadel:provider:openai:0001" },
+      { "provider:openai:0001": address },
+    );
+
+    expect(read).not.toHaveBeenCalled();
+    expect(check).toEqual({ key: "url", status: "fail", message: `${label} is missing.` });
+    expect(JSON.stringify(checks)).not.toContain("synthetic-saved-address");
+  });
+
+  it("does not ask the resolver about a reference that is not a channel reference", () => {
+    const { connectionOf, port } = guideFinish(catalogId);
+    const resolveConnectionSecret = vi.fn(() => address);
+    const checks = buildIntegrationConnectionChecks(
+      { ...port(), isConnectionUrlAllowlisted: vi.fn(() => true), resolveConnectionSecret },
+      connectionOf({ webhookUrl: "keychain:goatcitadel:approval-remote-action:0001" }),
+    );
+
+    expect(resolveConnectionSecret).not.toHaveBeenCalled();
+    expect(checks.find((check) => check.key === "url")).toEqual({
+      key: "url",
+      status: "fail",
+      message: `${label} is missing.`,
+    });
   });
 
   it("checks an address saved as plain text the way it always was", () => {
