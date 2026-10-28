@@ -5,7 +5,7 @@
 
 /**
  * Labels of letters, digits, hyphens and underscores joined by dots: a DNS name, or the dotted digits of an IPv4
- * address. Underscores appear in Docker and LAN names such as `signal_cli`. A trailing dot is not accepted: the
+ * address. Underscores appear in Docker and LAN names such as `chat_relay`. A trailing dot is not accepted: the
  * Gateway's network guard matches `example.com.` and `example.com` as different hosts, so the bare name would not let
  * the dotted address through.
  */

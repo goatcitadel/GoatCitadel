@@ -17,7 +17,7 @@ describe("channelAddressHost", () => {
   });
 
   it("accepts underscores in host labels, as Docker and LAN names use them", () => {
-    expect(channelAddressHost("http://signal_cli:8080/v1/send")).toBe("signal_cli:8080");
+    expect(channelAddressHost("http://chat_relay:8080/v1/send")).toBe("chat_relay:8080");
     expect(channelAddressHost("https://_matrix.example.org/")).toBe("_matrix.example.org");
   });
 
@@ -47,7 +47,7 @@ describe("channelAddressHost", () => {
 });
 
 describe("isChannelAddressHost", () => {
-  it.each(["hooks.slack.com", "ntfy.example.com:8443", "signal_cli:8080", "192.168.0.10", "[::1]:8443", "localhost"])(
+  it.each(["hooks.slack.com", "ntfy.example.com:8443", "chat_relay:8080", "192.168.0.10", "[::1]:8443", "localhost"])(
     "accepts %s",
     (host) => {
       expect(isChannelAddressHost(host)).toBe(true);
