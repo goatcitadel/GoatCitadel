@@ -31,6 +31,11 @@ const SECRET_REFERENCE_PREFIX = "keychain:goatcitadel:";
 /** Where the references saved for a channel connection start; the connection id and a colon follow. */
 const CONNECTION_SECRET_REFERENCE_PREFIX = `${SECRET_REFERENCE_PREFIX}channel-connection:`;
 
+/** Whether a config value points into secure storage. Such a value is a pointer, never a secret, whatever it says. */
+export function isSecureStorageReference(value: string): boolean {
+  return value.trim().startsWith(SECRET_REFERENCE_PREFIX);
+}
+
 export function resolveTelegramWebhookSecret(
   config: Record<string, unknown>,
   resolveReference?: ChannelSecretReferenceResolver,

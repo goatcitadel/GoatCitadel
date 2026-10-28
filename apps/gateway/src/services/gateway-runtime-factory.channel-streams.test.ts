@@ -18,6 +18,10 @@ const streams = {
 };
 
 const voiceGates: Array<() => Promise<boolean>> = [];
+const referenceReaders: Array<(secretRef: string) => string | undefined> = [];
+const resolveConnectionSecret = vi.fn((config: Record<string, unknown>, directKey: string) =>
+  config[directKey] === "keychain:goatcitadel:channel-connection:c1:botToken:n1" ? "stored-secret" : undefined,
+);
 const isFeatureEnabled = vi.fn(async (flag: string) => flag === "channelVoiceInboundV1Enabled");
 
 class FakeGatewayService {
@@ -25,8 +29,12 @@ class FakeGatewayService {
     setVoiceInboundGate: (gate: () => Promise<boolean>) => {
       voiceGates.push(gate);
     },
+    setSecretReferenceReader: (read: (secretRef: string) => string | undefined) => {
+      referenceReaders.push(read);
+    },
   };
   readonly isFeatureEnabled = isFeatureEnabled;
+  readonly resolveConnectionSecret = resolveConnectionSecret;
   constructor(..._args: unknown[]) {
     calls.push("gateway.construct");
   }
@@ -62,6 +70,8 @@ describe("gateway runtime facade channel-stream lifecycle", () => {
   beforeEach(() => {
     calls.length = 0;
     voiceGates.length = 0;
+    referenceReaders.length = 0;
+    resolveConnectionSecret.mockClear();
     isFeatureEnabled.mockClear();
     streams.sync.mockClear();
     streams.close.mockClear();
@@ -113,5 +123,23 @@ describe("gateway runtime facade channel-stream lifecycle", () => {
     expect(voiceGates).toHaveLength(1);
     await expect(voiceGates[0]!()).resolves.toBe(true);
     expect(isFeatureEnabled).toHaveBeenCalledWith("channelVoiceInboundV1Enabled");
+  });
+
+  it("gives the Discord runtime the Gateway's saved-key reader before serving deferred init, never from admin/cron init", async () => {
+    const admin = createGatewayAdminRuntime(config);
+    await admin.init();
+    expect(referenceReaders).toHaveLength(0);
+
+    const runtime = createGatewayRuntime(config);
+    expect(referenceReaders).toHaveLength(0);
+    await runtime.startDeferredInit();
+    expect(referenceReaders).toHaveLength(1);
+    expect(referenceReaders[0]!("keychain:goatcitadel:channel-connection:c1:botToken:n1")).toBe("stored-secret");
+    expect(referenceReaders[0]!("keychain:goatcitadel:channel-connection:c2:botToken:n2")).toBeUndefined();
+    expect(resolveConnectionSecret).toHaveBeenCalledWith(
+      { ref: "keychain:goatcitadel:channel-connection:c1:botToken:n1" },
+      "ref",
+      "refEnv",
+    );
   });
 });

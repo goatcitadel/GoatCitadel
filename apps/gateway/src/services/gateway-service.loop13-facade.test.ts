@@ -1861,6 +1861,31 @@ describe("GatewayService Loop 13 workspace and runtime helpers", () => {
   });
 });
 
+describe("GatewayService reads a saved channel key for the adapters that resolve through it", () => {
+  const ref = "keychain:goatcitadel:channel-connection:conn-1:botToken:00000000-0000-4000-8000-000000000001";
+
+  it("gives the stored secret for a saved reference, nothing when it cannot be read, and never the reference text", () => {
+    const { gateway } = createGatewayHarness();
+    gateway.secretStore.setSecret(
+      "channel-connection:conn-1:botToken:00000000-0000-4000-8000-000000000001",
+      " stored ",
+    );
+    const resolve = (config: Record<string, unknown>) =>
+      GatewayService.prototype.resolveConnectionSecret.call(
+        gateway,
+        config,
+        "botToken",
+        "botTokenEnv",
+        "channel.telegram",
+      );
+
+    expect(resolve({ botToken: ref })).toBe("stored");
+    expect(resolve({ botToken: ref.replace("conn-1", "conn-2") })).toBeUndefined();
+    expect(resolve({ botToken: "keychain:goatcitadel:channel-connection:not-a-valid-ref" })).toBeUndefined();
+    expect(resolve({ botToken: "plain-token" })).toBe("plain-token");
+  });
+});
+
 describe("GatewayService refuses an unbound variable name without logging a pasted token", () => {
   it("logs a refused name only when it has the shape of one, and a fixed marker otherwise", () => {
     const { gateway } = createGatewayHarness();
