@@ -326,7 +326,9 @@ describe("streamed workspace file upload", () => {
     ).rejects.toMatchObject({ code: "ALREADY_EXISTS" });
 
     await expect(fs.readFile(path.join(workspace, "taken.md"), "utf8")).resolves.toBe("kept");
-    await expect(fs.readdir(workspace)).resolves.toEqual(expect.not.arrayContaining(["bin.dat", "cut.md"]));
+    const names = await fs.readdir(workspace);
+    expect(names).not.toContain("bin.dat");
+    expect(names).not.toContain("cut.md");
     await expect(fs.readdir(path.join(workspace, ".goatcitadel-uploads"))).resolves.toEqual([]);
   });
 
