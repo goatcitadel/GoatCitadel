@@ -32,6 +32,14 @@ describe("healStreamingMarkdownTail", () => {
     expect(healStreamingMarkdownTail("See `a[b]` and [the do")).toBe("See `a[b]` and the do");
   });
 
+  it("closes an open span with a backtick run of its own length", () => {
+    expect(healStreamingMarkdownTail("Run ``code")).toBe("Run ``code``");
+    expect(healStreamingMarkdownTail("Run ``a`b")).toBe("Run ``a`b``");
+    expect(healStreamingMarkdownTail("Run ``a`")).toBe("Run ``a` ``");
+    expect(healStreamingMarkdownTail("Done ``a`b`` and **bold")).toBe("Done ``a`b`` and **bold**");
+    expect(healStreamingMarkdownTail("Run ``")).toBe("Run ");
+  });
+
   it("only touches the paragraph still being written", () => {
     expect(healStreamingMarkdownTail("An *open\n\nNow **bold")).toBe("An *open\n\nNow **bold**");
   });
@@ -56,6 +64,16 @@ describe("splitIncremental tail healing", () => {
     expect(split.stable + split.tail).toBe(content);
     expect(hasType(state.tailTree, "strong")).toBe(true);
     expect(textOf(state.tailTree)).not.toContain("**");
+  });
+
+  it.each([
+    ["a quote", "> ```js\n> const a = `b"],
+    ["a list", "- item\n\n  ```\n  const a = **b"],
+  ])("leaves code nested in %s alone", (_, content) => {
+    const state = createIncrementalSplitState();
+    splitIncremental(state, content);
+    expect(hasType(state.tailTree, "strong")).toBe(false);
+    expect(textOf(state.tailTree)).toContain(content.includes("**") ? "const a = **b" : "const a = `b");
   });
 
   it("leaves a tail inside an open code block alone", () => {

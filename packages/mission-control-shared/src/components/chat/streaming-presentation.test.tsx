@@ -46,6 +46,31 @@ describe("useSteadyStreamText", () => {
   });
 });
 
+describe("reduced motion", () => {
+  it("shows streamed text as it arrives instead of pacing it", () => {
+    vi.useFakeTimers();
+    const matchMedia = vi.spyOn(window, "matchMedia").mockImplementation(
+      (query: string) =>
+        ({
+          matches: query.includes("prefers-reduced-motion"),
+          media: query,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }) as unknown as MediaQueryList,
+    );
+    try {
+      const render = (content: string) =>
+        act(() => root.render(<AssistantMessageBody role="assistant" content={content} running streamTurnId="t1" />));
+      render("Hi");
+      const burst = `Hi${" there".repeat(20)}`;
+      render(burst);
+      expect(container.textContent).toBe(burst);
+    } finally {
+      matchMedia.mockRestore();
+    }
+  });
+});
+
 describe("new-word fade on the streaming tail", () => {
   // The second paragraph's first line is complete, so the first paragraph is settled and only the second is the tail.
   const content = "Settled paragraph.\n\nStill **arriving** text\nwith `code`";

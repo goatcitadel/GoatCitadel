@@ -1,6 +1,7 @@
 // After hermes-agent's run-summary (https://github.com/nousresearch/hermes-agent, MIT, Copyright (c) 2025 Nous
 // Research), keyed to GoatCitadel's own tool names and argument shapes.
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
+import { projectChatToolEffectTruth } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-effect-truth";
 import { summarizeShellCommand } from "./summarize-shell-command";
 
 type ToolCategory = "edit" | "explore" | "search" | "read" | "interact" | "run" | "create" | "send" | "other";
@@ -35,20 +36,29 @@ const CATEGORY_COPY: Record<ToolCategory, CategoryCopy> = {
 /**
  * What the summary may say happened. Only an executed call is described as done; a call in progress as happening;
  * anything else (failed, blocked, waiting on approval, or left unfinished by a settled turn) as not having happened.
+ * For calls whose whole point is an outside effect (edits, sends, creates), recorded effect truth wins over status:
+ * an uncertain effect reads "may have", and an executed call that recorded no effect reads as tried. A row with no
+ * effect record keeps its executed status as the evidence, as older rows carry none.
  */
-type Outcome = "done" | "running" | "awaiting" | "tried";
-const OUTCOME_ORDER: readonly Outcome[] = ["done", "running", "awaiting", "tried"];
+type Outcome = "done" | "running" | "uncertain" | "awaiting" | "tried";
+const OUTCOME_ORDER: readonly Outcome[] = ["done", "running", "uncertain", "awaiting", "tried"];
+const EFFECT_CATEGORIES: ReadonlySet<ToolCategory> = new Set(["edit", "send", "create"]);
 
 function outcomeOf(run: ChatToolRunRecord, live: boolean): Outcome {
-  if (run.status === "executed") return "done";
-  if (run.status === "started") return live ? "running" : "tried";
-  if (run.status === "approval_required") return "awaiting";
-  return "tried";
+  if (run.status === "started" && live) return "running";
+  if (EFFECT_CATEGORIES.has(toolCategory(run.toolName)) && projectChatToolEffectTruth(run)?.tone === "uncertain") {
+    return "uncertain";
+  }
+  if (run.status === "executed") {
+    return EFFECT_CATEGORIES.has(toolCategory(run.toolName)) && run.effectOutcomeKind === "none" ? "tried" : "done";
+  }
+  return run.status === "approval_required" ? "awaiting" : "tried";
 }
 
 function verbFor(copy: CategoryCopy, outcome: Outcome): string {
   if (outcome === "done") return copy.past;
   if (outcome === "running") return copy.present;
+  if (outcome === "uncertain") return `May have ${copy.past.toLowerCase()}`;
   return outcome === "awaiting" ? `Awaiting approval to ${copy.base}` : `Tried to ${copy.base}`;
 }
 

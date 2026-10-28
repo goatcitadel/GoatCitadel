@@ -6,7 +6,7 @@ export type ChatToolRunGroup = {
   key: string;
   /** The try the row shows: the newest one. */
   run: ChatToolRunRecord;
-  /** Failed tries before it, oldest first. They stay listed under the row; nothing is hidden. */
+  /** Failed tries before it, oldest first. They stay listed under the row with their own target, approval and effect. */
   earlier: ChatToolRunRecord[];
 };
 

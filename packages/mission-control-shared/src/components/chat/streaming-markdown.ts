@@ -117,6 +117,14 @@ function plainTailTree(
   return tree;
 }
 
+/** Whether the text still being written sits in a code or raw HTML block, even one nested in a quote or list. */
+function endsInsideRawBlock(node: RootContent): boolean {
+  if (node.type === "code" || node.type === "html") return true;
+  const children = "children" in node ? (node.children as RootContent[]) : [];
+  const last = children.at(-1);
+  return last ? endsInsideRawBlock(last) : false;
+}
+
 /**
  * The tail parsed from its healed source (an open **bold** closed for now, see healStreamingMarkdownTail), or
  * undefined when healing changes nothing or the tail ends inside code or raw HTML. Display only: content, stable
@@ -130,7 +138,7 @@ function healedTailTree(
   tailNodes: RootContent[],
 ): Root | undefined {
   const last = tailNodes.filter((node) => node.type !== "definition").at(-1);
-  if (!last || last.type === "code" || last.type === "html") return undefined;
+  if (!last || endsInsideRawBlock(last)) return undefined;
   const source = pending.slice(boundary, tailEnd);
   const healed = healStreamingMarkdownTail(source);
   if (healed === source) return undefined;

@@ -220,6 +220,23 @@ describe("ChatTurnDetails retried tools", () => {
       "a",
       "b",
     ]);
+    // An earlier try keeps its own target and effect note: a failed try may still have had an outside effect.
+    render(
+      turnWith([
+        { ...attempt("a", "failed", "exit code 1"), args: { command: "pnpm deploy" }, effectOutcomeKind: "uncertain" },
+        attempt("b", "executed"),
+      ] as ChatToolRunRecord[]),
+    );
+    const earlier = container.querySelector('[data-tool-run-id="a"]')!;
+    expect(earlier.querySelector('[title="pnpm deploy"]')?.textContent).toBe("pnpm deploy");
+    expect(earlier.textContent).toContain("Automatic replay is suppressed.");
+    render(
+      turnWith([
+        attempt("a", "failed", "exit code 1"),
+        attempt("b", "failed", "exit code 2"),
+        attempt("c", "executed"),
+      ]),
+    );
     // The summary still counts every call, failures included.
     expect(
       container.querySelector('details[aria-label="Tool activity for this turn"] > summary')!.textContent,

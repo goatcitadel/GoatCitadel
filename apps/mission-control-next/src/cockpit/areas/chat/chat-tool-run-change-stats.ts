@@ -43,19 +43,40 @@ export function countLineChanges(before: string, after: string): LineChangeStats
   return { added: newLines.length - common, removed: oldLines.length - common };
 }
 
-/** Adds and removals in a unified diff, file headers excluded. */
+const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/;
+
+/**
+ * Adds and removals in a unified diff. Each hunk header says how many old and new lines its body holds, so a body
+ * line is counted even when it looks like a file header (a removed "-- note" is written "--- note"); lines outside
+ * a hunk body (file headers, `diff`/`index` lines) are not counted.
+ */
 export function countUnifiedDiffChanges(diff: string): LineChangeStats {
-  return splitLines(diff).reduce<LineChangeStats>(
-    (stats, line) =>
-      line.startsWith("+++ ") || line.startsWith("--- ")
-        ? stats
-        : line.startsWith("+")
-          ? { ...stats, added: stats.added + 1 }
-          : line.startsWith("-")
-            ? { ...stats, removed: stats.removed + 1 }
-            : stats,
-    { added: 0, removed: 0 },
-  );
+  let added = 0;
+  let removed = 0;
+  let oldLeft = 0;
+  let newLeft = 0;
+  for (const line of splitLines(diff)) {
+    if (oldLeft <= 0 && newLeft <= 0) {
+      const header = HUNK_HEADER.exec(line);
+      if (header) {
+        oldLeft = header[1] === undefined ? 1 : Number(header[1]);
+        newLeft = header[2] === undefined ? 1 : Number(header[2]);
+      }
+      continue;
+    }
+    if (line.startsWith("\\")) continue; // "\ No newline at end of file"
+    if (line.startsWith("+")) {
+      added += 1;
+      newLeft -= 1;
+    } else if (line.startsWith("-")) {
+      removed += 1;
+      oldLeft -= 1;
+    } else {
+      oldLeft -= 1;
+      newLeft -= 1;
+    }
+  }
+  return { added, removed };
 }
 
 /**

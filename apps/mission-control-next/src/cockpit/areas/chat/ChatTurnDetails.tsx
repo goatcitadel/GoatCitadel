@@ -69,13 +69,26 @@ function EarlierTries({ tries }: { tries: ChatToolRunRecord[] }) {
       <ol className="mt-1 space-y-2">
         {tries.map((tool, index) => {
           const summary = toolRunSummaryText(tool);
+          const target = toolRunTarget(tool);
+          // A failed try can still have had an outside effect; its effect note and approval stay visible here.
+          const effect = projectChatToolEffectTruth(tool);
           return (
             <li key={tool.toolRunId} data-tool-run-id={tool.toolRunId}>
               <p className="text-fg-secondary">
                 Try {index + 1} · {activityLabel(tool)}
+                {target ? (
+                  <span
+                    title={target.full}
+                    className={`ml-2 text-fg-muted wrap-anywhere ${target.kind === "command" ? "font-mono" : ""}`}
+                  >
+                    {target.label}
+                  </span>
+                ) : null}
               </p>
+              {tool.approvalId ? <ChatToolApprovalLine tool={tool} /> : null}
               {summary ? <ChatToolRunSummary text={summary} /> : null}
               {tool.error ? <RecordedErrorDetails error={tool.error} /> : null}
+              {effect ? <p>{effect.plainSummary}</p> : null}
             </li>
           );
         })}

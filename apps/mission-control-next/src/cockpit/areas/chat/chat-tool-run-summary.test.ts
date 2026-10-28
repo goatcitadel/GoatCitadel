@@ -79,6 +79,22 @@ describe("summarizeTurnToolRuns", () => {
     expect(summarizeTurnToolRuns([run("slack.send", {}, "approval_required")], false)).toBe(
       "Awaiting approval to send 1 message",
     );
+    // Recorded effect truth wins over status for calls whose point is an outside effect.
+    expect(
+      summarizeTurnToolRuns([{ ...run("slack.send", {}), effectOutcomeKind: "uncertain" } as ChatToolRunRecord], false),
+    ).toBe("May have sent 1 message");
+    expect(
+      summarizeTurnToolRuns(
+        [{ ...run("fs.delete", { path: "x.txt" }, "failed"), effectOutcomeKind: "uncertain" } as ChatToolRunRecord],
+        false,
+      ),
+    ).toBe("May have changed x.txt");
+    expect(
+      summarizeTurnToolRuns(
+        [{ ...run("fs.patch", { path: "a.css" }), effectOutcomeKind: "none" } as ChatToolRunRecord],
+        false,
+      ),
+    ).toBe("Tried to change a.css");
     // A call a settled turn left unfinished did not happen either.
     expect(summarizeTurnToolRuns([run("fs.patch", { path: "a.css" }, "started")], false)).toBe("Tried to change a.css");
   });
@@ -95,6 +111,21 @@ describe("tool run change stats", () => {
       added: 2,
       removed: 1,
     });
+  });
+
+  it("counts hunk lines that look like file headers, across several hunks", () => {
+    const diff = [
+      "--- a/notes.md",
+      "+++ b/notes.md",
+      "@@ -1,2 +1,2 @@",
+      "--- old note",
+      "+++ new note",
+      " kept",
+      "@@ -9 +9,0 @@",
+      "-gone",
+      "\\ No newline at end of file",
+    ].join("\n");
+    expect(countUnifiedDiffChanges(diff)).toEqual({ added: 1, removed: 2 });
   });
 
   it("reports changes only for an edit that ran", () => {

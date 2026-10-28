@@ -36,6 +36,7 @@ import { LazyOpenUiStructuredBlock } from "./LazyOpenUiStructuredBlock";
 import { isGoatOpenUiRendererEnabled } from "./openui-flag";
 import { rehypeFadeNewWords } from "./rehype-fade-new-words";
 import { useSteadyStreamText } from "./use-steady-stream-text";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 
 export type AssistantStreamPresentationMode = "smooth" | "instant";
 
@@ -87,9 +88,11 @@ export function AssistantMessageBody({
   const normalizeStateRef = useRef<IncrementalDisplayTextState | undefined>(undefined);
   const normalizeTurnRef = useRef<string | undefined>(undefined);
   // Smooth mode reveals a streaming reply at a steady pace; the paced text is always a prefix of `content`.
+  // Timed reveal is motion too, so a reduced-motion preference shows text as it arrives.
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const pacedContent = useSteadyStreamText(
     content,
-    role === "assistant" && running && streamPresentationMode === "smooth",
+    role === "assistant" && running && streamPresentationMode === "smooth" && !reducedMotion,
   );
   const displayContent = useMemo(() => {
     if (role !== "assistant") {

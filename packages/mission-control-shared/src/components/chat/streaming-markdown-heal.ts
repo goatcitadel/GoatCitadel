@@ -22,20 +22,59 @@ function markerState(masked: string, pattern: RegExp): MarkerState {
 const PARTIAL_LINK_WITH_URL = /\[([^\]\n]*)\]\([^)\s]*$/;
 const PARTIAL_LINK_TEXT = /\[([^\]\n]*)$/;
 
-/**
- * The block with inline code blanked out to the same length, so offsets still line up: every closed `code` span,
- * and with `includeOpen` the still-open one after an unmatched backtick too.
- */
-function maskInlineCode(block: string, includeOpen: boolean): string {
-  const masked = block.replace(/`[^`\n]*`/g, (code) => "x".repeat(code.length));
-  const open = masked.lastIndexOf("`");
-  if (!includeOpen || open < 0 || (masked.match(/`/g)?.length ?? 0) % 2 === 0) return masked;
-  return masked.slice(0, open) + "x".repeat(masked.length - open);
+const backtickRunAt = (text: string, at: number): number => {
+  let end = at;
+  while (text[end] === "`") end += 1;
+  return end - at;
+};
+
+type InlineCodeScan = {
+  /** The block with every closed code span blanked out to the same length, so offsets still line up. */
+  masked: string;
+  /** Where a code span still waiting for its closer opens, or -1. */
+  openAt: number;
+  /** How many backticks opened it; CommonMark closes a span only with a run of the same length. */
+  openRun: number;
+};
+
+/** Finds inline code the CommonMark way: a run of N backticks is closed only by the next run of exactly N. */
+function scanInlineCode(block: string): InlineCodeScan {
+  let masked = "";
+  let at = 0;
+  while (at < block.length) {
+    if (block[at] !== "`") {
+      masked += block[at];
+      at += 1;
+      continue;
+    }
+    const run = backtickRunAt(block, at);
+    let close = at + run;
+    while (close < block.length) {
+      if (block[close] !== "`") {
+        close += 1;
+        continue;
+      }
+      const closeRun = backtickRunAt(block, close);
+      if (closeRun === run) break;
+      close += closeRun;
+    }
+    // While streaming, an unmatched opener is a span whose closer has not arrived yet.
+    if (close >= block.length) return { masked: masked + block.slice(at), openAt: at, openRun: run };
+    masked += "x".repeat(close + run - at);
+    at = close + run;
+  }
+  return { masked, openAt: -1, openRun: 0 };
+}
+
+/** The block with all inline code blanked out, including a span still open at the end. */
+function maskAllInlineCode(block: string): string {
+  const { masked, openAt } = scanInlineCode(block);
+  return openAt < 0 ? masked : masked.slice(0, openAt) + "x".repeat(masked.length - openAt);
 }
 
 /** A link still arriving, shown as its words. The match is found outside code, then cut from the real text. */
 function unwrapPartialLink(block: string, pattern: RegExp): string {
-  const match = pattern.exec(maskInlineCode(block, true));
+  const match = pattern.exec(maskAllInlineCode(block));
   if (!match) return block;
   const textStart = match.index + 1;
   return block.slice(0, match.index) + block.slice(textStart, textStart + match[1]!.length);
@@ -51,13 +90,14 @@ export function healStreamingMarkdownTail(text: string): string {
   const cut = text.lastIndexOf("\n\n") + 1;
   const head = text.slice(0, cut);
   let block = text.slice(cut);
-  // A marker with nothing after it yet ("Next up: **").
-  block = block.replace(/(^|\s)(\*{1,3}|~~|`)$/, "$1");
+  // A marker with nothing after it yet ("Next up: **", "Run ``").
+  block = block.replace(/(^|\s)(\*{1,3}|~~|`+)$/, "$1");
   // A link still arriving: its words for now. Never inside code ("`arr[`" keeps its bracket).
   block = unwrapPartialLink(unwrapPartialLink(block, PARTIAL_LINK_WITH_URL), PARTIAL_LINK_TEXT);
-  // Inside closed `code` nothing counts; an open one gets closed.
-  const masked = maskInlineCode(block, false);
-  if ((masked.match(/`/g)?.length ?? 0) % 2) return `${head}${block}\``;
+  // Inside closed `code` nothing counts; an open one gets a closer of its own length (a space first if the code
+  // ends in a backtick, which would otherwise lengthen the closing run).
+  const { masked, openAt, openRun } = scanInlineCode(block);
+  if (openAt >= 0) return `${head}${block}${block.endsWith("`") ? " " : ""}${"`".repeat(openRun)}`;
   const star = markerState(masked, /\*+/g);
   const strike = markerState(masked, /~~/g).bold;
   // Half of a closing ** has arrived: finish it.
