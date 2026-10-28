@@ -29,18 +29,11 @@ import { DetailInspector } from "../../../../components/DetailInspector";
 import { IntegrationConnectionReview } from "./IntegrationConnectionReview";
 import { useChannelSettings } from "./use-channel-settings";
 import { ChannelOutcomeCheck } from "./ChannelOutcomeCheck";
-import { CockpitOwnerLink } from "../../../../app/CockpitOwnerLink";
+import { CockpitOwnerLink, cockpitShellHref } from "../../../../app/CockpitOwnerLink";
 import {
   chatSetupHref,
   chatSetupHrefForDraft,
 } from "../../../../cockpit/areas/chat/channel-setup/channel-picker-model";
-
-/** A Cockpit address opened from this Classic page: the same address, asking for the Cockpit shell. */
-function cockpitShellHref(href: string): string {
-  const url = new URL(href, "http://goatcitadel.local");
-  url.searchParams.set("shell", "cockpit");
-  return url.pathname + url.search;
-}
 
 export function ChannelsSection({ activeWorkspaceId, navigate, route }: SettingsSectionProps) {
   const owner = useChannelSettings(activeWorkspaceId, (plan) =>

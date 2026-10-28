@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ChannelSetupWizardProps } from "../../../features/native-routes/settings/channel-setup/channel-wizard-model";
 import {
+  channelHosts,
   finalizeDisabledReason,
   isStepComplete,
   channelStageLabel,
@@ -10,6 +11,7 @@ import { useChannelWizard } from "../../../features/native-routes/settings/chann
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { ChannelDraftEvidencePanel } from "../../../features/native-routes/settings/channel-setup/ChannelDraftEvidencePanel";
+import { ChannelHostsCheck } from "../../../features/native-routes/settings/channel-setup/ChannelHostsCheck";
 import { ChannelEditingNote, ChannelNeeds } from "../../../features/native-routes/settings/channel-setup/ChannelNeeds";
 import { ChannelWizardFields, channelInputClass } from "./ChannelWizardFields";
 import { ChannelFeedback, ChannelRichBlocks, ChannelStepHelp } from "./ChannelWizardContent";
@@ -173,6 +175,12 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
               onChange={props.onValuesChange}
             />
             <ChannelStepHelp step={step} />
+            {step.kind === "test" ? (
+              <ChannelHostsCheck
+                hosts={channelHosts(props.definition, props.draft, props.values)}
+                workspaceId={props.scopeId ?? "default"}
+              />
+            ) : null}
           </article>
         </>
       )}

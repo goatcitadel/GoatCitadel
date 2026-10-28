@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetupDefinition, ChannelSetupDraft, ChannelSetupFieldDefinition } from "@goatcitadel/contracts";
 // This dynamic boundary loads current Gateway definitions for tests without expanding the production app graph.
@@ -27,6 +28,11 @@ vi.mock("../../../../cockpit/ui/Dialog", () => ({
         {children}
       </div>
     ) : null,
+}));
+// The hosts check on a test step reads the outbound allowlist; no test here may reach a real Gateway for it.
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
+  fetchSettings: vi.fn(async () => ({ revision: 1, networkAllowlist: [] })),
 }));
 beforeEach(() => __resetSessionViewStateForTests());
 const definitions = (await Object.values(runtimeDefinitions)[0]!()).listChannelSetupDefinitions();
@@ -590,7 +596,12 @@ describe("current all16 guided definitions in both shells", () => {
         onFinalize: vi.fn(async () => undefined),
       };
       for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
-        const r = await render(<Component {...props} />);
+        // The Cockpit has the query client the hosts check reads through; Classic brings its own.
+        const r = await render(
+          <QueryClientProvider client={new QueryClient()}>
+            <Component {...props} />
+          </QueryClientProvider>,
+        );
         const nav = r.root.findByProps({ "aria-label": "Setup steps" });
         const count = nav.findAllByType("button").length;
         expect(count).toBeGreaterThanOrEqual(5);

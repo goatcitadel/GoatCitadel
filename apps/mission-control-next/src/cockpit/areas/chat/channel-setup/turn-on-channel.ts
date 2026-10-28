@@ -8,7 +8,8 @@ import {
   validateChannelSetupDraft,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { approvePlanInPlace, ensureHostsAllowed, hasEnded, type InPlaceOutcome } from "./approve-plan-in-place";
+import { ensureHostsAllowed } from "../../../../features/native-routes/settings/channel-hosts";
+import { approvePlanInPlace, hasEnded, type InPlaceOutcome } from "./approve-plan-in-place";
 
 /**
  * What one click on Turn on came to. Besides the change's own outcomes:

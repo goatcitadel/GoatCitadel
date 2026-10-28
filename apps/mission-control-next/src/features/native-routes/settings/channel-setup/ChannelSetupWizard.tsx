@@ -3,6 +3,7 @@ import { Dialog } from "../../../../cockpit/ui/Dialog";
 import { ExtensionConfigurationGuidance } from "../../../../cockpit/areas/settings/ExtensionConfigurationGuidance";
 import { ChannelWizardFields } from "./ChannelWizardFieldCollection";
 import { ChannelCheckFeedback } from "./ChannelCheckFeedback";
+import { ClassicChannelHostsCheck } from "./ClassicChannelHostsCheck";
 import { ChannelDraftEvidencePanel } from "./ChannelDraftEvidencePanel";
 import { ChannelEditingNote, ChannelNeeds } from "./ChannelNeeds";
 import type { ChannelSetupRichBlock, ChannelSetupStepDefinition } from "@goatcitadel/contracts";
@@ -11,6 +12,7 @@ import { NativeButton } from "../../primitives";
 import { SettingsButtonRow } from "../SettingsShared";
 import { useChannelWizard } from "./use-channel-wizard";
 import {
+  channelHosts,
   isStepComplete,
   humanizeStepKind,
   channelStageLabel,
@@ -255,6 +257,12 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
             />
             <Troubleshooting step={activeStep} />
             <SuccessCriteria items={activeStep.successCriteria} />
+            {activeStep.kind === "test" ? (
+              <ClassicChannelHostsCheck
+                hosts={channelHosts(definition, draft, values)}
+                workspaceId={props.scopeId ?? "default"}
+              />
+            ) : null}
             <ChannelCheckFeedback
               feedback={feedback}
               error={localError}
