@@ -14,6 +14,7 @@ import { channelProofExpired, finalizeDisabledReason } from "../channel-setup/ch
 import { formatJson, parseJsonObject } from "../helpers/input-format";
 import { describeIntegrationConnectionError } from "./useIntegrationConnectionReview";
 import { assertChannelDraft, beginChannelOperation } from "./channel-setup-state";
+import { integrationPublicConfigMatches } from "./integration-editor-receipts";
 import type { ChannelSetupState } from "./use-channel-setup-state";
 
 type Operation = NonNullable<ReturnType<typeof beginChannelOperation>>;
@@ -92,12 +93,12 @@ export function useChannelDraftActions(s: ChannelSetupState, onPlanReady: (plan:
         }),
       (value) => {
         assertChannelDraft(value, draft, draft.revision);
+        // The Gateway's public projection withholds a public value it reads as secret-like (a variable-name field
+        // holding a token, or left empty); that redaction acknowledges the write without echoing the value.
         if (
           value.enabled !== input.enabled ||
           (input.label.trim() && value.label !== input.label.trim()) ||
-          Object.entries(publicValues).some(
-            ([key, field]) => JSON.stringify(value.draft[key]) !== JSON.stringify(field),
-          )
+          Object.entries(publicValues).some(([key, field]) => !integrationPublicConfigMatches(field, value.draft[key]))
         )
           throw new Error("The channel save response did not acknowledge the submitted public fields.");
       },
