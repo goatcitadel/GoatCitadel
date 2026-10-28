@@ -295,9 +295,9 @@ describe("channel hosts and inbound webhooks", () => {
     ]);
   });
 
-  it("adds Google's token host only while a service-account key is set, named or saved", () => {
+  it("adds Google's token host only while the guide's Connect with choice is Chat app", () => {
     expect(definitionByKey("google-chat").wizard.conditionalHosts).toEqual([
-      { host: "oauth2.googleapis.com", whenAnyFieldSet: ["serviceAccountKeyEnv", "serviceAccountKey"] },
+      { host: "oauth2.googleapis.com", whenAnyFieldSet: ["mode"], equals: "app" },
     ]);
   });
 
@@ -318,11 +318,11 @@ describe("channel hosts and inbound webhooks", () => {
     }
   });
 
-  it("expects Google Chat's webhook only in Chat app mode, which is when a service-account key is named or saved", () => {
+  it("expects Google Chat's webhook only in Chat app mode, which is when a service-account key is named or saved, or an audience is set", () => {
     const googleChat = definitionByKey("google-chat");
     expect(googleChat.wizard.inboundWebhook).toEqual({
       pathTemplate: "/api/v1/integrations/connections/{connectionId}/google-chat/webhook",
-      whenAnyFieldSet: ["serviceAccountKeyEnv", "serviceAccountKey"],
+      whenAnyFieldSet: ["serviceAccountKeyEnv", "serviceAccountKey", "audience"],
     });
     const serviceAccountKey = googleChat.wizard.steps
       .flatMap((step) => step.fields ?? [])
@@ -343,6 +343,7 @@ describe("channel hosts and inbound webhooks", () => {
     expect(result.definition.wizard.inboundWebhook?.whenAnyFieldSet).toEqual([
       "serviceAccountKeyEnv",
       "serviceAccountKey",
+      "audience",
     ]);
     expect(result.definition.wizard.inboundWebhook?.whenAnyFieldSet).not.toBe(
       CHANNEL_INBOUND_WEBHOOKS["google-chat"]?.whenAnyFieldSet,

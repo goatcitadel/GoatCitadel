@@ -1510,10 +1510,10 @@ describe("the shared guide builder", () => {
       expect(fieldOf("wecom", "encodingAesKeyEnv")?.label).toBe(
         "EncodingAESKey from an environment variable (advanced)",
       );
-      // These two guides have no pasted twin yet, so the label keeps its own words minus "env var".
+      // ntfy has no pasted twin yet, so the label keeps its own words minus "env var".
       expect(fieldOf("ntfy", "tokenEnv")?.label).toBe("Token from an environment variable (advanced)");
       expect(fieldOf("google-chat", "serviceAccountKeyEnv")?.label).toBe(
-        "Service-account key (Chat app mode) from an environment variable (advanced)",
+        "Service-account key (paste the JSON) from an environment variable (advanced)",
       );
     });
 

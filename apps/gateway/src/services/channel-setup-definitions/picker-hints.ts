@@ -71,18 +71,28 @@ export const CHANNEL_HOST_FIELDS: Readonly<Record<string, readonly string[]>> = 
 });
 
 /**
- * Google Chat runs as a Chat app when a service-account key is given, named by an environment variable the guide asks
- * for or stored as a saved key (which a connection's public config shows as redacted); the channel reads either.
+ * A saved Google Chat connection is a Chat app when it holds a service-account key, named by an environment variable
+ * or stored as a saved key (which a connection's public config shows as redacted); the channel reads either. The
+ * connection keeps no mode of its own, so a saved connection's webhook address follows these keys. The audience is
+ * listed too: a Chat app always has one, and unlike a pasted key it is also in the setup wizard's own values.
  */
-const GOOGLE_CHAT_APP_KEY_FIELDS: readonly string[] = Object.freeze(["serviceAccountKeyEnv", "serviceAccountKey"]);
+const GOOGLE_CHAT_APP_FIELDS: readonly string[] = Object.freeze([
+  "serviceAccountKeyEnv",
+  "serviceAccountKey",
+  "audience",
+]);
 
-/** Hosts a channel needs only while certain fields are set, keyed by catalog key. */
+/**
+ * Hosts a channel needs only while certain fields are set, keyed by catalog key. Google's token host follows the
+ * guide's "Connect with" choice, which the setup wizard always holds (an edit draft derives it from the saved keys), so
+ * a key left behind after switching back to an incoming webhook does not ask for it.
+ */
 export const CHANNEL_CONDITIONAL_HOSTS: Readonly<Record<string, readonly FrozenHostRule[]>> = Object.freeze({
   qqbot: Object.freeze([
     Object.freeze({ host: "sandbox.api.sgroup.qq.com", whenAnyFieldSet: Object.freeze(["sandbox"]), equals: true }),
   ]),
   "google-chat": Object.freeze([
-    Object.freeze({ host: "oauth2.googleapis.com", whenAnyFieldSet: GOOGLE_CHAT_APP_KEY_FIELDS }),
+    Object.freeze({ host: "oauth2.googleapis.com", whenAnyFieldSet: Object.freeze(["mode"]), equals: "app" }),
   ]),
 });
 
@@ -94,7 +104,7 @@ function inboundWebhookRoute(key: string): string {
  * Channels that receive on a Gateway webhook route (`routes/integration-webhooks-<key>-routes.ts`),
  * keyed by catalog key. Telegram receives on a webhook only when its receive mode is `webhook`.
  * Google Chat receives only in Chat app mode, which is when a service-account key is given; its
- * webhook mode only sends.
+ * webhook mode only sends. A saved connection has no mode, only its keys, so this rule reads the keys.
  */
 export const CHANNEL_INBOUND_WEBHOOKS: Readonly<Record<string, FrozenInboundWebhook>> = Object.freeze({
   telegram: Object.freeze({
@@ -108,7 +118,7 @@ export const CHANNEL_INBOUND_WEBHOOKS: Readonly<Record<string, FrozenInboundWebh
   wecom: Object.freeze({ pathTemplate: inboundWebhookRoute("wecom") }),
   "google-chat": Object.freeze({
     pathTemplate: inboundWebhookRoute("google-chat"),
-    whenAnyFieldSet: GOOGLE_CHAT_APP_KEY_FIELDS,
+    whenAnyFieldSet: GOOGLE_CHAT_APP_FIELDS,
   }),
   "nextcloud-talk": Object.freeze({ pathTemplate: inboundWebhookRoute("nextcloud-talk") }),
 });

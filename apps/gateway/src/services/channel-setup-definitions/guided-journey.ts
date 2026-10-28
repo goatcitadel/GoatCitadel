@@ -62,14 +62,14 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
   },
   "google-chat": {
     summary:
-      "Send cards and notifications into a Google Chat Space through its webhook, or run a Chat app (service account) that also receives messages, replies, and deletes its own messages.",
+      "Incoming webhook: send messages into one Google Chat space (sends only). Chat app: send and receive, with a Google Cloud project and a public HTTPS address.",
     prerequisites: [
-      "Webhook mode: permission to create an incoming webhook in the intended Google Chat Space, and the complete webhook URL treated as a credential.",
-      "Chat app mode: a Chat app whose HTTP endpoint is this connection's Google Chat webhook URL, its authentication audience (project number or endpoint URL), and the service-account JSON key in a gateway environment variable.",
-      "For inbound, the Google Chat user resource names (users/...) allowed to start conversations.",
+      "Incoming webhook: a Google Workspace Business or Enterprise account and permission to add webhooks to the space.",
+      "Chat app: a Google Cloud project with the Chat API on, a service account key, and a public HTTPS address for this Gateway.",
+      "Chat app: the Google user ids (users/…) allowed to message it.",
     ],
     firstMessage:
-      "Webhook mode: confirm the test card appears in the selected Space and thread; webhook mode cannot receive messages. Chat app mode: allow your users/... id, message the app (or @mention it in a space), and confirm its threaded reply.",
+      "Incoming webhook: check the test message appeared in the space. Chat app: paste this connection's webhook address into the Chat app's HTTP endpoint URL, allow your users/… id, then message the app and check the reply.",
   },
   teams: {
     summary:
@@ -387,7 +387,8 @@ function splitFieldStep(
       fields: identity,
       requiredAnyOf: credentialAlternatives(key, alternatives),
     });
-  if (destinations.length)
+  if (destinations.length) {
+    const shownWhen = sharedVisibility(destinations);
     halves.push({
       ...step,
       id: step.id + "-destinations",
@@ -395,8 +396,25 @@ function splitFieldStep(
       // A channel people can message has access to choose here; the others only choose where messages go.
       title: takesConversations(key) ? "Choose destinations and access" : "Where should messages go?",
       fields: destinations,
+      // A step whose every field is hidden together is hidden too, so nobody clicks through an empty one.
+      ...(shownWhen ? { visibleWhenFieldEquals: shownWhen } : {}),
     });
+  }
   return halves;
+}
+
+/** The one condition every field in the list is shown under, if they all share it. */
+function sharedVisibility(
+  fields: readonly ChannelSetupFieldDefinition[],
+): NonNullable<ChannelSetupFieldDefinition["visibleWhenFieldEquals"]> | undefined {
+  const condition = fields[0]?.visibleWhenFieldEquals;
+  if (!condition) return undefined;
+  const sharesIt = fields.every(
+    (field) =>
+      field.visibleWhenFieldEquals?.fieldKey === condition.fieldKey &&
+      field.visibleWhenFieldEquals.value === condition.value,
+  );
+  return sharesIt ? { ...condition } : undefined;
 }
 
 /**
@@ -438,10 +456,12 @@ const SENDER_EXPLANATIONS: Readonly<Record<string, string>> = {
 const GENERIC_SENDER_EXPLANATION = "Add trusted platform actor IDs. Empty means every inbound sender is denied.";
 
 /** Receiving here is a switch the operator turns on, so the sender step has nothing to say while it is off. */
-const SENDER_STEP_SHOWN_WHEN: Readonly<Record<string, { fieldKey: string; value: boolean }>> = {
+const SENDER_STEP_SHOWN_WHEN: Readonly<Record<string, { fieldKey: string; value: string | boolean }>> = {
   ntfy: { fieldKey: "inboundStreamEnabled", value: true },
   matrix: { fieldKey: "inboundStreamEnabled", value: true },
   mattermost: { fieldKey: "inboundStreamEnabled", value: true },
+  // An incoming webhook only sends; the Chat app is the half that receives.
+  "google-chat": { fieldKey: "mode", value: "app" },
 };
 
 function senderAccessStep(key: string): ChannelSetupStepDefinition {
@@ -493,6 +513,6 @@ function credentialAlternatives(key: string, alternatives: string[][]): string[]
   // The pasted bot token is the main way in, so a missing-value message names it first.
   if (key === "slack") return [["botToken", "botTokenEnv", "webhookUrl", "webhookUrlEnv", "slackInstallId"]];
   if (key === "discord") return [["botToken", "botTokenEnv", "webhookUrl", "webhookUrlEnv"]];
-  if (key === "google-chat") return [["webhookUrl", "webhookUrlEnv", "serviceAccountKeyEnv"]];
+  if (key === "google-chat") return [["webhookUrl", "webhookUrlEnv", "serviceAccountKey", "serviceAccountKeyEnv"]];
   return alternatives.length ? [alternatives[0]!] : undefined;
 }
