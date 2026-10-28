@@ -480,7 +480,7 @@ describe("channel setup definitions", () => {
     const testStep = definition.wizard.steps.find((step) => step.kind === "test");
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/dry run/i);
-    expect(definition.wizard.contentVersion).toBe("2026.10.ntfy.stream.v3.guided-2026-10");
+    expect(definition.wizard.contentVersion).toBe("2026.10.ntfy.stream.v3.guided-2026-10-28");
   });
 
   it("gives guided Nextcloud Talk setup a test step and a finalize confirmation step", () => {
@@ -500,7 +500,7 @@ describe("channel setup definitions", () => {
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/room/i);
     expect(definition.testing.levels).toContain("live-send");
-    expect(definition.wizard.contentVersion).toBe("2026.08.nextcloud-talk.v2.guided-2026-10");
+    expect(definition.wizard.contentVersion).toBe("2026.08.nextcloud-talk.v2.guided-2026-10-28");
   });
 
   it("ends every previously test-terminal guided wizard on a finalize confirmation step", () => {
@@ -524,7 +524,19 @@ describe("channel setup definitions", () => {
         `${catalogId} confirm step needs success criteria`,
       ).toBeGreaterThan(0);
       expect(definition.wizard.contentVersion, `${catalogId} contentVersion must be bumped`).toBe(
-        contentVersion + ".guided-2026-10",
+        contentVersion + ".guided-2026-10-28",
+      );
+    }
+  });
+
+  it("gives every guide the same current guide-text version suffix, after its own version", () => {
+    // Setup evidence records this version. Change the suffix whenever any guide's text, or the text the guides share,
+    // changes, so an evidence row tells which text the operator saw.
+    const definitions = listChannelSetupDefinitions();
+    expect(definitions.length).toBe(14);
+    for (const definition of definitions) {
+      expect(definition.wizard.contentVersion, `${definition.catalog.catalogId} content version`).toMatch(
+        /^\d{4}\.\d{2}\.[a-z-]+\..+\.guided-2026-10-28$/u,
       );
     }
   });
@@ -596,7 +608,7 @@ describe("channel setup definitions", () => {
 
   it("collects Google Chat app (service-account) fields and forces a default-deny sender allowlist", () => {
     const definition = requireChannelSetupDefinition("channel.google-chat");
-    expect(definition.definition.wizard.contentVersion).toBe("2026.10.google-chat.app.v2.guided-2026-10");
+    expect(definition.definition.wizard.contentVersion).toBe("2026.10.google-chat.app.v2.guided-2026-10-28");
     expect(definition.definition.adapter.adapterVersion).toBe("2026.10.google-chat.app.v2");
     expect(definition.definition.validation.validationVersion).toBe("2026.10.google-chat.app.v2");
     const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));

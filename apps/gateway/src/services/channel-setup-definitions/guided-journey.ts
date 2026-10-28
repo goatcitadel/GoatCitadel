@@ -208,6 +208,12 @@ const ADVANCED_KEYS = new Set([
   "setupCode",
   "profile",
 ]);
+/**
+ * Added after each guide's own content version. Setup evidence records the result, so a row tells which guide text the
+ * operator saw. Change it whenever the text of any guide, or the text the guides share, changes. Changing it also makes
+ * older setup test results out of date, so those tests run again.
+ */
+const GUIDED_CONTENT_VERSION_SUFFIX = ".guided-2026-10-28";
 /** A draft value `hydrate` sets when the saved connection was open access. It is never part of the saved config. */
 const OPEN_ACCESS_MARKER = "inboundAccessWasOpen";
 /** Webhook inbound that is always default-deny: the runtime ignores a stored open_legacy mode for these. */
@@ -257,7 +263,7 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
       ...runtime.definition,
       wizard: {
         ...runtime.definition.wizard,
-        contentVersion: runtime.definition.wizard.contentVersion + ".guided-2026-10",
+        contentVersion: runtime.definition.wizard.contentVersion + GUIDED_CONTENT_VERSION_SUFFIX,
         introSummary: profile.summary,
         prerequisites: profile.prerequisites,
         steps,
