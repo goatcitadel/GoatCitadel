@@ -348,6 +348,58 @@ describe("discovered MCP OAuth flow", () => {
     });
   });
 
+  it("names a sign-in host the allowlist doesn't cover as data, so no client reads it from the wording", async () => {
+    const server = discoveryServerRecord("https://vendor.example");
+    const review = { expectedRevision: mcpServerRevision(server), expectedConnectionRevision: null };
+    const host = {
+      requireMcpServer: async () => server,
+      readMcpAuthState: async () => ({}),
+      writeMcpAuthState: async () => {
+        throw new Error("pre-admission discovery must not write auth state");
+      },
+      discoverMcpOAuthAuthorization: (target: McpServerRecord, input: { redirectUri: string }) =>
+        discoverMcpAuthorizationServer({
+          ...input,
+          server: target,
+          fetchFn: createAllowlistedOAuthFetch(["other.example"]),
+        }),
+    };
+
+    const blocked = prepareReviewedMcpOAuthDiscovery(host, server.serverId, review);
+
+    await expect(blocked).rejects.toBeInstanceOf(ValidationError);
+    await expect(blocked).rejects.toMatchObject({
+      details: { field: "oauth", reason: "host_not_allowlisted", host: "vendor.example" },
+    });
+  });
+
+  it("names no host when the sign-in site is blocked outright", async () => {
+    await withFakeAuthServer({}, async ({ base }) => {
+      const server = discoveryServerRecord(base);
+      const review = { expectedRevision: mcpServerRevision(server), expectedConnectionRevision: null };
+      const blocked = prepareReviewedMcpOAuthDiscovery(
+        {
+          requireMcpServer: async () => server,
+          readMcpAuthState: async () => ({}),
+          writeMcpAuthState: async () => undefined,
+          discoverMcpOAuthAuthorization: (target: McpServerRecord, input: { redirectUri: string }) =>
+            discoverMcpAuthorizationServer({
+              ...input,
+              server: target,
+              fetchFn: createAllowlistedOAuthFetch(["other.example"]),
+            }),
+        },
+        server.serverId,
+        review,
+      );
+
+      // The fake vendor runs on loopback, which no allowlist entry for another host lets through.
+      const error = await blocked.catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ValidationError);
+      expect((error as ValidationError).details).toEqual({ field: "oauth" });
+    });
+  });
+
   it("refuses a discovered exchange whose PKCE verifier is gone", async () => {
     await withFakeAuthServer({}, async ({ base, host }) => {
       const server = discoveryServerRecord(base);

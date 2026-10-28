@@ -5,8 +5,45 @@ import {
   createIsolatedGuardedDispatcher,
   evaluateHostEgress,
   fetchAllowlistedOnce,
+  HostNotAllowlistedError,
   redactUrlForError,
 } from "./network-guard.js";
+
+describe("a host the allowlist doesn't cover yet", () => {
+  it("is refused with its host as data, beside the same wording", () => {
+    const refuse = (target: string) => {
+      try {
+        assertHostAllowed(target, ["other.example"]);
+      } catch (error) {
+        return error;
+      }
+      throw new Error("expected a refusal");
+    };
+
+    const plain = refuse("https://Auth.Vendor.example/oauth?client_secret=hunter2");
+    expect(plain).toBeInstanceOf(HostNotAllowlistedError);
+    expect(plain).toMatchObject({
+      host: "auth.vendor.example",
+      message: "Host is not yet allowlisted: https://auth.vendor.example",
+    });
+    expect(refuse("https://auth.vendor.example:8443/path")).toMatchObject({ host: "auth.vendor.example:8443" });
+    expect(refuse("auth.vendor.example")).toMatchObject({ host: "auth.vendor.example" });
+    // Without a scheme too, the host is only ever the bare host: no userinfo, query, fragment or path.
+    for (const target of [
+      "secret@auth.vendor.example",
+      "user@Auth.Vendor.example/oauth",
+      "auth.vendor.example?client_secret=hunter2",
+      "auth.vendor.example#token=abc",
+      "https://user:pw@auth.vendor.example/?code=1",
+    ]) {
+      expect(refuse(target), target).toMatchObject({ host: "auth.vendor.example" });
+    }
+    // A private or reserved host is blocked outright: allowing it isn't the fix, so it names no host.
+    const loopback = refuse("http://127.0.0.1:9/");
+    expect(loopback).toBeInstanceOf(Error);
+    expect(loopback).not.toBeInstanceOf(HostNotAllowlistedError);
+  });
+});
 
 // Regression coverage for CODEX_FINDING #25b (BlueBubbles/Zalo channel URL
 // secrets leaked via thrown allowlist errors) and #26 (Telegram bot token

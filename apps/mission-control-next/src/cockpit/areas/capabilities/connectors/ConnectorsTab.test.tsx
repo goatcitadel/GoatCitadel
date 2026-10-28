@@ -18,9 +18,12 @@ const inspector = vi.hoisted(() => ({ open: vi.fn(), content: null as null | { s
 vi.mock("../../../app/inspector", () => ({ useInspector: () => inspector }));
 // Each row reads its install flow from the store (R87); here a test sets what a row reads.
 const rowFlows = vi.hoisted(() => new Map<string, { phase: string } & Record<string, unknown>>());
+// Taking installs back on after a reload has its tests in use-connector-install.test.tsx; here only the call is checked.
+const recovered = vi.hoisted(() => vi.fn());
 vi.mock("./use-connector-install", async (original) => ({
   ...(await original<object>()),
   useConnectorInstallStatus: (entry: { id: string }) => rowFlows.get(entry.id) ?? { phase: "idle" },
+  useRecoveredInstalls: recovered,
 }));
 vi.mock("../../settings/McpServerCreate", () => ({
   McpServerCreate: ({ onClose }: { onClose: () => void }) => (
@@ -115,6 +118,7 @@ async function type(value: string) {
 
 beforeEach(() => {
   api.fetchCapabilityConnectors.mockReset();
+  recovered.mockReset();
   rowFlows.clear();
   route.navigate.mockReset();
   route.search = "";
@@ -141,6 +145,13 @@ describe("Connectors tab", () => {
       "ws-1",
       expect.objectContaining({ signal: expect.anything() }),
     );
+  });
+
+  it("takes installs that wait in Inbox back on with the list it loaded, after a reload", async () => {
+    api.fetchCapabilityConnectors.mockResolvedValue(response([SLACK, NOTION]));
+    await render();
+    await vi.waitFor(() => expect(text()).toContain("Notion"));
+    expect(recovered).toHaveBeenLastCalledWith([SLACK, NOTION]);
   });
 
   it("renders groups with counts", async () => {

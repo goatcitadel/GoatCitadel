@@ -5,8 +5,9 @@ import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { cn } from "../../../lib/cn";
-import { ConnectorSignInStep } from "./ConnectorSignInStep";
+import { ConnectorSignInStep, signInTimeWords, useSignInTimeLeft, type SignInTimeLeft } from "./ConnectorSignInStep";
 import { isActiveInstallState } from "./connector-install-store";
+import { inboxApprovalHref, type ConnectorNextLink } from "./connector-links";
 import type { ConnectorInstall, ConnectorInstallState, ConnectorInstallStep } from "./use-connector-install";
 
 /** The steps a flow can list, in the order they happen. */
@@ -53,10 +54,6 @@ const FAILED_WORDS: Readonly<Partial<Record<ConnectorInstallStep, string>>> = {
 const WAITING_INBOX = "Waiting on you in Inbox";
 const SIGNING_IN = "Finish signing in in your browser";
 
-/** The Inbox page for the install's approval. Install plans are made in the installation's own workspace. */
-const inboxApprovalHref = (approvalId: string) =>
-  `/inbox?approvalId=${encodeURIComponent(approvalId)}&workspaceId=default`;
-
 const stepOf = (step: ConnectorInstallStep): InstallStepId => (step === "finish_sign_in" ? "sign_in" : step);
 
 /** The steps an install from a template runs: sign-in only for an app that signs in. */
@@ -95,8 +92,15 @@ export function canStopInstall(state: ConnectorInstallState): boolean {
   return state.phase === "working" && state.step !== "plan" && state.step !== "approval";
 }
 
-/** The one sentence read out when the flow moves on. `doneWords` says how this flow ends ("Installed."). */
-export function installAnnouncement(state: ConnectorInstallState, doneWords: string): string {
+/**
+ * The one sentence read out when the flow moves on. `doneWords` says how this flow ends ("Installed."). A sign-in
+ * request that is nearly or already out of time is read out as the new one the page then offers (R94).
+ */
+export function installAnnouncement(
+  state: ConnectorInstallState,
+  doneWords: string,
+  signInTime: SignInTimeLeft = "open",
+): string {
   switch (state.phase) {
     case "idle":
       return "";
@@ -105,7 +109,8 @@ export function installAnnouncement(state: ConnectorInstallState, doneWords: str
     case "waiting_inbox":
       return WAITING_INBOX;
     case "signing_in":
-      return state.manualError ?? SIGNING_IN;
+      // Once the request is short of time the fields a mismatch was about are gone, so the swap is what's said.
+      return signInTime === "open" ? (state.manualError ?? SIGNING_IN) : signInTimeWords(signInTime);
     case "failed":
       return FAILED_WORDS[state.step] ?? state.message;
     case "stopped":
@@ -117,7 +122,8 @@ export function installAnnouncement(state: ConnectorInstallState, doneWords: str
 
 /**
  * The flow's one live region. It stays on the page for as long as the flow can be shown, so each change is read out
- * once, including the last one when the panel turns into the saved server's view.
+ * once, including the last one when the panel turns into the saved server's view, and the sign-in step's swap to a
+ * new request when the old one runs short of time.
  */
 export function InstallStatus({
   state,
@@ -129,10 +135,24 @@ export function InstallStatus({
   /** Points into the panel for `usePanelFocus`; the line is always on the page. */
   anchor?: Ref<HTMLParagraphElement>;
 }) {
+  const signInTime = useSignInTimeLeft(state.phase === "signing_in" ? state.startedAt : undefined);
   return (
     <p ref={anchor} role="status" className="sr-only">
-      {installAnnouncement(state, doneWords)}
+      {installAnnouncement(state, doneWords, signInTime)}
     </p>
+  );
+}
+
+/** A message's link to where its next step is done, in the message's own element (DESIGN.md). */
+function NextLink({ link, scope }: { link: ConnectorNextLink | undefined; scope: string }) {
+  if (!link) return null;
+  return (
+    <>
+      {" "}
+      <NativeOwnerLink scope={scope} href={link.href}>
+        {link.label}
+      </NativeOwnerLink>
+    </>
   );
 }
 
@@ -215,11 +235,17 @@ function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; sc
           {step ? (
             <>
               <p className="font-medium text-status-failed">{step}</p>
-              <p>{state.message}</p>
+              <p>
+                {state.message}
+                <NextLink link={state.link} scope={scope} />
+              </p>
             </>
           ) : (
             // Whether anything failed may be unknown here (a read that couldn't check it), so no failure colour.
-            <p className="font-medium text-fg">{state.message}</p>
+            <p className="font-medium text-fg">
+              {state.message}
+              <NextLink link={state.link} scope={scope} />
+            </p>
           )}
           <ChangedList changed={state.changed} heading="What happened" />
           {state.detail ? (
@@ -233,7 +259,10 @@ function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; sc
     case "stopped":
       return (
         <div className="space-y-2 text-sm text-fg-secondary">
-          <p className="text-fg">{state.message}</p>
+          <p className="text-fg">
+            {state.message}
+            <NextLink link={state.link} scope={scope} />
+          </p>
           <ChangedList changed={state.changed} heading="What changed" />
         </div>
       );

@@ -1,12 +1,12 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import {
-  ConflictError,
   ServiceUnavailableError,
   type ChangePlanRecord,
   type ChangePlanReceipt,
   type ConnectorInstallResponse,
 } from "@goatcitadel/contracts";
+import { awaitsApplyConfirmation } from "../services/evolution-control-plane-action-guards.js";
 import { sendRouteError } from "./_error-handler.js";
 
 const querySchema = z.object({ workspaceId: z.string().min(1).max(200) }).strict();
@@ -58,20 +58,19 @@ export const capabilityConnectorsRoutes: FastifyPluginAsync = async (fastify) =>
           surface: "capabilities" as const,
           requestId: request.id,
         };
-        const plan = await evolution.create({
-          actor,
-          request: { kind: "connector_install", ...body.data },
-          idempotencyKey: `capabilities:install:${request.idempotencyKey || request.id}:${body.data.templateId}`,
-        });
-        if (plan.requiredAction?.kind !== "confirmation") {
-          throw new ConflictError({
-            message: "This install is no longer waiting to be confirmed. Try installing again.",
-          });
-        }
-        // This route is the operator's own install, so it may ask for the opt-in approval skip.
-        const settled = await evolution.confirm(actor, plan.planId, plan.revision, plan.requiredAction.actionNonce, {
-          operatorSettingsSave: true,
-        });
+        const idempotencyKey = `capabilities:install:${request.idempotencyKey || request.id}:${body.data.templateId}`;
+        const installRequest = { kind: "connector_install" as const, ...body.data };
+        // A retry of a request whose answer was lost finds the plan its first try made, and gets its receipt (M8).
+        const plan =
+          (await evolution.findReplay(actor, idempotencyKey, installRequest)) ??
+          (await evolution.create({ actor, request: installRequest, idempotencyKey }));
+        // A plan an earlier try made that has moved on is answered with its receipt, which says where it stands now.
+        const settled = awaitsApplyConfirmation(plan)
+          ? // This route is the operator's own install, so it may ask for the opt-in approval skip.
+            await evolution.confirm(actor, plan.planId, plan.revision, plan.requiredAction.actionNonce, {
+              operatorSettingsSave: true,
+            })
+          : plan;
         const response: ConnectorInstallResponse = {
           templateId: body.data.templateId,
           changePlanReceipt: receiptFor(settled),
@@ -90,11 +89,16 @@ function requireOwner(fastify: FastifyInstance) {
   return owner;
 }
 
-/** Installs are Change Plans, with no direct-write fallback, so they wait for Change Plans to be on. */
+/**
+ * Installs are Change Plans, with no direct-write fallback, so they wait for Change Plans to be on. The reason is data
+ * (M5), so Capabilities says so plainly rather than showing a generic error.
+ */
 async function requireEvolution(fastify: FastifyInstance) {
   const evolution = fastify.services.evolution;
   if (!evolution || !(await evolution.isEnabled())) {
-    throw new ServiceUnavailableError("Installing connectors needs Change Plans, which are off on this install.");
+    throw new ServiceUnavailableError("Installing connectors needs Change Plans, which are off on this install.", {
+      reason: "change_plans_off",
+    });
   }
   return evolution;
 }

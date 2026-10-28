@@ -30,12 +30,13 @@ import {
   __resetConnectorInstallForTests,
   useConnectorInstall,
   useConnectorInstallStatus,
+  useRecoveredInstalls,
   type ConnectorInstallState,
 } from "./use-connector-install";
 
 const install = vi.hoisted(() => ({ installCapabilityConnector: vi.fn(), fetchCapabilityConnectors: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/capability-connectors", () => install);
-const plans = vi.hoisted(() => ({ fetchChangePlan: vi.fn(), cancelChangePlan: vi.fn() }));
+const plans = vi.hoisted(() => ({ fetchChangePlan: vi.fn(), fetchChangePlans: vi.fn(), cancelChangePlan: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", async (original) => ({
   ...(await original<object>()),
   ...plans,
@@ -228,6 +229,7 @@ beforeEach(() => {
     calls.push("read plan");
     return plan();
   });
+  plans.fetchChangePlans.mockResolvedValue({ items: [] });
   servers.fetchMcpServer.mockImplementation(async () => {
     calls.push("read server");
     return server();
@@ -481,6 +483,55 @@ describe("useConnectorInstall", () => {
       message: "This app is already saved. Reload to see it.",
       changed: [],
     });
+    expect(latest.state).not.toHaveProperty("link");
+    expect(plans.fetchChangePlan).not.toHaveBeenCalled();
+  });
+
+  it("links a refusal that sends the app to Settings", async () => {
+    install.installCapabilityConnector.mockRejectedValueOnce(
+      new ApiRequestError("Linear needs an API key. Set it up in Settings.", {
+        kind: "http",
+        method: "POST",
+        path: "/api/v1/capabilities/connectors/install",
+        status: 409,
+        body: { error: "Linear needs an API key. Set it up in Settings.", details: { field: "needsApiKey" } },
+      }),
+    );
+
+    await startInstall();
+
+    expect(latest.state).toMatchObject({
+      phase: "failed",
+      step: "plan",
+      message: "This app needs an API key. Set it up in Settings.",
+      link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+    });
+  });
+
+  // M5: the Gateway's 503 for this says why, so the panel says it plainly instead of a generic error.
+  it("says plainly that installing is switched off when Change Plans are off", async () => {
+    const gatewayText = "Installing connectors needs Change Plans, which are off on this install.";
+    install.installCapabilityConnector.mockRejectedValueOnce(
+      new ApiRequestError(gatewayText, {
+        kind: "http",
+        method: "POST",
+        path: "/api/v1/capabilities/connectors/install",
+        status: 503,
+        body: { error: gatewayText, code: "EXTERNAL_SERVICE_FAILED", details: { reason: "change_plans_off" } },
+      }),
+    );
+
+    await startInstall();
+
+    expect(latest.state).toMatchObject({
+      phase: "failed",
+      step: "plan",
+      message:
+        "Installing from here is switched off on this install, so nothing was changed. You can add it yourself in Settings.",
+      changed: [],
+      link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+    });
+    expect((latest.state as { message: string }).message).not.toContain("gateway");
     expect(plans.fetchChangePlan).not.toHaveBeenCalled();
   });
 
@@ -603,32 +654,40 @@ describe("useConnectorInstall", () => {
 
   // I1: a sign-in the Gateway refused before it changed anything says why, and what to do, in plain words.
   describe("when sign-in is refused", () => {
+    // The words that point at Settings link to the page that fixes it (DESIGN.md).
+    const ALLOWLIST_LINK = { label: "Open in Settings", href: "/settings/first-run" } as const;
+    const MCP_LINK = { label: "Open in Settings", href: "/settings/connections#mcp-servers" } as const;
     it.each([
       [
         "its sign-in site isn't on the network allowlist",
         { refused: "not_allowed", refusedHost: "auth.linear.app" },
         "Couldn't start signing in to Linear. Its sign-in site auth.linear.app isn't on your network allowlist. Add " +
-          "it in Settings, then sign in again.",
+          "it under Change installation defaults in Settings, then sign in again.",
+        { link: ALLOWLIST_LINK },
       ],
       [
         "a sign-in site it can't name isn't on the network allowlist",
         { refused: "not_allowed" },
-        "Couldn't start signing in to Linear. Its sign-in site isn't on your network allowlist. Add it in Settings, " +
-          "then sign in again.",
+        "Couldn't start signing in to Linear. Its sign-in site isn't on your network allowlist. Add it under Change " +
+          "installation defaults in Settings, then sign in again.",
+        { link: ALLOWLIST_LINK },
       ],
       [
         "its sign-in site can't be read",
         { refused: "sign_in_site" },
         "Couldn't start signing in to Linear. Its sign-in site couldn't be read. Try again in a moment, or set up " +
           "its sign-in in Settings.",
+        { link: MCP_LINK },
       ],
       [
         "the app won't register GoatCitadel",
         { refused: "registration" },
         "Couldn't start signing in to Linear. It wouldn't register GoatCitadel for sign-in. Set up its sign-in in " +
           "Settings instead.",
+        // Signing in again would only be refused the same way, so the flow says so for its controls.
+        { link: MCP_LINK, signInBlocked: true },
       ],
-    ] as const)("names the cause when %s", async (_label, refusal, message) => {
+    ] as const)("names the cause when %s", async (_label, refusal, message, next) => {
       const gatewayText = "Sign-in discovery for Linear failed: Host is not yet allowlisted: https://auth.linear.app";
       wrappers.commitMcpOAuth.mockResolvedValueOnce({ status: "conflict", message: gatewayText, ...refusal });
 
@@ -640,6 +699,7 @@ describe("useConnectorInstall", () => {
         message,
         changed: [SUMMARY],
         detail: gatewayText,
+        ...next,
       });
       expect(JSON.stringify(latest.state)).not.toContain("Changed elsewhere");
     });
@@ -750,15 +810,17 @@ describe("useConnectorInstall", () => {
         "a program on this computer",
         { transport: "stdio", command: "uvx", url: undefined },
         "Couldn't connect Linear. Check that it can run on this computer, then try again.",
+        undefined,
       ],
       [
         "a remote app",
         { transport: "http" },
         "Couldn't connect Linear. Try again in a moment, or check its setup in Settings.",
+        { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
       ],
     ] as const)(
       "shows the server's own last error once a failed connect of %s is settled",
-      async (_l, shape, words) => {
+      async (_l, shape, words, link) => {
         const secret = "abc123def456ghi789jkl0123";
         wrappers.commitMcpConnection.mockImplementationOnce(lostConnect);
         outcome.checkMcpServerOutcome.mockImplementationOnce(async () => {
@@ -774,6 +836,8 @@ describe("useConnectorInstall", () => {
         await flush();
 
         expect(latest.state).toMatchObject({ phase: "failed", step: "connect", message: words, changed: [] });
+        // The words that point at Settings link there (DESIGN.md); the others link nowhere.
+        expect((latest.state as { link?: unknown }).link).toEqual(link);
         const detail = (latest.state as { detail?: string }).detail ?? "";
         expect(detail).toContain("spawn uvx ENOENT");
         expect(detail).not.toContain(secret);
@@ -894,7 +958,215 @@ describe("useConnectorInstall", () => {
         phase: "stopped",
         message: "Install stopped. Nothing was changed. Its request is still in Inbox, where you can deny it.",
         changed: [],
+        link: { label: "Open in Inbox", href: "/inbox?approvalId=approval-1&workspaceId=default" },
       });
+    });
+  });
+
+  // A reload forgets every flow; an install that still waits in Inbox is taken on again when the list loads.
+  describe("after a reload", () => {
+    const WAITING = plan({ status: "awaiting_approval", requiredAction: APPROVAL, revision: 4, evidenceRefs: [] });
+
+    /** The Connectors tab as it loads its list, and one row's flow, read the way the panel reads it. */
+    function Loaded({ items, item }: { items: CapabilityConnectorItem[]; item: CapabilityConnectorItem }) {
+      useRecoveredInstalls(items);
+      latest = useConnectorInstall(item);
+      return null;
+    }
+
+    async function load(items: CapabilityConnectorItem[], item = items[0]!) {
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <Loaded items={items} item={item} />
+          </QueryClientProvider>,
+        ),
+      );
+      await flush();
+    }
+
+    it("takes on an install still waiting in Inbox, so its row shows it and Stop withdraws it", async () => {
+      plans.fetchChangePlans.mockResolvedValueOnce({ items: [WAITING] });
+
+      await load([TEMPLATE]);
+
+      expect(plans.fetchChangePlans).toHaveBeenCalledExactlyOnceWith(
+        { workspaceId: "default" },
+        { status: "awaiting_approval", limit: 100 },
+      );
+      expect(latest.state).toEqual({ phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
+      expect(install.installCapabilityConnector).not.toHaveBeenCalled();
+
+      plans.fetchChangePlan.mockResolvedValueOnce(WAITING);
+      plans.cancelChangePlan.mockResolvedValueOnce(plan({ status: "cancelled", revision: 5, evidenceRefs: [] }));
+      await act(async () => latest.cancel());
+      await flush();
+
+      expect(plans.cancelChangePlan).toHaveBeenCalledWith(
+        "plan-1",
+        { workspaceId: "default" },
+        { expectedRevision: 4, actionNonce: NONCE },
+      );
+      expect(latest.state).toEqual({ phase: "stopped", message: "Install stopped. Nothing was changed.", changed: [] });
+    });
+
+    it("goes on to sign in once the install it took on is approved", async () => {
+      vi.useFakeTimers();
+      plans.fetchChangePlans.mockResolvedValueOnce({ items: [WAITING] });
+      plans.fetchChangePlan.mockResolvedValueOnce(plan());
+
+      await load([TEMPLATE]);
+      await act(async () => vi.advanceTimersByTimeAsync(5_000));
+      await flush();
+
+      expect(latest.state).toMatchObject({ phase: "signing_in", signInHost: "auth.linear.app" });
+      expect(latest.serverId).toBe("srv-1");
+    });
+
+    it("takes on only a Capabilities install of a template in the list, and reads the plans once", async () => {
+      const elsewhere = plan({
+        ...WAITING,
+        planId: "plan-settings",
+        origin: { workspaceId: "default", surface: "settings", actorId: "operator" },
+      } as Partial<ChangePlanRecord>);
+      const unlisted = plan({
+        ...WAITING,
+        planId: "plan-notion",
+        request: { kind: "connector_install", templateId: "notion", enableChatConnectors: false },
+      } as Partial<ChangePlanRecord>);
+      plans.fetchChangePlans.mockResolvedValueOnce({ items: [elsewhere, unlisted] });
+
+      await load([TEMPLATE]);
+      await load([{ ...TEMPLATE }]);
+
+      expect(latest.state).toEqual({ phase: "idle" });
+      expect(plans.fetchChangePlans).toHaveBeenCalledOnce();
+    });
+
+    it("reads the plans again on the next list load when they couldn't be read", async () => {
+      plans.fetchChangePlans.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({ items: [WAITING] });
+
+      await load([TEMPLATE]);
+      expect(latest.state).toEqual({ phase: "idle" });
+      await load([{ ...TEMPLATE }]);
+
+      expect(plans.fetchChangePlans).toHaveBeenCalledTimes(2);
+      expect(latest.state).toEqual({ phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
+    });
+
+    /**
+     * Web Locks as another tab sees them: a name in `held` is another tab's, and a lock this tab takes is held until
+     * the promise its callback returned settles.
+     */
+    function withLocks(held: Set<string>) {
+      const locks = {
+        request: (name: string, options: { ifAvailable?: boolean }, callback: (lock: unknown) => unknown) => {
+          if (options.ifAvailable && held.has(name)) return Promise.resolve(callback(null));
+          held.add(name);
+          const result = Promise.resolve(callback({ name }));
+          void result.finally(() => held.delete(name));
+          return result;
+        },
+      };
+      Object.defineProperty(window.navigator, "locks", { value: locks, configurable: true });
+      return () => {
+        Reflect.deleteProperty(window.navigator, "locks");
+      };
+    }
+
+    it("leaves an install another tab already follows to that tab", async () => {
+      const restore = withLocks(new Set(["goatcitadel:connector-install:plan-1"]));
+      try {
+        plans.fetchChangePlans.mockResolvedValueOnce({ items: [WAITING] });
+
+        await load([TEMPLATE]);
+
+        // Only one tab goes on to sign in, switch on and connect once it is approved.
+        expect(latest.state).toEqual({ phase: "idle" });
+      } finally {
+        restore();
+      }
+    });
+
+    it("holds an install's plan for the tab that follows it until the flow settles", async () => {
+      const held = new Set<string>();
+      const restore = withLocks(held);
+      try {
+        plans.fetchChangePlans.mockResolvedValueOnce({ items: [WAITING] });
+        await load([TEMPLATE]);
+        expect(latest.state).toMatchObject({ phase: "waiting_inbox" });
+        expect([...held]).toEqual(["goatcitadel:connector-install:plan-1"]);
+
+        plans.fetchChangePlan.mockResolvedValueOnce(WAITING);
+        plans.cancelChangePlan.mockResolvedValueOnce(plan({ status: "cancelled", revision: 5, evidenceRefs: [] }));
+        await act(async () => latest.cancel());
+        await flush();
+
+        expect(latest.state).toMatchObject({ phase: "stopped" });
+        expect([...held]).toEqual([]);
+      } finally {
+        restore();
+      }
+    });
+
+    it("holds the plan of an install this tab started, so a reload elsewhere leaves it alone", async () => {
+      const held = new Set<string>();
+      const restore = withLocks(held);
+      try {
+        install.installCapabilityConnector.mockResolvedValueOnce(
+          receipt({ status: "awaiting_approval", requiredAction: APPROVAL }),
+        );
+
+        await startInstall();
+
+        expect(latest.state).toMatchObject({ phase: "waiting_inbox" });
+        expect([...held]).toEqual(["goatcitadel:connector-install:plan-1"]);
+      } finally {
+        restore();
+      }
+    });
+
+    // A tab that loaded while this one's Install was in flight may have taken the plan on first: it then goes on there.
+    it("leaves an install it started to another tab that took the plan on first", async () => {
+      vi.useFakeTimers();
+      const restore = withLocks(new Set(["goatcitadel:connector-install:plan-1"]));
+      try {
+        install.installCapabilityConnector.mockResolvedValueOnce(
+          receipt({ status: "awaiting_approval", requiredAction: APPROVAL }),
+        );
+
+        await startInstall();
+        await act(async () => vi.advanceTimersByTimeAsync(5_000));
+
+        expect(latest.state).toEqual({
+          phase: "stopped",
+          message: "Another tab is following this install. It goes on there once you approve it in Inbox.",
+          changed: [],
+          link: { label: "Open in Inbox", href: "/inbox?approvalId=approval-1&workspaceId=default" },
+        });
+        // Only the other tab reads the plan and goes on after approval.
+        expect(plans.fetchChangePlan).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        restore();
+      }
+    });
+
+    it("leaves a flow this tab already has alone", async () => {
+      vi.useFakeTimers();
+      install.installCapabilityConnector.mockResolvedValueOnce(
+        receipt({ status: "awaiting_approval", requiredAction: APPROVAL }),
+      );
+      plans.fetchChangePlan.mockResolvedValue(WAITING);
+      await startInstall();
+      plans.fetchChangePlans.mockResolvedValueOnce({ items: [WAITING] });
+
+      await load([TEMPLATE]);
+      await act(async () => vi.advanceTimersByTimeAsync(5_000));
+
+      expect(latest.state).toEqual({ phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
+      // One flow follows the plan: a second one for the same plan would read it on its own timer too.
+      expect(plans.fetchChangePlan).toHaveBeenCalledOnce();
     });
   });
 

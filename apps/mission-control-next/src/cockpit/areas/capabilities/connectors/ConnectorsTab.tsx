@@ -18,6 +18,7 @@ import {
   filterConnectors,
   groupConnectors,
 } from "./connector-view";
+import { useRecoveredInstalls } from "./use-connector-install";
 import { useConnectorPanel } from "./use-connector-panel";
 
 // The custom server form belongs to Settings and is large; it loads only when someone asks to add their own.
@@ -53,6 +54,8 @@ export function ConnectorsTab() {
     focusSearchAfterRemoval.current = true;
   }, []);
   const panel = useConnectorPanel(view.record?.items, markRemoved);
+  // A reload forgets every install flow; one that still waits in Inbox is taken back on from the loaded list.
+  useRecoveredInstalls(view.record?.items);
   const [adding, setAdding] = useState(false);
   const [search, setSearch] = useState("");
   const [chosenCategories, setChosenCategories] = useState<string[]>([]);

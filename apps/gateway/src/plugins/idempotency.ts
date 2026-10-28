@@ -64,7 +64,9 @@ const SECURE_CONFIGURATION_ROUTE =
 const REMOTE_WORKER_BOOTSTRAP_ROUTE = "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap";
 const REMOTE_WORKER_MESH_JOIN_AUTHORITY_ROUTE =
   "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities";
-const CANONICAL_REPLAY_ROUTES = new Set([SECURE_CONFIGURATION_ROUTE]);
+/** A connector install answers a retry from the Change Plan its key made, so the retry gets the same receipt (M8). */
+const CONNECTOR_INSTALL_ROUTE = "/api/v1/capabilities/connectors/install";
+const CANONICAL_REPLAY_ROUTES = new Set([SECURE_CONFIGURATION_ROUTE, CONNECTOR_INSTALL_ROUTE]);
 const CANONICAL_IDEMPOTENCY_OWNER_ROUTES = new Set([
   REMOTE_WORKER_BOOTSTRAP_ROUTE,
   REMOTE_WORKER_MESH_JOIN_AUTHORITY_ROUTE,
@@ -136,11 +138,11 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     }
 
     if (claim.outcome === "duplicate" && CANONICAL_REPLAY_ROUTES.has(routePath)) {
-      // The secure-configuration handler owns a secret-independent replay path
-      // backed by its canonical repository. Let an exact transport retry
-      // recover a secret-free receipt after a lost response; newly supplied
-      // bytes are ignored. In-progress and payload-mismatch claims remain
-      // blocked.
+      // These handlers own a secret-independent replay path backed by their
+      // canonical repository (the secure-configuration prompt, the connector
+      // install's Change Plan). Let an exact transport retry recover a
+      // secret-free receipt after a lost response; newly supplied bytes are
+      // ignored. In-progress and payload-mismatch claims remain blocked.
       request.mutationIdempotencyOutcome = "committed";
       return;
     }

@@ -9,10 +9,13 @@ import {
 import {
   ChangePlanRepository,
   createDatabase,
+  MutationIdempotencyRepository,
   type ChangePlanRepositoryCreateInput,
   type ChangePlanRepositoryListInput,
   type ChangePlanRepositoryTransitionInput,
 } from "@goatcitadel/storage";
+import { idempotencyHeaderPlugin } from "../plugins/idempotency.js";
+import type { MutationIdempotencyStore } from "../services/mutation-idempotency-store.js";
 import { ConnectorInstallChangePlanAdapter } from "../services/connector-install-change-plan-adapter.js";
 import { EvolutionControlPlaneAdapterRegistry } from "../services/evolution-control-plane-adapter.js";
 import { EvolutionControlPlaneService } from "../services/evolution-control-plane-service.js";
@@ -52,10 +55,20 @@ describe("capability connectors route", () => {
     app = null;
   });
 
-  async function build(services: Record<string, unknown>) {
+  /**
+   * `idempotency` adds the Gateway's Idempotency-Key plugin, so a retry names its first try; with a `store`, the
+   * plugin records each attempt as the Gateway does.
+   */
+  async function build(
+    services: Record<string, unknown>,
+    options: { idempotency?: { store?: MutationIdempotencyStore } } = {},
+  ) {
     app = Fastify();
     app.decorateRequest("authActorId", "operator-test");
     app.decorate("services", services as never);
+    if (options.idempotency) {
+      await app.register(idempotencyHeaderPlugin, { mutationStore: options.idempotency.store });
+    }
     await app.register(capabilityConnectorsRoutes);
     return app;
   }
@@ -128,7 +141,13 @@ describe("capability connectors route", () => {
     function mockedEvolution(settled: Partial<ChangePlanRecord>) {
       return {
         isEnabled: vi.fn(async () => true),
-        create: vi.fn(async () => ({ planId: "plan-install", revision: 1, requiredAction: CONFIRMATION })),
+        findReplay: vi.fn(async () => undefined),
+        create: vi.fn(async () => ({
+          planId: "plan-install",
+          status: "awaiting_confirmation",
+          revision: 1,
+          requiredAction: CONFIRMATION,
+        })),
         confirm: vi.fn(async () => ({
           planId: "plan-install",
           revision: 3,
@@ -206,6 +225,40 @@ describe("capability connectors route", () => {
       });
     });
 
+    it("confirms a plan an earlier try made only while it still waits for its own apply confirmation", async () => {
+      const replay = (requiredAction: Record<string, unknown>, status = "awaiting_confirmation") => ({
+        planId: "plan-install",
+        revision: 2,
+        risk: "danger",
+        status,
+        summary: "Allow mcp.linear.app. Save Linear, switched off.",
+        request: { kind: "connector_install", templateId: "linear", enableChatConnectors: true },
+        origin: { workspaceId: "default", surface: "capabilities", actorId: "operator-test" },
+        requiredAction,
+      });
+      const send = (server: FastifyInstance) =>
+        server.inject({ method: "POST", url: INSTALL, payload: { templateId: "linear", enableChatConnectors: true } });
+
+      const rollback = mockedEvolution({ status: "completed" });
+      rollback.findReplay.mockResolvedValueOnce(replay({ ...CONFIRMATION, purpose: "rollback" }) as never);
+      const refused = await send(await build({ evolution: rollback }));
+      expect(refused.statusCode).toBe(202);
+      expect(refused.json().changePlanReceipt).toMatchObject({
+        planId: "plan-install",
+        status: "awaiting_confirmation",
+      });
+      expect(rollback.confirm).not.toHaveBeenCalled();
+      expect(rollback.create).not.toHaveBeenCalled();
+      await app?.close();
+
+      const pending = mockedEvolution({ status: "completed" });
+      pending.findReplay.mockResolvedValueOnce(replay({ ...CONFIRMATION, purpose: "apply" }) as never);
+      const confirmed = await send(await build({ evolution: pending }));
+      expect(confirmed.statusCode).toBe(202);
+      expect(pending.confirm).toHaveBeenCalledOnce();
+      expect(pending.create).not.toHaveBeenCalled();
+    });
+
     it("rejects extra body fields", async () => {
       const evolution = mockedEvolution({ status: "completed" });
       const server = await build({ evolution });
@@ -263,7 +316,7 @@ describe("capability connectors route", () => {
       expect(evolution.confirm).not.toHaveBeenCalled();
     });
 
-    it("answers 503 when Change Plans are off or not composed", async () => {
+    it("answers 503 naming its own reason when Change Plans are off or not composed (M5)", async () => {
       const evolution = mockedEvolution({ status: "completed" });
       evolution.isEnabled.mockResolvedValueOnce(false);
       for (const services of [{ evolution }, {}]) {
@@ -274,6 +327,8 @@ describe("capability connectors route", () => {
           payload: { templateId: "linear", enableChatConnectors: false },
         });
         expect(response.statusCode).toBe(503);
+        // The reason is data, so Capabilities can say so plainly instead of showing a generic error.
+        expect(response.json()).toMatchObject({ details: { reason: "change_plans_off" } });
         await server.close();
         app = null;
       }
@@ -342,6 +397,7 @@ describe("capability connectors route", () => {
           },
         });
         let disposition: "approved" | "pending" = "pending";
+        const createApproval = vi.fn(async () => "approval-install");
         const service = new EvolutionControlPlaneService({
           repository: {
             create: async (create: ChangePlanRepositoryCreateInput) => sync.create(create),
@@ -350,19 +406,29 @@ describe("capability connectors route", () => {
             listActive: async (limit?: number) => sync.listActive(limit),
             listAwaitingApproval: async (approvalId: string, limit?: number) =>
               sync.listAwaitingApproval(approvalId, limit),
+            findByIdempotency: async (workspaceId: string, key: string) => sync.findByIdempotency(workspaceId, key),
             transition: async (planId: string, transition: ChangePlanRepositoryTransitionInput) =>
               sync.transition(planId, transition),
           },
           adapters: new EvolutionControlPlaneAdapterRegistry([adapter]),
           allowsOperatorApprovalSkip: async () => skip,
-          createApproval: async () => "approval-install",
+          createApproval,
           getApprovalDisposition: async () => disposition,
         });
+        // The Gateway's own record of each HTTP attempt, on the same ledger database.
+        const attempts = new MutationIdempotencyRepository(database);
+        const attemptStore: MutationIdempotencyStore = {
+          claim: async (input) => attempts.claim(input),
+          markCompleted: async (input) => attempts.markCompleted(input),
+          markFailed: async (input) => attempts.markFailed(input),
+        };
         return {
           service,
           sync,
           servers,
           relaxedBy,
+          createApproval,
+          attemptStore,
           settings: () => settings,
           approve: () => {
             disposition = "approved";
@@ -372,6 +438,98 @@ describe("capability connectors route", () => {
 
       const install = (server: FastifyInstance) =>
         server.inject({ method: "POST", url: INSTALL, payload: { templateId: "linear", enableChatConnectors: true } });
+      /** One attempt under the Idempotency-Key a client keeps for it; sending it again is a retry of that attempt. */
+      const attempt = (server: FastifyInstance, key: string, enableChatConnectors = true) =>
+        server.inject({
+          method: "POST",
+          url: INSTALL,
+          headers: { "idempotency-key": key },
+          payload: { templateId: "linear", enableChatConnectors },
+        });
+
+      // M8: a retry of a request whose answer was lost gets that answer, never a refusal or a second install. The
+      // Gateway's attempt record passes an exact retry of a finished attempt on to this route, which answers it.
+      describe("a retried request", () => {
+        it("gets the receipt its first try got while the install waits in Inbox", async () => {
+          const plane = controlPlane(false);
+          const server = await build({ evolution: plane.service }, { idempotency: { store: plane.attemptStore } });
+
+          const first = await attempt(server, "attempt-inbox");
+          const retried = await attempt(server, "attempt-inbox");
+
+          expect(first.statusCode).toBe(202);
+          expect(first.json().changePlanReceipt).toMatchObject({ status: "awaiting_approval" });
+          expect(retried.statusCode).toBe(202);
+          expect(retried.json()).toEqual(first.json());
+          expect(plane.createApproval).toHaveBeenCalledOnce();
+          expect(plane.sync.list({ workspaceId: "default" })).toHaveLength(1);
+        });
+
+        it("gets its receipt once the install finished, rather than being refused as already saved", async () => {
+          const plane = controlPlane(true);
+          const server = await build({ evolution: plane.service }, { idempotency: { store: plane.attemptStore } });
+
+          const first = await attempt(server, "attempt-done");
+          const retried = await attempt(server, "attempt-done");
+
+          expect(first.json().changePlanReceipt).toMatchObject({ status: "completed" });
+          expect(retried.statusCode).toBe(202);
+          expect(retried.json()).toEqual(first.json());
+          expect(plane.servers).toHaveLength(1);
+          expect(plane.relaxedBy).toHaveBeenCalledOnce();
+        });
+
+        it("is refused when it asks for a different install under the same key", async () => {
+          const plane = controlPlane(false);
+          const server = await build({ evolution: plane.service }, { idempotency: { store: plane.attemptStore } });
+
+          await attempt(server, "attempt-changed", true);
+          const changed = await attempt(server, "attempt-changed", false);
+
+          expect(changed.statusCode).toBe(409);
+          expect(changed.json()).toEqual({ error: "Idempotency-Key was reused with a different payload" });
+          expect(plane.createApproval).toHaveBeenCalledOnce();
+          expect(plane.sync.list({ workspaceId: "default" })).toHaveLength(1);
+        });
+
+        it("is refused by the control plane too when a reused key asks for a different install", async () => {
+          const plane = controlPlane(false);
+          // Without the attempt record, the control plane's own check of the plan the key made still holds.
+          const server = await build({ evolution: plane.service }, { idempotency: {} });
+
+          await attempt(server, "attempt-unrecorded", true);
+          const changed = await attempt(server, "attempt-unrecorded", false);
+
+          expect(changed.statusCode).toBe(409);
+          expect(plane.createApproval).toHaveBeenCalledOnce();
+          expect(plane.sync.list({ workspaceId: "default" })).toHaveLength(1);
+        });
+
+        it("is a retry only for the same request from the same actor on the same surface", async () => {
+          const plane = controlPlane(false);
+          const server = await build({ evolution: plane.service }, { idempotency: {} });
+          await attempt(server, "attempt-owned", true);
+          const key = "capabilities:install:attempt-owned:linear";
+          const request = { kind: "connector_install", templateId: "linear", enableChatConnectors: true } as const;
+          const owner = { workspaceId: "default", actorId: "operator-test", surface: "capabilities" } as const;
+
+          await expect(plane.service.findReplay(owner, key, request)).resolves.toMatchObject({
+            status: "awaiting_approval",
+          });
+          await expect(plane.service.findReplay(owner, "capabilities:install:unknown:linear", request)).resolves.toBe(
+            undefined,
+          );
+          for (const actor of [
+            { ...owner, actorId: "someone-else" },
+            { ...owner, surface: "settings" as const },
+          ]) {
+            await expect(plane.service.findReplay(actor, key, request)).rejects.toBeInstanceOf(ConflictError);
+          }
+          await expect(
+            plane.service.findReplay(owner, key, { ...request, enableChatConnectors: false }),
+          ).rejects.toBeInstanceOf(ConflictError);
+        });
+      });
 
       it("completes the install, and records the skipped approval, when the skip setting is on", async () => {
         const plane = controlPlane(true);

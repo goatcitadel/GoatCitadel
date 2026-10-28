@@ -3,12 +3,13 @@ import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { CapabilityConnectorItem, McpServerRecord } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { queryKeys } from "../../../data/query-keys";
+import type { ConnectorNextLink } from "./connector-links";
 
 export type ConnectorInstallStep = "plan" | "approval" | "sign_in" | "finish_sign_in" | "switch_on" | "connect";
 
 /**
  * Where one install (or a saved server's sign-in or connect) stands. Every message is plain words; `detail` is error
- * text for TechnicalDetails only.
+ * text for TechnicalDetails only. A message that sends the operator somewhere carries its `link` there.
  */
 export type ConnectorInstallState =
   | { phase: "idle" }
@@ -25,8 +26,20 @@ export type ConnectorInstallState =
       startedAt: number;
     }
   | { phase: "done"; serverId: string }
-  | { phase: "failed"; step: ConnectorInstallStep; message: string; changed: string[]; detail?: string }
-  | { phase: "stopped"; message: string; changed: string[] };
+  | {
+      phase: "failed";
+      step: ConnectorInstallStep;
+      message: string;
+      changed: string[];
+      detail?: string;
+      link?: ConnectorNextLink;
+      /** Signing in again can't help: the app refused to register GoatCitadel, so its sign-in is set up in Settings. */
+      signInBlocked?: true;
+    }
+  | { phase: "stopped"; message: string; changed: string[]; link?: ConnectorNextLink };
+
+/** What a failure says to do next beyond its words: where that is done, and whether a new sign-in can help. */
+export type FailureNext = { readonly link?: ConnectorNextLink; readonly signInBlocked?: true };
 
 export const IDLE: ConnectorInstallState = { phase: "idle" };
 /** One object per step, so a step that is set again does not change the record. */
@@ -98,6 +111,41 @@ function syncPlanPoll(id: number, everyMs: number | undefined) {
   if (everyMs) polls.set(id, { everyMs, timer: globalThis.setInterval(() => void readPlanOf?.(id), everyMs) });
 }
 
+// One tab follows each install plan: a Web Lock named for the plan, held while this tab's flow follows it and let go
+// when the flow settles or is forgotten. A tab that loads while another holds it leaves that install to the other tab,
+// so only one tab signs in, switches the app on and connects it once the plan is approved.
+const planLocks = new Map<string, () => void>();
+
+/**
+ * Holds `planId` for this tab. False when another tab holds it; true once held, or when the browser has no Web Locks
+ * (the flow then goes on in this tab, as it always did).
+ */
+export function holdInstallPlan(planId: string): Promise<boolean> {
+  const locks = globalThis.navigator?.locks;
+  if (!locks || planLocks.has(planId)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    locks
+      .request(`goatcitadel:connector-install:${planId}`, { ifAvailable: true }, (lock) => {
+        if (!lock) {
+          resolve(false);
+          return undefined;
+        }
+        resolve(true);
+        return new Promise<void>((release) => {
+          planLocks.set(planId, release);
+        });
+      })
+      .catch(() => resolve(true));
+  });
+}
+
+/** Lets go of a plan this tab held; a flow that settles or is forgotten does this itself. */
+export function releaseInstallPlan(planId: string | undefined) {
+  if (!planId) return;
+  planLocks.get(planId)?.();
+  planLocks.delete(planId);
+}
+
 export function readInstallFlow(id: number): ConnectorInstallFlow | undefined {
   return flows.get(id);
 }
@@ -139,6 +187,7 @@ export function indexInstallFlow(id: number, key: string) {
 /** Forgets a flow: its rows read idle again. */
 export function deleteInstallFlow(id: number) {
   syncPlanPoll(id, undefined);
+  releaseInstallPlan(flows.get(id)?.planId);
   flows.delete(id);
   for (const [key, value] of [...index]) if (value === id) index.delete(key);
   publish();
@@ -257,13 +306,28 @@ export function settleInstallFlow(id: number, state: ConnectorInstallState) {
   const run = runs.get(id);
   retireRun(id);
   const flow = updateInstallFlow(id, { state, pollMs: undefined });
+  releaseInstallPlan(flow?.planId);
   refreshConnector(run, flow?.serverId);
 }
 
 /** Ends the flow as failed at `step`, with what already changed. `detail` is for TechnicalDetails only. */
-export function failInstallFlow(id: number, step: ConnectorInstallStep, message: string, detail?: string) {
+export function failInstallFlow(
+  id: number,
+  step: ConnectorInstallStep,
+  message: string,
+  detail?: string,
+  next: FailureNext = {},
+) {
   const changed = [...(runs.get(id)?.changed ?? [])];
-  settleInstallFlow(id, { phase: "failed", step, message, changed, ...(detail ? { detail } : {}) });
+  settleInstallFlow(id, {
+    phase: "failed",
+    step,
+    message,
+    changed,
+    ...(detail ? { detail } : {}),
+    ...(next.link ? { link: next.link } : {}),
+    ...(next.signInBlocked ? { signInBlocked: true } : {}),
+  });
 }
 
 /** An error's text for `detail`. */
@@ -275,6 +339,7 @@ export function technicalText(error: unknown) {
 export function __resetConnectorInstallFlowsForTests() {
   for (const run of runs.values()) run.signIn?.stop();
   for (const id of [...polls.keys()]) syncPlanPoll(id, undefined);
+  for (const planId of [...planLocks.keys()]) releaseInstallPlan(planId);
   runs.clear();
   flows.clear();
   index.clear();
