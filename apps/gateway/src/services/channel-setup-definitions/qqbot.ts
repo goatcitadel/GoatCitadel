@@ -79,7 +79,7 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
               explanation: "The AppID of your QQ Bot Open Platform app.",
               whereToFind: [
                 paragraph(
-                  "QQ issues the AppID and AppSecret when you create the bot. Sign in at q.qq.com and open the bot's management page to see them.",
+                  "QQ issues the AppID and AppSecret when you create the bot on the QQ Open Platform (q.qq.com). Sign in there and open your bot's management page.",
                 ),
                 linkBlock("QQ Bot docs: getting started", "https://bot.q.qq.com/wiki/develop/api-v2/"),
               ],
@@ -103,7 +103,7 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
               type: "secret",
               required: false,
               explanation: PASTED_SECRET_EXPLANATION,
-              whereToFind: [paragraph("QQ issues it with the AppID, in the same place.")],
+              whereToFind: [paragraph("QQ issues it with the AppID when you create the bot.")],
               sensitive: true,
               canChangeLater: true,
             },

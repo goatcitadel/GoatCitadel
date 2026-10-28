@@ -267,7 +267,7 @@ describe("QQ Bot setup guide: connecting the app (items 4, 5, 8, A5)", () => {
     expect(appId.whereToFind).toEqual([
       {
         kind: "paragraph",
-        text: "QQ issues the AppID and AppSecret when you create the bot. Sign in at q.qq.com and open the bot's management page to see them.",
+        text: "QQ issues the AppID and AppSecret when you create the bot on the QQ Open Platform (q.qq.com). Sign in there and open your bot's management page.",
       },
       {
         kind: "link",
@@ -287,7 +287,7 @@ describe("QQ Bot setup guide: connecting the app (items 4, 5, 8, A5)", () => {
     expect(secret.sensitive).toBe(true);
     expect(secret.advanced).not.toBe(true);
     expect(secret.explanation).toBe("Paste it here. GoatCitadel keeps it in this computer's secure storage.");
-    expect(textOf(secret.whereToFind)).toContain("QQ issues it with the AppID");
+    expect(textOf(secret.whereToFind)).toContain("QQ issues it with the AppID when you create the bot.");
   });
 
   it("keeps the variable name under Advanced, with the shared name rule (A5)", () => {
