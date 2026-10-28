@@ -521,6 +521,47 @@ describe("Chat form field visibility", () => {
   });
 });
 
+describe("Chat form: required on this path (R81)", () => {
+  async function discordFields(overrides: Partial<ChannelSetupDraft>) {
+    const f = reviewedSettingsFixture({ catalogId: "channel.discord", draft: {}, secretState: {}, ...overrides });
+    const prepared = await f.adapter.prepare(context(), {
+      kind: "channel_connection",
+      channelKind: "discord",
+      draftId: f.draft.draftId,
+    });
+    if (prepared.requiredAction?.kind !== "public_form") throw new Error("Expected public form");
+    return Object.fromEntries(prepared.requiredAction.fields.map((field) => [field.fieldId, field]));
+  }
+  const configured = { configured: true, custody: "temporary" as const };
+
+  it("does not require a webhook-only Discord draft's form to name a server", async () => {
+    const fields = await discordFields({
+      draft: { defaultChannelId: "123456789012345678" },
+      secretState: { webhookUrl: configured },
+    });
+
+    expect(fields.defaultGuildId).toBeDefined();
+    expect(fields.defaultGuildId?.required).toBe(false);
+    expect(fields.defaultChannelId?.required).toBe(true);
+  });
+
+  it.each([
+    ["a bot token variable in the draft", { draft: { botTokenEnv: "DISCORD_BOT_TOKEN" } }],
+    ["a saved bot token", { secretState: { botToken: configured } }],
+    ["a bot token alongside a webhook", { secretState: { botToken: configured, webhookUrl: configured } }],
+  ])("requires a Discord form to name a server with %s", async (_case, overrides) => {
+    const fields = await discordFields(overrides);
+
+    expect(fields.defaultGuildId?.required).toBe(true);
+  });
+
+  it("leaves a field that is required on every path required", async () => {
+    const fields = await discordFields({ secretState: { webhookUrl: configured } });
+
+    expect(fields.defaultChannelId?.required).toBe(true);
+  });
+});
+
 describe("Settings review summary", () => {
   it("shows exact public routing, defaults, normalized sender count and check times without secrets or endpoints", async () => {
     const f = reviewedSettingsFixture({ label: "Work Slack", enabled: false });

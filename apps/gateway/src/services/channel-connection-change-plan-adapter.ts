@@ -9,6 +9,7 @@ import {
   type ChangePlanRecord,
   type ChannelSetupDefinition,
   type ChannelSetupDraft,
+  type ChannelSetupFieldDefinition,
   type ChannelSetupFinalizeResult,
   type ChannelSetupValidationResult,
   type IntegrationConnection,
@@ -491,6 +492,24 @@ function valuesWithDefaults(definition: ChannelSetupDefinition, draft: ChannelSe
   return { ...Object.fromEntries(defaults), ...draft.draft };
 }
 
+/** Whether a value is set: typed in, already saved, or kept in secure storage (as the guide reads it). */
+function hasDraftValue(draft: ChannelSetupDraft, values: Record<string, unknown>, key: string): boolean {
+  const value = values[key];
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (value && typeof value === "object") return Object.keys(value).length > 0;
+  return draft.hydration?.fieldState[key] === "configured" || draft.secretState?.[key]?.configured === true;
+}
+
+/** Whether the field has to be filled in on this draft's path: a field required only with others is not asked for without them. */
+function isRequiredHere(field: ChannelSetupFieldDefinition, draft: ChannelSetupDraft, values: Record<string, unknown>) {
+  if (!field.required) return false;
+  const paths = field.requiredWhenAnyFieldSet;
+  return !paths || paths.some((key) => hasDraftValue(draft, values, key));
+}
+
 function publicFields(definition: ChannelSetupDefinition, draft: ChannelSetupDraft): ChangePlanPublicFormField[] {
   const secretKeys = new Set(definition.adapter.secretFieldKeys);
   const values = valuesWithDefaults(definition, draft);
@@ -526,7 +545,7 @@ function publicFields(definition: ChannelSetupDefinition, draft: ChannelSetupDra
               : field.type === "url"
                 ? "url"
                 : "text",
-        required: field.required,
+        required: isRequiredHere(field, draft, values),
         description: field.explanation,
         ...(field.options
           ? {
