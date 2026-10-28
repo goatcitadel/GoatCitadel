@@ -95,18 +95,21 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
               ordered: true,
               items: [
                 "Copy this connection's webhook address.",
-                "Uninstall the bot with occ talk:bot:uninstall and its bot ID.",
+                "Find the bot's ID with occ talk:bot:list, then uninstall the bot with occ talk:bot:uninstall and that ID.",
                 "Install the bot again with occ talk:bot:install: the same name and secret, this connection's webhook address, and the features webhook and response.",
-                "Turn it on for the conversation again with occ talk:bot:setup.",
+                "Look up the bot's ID again with occ talk:bot:list. A bot you install again can have a new ID, and occ talk:bot:setup must use the current one.",
+                "Turn it on for the conversation again with occ talk:bot:setup, giving it that ID and the room token.",
               ],
             },
             {
               kind: "code",
               language: "shell",
               code: [
+                "occ talk:bot:list",
                 "occ talk:bot:uninstall <bot-id>",
                 'occ talk:bot:install --feature webhook --feature response "GoatCitadel" "<secret>" "<webhook address>"',
-                "occ talk:bot:setup <bot-id> <room-token>",
+                "occ talk:bot:list",
+                "occ talk:bot:setup <new-bot-id> <room-token>",
               ].join("\n"),
             },
             linkBlock("Nextcloud Talk: occ commands", "https://nextcloud-talk.readthedocs.io/en/latest/occ/"),
@@ -143,8 +146,15 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
               whyNeeded: "GoatCitadel signs what it sends to Talk with it, and checks what Talk sends back with it.",
               whereToFind: [
                 paragraph(
-                  "It is the secret occ talk:bot:create printed, or the one you gave it with --secret. If you no longer have it, uninstall the bot and create it again.",
+                  "It is the secret occ talk:bot:create printed, or the one you gave it with --secret. If you no longer have it, uninstall the bot with occ talk:bot:uninstall and set it up again:",
                 ),
+                {
+                  kind: "list",
+                  items: [
+                    "To send only: create it again with occ talk:bot:create, then turn it on for the conversation with occ talk:bot:setup.",
+                    "To receive: install it again with occ talk:bot:install, this connection's webhook address and the features webhook and response, then turn it on for the conversation with occ talk:bot:setup.",
+                  ],
+                },
               ],
               commonMistakes: [
                 "A secret shorter than 40 characters. occ requires 40 to 128.",
@@ -172,11 +182,27 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
                 "The token Talk gives the conversation. The test message and any send that names no room go to this conversation.",
               whereToFind: [
                 paragraph(
-                  "This is the room token you give occ talk:bot:setup. Talk's own API calls it the conversation's token, and its list of your conversations shows one for each: GET /ocs/v2.php/apps/spreed/api/v4/room on your Nextcloud address, signed in as yourself.",
+                  "This is the room token you give occ talk:bot:setup. Talk's own API calls it the conversation's token, and its list of your conversations gives one for each. This command asks for that list; each conversation in the answer has a token:",
+                ),
+                {
+                  kind: "code",
+                  language: "shell",
+                  code: 'curl -u <user>:<password> -H "OCS-APIRequest: true" -H "Accept: application/json" "<Base URL>/ocs/v2.php/apps/spreed/api/v4/room"',
+                },
+                paragraph(
+                  "Use your Nextcloud user name and password. If you use two-factor authentication, use a device-specific password instead (Personal settings › Security).",
                 ),
                 linkBlock(
                   "Nextcloud Talk: conversations",
                   "https://nextcloud-talk.readthedocs.io/en/latest/conversation/",
+                ),
+                linkBlock(
+                  "Nextcloud: OCS API",
+                  "https://docs.nextcloud.com/server/latest/developer_manual/client_apis/OCS/ocs-api-overview.html",
+                ),
+                linkBlock(
+                  "Nextcloud: device-specific passwords",
+                  "https://docs.nextcloud.com/server/latest/user_manual/en/session_management.html",
                 ),
               ],
               looksLike: "a1b2c3d4",
@@ -359,7 +385,7 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
           level: "error",
           message: "Paste the Nextcloud Talk bot secret.",
           failureCategory: "missing_input",
-          nextSteps: ["Use the secret you gave occ talk:bot:install."],
+          nextSteps: ["Use the secret occ talk:bot:create printed, or the one you gave it with --secret."],
         });
       }
       if (!readString(draft.draft, "defaultRoomId")) {

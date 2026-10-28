@@ -148,7 +148,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "The room token of the conversation the bot should use.",
     ],
     firstMessage:
-      "Check the test message arrived. To receive: reinstall the bot with this connection's webhook address and the same secret, turn it on for the room again, allow users/<your user name>, and send a message.",
+      "Check the test message arrived. To receive: reinstall the bot with this connection's webhook address and the same secret, turn it on for the room again, allow users/<your user name>, and send a message. Talk sends every message posted in the room to that address, so use only an address you control.",
   },
   line: {
     summary:
