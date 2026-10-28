@@ -77,6 +77,7 @@ import {
   type McpToolPolicyBinding,
 } from "./mcp-tool-policy-binding.js";
 import { readMcpApprovalRelief, type McpApprovalRelief } from "./mcp-approval-relief.js";
+import { isOwnDeliveryMarker, type OwnDeliveryMarker } from "./own-delivery.js";
 import {
   readMeshToolPolicyBinding,
   MESH_TOOL_POLICY_DEFINITION,
@@ -350,6 +351,11 @@ export interface ToolPolicyEvaluateOptions {
    * read from ToolInvokeRequest or policyContext. It must name this call's exact MCP target.
    */
   mcpApprovalRelief?: McpApprovalRelief;
+  /**
+   * Gateway-minted for GoatCitadel's own deliveries (channel replies, the operator's own sends, Library actions),
+   * never read from ToolInvokeRequest or policyContext. A genuine marker skips only the switched-off tool group check.
+   */
+  ownDelivery?: OwnDeliveryMarker;
 }
 
 export interface ToolPolicyInvokeOptions extends ToolPolicyEvaluateOptions {
@@ -645,6 +651,7 @@ export class ToolPolicyEngine {
         externalSideEffect: options.externalSideEffect,
         mcpToolBinding: options.mcpToolBinding,
         meshToolBinding: options.meshToolBinding,
+        ownDelivery: options.ownDelivery,
       });
       if (result) {
         return result;
@@ -977,6 +984,7 @@ export class ToolPolicyEngine {
       externalSideEffect?: ToolPolicyInvokeOptions["externalSideEffect"];
       mcpToolBinding?: McpToolPolicyBinding;
       meshToolBinding?: MeshToolPolicyBinding;
+      ownDelivery?: OwnDeliveryMarker;
     },
   ): Promise<ToolInvokeResult | undefined> {
     const pending = await this.storage.pendingApprovalActions.find(approvalId);
@@ -1230,7 +1238,8 @@ export class ToolPolicyEngine {
     // A switched-off group is deny-wins like tools.deny: tools.allow, allow grants and a local operator
     // override cannot lift it. It sits after the deny gate so a tool that is also denied reports policy_deny,
     // the remedy switching the group on would not fix. Core, MCP and mesh names are never in the map.
-    for (const name of toolNames) {
+    // The switch stops the AI only: a Gateway-minted own-delivery marker skips this one check and nothing else.
+    for (const name of isOwnDeliveryMarker(options.ownDelivery) ? [] : toolNames) {
       const groupId = policy.switchedOffTools?.get(name);
       if (groupId) {
         return withPolicy(

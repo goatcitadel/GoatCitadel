@@ -47,6 +47,7 @@ import {
   parseHookDeliveryWorkflowPayload,
   parseOrchestrationWorkflowPayload,
   parseProactiveTickWorkflowPayload,
+  readConnectorDeliveryOwnership,
   type DurableWorkflowExecutorHosts,
   type DurableChatPostCommitEffectWorkflowPort,
 } from "./durable-execution-service.js";
@@ -1613,6 +1614,56 @@ describe("durable-execution-service orchestration workflow", () => {
       expect.objectContaining({ reason: "terminal hook delivery" }),
       expect.objectContaining({ links: expect.objectContaining({ runId: expect.any(String) }) }),
     );
+  });
+
+  it("sends approval prompts and autonomous replies as GoatCitadel's own delivery, and nothing else", async () => {
+    vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
+      await deps.markExternalCallStarted?.();
+      await deps.commsSend({ connectionId: "channel-1", target: "#ops", message: "hello" });
+      await deps.commsReply({ connectionId: "channel-1", target: "#ops", message: "hi", replyToMessageId: "m-1" });
+      return { capabilityId: "outbound_messages", dispatchKind: "integration_channel_send", result: {} } as never;
+    });
+    const deliver = async (deliveryKind: string | undefined) => {
+      const run = {
+        ...buildRunWithPayload("connector.delivery", {
+          version: "connector.delivery.v1",
+          connectorId: "connector-channel",
+          action: "channel.send",
+          payload: { target: "#ops", message: "hello" },
+        }),
+        ...(deliveryKind ? { metadata: { deliveryKind } } : {}),
+      };
+      const host = {
+        requireConnectorRecord: vi.fn(() => ({
+          connectorId: "connector-channel",
+          connectorType: "integration_connection",
+        })),
+        commsSend: vi.fn(async () => ({ status: "sent" })),
+        commsReply: vi.fn(async () => ({ status: "sent" })),
+        resolveDurableRunHookWorkspaceId: vi.fn(() => "default"),
+        storage: {
+          ...createConnectorDeliveryLedger(),
+          durableRuns: { getRun: vi.fn(() => run), updateRun: vi.fn(), createCheckpoint: vi.fn() },
+        },
+        recordDurableTimelineEvent: vi.fn(),
+        publishRealtime: vi.fn(),
+      };
+      await executeDurableConnectorDeliveryRun(host as never, run);
+      return host;
+    };
+
+    for (const deliveryKind of ["approval.remote_token", "autonomous.assistant_message"]) {
+      const host = await deliver(deliveryKind);
+      expect(host.commsSend, deliveryKind).toHaveBeenCalledWith(expect.any(Object), { ownDelivery: true });
+      expect(host.commsReply, deliveryKind).toHaveBeenCalledWith(expect.any(Object), { ownDelivery: true });
+    }
+    // Any other connector delivery stays subject to a switched-off group.
+    for (const deliveryKind of [undefined, "operator.custom"]) {
+      const host = await deliver(deliveryKind);
+      expect(host.commsSend, String(deliveryKind)).toHaveBeenCalledWith(expect.any(Object), undefined);
+      expect(host.commsReply, String(deliveryKind)).toHaveBeenCalledWith(expect.any(Object), undefined);
+    }
+    expect(readConnectorDeliveryOwnership({ metadata: { deliveryKind: { toString: () => "x" } } })).toBeUndefined();
   });
 
   it("executes connector delivery runs with retained domain links", async () => {

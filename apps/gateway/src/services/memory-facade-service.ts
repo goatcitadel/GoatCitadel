@@ -7,12 +7,23 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import { createOwnDeliveryMarker, type OwnDeliveryMarker } from "@goatcitadel/policy-engine";
 
 export interface KnowledgeFacadePort {
   invokeAndUnwrap(
     request: ToolInvokeRequest,
     realtimeType: string,
+    options?: { ownDelivery?: OwnDeliveryMarker },
   ): Promise<ToolInvokeResult | Record<string, unknown>>;
+}
+
+/**
+ * The facade serves only the operator's Library knowledge routes and Chat attachments; the AI's own memory and
+ * document tools go through the tool coordinator, never here. So every facade call is the operator's own action and
+ * keeps working while its tool group is switched off.
+ */
+function operatorAction(): { ownDelivery: OwnDeliveryMarker } {
+  return { ownDelivery: createOwnDeliveryMarker("operator_action") };
 }
 
 // Omit absent optional executable arguments before policy evaluation. JSON-backed
@@ -64,6 +75,7 @@ export async function knowledgeMemoryWrite(
       taskId: input.taskId,
     },
     "knowledge_memory_write",
+    operatorAction(),
   );
 }
 
@@ -85,6 +97,7 @@ export async function knowledgeMemorySearch(
       taskId: input.taskId,
     },
     "knowledge_memory_search",
+    operatorAction(),
   );
 }
 
@@ -108,6 +121,7 @@ export async function knowledgeDocsIngest(
       taskId: input.taskId,
     },
     "knowledge_docs_ingest",
+    operatorAction(),
   );
 }
 
@@ -129,6 +143,7 @@ export async function knowledgeEmbeddingsIndex(
       taskId: input.taskId,
     },
     "knowledge_embeddings_index",
+    operatorAction(),
   );
 }
 
@@ -150,5 +165,6 @@ export async function knowledgeEmbeddingsQuery(
       taskId: input.taskId,
     },
     "knowledge_embeddings_query",
+    operatorAction(),
   );
 }

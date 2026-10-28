@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { commsRoutes } from "./comms.js";
 
+// Every operator comms route passes its own-delivery option as a separate argument.
+const OWN = { ownDelivery: true };
+
 function decorateComms(app: FastifyInstance, methods: Record<string, unknown>) {
   app.decorate("services", { comms: methods } as never);
 }
@@ -60,6 +63,7 @@ describe("comms routes", () => {
       expect.objectContaining({
         title: "Review",
       }),
+      OWN,
     );
   });
 
@@ -82,7 +86,10 @@ describe("comms routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(commsCalendarCreate).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: "calendar-key-1" }));
+    expect(commsCalendarCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: "calendar-key-1" }),
+      OWN,
+    );
   });
 
   it("allows attachment-only channel sends", async () => {
@@ -119,6 +126,7 @@ describe("comms routes", () => {
         attachmentIds: ["22222222-2222-4222-8222-222222222222"],
         message: "",
       }),
+      OWN,
     );
     expect(response.json()).toMatchObject({
       deliveryId: "delivery-1",
@@ -132,6 +140,54 @@ describe("comms routes", () => {
     });
     expect(rawSendResult.providerPayload.authorization).toBe("Bearer send-short");
     expect(rawSendResult.providerPayload.receiptUrl).toContain("send-path");
+  });
+
+  it("a comms request body can't change how the send is treated", async () => {
+    const commsSend = vi.fn(async (_input: unknown, _own?: unknown) => ({ deliveryId: "body", status: "queued" }));
+    const commsGmailSend = vi.fn(async (_input: unknown, _own?: unknown) => ({ messageId: "gmail-body" }));
+    app = Fastify();
+    decorateComms(app, { commsSend, commsGmailSend });
+    await app.register(commsRoutes);
+    // A caller tries to switch the treatment off, or to smuggle a look-alike marker, through the body.
+    const smuggled = {
+      ownDelivery: false,
+      options: { ownDelivery: { kind: "own_delivery", reason: "channel_reply" } },
+    };
+
+    const send = await app.inject({
+      method: "POST",
+      url: "/api/v1/comms/send",
+      payload: {
+        connectionId: "11111111-1111-4111-8111-111111111111",
+        target: "channel:123",
+        message: "From the operator",
+        ...smuggled,
+      },
+    });
+    const gmail = await app.inject({
+      method: "POST",
+      url: "/api/v1/comms/gmail/send",
+      payload: {
+        connectionId: "11111111-1111-4111-8111-111111111111",
+        to: ["ops@example.test"],
+        subject: "Status",
+        bodyText: "Ready",
+        ...smuggled,
+      },
+    });
+
+    expect(send.statusCode).toBe(200);
+    expect(gmail.statusCode).toBe(200);
+    // The schemas strip the extra fields; only the route's own argument says how the send is treated.
+    for (const [mock, input] of [
+      [commsSend, commsSend.mock.calls[0]?.[0]],
+      [commsGmailSend, commsGmailSend.mock.calls[0]?.[0]],
+    ] as const) {
+      expect(mock).toHaveBeenCalledTimes(1);
+      expect(mock).toHaveBeenCalledWith(expect.any(Object), OWN);
+      expect(input).not.toHaveProperty("ownDelivery");
+      expect(input).not.toHaveProperty("options");
+    }
   });
 
   it("forwards explicit channel replies to the gateway", async () => {
@@ -157,6 +213,7 @@ describe("comms routes", () => {
         replyToMessageId: "msg-789",
         message: "Reply body",
       }),
+      OWN,
     );
   });
 
@@ -183,6 +240,7 @@ describe("comms routes", () => {
         messageId: "msg-123",
         reaction: "love",
       }),
+      OWN,
     );
   });
 
@@ -206,6 +264,7 @@ describe("comms routes", () => {
       expect.objectContaining({
         messageId: "msg-456",
       }),
+      OWN,
     );
   });
 
@@ -768,6 +827,7 @@ describe("comms routes", () => {
     expect(gmailRead.statusCode).toBe(200);
     expect(commsGmailRead).toHaveBeenCalledWith(
       expect.objectContaining({ query: "from:ops@example.test", maxResults: 10 }),
+      OWN,
     );
 
     const gmailSend = await app.inject({
@@ -781,7 +841,7 @@ describe("comms routes", () => {
       },
     });
     expect(gmailSend.statusCode).toBe(200);
-    expect(commsGmailSend).toHaveBeenCalledWith(expect.objectContaining({ subject: "Status" }));
+    expect(commsGmailSend).toHaveBeenCalledWith(expect.objectContaining({ subject: "Status" }), OWN);
 
     const calendarList = await app.inject({
       method: "POST",
@@ -793,7 +853,10 @@ describe("comms routes", () => {
       },
     });
     expect(calendarList.statusCode).toBe(200);
-    expect(commsCalendarList).toHaveBeenCalledWith(expect.objectContaining({ fromIso: "2026-03-05T10:00:00.000Z" }));
+    expect(commsCalendarList).toHaveBeenCalledWith(
+      expect.objectContaining({ fromIso: "2026-03-05T10:00:00.000Z" }),
+      OWN,
+    );
   });
 
   it("rejects malformed runtime and diagnostics params before service lookup", async () => {

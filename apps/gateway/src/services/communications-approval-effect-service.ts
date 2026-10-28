@@ -17,6 +17,7 @@ import {
   commsGmailSend,
   commsSmtpSend,
   CommsPreApprovalSettledError,
+  OWN_DELIVERY,
   type CommsHost,
   type CommsPreApproval,
 } from "./comms-service.js";
@@ -599,7 +600,11 @@ function selectCommunicationsExecutor(
   return send && ((input) => send.call(executors, input));
 }
 
-/** Composes the executor over the same comms host the communications routes use. */
+/**
+ * Composes the executor over the same comms host the communications routes use. Only the operator's
+ * Communications page asks for these approvals, so an approved send is the operator's own and keeps
+ * working while Email and calendar is switched off.
+ */
 export function createCommunicationsApprovalEffectService(
   storage: CommunicationsApprovalEffectDeps["storage"],
   host: CommsHost,
@@ -607,9 +612,9 @@ export function createCommunicationsApprovalEffectService(
   return new CommunicationsApprovalEffectService({
     storage,
     getIntegrationConnection: (connectionId) => host.getIntegrationConnection(connectionId),
-    commsGmailSend: (input, preApproval) => commsGmailSend(host, input, preApproval),
-    commsSmtpSend: (input, preApproval) => commsSmtpSend(host, input, preApproval),
-    commsCalendarCreate: (input, preApproval) => commsCalendarCreate(host, input, preApproval),
+    commsGmailSend: (input, preApproval) => commsGmailSend(host, input, preApproval, OWN_DELIVERY),
+    commsSmtpSend: (input, preApproval) => commsSmtpSend(host, input, preApproval, OWN_DELIVERY),
+    commsCalendarCreate: (input, preApproval) => commsCalendarCreate(host, input, preApproval, OWN_DELIVERY),
   });
 }
 

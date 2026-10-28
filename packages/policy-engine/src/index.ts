@@ -9,6 +9,7 @@ export {
   type McpToolPolicyIdentity,
 } from "./mcp-tool-policy-binding.js";
 export { createMcpApprovalRelief, type McpApprovalRelief } from "./mcp-approval-relief.js";
+export * from "./own-delivery.js";
 export {
   createMeshToolPolicyBinding,
   MESH_TOOL_POLICY_DEFINITION,

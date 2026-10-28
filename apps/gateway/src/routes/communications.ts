@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { z } from "zod";
+import { OWN_DELIVERY } from "../services/comms-service.js";
 import {
   createCommunicationsDashboardService,
   MailDraftRecoveryUnavailableError,
@@ -84,13 +85,16 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
   const service = createCommunicationsDashboardService({
     createApproval: (input) => fastify.services.approvals.createApproval(input),
     listIntegrationConnections: (kind, limit) => fastify.services.integrations.listIntegrationConnections(kind, limit),
+    // The Communications page reads are the operator's own, so they keep working while Email and calendar is off.
     commsGmailRead: async (input) => {
       const fixture = await resolveCommunicationsVerificationFixture(fastify, input.connectionId);
-      return fixture ? { messages: fixture.messages } : await fastify.services.comms.commsGmailRead(input);
+      return fixture
+        ? { messages: fixture.messages }
+        : await fastify.services.comms.commsGmailRead(input, OWN_DELIVERY);
     },
     commsCalendarList: async (input) => {
       const fixture = await resolveCommunicationsVerificationFixture(fastify, input.connectionId);
-      return fixture ? { items: fixture.events } : await fastify.services.comms.commsCalendarList(input);
+      return fixture ? { items: fixture.events } : await fastify.services.comms.commsCalendarList(input, OWN_DELIVERY);
     },
     mailDrafts: fastify.services.mailDrafts,
   });

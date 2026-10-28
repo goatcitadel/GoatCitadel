@@ -119,6 +119,40 @@ describe("communications approval execution through the real Gateway tool path",
     expect(settled?.failureReason).toBeUndefined();
   });
 
+  it("sends the operator's approved mail draft while Email and calendar is switched off", async () => {
+    const { live, connection, dashboard, gmailCalls } = await startGatewayWithGmail();
+    const draft = await dashboard.createDraft({
+      accountId: connection.connectionId,
+      to: ["recipient@example.com"],
+      subject: "Approved with email off",
+      bodyText: "The operator's own send.",
+    });
+    const approvalId = (await dashboard.sendDraft(draft.draftId)).approvalId!;
+    // Switching the group off stops the AI's mail tools, not the operator's own approved draft.
+    live.config.toolPolicy.tools.disabledGroups = ["email_and_calendar"];
+
+    await live.resolveApproval(approvalId, { decision: "approve", resolvedBy: "operator" });
+
+    const settled = await pollFor(
+      async () => await live.storage.mailDrafts.find(draft.draftId),
+      (candidate) => candidate?.status === "sent" || candidate?.status === "failed",
+      "the approved draft to settle with Email and calendar off",
+    );
+    expect(settled?.failureReason).toBeUndefined();
+    expect(settled).toMatchObject({ status: "sent" });
+    expect(gmailCalls).toHaveLength(1);
+    // The AI's own gmail.send is still switched off.
+    const aiSend = await live.invokeTool({
+      toolName: "gmail.send",
+      args: { connectionId: connection.connectionId, to: ["x@example.com"], subject: "AI", bodyText: "AI" },
+      agentId: "assistant",
+      sessionId: "ai-mail-session",
+    });
+    expect(aiSend.outcome).toBe("blocked");
+    expect(aiSend.policyReason).toContain("tool group switched off");
+    expect(gmailCalls).toHaveLength(1);
+  });
+
   it("sends nothing when the mail account changed between approval and execution", async () => {
     const { live, connection, dashboard, gmailCalls } = await startGatewayWithGmail();
     const draft = await dashboard.createDraft({

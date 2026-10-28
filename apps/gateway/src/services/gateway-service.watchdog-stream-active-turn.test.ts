@@ -130,11 +130,15 @@ describe("GatewayService watchdog facade behavior", () => {
         sampleRunIds: ["dead-1"],
       },
     });
-    expect(commsSend).toHaveBeenCalledWith({
-      connectionId: "conn-1",
-      target: "ops-room",
-      message: "Watchdog attention needed: Durable watchdog\n\n1 unresolved durable dead letter(s) need review.",
-    });
+    // A home-channel notice is GoatCitadel's own delivery, so a switched-off Messaging group does not stop it.
+    expect(commsSend).toHaveBeenCalledWith(
+      {
+        connectionId: "conn-1",
+        target: "ops-room",
+        message: "Watchdog attention needed: Durable watchdog\n\n1 unresolved durable dead letter(s) need review.",
+      },
+      { ownDelivery: true },
+    );
     expect(recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
