@@ -41,6 +41,18 @@ function textOf(blocks: readonly ChannelSetupRichBlock[] | undefined): string {
   return (blocks ?? []).map((block) => JSON.stringify(block)).join("\n");
 }
 
+/** Every string the guide shows, joined: values only, not the names of fields such as a placeholder's own key. */
+function wizardText(): string {
+  const strings: string[] = [];
+  const walk = (value: unknown): void => {
+    if (typeof value === "string") strings.push(value);
+    else if (Array.isArray(value)) value.forEach(walk);
+    else if (value && typeof value === "object") Object.values(value).forEach(walk);
+  };
+  walk(guide().definition.wizard);
+  return strings.join("\n");
+}
+
 function stepIds(): string[] {
   return guide().definition.wizard.steps.map((candidate) => candidate.id);
 }
@@ -174,32 +186,73 @@ describe("Nextcloud Talk setup guide: adding the bot (items 1 and 2)", () => {
     );
   });
 
-  it("walks through the secret, the install with both features, a placeholder address and turning it on for the room", () => {
+  it("sends: creates a response-only bot that takes no webhook address, copies its secret, and turns it on for the room (R53)", () => {
     expect(step("install-bot").body).toContainEqual({
       kind: "list",
       ordered: true,
       items: [
-        "Make up a secret of 40 to 128 characters and keep it. GoatCitadel needs the same secret.",
-        "Install the bot with occ talk:bot:install. Give it a name, the secret, a webhook address, and the features webhook and response. Without the response feature the bot can't post.",
-        "For now, use any web address as the webhook address. You only need the real one to receive messages (see below).",
+        "Create the bot with occ talk:bot:create and give it a name. It gets the response feature only, so it can post messages and reactions, and it takes no webhook address. Talk sends room messages to a webhook address only for a bot with the webhook feature.",
+        "Copy the bot's secret. occ prints a random one unless you give your own with --secret. It must be 40 to 128 characters, and GoatCitadel needs the same secret.",
         "Turn the bot on for the conversation with occ talk:bot:setup. Give it the bot's ID (occ talk:bot:list lists your bots) and the conversation's room token.",
       ],
     });
+    // The send-only commands name no webhook address and no webhook feature.
     expect(step("install-bot").body).toContainEqual({
       kind: "code",
       language: "shell",
+      code: ['occ talk:bot:create "GoatCitadel"', "occ talk:bot:setup <bot-id> <room-token>"].join("\n"),
+    });
+  });
+
+  it("receives: warns that Talk posts every room message to the webhook address, then installs the bot again with this connection's address (R53)", () => {
+    const body = step("install-bot").body ?? [];
+
+    expect(body).toContainEqual({
+      kind: "note",
+      tone: "warning",
+      text: "Talk sends every message posted in the conversation to the webhook address of a bot that has the webhook feature. Use only an address you control.",
+    });
+    expect(body).toContainEqual({
+      kind: "list",
+      ordered: true,
+      items: [
+        "Copy this connection's webhook address.",
+        "Uninstall the bot with occ talk:bot:uninstall and its bot ID.",
+        "Install the bot again with occ talk:bot:install: the same name and secret, this connection's webhook address, and the features webhook and response.",
+        "Turn it on for the conversation again with occ talk:bot:setup.",
+      ],
+    });
+    expect(body).toContainEqual({
+      kind: "code",
+      language: "shell",
       code: [
+        "occ talk:bot:uninstall <bot-id>",
         'occ talk:bot:install --feature webhook --feature response "GoatCitadel" "<secret>" "<webhook address>"',
         "occ talk:bot:setup <bot-id> <room-token>",
       ].join("\n"),
     });
   });
 
-  it("gives the two phases: sending now with a placeholder, receiving after you finish with this connection's address", () => {
+  it("gives the two phases as a short sending line and a receiving paragraph, with no run-on instructions (R53)", () => {
     expect(paragraphs("install-bot").slice(1)).toEqual([
-      "Sending: install the bot with a placeholder address, turn it on for the room, test, and finish.",
-      "Receiving (optional), after you finish: Talk fixes a bot's webhook address when the bot is installed, and occ has no command to change it. So copy this connection's webhook address (you get it after you finish: Settings › Channels › this connection), uninstall the bot with occ talk:bot:uninstall, install it again with that address and the same secret, then turn it on for the room again.",
+      "Sending is all a send-only setup needs:",
+      "Receiving (optional), after you finish. No occ command changes a bot's webhook address, so to receive you install the bot again with this connection's address. GoatCitadel shows it after you finish: Settings › Channels › this connection.",
     ]);
+    // Every instruction is a numbered list item; no paragraph is a chain of steps.
+    expect((step("install-bot").body ?? []).filter((block) => block.kind === "list")).toHaveLength(2);
+  });
+
+  it("never says any web address works, never suggests a placeholder, and never calls it harmless (R53)", () => {
+    expect(wizardText()).not.toMatch(
+      /any web address|any address|any https|placeholder|doesn't matter|does not matter|harmless/iu,
+    );
+  });
+
+  it("repeats the warning where an edit still sees it: the finish step is not setup-only (R53)", () => {
+    expect(step("finish").createOnly).toBeUndefined();
+    expect(paragraphs("finish")[0]).toContain(
+      "Talk sends every message posted in the conversation to that address, so use only an address you control.",
+    );
   });
 
   it("links the vendor pages the steps rest on", () => {
@@ -209,13 +262,10 @@ describe("Nextcloud Talk setup guide: adding the bot (items 1 and 2)", () => {
     expect(text).toContain("https://nextcloud-talk.readthedocs.io/en/latest/bots/");
   });
 
-  it("asks only for what every setup needs: the receiving reinstall is plain text, not a box that blocks Continue (R50)", () => {
+  it("asks only for what every setup needs: the receiving reinstall is a list, not a box that blocks Continue (R50)", () => {
     const boxes = (step("install-bot").checklist ?? []).map((item) => item.label);
 
-    expect(boxes).toEqual([
-      "Install the bot with the webhook and response features",
-      "Turn the bot on for the conversation",
-    ]);
+    expect(boxes).toEqual(["Create the bot with the response feature", "Turn the bot on for the conversation"]);
     expect(boxes.join("\n")).not.toMatch(/receiv|again|webhook address|public/iu);
   });
 
@@ -311,15 +361,15 @@ describe("Nextcloud Talk setup guide: the bot secret and the room token (items 3
 
   it("says where the secret comes from and what makes one wrong", () => {
     expect(textOf(field("token").whereToFind)).toContain(
-      "It is the secret you gave occ talk:bot:install. If you no longer have it, uninstall the bot and install it again with a new secret.",
+      "It is the secret occ talk:bot:create printed, or the one you gave it with --secret. If you no longer have it, uninstall the bot and create it again.",
     );
     expect(field("token").commonMistakes).toEqual([
       "A secret shorter than 40 characters. occ requires 40 to 128.",
-      "A different secret from the one the bot was installed with.",
+      "A different secret from the one the bot has.",
     ]);
   });
 
-  it("calls the room field Room token and says what it is without guessing where it shows", () => {
+  it("calls the room field Room token and says how to list it yourself, not who to ask (R53)", () => {
     const room = field("defaultRoomId");
 
     expect(room.label).toBe("Room token");
@@ -327,8 +377,10 @@ describe("Nextcloud Talk setup guide: the bot secret and the room token (items 3
       "The token Talk gives the conversation. The test message and any send that names no room go to this conversation.",
     );
     expect(textOf(room.whereToFind)).toContain(
-      "This is the room token you give occ talk:bot:setup. Talk's own API calls it the conversation's token. If you can't see it in your Talk app, ask your Nextcloud admin.",
+      "This is the room token you give occ talk:bot:setup. Talk's own API calls it the conversation's token, and its list of your conversations shows one for each: GET /ocs/v2.php/apps/spreed/api/v4/room on your Nextcloud address, signed in as yourself.",
     );
+    // The person has shell access to the server, so telling them to ask an admin would send them in a circle.
+    expect(textOf(room.whereToFind)).not.toMatch(/admin/iu);
     expect(textOf(room.whereToFind)).toContain("https://nextcloud-talk.readthedocs.io/en/latest/conversation/");
     expect(room.commonMistakes).toEqual(["Using the conversation's name instead of its token."]);
   });
@@ -402,7 +454,7 @@ describe("Nextcloud Talk setup guide: the test and finishing (item 10, R49)", ()
 
   it("finishes by saving for sending, and points receiving at the next step", () => {
     expect(paragraphs("finish")).toEqual([
-      "Finish saves the connection so GoatCitadel can send from it. To receive messages, install the bot again with this connection's webhook address and the same secret (the last step shows how).",
+      "Finish saves the connection so GoatCitadel can send from it. To receive messages, install the bot again with this connection's webhook address and the same secret (the last step shows how). Talk sends every message posted in the conversation to that address, so use only an address you control.",
     ]);
     expect(step("finish").successCriteria).toEqual([
       "Nextcloud accepted the signed test message.",
@@ -426,19 +478,19 @@ describe("Nextcloud Talk setup guide: when the test fails (A13)", () => {
     ]);
   });
 
-  it("covers a bot that isn't installed, lacks the response feature, isn't on for the room, or has another secret", () => {
+  it("covers a bot that lacks the response feature, isn't on for the room, or has another secret", () => {
     expect(items().find((item) => item.id === "bot-rejected")?.title).toBe(
       "It says Nextcloud Talk rejected the signed room send",
     );
     expect(body("bot-rejected")).toBe(
-      "Check these in order. The bot must be installed with both the webhook and response features: without response it can't post. It must be turned on for this conversation with occ talk:bot:setup (occ talk:bot:list followed by the room token lists the bots set up for it). The Room token must be the conversation's token, not its name. And the secret here must be the one the bot was installed with.",
+      "Check these in order. The bot must have the response feature, or it can't post: a bot made with occ talk:bot:create has it. It must be turned on for this conversation with occ talk:bot:setup (occ talk:bot:list with the room token lists the bots for that conversation). The Room token must be the conversation's token, not its name. And the secret here must be the one the bot has.",
     );
   });
 
   it("says a secret under 40 characters can't be used", () => {
     expect(items().find((item) => item.id === "secret-short")?.title).toBe("occ says the secret is too short");
     expect(body("secret-short")).toBe(
-      "A bot secret must be 40 to 128 characters. Make a longer one, install the bot again with it, and paste the same secret here.",
+      "A bot secret must be 40 to 128 characters. Create the bot again with a longer one, or leave --secret out and let occ make one, and paste the same secret here.",
     );
   });
 
@@ -463,6 +515,7 @@ describe("Nextcloud Talk setup guide: when the test fails (A13)", () => {
   it("points a silent bot at the reinstall, the HTTPS address, the sender format and the running Gateway", () => {
     const noReply = body("no-reply");
 
+    expect(noReply).toContain("A bot made with occ talk:bot:create hears nothing: it has the response feature only.");
     expect(noReply).toContain("installed with this connection's webhook address and the same secret");
     expect(noReply).toContain("turned on for the room again after any reinstall");
     expect(noReply).toContain("over HTTPS");
@@ -513,7 +566,7 @@ describe("Nextcloud Talk send-only path: can it finish?", () => {
     ]);
   });
 
-  it("is cleared by the setup test once the bot is installed and turned on for the room", async () => {
+  it("is cleared by the setup test once the bot is created and turned on for the room", async () => {
     const config = guide().normalize(draftOf(SEND_VALUES));
     const { issues, live, eligibility } = await botInstalled.verdictOf(config);
 
@@ -527,7 +580,7 @@ describe("Nextcloud Talk send-only path: can it finish?", () => {
     expect(eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
   });
 
-  it("signs the test message with the bot secret, the secret the person gave occ talk:bot:install", async () => {
+  it("signs the test message with the bot secret, the one occ talk:bot:create printed", async () => {
     const config = guide().normalize(draftOf(SEND_VALUES));
     const { deps } = await botInstalled.verdictOf(config);
     const send = vi
@@ -546,7 +599,7 @@ describe("Nextcloud Talk send-only path: can it finish?", () => {
     );
   });
 
-  it("holds Finalize back while the bot is not installed for the room, and the guide names the fixes", async () => {
+  it("holds Finalize back while the bot is not set up for the room, and the guide names the fixes", async () => {
     const config = guide().normalize(draftOf(SEND_VALUES));
     const { eligibility } = await botMissing.verdictOf(config);
 
@@ -639,7 +692,7 @@ describe("Nextcloud Talk receiving path: can it finish?", () => {
     expect(eligibility.allowed).toBe(true);
   });
 
-  it("verifies what Talk posts with the same secret the bot was installed with", () => {
+  it("verifies what Talk posts with the same secret the bot has", () => {
     const body = Buffer.from(JSON.stringify({ type: "Create" }), "utf8");
     const random = "r".repeat(64);
     const signature = createHmac("sha256", SECRET)

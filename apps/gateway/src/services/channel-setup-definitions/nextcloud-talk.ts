@@ -68,37 +68,54 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "GoatCitadel posts to Talk as a bot. Talk only lets you add a bot from the command line, so you need shell access to your Nextcloud server. Run occ the way you usually do there.",
             ),
+            paragraph("Sending is all a send-only setup needs:"),
             {
               kind: "list",
               ordered: true,
               items: [
-                "Make up a secret of 40 to 128 characters and keep it. GoatCitadel needs the same secret.",
-                "Install the bot with occ talk:bot:install. Give it a name, the secret, a webhook address, and the features webhook and response. Without the response feature the bot can't post.",
-                "For now, use any web address as the webhook address. You only need the real one to receive messages (see below).",
+                "Create the bot with occ talk:bot:create and give it a name. It gets the response feature only, so it can post messages and reactions, and it takes no webhook address. Talk sends room messages to a webhook address only for a bot with the webhook feature.",
+                "Copy the bot's secret. occ prints a random one unless you give your own with --secret. It must be 40 to 128 characters, and GoatCitadel needs the same secret.",
                 "Turn the bot on for the conversation with occ talk:bot:setup. Give it the bot's ID (occ talk:bot:list lists your bots) and the conversation's room token.",
               ],
             },
             {
               kind: "code",
               language: "shell",
+              code: ['occ talk:bot:create "GoatCitadel"', "occ talk:bot:setup <bot-id> <room-token>"].join("\n"),
+            },
+            paragraph(
+              "Receiving (optional), after you finish. No occ command changes a bot's webhook address, so to receive you install the bot again with this connection's address. GoatCitadel shows it after you finish: Settings › Channels › this connection.",
+            ),
+            note(
+              "warning",
+              "Talk sends every message posted in the conversation to the webhook address of a bot that has the webhook feature. Use only an address you control.",
+            ),
+            {
+              kind: "list",
+              ordered: true,
+              items: [
+                "Copy this connection's webhook address.",
+                "Uninstall the bot with occ talk:bot:uninstall and its bot ID.",
+                "Install the bot again with occ talk:bot:install: the same name and secret, this connection's webhook address, and the features webhook and response.",
+                "Turn it on for the conversation again with occ talk:bot:setup.",
+              ],
+            },
+            {
+              kind: "code",
+              language: "shell",
               code: [
+                "occ talk:bot:uninstall <bot-id>",
                 'occ talk:bot:install --feature webhook --feature response "GoatCitadel" "<secret>" "<webhook address>"',
                 "occ talk:bot:setup <bot-id> <room-token>",
               ].join("\n"),
             },
-            paragraph(
-              "Sending: install the bot with a placeholder address, turn it on for the room, test, and finish.",
-            ),
-            paragraph(
-              "Receiving (optional), after you finish: Talk fixes a bot's webhook address when the bot is installed, and occ has no command to change it. So copy this connection's webhook address (you get it after you finish: Settings › Channels › this connection), uninstall the bot with occ talk:bot:uninstall, install it again with that address and the same secret, then turn it on for the room again.",
-            ),
             linkBlock("Nextcloud Talk: occ commands", "https://nextcloud-talk.readthedocs.io/en/latest/occ/"),
             linkBlock("Nextcloud Talk: bots", "https://nextcloud-talk.readthedocs.io/en/latest/bots/"),
           ],
-          // Only what every setup needs. Reinstalling the bot with a webhook address is for receiving, after you finish:
-          // it is a paragraph above, not a box, because each box here blocks Continue.
+          // Only what every setup needs. Installing the bot again with a webhook address is for receiving, after you
+          // finish: it is a list above, not a box, because each box here blocks Continue.
           checklist: [
-            check("install", "Install the bot with the webhook and response features"),
+            check("create", "Create the bot with the response feature"),
             check("setup-room", "Turn the bot on for the conversation"),
           ],
         },
@@ -126,12 +143,12 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
               whyNeeded: "GoatCitadel signs what it sends to Talk with it, and checks what Talk sends back with it.",
               whereToFind: [
                 paragraph(
-                  "It is the secret you gave occ talk:bot:install. If you no longer have it, uninstall the bot and install it again with a new secret.",
+                  "It is the secret occ talk:bot:create printed, or the one you gave it with --secret. If you no longer have it, uninstall the bot and create it again.",
                 ),
               ],
               commonMistakes: [
                 "A secret shorter than 40 characters. occ requires 40 to 128.",
-                "A different secret from the one the bot was installed with.",
+                "A different secret from the one the bot has.",
               ],
               sensitive: true,
               canChangeLater: true,
@@ -155,7 +172,7 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
                 "The token Talk gives the conversation. The test message and any send that names no room go to this conversation.",
               whereToFind: [
                 paragraph(
-                  "This is the room token you give occ talk:bot:setup. Talk's own API calls it the conversation's token. If you can't see it in your Talk app, ask your Nextcloud admin.",
+                  "This is the room token you give occ talk:bot:setup. Talk's own API calls it the conversation's token, and its list of your conversations shows one for each: GET /ocs/v2.php/apps/spreed/api/v4/room on your Nextcloud address, signed in as yourself.",
                 ),
                 linkBlock(
                   "Nextcloud Talk: conversations",
@@ -181,12 +198,12 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
             troubleshoot(
               "bot-rejected",
               "It says Nextcloud Talk rejected the signed room send",
-              "Check these in order. The bot must be installed with both the webhook and response features: without response it can't post. It must be turned on for this conversation with occ talk:bot:setup (occ talk:bot:list followed by the room token lists the bots set up for it). The Room token must be the conversation's token, not its name. And the secret here must be the one the bot was installed with.",
+              "Check these in order. The bot must have the response feature, or it can't post: a bot made with occ talk:bot:create has it. It must be turned on for this conversation with occ talk:bot:setup (occ talk:bot:list with the room token lists the bots for that conversation). The Room token must be the conversation's token, not its name. And the secret here must be the one the bot has.",
             ),
             troubleshoot(
               "secret-short",
               "occ says the secret is too short",
-              "A bot secret must be 40 to 128 characters. Make a longer one, install the bot again with it, and paste the same secret here.",
+              "A bot secret must be 40 to 128 characters. Create the bot again with a longer one, or leave --secret out and let occ make one, and paste the same secret here.",
             ),
             troubleshoot(
               "host-not-allowed",
@@ -206,7 +223,7 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
             troubleshoot(
               "no-reply",
               "You message the bot and nothing comes back",
-              "Check these in order. The bot must be installed with this connection's webhook address and the same secret, with the webhook feature, and turned on for the room again after any reinstall. Your Nextcloud server must be able to reach that address over HTTPS. Your user name must be listed as users/ followed by the name (for example users/alice) under Who may message this bot. And GoatCitadel must be running.",
+              "Check these in order. A bot made with occ talk:bot:create hears nothing: it has the response feature only. The bot must be installed with this connection's webhook address and the same secret, with the webhook feature, and turned on for the room again after any reinstall. Your Nextcloud server must be able to reach that address over HTTPS. Your user name must be listed as users/ followed by the name (for example users/alice) under Who may message this bot. And GoatCitadel must be running.",
             ),
           ],
         },
@@ -216,7 +233,7 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finish saves the connection so GoatCitadel can send from it. To receive messages, install the bot again with this connection's webhook address and the same secret (the last step shows how).",
+              "Finish saves the connection so GoatCitadel can send from it. To receive messages, install the bot again with this connection's webhook address and the same secret (the last step shows how). Talk sends every message posted in the conversation to that address, so use only an address you control.",
             ),
           ],
           successCriteria: ["Nextcloud accepted the signed test message.", "The test message arrived in the room."],
