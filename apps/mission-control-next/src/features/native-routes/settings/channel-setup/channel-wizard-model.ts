@@ -106,10 +106,8 @@ export function findMissingFieldLabels(
     .map((field) => field.label);
   for (const group of step.requiredAnyOf ?? []) {
     if (!group.some((key) => hasFieldValue(draft, effectiveValues, key))) {
-      const allFields = definition.wizard.steps.flatMap((item) => item.fields ?? []);
-      // A key with no field is one the operator cannot see or fill in, so the message does not name it.
-      const labels = new Set(group.flatMap((key) => allFields.find((field) => field.key === key)?.label ?? []));
-      if (labels.size) missing.push([...labels].join(" or "));
+      const labels = alternativeLabels(definition, group, effectiveValues);
+      if (labels.length) missing.push(labels.join(" or "));
     }
   }
   for (const field of fields) {
@@ -135,6 +133,26 @@ export function findMissingFieldLabels(
     missing.unshift("Bot token env var or bot token");
   }
   return missing;
+}
+
+/**
+ * The labels a blocked Continue names for a group of alternatives, each said once. A key with no field is one the
+ * operator cannot see or fill in, and a field they cannot see is no way in either, so neither is named. A variable
+ * field whose pasted twin is also offered is left out: the pasted field's plain label says it.
+ */
+function alternativeLabels(
+  definition: ChannelSetupDefinition,
+  group: readonly string[],
+  values: Record<string, unknown>,
+): string[] {
+  const allFields = definition.wizard.steps.flatMap((item) => item.fields ?? []);
+  const offered = group.flatMap((key) => {
+    const field = allFields.find((candidate) => candidate.key === key);
+    return field && isFieldVisible(field, values) ? [field] : [];
+  });
+  const offeredKeys = new Set(offered.map((field) => field.key));
+  const named = offered.filter((field) => !(field.key.endsWith("Env") && offeredKeys.has(field.key.slice(0, -3))));
+  return [...new Set(named.map((field) => field.label))];
 }
 
 export function hasFieldValue(draft: ChannelSetupDraft, values: Record<string, unknown>, key: string): boolean {

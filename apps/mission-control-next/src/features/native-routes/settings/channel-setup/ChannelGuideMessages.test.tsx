@@ -130,9 +130,80 @@ describe("the missing-values message", () => {
     };
     const definition = withSteps([step]);
 
-    expect(findMissingFieldLabels(definition, makeDraft(definition), step, {})).toEqual([
-      "Bot token or Token environment",
-    ]);
+    expect(findMissingFieldLabels(definition, makeDraft(definition), step, {})).toEqual(["Bot token"]);
+  });
+
+  it("names a paste-or-variable pair by the pasted field's plain label only", () => {
+    const whatsapp = definitions.find((item) => item.catalog.catalogId === "channel.whatsapp")!;
+    const step = whatsapp.wizard.steps.find((item) => item.requiredAnyOf?.length)!;
+
+    const missing = findMissingFieldLabels(whatsapp, makeDraft(whatsapp), step, {});
+
+    expect(missing).toContain("Access token");
+    expect(missing.join(" ")).not.toMatch(/environment variable/i);
+  });
+
+  it("names only the alternatives that are visible", () => {
+    const step = {
+      id: "values",
+      kind: "field-collection" as const,
+      title: "Values",
+      fields: [
+        { key: "mode", label: "Mode", type: "select" as const, required: false, defaultValue: "bot", explanation: "M" },
+        {
+          key: "botToken",
+          label: "Bot token",
+          type: "secret" as const,
+          required: false,
+          explanation: "Secret",
+          visibleWhenFieldEquals: { fieldKey: "mode", value: "bot" },
+        },
+        {
+          key: "webhookUrl",
+          label: "Webhook URL",
+          type: "url" as const,
+          required: false,
+          explanation: "Hook",
+          visibleWhenFieldEquals: { fieldKey: "mode", value: "webhook" },
+        },
+      ],
+      requiredAnyOf: [["botToken", "webhookUrl"]],
+    };
+    const definition = withSteps([step]);
+    const draft = makeDraft(definition);
+
+    expect(findMissingFieldLabels(definition, draft, step, {})).toEqual(["Bot token"]);
+    expect(findMissingFieldLabels(definition, draft, step, { mode: "webhook" })).toEqual(["Webhook URL"]);
+  });
+
+  it("names the variable field when it is the only visible way in", () => {
+    const step = {
+      id: "values",
+      kind: "field-collection" as const,
+      title: "Values",
+      fields: [
+        { key: "mode", label: "Mode", type: "select" as const, required: false, defaultValue: "env", explanation: "M" },
+        {
+          key: "botToken",
+          label: "Bot token",
+          type: "secret" as const,
+          required: false,
+          explanation: "Secret",
+          visibleWhenFieldEquals: { fieldKey: "mode", value: "paste" },
+        },
+        {
+          key: "botTokenEnv",
+          label: "Bot token from a variable",
+          type: "text" as const,
+          required: false,
+          explanation: "E",
+        },
+      ],
+      requiredAnyOf: [["botToken", "botTokenEnv"]],
+    };
+    const definition = withSteps([step]);
+
+    expect(findMissingFieldLabels(definition, makeDraft(definition), step, {})).toEqual(["Bot token from a variable"]);
   });
 
   it("does not block on a group none of whose alternatives is a field", () => {

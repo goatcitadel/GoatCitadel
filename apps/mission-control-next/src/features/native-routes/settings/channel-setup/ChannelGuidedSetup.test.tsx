@@ -184,7 +184,7 @@ describe("semantic channel step completion", () => {
       },
       step = definition.wizard.steps[0]!;
     expect(findMissingFieldLabels(definition, draft, step, {})).toEqual([]);
-    expect(findMissingFieldLabels(definition, draft, step, { botToken: "" })).toEqual(["Token or Token environment"]);
+    expect(findMissingFieldLabels(definition, draft, step, { botToken: "" })).toEqual(["Token"]);
     expect(findMissingFieldLabels(definition, draft, step, { botTokenEnv: "BOT_TOKEN" })).toEqual([]);
   });
   it("validates default and destination identity while preserving distinct threads", () => {
