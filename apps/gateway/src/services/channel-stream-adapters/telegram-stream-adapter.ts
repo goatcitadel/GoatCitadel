@@ -1,6 +1,7 @@
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { readTelegramReceiveMode } from "@goatcitadel/gateway-core";
 import { readBoundedResponseJson } from "../bounded-response-reader.js";
+import type { ChannelSecretOwner } from "../channel-secret-resolution.js";
 import type { ChannelStreamCursorStore } from "../channel-stream-cursor-store.js";
 import {
   ChannelStreamAuthError,
@@ -48,7 +49,8 @@ export interface TelegramStreamAdapterDeps {
     config: Record<string, unknown>,
     directKey: string,
     envKey: string,
-    catalogId?: string,
+    catalogId: string | undefined,
+    owner: ChannelSecretOwner,
   ): string | undefined;
   isUrlAllowlisted(urlValue: string): boolean;
   cursorStore: ChannelStreamCursorStore;
@@ -190,7 +192,13 @@ export function createTelegramStreamAdapter(deps: TelegramStreamAdapterDeps): Ch
       return readTelegramReceiveMode(connection.config) === "poll";
     },
     async run(ctx: ChannelStreamRunContext): Promise<void> {
-      const key = deps.resolveSecret(ctx.connection.config, "botToken", "botTokenEnv", ctx.connection.catalogId);
+      const key = deps.resolveSecret(
+        ctx.connection.config,
+        "botToken",
+        "botTokenEnv",
+        ctx.connection.catalogId,
+        ctx.connection,
+      );
       if (!key) throw new ChannelStreamAuthError(NO_KEY);
       // The bot id scopes the stored offset; a key without one is never stored or sent.
       const botId = /^(\d+):\S+$/.exec(key)?.[1];

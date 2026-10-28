@@ -29,6 +29,7 @@ import {
   runZaloBotLiveChecks,
 } from "./channel-bot-live-probes.js";
 import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-diagnostic-checks.js";
+import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
 import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
 import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel-config.js";
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
@@ -69,11 +70,13 @@ export interface IntegrationDiagnosticsPort {
   ): Pick<DiscordRuntimeStatus, "ready" | "lastError" | "connectedBotTag"> | undefined;
   isConnectionUrlAllowlisted(urlValue: string): boolean;
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
+  /** `owner` is the connection the config belongs to: a saved key is read only for the connection that saved it. */
   resolveConnectionSecret(
     config: Record<string, unknown>,
     directKey: string,
     envKey: string,
     catalogId: string,
+    owner: ChannelSecretOwner,
   ): string | undefined;
   /** Google sign-in readiness for a Gmail and Google Calendar connection, read from the OS keychain. */
   getGoogleWorkspaceOAuthStatus?(connectionId: string): Promise<GoogleWorkspaceOAuthStatus>;
@@ -111,7 +114,7 @@ export function buildIntegrationConnectionChecks(
   // not pass here and then give a live check with nothing to check. Only names are reported, never a resolved value.
   const requireSecretRef = (key: string, label: string, directKey: string, envKey: string) => {
     const envName = deps.readConnectionConfigValue(config, envKey);
-    if (deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId)) {
+    if (deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId, connection)) {
       // The name is printed only when the variable is what answered, and only when it has the shape of a name: an old
       // connection can hold a token in the name field, and a direct value can answer while a stale name sits there.
       const via = deps.readConnectionConfigValue(config, directKey) ? undefined : printableEnvVarName(envName);
@@ -210,8 +213,7 @@ export function buildIntegrationConnectionChecks(
     switch (connection.key) {
       case "slack": {
         const slackBotToken = Boolean(
-          deps.readConnectionConfigValue(config, "botToken") ||
-          hasConnectionEnvValue(deps, config, "botTokenEnv", connection.catalogId),
+          deps.readConnectionConfigValue(config, "botToken") || hasConnectionEnvValue(deps, connection, "botTokenEnv"),
         );
         const slackAuthSet = slackBotToken || Boolean(deps.readConnectionConfigValue(config, "webhookUrl"));
         checks.push({
@@ -234,13 +236,13 @@ export function buildIntegrationConnectionChecks(
           status:
             deps.readConnectionConfigValue(config, "webhookUrl") ||
             deps.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(deps, config, "botTokenEnv", connection.catalogId)
+            hasConnectionEnvValue(deps, connection, "botTokenEnv")
               ? "pass"
               : "fail",
           message:
             deps.readConnectionConfigValue(config, "webhookUrl") ||
             deps.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(deps, config, "botTokenEnv", connection.catalogId)
+            hasConnectionEnvValue(deps, connection, "botTokenEnv")
               ? "Discord bot token or webhook is configured."
               : "Discord bot token or webhook is missing.",
         });
@@ -404,13 +406,11 @@ export function buildIntegrationConnectionChecks(
       checks.push({
         key: "auth",
         status:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv", connection.catalogId) ||
-          deps.readConnectionConfigValue(config, "apiKey")
+          hasConnectionEnvValue(deps, connection, "apiKeyEnv") || deps.readConnectionConfigValue(config, "apiKey")
             ? "pass"
             : "fail",
         message:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv", connection.catalogId) ||
-          deps.readConnectionConfigValue(config, "apiKey")
+          hasConnectionEnvValue(deps, connection, "apiKeyEnv") || deps.readConnectionConfigValue(config, "apiKey")
             ? "GIF search API key is configured."
             : "GIF search API key is missing.",
       });
@@ -424,13 +424,13 @@ export function buildIntegrationConnectionChecks(
         status:
           connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl) ||
           deps.readConnectionConfigValue(config, "authToken") ||
-          hasConnectionEnvValue(deps, config, "authTokenEnv", connection.catalogId)
+          hasConnectionEnvValue(deps, connection, "authTokenEnv")
             ? "pass"
             : "warn",
         message: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl)
           ? "Local bridge URL is configured."
           : deps.readConnectionConfigValue(config, "authToken") ||
-              hasConnectionEnvValue(deps, config, "authTokenEnv", connection.catalogId)
+              hasConnectionEnvValue(deps, connection, "authTokenEnv")
             ? "Remote bridge authentication is configured."
             : "Remote bridge authentication is not configured.",
       });
@@ -440,13 +440,11 @@ export function buildIntegrationConnectionChecks(
       checks.push({
         key: "auth",
         status:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv", connection.catalogId) &&
-          hasConnectionEnvValue(deps, config, "tokenEnv", connection.catalogId)
+          hasConnectionEnvValue(deps, connection, "apiKeyEnv") && hasConnectionEnvValue(deps, connection, "tokenEnv")
             ? "pass"
             : "fail",
         message:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv", connection.catalogId) &&
-          hasConnectionEnvValue(deps, config, "tokenEnv", connection.catalogId)
+          hasConnectionEnvValue(deps, connection, "apiKeyEnv") && hasConnectionEnvValue(deps, connection, "tokenEnv")
             ? "Trello API credentials are configured."
             : "Trello API credentials are missing.",
       });
@@ -626,7 +624,7 @@ export async function runIntegrationConnectionLiveChecks(
   }
   const config = connection.config;
   const resolveSecret = (directKey: string, envKey: string) =>
-    deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId);
+    deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId, connection);
   switch (connection.key) {
     case "slack": {
       const token = resolveSecret("botToken", "botTokenEnv") ?? resolveSecret("token", "tokenEnv");
@@ -810,13 +808,12 @@ function readBoolean(value: unknown): boolean {
  */
 function hasConnectionEnvValue(
   deps: IntegrationDiagnosticsPort,
-  config: Record<string, unknown>,
+  connection: IntegrationConnection,
   key: string,
-  catalogId: string,
 ): boolean {
-  const envName = deps.readConnectionConfigValue(config, key);
+  const envName = deps.readConnectionConfigValue(connection.config, key);
   if (!envName) return false;
-  return Boolean(deps.resolveConnectionSecret({ [key]: envName }, "", key, catalogId)?.trim());
+  return Boolean(deps.resolveConnectionSecret({ [key]: envName }, "", key, connection.catalogId, connection)?.trim());
 }
 
 /** Whether the variable the config names under `key` is set, whatever its name. Only for a field no resolver reads. */

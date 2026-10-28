@@ -5,6 +5,7 @@ import {
   type ChatChannelConversation,
 } from "@goatcitadel/contracts";
 import type { ChatCommandOptions } from "./chat-command-service.js";
+import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
 import type { ChannelVoiceInboundRequest, ChannelVoiceTranscriptionResult } from "./channel-voice-inbound-service.js";
 import { ChannelBotLoopGuard, type BotLoopGuardConfig } from "./channel-bot-loop-guard.js";
 
@@ -173,7 +174,10 @@ export type IntegrationWebhookRouteLike = {
    * cannot silently drop them.
    */
   isVoiceInboundEnabled?: () => boolean | Promise<boolean>;
-  transcribeChannelVoice?: (input: ChannelVoiceInboundRequest) => Promise<ChannelVoiceTranscriptionResult>;
+  transcribeChannelVoice?: (
+    input: ChannelVoiceInboundRequest,
+    owner: ChannelSecretOwner,
+  ) => Promise<ChannelVoiceTranscriptionResult>;
   /**
    * Canonical production ingress owner. When present, provider callbacks return
    * after this method commits a bounded durable envelope; model execution and

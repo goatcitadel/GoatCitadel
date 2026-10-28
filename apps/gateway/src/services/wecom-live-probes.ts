@@ -49,7 +49,7 @@ export async function runConfiguredWecomChecks(
   const config = connection.config;
   const read = (key: string) => deps.readConnectionConfigValue(config, key);
   const resolve = (directKey: string, envKey: string) =>
-    deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId);
+    deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId, connection);
   const corpId = read("corpId");
   const agentId = read("agentId");
   const secret = resolve("secret", "secretEnv");

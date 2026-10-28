@@ -16,10 +16,16 @@ export async function runDiscordConnectionLiveChecks(
 ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
   const config = connection.config;
   const token =
-    deps.resolveConnectionSecret(config, "botToken", "botTokenEnv", connection.catalogId) ??
-    deps.resolveConnectionSecret(config, "token", "tokenEnv", connection.catalogId);
+    deps.resolveConnectionSecret(config, "botToken", "botTokenEnv", connection.catalogId, connection) ??
+    deps.resolveConnectionSecret(config, "token", "tokenEnv", connection.catalogId, connection);
   const runtimeMode = deps.readConnectionConfigValue(config, "runtimeMode") === "gateway" ? "gateway" : "bridge";
-  const webhookUrl = deps.resolveConnectionSecret(config, "webhookUrl", "webhookUrlEnv", connection.catalogId);
+  const webhookUrl = deps.resolveConnectionSecret(
+    config,
+    "webhookUrl",
+    "webhookUrlEnv",
+    connection.catalogId,
+    connection,
+  );
   if (!token && webhookUrl && runtimeMode === "bridge")
     return runGovernedWebhookLiveChecks(deps, {
       channelKey: "discord",

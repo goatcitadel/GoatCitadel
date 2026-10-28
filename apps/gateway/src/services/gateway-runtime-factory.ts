@@ -173,8 +173,8 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
       );
       // A saved Discord bot token is a secure-storage reference; the runtime reads this connection's own key through
       // the same custody read a send uses, and an unset reader leaves such a connection down.
-      gateway.discordRuntimeService.setSecretReferenceReader((secretRef) =>
-        gateway.resolveConnectionSecret({ ref: secretRef }, "ref", "refEnv"),
+      gateway.discordRuntimeService.setSecretReferenceReader((secretRef, owner) =>
+        gateway.resolveConnectionSecret({ ref: secretRef }, "ref", "refEnv", undefined, owner),
       );
       await gateway.startDeferredInit(signal);
       // Persistent channel streams start only on the serving path, never for admin/cron CLIs that call init().

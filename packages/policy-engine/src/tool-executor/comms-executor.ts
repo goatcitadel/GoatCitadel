@@ -89,8 +89,11 @@ interface ApprovalActionSecretRuntime {
   isApprovalActionConnectorReady?: (connectionId: string) => Promise<boolean>;
   beforeExternalSideEffect?: () => void | Promise<void>;
   resolveGoogleWorkspaceAccessToken?: (input: { connectionId: string; toolName: string }) => Promise<string>;
-  /** Reads the key a channel connection saved in secure storage; undefined when nothing is stored for it. */
-  resolveChannelConnectionSecret?: (secretRef: string) => string | undefined;
+  /**
+   * Reads the key a channel connection saved in secure storage, for that connection only; undefined when nothing is
+   * stored for it or the reference was saved for another connection.
+   */
+  resolveChannelConnectionSecret?: (connectionId: string, secretRef: string) => string | undefined;
   /**
    * Reads the variable a channel connection names for a secret, only when the Gateway's name rule allows that name.
    * Absent means no variable is read: the send fails as if the secret were missing, never from `process.env`.
@@ -430,7 +433,9 @@ function resolveSavedChannelSecrets(
   const resolveValue = (field: string, value: unknown): unknown => {
     const reference = typeof value === "string" ? value.trim() : "";
     if (!reference.startsWith(KEYCHAIN_REF_PREFIX)) return value;
-    const secret = reference.startsWith(ownPrefix) ? runtime.resolveChannelConnectionSecret?.(reference)?.trim() : "";
+    const secret = reference.startsWith(ownPrefix)
+      ? runtime.resolveChannelConnectionSecret?.(connection.connectionId, reference)?.trim()
+      : "";
     if (!secret || (!STRUCTURED_SECRET_FIELDS.has(field) && CONTROL_CHARACTER_PATTERN.test(secret))) {
       throw new Error(
         `The saved ${asString(connection.label) ?? connection.key} credential is unavailable from secure storage.`,

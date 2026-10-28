@@ -177,9 +177,10 @@ export interface ToolExecutorRuntimeHooks {
   resolveGoogleWorkspaceAccessToken?: (input: { connectionId: string; toolName: string }) => Promise<string>;
   /**
    * Reads the key a channel connection saved in secure storage, so a real send uses the key and never the
-   * reference kept in the connection config. Absent means a send that needs a saved key fails before any request.
+   * reference kept in the connection config. It is told which connection the send is for and reads only a key saved
+   * for that connection. Absent means a send that needs a saved key fails before any request.
    */
-  resolveChannelConnectionSecret?: (secretRef: string) => string | undefined;
+  resolveChannelConnectionSecret?: (connectionId: string, secretRef: string) => string | undefined;
   /**
    * Reads the variable a channel connection names for a secret, so a real send never reads `process.env` by a name
    * the connection config chose. The Gateway answers with the value only when its name rule allows that name, or with a

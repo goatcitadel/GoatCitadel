@@ -96,7 +96,7 @@ export async function invokeGitHubAction(
   checkedAt: string,
   ward?: IntegrationWardContext,
 ): Promise<IntegrationActionInvokeResult> {
-  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   if (!token) {
     return blocked(
       connection,
@@ -394,7 +394,7 @@ export function buildGitHubIssueCreateRunInput(
   connection: IntegrationConnection,
   options: GitHubRunInputOptions<GitHubIssueCreatePayload>,
 ): WritebackRunInputParts | GitHubRunInputBlocked {
-  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   if (!token) {
     return { blockedReason: "github_auth_missing", message: "Configure a GitHub token." };
   }
@@ -456,7 +456,7 @@ export function buildGitHubIssueCommentRunInput(
   connection: IntegrationConnection,
   options: GitHubRunInputOptions<GitHubIssueCommentPayload>,
 ): WritebackRunInputParts | GitHubRunInputBlocked {
-  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   if (!token) {
     return { blockedReason: "github_auth_missing", message: "Configure a GitHub token." };
   }
@@ -520,7 +520,7 @@ export function buildGuardedTokenCheck(
   suggestedEnv: string,
 ): ConnectorDiagnosticReport["checks"][number] {
   const config = connection.config;
-  if (deps.resolveConnectionSecret(config, "token", "tokenEnv", connection.catalogId)) {
+  if (deps.resolveConnectionSecret(config, "token", "tokenEnv", connection.catalogId, connection)) {
     return { key: "auth", status: "pass", message: `${label} is configured.` };
   }
   const envName = deps.readConnectionConfigValue(config, "tokenEnv");
@@ -563,7 +563,7 @@ export async function runGitHubLiveChecks(
   >,
   connection: IntegrationConnection,
 ): Promise<ConnectorDiagnosticReport["checks"]> {
-  const token = deps.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+  const token = deps.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   const repo = deps.readConnectionConfigValue(connection.config, "defaultRepo");
   if (!token) {
     return [{ key: "auth_live", status: "fail", message: TOKEN_UNRESOLVED_MESSAGE }];

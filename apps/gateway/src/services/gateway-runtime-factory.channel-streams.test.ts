@@ -18,7 +18,7 @@ const streams = {
 };
 
 const voiceGates: Array<() => Promise<boolean>> = [];
-const referenceReaders: Array<(secretRef: string) => string | undefined> = [];
+const referenceReaders: Array<(secretRef: string, owner: { connectionId: string }) => string | undefined> = [];
 const resolveConnectionSecret = vi.fn((config: Record<string, unknown>, directKey: string) =>
   config[directKey] === "keychain:goatcitadel:channel-connection:c1:botToken:n1" ? "stored-secret" : undefined,
 );
@@ -29,7 +29,7 @@ class FakeGatewayService {
     setVoiceInboundGate: (gate: () => Promise<boolean>) => {
       voiceGates.push(gate);
     },
-    setSecretReferenceReader: (read: (secretRef: string) => string | undefined) => {
+    setSecretReferenceReader: (read: (secretRef: string, owner: { connectionId: string }) => string | undefined) => {
       referenceReaders.push(read);
     },
   };
@@ -134,12 +134,18 @@ describe("gateway runtime facade channel-stream lifecycle", () => {
     expect(referenceReaders).toHaveLength(0);
     await runtime.startDeferredInit();
     expect(referenceReaders).toHaveLength(1);
-    expect(referenceReaders[0]!("keychain:goatcitadel:channel-connection:c1:botToken:n1")).toBe("stored-secret");
-    expect(referenceReaders[0]!("keychain:goatcitadel:channel-connection:c2:botToken:n2")).toBeUndefined();
+    const owner = { connectionId: "c1" };
+    expect(referenceReaders[0]!("keychain:goatcitadel:channel-connection:c1:botToken:n1", owner)).toBe("stored-secret");
+    expect(
+      referenceReaders[0]!("keychain:goatcitadel:channel-connection:c2:botToken:n2", { connectionId: "c2" }),
+    ).toBeUndefined();
+    // The reader hands the owner it was given to the shared read, so that read can refuse another connection's key.
     expect(resolveConnectionSecret).toHaveBeenCalledWith(
       { ref: "keychain:goatcitadel:channel-connection:c1:botToken:n1" },
       "ref",
       "refEnv",
+      undefined,
+      owner,
     );
   });
 });

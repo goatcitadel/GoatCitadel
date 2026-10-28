@@ -36,6 +36,7 @@ import type {
   VerifyIntegrationPluginPackageInput,
 } from "./integration-plugin-package-integrity.js";
 import { parseChannelSecretRef, type ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
+import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
 import { emitChannelActivityImpl } from "./integration-channel-activity.js";
@@ -99,6 +100,7 @@ export interface IntegrationChannelPort {
     directKey: string,
     envKey: string,
     catalogId: string,
+    owner: ChannelSecretOwner,
   ): string | undefined;
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
   isConnectionUrlAllowlisted(urlValue: string): boolean;
@@ -808,8 +810,8 @@ export async function emitTelegramTypingImpl(
   input: ChannelTypingInput,
 ): Promise<ChannelTypingResult> {
   const token =
-    deps.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId) ??
-    deps.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+    deps.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId, connection) ??
+    deps.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   const chatId = input.target.trim() || resolveChannelConfigTarget("telegram", connection.config);
   if (!token) {
     return {

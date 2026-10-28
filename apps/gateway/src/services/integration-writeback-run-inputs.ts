@@ -202,8 +202,14 @@ export function buildTrelloCardCreateRunInput(
   connection: IntegrationConnection,
   options: WritebackRunInputOptions<TrelloCardPayload>,
 ): WritebackRunInputParts | WritebackRunInputBlocked {
-  const apiKey = host.resolveConnectionSecret(connection.config, "apiKey", "apiKeyEnv", connection.catalogId);
-  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+  const apiKey = host.resolveConnectionSecret(
+    connection.config,
+    "apiKey",
+    "apiKeyEnv",
+    connection.catalogId,
+    connection,
+  );
+  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   if (!apiKey || !token) {
     return {
       blockedReason: "trello_auth_missing",
@@ -378,9 +384,15 @@ export async function parseProviderResponse(response: Response): Promise<ParsedP
 
 export function resolveBearerAuth(host: IntegrationActionHost, connection: IntegrationConnection): string | undefined {
   const token =
-    host.resolveConnectionSecret(connection.config, "authToken", "authTokenEnv", connection.catalogId) ??
-    host.resolveConnectionSecret(connection.config, "accessToken", "accessTokenEnv", connection.catalogId) ??
-    host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+    host.resolveConnectionSecret(connection.config, "authToken", "authTokenEnv", connection.catalogId, connection) ??
+    host.resolveConnectionSecret(
+      connection.config,
+      "accessToken",
+      "accessTokenEnv",
+      connection.catalogId,
+      connection,
+    ) ??
+    host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   return token ? `Bearer ${token}` : undefined;
 }
 

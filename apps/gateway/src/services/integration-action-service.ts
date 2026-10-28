@@ -26,6 +26,7 @@ import { invokeGitHubAction } from "./github-integration-action.js";
 import { invokeNotionAction } from "./notion-integration-action.js";
 import { buildLocalBridgeActionTargets, isLocalBridgeExternalSideEffectAction } from "./local-bridge-action-policy.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
+import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
 import type { ExternalSideEffectReplayRecords } from "./external-side-effect-replay-record.js";
 import {
   buildGmailSendRunInput,
@@ -80,6 +81,7 @@ export interface IntegrationActionHost {
     directKey: string,
     envKey: string,
     catalogId: string,
+    owner: ChannelSecretOwner,
   ): string | undefined;
   publishRealtime(scope: string, channel: string, payload: Record<string, unknown>): Promise<unknown>;
   /** The connection's native Google sign-in; Gmail actions never read a pasted access token. */
@@ -501,8 +503,14 @@ async function invokeTrelloAction(
   checkedAt: string,
   ward?: IntegrationWardContext,
 ): Promise<IntegrationActionInvokeResult> {
-  const apiKey = host.resolveConnectionSecret(connection.config, "apiKey", "apiKeyEnv", connection.catalogId);
-  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+  const apiKey = host.resolveConnectionSecret(
+    connection.config,
+    "apiKey",
+    "apiKeyEnv",
+    connection.catalogId,
+    connection,
+  );
+  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
   if (!apiKey || !token) {
     return blocked(
       connection,

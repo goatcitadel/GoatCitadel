@@ -316,11 +316,13 @@ describe("channel-setup-service contract behavior", () => {
       const result = await validateChannelSetupDraft(host, created.draftId, created.revision);
       const stored = await host.storage.channelSetupDrafts.get(created.draftId);
 
+      // The edit draft reads the saved connection's keys and its own, and nobody else's.
       expect(host.resolveConnectionSecret).toHaveBeenCalledWith(
         expect.any(Object),
         "webhookUrl",
         "webhookUrlEnv",
         "channel.teams",
+        { connectionId: saved.connectionId, draftId: created.draftId },
       );
       expect(result).toMatchObject({
         status: "warn",

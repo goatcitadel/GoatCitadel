@@ -1624,10 +1624,18 @@ describe("GatewayService Loop 13 workspace and runtime helpers", () => {
         "token",
         "tokenEnv",
         "test.loop13",
+        { connectionId: "conn-1" },
       ),
     ).toBe("resolved-secret");
     expect(
-      GatewayService.prototype.resolveConnectionSecret.call(gateway, { token: " direct-secret " }, "token", "tokenEnv"),
+      GatewayService.prototype.resolveConnectionSecret.call(
+        gateway,
+        { token: " direct-secret " },
+        "token",
+        "tokenEnv",
+        undefined,
+        { connectionId: "conn-1" },
+      ),
     ).toBe("direct-secret");
     expect(GatewayService.prototype.isConnectionUrlAllowlisted.call(gateway, "https://api.example.test/v1")).toBe(true);
     expect(GatewayService.prototype.isConnectionUrlAllowlisted.call(gateway, "not a url")).toBe(false);
@@ -1870,19 +1878,81 @@ describe("GatewayService reads a saved channel key for the adapters that resolve
       "channel-connection:conn-1:botToken:00000000-0000-4000-8000-000000000001",
       " stored ",
     );
-    const resolve = (config: Record<string, unknown>) =>
+    const resolve = (
+      config: Record<string, unknown>,
+      owner: { connectionId: string; draftId?: string } = { connectionId: "conn-1" },
+    ) =>
       GatewayService.prototype.resolveConnectionSecret.call(
         gateway,
         config,
         "botToken",
         "botTokenEnv",
         "channel.telegram",
+        owner,
       );
 
     expect(resolve({ botToken: ref })).toBe("stored");
     expect(resolve({ botToken: ref.replace("conn-1", "conn-2") })).toBeUndefined();
     expect(resolve({ botToken: "keychain:goatcitadel:channel-connection:not-a-valid-ref" })).toBeUndefined();
     expect(resolve({ botToken: "plain-token" })).toBe("plain-token");
+  });
+
+  it("reads a saved reference only for the connection or draft that owns it", () => {
+    const { gateway } = createGatewayHarness();
+    const draftRef = "keychain:goatcitadel:channel-draft:draft-1:botToken:00000000-0000-4000-8000-000000000002";
+    gateway.secretStore.setSecret("channel-connection:conn-1:botToken:00000000-0000-4000-8000-000000000001", "mine");
+    gateway.secretStore.setSecret("channel-connection:conn-2:botToken:00000000-0000-4000-8000-000000000001", "theirs");
+    gateway.secretStore.setSecret("channel-draft:draft-1:botToken:00000000-0000-4000-8000-000000000002", "drafted");
+    const resolve = (botToken: string, owner: { connectionId: string; draftId?: string } | undefined) =>
+      GatewayService.prototype.resolveConnectionSecret.call(
+        gateway,
+        { botToken },
+        "botToken",
+        "botTokenEnv",
+        "channel.telegram",
+        owner as never,
+      );
+
+    // Another connection's reference is refused for the connection that holds it in its config.
+    expect(resolve(ref.replace("conn-1", "conn-2"), { connectionId: "conn-1" })).toBeUndefined();
+    expect(resolve(ref.replace("conn-1", "conn-2"), { connectionId: "conn-2" })).toBe("theirs");
+    // A draft's reference is read for that draft's setup test only; an edit draft reads both.
+    expect(resolve(draftRef, { connectionId: "conn-1" })).toBeUndefined();
+    expect(resolve(draftRef, { connectionId: "conn-1", draftId: "draft-2" })).toBeUndefined();
+    expect(resolve(draftRef, { connectionId: "conn-1", draftId: "draft-1" })).toBe("drafted");
+    expect(resolve(ref, { connectionId: "conn-1", draftId: "draft-1" })).toBe("mine");
+    // No owner, no key.
+    expect(resolve(ref, undefined)).toBeUndefined();
+  });
+
+  it("logs a refused reference without its text, its key or the other connection's id", () => {
+    const { gateway } = createGatewayHarness();
+    gateway.secretStore.setSecret(
+      "channel-connection:conn-2:botToken:00000000-0000-4000-8000-000000000001",
+      "theirs-stored-0042",
+    );
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let logged: string;
+    try {
+      expect(
+        GatewayService.prototype.resolveConnectionSecret.call(
+          gateway,
+          { botToken: ref.replace("conn-1", "conn-2") },
+          "botToken",
+          "botTokenEnv",
+          "channel.telegram",
+          { connectionId: "conn-1" },
+        ),
+      ).toBeUndefined();
+      logged = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+    } finally {
+      stderr.mockRestore();
+    }
+
+    expect(logged).toContain("Refusing to resolve");
+    expect(logged).not.toContain("conn-2");
+    expect(logged).not.toContain("theirs-stored-0042");
+    expect(logged).not.toContain("keychain:goatcitadel");
   });
 });
 
@@ -1903,6 +1973,7 @@ describe("GatewayService refuses an unbound variable name without logging a past
             "token",
             "tokenEnv",
             "channel.slack",
+            { connectionId: "conn-1" },
           ),
         ).toBeUndefined();
       }

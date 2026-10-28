@@ -136,12 +136,13 @@ describe("integration-diagnostics-service contract behavior", () => {
         status: "fail",
         message: "The variable name must start with MATTERMOST_. Rename it and restart GoatCitadel.",
       });
-      // It asks the same resolver the live probes ask, with the connection's catalog entry.
+      // It asks the same resolver the live probes ask, with the connection's catalog entry, as the connection that owns the config.
       expect(port.resolveConnectionSecret).toHaveBeenCalledWith(
         connection.config,
         "botToken",
         "botTokenEnv",
         "channel.mattermost",
+        connection,
       );
       expect(JSON.stringify(checks)).not.toContain(SECRET);
     });

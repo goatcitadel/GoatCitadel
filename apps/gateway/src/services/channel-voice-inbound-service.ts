@@ -3,6 +3,7 @@ import {
   readBoundedResponseBytes,
   readBoundedResponseJson,
 } from "./bounded-response-reader.js";
+import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
 import { detectAttachmentMediaType, sniffAttachmentBytes } from "./media-voice-service.js";
 
 /**
@@ -113,15 +114,20 @@ export interface ChannelVoiceInboundDeps {
     directKey: string,
     envKey: string,
     catalogId: string,
+    owner: ChannelSecretOwner,
   ) => string | undefined;
 }
 
 export class ChannelVoiceInboundService {
   public constructor(private readonly deps: ChannelVoiceInboundDeps) {}
 
-  public async transcribe(request: ChannelVoiceInboundRequest): Promise<ChannelVoiceTranscriptionResult> {
+  /** `owner` is the connection the voice message arrived on: its saved keys are the only ones read for the download. */
+  public async transcribe(
+    request: ChannelVoiceInboundRequest,
+    owner: ChannelSecretOwner,
+  ): Promise<ChannelVoiceTranscriptionResult> {
     try {
-      const media = await this.downloadVoiceMedia(request);
+      const media = await this.downloadVoiceMedia(request, owner);
       if (!media.ok) {
         return media;
       }
@@ -131,14 +137,14 @@ export class ChannelVoiceInboundService {
     }
   }
 
-  private async downloadVoiceMedia(request: ChannelVoiceInboundRequest) {
+  private async downloadVoiceMedia(request: ChannelVoiceInboundRequest, owner: ChannelSecretOwner) {
     switch (request.channel) {
       case "telegram":
-        return await this.downloadTelegramVoiceMedia(request);
+        return await this.downloadTelegramVoiceMedia(request, owner);
       case "whatsapp":
-        return await this.downloadWhatsAppVoiceMedia(request);
+        return await this.downloadWhatsAppVoiceMedia(request, owner);
       case "slack":
-        return await this.downloadSlackVoiceMedia(request);
+        return await this.downloadSlackVoiceMedia(request, owner);
       case "discord":
         return await this.downloadDiscordVoiceMedia(request);
     }
@@ -149,16 +155,23 @@ export class ChannelVoiceInboundService {
     config: Record<string, unknown>,
     directKey: string,
     catalogId: string,
+    owner: ChannelSecretOwner,
   ): string | undefined {
     const resolve = this.deps.resolveConnectionSecret;
-    return resolve(config, directKey, `${directKey}Env`, catalogId) ?? resolve(config, "token", "tokenEnv", catalogId);
+    return (
+      resolve(config, directKey, `${directKey}Env`, catalogId, owner) ??
+      resolve(config, "token", "tokenEnv", catalogId, owner)
+    );
   }
 
   private isUrlAllowlisted(urlValue: string): boolean {
     return this.deps.isConnectionUrlAllowlisted(urlValue);
   }
 
-  private async downloadSlackVoiceMedia(request: Extract<ChannelVoiceInboundRequest, { channel: "slack" }>) {
+  private async downloadSlackVoiceMedia(
+    request: Extract<ChannelVoiceInboundRequest, { channel: "slack" }>,
+    owner: ChannelSecretOwner,
+  ) {
     if (!SLACK_FILE_ID_PATTERN.test(request.fileId)) {
       return failure("invalid_media_reference", "Slack voice file id has an unexpected shape.");
     }
@@ -167,7 +180,7 @@ export class ChannelVoiceInboundService {
     if (!isHttpsUrlOnHosts(request.downloadUrl, SLACK_FILE_HOSTS)) {
       return failure("url_not_allowlisted", "Slack voice download URL is not an https://files.slack.com URL.");
     }
-    const botToken = this.resolveTokenSecret(request.connectionConfig, "botToken", "channel.slack");
+    const botToken = this.resolveTokenSecret(request.connectionConfig, "botToken", "channel.slack", owner);
     if (!botToken) {
       return failure("missing_credentials", "Slack connection is missing a bot token.");
     }
@@ -199,8 +212,11 @@ export class ChannelVoiceInboundService {
     return { ok: true as const, bytes: bytes.bytes, mimeType: request.mimeType ?? "audio/ogg" };
   }
 
-  private async downloadTelegramVoiceMedia(request: Extract<ChannelVoiceInboundRequest, { channel: "telegram" }>) {
-    const botToken = this.resolveTokenSecret(request.connectionConfig, "botToken", "channel.telegram");
+  private async downloadTelegramVoiceMedia(
+    request: Extract<ChannelVoiceInboundRequest, { channel: "telegram" }>,
+    owner: ChannelSecretOwner,
+  ) {
+    const botToken = this.resolveTokenSecret(request.connectionConfig, "botToken", "channel.telegram", owner);
     if (!botToken) {
       return failure("missing_credentials", "Telegram connection is missing a bot token.");
     }
@@ -247,8 +263,11 @@ export class ChannelVoiceInboundService {
     return { ok: true as const, bytes: bytes.bytes, mimeType: request.mimeType ?? "audio/ogg" };
   }
 
-  private async downloadWhatsAppVoiceMedia(request: Extract<ChannelVoiceInboundRequest, { channel: "whatsapp" }>) {
-    const accessToken = this.resolveTokenSecret(request.connectionConfig, "accessToken", "channel.whatsapp");
+  private async downloadWhatsAppVoiceMedia(
+    request: Extract<ChannelVoiceInboundRequest, { channel: "whatsapp" }>,
+    owner: ChannelSecretOwner,
+  ) {
+    const accessToken = this.resolveTokenSecret(request.connectionConfig, "accessToken", "channel.whatsapp", owner);
     if (!accessToken) {
       return failure("missing_credentials", "WhatsApp connection is missing an access token.");
     }

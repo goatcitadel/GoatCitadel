@@ -36,6 +36,7 @@ import { buildChannelConversation } from "./channel-conversation.js";
 import {
   createConnectionSecretReferenceResolver,
   isSecureStorageReference,
+  type ChannelSecretReferenceReader,
   type ChannelSecretReferenceResolver,
 } from "./channel-secret-resolution.js";
 import {
@@ -136,7 +137,7 @@ export class DiscordRuntimeService {
    * pairing or allowlist side effect, exactly as before voice inbound existed.
    */
   private voiceInboundGate: () => Promise<boolean> = async () => false;
-  private secretReferenceReader: ChannelSecretReferenceResolver | undefined;
+  private secretReferenceReader: ChannelSecretReferenceReader | undefined;
 
   public constructor(private readonly callbacks: DiscordRuntimeCallbacks) {}
 
@@ -148,7 +149,7 @@ export class DiscordRuntimeService {
    * Reads the key a connection saved in secure storage. Installed by the runtime composition. Unset means no saved key
    * can be read, so a connection whose bot token is a saved key stays down; its reference is never used as a token.
    */
-  public setSecretReferenceReader(read: ChannelSecretReferenceResolver): void {
+  public setSecretReferenceReader(read: ChannelSecretReferenceReader): void {
     this.secretReferenceReader = read;
   }
 

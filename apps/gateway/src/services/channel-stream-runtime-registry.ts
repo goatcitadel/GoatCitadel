@@ -5,6 +5,7 @@ import {
   type DurableInboundChannelAcceptInput,
   type DurableInboundChannelAcceptResult,
 } from "./channel-inbound-dispatch.js";
+import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
 import { createSystemSettingsChannelStreamCursorStore } from "./channel-stream-cursor-store.js";
 import { createMatrixStreamAdapter } from "./channel-stream-adapters/matrix-stream-adapter.js";
 import { createMattermostStreamAdapter } from "./channel-stream-adapters/mattermost-stream-adapter.js";
@@ -31,7 +32,8 @@ export interface ChannelStreamRuntimeHost {
     config: Record<string, unknown>,
     directKey: string,
     envKey: string,
-    catalogId?: string,
+    catalogId: string | undefined,
+    owner: ChannelSecretOwner,
   ): string | undefined;
   isConnectionUrlAllowlisted(urlValue: string): boolean;
 }
@@ -100,8 +102,13 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost, runtimeKey: object)
   const sharedDeps = {
     // Plain fetch: a persistent stream must not inherit the diagnostics request timeout.
     fetch: ((input, init) => fetch(input, init)) as typeof fetch,
-    resolveSecret: (config: Record<string, unknown>, directKey: string, envKey: string, catalogId?: string) =>
-      host.resolveConnectionSecret(config, directKey, envKey, catalogId),
+    resolveSecret: (
+      config: Record<string, unknown>,
+      directKey: string,
+      envKey: string,
+      catalogId: string | undefined,
+      owner: ChannelSecretOwner,
+    ) => host.resolveConnectionSecret(config, directKey, envKey, catalogId, owner),
     isUrlAllowlisted: (urlValue: string) => host.isConnectionUrlAllowlisted(urlValue),
   };
   return new ChannelStreamRuntimeService({

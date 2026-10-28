@@ -1073,6 +1073,8 @@ describe("InboundChannelEventService", () => {
         harness.storage.inboundChannelEvents.get(discord.inboundEventId)?.status === "completed",
     );
 
+    // The download reads keys as the connection the event arrived on (the claim names it), and as no other.
+    const owner = { connectionId: "connection-1" };
     expect(transcribe).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "slack",
@@ -1080,6 +1082,7 @@ describe("InboundChannelEventService", () => {
         downloadUrl: "https://files.slack.com/files-pri/T1-F0VOICE01/download/a.webm",
         mimeType: "audio/webm",
       }),
+      owner,
     );
     expect(transcribe).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1087,6 +1090,7 @@ describe("InboundChannelEventService", () => {
         attachmentId: "222333444555",
         url: "https://cdn.discordapp.com/attachments/1/222333444555/voice-message.ogg",
       }),
+      owner,
     );
     for (const accepted of [slack, discord]) {
       const persisted = JSON.stringify(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.payload);

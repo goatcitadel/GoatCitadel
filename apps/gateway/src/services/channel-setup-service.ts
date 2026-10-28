@@ -49,6 +49,7 @@ import {
 import { type ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cache.js";
 import { preserveChannelSetupDraftSecretsForPublicUpdate } from "./channel-setup-public-projection.js";
 import type { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
+import { channelSecretOwnerForDraft, type ChannelSecretOwner } from "./channel-secret-resolution.js";
 import { requireReviewedChannelConnection } from "./channel-setup-connection-review.js";
 import { pastedAddressHosts, recordAddressHosts } from "./channel-setup-address-hosts.js";
 
@@ -62,6 +63,7 @@ export interface ChannelSetupHost {
     directKey: string,
     envKey: string,
     catalogId: string,
+    owner: ChannelSecretOwner,
   ) => string | undefined;
   getChannelCapabilities?: (connectionId: string) => Promise<ChannelCapabilities>;
   getChannelRuntimeStatus?: (connectionId: string) => Promise<ChannelRuntimeStatus>;
@@ -291,7 +293,13 @@ export async function validateChannelSetupDraft(
     // Inspect the endpoint only inside Gateway custody. Saved/env-backed URLs
     // must receive the same migration and supported-trigger checks as new ones.
     const connection = await buildEphemeralChannelConnection(host, validationDraft);
-    const endpoint = host.resolveConnectionSecret(connection.config, "webhookUrl", "webhookUrlEnv", draft.catalogId);
+    const endpoint = host.resolveConnectionSecret(
+      connection.config,
+      "webhookUrl",
+      "webhookUrlEnv",
+      draft.catalogId,
+      channelSecretOwnerForDraft(draft),
+    );
     if (endpoint) validationDraft = { ...validationDraft, draft: { ...validationDraft.draft, webhookUrl: endpoint } };
   }
   const issues = runtime.validate(validationDraft);

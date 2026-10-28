@@ -594,6 +594,19 @@ describe("gateway service host guard", () => {
       /new ToolPolicyEngine\(config\.toolPolicy, this\.storage, undefined, \{[\s\S]{0,1500}resolveFirecrawlEndpoint: \(\) => this\.config\.assistant\.web\.firecrawl,/,
     );
   }, 15_000);
+
+  it("gives the policy engine a saved-key read that is told which connection the send is for", async () => {
+    const files = await readServiceSources();
+    const gatewayService = normalizeSourceForGuard(
+      files.find(({ relativePath }) => relativePath === "gateway-service.ts")?.source ?? "",
+    );
+
+    // The send checks its own connection first, and this read checks again with the same id, so a key saved for
+    // another connection is not read even if the first check were ever dropped.
+    expect(gatewayService).toMatch(
+      /new ToolPolicyEngine\(config\.toolPolicy, this\.storage, undefined, \{[\s\S]{0,2500}resolveChannelConnectionSecret: \(connectionId, ref\) =>\s*this\.resolveConnectionSecret\(\{ ref \}, "ref", "refEnv", undefined, \{ connectionId \}\),/,
+    );
+  }, 15_000);
 });
 
 function normalizeTypeAlias(source: string): string {

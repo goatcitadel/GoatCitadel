@@ -1948,7 +1948,8 @@ describe("a saved Discord bot token", () => {
     await service.sync();
     await vi.waitFor(() => expect(runtime.client.login).toHaveBeenCalledWith(STORED));
 
-    expect(readReference).toHaveBeenCalledWith(OWN_REF);
+    // The reader is told whose key this is, so the shared read can refuse any other connection's.
+    expect(readReference).toHaveBeenCalledWith(OWN_REF, { connectionId: CONNECTION_ID });
     expect(createManagedRuntime).toHaveBeenCalledWith(STORED, [connection]);
     expect(createManagedRuntime).not.toHaveBeenCalledWith(OWN_REF, expect.anything());
     expect(runtime.client.login).not.toHaveBeenCalledWith(OWN_REF);
