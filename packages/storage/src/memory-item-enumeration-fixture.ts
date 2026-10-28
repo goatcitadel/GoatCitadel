@@ -83,6 +83,19 @@ export async function verifyMemoryItemEnumeration(db: DatabaseClient) {
     assert.ok(pages < 10, "pagination must terminate");
   }
   assert.equal(pages, 3);
+  // The generation and snapshot pin the matching set, so later pages carry the
+  // first page's count instead of rescanning every match.
+  const firstContinuation = first.continuation;
+  assert.equal(firstContinuation.total, expected.length);
+  assert.equal(
+    repository.listPage({ ...input, continuation: { ...firstContinuation, total: 7 } }).total,
+    7,
+    "continuation pages must not recount",
+  );
+  assert.throws(
+    () => repository.listPage({ ...input, continuation: { ...firstContinuation, total: -1 } }),
+    /continuation/,
+  );
   assert.equal(seen.length, expected.length);
   assert.equal(new Set(seen).size, seen.length, "duplicate IDs across pages");
   assert.deepEqual(new Set(seen), new Set(expected), "every scoped matching item must be enumerated");
