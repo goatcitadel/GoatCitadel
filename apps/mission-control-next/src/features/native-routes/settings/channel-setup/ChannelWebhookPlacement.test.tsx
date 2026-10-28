@@ -289,4 +289,10 @@ describe("the webhook address on a saved connection in the Classic page", () => 
     await inspect(connection("google-chat", "conn-3", { serviceAccountKeyEnv: "GOOGLE_CHAT_KEY" }));
     expect(section()?.querySelector("code")?.textContent).toBe(address("google-chat", "conn-3"));
   });
+
+  it("shows the address of a Google Chat connection whose service-account key is saved rather than named", async () => {
+    // A saved key comes back redacted in the connection's public config; it still means Chat app mode.
+    await inspect(connection("google-chat", "conn-3", { serviceAccountKey: "[REDACTED]" }));
+    expect(section()?.querySelector("code")?.textContent).toBe(address("google-chat", "conn-3"));
+  });
 });

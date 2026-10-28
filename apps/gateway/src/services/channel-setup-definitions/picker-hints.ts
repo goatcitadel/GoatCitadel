@@ -74,13 +74,19 @@ export const CHANNEL_HOST_FIELDS: Readonly<Record<string, readonly string[]>> = 
   imessage: Object.freeze(["bridgeUrl", "photonSidecarUrl"]),
 });
 
+/**
+ * Google Chat runs as a Chat app when a service-account key is given, named by an environment variable the guide asks
+ * for or stored as a saved key (which a connection's public config shows as redacted); the channel reads either.
+ */
+const GOOGLE_CHAT_APP_KEY_FIELDS: readonly string[] = Object.freeze(["serviceAccountKeyEnv", "serviceAccountKey"]);
+
 /** Hosts a channel needs only while certain fields are set, keyed by catalog key. */
 export const CHANNEL_CONDITIONAL_HOSTS: Readonly<Record<string, readonly FrozenHostRule[]>> = Object.freeze({
   qqbot: Object.freeze([
     Object.freeze({ host: "sandbox.api.sgroup.qq.com", whenAnyFieldSet: Object.freeze(["sandbox"]), equals: true }),
   ]),
   "google-chat": Object.freeze([
-    Object.freeze({ host: "oauth2.googleapis.com", whenAnyFieldSet: Object.freeze(["serviceAccountKeyEnv"]) }),
+    Object.freeze({ host: "oauth2.googleapis.com", whenAnyFieldSet: GOOGLE_CHAT_APP_KEY_FIELDS }),
   ]),
 });
 
@@ -91,7 +97,7 @@ function inboundWebhookRoute(key: string): string {
 /**
  * Channels that receive on a Gateway webhook route (`routes/integration-webhooks-<key>-routes.ts`),
  * keyed by catalog key. Telegram receives on a webhook only when its receive mode is `webhook`.
- * Google Chat receives only in Chat app mode, which is when a service-account key is named; its
+ * Google Chat receives only in Chat app mode, which is when a service-account key is given; its
  * webhook mode only sends.
  */
 export const CHANNEL_INBOUND_WEBHOOKS: Readonly<Record<string, FrozenInboundWebhook>> = Object.freeze({
@@ -106,7 +112,7 @@ export const CHANNEL_INBOUND_WEBHOOKS: Readonly<Record<string, FrozenInboundWebh
   wecom: Object.freeze({ pathTemplate: inboundWebhookRoute("wecom") }),
   "google-chat": Object.freeze({
     pathTemplate: inboundWebhookRoute("google-chat"),
-    whenAnyFieldSet: Object.freeze(["serviceAccountKeyEnv"]),
+    whenAnyFieldSet: GOOGLE_CHAT_APP_KEY_FIELDS,
   }),
   "nextcloud-talk": Object.freeze({ pathTemplate: inboundWebhookRoute("nextcloud-talk") }),
 });
