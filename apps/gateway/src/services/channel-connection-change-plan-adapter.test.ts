@@ -545,6 +545,32 @@ describe("Settings review summary", () => {
     expect(f.draft).toEqual(snapshot);
   });
 
+  it.each(["ntfy", "mattermost", "matrix", "google-chat", "qqbot", "wecom"])(
+    "says a new %s draft is allowlist-only even though its guide has no access-mode field",
+    async (key) => {
+      const f = reviewedSettingsFixture({
+        catalogId: `channel.${key}`,
+        draft: { allowedSenders: ["u-1", "u-2"] },
+      });
+      const result = await f.adapter.prepare(f.ctx, {
+        kind: "channel_connection",
+        channelKind: key,
+        draftId: f.draft.draftId,
+      });
+      expect(result.summary).toContain("Inbound access: allowlist, 2 allowed senders.");
+    },
+  );
+
+  it("leaves the inbound line out for a channel that has a mode field when the draft has none", async () => {
+    const f = reviewedSettingsFixture({ catalogId: "channel.line", draft: { allowedSenders: ["u-1"] } });
+    const result = await f.adapter.prepare(f.ctx, {
+      kind: "channel_connection",
+      channelKind: "line",
+      draftId: f.draft.draftId,
+    });
+    expect(result.summary).not.toContain("Inbound access");
+  });
+
   it("uses actual Discord server/channel and policy fields rather than unrelated legacy flat flags", async () => {
     const f = reviewedSettingsFixture({
       catalogId: "channel.discord",

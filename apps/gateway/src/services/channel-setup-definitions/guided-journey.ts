@@ -196,6 +196,8 @@ const ADVANCED_KEYS = new Set([
   "profile",
   "sandbox",
 ]);
+/** A draft value `hydrate` sets when the saved connection was open access. It is never part of the saved config. */
+const OPEN_ACCESS_MARKER = "inboundAccessWasOpen";
 /** Webhook inbound that is always default-deny: the runtime ignores a stored open_legacy mode for these. */
 const FORCED_WEBHOOK_INBOUND_KEYS = new Set(["qqbot", "wecom"]);
 
@@ -234,7 +236,7 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
     id: "first-message",
     kind: "instruction",
     stage: "first_message",
-    title: GUIDED_INBOUND_CHANNELS.has(key) || key === "discord" ? "Verify the first conversation" : "Confirm delivery",
+    title: takesConversations(key) ? "Verify the first conversation" : "Confirm delivery",
     body: [{ kind: "paragraph", text: profile.firstMessage }],
   });
   return {
@@ -251,13 +253,20 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
     },
     hydrate(connection) {
       const hydrated = runtime.hydrate(connection);
+      const access = hydrateGuidedChannelInboundAccess(key, connection.config);
       return {
         ...hydrated,
-        draft: { ...hydrated.draft, ...hydrateGuidedChannelInboundAccess(key, connection.config) },
+        draft: {
+          ...hydrated.draft,
+          ...access,
+          // Remembers that the saved connection was open, so the choice to change that stays on screen while it is edited.
+          ...(access.inboundAccessMode === "open_legacy" ? { [OPEN_ACCESS_MARKER]: true } : {}),
+        },
       };
     },
     normalize(draft) {
-      const normalized = {
+      // The marker belongs to the draft only; whatever a guide's own normalizer copies, it never reaches the saved config.
+      const { [OPEN_ACCESS_MARKER]: _openAccessMarker, ...normalized } = {
         ...runtime.normalize(draft),
         ...normalizeGuidedChannelInboundAccess(key, draft, draft.hydration?.rawLegacyConfig ?? {}),
       };
@@ -380,11 +389,19 @@ function splitFieldStep(
       ...step,
       id: step.id + "-destinations",
       stage: "destinations_access",
-      // A channel with a "Who may message this bot?" step has access to choose here; the others only choose where messages go.
-      title: GUIDED_INBOUND_CHANNELS.has(key) ? "Choose destinations and access" : "Where should messages go?",
+      // A channel people can message has access to choose here; the others only choose where messages go.
+      title: takesConversations(key) ? "Choose destinations and access" : "Where should messages go?",
       fields: destinations,
     });
   return halves;
+}
+
+/**
+ * Channels people can message: the ones with a "Who may message this bot?" step, and Discord, which sets that with the
+ * direct-message and server policies on its destinations step. Zalo and Teams only send.
+ */
+function takesConversations(key: string): boolean {
+  return GUIDED_INBOUND_CHANNELS.has(key) || key === "discord";
 }
 
 /** The stage a step gets when its guide did not set one. */
@@ -436,8 +453,9 @@ function senderAccessStep(key: string): ChannelSetupStepDefinition {
     // A forced-allowlist channel has no mode to compare against, so its sender list is always shown.
     ...(forcedAllowlist ? {} : { visibleWhenFieldEquals: { fieldKey: "inboundAccessMode", value: "allowlist" } }),
   };
-  // The mode only matters to a connection saved with open access. Definitions are shared by every draft, and the
-  // mode a draft starts with is the saved one, so this choice is shown only while the draft is still open access.
+  // The choice only matters to a connection that was saved with open access. Definitions are shared by every draft, so
+  // `hydrate` marks such a draft and the choice follows the marker, not the mode being edited: it stays on screen
+  // after "Only allowed senders" is picked, and a new draft never sees it.
   const accessMode: ChannelSetupFieldDefinition = {
     key: "inboundAccessMode",
     label: "Inbound access",
@@ -450,7 +468,7 @@ function senderAccessStep(key: string): ChannelSetupStepDefinition {
       { value: "allowlist", label: "Only allowed senders" },
       { value: "open_legacy", label: "Open legacy access (advanced)" },
     ],
-    visibleWhenFieldEquals: { fieldKey: "inboundAccessMode", value: "open_legacy" },
+    visibleWhenFieldEquals: { fieldKey: OPEN_ACCESS_MARKER, value: true },
   };
   return {
     id: "sender-access",

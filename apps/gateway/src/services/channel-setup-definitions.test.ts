@@ -1432,6 +1432,10 @@ const INBOUND_WEBHOOK_SECRET_ENV_FIELDS: Record<string, string[]> = {
   wecom: ["callbackTokenEnv", "encodingAesKeyEnv"],
 };
 
+/** Set when a connection that was saved with open access is loaded, so the open-access choice stays on screen. */
+const OPEN_MARKER_KEY = "inboundAccessWasOpen";
+const OPEN_MARKER = { [OPEN_MARKER_KEY]: true };
+
 const ENV_RULE_PATTERN =
   /The variable's name must start with ([A-Z0-9_]+)_ \(for example ([A-Z0-9_]+)\)\. Set it where GoatCitadel starts, then restart GoatCitadel\.( It must also end in (_TOKEN or _SECRET|_AES_KEY)\.)?$/u;
 
@@ -1682,9 +1686,11 @@ describe("the shared guide builder", () => {
         guide(key).wizard.steps.find((step) => step.id.endsWith("-destinations"))?.title;
 
       expect(destinationsTitle("zalo")).toBe("Where should messages go?");
-      expect(destinationsTitle("discord")).toBe("Where should messages go?");
-      // Channels that can also receive keep the title that covers who may message them.
-      for (const key of ["slack", "telegram", "whatsapp", "ntfy", "matrix", "qqbot"]) {
+      // Teams has no destinations step at all, so there is no title to change.
+      expect(destinationsTitle("teams")).toBeUndefined();
+      // Channels that can also receive keep the title that covers who may message them. Discord's
+      // destinations step holds its direct-message and server policies, so it counts as one of them.
+      for (const key of ["discord", "slack", "telegram", "whatsapp", "ntfy", "matrix", "qqbot"]) {
         expect(destinationsTitle(key), key).toBe("Choose destinations and access");
       }
     });
@@ -1761,10 +1767,16 @@ describe("the shared guide builder", () => {
         expect(shownWith(definition, mode?.visibleWhenFieldEquals, { inboundAccessMode: "allowlist" }), key).toBe(
           false,
         );
-        // A saved open connection hydrates as open_legacy, so it sees the choice and can change it on purpose.
+        // Picking a mode does not by itself make a draft one that was saved open.
         expect(shownWith(definition, mode?.visibleWhenFieldEquals, { inboundAccessMode: "open_legacy" }), key).toBe(
-          true,
+          false,
         );
+        // A saved open connection is marked when it is loaded, so the choice shows whatever the mode is set to.
+        expect(shownWith(definition, mode?.visibleWhenFieldEquals, OPEN_MARKER), key).toBe(true);
+        expect(
+          shownWith(definition, mode?.visibleWhenFieldEquals, { ...OPEN_MARKER, inboundAccessMode: "allowlist" }),
+          key,
+        ).toBe(true);
         expect(shownWith(definition, list?.visibleWhenFieldEquals, { inboundAccessMode: "open_legacy" }), key).toBe(
           false,
         );
@@ -1804,19 +1816,82 @@ describe("the shared guide builder", () => {
     it("shows the open-access choice for a saved open connection and not for a saved allowlist", () => {
       const runtime = requireChannelSetupDefinition("channel.whatsapp");
       const mode = senderStep("whatsapp")?.fields?.find((field) => field.key === "inboundAccessMode");
-      const hydratedMode = (config: Record<string, unknown>) =>
+      const hydratedDraft = (config: Record<string, unknown>) =>
         runtime.hydrate(createConnection({ catalogId: "channel.whatsapp", key: "whatsapp", config })).draft;
 
-      expect(
-        shownWith(runtime.definition, mode?.visibleWhenFieldEquals, hydratedMode({ inboundAccessMode: "open_legacy" })),
-      ).toBe(true);
       expect(
         shownWith(
           runtime.definition,
           mode?.visibleWhenFieldEquals,
-          hydratedMode({ inboundAccessMode: "allowlist", allowedSenders: ["15551234567"] }),
+          hydratedDraft({ inboundAccessMode: "open_legacy" }),
+        ),
+      ).toBe(true);
+      // A connection saved before the mode existed, with no senders listed, is open too.
+      expect(shownWith(runtime.definition, mode?.visibleWhenFieldEquals, hydratedDraft({}))).toBe(true);
+      expect(
+        shownWith(
+          runtime.definition,
+          mode?.visibleWhenFieldEquals,
+          hydratedDraft({ inboundAccessMode: "allowlist", allowedSenders: ["15551234567"] }),
         ),
       ).toBe(false);
+    });
+
+    it("keeps the open-access choice on screen after a saved open connection is switched to an allowlist", () => {
+      const runtime = requireChannelSetupDefinition("channel.whatsapp");
+      const mode = senderStep("whatsapp")?.fields?.find((field) => field.key === "inboundAccessMode");
+      const list = senderStep("whatsapp")?.fields?.find((field) => field.key === "allowedSenders");
+      const opened = runtime.hydrate(
+        createConnection({
+          catalogId: "channel.whatsapp",
+          key: "whatsapp",
+          config: { inboundAccessMode: "open_legacy" },
+        }),
+      ).draft;
+      const switched = { ...opened, inboundAccessMode: "allowlist" };
+
+      // The wizard hides a field when its condition fails, so the select must not vanish under the person using it.
+      expect(shownWith(runtime.definition, mode?.visibleWhenFieldEquals, switched)).toBe(true);
+      expect(shownWith(runtime.definition, list?.visibleWhenFieldEquals, switched)).toBe(true);
+      expect(
+        shownWith(runtime.definition, mode?.visibleWhenFieldEquals, { ...switched, inboundAccessMode: "open_legacy" }),
+      ).toBe(true);
+    });
+
+    it("marks only a saved open connection on a channel that has the choice", () => {
+      const marked = (key: string, config: Record<string, unknown>) =>
+        requireChannelSetupDefinition(`channel.${key}`).hydrate(
+          createConnection({ catalogId: `channel.${key}`, key, config }),
+        ).draft[OPEN_MARKER_KEY];
+
+      for (const key of ["slack", "telegram", "whatsapp", "line", "nextcloud-talk"]) {
+        expect(marked(key, { inboundAccessMode: "open_legacy" }), key).toBe(true);
+        expect(marked(key, { inboundAccessMode: "allowlist", allowedSenders: ["u1"] }), key).toBeUndefined();
+      }
+      // The runtime ignores a stored open mode on these, so a stored one is never carried over.
+      for (const key of ["ntfy", "mattermost", "matrix", "google-chat", "qqbot", "wecom"]) {
+        expect(marked(key, { inboundAccessMode: "open_legacy" }), key).toBeUndefined();
+      }
+      // These have no sender step at all.
+      for (const key of ["discord", "teams", "zalo"]) {
+        expect(marked(key, { inboundAccessMode: "open_legacy" }), key).toBeUndefined();
+      }
+    });
+
+    it("never writes the open-connection marker into the saved configuration", () => {
+      for (const definition of listChannelSetupDefinitions()) {
+        const key = definition.catalog.key;
+        const runtime = requireChannelSetupDefinition(definition.catalog.catalogId);
+        const draft = createDraft(
+          definition.catalog.catalogId,
+          { ...OPEN_MARKER, inboundAccessMode: "open_legacy", allowedSenders: ["u1"] },
+          "edit",
+        );
+        const normalized = runtime.normalize({ ...draft, connectionId: "11111111-1111-1111-1111-111111111111" });
+
+        expect(normalized, key).not.toHaveProperty(OPEN_MARKER_KEY);
+        expect(JSON.stringify(normalized), key).not.toContain(OPEN_MARKER_KEY);
+      }
     });
   });
 

@@ -23,12 +23,15 @@ describe("channel setup definition loop28 tails", () => {
         defaultTarget: "configured",
       },
     });
+    // An open connection also carries the draft-only marker that keeps the open-access choice on screen.
     expect(hydrated.draft).toEqual({
       inboundAccessMode: "open_legacy",
+      inboundAccessWasOpen: true,
       channelAccessTokenEnv: undefined,
       channelSecretEnv: "LINE_CHANNEL_SECRET",
       defaultTarget: "Utarget",
     });
+    // The saved config does not get the marker back.
     expect(
       definition.normalize({
         ...draft("channel.line", hydrated.draft, "edit"),
