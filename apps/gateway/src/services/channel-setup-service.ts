@@ -501,7 +501,8 @@ export async function finalizeChannelSetupDraft(
   const setupEvidence = await buildChannelSetupActivationEvidence(host, test, eligibility);
   const payload = {
     ...(setupEvidence ? { setupEvidence } : {}),
-    connectionId: readyDraft.connectionId ?? randomUUID(),
+    // A new connection keeps its draft's id, so a webhook channel's address (which holds the id) is known before Finalize.
+    connectionId: readyDraft.connectionId ?? readyDraft.draftId,
     catalogId: ephemeral.catalogId,
     kind: ephemeral.kind,
     key: ephemeral.key,
