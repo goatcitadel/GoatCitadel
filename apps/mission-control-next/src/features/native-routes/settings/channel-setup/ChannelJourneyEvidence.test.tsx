@@ -141,6 +141,28 @@ describe("connection diagnostics check names", () => {
     expect(diagnostics.checks.map((check) => check.key)).toEqual(["slack_sandbox_send", "ntfy_sandbox_cleanup"]);
     renderer.unmount();
   });
+  it("shows the stored `delivery_posture` key as sending and receiving, without changing the key", async () => {
+    const diagnostics = {
+      connectorType: "integration_connection" as const,
+      connectorId: "matrix-fixture",
+      status: "ok" as const,
+      checkedAt: "2026-10-28T03:00:00.000Z",
+      checks: [
+        { key: "delivery_posture", status: "pass" as const, message: "Matrix outbound is text-only." },
+        { key: "default_room", status: "pass" as const, message: "A default room is set." },
+      ],
+    };
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChannelJourneyEvidence diagnostics={diagnostics} />);
+    });
+    const copy = text(renderer.root);
+    expect(copy).toContain("Sending and receiving");
+    expect(copy).toContain("default room");
+    expect(copy).not.toMatch(/posture/iu);
+    expect(diagnostics.checks.map((check) => check.key)).toEqual(["delivery_posture", "default_room"]);
+    renderer.unmount();
+  });
 });
 describe("platform-unsupported actions", () => {
   it("lists actions the platform does not offer, with the reason", async () => {
