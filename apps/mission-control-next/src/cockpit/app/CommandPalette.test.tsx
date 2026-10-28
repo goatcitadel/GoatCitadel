@@ -331,6 +331,32 @@ describe("CommandPalette", () => {
     expect(document.body.textContent).toContain("Go to Library › Memory");
   });
 
+  it.each([
+    ["Connectors", "/capabilities/connectors"],
+    ["Tools", "/capabilities/tools"],
+  ])("lists Capabilities › %s as a tab destination", async (label, path) => {
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
+    const input = document.querySelector<HTMLInputElement>("[cmdk-input]")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, `capabilities ${label}`);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(document.body.textContent).toContain(`Go to Capabilities › ${label}`);
+    const item = [...document.querySelectorAll("[cmdk-item]")].find((node) =>
+      node.textContent?.includes(`Capabilities › ${label}`),
+    );
+    act(() => item?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(controls.navigate).toHaveBeenCalledWith(path);
+  });
+
+  it("keeps the Capabilities tabs out of the empty palette", async () => {
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
+    expect(document.body.textContent).toContain("Go to Capabilities");
+    expect(document.body.textContent).not.toContain("Capabilities › Tools");
+  });
+
   it("offers all areas and the classic view", async () => {
     act(() => {
       root.render(<CommandPalette open onOpenChange={() => undefined} />);

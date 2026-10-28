@@ -71,21 +71,29 @@ describe("Cockpit compatibility coverage", () => {
   ])("keeps %s unavailable: a channel page needs exactly one readable connection id", (input) => {
     expect(resolveCockpitCompatibility(input)).toEqual({ kind: "missing" });
   });
-  it.each(["/capabilities", "/capabilities/connectors", "/capabilities/connectors?workspaceId=w#top"])(
-    "opens the Capabilities area natively: %s",
-    (href) => {
-      expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
-    },
-  );
-  it.each(["/capabilities/skills", "/capabilities/connectors/extra", "/capabilities/unknown"])(
-    "reports %s missing until its tab exists",
-    (href) => {
-      expect(resolveCockpitCompatibility(href)).toEqual({ kind: "missing" });
-    },
-  );
-  it("offers Classic for an explicit rollback of the Capabilities area", () => {
-    expect(resolveCockpitCompatibility("/capabilities/connectors?shell=classic")).toMatchObject({ kind: "classic" });
+  it.each([
+    "/capabilities",
+    "/capabilities/connectors",
+    "/capabilities/connectors?workspaceId=w#top",
+    "/capabilities/tools",
+    "/capabilities/tools?workspaceId=w&item=group%3Afiles#top",
+  ])("opens the Capabilities area natively: %s", (href) => {
+    expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
   });
+  it.each([
+    "/capabilities/skills",
+    "/capabilities/connectors/extra",
+    "/capabilities/tools/extra",
+    "/capabilities/unknown",
+  ])("reports %s missing until its tab exists", (href) => {
+    expect(resolveCockpitCompatibility(href)).toEqual({ kind: "missing" });
+  });
+  it.each(["/capabilities/connectors?shell=classic", "/capabilities/tools?shell=classic"])(
+    "offers Classic for an explicit rollback of the Capabilities area: %s",
+    (href) => {
+      expect(resolveCockpitCompatibility(href)).toMatchObject({ kind: "classic" });
+    },
+  );
   it("retains explicit Classic Projects rollback", () => {
     expect(resolveCockpitCompatibility("/projects/p?shell=classic&workspaceId=w#context")).toMatchObject({
       kind: "classic",
@@ -242,8 +250,47 @@ it.each([
     ) + "#details";
   expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
 });
-it.each(["/library/skills", "/library/tools"])("keeps supported catalog alias %s native", (href) => {
+it("keeps the supported catalog alias /library/skills native", () => {
+  const href = "/library/skills";
   expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
+});
+describe("the Library tools address", () => {
+  it("sends /library/tools to /capabilities/tools", () => {
+    expect(resolveCockpitCompatibility("/library/tools")).toEqual({ kind: "native", href: "/capabilities/tools" });
+    expect(resolveCockpitCompatibility("/library/tools/")).toEqual({ kind: "native", href: "/capabilities/tools" });
+  });
+  it("leaves the catalog filters and the fragment behind", () => {
+    expect(resolveCockpitCompatibility("/library/tools?q=fs&type=tool&status=available&trust=trusted#details")).toEqual(
+      { kind: "native", href: "/capabilities/tools" },
+    );
+  });
+  it("keeps the workspace and the shell with it", () => {
+    expect(resolveCockpitCompatibility("/library/tools?workspaceId=w&shell=cockpit")).toEqual({
+      kind: "native",
+      href: "/capabilities/tools?workspaceId=w&shell=cockpit",
+    });
+    expect(resolveCockpitCompatibility("/library/tools?q=fs&workspaceId=w&shellScope=keep&shell=cockpit#top")).toEqual({
+      kind: "native",
+      href: "/capabilities/tools?workspaceId=w&shellScope=keep&shell=cockpit",
+    });
+  });
+  it("keeps an explicit Classic rollback on the Library", () => {
+    expect(resolveCockpitCompatibility("/library/tools?shell=classic")).toEqual({
+      kind: "classic",
+      href: "/library/tools?shell=classic",
+      label: "Open the classic view",
+    });
+  });
+  it("does not widen to other Library tools paths", () => {
+    expect(resolveCockpitCompatibility("/library/tools/extra")).toEqual({ kind: "missing" });
+  });
+  it("leaves the one-tool record links where they were", () => {
+    const href = catalogHref(
+      { search: "", kind: "all", status: "all", trust: "all" },
+      { kind: "tool", capabilityId: "fs.write" },
+    );
+    expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
+  });
 });
 it.each(["/library/unknown/record", "/library/tool/%invalid", "/library/tool/record/extra"])(
   "rejects unsupported catalog selection %s",
