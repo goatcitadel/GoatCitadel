@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 
 const runDiscordBotLiveChecksMock = vi.hoisted(() => vi.fn());
@@ -21,6 +21,7 @@ import {
   runIntegrationConnectionLiveChecks,
   type IntegrationDiagnosticsPort,
 } from "./integration-diagnostics-service.js";
+import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
 
 function createDiscordConnection(config: Record<string, unknown>): IntegrationConnection {
   return {
@@ -83,17 +84,214 @@ function createPort(): IntegrationDiagnosticsPort {
       const value = config[key];
       return typeof value === "string" ? value : undefined;
     }),
-    resolveConnectionSecret: vi.fn((config: Record<string, unknown>, key: string) => {
-      const value = config[key];
-      return typeof value === "string" ? value : undefined;
-    }),
+    resolveConnectionSecret: vi.fn(resolveLikeTheGateway),
   };
+}
+
+/**
+ * What `GatewayService.resolveConnectionSecret` does with a plain config: the direct value, else the variable the
+ * config names, but only when the credential guard permits that name for the connection's catalog entry.
+ */
+function resolveLikeTheGateway(
+  config: Record<string, unknown>,
+  directKey: string,
+  envKey: string,
+  catalogId?: string,
+): string | undefined {
+  const direct = config[directKey];
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const envName = config[envKey];
+  if (typeof envName !== "string" || !envName.trim()) return undefined;
+  return isPermittedIntegrationSecretEnvVarName(envName, catalogId) ? process.env[envName.trim()] : undefined;
 }
 
 describe("integration-diagnostics-service contract behavior", () => {
   beforeEach(() => {
     runDiscordBotLiveChecksMock.mockReset();
     runNtfyLiveChecksMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  describe("a channel's variable is checked through the name rule its sends use (C6)", () => {
+    const SECRET = "must-not-leak-this-value";
+    const authOf = (connection: IntegrationConnection, port = createPort()) =>
+      buildIntegrationConnectionChecks(port, connection).find((check) => check.key === "auth");
+
+    it("fails a variable that is set but whose name the Gateway refuses, naming the prefix it needs", () => {
+      vi.stubEnv("MY_TOKEN", SECRET);
+      const port = createPort();
+      const connection = createIntegrationConnection("mattermost", "channel", {
+        serverUrl: "https://chat.example.test",
+        botTokenEnv: "MY_TOKEN",
+        defaultChannel: "town-square",
+      });
+
+      const checks = buildIntegrationConnectionChecks(port, connection);
+
+      expect(checks.find((check) => check.key === "auth")).toEqual({
+        key: "auth",
+        status: "fail",
+        message: "The variable name must start with MATTERMOST_. Rename it and restart GoatCitadel.",
+      });
+      // It asks the same resolver the live probes ask, with the connection's catalog entry.
+      expect(port.resolveConnectionSecret).toHaveBeenCalledWith(
+        connection.config,
+        "botToken",
+        "botTokenEnv",
+        "channel.mattermost",
+      );
+      expect(JSON.stringify(checks)).not.toContain(SECRET);
+    });
+
+    it("also names the suffix when the field is one a webhook reads too", () => {
+      vi.stubEnv("MY_SECRET", SECRET);
+      const qqbot = authOf(
+        createIntegrationConnection("qqbot", "channel", { appId: "102000", appSecretEnv: "MY_SECRET" }),
+      );
+      const nextcloud = authOf(
+        createIntegrationConnection("nextcloud-talk", "channel", {
+          baseUrl: "https://cloud.example.test",
+          tokenEnv: "MY_SECRET",
+        }),
+      );
+
+      expect(qqbot).toEqual({
+        key: "auth",
+        status: "fail",
+        message:
+          "The variable name must start with QQBOT_. Rename it and restart GoatCitadel. The name must also end in _TOKEN or _SECRET.",
+      });
+      expect(nextcloud?.message).toBe(
+        "The variable name must start with NEXTCLOUD_TALK_. Rename it and restart GoatCitadel. The name must also end in _TOKEN or _SECRET.",
+      );
+      expect(JSON.stringify([qqbot, nextcloud])).not.toContain(SECRET);
+    });
+
+    it("passes a variable whose name the Gateway reads, and says which one", () => {
+      vi.stubEnv("MATTERMOST_BOT_TOKEN", SECRET);
+      const auth = authOf(
+        createIntegrationConnection("mattermost", "channel", {
+          serverUrl: "https://chat.example.test",
+          botTokenEnv: "MATTERMOST_BOT_TOKEN",
+        }),
+      );
+
+      expect(auth).toEqual({
+        key: "auth",
+        status: "pass",
+        message: "Mattermost bot token is configured via MATTERMOST_BOT_TOKEN.",
+      });
+    });
+
+    it("says a rightly named variable is missing when it is not set, and still fails a wrong name that is not set", () => {
+      const connection = (name: string) =>
+        createIntegrationConnection("mattermost", "channel", {
+          serverUrl: "https://chat.example.test",
+          botTokenEnv: name,
+        });
+
+      expect(authOf(connection("MATTERMOST_BOT_TOKEN"))).toMatchObject({
+        status: "fail",
+        message: "Mattermost bot token is missing.",
+      });
+      expect(authOf(connection("NOT_SET_ANYWHERE"))).toMatchObject({
+        status: "fail",
+        message: expect.stringContaining("MATTERMOST_"),
+      });
+    });
+
+    it("lets a direct value win, whatever the variable is called", () => {
+      vi.stubEnv("MY_TOKEN", SECRET);
+
+      expect(
+        authOf(
+          createIntegrationConnection("mattermost", "channel", {
+            serverUrl: "https://chat.example.test",
+            botToken: "keychain:goatcitadel:channel-connection:x:botToken",
+            botTokenEnv: "MY_TOKEN",
+          }),
+        ),
+      ).toMatchObject({ status: "pass" });
+    });
+
+    it("keeps a model provider's key variable a plain is-it-set check, since no resolver reads it", () => {
+      vi.stubEnv("OPENAI_API_KEY", SECRET);
+      const connection = (apiKeyEnv: string) =>
+        createIntegrationConnection("openai", "model_provider", {
+          baseUrl: "https://api.openai.example.test/v1",
+          model: "gpt-test",
+          apiKeyEnv,
+        });
+
+      // The form suggests the provider's own variable, which the credential guard forbids for an integration secret.
+      expect(authOf(connection("OPENAI_API_KEY"))).toMatchObject({ status: "pass", message: "API key is configured." });
+      expect(authOf(connection("NOT_SET_ANYWHERE"))).toMatchObject({ status: "fail", message: "API key is missing." });
+    });
+
+    it("applies the same rule to the variables that GIF search, Trello and a remote bridge read", () => {
+      vi.stubEnv("GIF_API_KEY", SECRET);
+      vi.stubEnv("GIPHY_API_KEY", SECRET);
+      vi.stubEnv("TRELLO_KEY", SECRET);
+      vi.stubEnv("TRELLO_TOKEN", SECRET);
+      vi.stubEnv("MY_BRIDGE_TOKEN", SECRET);
+      const bridge = (authTokenEnv: string) =>
+        buildIntegrationConnectionChecks(
+          createPort(),
+          createIntegrationConnection("peekaboo-screen", "automation", {
+            bridgeUrl: "https://remote-screen.example.test",
+            authTokenEnv,
+          }),
+        ).find((check) => check.key === "bridge_auth");
+
+      expect(
+        authOf(
+          createIntegrationConnection("gif-search", "automation", { provider: "giphy", apiKeyEnv: "GIF_API_KEY" }),
+        ),
+      ).toMatchObject({ status: "fail" });
+      expect(
+        authOf(
+          createIntegrationConnection("gif-search", "automation", { provider: "giphy", apiKeyEnv: "GIPHY_API_KEY" }),
+        ),
+      ).toMatchObject({ status: "pass" });
+      expect(
+        authOf(
+          createIntegrationConnection("trello", "productivity", {
+            apiKeyEnv: "TRELLO_KEY",
+            tokenEnv: "MY_BRIDGE_TOKEN",
+          }),
+        ),
+      ).toMatchObject({ status: "fail" });
+      expect(
+        authOf(
+          createIntegrationConnection("trello", "productivity", { apiKeyEnv: "TRELLO_KEY", tokenEnv: "TRELLO_TOKEN" }),
+        ),
+      ).toMatchObject({ status: "pass" });
+      expect(bridge("MY_BRIDGE_TOKEN")).toMatchObject({ status: "warn" });
+    });
+
+    it("applies the same rule to a Slack or Discord bot token variable", () => {
+      vi.stubEnv("MY_TOKEN", SECRET);
+      vi.stubEnv("DISCORD_BOT_TOKEN", SECRET);
+      vi.stubEnv("SLACK_BOT_TOKEN", SECRET);
+
+      expect(authOf(createIntegrationConnection("discord", "channel", { botTokenEnv: "MY_TOKEN" }))).toMatchObject({
+        status: "fail",
+        message: "Discord bot token or webhook is missing.",
+      });
+      expect(
+        authOf(createIntegrationConnection("discord", "channel", { botTokenEnv: "DISCORD_BOT_TOKEN" })),
+      ).toMatchObject({ status: "pass" });
+      expect(authOf(createIntegrationConnection("slack", "channel", { botTokenEnv: "MY_TOKEN" }))).toMatchObject({
+        status: "fail",
+        message: "Slack bot token or webhook is missing.",
+      });
+      expect(authOf(createIntegrationConnection("slack", "channel", { botTokenEnv: "SLACK_BOT_TOKEN" }))).toMatchObject(
+        { status: "pass" },
+      );
+    });
   });
 
   it("marks remote plain-http webhook URLs as unsafe while still recognizing configured auth", () => {
@@ -610,13 +808,13 @@ describe("integration-diagnostics-service contract behavior", () => {
       MATTERMOST_TOKEN: process.env.MATTERMOST_TOKEN,
       TRELLO_KEY: process.env.TRELLO_KEY,
       TRELLO_TOKEN: process.env.TRELLO_TOKEN,
-      GIF_API_KEY: process.env.GIF_API_KEY,
+      GIPHY_API_KEY: process.env.GIPHY_API_KEY,
     };
     process.env.TELEGRAM_BOT_TOKEN = "telegram-token";
     process.env.MATTERMOST_TOKEN = "mattermost-token";
     process.env.TRELLO_KEY = "trello-key";
     process.env.TRELLO_TOKEN = "trello-token";
-    process.env.GIF_API_KEY = "gif-key";
+    process.env.GIPHY_API_KEY = "gif-key";
     try {
       const telegram = buildIntegrationConnectionChecks(
         host,
@@ -687,7 +885,7 @@ describe("integration-diagnostics-service contract behavior", () => {
         }),
         createIntegrationConnection("gif-search", "automation", {
           provider: "giphy",
-          apiKeyEnv: "GIF_API_KEY",
+          apiKeyEnv: "GIPHY_API_KEY",
         }),
         createIntegrationConnection("peekaboo-screen", "automation", {
           bridgeUrl: "https://remote-screen.example.test",

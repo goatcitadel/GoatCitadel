@@ -34,7 +34,9 @@ import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import { evaluateHostEgress } from "@goatcitadel/policy-engine";
+import { secretEnvPrefix, secretEnvSuffixRule } from "./channel-setup-definitions/common.js";
 import { FORCED_ALLOWLIST_INBOUND_CHANNELS } from "./channel-setup-inbound-access.js";
+import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
 
 const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
   "slack",
@@ -101,15 +103,19 @@ export function buildIntegrationConnectionChecks(
     connection.kind === "channel" ? describeChannelFeatureMetadata(connection.key, config) : undefined;
   const channelCapabilities =
     connection.kind === "channel" ? describeChannelCapabilities(connection.key, config) : undefined;
+  // Presence is decided by the resolver the live probes use, so a variable whose name the Gateway refuses to read does
+  // not pass here and then give a live check with nothing to check. Only names are reported, never a resolved value.
   const requireSecretRef = (key: string, label: string, directKey: string, envKey: string) => {
-    const direct = deps.readConnectionConfigValue(config, directKey);
     const envName = deps.readConnectionConfigValue(config, envKey);
-    const envPresent = envName ? Boolean(process.env[envName]) : false;
+    if (deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId)) {
+      checks.push({ key, status: "pass", message: `${label} is configured${envName ? ` via ${envName}` : ""}.` });
+      return;
+    }
+    const refused = envName !== undefined && !isPermittedIntegrationSecretEnvVarName(envName, connection.catalogId);
     checks.push({
       key,
-      status: direct || envPresent ? "pass" : "fail",
-      message:
-        direct || envPresent ? `${label} is configured${envName ? ` via ${envName}` : ""}.` : `${label} is missing.`,
+      status: "fail",
+      message: refused ? refusedVariableNameMessage(connection.key, envKey) : `${label} is missing.`,
     });
   };
   const requireText = (key: string, label: string, value: string | undefined, status: "warn" | "fail" = "fail") => {
@@ -197,7 +203,8 @@ export function buildIntegrationConnectionChecks(
     switch (connection.key) {
       case "slack": {
         const slackBotToken = Boolean(
-          deps.readConnectionConfigValue(config, "botToken") || hasConnectionEnvValue(deps, config, "botTokenEnv"),
+          deps.readConnectionConfigValue(config, "botToken") ||
+          hasConnectionEnvValue(deps, config, "botTokenEnv", connection.catalogId),
         );
         const slackAuthSet = slackBotToken || Boolean(deps.readConnectionConfigValue(config, "webhookUrl"));
         checks.push({
@@ -220,13 +227,13 @@ export function buildIntegrationConnectionChecks(
           status:
             deps.readConnectionConfigValue(config, "webhookUrl") ||
             deps.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(deps, config, "botTokenEnv")
+            hasConnectionEnvValue(deps, config, "botTokenEnv", connection.catalogId)
               ? "pass"
               : "fail",
           message:
             deps.readConnectionConfigValue(config, "webhookUrl") ||
             deps.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(deps, config, "botTokenEnv")
+            hasConnectionEnvValue(deps, config, "botTokenEnv", connection.catalogId)
               ? "Discord bot token or webhook is configured."
               : "Discord bot token or webhook is missing.",
         });
@@ -366,15 +373,15 @@ export function buildIntegrationConnectionChecks(
     checkUrl("url", "Provider base URL", deps.readConnectionConfigValue(config, "baseUrl"), true);
     requireText("target", "Default model", deps.readConnectionConfigValue(config, "model"), "warn");
     const isLocal = connectionUrlHelpers.isConnectionValueLocalUrl(deps.readConnectionConfigValue(config, "baseUrl"));
+    // No resolver reads a model provider connection's key variable, and its form suggests the provider's own variable
+    // (OPENAI_API_KEY), which the credential guard forbids. So this one stays a plain check that the variable is set.
+    const apiKeySet = deps.readConnectionConfigValue(config, "apiKey") || hasProcessEnvValue(deps, config, "apiKeyEnv");
     checks.push({
       key: "auth",
-      status:
-        isLocal || deps.readConnectionConfigValue(config, "apiKey") || hasConnectionEnvValue(deps, config, "apiKeyEnv")
-          ? "pass"
-          : "fail",
+      status: isLocal || apiKeySet ? "pass" : "fail",
       message: isLocal
         ? "Local model endpoint does not require an API key."
-        : deps.readConnectionConfigValue(config, "apiKey") || hasConnectionEnvValue(deps, config, "apiKeyEnv")
+        : apiKeySet
           ? "API key is configured."
           : "API key is missing.",
     });
@@ -390,11 +397,13 @@ export function buildIntegrationConnectionChecks(
       checks.push({
         key: "auth",
         status:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv") || deps.readConnectionConfigValue(config, "apiKey")
+          hasConnectionEnvValue(deps, config, "apiKeyEnv", connection.catalogId) ||
+          deps.readConnectionConfigValue(config, "apiKey")
             ? "pass"
             : "fail",
         message:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv") || deps.readConnectionConfigValue(config, "apiKey")
+          hasConnectionEnvValue(deps, config, "apiKeyEnv", connection.catalogId) ||
+          deps.readConnectionConfigValue(config, "apiKey")
             ? "GIF search API key is configured."
             : "GIF search API key is missing.",
       });
@@ -408,12 +417,13 @@ export function buildIntegrationConnectionChecks(
         status:
           connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl) ||
           deps.readConnectionConfigValue(config, "authToken") ||
-          hasConnectionEnvValue(deps, config, "authTokenEnv")
+          hasConnectionEnvValue(deps, config, "authTokenEnv", connection.catalogId)
             ? "pass"
             : "warn",
         message: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl)
           ? "Local bridge URL is configured."
-          : deps.readConnectionConfigValue(config, "authToken") || hasConnectionEnvValue(deps, config, "authTokenEnv")
+          : deps.readConnectionConfigValue(config, "authToken") ||
+              hasConnectionEnvValue(deps, config, "authTokenEnv", connection.catalogId)
             ? "Remote bridge authentication is configured."
             : "Remote bridge authentication is not configured.",
       });
@@ -423,11 +433,13 @@ export function buildIntegrationConnectionChecks(
       checks.push({
         key: "auth",
         status:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv") && hasConnectionEnvValue(deps, config, "tokenEnv")
+          hasConnectionEnvValue(deps, config, "apiKeyEnv", connection.catalogId) &&
+          hasConnectionEnvValue(deps, config, "tokenEnv", connection.catalogId)
             ? "pass"
             : "fail",
         message:
-          hasConnectionEnvValue(deps, config, "apiKeyEnv") && hasConnectionEnvValue(deps, config, "tokenEnv")
+          hasConnectionEnvValue(deps, config, "apiKeyEnv", connection.catalogId) &&
+          hasConnectionEnvValue(deps, config, "tokenEnv", connection.catalogId)
             ? "Trello API credentials are configured."
             : "Trello API credentials are missing.",
       });
@@ -785,13 +797,36 @@ function readBoolean(value: unknown): boolean {
   return value === true || (typeof value === "string" && value.trim().toLowerCase() === "true");
 }
 
+/**
+ * Whether the variable the config names under `key` can be read: it asks the resolver the live probes use, with only
+ * that variable's name, so a name the Gateway refuses counts as missing and a direct value never answers for it.
+ */
 function hasConnectionEnvValue(
   deps: IntegrationDiagnosticsPort,
+  config: Record<string, unknown>,
+  key: string,
+  catalogId: string,
+): boolean {
+  const envName = deps.readConnectionConfigValue(config, key);
+  if (!envName) return false;
+  return Boolean(deps.resolveConnectionSecret({ [key]: envName }, "", key, catalogId)?.trim());
+}
+
+/** Whether the variable the config names under `key` is set, whatever its name. Only for a field no resolver reads. */
+function hasProcessEnvValue(
+  deps: Pick<IntegrationDiagnosticsPort, "readConnectionConfigValue">,
   config: Record<string, unknown>,
   key: string,
 ): boolean {
   const envName = deps.readConnectionConfigValue(config, key);
   return Boolean(envName && process.env[envName]?.trim());
+}
+
+/** What to tell the operator about a variable name the Gateway will not read, from the same rule the setup guide gives. */
+function refusedVariableNameMessage(channelKey: string, envKey: string): string {
+  const rule = `The variable name must start with ${secretEnvPrefix(channelKey)}_. Rename it and restart GoatCitadel.`;
+  const suffixRule = secretEnvSuffixRule(channelKey, envKey);
+  return suffixRule ? `${rule} ${suffixRule}` : rule;
 }
 
 function isHostAllowlisted(deps: IntegrationDiagnosticsPort, hostname: string): boolean {

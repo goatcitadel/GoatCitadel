@@ -19,6 +19,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { requireChannelSetupDefinition } from "../channel-setup-definitions.js";
 import { evaluateChannelSetupEligibility } from "../channel-setup-eligibility.js";
+import { isPermittedIntegrationSecretEnvVarName } from "../gateway/integration-secret-envvar-guard.js";
 import {
   buildIntegrationConnectionChecks,
   runIntegrationConnectionLiveChecks,
@@ -139,7 +140,13 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
       getDiscordRuntimeStatus: vi.fn(() => undefined),
       isConnectionUrlAllowlisted: vi.fn(() => true),
       readConnectionConfigValue: vi.fn(readString),
-      resolveConnectionSecret: vi.fn(readString),
+      // Like GatewayService.resolveConnectionSecret: the direct value, else the variable the config names, if the guard permits that name.
+      resolveConnectionSecret: vi.fn((values, directKey, envKey, catalogId) => {
+        const direct = readString(values, directKey)?.trim();
+        if (direct) return direct;
+        const envName = readString(values, envKey)?.trim();
+        return envName && isPermittedIntegrationSecretEnvVarName(envName, catalogId) ? process.env[envName] : undefined;
+      }),
     };
   }
 
