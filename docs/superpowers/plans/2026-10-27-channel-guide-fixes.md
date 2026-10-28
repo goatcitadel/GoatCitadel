@@ -512,6 +512,43 @@ Each task follows its spec entry: the failing test it names first, then the mini
 | C8 | C8 | Moot: iMessage was retired on 2026-10-28 (N1). | Skip. | N1 |
 | C9 | A6 | `channel-inbound-dispatch.test.ts` and the webhooks test: a dropped message's diagnostic `message` contains the sender id | the spec's message for both events, at `channel-inbound-dispatch.ts:363-385` and `integration-webhooks.ts:~150-170` | N5 default |
 
+### As built (PR 4)
+
+What changed from the table:
+- **C4:** skipped. The N2 default applies, and the WhatsApp copy shipped in PR 3. **C8:** moot (N1). Zalo's token refresh was left out (operator, 2026-10-28).
+- **Added while the PR ran:** C6b and C6c (security: a send reads a channel's variable only through the name rule, and a saved key is read only for the connection or draft that owns it), C11 (an edit keeps its saved key), D1 (small setup-path fixes left from PR 3), D2 (a retired channel never looks usable) and D3 (docs, labels and guide versions).
+- **D3:** every guide's `wizard.contentVersion` now ends in `.guided-2026-10-28`, set by one constant in `guided-journey.ts`. The `delivery_posture` diagnostic check keeps its key and shows as "Sending and receiving".
+
+Rulings:
+- R63: PR 4 is C2, C3, C5/C6, C6b, C6c, C7, C9, C11, D1, D2 and D3.
+- R64: some findings are parked for later (below).
+- R65: dev diagnostics are off under `NODE_ENV=production` (Docker), so guides that point to System › Diagnostics say Docker needs `GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true`. Ids must survive the diagnostics redactor, which isn't weakened.
+- R66: a variable-name field accepts exactly the names its runtime resolver accepts. The predicates are reused, not copied.
+- R67: the provider-hosts warning names exactly the hosts the guide's Allow these hosts button adds, and blocks Finalize until they're allowed.
+- R68: Google Chat Chat-app mode finishes with an advisory, because no test message can be sent. Webhook mode no longer needs the thread key.
+- R69: a new connection keeps its draft's id, so its webhook address shows before Finalize.
+- R70: "an edit asks for the saved key again" was confirmed by a test before it was fixed. It was real for Google Chat and the webhook-address channels.
+- R71: C3 also fixed the Google Chat address lines that its change made false.
+- R72: the model-provider `apiKeyEnv` presence check is left unguarded, because it isn't a channel field.
+- R73 (security): sends read a channel's variable only through the name rule. The rule is checked through a gateway hook, and a missing hook fails closed.
+- R74 (security): a pasted token in a name field is never echoed in a check message or the resolver's warning log.
+- R75 (security): the SMTP password variable gets the same rule (`SMTP_` / `IMAP_` alias for the email integration only).
+- R76: the Discord gateway runtime logs in with the saved token, not its secure-storage reference.
+- R77: subagent commit trailers name the model that wrote the commit.
+- R78 (security): a saved key is only read for the connection or draft that owns it, checked once at the shared read.
+- R79: Slack's `slack.com` is required only with a bot token, not for an incoming-webhook-only setup.
+- R80: guide copy says to finish setup first, then where to find a dropped sender's id, and what Docker shows.
+- R81: Chat's Discord form asks for the server ID only on bot paths.
+- R82: a field revealed by a choice in the same Chat form is accepted. The open-legacy marker can never be submitted.
+
+Parked for later:
+- orphaned secure-storage entries after a key is replaced or cleared;
+- trailing-dot handling in the network guards;
+- whether `occ talk:bot:list` prints bot ids (needs a live Talk install);
+- the dead `buildSlackOAuthConnectionInput`;
+- Classic diagnostics showing raw check keys (D3 maps only `delivery_posture` to a plain name);
+- System › Diagnostics alert text when diagnostics are off.
+
 ### Task C10: PR 4 proof and PR
 
 - [ ] **Lanes:** gateway `src/services/channel-*`, `src/services/integration-diagnostics*`, `src/routes/integration-webhooks*`; the gateway typecheck; `git diff --check`.
