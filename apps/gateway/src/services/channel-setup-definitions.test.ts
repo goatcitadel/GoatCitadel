@@ -479,6 +479,7 @@ describe("channel setup definitions", () => {
 
     expect(definition.wizard.steps.map((step) => step.kind)).toEqual([
       "intro",
+      "instruction",
       "field-collection",
       "field-collection",
       "field-collection",
@@ -1358,7 +1359,7 @@ describe("channel setup definitions", () => {
       matrix: ["overview", "create-bot"],
       qqbot: ["overview"],
       wecom: ["overview"],
-      "nextcloud-talk": ["overview"],
+      "nextcloud-talk": ["overview", "install-bot"],
       line: ["overview", "create-account"],
       zalo: ["overview"],
     };
@@ -1544,7 +1545,7 @@ describe("the shared guide builder", () => {
       expect(labels).toMatchObject({
         "telegram.webhookSecretEnv": "Webhook secret from an environment variable (advanced)",
         "ntfy.tokenEnv": "Token from an environment variable (advanced)",
-        "nextcloud-talk.tokenEnv": "Token from an environment variable (advanced)",
+        "nextcloud-talk.tokenEnv": "Bot secret from an environment variable (advanced)",
         "discord.botTokenEnv": "Bot token from an environment variable (advanced)",
         "whatsapp.accessTokenEnv": "Access token from an environment variable (advanced)",
         "whatsapp.appSecretEnv": "App secret from an environment variable (advanced)",

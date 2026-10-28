@@ -1,10 +1,14 @@
 import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
+  PASTED_SECRET_EXPLANATION,
   requireCatalog,
   baseCatalogMeta,
   paragraph,
   note,
+  linkBlock,
+  check,
+  troubleshoot,
   readString,
   looksLikeHttpUrl,
   hasAnyConfiguredSecret,
@@ -12,6 +16,7 @@ import {
   readLegacyString,
   requiredFieldIssue,
   malformedFieldIssue,
+  requireSecureUrl,
 } from "./common.js";
 
 export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
@@ -25,11 +30,11 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect Nextcloud Talk using the public base URL, the shared bot token, and a default fallback room id.",
+        "Send Nextcloud Talk messages through a Talk bot. Receiving needs an HTTPS address your Nextcloud server can reach.",
       prerequisites: [
-        "A reachable Nextcloud Talk instance.",
-        "A Talk bot token or shared webhook secret already provisioned for the integration.",
-        "A fallback room id for manual sends.",
+        "Shell access to your Nextcloud server, to add a bot with occ.",
+        "A bot secret of 40 to 128 characters.",
+        "The room token of the conversation the bot should use.",
       ],
       steps: [
         {
@@ -39,12 +44,62 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph(
-              "GoatCitadel uses the Nextcloud Talk bot API plus signed webhooks for inbound events, outbound replies, and reactions.",
+              "GoatCitadel sends text and reactions to a Nextcloud Talk conversation as a bot, and can hear messages from it through signed webhooks.",
             ),
+            paragraph(
+              "Sending works without a public address. Receiving needs an HTTPS address your Nextcloud server can reach.",
+            ),
+            paragraph(
+              "Receiving is optional. Only people you allow (written users/ followed by their user name, for example users/alice) can start conversations.",
+            ),
+            paragraph("This channel sends text. Attachments aren't supported."),
             note(
               "info",
-              "Nextcloud Talk already has runtime support in the gateway. This guided definition brings its setup flow into parity with the other visible channel setup wizards.",
+              "GoatCitadel can reach your Nextcloud server only once the server is in the hosts GoatCitadel may reach: the setup test has an Allow these hosts button for that.",
             ),
+          ],
+        },
+        {
+          id: "install-bot",
+          kind: "instruction",
+          createOnly: true,
+          title: "Add the bot to Nextcloud Talk",
+          body: [
+            paragraph(
+              "GoatCitadel posts to Talk as a bot. Talk only lets you add a bot from the command line, so you need shell access to your Nextcloud server. Run occ the way you usually do there.",
+            ),
+            {
+              kind: "list",
+              ordered: true,
+              items: [
+                "Make up a secret of 40 to 128 characters and keep it. GoatCitadel needs the same secret.",
+                "Install the bot with occ talk:bot:install. Give it a name, the secret, a webhook address, and the features webhook and response. Without the response feature the bot can't post.",
+                "For now, use any web address as the webhook address. You only need the real one to receive messages (see below).",
+                "Turn the bot on for the conversation with occ talk:bot:setup. Give it the bot's ID (occ talk:bot:list lists your bots) and the conversation's room token.",
+              ],
+            },
+            {
+              kind: "code",
+              language: "shell",
+              code: [
+                'occ talk:bot:install --feature webhook --feature response "GoatCitadel" "<secret>" "<webhook address>"',
+                "occ talk:bot:setup <bot-id> <room-token>",
+              ].join("\n"),
+            },
+            paragraph(
+              "Sending: install the bot with a placeholder address, turn it on for the room, test, and finish.",
+            ),
+            paragraph(
+              "Receiving (optional), after you finish: Talk fixes a bot's webhook address when the bot is installed, and occ has no command to change it. So copy this connection's webhook address (you get it after you finish: Settings › Channels › this connection), uninstall the bot with occ talk:bot:uninstall, install it again with that address and the same secret, then turn it on for the room again.",
+            ),
+            linkBlock("Nextcloud Talk: occ commands", "https://nextcloud-talk.readthedocs.io/en/latest/occ/"),
+            linkBlock("Nextcloud Talk: bots", "https://nextcloud-talk.readthedocs.io/en/latest/bots/"),
+          ],
+          // Only what every setup needs. Reinstalling the bot with a webhook address is for receiving, after you finish:
+          // it is a paragraph above, not a box, because each box here blocks Continue.
+          checklist: [
+            check("install", "Install the bot with the webhook and response features"),
+            check("setup-room", "Turn the bot on for the conversation"),
           ],
         },
         {
@@ -57,8 +112,28 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
               label: "Base URL",
               type: "url",
               required: true,
-              explanation: "Public base URL for the Nextcloud instance that hosts Talk.",
+              explanation:
+                "The address of your Nextcloud server. Use https://. Plain http:// works only for this computer (127.0.0.1 or localhost).",
               looksLike: "https://cloud.example.com",
+              canChangeLater: true,
+            },
+            {
+              key: "token",
+              label: "Bot secret",
+              type: "secret",
+              required: false,
+              explanation: PASTED_SECRET_EXPLANATION,
+              whyNeeded: "GoatCitadel signs what it sends to Talk with it, and checks what Talk sends back with it.",
+              whereToFind: [
+                paragraph(
+                  "It is the secret you gave occ talk:bot:install. If you no longer have it, uninstall the bot and install it again with a new secret.",
+                ),
+              ],
+              commonMistakes: [
+                "A secret shorter than 40 characters. occ requires 40 to 128.",
+                "A different secret from the one the bot was installed with.",
+              ],
+              sensitive: true,
               canChangeLater: true,
             },
             {
@@ -66,29 +141,29 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
               label: "Token env var",
               type: "text",
               required: false,
-              explanation:
-                "Preferred path. Name of the env var that stores the shared Nextcloud Talk bot token or webhook secret.",
+              explanation: "Name of the env var that stores the bot secret.",
               looksLike: "NEXTCLOUD_TALK_TOKEN",
               canChangeLater: true,
               placeholder: "NEXTCLOUD_TALK_TOKEN",
             },
             {
-              key: "token",
-              label: "Token (manual fallback)",
-              type: "secret",
-              required: false,
-              explanation: "Optional direct token entry if env-backed storage is not ready yet.",
-              sensitive: true,
-              canChangeLater: true,
-              placeholder: "Paste only if you cannot use an env var",
-            },
-            {
               key: "defaultRoomId",
-              label: "Default room ID",
+              label: "Room token",
               type: "text",
               required: true,
-              explanation: "Fallback room for manual sends and operator-delivery routing.",
-              looksLike: "room-id",
+              explanation:
+                "The token Talk gives the conversation. The test message and any send that names no room go to this conversation.",
+              whereToFind: [
+                paragraph(
+                  "This is the room token you give occ talk:bot:setup. Talk's own API calls it the conversation's token. If you can't see it in your Talk app, ask your Nextcloud admin.",
+                ),
+                linkBlock(
+                  "Nextcloud Talk: conversations",
+                  "https://nextcloud-talk.readthedocs.io/en/latest/conversation/",
+                ),
+              ],
+              looksLike: "a1b2c3d4",
+              commonMistakes: ["Using the conversation's name instead of its token."],
               canChangeLater: true,
             },
           ],
@@ -99,7 +174,39 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "Guided test sends one signed sandbox message to the selected room using the existing bot API. Auth and room membership are verified by that request; confirmation of receipt and signed inbound delivery remains explicit after activation.",
+              "The test signs one message with your bot secret and posts it into the room as the bot: check that \"GoatCitadel channel setup verification.\" arrived in the conversation. The test doesn't delete it. It can't check receiving, because it only sends.",
+            ),
+          ],
+          troubleshooting: [
+            troubleshoot(
+              "bot-rejected",
+              "It says Nextcloud Talk rejected the signed room send",
+              "Check these in order. The bot must be installed with both the webhook and response features: without response it can't post. It must be turned on for this conversation with occ talk:bot:setup (occ talk:bot:list followed by the room token lists the bots set up for it). The Room token must be the conversation's token, not its name. And the secret here must be the one the bot was installed with.",
+            ),
+            troubleshoot(
+              "secret-short",
+              "occ says the secret is too short",
+              "A bot secret must be 40 to 128 characters. Make a longer one, install the bot again with it, and paste the same secret here.",
+            ),
+            troubleshoot(
+              "host-not-allowed",
+              "It says GoatCitadel can't reach your Nextcloud server yet",
+              "GoatCitadel only reaches hosts you allow. Use Allow these hosts on this step to add your Nextcloud server, then run the test again.",
+            ),
+            troubleshoot(
+              "variable-not-found",
+              "It says the bot secret is missing, and you used an environment variable",
+              "A variable's name must start with NEXTCLOUD_TALK_ and end in _TOKEN or _SECRET (for example NEXTCLOUD_TALK_TOKEN), and you must restart GoatCitadel after you set it. Or paste the secret instead.",
+            ),
+            troubleshoot(
+              "send-uncertain",
+              "It says the send outcome is uncertain",
+              "Open the conversation and see whether the test message arrived before you run the test again. If it didn't, check that your Nextcloud server is up and that GoatCitadel can reach it.",
+            ),
+            troubleshoot(
+              "no-reply",
+              "You message the bot and nothing comes back",
+              "Check these in order. The bot must be installed with this connection's webhook address and the same secret, with the webhook feature, and turned on for the room again after any reinstall. Your Nextcloud server must be able to reach that address over HTTPS. Your user name must be listed as users/ followed by the name (for example users/alice) under Who may message this bot. And GoatCitadel must be running.",
             ),
           ],
         },
@@ -109,14 +216,10 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "After finalizing, send a sandbox message to the default room to confirm the bot can deliver before relying on this connection.",
+              "Finish saves the connection so GoatCitadel can send from it. To receive messages, install the bot again with this connection's webhook address and the same secret (the last step shows how).",
             ),
           ],
-          successCriteria: [
-            "The base URL points at the Nextcloud instance that hosts Talk.",
-            "A Talk token or an env-backed token reference is configured.",
-            "The default room id is the room GoatCitadel may use for fallback sends.",
-          ],
+          successCriteria: ["Nextcloud accepted the signed test message.", "The test message arrived in the room."],
         },
       ],
     },
@@ -221,19 +324,29 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
       );
       if (!baseUrl) {
         issues.push(requiredFieldIssue("baseUrl", "Base URL is required."));
-      } else if (!looksLikeHttpUrl(baseUrl)) {
-        issues.push(malformedFieldIssue("baseUrl", "Base URL should start with http:// or https://."));
+      } else {
+        // Plain http is refused the same way the live test refuses it. That rule lets "ftp://localhost" through, so the
+        // scheme is checked here too.
+        const insecure = requireSecureUrl(baseUrl, "baseUrl", "Base URL");
+        if (insecure) {
+          issues.push(insecure);
+        } else if (!looksLikeHttpUrl(baseUrl)) {
+          issues.push(malformedFieldIssue("baseUrl", "Base URL should start with https://."));
+        }
       }
       if (!hasConfiguredToken) {
         issues.push({
           key: "nextcloud_talk_auth_missing",
+          // The pasted field is where a person goes to fix this, not the expert variable name.
+          fieldKey: "token",
           level: "error",
-          message: "Provide either a Nextcloud Talk token or an env-backed token reference.",
+          message: "Paste the Nextcloud Talk bot secret.",
           failureCategory: "missing_input",
+          nextSteps: ["Use the secret you gave occ talk:bot:install."],
         });
       }
       if (!readString(draft.draft, "defaultRoomId")) {
-        issues.push(requiredFieldIssue("defaultRoomId", "Default room ID is required."));
+        issues.push(requiredFieldIssue("defaultRoomId", "Room token is required."));
       }
       return issues;
     },

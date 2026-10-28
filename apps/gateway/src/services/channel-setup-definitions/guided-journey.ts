@@ -140,14 +140,15 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Confirm the sandbox message arrives in WeCom. For inbound, save the connection webhook URL, Token and EncodingAESKey in the application's message-receiving settings, allow your WeCom userid, message the application, and confirm its reply; messages from users who are not allowed are dropped. Outbound is text-only.",
   },
   "nextcloud-talk": {
-    summary: "Connect a Nextcloud Talk bot with signed inbound events and outbound replies.",
+    summary:
+      "Send Nextcloud Talk messages through a Talk bot. Receiving needs an HTTPS address your Nextcloud server can reach.",
     prerequisites: [
-      "A reachable Nextcloud Talk instance with bot API support.",
-      "A registered bot, shared signing token and room membership.",
-      "A public HTTPS Gateway webhook endpoint for signed inbound messages.",
+      "Shell access to your Nextcloud server, to add a bot with occ.",
+      "A bot secret of 40 to 128 characters.",
+      "The room token of the conversation the bot should use.",
     ],
     firstMessage:
-      "Register the saved connection webhook URL with the same shared token, allow your Nextcloud actor ID, and send a room message. Confirm its reply; attachments and unsend are not supported.",
+      "Check the test message arrived. To receive: reinstall the bot with this connection's webhook address and the same secret, turn it on for the room again, allow users/<your user name>, and send a message.",
   },
   line: {
     summary:
