@@ -121,7 +121,8 @@ describe("LINE setup guide: what it says up front (items 4 and 6)", () => {
     );
     expect(wizard.prerequisites).toEqual([
       "A LINE Official Account with the Messaging API on, and its long-lived channel access token.",
-      "Your LINE user ID (Developers Console › your channel › Basic settings) with the Official Account added as a friend.",
+      // Ruling R46: the audit's "with the Official Account added as a friend" is unverified, so it is not shipped.
+      "Your LINE user ID (Developers Console › your channel › Basic settings).",
       "To receive: a public HTTPS address and the channel secret.",
     ]);
     expect(paragraphs("first-message")).toEqual([
@@ -214,8 +215,9 @@ describe("LINE setup guide: the default target (item 1)", () => {
     expect(text).toContain("https://developers.line.biz/en/docs/messaging-api/getting-user-ids/");
   });
 
-  it("does not claim the friend requirement in the help: LINE's docs do not state it for push messages", () => {
+  it("does not claim the friend requirement anywhere in the guide: LINE's docs do not state it for push messages (R46)", () => {
     expect(textOf(field("defaultTarget").whereToFind)).not.toMatch(/friend|QR/iu);
+    expect(JSON.stringify(guide().definition.wizard)).not.toMatch(/friend|QR code/iu);
   });
 
   it("is asked with the destinations, and still required", () => {

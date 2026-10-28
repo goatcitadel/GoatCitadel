@@ -156,7 +156,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Send LINE messages from your LINE Official Account. Receiving needs a public HTTPS address. Every message is a push message, which counts toward your plan's monthly limit.",
     prerequisites: [
       "A LINE Official Account with the Messaging API on, and its long-lived channel access token.",
-      "Your LINE user ID (Developers Console › your channel › Basic settings) with the Official Account added as a friend.",
+      "Your LINE user ID (Developers Console › your channel › Basic settings).",
       "To receive: a public HTTPS address and the channel secret.",
     ],
     firstMessage:
