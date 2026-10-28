@@ -357,7 +357,9 @@ describe("shared API wrapper tail coverage", () => {
         body: JSON.stringify({ targetPath: "out.md", citadelId: "company", workspaceId: "engineering" }),
       },
     );
-    await expectCall(operatorsAgentsFiles.uploadFile("out.md", "body"), "/api/v1/files/upload", { method: "POST" });
+    await expectCall(operatorsAgentsFiles.uploadFile("out.md", "body"), "/api/v1/files/upload?relativePath=out.md", {
+      method: "POST",
+    });
     await expectCall(operatorsAgentsFiles.downloadFile("out.md"), "/api/v1/files/download?relativePath=out.md");
     await expectCall(
       operatorsAgentsFiles.downloadFile("out.md", { citadelId: "company", workspaceId: "engineering" }),
