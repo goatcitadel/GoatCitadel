@@ -517,7 +517,8 @@ Each task follows its spec entry: the failing test it names first, then the mini
 What changed from the table:
 - **C4:** skipped. The N2 default applies, and the WhatsApp copy shipped in PR 3. **C8:** moot (N1). Zalo's token refresh was left out (operator, 2026-10-28).
 - **Added while the PR ran:** C6b and C6c (security: a send reads a channel's variable only through the name rule, and a saved key is read only for the connection or draft that owns it), C11 (an edit keeps its saved key), D1 (small setup-path fixes left from PR 3), D2 (a retired channel never looks usable) and D3 (docs, labels and guide versions).
-- **D3:** every guide's `wizard.contentVersion` now ends in `.guided-2026-10-28`, set by one constant in `guided-journey.ts`. The `delivery_posture` diagnostic check keeps its key and shows as "Sending and receiving".
+- **C3:** the create-draft line reads `This address works once you finish and the connection is on.`, because the address answers only then.
+- **D3:** every guide's `wizard.contentVersion` now ends in `.guided-2026-10-28`, set by one constant in `guided-journey.ts`. The `delivery_posture` diagnostic check keeps its key and shows as "how sending and receiving work", since it is a fixed note, not a tested result.
 
 Rulings:
 - R63: PR 4 is C2, C3, C5/C6, C6b, C6c, C7, C9, C11, D1, D2 and D3.
