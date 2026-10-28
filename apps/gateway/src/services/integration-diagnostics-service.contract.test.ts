@@ -573,6 +573,53 @@ describe("integration-diagnostics-service contract behavior", () => {
     expect(withSpace.find((check) => check.key === "target")).toMatchObject({ status: "pass" });
   });
 
+  describe("a Slack connection saved with the legacy token fields", () => {
+    const checksFor = (config: Record<string, unknown>) =>
+      buildIntegrationConnectionChecks(createPort(), createIntegrationConnection("slack", "channel", config));
+
+    it("is a bot connection, so it is asked for a default channel as one saved with botToken is", () => {
+      vi.stubEnv("SLACK_BOT_TOKEN", "synthetic-slack-token");
+      const saved = [{ botToken: "xoxb-synthetic" }, { token: "xoxb-synthetic" }, { tokenEnv: "SLACK_BOT_TOKEN" }];
+
+      for (const config of saved) {
+        const checks = checksFor(config);
+        expect(
+          checks.find((check) => check.key === "auth"),
+          JSON.stringify(Object.keys(config)),
+        ).toMatchObject({
+          status: "pass",
+        });
+        expect(
+          checks.find((check) => check.key === "target"),
+          JSON.stringify(Object.keys(config)),
+        ).toMatchObject({
+          status: "warn",
+          message: "Default Slack channel is missing.",
+        });
+        expect(JSON.stringify(checks)).not.toContain("synthetic-slack-token");
+        expect(JSON.stringify(checks)).not.toContain("xoxb-synthetic");
+      }
+      expect(
+        checksFor({ token: "xoxb-synthetic", defaultChannel: "#ops" }).find((c) => c.key === "target"),
+      ).toMatchObject({ status: "pass" });
+    });
+
+    it("does not count a legacy variable the credential guard refuses", () => {
+      vi.stubEnv("MY_TOKEN", "synthetic-slack-token");
+
+      expect(checksFor({ tokenEnv: "MY_TOKEN" }).find((check) => check.key === "auth")).toMatchObject({
+        status: "fail",
+      });
+      expect(checksFor({ tokenEnv: "MY_TOKEN" }).map((check) => check.key)).not.toContain("target");
+    });
+
+    it("still asks a webhook-only connection for no default channel", () => {
+      expect(
+        checksFor({ webhookUrl: "https://hooks.slack.com/services/T0/B0/x" }).map((check) => check.key),
+      ).not.toContain("target");
+    });
+  });
+
   it("requires local bridge posture for local-app productivity entries", () => {
     const host = createPort();
     const connection = createIntegrationConnection("apple-notes", "productivity", {

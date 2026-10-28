@@ -230,8 +230,12 @@ export function buildIntegrationConnectionChecks(
     }
     switch (connection.key) {
       case "slack": {
+        // The legacy `token` / `tokenEnv` pair is a bot token too: Slack's sends read it after `botToken`.
         const slackBotToken = Boolean(
-          deps.readConnectionConfigValue(config, "botToken") || hasConnectionEnvValue(deps, connection, "botTokenEnv"),
+          deps.readConnectionConfigValue(config, "botToken") ||
+          hasConnectionEnvValue(deps, connection, "botTokenEnv") ||
+          deps.readConnectionConfigValue(config, "token") ||
+          hasConnectionEnvValue(deps, connection, "tokenEnv"),
         );
         const slackAuthSet = slackBotToken || Boolean(deps.readConnectionConfigValue(config, "webhookUrl"));
         checks.push({
