@@ -497,7 +497,9 @@ describe("Nextcloud Talk setup guide: receiving (items 4 and 6, A7, A8)", () => 
     expect(fieldKeys("sender-access")).toContain("allowedSenders");
     const senders = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
-    expect(senders?.explanation).toBe("users/ followed by your Nextcloud user name, for example users/alice.");
+    expect(senders?.explanation).toBe(
+      'users/ followed by your Nextcloud user name, for example users/alice. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+    );
   });
 
   it("matches the id Talk sends, users/alice, and not a bare name", () => {

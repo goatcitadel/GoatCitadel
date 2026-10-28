@@ -222,11 +222,11 @@ describe("Google Chat setup guide: one mode field (item 4)", () => {
     expect(hidden).toEqual(["google-chat"]);
   });
 
-  it("keeps the sender help it already had", () => {
+  it("keeps the sender help it already had and says where to find a user's id", () => {
     const allowed = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(allowed?.explanation).toBe(
-      "Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied.",
+      'Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
     );
   });
 });

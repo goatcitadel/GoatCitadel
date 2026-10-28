@@ -225,7 +225,7 @@ describe("WhatsApp setup guide: who may message the bot (item 4, A7, A8)", () =>
     const allowed = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(allowed?.explanation).toBe(
-      "Your WhatsApp number with country code, digits only, no plus (for example 15551234567).",
+      'Your WhatsApp number with country code, digits only, no plus (for example 15551234567). Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
     );
   });
 

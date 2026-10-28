@@ -240,7 +240,7 @@ describe("LINE setup guide: receiving is its own optional step (items 3 and 5, A
     const open = guide().hydrate(connectionOf({ ...SEND_ONLY_VALUES, inboundAccessMode: "open_legacy" })).draft;
 
     expect(allowed?.explanation).toBe(
-      "Your LINE user ID (starts with U). For a one-to-one chat it is the same ID as Default target.",
+      'Your LINE user ID (starts with U). For a one-to-one chat it is the same ID as Default target. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
     );
     expect(mode?.visibleWhenFieldEquals).toEqual({ fieldKey: "inboundAccessWasOpen", value: true });
     expect(open.inboundAccessWasOpen).toBe(true);

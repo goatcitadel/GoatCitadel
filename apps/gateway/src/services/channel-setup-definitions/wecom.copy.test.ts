@@ -5,6 +5,7 @@ import {
   type ChannelSetupRichBlock,
   type ChannelSetupStepDefinition,
 } from "@goatcitadel/contracts";
+import { describeDroppedSender } from "../channel-inbound-dispatch.js";
 import { isAllowedSecretEnvName } from "../channel-secret-resolution.js";
 import { requireChannelSetupDefinition } from "../channel-setup-definitions.js";
 import {
@@ -421,11 +422,11 @@ describe("WeCom setup guide: the sender step (A7, A8)", () => {
     expect(step("sender-access").visibleWhenFieldEquals).toBeUndefined();
   });
 
-  it("keeps the sender help for WeCom userids", () => {
+  it("keeps the sender help for WeCom userids and says where to find one", () => {
     const senders = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(senders?.explanation).toBe(
-      "Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied.",
+      'Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
     );
   });
 });
@@ -763,11 +764,13 @@ describe("WeCom receiving path: can it finish?", () => {
     expect(evaluateChannelInboundAccess({ config, actorId: "lisi" })).toMatchObject({ allowed: false });
   });
 
-  it("tells the person where their userid is, so allowing themselves needs no later fix (unlike QQ)", () => {
-    // WeCom shows a member's userid (the Account) to an administrator under Contacts.
+  it("tells the person where their userid is, so allowing themselves needs no later fix", () => {
+    // WeCom shows a member's userid (the Account) to an administrator under Contacts. Someone who can't see
+    // Contacts can read it from the dropped message's diagnostic (A6, C9), as for QQ.
     expect(textOf(field("defaultTarget").whereToFind)).toContain("Contacts");
     expect(paragraphs("first-message")[0]).toContain("Allow your WeCom userid");
-    expect(wizardText()).not.toMatch(/Diagnostics/u);
+    expect(wizardText()).toContain('find "Dropped a … message from …"');
+    expect(describeDroppedSender("wecom", "zhangsan")).toMatch(/^Dropped a WeCom message from zhangsan: /u);
   });
 
   it("does not make an edit replay the setup-only steps, but still shows the receiving step", () => {

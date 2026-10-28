@@ -301,7 +301,9 @@ describe("Slack setup guide: who may message the bot (item 6, A7, A8)", () => {
   it("says what a Slack sender identity looks like", () => {
     const allowed = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
-    expect(allowed?.explanation).toBe("Your Slack member ID (starts with U).");
+    expect(allowed?.explanation).toBe(
+      'Your Slack member ID (starts with U). Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+    );
   });
 
   it("offers the open-access choice only for a connection that was saved open", () => {

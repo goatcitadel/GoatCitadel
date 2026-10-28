@@ -365,7 +365,7 @@ describe("ntfy setup guide: receiving and dry run (items 3, 5, 6, A7, A8)", () =
     const senders = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(senders?.explanation).toBe(
-      "Added for you as ntfy-topic:<subscribe topic>. If you change the topic later, change this too.",
+      'Added for you as ntfy-topic:<subscribe topic>. If you change the topic later, change this too. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
     );
   });
 

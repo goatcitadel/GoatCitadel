@@ -366,7 +366,7 @@ describe("Mattermost setup guide: receiving (items 4 and 6, A7, A8)", () => {
 
   it("says a sender is a user ID, not a username, and where an admin finds it", () => {
     expect(field("allowedSenders").explanation).toBe(
-      "Mattermost user IDs (26 letters and digits), not usernames. An admin sees them in System Console › User Management › Users.",
+      'Mattermost user IDs (26 letters and digits), not usernames. An admin sees them in System Console › User Management › Users. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
     );
   });
 

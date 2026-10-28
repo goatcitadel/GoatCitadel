@@ -330,9 +330,9 @@ describe("Matrix setup guide: receiving (items 5 and 6, A7, A8)", () => {
     expect(fieldKeys("sender-access")).toEqual(["allowedSenders"]);
   });
 
-  it("says the Matrix ID format a sender must be written in", () => {
+  it("says the Matrix ID format a sender must be written in, and where to find it", () => {
     expect(field("allowedSenders").explanation).toBe(
-      "Your Matrix ID with the @ and the server, for example @alice:example.com.",
+      'Your Matrix ID with the @ and the server, for example @alice:example.com. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
     );
   });
 

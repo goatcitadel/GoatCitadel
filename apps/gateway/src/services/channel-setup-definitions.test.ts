@@ -15,6 +15,7 @@ import {
   secretEnvVariableRule,
   secretNameForVariable,
 } from "./channel-setup-definitions/common.js";
+import { describeDroppedSender } from "./channel-inbound-dispatch.js";
 import { withGuidedJourney } from "./channel-setup-definitions/guided-journey.js";
 import { createLineDefinition } from "./channel-setup-definitions/line.js";
 import { isAllowedSecretEnvName } from "./channel-secret-resolution.js";
@@ -1985,30 +1986,78 @@ describe("the shared guide builder", () => {
   });
 
   describe("the sender step (A7, A8)", () => {
+    // The gateway names a dropped message's sender in System › Diagnostics (describeDroppedSender), so these guides
+    // say where to find an id they don't show anywhere else.
+    const FIND_SENDER_ID =
+      'Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".';
+    const DIAGNOSTICS_ON_DOCKER =
+      "You can add an id any time with Edit setup. On a Docker install, System › Diagnostics stays empty until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.";
+    const SENDER_ID_IN_DIAGNOSTICS = [
+      "slack",
+      "whatsapp",
+      "line",
+      "nextcloud-talk",
+      "ntfy",
+      "mattermost",
+      "matrix",
+      "google-chat",
+      "qqbot",
+      "wecom",
+    ];
+
     it("explains in each channel's own words what a sender identity looks like", () => {
       const explanations: Record<string, string> = {
-        whatsapp: "Your WhatsApp number with country code, digits only, no plus (for example 15551234567).",
-        matrix: "Your Matrix ID with the @ and the server, for example @alice:example.com.",
-        mattermost:
-          "Mattermost user IDs (26 letters and digits), not usernames. An admin sees them in System Console › User Management › Users.",
-        "nextcloud-talk": "users/ followed by your Nextcloud user name, for example users/alice.",
-        line: "Your LINE user ID (starts with U). For a one-to-one chat it is the same ID as Default target.",
-        slack: "Your Slack member ID (starts with U).",
-        ntfy: "Added for you as ntfy-topic:<subscribe topic>. If you change the topic later, change this too.",
-        // These keep their current text until the "dropped message" sentence can be backed by a screen.
+        whatsapp: `Your WhatsApp number with country code, digits only, no plus (for example 15551234567). ${FIND_SENDER_ID}`,
+        matrix: `Your Matrix ID with the @ and the server, for example @alice:example.com. ${FIND_SENDER_ID}`,
+        mattermost: `Mattermost user IDs (26 letters and digits), not usernames. An admin sees them in System Console › User Management › Users. ${FIND_SENDER_ID}`,
+        "nextcloud-talk": `users/ followed by your Nextcloud user name, for example users/alice. ${FIND_SENDER_ID}`,
+        line: `Your LINE user ID (starts with U). For a one-to-one chat it is the same ID as Default target. ${FIND_SENDER_ID}`,
+        slack: `Your Slack member ID (starts with U). ${FIND_SENDER_ID}`,
+        ntfy: `Added for you as ntfy-topic:<subscribe topic>. If you change the topic later, change this too. ${FIND_SENDER_ID}`,
+        // Telegram pairs people instead of dropping them by sender, so it has no such line.
         telegram:
           "Telegram pairing approval adds the approved user here. A destination chat ID is not permission to message the bot.",
-        "google-chat":
-          "Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied.",
-        qqbot:
-          "Add the QQ openids (the ids QQ assigns to senders, not QQ numbers) that may start conversations. Inbound is default-deny; empty means every inbound sender is denied.",
-        wecom:
-          "Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied.",
+        "google-chat": `Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied. ${FIND_SENDER_ID}`,
+        qqbot: `Add the QQ openids (the ids QQ assigns to senders, not QQ numbers) that may start conversations. Inbound is default-deny; empty means every inbound sender is denied. ${FIND_SENDER_ID}`,
+        wecom: `Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied. ${FIND_SENDER_ID}`,
       };
 
       for (const [key, text] of Object.entries(explanations)) {
         const field = senderStep(key)?.fields?.find((item) => item.key === "allowedSenders");
         expect(field?.explanation, key).toBe(text);
+      }
+    });
+
+    it("tells every channel that drops messages by sender where to find an id, and no other", () => {
+      for (const key of SENDER_ID_IN_DIAGNOSTICS) {
+        const field = senderStep(key)?.fields?.find((item) => item.key === "allowedSenders");
+        expect(field?.explanation, key).toContain(FIND_SENDER_ID);
+      }
+      for (const key of ["telegram", "discord", "teams", "zalo"]) {
+        expect(JSON.stringify(guide(key)), key).not.toContain("System › Diagnostics");
+      }
+    });
+
+    it("says once, on the sender step, that a Docker install needs diagnostics switched on first", () => {
+      for (const key of SENDER_ID_IN_DIAGNOSTICS) {
+        const paragraphs = (senderStep(key)?.body ?? []).flatMap((block) =>
+          block.kind === "paragraph" ? [block.text] : [],
+        );
+        expect(paragraphs, key).toContain(DIAGNOSTICS_ON_DOCKER);
+        expect(paragraphs.join("\n").match(/GOATCITADEL_DEV_DIAGNOSTICS_ENABLED/gu), key).toHaveLength(1);
+      }
+      expect(
+        senderStep("telegram")
+          ?.body?.map((block) => JSON.stringify(block))
+          .join("\n"),
+      ).not.toContain("GOATCITADEL_DEV_DIAGNOSTICS_ENABLED");
+    });
+
+    it("quotes the diagnostic the way the gateway words it", () => {
+      for (const key of SENDER_ID_IN_DIAGNOSTICS) {
+        // The guide's line has the sentence's start and its "from"; the real message has both.
+        const message = describeDroppedSender(key, "THE-ID");
+        expect(message, key).toMatch(/^Dropped a .+ message from THE-ID: /u);
       }
     });
 

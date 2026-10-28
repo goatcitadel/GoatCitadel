@@ -131,7 +131,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     ],
     // QQ's approval for group and direct-message events (audit line) is on no QQ page, so it is not claimed here.
     firstMessage:
-      "In the QQ Bot console set the callback URL to this connection's webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. Message the bot once; it won't answer yet. Add your openid (see Who may message this bot) with Edit setup, then message again. GoatCitadel can't show your openid yet, so you need to know it already.",
+      "In the QQ Bot console set the callback URL to this connection's webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. If you already added your openid under Who may message this bot, message the bot and check the reply. If not, message the bot once; it won't answer. Open System › Diagnostics, find \"Dropped a QQBot message from …\" and copy the openid. Add it under Who may message this bot with Edit setup, then message again. On a Docker install, System › Diagnostics stays empty until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.",
   },
   wecom: {
     // WeCom's callback page allows http or https and recommends https (developer.work.weixin.qq.com/document/path/90238),
@@ -498,6 +498,33 @@ const SENDER_EXPLANATIONS: Readonly<Record<string, string>> = {
 };
 const GENERIC_SENDER_EXPLANATION = "Add trusted platform actor IDs. Empty means every inbound sender is denied.";
 
+/**
+ * Channels whose inbound messages all pass the shared sender gate (channel-inbound-dispatch.ts), which names a dropped
+ * message's sender in its System › Diagnostics message. Telegram pairs people instead, so it has no such line.
+ */
+const SENDER_ID_IN_DIAGNOSTICS: ReadonlySet<string> = new Set([
+  "slack",
+  "whatsapp",
+  "line",
+  "nextcloud-talk",
+  "ntfy",
+  "mattermost",
+  "matrix",
+  "google-chat",
+  "qqbot",
+  "wecom",
+]);
+const FIND_SENDER_ID_LINE =
+  'Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".';
+/** Diagnostics are off in production mode, which a Docker install runs in; the native desktop hosts don't. */
+const DIAGNOSTICS_ON_DOCKER_NOTE =
+  "You can add an id any time with Edit setup. On a Docker install, System › Diagnostics stays empty until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.";
+
+function senderExplanation(key: string): string {
+  const explanation = SENDER_EXPLANATIONS[key] ?? GENERIC_SENDER_EXPLANATION;
+  return SENDER_ID_IN_DIAGNOSTICS.has(key) ? `${explanation} ${FIND_SENDER_ID_LINE}` : explanation;
+}
+
 /** Receiving here is a switch the operator turns on, so the sender step has nothing to say while it is off. */
 const SENDER_STEP_SHOWN_WHEN: Readonly<Record<string, { fieldKey: string; value: string | boolean }>> = {
   ntfy: { fieldKey: "inboundStreamEnabled", value: true },
@@ -515,7 +542,7 @@ function senderAccessStep(key: string): ChannelSetupStepDefinition {
     label: "Allowed sender identities",
     type: "sender-list",
     required: false,
-    explanation: SENDER_EXPLANATIONS[key] ?? GENERIC_SENDER_EXPLANATION,
+    explanation: senderExplanation(key),
     // A forced-allowlist channel has no mode to compare against, so its sender list is always shown.
     ...(forcedAllowlist ? {} : { visibleWhenFieldEquals: { fieldKey: "inboundAccessMode", value: "allowlist" } }),
   };
@@ -547,6 +574,7 @@ function senderAccessStep(key: string): ChannelSetupStepDefinition {
         kind: "paragraph",
         text: "Sender identities control who can start a conversation. Destination selection only chooses where messages are delivered. An empty sender list blocks all inbound conversations.",
       },
+      ...(SENDER_ID_IN_DIAGNOSTICS.has(key) ? [{ kind: "paragraph" as const, text: DIAGNOSTICS_ON_DOCKER_NOTE }] : []),
     ],
     fields: forcedAllowlist ? [allowedSenders] : [accessMode, allowedSenders],
   };
