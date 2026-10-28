@@ -106,7 +106,9 @@ export function findMissingFieldLabels(
   for (const group of step.requiredAnyOf ?? []) {
     if (!group.some((key) => hasFieldValue(draft, effectiveValues, key))) {
       const allFields = definition.wizard.steps.flatMap((item) => item.fields ?? []);
-      missing.push(group.map((key) => allFields.find((field) => field.key === key)?.label ?? key).join(" or "));
+      // A key with no field is one the operator cannot see or fill in, so the message does not name it.
+      const labels = new Set(group.flatMap((key) => allFields.find((field) => field.key === key)?.label ?? []));
+      if (labels.size) missing.push([...labels].join(" or "));
     }
   }
   for (const field of fields) {

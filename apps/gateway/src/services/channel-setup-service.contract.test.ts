@@ -743,6 +743,27 @@ describe("channel-setup-service contract behavior", () => {
     });
   });
 
+  it.each([
+    ["pass", "Check that the test message arrived, then finalize."],
+    ["fail", "Review the failing checks, correct the draft, then run the test again."],
+  ] as const)("words the next step after a live test whose sandbox send is a %s", async (status, nextAction) => {
+    const host = createHost();
+    host.buildIntegrationConnectionChecks = vi.fn(() => []);
+    host.runIntegrationConnectionLiveChecks = vi.fn(async () => ({
+      checks: [{ key: "ntfy_sandbox_send", status, message: "Sandbox notification result." }],
+    }));
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.ntfy", lifecycleMode: "create" });
+    const configured = await host.storage.channelSetupDrafts.update(created.draftId, {
+      expectedRevision: created.revision,
+      draft: { baseUrl: "https://ntfy.sh", topic: "goatcitadel-preqa", dryRun: true },
+    });
+
+    const result = await testChannelSetupDraft(host, configured.draftId, configured.revision);
+
+    expect(result.status).toBe(status === "pass" ? "ok" : "error");
+    expect(result.recommendedNextAction).toBe(nextAction);
+  });
+
   it("protects server-adopted OAuth metadata on the actual public update path", async () => {
     const host = createHost();
     const created = await createChannelSetupDraft(host, { catalogId: "channel.slack" });

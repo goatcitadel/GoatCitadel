@@ -15,7 +15,6 @@ import { useChannelWizard } from "./use-channel-wizard";
 import {
   channelHosts,
   isStepComplete,
-  humanizeStepKind,
   channelStageLabel,
   wizardValuesWithDefaults,
   finalizeDisabledReason,
@@ -216,7 +215,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
                       </span>
                       <span>
                         <strong>{step.title}</strong>
-                        <small>{complete ? "Complete" : active ? "Current step" : humanizeStepKind(step.kind)}</small>
+                        <small>{complete ? "Complete" : active ? "Current step" : channelStageLabel(step)}</small>
                       </span>
                     </button>
                   </li>
@@ -313,7 +312,6 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
                   <NativeButton
                     variant="default"
                     disabled={actionsBlocked || Boolean(finalizeDisabledReason(dirty, feedback))}
-                    title={finalizeDisabledReason(dirty, feedback)}
                     onClick={() => void handleFinalize()}
                   >
                     <CheckCircle2 size={16} />
@@ -327,6 +325,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
                 ) : null}
               </SettingsButtonRow>
             </footer>
+            {activeStep.kind === "confirm" ? <FinalizeReason dirty={dirty} feedback={feedback} /> : null}
           </article>
         </div>
       )}
@@ -438,15 +437,21 @@ function AdvancedJsonEditor({
         <NativeButton
           variant="default"
           disabled={disabled || reviewRequired || mutationBlocked || Boolean(finalizeDisabledReason(dirty, feedback))}
-          title={finalizeDisabledReason(dirty, feedback)}
           onClick={onFinalize}
         >
           <CheckCircle2 size={16} />
           {busyAction === "finalize" ? "Finalizing…" : "Finalize connection"}
         </NativeButton>
       </SettingsButtonRow>
+      <FinalizeReason dirty={dirty} feedback={feedback} />
     </article>
   );
+}
+
+/** Plain text beside the button, not a tooltip: a disabled button shows no tooltip to keyboard or touch users. */
+function FinalizeReason({ dirty, feedback }: { dirty: boolean; feedback?: ChannelSetupWizardFeedback | null }) {
+  const reason = finalizeDisabledReason(dirty, feedback);
+  return reason ? <p className="mc-next-settings-field-note">{reason}</p> : null;
 }
 
 function Checklist({
