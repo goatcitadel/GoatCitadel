@@ -146,13 +146,13 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
               whyNeeded: "GoatCitadel signs what it sends to Talk with it, and checks what Talk sends back with it.",
               whereToFind: [
                 paragraph(
-                  "It is the secret occ talk:bot:create printed, or the one you gave it with --secret. If you no longer have it, uninstall the bot with occ talk:bot:uninstall and set it up again:",
+                  "It is the secret occ talk:bot:create printed, or the one you gave it with --secret. If you no longer have it, find the bot's ID with occ talk:bot:list, uninstall the bot with occ talk:bot:uninstall and that ID, and set it up again:",
                 ),
                 {
                   kind: "list",
                   items: [
-                    "To send only: create it again with occ talk:bot:create, then turn it on for the conversation with occ talk:bot:setup.",
-                    "To receive: install it again with occ talk:bot:install, this connection's webhook address and the features webhook and response, then turn it on for the conversation with occ talk:bot:setup.",
+                    "To send only: create it again with occ talk:bot:create, then find its ID with occ talk:bot:list (a bot you create again can have a new ID) and turn it on for the conversation with occ talk:bot:setup.",
+                    "To receive: install it again with occ talk:bot:install, this connection's webhook address and the features webhook and response, then find its ID with occ talk:bot:list (a reinstalled bot can have a new ID) and turn it on for the conversation with occ talk:bot:setup.",
                   ],
                 },
               ],
@@ -187,10 +187,10 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
                 {
                   kind: "code",
                   language: "shell",
-                  code: 'curl -u <user>:<password> -H "OCS-APIRequest: true" -H "Accept: application/json" "<Base URL>/ocs/v2.php/apps/spreed/api/v4/room"',
+                  code: 'curl -u <user> -H "OCS-APIRequest: true" -H "Accept: application/json" "<Base URL>/ocs/v2.php/apps/spreed/api/v4/room"',
                 },
                 paragraph(
-                  "Use your Nextcloud user name and password. If you use two-factor authentication, use a device-specific password instead (Personal settings › Security).",
+                  "Use your Nextcloud user name. curl asks for the password, so it isn't typed on the command line. Use a device-specific password, not your login password: create one under Personal settings › Security.",
                 ),
                 linkBlock(
                   "Nextcloud Talk: conversations",
@@ -249,7 +249,7 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
             troubleshoot(
               "no-reply",
               "You message the bot and nothing comes back",
-              "Check these in order. A bot made with occ talk:bot:create hears nothing: it has the response feature only. The bot must be installed with this connection's webhook address and the same secret, with the webhook feature, and turned on for the room again after any reinstall. Your Nextcloud server must be able to reach that address over HTTPS. Your user name must be listed as users/ followed by the name (for example users/alice) under Who may message this bot. And GoatCitadel must be running.",
+              "Check these in order. A bot made with occ talk:bot:create hears nothing: it has the response feature only. The bot must be installed with this connection's webhook address and the same secret, with the webhook feature, and turned on for the room again after any reinstall: find its ID with occ talk:bot:list, because a reinstalled bot can have a new ID, and use it with occ talk:bot:setup. Your Nextcloud server must be able to reach that address over HTTPS. Your user name must be listed as users/ followed by the name (for example users/alice) under Who may message this bot. And GoatCitadel must be running.",
             ),
           ],
         },

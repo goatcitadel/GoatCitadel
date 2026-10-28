@@ -277,6 +277,20 @@ describe("Nextcloud Talk setup guide: adding the bot (items 1 and 2)", () => {
     }
   });
 
+  it("never shows a password typed on a command line: curl asks for it, and the default is a device-specific password (R55)", () => {
+    const commands = [...(field("defaultRoomId").whereToFind ?? []), ...(step("install-bot").body ?? [])].flatMap(
+      (block) => (block.kind === "code" ? block.code.split("\n") : []),
+    );
+    const curl = commands.filter((line) => /\bcurl\b/u.test(line));
+
+    expect(curl).toEqual([
+      'curl -u <user> -H "OCS-APIRequest: true" -H "Accept: application/json" "<Base URL>/ocs/v2.php/apps/spreed/api/v4/room"',
+    ]);
+    // No "-u user:password" in any form, in any string the guide shows.
+    expect(wizardText()).not.toMatch(/<user>:<password>|-u\s+\S+:\S+/u);
+    expect(wizardText()).not.toMatch(/user name and password/iu);
+  });
+
   it("points a missing secret at the command that makes one for a send-only setup, not at the one that takes an address (R53)", () => {
     expect(issueText()).toContain("Paste the Nextcloud Talk bot secret.");
     expect(issueText()).toContain("Use the secret occ talk:bot:create printed, or the one you gave it with --secret.");
@@ -399,13 +413,13 @@ describe("Nextcloud Talk setup guide: the bot secret and the room token (items 3
 
     expect(where).toContainEqual({
       kind: "paragraph",
-      text: "It is the secret occ talk:bot:create printed, or the one you gave it with --secret. If you no longer have it, uninstall the bot with occ talk:bot:uninstall and set it up again:",
+      text: "It is the secret occ talk:bot:create printed, or the one you gave it with --secret. If you no longer have it, find the bot's ID with occ talk:bot:list, uninstall the bot with occ talk:bot:uninstall and that ID, and set it up again:",
     });
     expect(where).toContainEqual({
       kind: "list",
       items: [
-        "To send only: create it again with occ talk:bot:create, then turn it on for the conversation with occ talk:bot:setup.",
-        "To receive: install it again with occ talk:bot:install, this connection's webhook address and the features webhook and response, then turn it on for the conversation with occ talk:bot:setup.",
+        "To send only: create it again with occ talk:bot:create, then find its ID with occ talk:bot:list (a bot you create again can have a new ID) and turn it on for the conversation with occ talk:bot:setup.",
+        "To receive: install it again with occ talk:bot:install, this connection's webhook address and the features webhook and response, then find its ID with occ talk:bot:list (a reinstalled bot can have a new ID) and turn it on for the conversation with occ talk:bot:setup.",
       ],
     });
     expect(field("token").commonMistakes).toEqual([
@@ -428,11 +442,11 @@ describe("Nextcloud Talk setup guide: the bot secret and the room token (items 3
     expect(room.whereToFind).toContainEqual({
       kind: "code",
       language: "shell",
-      code: 'curl -u <user>:<password> -H "OCS-APIRequest: true" -H "Accept: application/json" "<Base URL>/ocs/v2.php/apps/spreed/api/v4/room"',
+      code: 'curl -u <user> -H "OCS-APIRequest: true" -H "Accept: application/json" "<Base URL>/ocs/v2.php/apps/spreed/api/v4/room"',
     });
     expect(room.whereToFind).toContainEqual({
       kind: "paragraph",
-      text: "Use your Nextcloud user name and password. If you use two-factor authentication, use a device-specific password instead (Personal settings › Security).",
+      text: "Use your Nextcloud user name. curl asks for the password, so it isn't typed on the command line. Use a device-specific password, not your login password: create one under Personal settings › Security.",
     });
     // The person has shell access to the server, so telling them to ask an admin would send them in a circle.
     expect(textOf(room.whereToFind)).not.toMatch(/admin|signed in as yourself/iu);
@@ -576,7 +590,9 @@ describe("Nextcloud Talk setup guide: when the test fails (A13)", () => {
 
     expect(noReply).toContain("A bot made with occ talk:bot:create hears nothing: it has the response feature only.");
     expect(noReply).toContain("installed with this connection's webhook address and the same secret");
-    expect(noReply).toContain("turned on for the room again after any reinstall");
+    expect(noReply).toContain(
+      "turned on for the room again after any reinstall: find its ID with occ talk:bot:list, because a reinstalled bot can have a new ID, and use it with occ talk:bot:setup.",
+    );
     expect(noReply).toContain("over HTTPS");
     expect(noReply).toContain("users/alice");
     expect(noReply).toContain("Who may message this bot");
