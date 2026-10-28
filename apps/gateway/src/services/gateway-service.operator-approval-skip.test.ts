@@ -240,10 +240,10 @@ describe("GatewayService tool group switches", () => {
 
   // The approval is the operator's last word on a switch they flipped themselves, so approving applies it (#496).
   it("switches on once the operator approves it in Inbox", async () => {
-    await saveGroupSwitch({ groupId: "subagents", enabled: false });
+    await saveGroupSwitch({ groupId: "email_and_calendar", enabled: false });
     await setApprovalSkip(false);
     try {
-      const waiting = await saveGroupSwitch({ groupId: "subagents", enabled: true });
+      const waiting = await saveGroupSwitch({ groupId: "email_and_calendar", enabled: true });
       expect(waiting.status).toBe("awaiting_approval");
       const approvalId = waiting.requiredAction?.kind === "approval" ? waiting.requiredAction.approvalId : undefined;
       expect(approvalId).toBeTruthy();
@@ -257,8 +257,8 @@ describe("GatewayService tool group switches", () => {
         },
         { timeout: 8_000, interval: 100 },
       );
-      expect(await switchedOffGroups()).not.toContain("subagents");
-      expect(await reasonCodesFor("agent.fanout")).not.toContain("tool_group_off");
+      expect(await switchedOffGroups()).not.toContain("email_and_calendar");
+      expect(await reasonCodesFor("calendar.list")).not.toContain("tool_group_off");
     } finally {
       await setApprovalSkip(true);
     }
