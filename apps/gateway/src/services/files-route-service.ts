@@ -175,7 +175,12 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
       }
       throw error;
     });
-    if ((await commitStagedUpload(staged.stagingPath, fullPath, options)) === "exists") {
+    const committed = await commitStagedUpload(staged.stagingPath, fullPath, {
+      ...(options.expectAbsent ? { expectAbsent: true } : {}),
+      // Re-checked at the move: the folder may have changed while the body streamed in.
+      assertTarget: () => assertWritePathInJail(fullPath, deps.writeJailRoots),
+    });
+    if (committed === "exists") {
       throw uploadTargetExists(normalized);
     }
     return publishUpload(normalized, fullPath, staged.bytes);

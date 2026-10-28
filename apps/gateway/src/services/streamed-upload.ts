@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants, createWriteStream } from "node:fs";
+import { constants as fsConstants, createReadStream, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -108,14 +108,19 @@ export async function receiveUpload(body: Readable, options: ReceiveUploadOption
 /**
  * Moves a staged upload to its target and always removes the staging file. With `expectAbsent`, a hard link creates
  * the target atomically, so a file that appeared since the review is never replaced ("exists" is returned instead).
+ * An existing file is rewritten in place, as `fs.writeFile` did, so its mode, ACLs and hard links survive.
+ *
+ * `assertTarget` runs after the parent folder exists and immediately before the file operation: an upload can take
+ * minutes, and a check made before it started says nothing about a parent swapped for a symlink meanwhile.
  */
 export async function commitStagedUpload(
   stagingPath: string,
   targetPath: string,
-  options: { expectAbsent?: boolean } = {},
+  options: { expectAbsent?: boolean; assertTarget?: () => void } = {},
 ): Promise<"written" | "exists"> {
   try {
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    options.assertTarget?.();
     if (options.expectAbsent) {
       try {
         await withMoveRetries(() => fs.link(stagingPath, targetPath));
@@ -131,6 +136,11 @@ export async function commitStagedUpload(
           throw copyError;
         }
       }
+      return "written";
+    }
+    const existing = await fs.lstat(targetPath).catch(() => undefined);
+    if (existing?.isFile()) {
+      await pipeline(createReadStream(stagingPath), createWriteStream(targetPath, { flags: "w" }));
       return "written";
     }
     try {

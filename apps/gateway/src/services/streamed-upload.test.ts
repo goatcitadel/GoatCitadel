@@ -132,6 +132,46 @@ describe("commitStagedUpload", () => {
     await expect(fs.stat(staged.stagingPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("rewrites an existing file in place, keeping its hard links and permission bits", async () => {
+    const root = await tempDir();
+    const target = path.join(root, "script.sh");
+    const alias = path.join(root, "alias.sh");
+    await fs.writeFile(target, "old");
+    await fs.chmod(target, 0o700);
+    await fs.link(target, alias);
+    const modeBefore = (await fs.stat(target)).mode & 0o777;
+    const staged = await receiveUpload(chunked("new"), {
+      stagingDir: path.join(root, "s"),
+      maxBytes: 10,
+      declaredBytes: 3,
+    });
+
+    await expect(commitStagedUpload(staged.stagingPath, target)).resolves.toBe("written");
+    await expect(fs.readFile(alias, "utf8")).resolves.toBe("new");
+    expect((await fs.stat(target)).mode & 0o777).toBe(modeBefore);
+    await expect(fs.readdir(path.join(root, "s"))).resolves.toEqual([]);
+  });
+
+  it("refuses the move when the target check fails at commit time, and removes the staged file", async () => {
+    const root = await tempDir();
+    const staged = await receiveUpload(chunked("x"), {
+      stagingDir: path.join(root, "s"),
+      maxBytes: 10,
+      declaredBytes: 1,
+    });
+    const refusal = new Error("outside the write jail");
+
+    await expect(
+      commitStagedUpload(staged.stagingPath, path.join(root, "out", "x.md"), {
+        assertTarget: () => {
+          throw refusal;
+        },
+      }),
+    ).rejects.toBe(refusal);
+    await expect(fs.stat(path.join(root, "out", "x.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readdir(path.join(root, "s"))).resolves.toEqual([]);
+  });
+
   it("never replaces a file that exists when the upload expects none", async () => {
     const root = await tempDir();
     const target = path.join(root, "note.md");

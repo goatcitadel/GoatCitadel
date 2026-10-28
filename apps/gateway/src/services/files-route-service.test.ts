@@ -330,6 +330,28 @@ describe("streamed workspace file upload", () => {
     await expect(fs.readdir(path.join(workspace, ".goatcitadel-uploads"))).resolves.toEqual([]);
   });
 
+  it("re-checks the write jail at the move, so a folder swapped for a link mid-upload cannot redirect the file", async () => {
+    const { createFilesRoutePort } = await import("./files-route-service.js");
+    const rootDir = await createTempWorkspace(tempRoots);
+    const workspace = path.join(rootDir, "workspace");
+    const outside = path.join(rootDir, "outside");
+    await fs.mkdir(outside);
+    await fs.mkdir(path.join(workspace, "docs"));
+    const port = createPort(createFilesRoutePort, rootDir);
+    async function* swappingBody() {
+      yield Buffer.from("first ");
+      await fs.rm(path.join(workspace, "docs"), { recursive: true });
+      await fs.symlink(outside, path.join(workspace, "docs"), "junction");
+      yield Buffer.from("second");
+    }
+
+    await expect(
+      port.uploadWorkspaceFileStream("docs/escape.md", Readable.from(swappingBody()), { declaredBytes: 12 }),
+    ).rejects.toThrow(/write jail/u);
+    await expect(fs.readdir(outside)).resolves.toEqual([]);
+    await expect(fs.readdir(path.join(workspace, ".goatcitadel-uploads"))).resolves.toEqual([]);
+  });
+
   it("refuses an upload over the size limit by its declared length, and any target inside the staging folder", async () => {
     process.env.GOATCITADEL_MAX_FILE_UPLOAD_BYTES = "8";
     vi.resetModules();
