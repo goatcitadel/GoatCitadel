@@ -58,20 +58,21 @@ export const capabilityConnectorsRoutes: FastifyPluginAsync = async (fastify) =>
           surface: "capabilities" as const,
           requestId: request.id,
         };
-        const plan = await evolution.create({
-          actor,
-          request: { kind: "connector_install", ...body.data },
-          idempotencyKey: `capabilities:install:${request.idempotencyKey || request.id}:${body.data.templateId}`,
-        });
-        if (plan.requiredAction?.kind !== "confirmation") {
-          throw new ConflictError({
-            message: "This install is no longer waiting to be confirmed. Try installing again.",
-          });
-        }
-        // This route is the operator's own install, so it may ask for the opt-in approval skip.
-        const settled = await evolution.confirm(actor, plan.planId, plan.revision, plan.requiredAction.actionNonce, {
-          operatorSettingsSave: true,
-        });
+        const idempotencyKey = `capabilities:install:${request.idempotencyKey || request.id}:${body.data.templateId}`;
+        // A retry of a request whose answer was lost finds the plan its first try made, and gets its receipt (M8).
+        const plan =
+          (await replayOf(evolution, actor, idempotencyKey, body.data)) ??
+          (await evolution.create({ actor, request: { kind: "connector_install", ...body.data }, idempotencyKey }));
+        // Only the install's own apply confirmation is confirmed here. A plan an earlier try made that has moved on (or
+        // waits on anything else) is answered with its receipt, which says where it stands now.
+        const action = plan.requiredAction;
+        const settled =
+          plan.status === "awaiting_confirmation" && action?.kind === "confirmation" && action.purpose !== "rollback"
+            ? // This route is the operator's own install, so it may ask for the opt-in approval skip.
+              await evolution.confirm(actor, plan.planId, plan.revision, action.actionNonce, {
+                operatorSettingsSave: true,
+              })
+            : plan;
         const response: ConnectorInstallResponse = {
           templateId: body.data.templateId,
           changePlanReceipt: receiptFor(settled),
@@ -90,13 +91,43 @@ function requireOwner(fastify: FastifyInstance) {
   return owner;
 }
 
-/** Installs are Change Plans, with no direct-write fallback, so they wait for Change Plans to be on. */
+/**
+ * Installs are Change Plans, with no direct-write fallback, so they wait for Change Plans to be on. The reason is data
+ * (M5), so Capabilities says so plainly rather than showing a generic error.
+ */
 async function requireEvolution(fastify: FastifyInstance) {
   const evolution = fastify.services.evolution;
   if (!evolution || !(await evolution.isEnabled())) {
-    throw new ServiceUnavailableError("Installing connectors needs Change Plans, which are off on this install.");
+    throw new ServiceUnavailableError("Installing connectors needs Change Plans, which are off on this install.", {
+      reason: "change_plans_off",
+    });
   }
   return evolution;
+}
+
+type Evolution = Awaited<ReturnType<typeof requireEvolution>>;
+
+/** The plan a first try with this key made, when this is its retry. A key reused for a different install is refused. */
+async function replayOf(
+  evolution: Evolution,
+  actor: Parameters<Evolution["create"]>[0]["actor"],
+  idempotencyKey: string,
+  body: z.infer<typeof installBodySchema>,
+): Promise<ChangePlanRecord | undefined> {
+  const plan = await evolution.findByIdempotencyKey(actor, idempotencyKey);
+  if (!plan) return undefined;
+  const asked = plan.request.kind === "connector_install" ? plan.request : undefined;
+  if (
+    asked?.templateId !== body.templateId ||
+    asked.enableChatConnectors !== body.enableChatConnectors ||
+    plan.origin.surface !== actor.surface ||
+    plan.origin.actorId !== actor.actorId
+  ) {
+    throw new ConflictError({
+      message: "This request was already used for a different install. Try installing again.",
+    });
+  }
+  return plan;
 }
 
 function receiptFor(plan: ChangePlanRecord): ChangePlanReceipt {

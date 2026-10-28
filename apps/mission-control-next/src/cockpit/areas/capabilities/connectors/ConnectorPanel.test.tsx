@@ -32,6 +32,11 @@ const connectorsApi = vi.hoisted(() => ({ fetchCapabilityConnectors: vi.fn() }))
 vi.mock("@goatcitadel/mission-control-shared/api/capability-connectors", () => connectorsApi);
 const route = vi.hoisted(() => ({ search: "", navigate: vi.fn() }));
 vi.mock("../../../app/use-cockpit-route", () => ({ useCockpitRoute: () => route }));
+// The tab takes installs that wait in Inbox back on when its list loads; none wait here.
+vi.mock("@goatcitadel/mission-control-shared/api/chat", async (original) => ({
+  ...(await original<object>()),
+  fetchChangePlans: async () => ({ items: [] }),
+}));
 
 const REVISION = "a".repeat(64);
 const KEY = queryKeys.capabilityConnectors("ws-1");

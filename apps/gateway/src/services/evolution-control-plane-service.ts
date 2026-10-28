@@ -4,6 +4,12 @@ import {
   reconcileAwaitingChangePlanApproval,
   settleRefusedChangePlanApproval,
 } from "./evolution-control-plane-approval-reconciliation.js";
+import {
+  isOwnerInputActionKind,
+  requireArtifactReviewAction,
+  requireOwnerInputAction,
+  requirePendingAction,
+} from "./evolution-control-plane-action-guards.js";
 import { validatePublicValues } from "./evolution-control-plane-public-form.js";
 import * as operatorApprovalSkip from "./evolution-control-plane-operator-approval-skip.js";
 import {
@@ -42,6 +48,7 @@ export interface EvolutionControlPlaneRepositoryPort {
   list(input: ChangePlanRepositoryListInput): Promise<ChangePlanRecord[]>;
   listActive(limit?: number): Promise<ChangePlanRecord[]>;
   listAwaitingApproval?(approvalId: string, limit?: number): Promise<ChangePlanRecord[]>;
+  findByIdempotency?(workspaceId: string, idempotencyKey: string): Promise<ChangePlanRecord | undefined>;
   transition(planId: string, input: ChangePlanRepositoryTransitionInput): Promise<ChangePlanRecord>;
 }
 
@@ -161,6 +168,19 @@ export class EvolutionControlPlaneService {
     return plan;
   }
 
+  /**
+   * The plan an earlier request with this idempotency key made, if one did, so a route can answer a retry with that
+   * plan instead of preparing a new one. A plan the actor can't see is never returned.
+   */
+  public async findByIdempotencyKey(actor: EvolutionControlPlaneActor, key: string) {
+    const plan = await this.deps.repository.findByIdempotency?.(
+      requireIdentifier(actor.workspaceId, "workspaceId"),
+      key,
+    );
+    if (plan) assertVisible(plan, actor);
+    return plan;
+  }
+
   public async list(
     actor: EvolutionControlPlaneActor,
     input: Omit<ChangePlanRepositoryListInput, "workspaceId"> = {},
@@ -171,10 +191,11 @@ export class EvolutionControlPlaneService {
       ...(input.status ? { status: input.status } : {}),
       ...(input.limit ? { limit: input.limit } : {}),
     };
-    if (!input.sessionId) return await this.deps.repository.list(query);
+    const { repository } = this.deps;
+    if (!input.sessionId) return await repository.list(query);
     const [bound, workspacePlans] = await Promise.all([
-      this.deps.repository.list({ ...query, sessionId: input.sessionId }),
-      this.deps.repository.list(query),
+      repository.list({ ...query, sessionId: input.sessionId }),
+      repository.list(query),
     ]);
     const merged = new Map<string, ChangePlanRecord>();
     for (const plan of [...bound, ...workspacePlans.filter((item) => !item.origin.sessionId)]) {
@@ -943,68 +964,6 @@ function requireRevision(plan: ChangePlanRecord, expectedRevision: number): void
       },
     });
   }
-}
-
-function requirePendingAction(
-  plan: ChangePlanRecord,
-  kind: "confirmation",
-  actionNonce: string,
-): Extract<ChangePlanRequiredAction, { kind: "confirmation" }>;
-function requirePendingAction(
-  plan: ChangePlanRecord,
-  kind: "public_form",
-  actionNonce: string,
-): Extract<ChangePlanRequiredAction, { kind: "public_form" }>;
-function requirePendingAction(
-  plan: ChangePlanRecord,
-  kind: "approval",
-  actionNonce: string,
-): Extract<ChangePlanRequiredAction, { kind: "approval" }>;
-function requirePendingAction(
-  plan: ChangePlanRecord,
-  kind: ChangePlanRequiredAction["kind"],
-  actionNonce: string,
-): ChangePlanRequiredAction {
-  if (!plan.requiredAction || plan.requiredAction.kind !== kind) {
-    throw new ConflictError({ message: `Change Plan is not awaiting ${kind.replaceAll("_", " ")}.` });
-  }
-  if (!actionNonce || actionNonce !== plan.requiredAction.actionNonce) {
-    throw new ConflictError({ message: "Change Plan action nonce is missing or stale." });
-  }
-  return plan.requiredAction;
-}
-
-function requireOwnerInputAction(
-  plan: ChangePlanRecord,
-  kind: EvolutionControlPlaneOwnerInputReceipt["actionKind"],
-  actionNonce: string,
-): Extract<ChangePlanRequiredAction, { kind: EvolutionControlPlaneOwnerInputReceipt["actionKind"] }> {
-  const action = plan.requiredAction;
-  if (!action || action.kind !== kind || !isOwnerInputActionKind(action.kind)) {
-    throw new ConflictError({ message: `Change Plan is not awaiting ${kind.replaceAll("_", " ")}.` });
-  }
-  if (!actionNonce || action.actionNonce !== actionNonce) {
-    throw new ConflictError({ message: "Change Plan action nonce is missing or stale." });
-  }
-  return action;
-}
-
-function requireArtifactReviewAction(
-  plan: ChangePlanRecord,
-  actionNonce: string,
-): Extract<ChangePlanRequiredAction, { kind: "artifact_review" }> {
-  const action = plan.requiredAction;
-  if (!action || action.kind !== "artifact_review") {
-    throw new ConflictError({ message: "Change Plan is not awaiting artifact review." });
-  }
-  if (!actionNonce || action.actionNonce !== actionNonce) {
-    throw new ConflictError({ message: "Change Plan action nonce is missing or stale." });
-  }
-  return action;
-}
-
-function isOwnerInputActionKind(value: string): value is EvolutionControlPlaneOwnerInputReceipt["actionKind"] {
-  return value === "secure_input" || value === "oauth" || value === "native_path_picker";
 }
 
 function validateOwnerInputReceipt(receipt: EvolutionControlPlaneOwnerInputReceipt): void {

@@ -362,7 +362,7 @@ it.each(["discovery", "discovery-committed", "discovery-on-complete"] as const)(
       body: {
         error: "Sign-in discovery for Fixture failed: Host is not yet allowlisted: https://mcp.example",
         code: "FIELD_INVALID",
-        details: { field: "oauth" },
+        details: { field: "oauth", reason: "host_not_allowlisted", host: "mcp.example" },
         ...(kind === "discovery-committed" ? { mutationCommitted: true } : {}),
       },
     });
@@ -406,37 +406,55 @@ it.each(["discovery", "discovery-committed", "discovery-on-complete"] as const)(
     expect(readMcpServerAttempt(initial.serverId).phase).not.toBe("uncertain");
   },
 );
-// I1: callers that word the refusal themselves (Capabilities) learn which one it was; the message is unchanged.
+// I1: callers that word the refusal themselves (Capabilities) learn which one it was; the message is unchanged. The
+// Gateway names a host off the allowlist as data, so the wording is never read for it.
+const NOT_ALLOWLISTED = "Sign-in discovery for Fixture failed: Host is not yet allowlisted: https://auth.example:8443.";
 it.each([
   [
     "start",
-    "oauth",
-    "Sign-in discovery for Fixture failed: Host is not yet allowlisted: https://Auth.example:8443.",
+    { field: "oauth", reason: "host_not_allowlisted", host: "auth.example:8443" },
+    NOT_ALLOWLISTED,
     "not_allowed",
     "auth.example:8443",
   ],
-  ["start", "oauth", "Sign-in discovery for Fixture failed: metadata was not valid JSON", "sign_in_site", undefined],
+  // A host that isn't one (a path, a scheme) is dropped, and the refusal still says the site isn't allowed.
   [
     "start",
-    "oauthRegistration",
+    { field: "oauth", reason: "host_not_allowlisted", host: "https://x/y" },
+    NOT_ALLOWLISTED,
+    "not_allowed",
+    undefined,
+  ],
+  // The same words without the Gateway's reason are not parsed: the sign-in site just couldn't be read.
+  ["start", { field: "oauth" }, NOT_ALLOWLISTED, "sign_in_site", undefined],
+  [
+    "start",
+    { field: "oauth" },
+    "Sign-in discovery for Fixture failed: metadata was not valid JSON",
+    "sign_in_site",
+    undefined,
+  ],
+  [
+    "start",
+    { field: "oauthRegistration" },
     "Sign-in for Fixture stopped at client registration: refused.",
     "registration",
     undefined,
   ],
   [
     "complete",
-    "oauth",
+    { field: "oauth" },
     "This sign-in expired or the Gateway restarted since it began. Start authorization again.",
     "expired",
     undefined,
   ],
-] as const)("names a pre-admission %s refusal (%s: %s)", async (action, field, error, refused, refusedHost) => {
+] as const)("names a pre-admission %s refusal (%o: %s)", async (action, details, error, refused, refusedHost) => {
   const rejection = new ApiRequestError("request failed", {
     kind: "http",
     status: 400,
     method: "POST",
     path: `/api/v1/mcp/servers/fixture/oauth/${action}-reviewed`,
-    body: { error, code: "FIELD_INVALID", details: { field } },
+    body: { error, code: "FIELD_INVALID", details },
   });
   let reviewed = initial;
   if (action === "complete") {

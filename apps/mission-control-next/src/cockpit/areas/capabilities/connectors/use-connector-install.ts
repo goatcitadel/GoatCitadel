@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
   CapabilityConnectorItem,
@@ -8,12 +9,13 @@ import type {
 } from "@goatcitadel/contracts";
 import { fetchApproval, resolveApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { installCapabilityConnector } from "@goatcitadel/mission-control-shared/api/capability-connectors";
-import { cancelChangePlan, fetchChangePlan } from "@goatcitadel/mission-control-shared/api/chat";
+import { cancelChangePlan, fetchChangePlan, fetchChangePlans } from "@goatcitadel/mission-control-shared/api/chat";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../../data/query-keys";
 import { connectServer, startSignIn, submitSignInCode, switchOn } from "./connector-install-server-steps";
+import { inboxApprovalLink, MCP_SETTINGS_LINK, type ConnectorNextLink } from "./connector-links";
 import {
   __resetConnectorInstallFlowsForTests,
   beginRun,
@@ -21,7 +23,9 @@ import {
   failInstallFlow as fail,
   findInstallFlow,
   forgetInstallFlow,
+  holdInstallPlan,
   IDLE,
+  releaseInstallPlan,
   isActiveInstallState,
   indexInstallFlow,
   isCurrent,
@@ -51,6 +55,8 @@ const INBOX_POLL_MS = 5_000;
 const APPLY_POLL_MS = 1_000;
 /** Quick reads while a plan applies (as approvePlanInPlace does); after these it is read at the Inbox pace. */
 const APPLY_POLL_ROUNDS = 12;
+/** How many plans waiting in Inbox one read after a reload looks through (R88's flows are this app session's only). */
+const RECOVERY_LIMIT = 100;
 const SERVER_REF = "mcp_server:";
 
 const DONE: ReadonlySet<ChangePlanStatus> = new Set(["completed", "applied", "monitoring"]);
@@ -62,13 +68,21 @@ const ENDED: ReadonlySet<ChangePlanStatus> = new Set([
   "manual_required",
 ]);
 
-/** The install route's 409 refusals, by the field it names (R69). */
-const REFUSED = new Map([
-  ["needsApiKey", "This app needs an API key. Set it up in Settings."],
-  ["needsSignInSetup", "Sign-in isn't set up for this app yet."],
-  ["alreadyInstalled", "This app is already saved. Reload to see it."],
-  ["templateId", "This app can't be installed from here."],
+type Refusal = { readonly words: string; readonly link?: ConnectorNextLink };
+/** The install route's 409 refusals, by the field it names (R69); words that send the operator somewhere link there. */
+const REFUSED = new Map<string, Refusal>([
+  ["needsApiKey", { words: "This app needs an API key. Set it up in Settings.", link: MCP_SETTINGS_LINK }],
+  ["needsSignInSetup", { words: "Sign-in isn't set up for this app yet." }],
+  ["alreadyInstalled", { words: "This app is already saved. Reload to see it." }],
+  ["templateId", { words: "This app can't be installed from here." }],
 ]);
+/** The install route's 503 when Change Plans are off (M5), which every Install on this install would hit. */
+const SWITCHED_OFF: Refusal = {
+  words:
+    "Installing from here is switched off on this install, so nothing was changed. You can add it yourself in " +
+    "Settings.",
+  link: MCP_SETTINGS_LINK,
+};
 const DECLINED = "You declined this install in Inbox. Nothing was changed.";
 const EXPIRED = "This request expired after 15 minutes. Start again.";
 const WITHDRAWN = "This install was cancelled. Nothing was changed.";
@@ -85,11 +99,12 @@ const approvalIdOf = (action: ChangePlanRequiredAction | undefined) =>
   action?.kind === "approval" ? action.approvalId : undefined;
 const changedSoFar = (id: number) => [...(readRun(id)?.changed ?? [])];
 
-function refusalWords(error: unknown): string | undefined {
-  if (!isApiRequestError(error) || error.status !== 409 || !error.body || typeof error.body !== "object")
-    return undefined;
-  const field = (error.body as { details?: { field?: unknown } }).details?.field;
-  return typeof field === "string" ? REFUSED.get(field) : undefined;
+/** An install the route refused before it changed anything, by the field or reason its answer names. */
+function refusalOf(error: unknown): Refusal | undefined {
+  if (!isApiRequestError(error) || !error.body || typeof error.body !== "object") return undefined;
+  const details = (error.body as { details?: { field?: unknown; reason?: unknown } }).details;
+  if (error.status === 503 && details?.reason === "change_plans_off") return SWITCHED_OFF;
+  return error.status === 409 && typeof details?.field === "string" ? REFUSED.get(details.field) : undefined;
 }
 
 async function install(id: number, token: number, templateId: string, enableChatConnectors: boolean) {
@@ -98,14 +113,17 @@ async function install(id: number, token: number, templateId: string, enableChat
     response = await installCapabilityConnector({ templateId, enableChatConnectors });
   } catch (error) {
     if (!isCurrent(id, token)) return;
-    const words = refusalWords(error) ?? `Couldn't start the install. ${describeApiError(error).summary}`;
-    fail(id, "plan", words, technicalText(error));
+    const refused = refusalOf(error);
+    const words = refused?.words ?? `Couldn't start the install. ${describeApiError(error).summary}`;
+    fail(id, "plan", words, technicalText(error), refused);
     return;
   }
   if (!isCurrent(id, token)) return;
   const receipt = response?.changePlanReceipt;
   if (!receipt?.planId) return fail(id, "plan", UNCHECKED);
   updateInstallFlow(id, { planId: receipt.planId });
+  // This tab pressed Install, so it follows the plan; a tab that loads meanwhile leaves the plan to this one.
+  void holdInstallPlan(receipt.planId);
   const approvalId = approvalIdOf(receipt.requiredAction);
   if (receipt.status === "awaiting_approval" && approvalId) return waitInInbox(id, receipt.planId, approvalId);
   await readPlan(id);
@@ -234,10 +252,15 @@ async function withdraw(id: number, planId: string) {
     if (plan.status !== "awaiting_approval" || !action) return fail(id, "approval", NOT_STOPPED);
     await cancelChangePlan(planId, PLAN_CONTEXT, { expectedRevision: plan.revision, actionNonce: action.actionNonce });
     if (!isCurrent(id, token)) return;
-    const cleared = await denyOwnApproval(planId, approvalIdOf(action));
-    if (isCurrent(id, token)) {
-      settle(id, { phase: "stopped", message: cleared ? INSTALL_STOPPED : STOPPED_STILL_IN_INBOX, changed: [] });
-    }
+    const approvalId = approvalIdOf(action);
+    const cleared = await denyOwnApproval(planId, approvalId);
+    if (!isCurrent(id, token)) return;
+    settle(
+      id,
+      cleared || !approvalId
+        ? { phase: "stopped", message: INSTALL_STOPPED, changed: [] }
+        : { phase: "stopped", message: STOPPED_STILL_IN_INBOX, changed: [], link: inboxApprovalLink(approvalId) },
+    );
   } catch (error) {
     if (isCurrent(id, token)) fail(id, "approval", NOT_STOPPED, technicalText(error));
   }
@@ -319,6 +342,61 @@ function restartSignIn(id: number) {
   void startSignIn(id, retireRun(id), flow.serverId);
 }
 
+/**
+ * Plans from before a reload that still wait in Inbox are read once per app session, when the list first loads: a
+ * reload forgets every flow, and an Install pressed then would be refused while the old plan holds the template.
+ */
+let recovery: "reading" | "done" | undefined;
+
+function recoverWaitingInstalls(items: readonly CapabilityConnectorItem[], context: RunContext) {
+  if (recovery) return;
+  recovery = "reading";
+  fetchChangePlans(PLAN_CONTEXT, { status: "awaiting_approval", limit: RECOVERY_LIMIT }).then(
+    (read) => {
+      recovery = "done";
+      for (const plan of read?.items ?? []) void followWaitingPlan(plan, items, context);
+    },
+    () => {
+      // Nothing was taken on, so the next time the tab reads a changed list (or opens again) it reads the plans again.
+      recovery = undefined;
+    },
+  );
+}
+
+/**
+ * Takes on one Capabilities install that waits in Inbox for a template in the list, as the flow that made it would
+ * follow it: the row reads "Waiting on you in Inbox", Stop withdraws it, and an approval goes on to sign in, switch it
+ * on and connect it. A template that already has a flow in this tab keeps it, and a plan another tab follows is left
+ * to that tab.
+ */
+async function followWaitingPlan(
+  plan: ChangePlanRecord,
+  items: readonly CapabilityConnectorItem[],
+  context: RunContext,
+) {
+  const templateId = plan?.request?.kind === "connector_install" ? plan.request.templateId : undefined;
+  const item = items.find((entry) => entry.source === "mcp_template" && entry.templateId === templateId);
+  const approvalId = approvalIdOf(plan?.requiredAction);
+  if (!item || !templateId || !approvalId || plan.status !== "awaiting_approval") return;
+  if (!isThisInstall(plan, plan.planId, templateId) || findInstallFlow(item)) return;
+  if (!(await holdInstallPlan(plan.planId))) return;
+  // An Install pressed while the lock was asked for made its own flow, which keeps the template.
+  if (findInstallFlow(item)) return releaseInstallPlan(plan.planId);
+  const flow = createInstallFlow([templateKey(templateId)]);
+  beginRun(flow.id, { ...context, name: item.name, templateId, oauth: item.auth === "oauth" });
+  updateInstallFlow(flow.id, { planId: plan.planId });
+  waitInInbox(flow.id, plan.planId, approvalId);
+}
+
+/** Called by the Connectors tab with its list: after a reload, takes back on the installs that wait in Inbox. */
+export function useRecoveredInstalls(items: readonly CapabilityConnectorItem[] | undefined): void {
+  const client = useQueryClient();
+  const { activeWorkspaceId } = useUiPreferences();
+  useEffect(() => {
+    if (items) recoverWaitingInstalls(items, { client, listKey: queryKeys.capabilityConnectors(activeWorkspaceId) });
+  }, [items, client, activeWorkspaceId]);
+}
+
 export interface ConnectorInstall {
   state: ConnectorInstallState;
   /** The saved server once the install created it (or the item's own server): the panel finds its row by it (R80). */
@@ -367,5 +445,6 @@ export function useConnectorInstallStatus(item: CapabilityConnectorItem): Connec
 }
 
 export function __resetConnectorInstallForTests() {
+  recovery = undefined;
   __resetConnectorInstallFlowsForTests();
 }

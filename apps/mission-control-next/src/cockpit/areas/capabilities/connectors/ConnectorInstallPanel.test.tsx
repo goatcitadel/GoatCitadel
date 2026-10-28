@@ -80,6 +80,7 @@ vi.mock("./use-connector-install", async () => {
     },
     useConnectorInstallStatus: (item: CapabilityConnectorItem) =>
       useSyncExternalStore(flows.subscribe, () => flows.read(item)).state,
+    useRecoveredInstalls: () => undefined,
   };
 });
 
@@ -490,6 +491,110 @@ describe("Install progress", () => {
     }
   });
 
+  it("reads out the swap to a new sign-in, and moves focus to its button", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      await renderPanel(LINEAR.id, [LINEAR]);
+      setFlow(
+        LINEAR,
+        {
+          phase: "signing_in",
+          authorizeUrl: AUTHORIZE_URL,
+          signInHost: "auth.linear.app",
+          scopes: "read, write",
+          startedAt: Date.now(),
+        },
+        "srv-1",
+      );
+      expect(status()).toBe("Finish signing in in your browser");
+      link("Open sign-in page")!.focus();
+
+      await act(async () => {
+        vi.advanceTimersByTime(9 * 60_000);
+      });
+
+      expect(status()).toBe(
+        "This sign-in request is about to run out of time. Start a new one, then finish signing in within 10 minutes.",
+      );
+      expect(document.activeElement).toBe(button("Start sign-in again"));
+
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(status()).toBe(
+        "This sign-in request has run out of time. Start a new one, then finish signing in within 10 minutes.",
+      );
+      expect(document.activeElement).toBe(button("Start sign-in again"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads out the swap even after a pasted code didn't match", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const mismatch = "That doesn't match this sign-in. Paste the code and state from the sign-in page again.";
+      await renderPanel(LINEAR.id, [LINEAR]);
+      setFlow(
+        LINEAR,
+        {
+          phase: "signing_in",
+          authorizeUrl: AUTHORIZE_URL,
+          signInHost: "auth.linear.app",
+          scopes: "read, write",
+          startedAt: Date.now(),
+          manualError: mismatch,
+        },
+        "srv-1",
+      );
+      expect(status()).toBe(mismatch);
+
+      await act(async () => {
+        vi.advanceTimersByTime(9 * 60_000);
+      });
+
+      // The fields the mismatch was about are gone, so the live region says what the page offers now.
+      expect(status()).toBe(
+        "This sign-in request is about to run out of time. Start a new one, then finish signing in within 10 minutes.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves focus where it is when the sign-in swaps while focus is elsewhere", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const elsewhere = document.createElement("button");
+    elsewhere.textContent = "Elsewhere";
+    document.body.append(elsewhere);
+    try {
+      await renderPanel(LINEAR.id, [LINEAR]);
+      setFlow(
+        LINEAR,
+        {
+          phase: "signing_in",
+          authorizeUrl: AUTHORIZE_URL,
+          signInHost: "auth.linear.app",
+          scopes: "read, write",
+          startedAt: Date.now(),
+        },
+        "srv-1",
+      );
+      elsewhere.focus();
+
+      await act(async () => {
+        vi.advanceTimersByTime(9 * 60_000);
+      });
+
+      expect(button("Start sign-in again")).toBeDefined();
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+      vi.useRealTimers();
+    }
+  });
+
   it("offers a new sign-in straight away when the panel opens on an old one", async () => {
     await renderPanel(LINEAR.id, [LINEAR]);
     setFlow(
@@ -671,6 +776,52 @@ describe("Install progress", () => {
     expect(flows.cancel).toHaveBeenCalledExactlyOnceWith(EXAMPLE.id);
   });
 
+  // DESIGN.md: a sentence that points somewhere links there, in the same element.
+  it("links a failure's next step from the words that point there", async () => {
+    await renderPanel(LINEAR.id, [LINEAR]);
+    const message =
+      "Installing from here is switched off on this install, so nothing was changed. You can add it yourself in Settings.";
+    setFlow(LINEAR, {
+      phase: "failed",
+      step: "plan",
+      message,
+      changed: [],
+      link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+    });
+    const settings = link("Open in Settings");
+    expect(settings?.closest("p")?.textContent).toBe(`${message} Open in Settings`);
+    expect(`${href(settings).pathname}${href(settings).hash}`).toBe("/settings/connections#mcp-servers");
+
+    setFlow(
+      LINEAR,
+      {
+        phase: "failed",
+        step: "sign_in",
+        message:
+          "Couldn't start signing in to Linear. It wouldn't register GoatCitadel for sign-in. Set up its sign-in in Settings instead.",
+        changed: [],
+        link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+      },
+      "srv-1",
+    );
+    expect(link("Open in Settings")?.closest("p")?.textContent).toContain("Set up its sign-in in Settings instead.");
+  });
+
+  it("links a stop that leaves the request in Inbox", async () => {
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    const message = "Install stopped. Nothing was changed. Its request is still in Inbox, where you can deny it.";
+    setFlow(EXAMPLE, {
+      phase: "stopped",
+      message,
+      changed: [],
+      link: { label: "Open in Inbox", href: "/inbox?approvalId=approval-1&workspaceId=default" },
+    });
+    const inbox = link("Open in Inbox");
+    expect(inbox?.closest("p")?.textContent).toBe(`${message} Open in Inbox`);
+    expect(href(inbox).pathname).toBe("/inbox");
+    expect(href(inbox).searchParams.get("approvalId")).toBe("approval-1");
+  });
+
   it("shows a stopped install's message and what changed", async () => {
     await renderPanel(EXAMPLE.id, [EXAMPLE]);
     setFlow(EXAMPLE, {
@@ -754,6 +905,59 @@ describe("Saved server sign-in and connect", () => {
     await act(async () => button("Sign in again")?.click());
     expect(flows.resume).toHaveBeenCalledExactlyOnceWith(off.id, "sign_in");
   });
+
+  it("offers no Sign in again once the app refused to register GoatCitadel, only the way to Settings", async () => {
+    const off = { ...SAVED_LINEAR, state: "turned_off", reason: "turned_off" } as const;
+    await renderPanel(off.id, [off]);
+    setFlow(
+      off,
+      {
+        phase: "failed",
+        step: "sign_in",
+        message:
+          "Couldn't start signing in to Linear. It wouldn't register GoatCitadel for sign-in. Set up its sign-in in " +
+          "Settings instead.",
+        changed: ["Allowed mcp.linear.app. Saved Linear, switched off."],
+        link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+        signInBlocked: true,
+      },
+      "srv-1",
+    );
+    expect(button("Sign in again")).toBeUndefined();
+    expect(link("Open in Settings")).toBeDefined();
+    expect(button("Dismiss")).toBeDefined();
+  });
+
+  it.each([
+    ["needs_sign_in", "sign_in_needed", "Connect"],
+    ["sign_in_expired", "sign_in_expired", "Reconnect"],
+  ] as const)(
+    "holds back the own button of a %s server (%s: %s) while the registration refusal is shown",
+    async (state, reason, label) => {
+      const row = { ...SAVED_LINEAR, state, reason };
+      await renderPanel(row.id, [row]);
+      expect(button(label)).toBeDefined();
+      setFlow(
+        row,
+        {
+          phase: "failed",
+          step: "sign_in",
+          message:
+            "Couldn't start signing in to Linear. It wouldn't register GoatCitadel for sign-in. Set up its sign-in in " +
+            "Settings instead.",
+          changed: [],
+          link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+          signInBlocked: true,
+        },
+        "srv-1",
+      );
+      // Pressing it would only be refused the same way; once dismissed, the button comes back.
+      expect(button(label)).toBeUndefined();
+      expect(link("Open in Settings")).toBeDefined();
+      setFlow(row, { phase: "idle" });
+      expect(button(label)).toBeDefined();
+    },
+  );
 
   // M10: a finished connect says what it left, never a plain "Connected." that hides a limit.
   it.each([
