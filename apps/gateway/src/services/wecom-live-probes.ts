@@ -238,7 +238,7 @@ async function checkApplication(
       disposition: "blocking",
       message:
         errcode === TRUSTED_IP_ERRCODE
-          ? "WeCom refused this server's IP (errcode 60020). Add the gateway host's public IP to the application's trusted IP list."
+          ? "WeCom refused this computer's public IP (errcode 60020). Add it to the application's trusted IP list."
           : `WeCom could not read the application (errcode ${Number.isInteger(errcode) ? errcode : "unknown"}). Verify the agent id.`,
       failureCategory: errcode === TRUSTED_IP_ERRCODE ? "permission_mismatch" : "destination_mismatch",
     });

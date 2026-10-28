@@ -127,16 +127,18 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "In the QQ Bot console set the callback URL to this connection's webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. Message the bot once; it won't answer yet. Add your openid (see Who may message this bot) with Edit setup, then message again. GoatCitadel can't show your openid yet, so you need to know it already.",
   },
   wecom: {
+    // WeCom's callback page allows http or https and recommends https (developer.work.weixin.qq.com/document/path/90238),
+    // so "a public HTTPS address" from the audit is "a public web address (WeCom recommends HTTPS)" here.
     summary:
-      "Send WeCom application text to users, departments and tags and receive messages on an encrypted callback.",
+      "Send and receive WeCom messages through a self-built application. Sending needs this computer's public IP on the app's trusted IP list. Receiving needs a public web address (WeCom recommends HTTPS).",
     prerequisites: [
-      "A WeCom self-built application with its CorpID, AgentId and Secret (the Secret in a gateway environment variable such as WECOM_SECRET).",
-      "qyapi.weixin.qq.com in the network allowlist and the gateway host's public IP on the application's trusted IP list.",
-      "For inbound, the callback Token and EncodingAESKey in gateway environment variables and a public HTTPS Gateway URL for the callback.",
-      "For inbound, the WeCom userids allowed to start conversations.",
+      "A WeCom self-built application: its CorpID, AgentId and Secret.",
+      "This computer's public IP on the app's trusted IP list.",
+      "To receive: a public web address (WeCom recommends HTTPS), and the Token and EncodingAESKey from the app's receive messages settings.",
     ],
+    // The test sends a message only when a default target is set, so the first check is conditional.
     firstMessage:
-      "Confirm the sandbox message arrives in WeCom. For inbound, save the connection webhook URL, Token and EncodingAESKey in the application's message-receiving settings, allow your WeCom userid, message the application, and confirm its reply; messages from users who are not allowed are dropped. Outbound is text-only.",
+      "If you set a default target, check the test message arrived. To receive: in the app's receive messages settings enter this connection's webhook address with the same Token and EncodingAESKey, and save. Allow your WeCom userid, message the app, and check the reply.",
   },
   "nextcloud-talk": {
     summary:
