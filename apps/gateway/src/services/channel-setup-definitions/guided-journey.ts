@@ -83,14 +83,15 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Check the test card appeared in the channel. If it didn't, open the workflow's run history in Teams.",
   },
   whatsapp: {
-    summary: "Connect WhatsApp Business Cloud API with a sender identity and optional signed inbound webhooks.",
+    summary:
+      "Send WhatsApp messages from a WhatsApp Business number through Meta's Cloud API. Receiving messages needs a public HTTPS address. Personal WhatsApp (QR code linking) isn't supported.",
     prerequisites: [
-      "A Meta app and WhatsApp Business Cloud API sender with an access token and phone-number ID.",
-      "A recipient permitted by the current Cloud API messaging rules.",
-      "For inbound conversations, a public HTTPS endpoint, app secret and webhook verify token.",
+      "A Meta app with WhatsApp set up, its phone number ID, and a permanent System User access token.",
+      "The recipient messages your business number first; WhatsApp delivers the plain-text test only in the 24 hours after that.",
+      "To receive messages: a public HTTPS address with a trusted certificate, the app secret, and a verify token you choose.",
     ],
     firstMessage:
-      "Register the saved connection webhook URL in Meta, complete its verification challenge, and subscribe to messages. Allow trusted wa_id sender values (digits only), send an inbound message and confirm its reply. Personal WhatsApp QR linking is not supported by this adapter.",
+      "Check the test message arrived. To receive: in Meta's App Dashboard open WhatsApp › Configuration, paste this connection's webhook address and your verify token, verify, and subscribe to messages. Allow your number (digits only, no plus) under Who may message this bot, then send a message and check the reply.",
   },
   mattermost: {
     summary:
