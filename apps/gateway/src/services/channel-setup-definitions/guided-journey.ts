@@ -1,11 +1,20 @@
-import type { ChannelSetupFieldDefinition, ChannelSetupStepDefinition } from "@goatcitadel/contracts";
+import type {
+  ChannelSetupFieldDefinition,
+  ChannelSetupStage,
+  ChannelSetupStepDefinition,
+} from "@goatcitadel/contracts";
 import {
   GUIDED_INBOUND_CHANNELS,
   FORCED_ALLOWLIST_INBOUND_CHANNELS,
   hydrateGuidedChannelInboundAccess,
   normalizeGuidedChannelInboundAccess,
 } from "../channel-setup-inbound-access.js";
-import type { ChannelSetupRuntimeDefinition } from "./common.js";
+import {
+  PASTED_SECRET_EXPLANATION,
+  plainSecretLabel,
+  secretEnvFieldCopy,
+  type ChannelSetupRuntimeDefinition,
+} from "./common.js";
 
 const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstMessage: string }> = {
   discord: {
@@ -195,106 +204,31 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
   const profile = POSTURE[key];
   if (!profile) return runtime;
   const steps: ChannelSetupStepDefinition[] = [];
+  const authoredFields = runtime.definition.wizard.steps.flatMap((step) => step.fields ?? []);
+  let firstFieldStepSplit = false;
   for (const step of runtime.definition.wizard.steps) {
     if (step.fields?.length) {
-      const fields = step.fields.map((field): ChannelSetupFieldDefinition => {
-        if (key === "whatsapp" && field.key === "phoneNumberId") return { ...field, inputMode: "numeric" };
-        if (field.key === "targets")
-          return { ...field, type: "target-list", targetAddressKey: key === "telegram" ? "chatId" : "channel" };
-        if (key === "discord" && ["defaultChannelId", "defaultGuildId"].includes(field.key))
-          return {
-            ...field,
-            required: false,
-            inputMode: "numeric",
-            visibleWhenFieldEquals: { fieldKey: "guildPolicy", value: "allowlist" },
-          };
-        return {
-          ...field,
-          ...(ADVANCED_KEYS.has(field.key) || field.label.startsWith("Legacy") ? { advanced: true } : {}),
-          ...(runtime.definition.adapter.secretFieldKeys.includes(field.key) ? { required: false } : {}),
-        };
-      });
-      const identity = fields.filter((field) => !DESTINATION_KEYS.has(field.key));
-      const destinations = fields.filter((field) => DESTINATION_KEYS.has(field.key));
-      const alternatives = runtime.definition.adapter.secretFieldKeys
-        .filter((fieldKey) => identity.some((field) => field.key === fieldKey))
-        .map((fieldKey) => [fieldKey, fieldKey + "Env"])
-        .filter((group) => group.some((fieldKey) => identity.some((field) => field.key === fieldKey)));
-      if (identity.length)
-        steps.push({
-          ...step,
-          id: step.id + "-identity",
-          stage: "identity",
-          title: "Connect the account",
-          fields: identity,
-          requiredAnyOf: credentialAlternatives(key, alternatives),
-        });
-      if (destinations.length)
-        steps.push({
-          ...step,
-          id: step.id + "-destinations",
-          stage: "destinations_access",
-          title: "Choose destinations and access",
-          fields: destinations,
-        });
+      const fields = secretsBeforeTheirVariables(
+        step.fields.map((field) => guidedField(runtime, authoredFields, field)),
+        runtime.definition.adapter.secretFieldKeys,
+      );
+      // Only the first field step is the account/destination pair; a later one keeps the id, title and stage it was written with.
+      if (firstFieldStepSplit) {
+        steps.push({ ...step, fields, stage: step.stage ?? fieldStepStage(fields) });
+      } else {
+        firstFieldStepSplit = true;
+        steps.push(...splitFieldStep(runtime, step, fields));
+      }
       continue;
     }
-    steps.push({
-      ...step,
-      stage: step.kind === "test" ? "checks" : step.kind === "confirm" ? "activation" : "prerequisites",
-    });
+    steps.push({ ...step, stage: step.stage ?? stageForKind(step) });
   }
   if (GUIDED_INBOUND_CHANNELS.has(key)) {
     const insertAt = Math.max(
       0,
       steps.findIndex((step) => step.stage === "checks"),
     );
-    steps.splice(insertAt, 0, {
-      id: "sender-access",
-      kind: "field-collection",
-      stage: "destinations_access",
-      title: "Who may message this bot?",
-      body: [
-        {
-          kind: "paragraph",
-          text: "Sender identities control who can start a conversation. Destination selection only chooses where messages are delivered. An empty sender list blocks all inbound conversations.",
-        },
-      ],
-      fields: [
-        {
-          key: "inboundAccessMode",
-          label: "Inbound access",
-          type: "select",
-          required: true,
-          defaultValue: "allowlist",
-          explanation:
-            "Keep allowlist for controlled access. Existing open legacy connections keep their posture until you deliberately change it.",
-          options: FORCED_ALLOWLIST_INBOUND_CHANNELS.has(key)
-            ? [{ value: "allowlist", label: "Only allowed senders" }]
-            : [
-                { value: "allowlist", label: "Only allowed senders" },
-                { value: "open_legacy", label: "Open legacy access (advanced)" },
-              ],
-        },
-        {
-          key: "allowedSenders",
-          label: "Allowed sender identities",
-          type: "sender-list",
-          required: false,
-          explanation:
-            key === "telegram"
-              ? "Telegram pairing approval adds the approved user here. A destination chat ID is not permission to message the bot."
-              : key === "google-chat"
-                ? "Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied."
-                : key === "qqbot"
-                  ? "Add the QQ openids (the ids QQ assigns to senders, not QQ numbers) that may start conversations. Inbound is default-deny; empty means every inbound sender is denied."
-                  : key === "wecom"
-                    ? "Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied."
-                    : "Add trusted platform actor IDs. Empty means every inbound sender is denied.",
-          visibleWhenFieldEquals: { fieldKey: "inboundAccessMode", value: "allowlist" },
-        },
-      ],
-    });
+    steps.splice(insertAt, 0, senderAccessStep(key));
   }
   steps.push({
     id: "first-message",
@@ -350,6 +284,187 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
       }
       return issues;
     },
+  };
+}
+
+/** The wizard's field after the shared rules: expert options, optional secrets, and the secret/variable wording. */
+function guidedField(
+  runtime: ChannelSetupRuntimeDefinition,
+  siblings: readonly ChannelSetupFieldDefinition[],
+  field: ChannelSetupFieldDefinition,
+): ChannelSetupFieldDefinition {
+  const key = runtime.definition.catalog.key;
+  const secretKeys = runtime.definition.adapter.secretFieldKeys;
+  if (key === "whatsapp" && field.key === "phoneNumberId") return { ...field, inputMode: "numeric" };
+  if (field.key === "targets")
+    return { ...field, type: "target-list", targetAddressKey: key === "telegram" ? "chatId" : "channel" };
+  if (key === "discord" && ["defaultChannelId", "defaultGuildId"].includes(field.key))
+    return {
+      ...field,
+      required: false,
+      inputMode: "numeric",
+      visibleWhenFieldEquals: { fieldKey: "guildPolicy", value: "allowlist" },
+    };
+  const shared: ChannelSetupFieldDefinition = {
+    ...field,
+    ...(ADVANCED_KEYS.has(field.key) || field.label.startsWith("Legacy") ? { advanced: true } : {}),
+    ...(secretKeys.includes(field.key) ? { required: false } : {}),
+  };
+  const secretOfVariable = field.key.endsWith("Env") ? field.key.slice(0, -"Env".length) : undefined;
+  if (secretOfVariable && secretKeys.includes(secretOfVariable)) {
+    // A variable name is the expert way to give a secret; the pasted field beside it is the main one.
+    return {
+      ...shared,
+      ...secretEnvFieldCopy(
+        key,
+        field,
+        siblings.find((item) => item.key === secretOfVariable),
+      ),
+    };
+  }
+  if (secretKeys.includes(field.key) && siblings.some((item) => item.key === `${field.key}Env`)) {
+    const { placeholder: _placeholder, ...pasted } = shared;
+    return { ...pasted, label: plainSecretLabel(field.label), explanation: PASTED_SECRET_EXPLANATION };
+  }
+  return shared;
+}
+
+/** Puts each pasted secret ahead of the field that names its environment variable, leaving other fields where they were. */
+function secretsBeforeTheirVariables(
+  fields: ChannelSetupFieldDefinition[],
+  secretKeys: readonly string[],
+): ChannelSetupFieldDefinition[] {
+  const indexOf = new Map(fields.map((field, index) => [field.key, index]));
+  const lateSecrets = new Map<ChannelSetupFieldDefinition, ChannelSetupFieldDefinition>();
+  fields.forEach((field, index) => {
+    if (!field.key.endsWith("Env")) return;
+    const secretKey = field.key.slice(0, -"Env".length);
+    const secretIndex = indexOf.get(secretKey);
+    if (secretIndex === undefined || secretIndex < index || !secretKeys.includes(secretKey)) return;
+    const secret = fields[secretIndex];
+    if (secret) lateSecrets.set(field, secret);
+  });
+  const moved = new Set(lateSecrets.values());
+  return fields.flatMap((field) => {
+    if (moved.has(field)) return [];
+    const secret = lateSecrets.get(field);
+    return secret ? [secret, field] : [field];
+  });
+}
+
+/** The account half and the destinations half of a guide's first field step, each keeping the step's other settings. */
+function splitFieldStep(
+  runtime: ChannelSetupRuntimeDefinition,
+  step: ChannelSetupStepDefinition,
+  fields: ChannelSetupFieldDefinition[],
+): ChannelSetupStepDefinition[] {
+  const key = runtime.definition.catalog.key;
+  const identity = fields.filter((field) => !DESTINATION_KEYS.has(field.key));
+  const destinations = fields.filter((field) => DESTINATION_KEYS.has(field.key));
+  const alternatives = runtime.definition.adapter.secretFieldKeys
+    .filter((fieldKey) => identity.some((field) => field.key === fieldKey))
+    .map((fieldKey) => [fieldKey, fieldKey + "Env"])
+    .filter((group) => group.some((fieldKey) => identity.some((field) => field.key === fieldKey)));
+  const halves: ChannelSetupStepDefinition[] = [];
+  if (identity.length)
+    halves.push({
+      ...step,
+      id: step.id + "-identity",
+      stage: "identity",
+      title: "Connect the account",
+      fields: identity,
+      requiredAnyOf: credentialAlternatives(key, alternatives),
+    });
+  if (destinations.length)
+    halves.push({
+      ...step,
+      id: step.id + "-destinations",
+      stage: "destinations_access",
+      // A channel with a "Who may message this bot?" step has access to choose here; the others only choose where messages go.
+      title: GUIDED_INBOUND_CHANNELS.has(key) ? "Choose destinations and access" : "Where should messages go?",
+      fields: destinations,
+    });
+  return halves;
+}
+
+/** The stage a step gets when its guide did not set one. */
+function stageForKind(step: ChannelSetupStepDefinition): ChannelSetupStage {
+  return step.kind === "test" ? "checks" : step.kind === "confirm" ? "activation" : "prerequisites";
+}
+
+function fieldStepStage(fields: readonly ChannelSetupFieldDefinition[]): ChannelSetupStage {
+  return fields.some((field) => DESTINATION_KEYS.has(field.key)) ? "destinations_access" : "identity";
+}
+
+/** Sender identities differ by platform, and matching is exact, so each channel says what its own look like. */
+const SENDER_EXPLANATIONS: Readonly<Record<string, string>> = {
+  slack: "Your Slack member ID (starts with U).",
+  telegram:
+    "Telegram pairing approval adds the approved user here. A destination chat ID is not permission to message the bot.",
+  whatsapp: "Your WhatsApp number with country code, digits only, no plus (for example 15551234567).",
+  line: "Your LINE user ID (starts with U). For a one-to-one chat it is the same ID as Default target.",
+  "nextcloud-talk": "users/ followed by your Nextcloud user name, for example users/alice.",
+  ntfy: "Added for you as ntfy-topic:<subscribe topic>. If you change the topic later, change this too.",
+  mattermost:
+    "Mattermost user IDs (26 letters and digits), not usernames. An admin sees them in System Console › User Management › Users.",
+  matrix: "Your Matrix ID with the @ and the server, for example @alice:example.com.",
+  "google-chat":
+    "Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied.",
+  qqbot:
+    "Add the QQ openids (the ids QQ assigns to senders, not QQ numbers) that may start conversations. Inbound is default-deny; empty means every inbound sender is denied.",
+  wecom:
+    "Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied.",
+};
+const GENERIC_SENDER_EXPLANATION = "Add trusted platform actor IDs. Empty means every inbound sender is denied.";
+
+/** Receiving here is a switch the operator turns on, so the sender step has nothing to say while it is off. */
+const SENDER_STEP_SHOWN_WHEN: Readonly<Record<string, { fieldKey: string; value: boolean }>> = {
+  ntfy: { fieldKey: "inboundStreamEnabled", value: true },
+  matrix: { fieldKey: "inboundStreamEnabled", value: true },
+  mattermost: { fieldKey: "inboundStreamEnabled", value: true },
+};
+
+function senderAccessStep(key: string): ChannelSetupStepDefinition {
+  const forcedAllowlist = FORCED_ALLOWLIST_INBOUND_CHANNELS.has(key);
+  const shownWhen = SENDER_STEP_SHOWN_WHEN[key];
+  const allowedSenders: ChannelSetupFieldDefinition = {
+    key: "allowedSenders",
+    label: "Allowed sender identities",
+    type: "sender-list",
+    required: false,
+    explanation: SENDER_EXPLANATIONS[key] ?? GENERIC_SENDER_EXPLANATION,
+    // A forced-allowlist channel has no mode to compare against, so its sender list is always shown.
+    ...(forcedAllowlist ? {} : { visibleWhenFieldEquals: { fieldKey: "inboundAccessMode", value: "allowlist" } }),
+  };
+  // The mode only matters to a connection saved with open access. Definitions are shared by every draft, and the
+  // mode a draft starts with is the saved one, so this choice is shown only while the draft is still open access.
+  const accessMode: ChannelSetupFieldDefinition = {
+    key: "inboundAccessMode",
+    label: "Inbound access",
+    type: "select",
+    required: true,
+    defaultValue: "allowlist",
+    explanation:
+      "This connection lets any sender start a conversation. Choose Only allowed senders to limit it to the people you list.",
+    options: [
+      { value: "allowlist", label: "Only allowed senders" },
+      { value: "open_legacy", label: "Open legacy access (advanced)" },
+    ],
+    visibleWhenFieldEquals: { fieldKey: "inboundAccessMode", value: "open_legacy" },
+  };
+  return {
+    id: "sender-access",
+    kind: "field-collection",
+    stage: "destinations_access",
+    title: "Who may message this bot?",
+    ...(shownWhen ? { visibleWhenFieldEquals: { ...shownWhen } } : {}),
+    body: [
+      {
+        kind: "paragraph",
+        text: "Sender identities control who can start a conversation. Destination selection only chooses where messages are delivered. An empty sender list blocks all inbound conversations.",
+      },
+    ],
+    fields: forcedAllowlist ? [allowedSenders] : [accessMode, allowedSenders],
   };
 }
 
