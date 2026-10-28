@@ -1479,7 +1479,7 @@ describe("channel confirmed receipts and OAuth scope", () => {
     expect(withheld.props.value).toBe("");
     expect(withheld.props.placeholder).toBe("Saved value hidden");
     expect(textOf(renderer.root)).toContain(
-      "The Gateway hides this saved value because it might be a secret. An empty value is hidden too.",
+      "GoatCitadel hides this saved value because it might be a secret. An empty value is hidden too.",
     );
     expect(textOf(renderer.root)).not.toContain("[REDACTED]");
     const clear = findButton(renderer.root, "Clear saved value");

@@ -188,7 +188,7 @@ export function ChannelWizardFields({
           <p>{field.explanation}</p>
           {withheld ? (
             <p>
-              The Gateway hides this saved value because it might be a secret. An empty value is hidden too. Type a
+              GoatCitadel hides this saved value because it might be a secret. An empty value is hidden too. Type a
               replacement, or clear it.
             </p>
           ) : null}
