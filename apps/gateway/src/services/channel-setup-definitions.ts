@@ -48,6 +48,11 @@ export function getChannelSetupDefinition(catalogId: string): ChannelSetupDefini
   return RUNTIME_DEFINITIONS[catalogId]?.definition;
 }
 
+/** The guide for a catalog id, or undefined when the channel has none. One lookup, for a caller that must not throw. */
+export function findChannelSetupDefinition(catalogId: string): ChannelSetupRuntimeDefinition | undefined {
+  return Object.hasOwn(RUNTIME_DEFINITIONS, catalogId) ? RUNTIME_DEFINITIONS[catalogId] : undefined;
+}
+
 export function requireChannelSetupDefinition(catalogId: string): ChannelSetupRuntimeDefinition {
   const definition = RUNTIME_DEFINITIONS[catalogId];
   if (!definition) {

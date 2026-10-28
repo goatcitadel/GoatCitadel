@@ -5,7 +5,7 @@ import { runConfiguredMatrixChecks } from "./matrix-live-probes.js";
 import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.js";
 import { appendQqbotStructuralChecks, runConfiguredQqbotChecks } from "./qqbot-live-probes.js";
 import { appendWecomStructuralChecks, runConfiguredWecomChecks } from "./wecom-live-probes.js";
-import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
+import { describeChannelCapabilities, logger } from "@goatcitadel/gateway-core";
 import {
   GOOGLE_WORKSPACE_CATALOG_ID,
   channelAddressHost,
@@ -40,7 +40,7 @@ import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import { evaluateHostEgress } from "@goatcitadel/policy-engine";
-import { getChannelSetupDefinition, requireChannelSetupDefinition } from "./channel-setup-definitions.js";
+import { findChannelSetupDefinition } from "./channel-setup-definitions.js";
 import { secretEnvSuffixRule } from "./channel-setup-definitions/common.js";
 import { connectionFixedHosts } from "./channel-setup-definitions/picker-hints.js";
 import { FORCED_ALLOWLIST_INBOUND_CHANNELS } from "./channel-setup-inbound-access.js";
@@ -49,6 +49,8 @@ import {
   printableEnvVarName,
   refusedEnvVarNameMessage,
 } from "./gateway/integration-secret-envvar-guard.js";
+
+const log = logger.child("integration-diagnostics");
 
 const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
   "slack",
@@ -894,12 +896,25 @@ function buildProviderHostsCheck(
   connection: IntegrationConnection,
   reportedAddressHosts: ReadonlySet<string>,
 ): ConnectorDiagnosticReport["checks"][number] | undefined {
-  if (connection.key === "telegram" || !getChannelSetupDefinition(connection.catalogId)) {
+  if (connection.key === "telegram") {
     return undefined;
   }
-  const hosts = connectionFixedHosts(requireChannelSetupDefinition(connection.catalogId), connection).filter(
-    (host) => !reportedAddressHosts.has(host),
-  );
+  const runtime = findChannelSetupDefinition(connection.catalogId);
+  if (!runtime) {
+    return undefined;
+  }
+  let fixedHosts: string[];
+  try {
+    fixedHosts = connectionFixedHosts(runtime, connection);
+  } catch {
+    // The guide's own read of this connection failed. That must not take down every other check, so the hosts check is
+    // left out. The error is dropped (it could hold part of the config); the catalog id is enough to find the guide.
+    log.warn("Could not work out a channel's provider hosts, so the provider hosts check was left out.", {
+      catalogId: connection.catalogId,
+    });
+    return undefined;
+  }
+  const hosts = fixedHosts.filter((host) => !reportedAddressHosts.has(host));
   if (hosts.length === 0) {
     return undefined;
   }

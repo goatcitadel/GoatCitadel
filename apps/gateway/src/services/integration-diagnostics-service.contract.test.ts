@@ -24,7 +24,7 @@ import {
 import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
 import { requireChannelSetupDefinition } from "./channel-setup-definitions.js";
 import { guideFinish } from "./channel-setup-definitions/guide-finish.test-support.js";
-import { CHANNEL_REQUIRED_HOSTS } from "./channel-setup-definitions/picker-hints.js";
+import { CHANNEL_CONDITIONAL_HOSTS, CHANNEL_REQUIRED_HOSTS } from "./channel-setup-definitions/picker-hints.js";
 // The model the guide's "Allow these hosts" button is built on, used as it is so the two halves can't drift apart.
 import { channelHosts } from "../../../mission-control-next/src/features/native-routes/settings/channel-setup/channel-wizard-model.js";
 import { isBaseUrlAllowlisted } from "../../../mission-control-next/src/cockpit/areas/settings/web-search-state.js";
@@ -1476,10 +1476,60 @@ describe("integration-diagnostics-service contract behavior", () => {
 
     it("has a case for every channel with fixed hosts, so a new one can't skip the agreement test", () => {
       const covered = new Set(CASES.map((testCase) => testCase.key));
-      const fixed = Object.keys(CHANNEL_REQUIRED_HOSTS).filter((key) => key !== "telegram");
+      // A channel whose hosts depend on how it is set up (Slack, Google Chat, QQ) is in the conditional table, and one
+      // of those can be in no other table, so both tables count.
+      const fixed = [...new Set([...Object.keys(CHANNEL_REQUIRED_HOSTS), ...Object.keys(CHANNEL_CONDITIONAL_HOSTS)])]
+        .filter((key) => key !== "telegram")
+        .sort();
 
       expect(fixed.filter((key) => !covered.has(key))).toEqual([]);
+      expect(fixed).toContain("slack");
       expect(CHANNEL_REQUIRED_HOSTS.telegram).toEqual(["api.telegram.org"]);
+    });
+
+    it("leaves the hosts check out, warns once by catalog id, and keeps every other check when a guide cannot say its hosts", () => {
+      const runtime = requireChannelSetupDefinition("channel.zalo");
+      const hydrate = vi.spyOn(runtime, "hydrate").mockImplementation(() => {
+        throw new Error("synthetic hydrate failure holding synthetic-secret-token");
+      });
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const port = createPort();
+        port.config.toolPolicy.sandbox.networkAllowlist = [];
+
+        const checks = buildIntegrationConnectionChecks(
+          port,
+          createIntegrationConnection("zalo", "channel", { accessToken: "zalo-token", defaultTarget: "user-1" }),
+        );
+
+        expect(hydrate).toHaveBeenCalled();
+        expect(checks.find((check) => check.key === "provider_hosts")).toBeUndefined();
+        expect(checks.map((check) => check.key)).toEqual(expect.arrayContaining(["actions", "auth", "target"]));
+        const logged = stderr.mock.calls.map(([chunk]) => String(chunk));
+        expect(logged.filter((line) => line.includes("provider hosts"))).toHaveLength(1);
+        expect(logged.join("")).toContain("channel.zalo");
+        expect(logged.join("")).not.toContain("synthetic-secret-token");
+        expect(logged.join("")).not.toContain("zalo-token");
+      } finally {
+        stderr.mockRestore();
+        hydrate.mockRestore();
+      }
+    });
+
+    it("says nothing about the hosts of a channel that has no guide", () => {
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const port = createPort();
+        const checks = buildIntegrationConnectionChecks(
+          port,
+          createIntegrationConnection("no-such-channel", "channel", { token: "t", defaultTarget: "x" }),
+        );
+
+        expect(checks.find((check) => check.key === "provider_hosts")).toBeUndefined();
+        expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join("")).not.toContain("provider hosts");
+      } finally {
+        stderr.mockRestore();
+      }
     });
   });
 });
