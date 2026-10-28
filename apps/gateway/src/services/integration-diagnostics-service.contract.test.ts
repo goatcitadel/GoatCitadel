@@ -22,6 +22,12 @@ import {
   type IntegrationDiagnosticsPort,
 } from "./integration-diagnostics-service.js";
 import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
+import { requireChannelSetupDefinition } from "./channel-setup-definitions.js";
+import { guideFinish } from "./channel-setup-definitions/guide-finish.test-support.js";
+import { CHANNEL_REQUIRED_HOSTS } from "./channel-setup-definitions/picker-hints.js";
+// The model the guide's "Allow these hosts" button is built on, used as it is so the two halves can't drift apart.
+import { channelHosts } from "../../../mission-control-next/src/features/native-routes/settings/channel-setup/channel-wizard-model.js";
+import { isBaseUrlAllowlisted } from "../../../mission-control-next/src/cockpit/areas/settings/web-search-state.js";
 
 function createDiscordConnection(config: Record<string, unknown>): IntegrationConnection {
   return {
@@ -536,6 +542,8 @@ describe("integration-diagnostics-service contract behavior", () => {
   it("asks an incoming Google Chat webhook for nothing but its link: the thread key is optional", () => {
     const host = createPort();
     host.isConnectionUrlAllowlisted = vi.fn(() => true);
+    // Google Chat's own host is on the allowlist, as it is once the guide's Allow these hosts button has been used.
+    host.config.toolPolicy.sandbox.networkAllowlist = ["chat.googleapis.com"];
     const webhook = "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=k&token=t";
 
     const checks = buildIntegrationConnectionChecks(
@@ -1215,6 +1223,216 @@ describe("integration-diagnostics-service contract behavior", () => {
     expect(connectionWarn).toMatchObject({
       status: "warn",
       message: expect.stringContaining("Connection-level urlAllowlist contains a wildcard"),
+    });
+  });
+
+  describe("a channel's fixed provider hosts must be on the network allowlist (C7, R67)", () => {
+    const WEBHOOK_URL = "https://hooks.slack.com/services/T000/B000/XXXX";
+    const hostsCheckOf = (connection: IntegrationConnection, allowlist: string[]) => {
+      const port = createPort();
+      port.config.toolPolicy.sandbox.networkAllowlist = allowlist;
+      return buildIntegrationConnectionChecks(port, connection).find((check) => check.key === "provider_hosts");
+    };
+    /** The hosts a message names: every dotted name in it. The messages are plain sentences, so nothing else matches. */
+    const hostsNamedIn = (message: string) => message.match(/[a-z0-9-]+(?:\.[a-z0-9-]+)+/gu) ?? [];
+
+    /** One connection per way a channel can be set up, with the hosts a real send needs for it. */
+    const CASES: ReadonlyArray<{ label: string; key: string; config: Record<string, unknown>; hosts: string[] }> = [
+      { label: "Discord", key: "discord", config: { botToken: "discord-bot-token" }, hosts: ["discord.com"] },
+      {
+        label: "Slack with a bot token",
+        key: "slack",
+        config: { botToken: "xoxb-test", defaultChannel: "#ops" },
+        hosts: ["slack.com"],
+      },
+      {
+        label: "Slack with a bot token variable",
+        key: "slack",
+        config: { botTokenEnv: "SLACK_BOT_TOKEN", defaultChannel: "#ops" },
+        hosts: ["slack.com"],
+      },
+      {
+        label: "Slack connected with OAuth",
+        key: "slack",
+        config: { slackInstallId: "slack:T000", defaultChannel: "#ops" },
+        hosts: ["slack.com"],
+      },
+      { label: "Slack with only a webhook", key: "slack", config: { webhookUrl: WEBHOOK_URL }, hosts: [] },
+      {
+        label: "WhatsApp",
+        key: "whatsapp",
+        config: { accessToken: "wa-token", phoneNumberId: "phone-1", defaultTarget: "15551234567" },
+        hosts: ["graph.facebook.com"],
+      },
+      {
+        label: "LINE",
+        key: "line",
+        config: { channelAccessToken: "line-token", defaultTarget: "U123" },
+        hosts: ["api.line.me"],
+      },
+      {
+        label: "Zalo",
+        key: "zalo",
+        config: { accessToken: "zalo-token", defaultTarget: "user-1" },
+        hosts: ["openapi.zalo.me"],
+      },
+      {
+        label: "QQ",
+        key: "qqbot",
+        config: { appId: "1024", appSecretEnv: "QQBOT_APP_SECRET", defaultTarget: "openid" },
+        hosts: ["bots.qq.com", "api.bot.qq.com"],
+      },
+      {
+        label: "QQ in Test mode",
+        key: "qqbot",
+        config: { appId: "1024", appSecretEnv: "QQBOT_APP_SECRET", defaultTarget: "openid", sandbox: true },
+        hosts: ["bots.qq.com", "api.bot.qq.com", "sandbox.api.sgroup.qq.com"],
+      },
+      {
+        label: "WeCom",
+        key: "wecom",
+        config: { corpId: "ww1", agentId: "1000002", secretEnv: "WECOM_SECRET" },
+        hosts: ["qyapi.weixin.qq.com"],
+      },
+      { label: "Google Chat incoming webhook", key: "google-chat", config: {}, hosts: ["chat.googleapis.com"] },
+      {
+        label: "Google Chat app",
+        key: "google-chat",
+        config: {
+          serviceAccountKeyEnv: "GOOGLE_CHAT_SERVICE_ACCOUNT_KEY",
+          audience: "https://example.test",
+          defaultSpace: "spaces/AAA",
+        },
+        hosts: ["chat.googleapis.com", "oauth2.googleapis.com"],
+      },
+    ];
+
+    it.each([
+      ["zalo", { accessToken: "zalo-token", defaultTarget: "user-1" }, "openapi.zalo.me"],
+      ["slack", { botToken: "xoxb-test", defaultChannel: "#ops" }, "slack.com"],
+      ["whatsapp", { accessToken: "wa-token", phoneNumberId: "phone-1", defaultTarget: "1555" }, "graph.facebook.com"],
+      ["line", { channelAccessToken: "line-token", defaultTarget: "U123" }, "api.line.me"],
+    ])("warns on a %s connection when its host is not allowed, and says what clears it", (key, config, host) => {
+      const check = hostsCheckOf(createIntegrationConnection(key, "channel", config), ["discord.com"]);
+
+      expect(check).toEqual({
+        key: "provider_hosts",
+        status: "warn",
+        message: `Real sends need ${host} on the network allowlist. Use Allow these hosts in the guide, or add it in Settings.`,
+      });
+    });
+
+    it("passes when the host is on the allowlist, however the entry is written", () => {
+      const connection = createIntegrationConnection("zalo", "channel", { accessToken: "t", defaultTarget: "u" });
+
+      for (const allowlist of [["openapi.zalo.me"], ["OpenAPI.Zalo.me"], ["*.zalo.me"], ["*"]]) {
+        expect(hostsCheckOf(connection, allowlist), allowlist.join()).toEqual({
+          key: "provider_hosts",
+          status: "pass",
+          message: "Provider host openapi.zalo.me is on the network allowlist.",
+        });
+      }
+    });
+
+    it("gives a Slack webhook-only connection no slack.com warning, as it never contacts slack.com", () => {
+      const connection = createIntegrationConnection("slack", "channel", { webhookUrl: WEBHOOK_URL });
+      const port = createPort();
+      port.config.toolPolicy.sandbox.networkAllowlist = ["discord.com"];
+
+      const checks = buildIntegrationConnectionChecks(port, connection);
+
+      expect(checks.find((check) => check.key === "provider_hosts")).toBeUndefined();
+      expect(checks.map((check) => check.message).join(" ")).not.toMatch(/(^|\s)slack\.com/u);
+    });
+
+    it("names only the hosts still missing, and all of them in one warning", () => {
+      const testMode = CASES.find((testCase) => testCase.label === "QQ in Test mode")!;
+      const connection = createIntegrationConnection("qqbot", "channel", testMode.config);
+
+      expect(hostsCheckOf(connection, ["bots.qq.com"])?.message).toBe(
+        "Real sends need api.bot.qq.com and sandbox.api.sgroup.qq.com on the network allowlist. Use Allow these hosts in the guide, or add them in Settings.",
+      );
+      expect(hostsCheckOf(connection, [])?.message).toBe(
+        "Real sends need bots.qq.com, api.bot.qq.com and sandbox.api.sgroup.qq.com on the network allowlist. Use Allow these hosts in the guide, or add them in Settings.",
+      );
+      expect(hostsCheckOf(connection, ["*.qq.com", "sandbox.api.sgroup.qq.com"])?.status).toBe("pass");
+    });
+
+    it("leaves Telegram to its own check, and the channels whose host is an address to the address check", () => {
+      const checks = (key: string, config: Record<string, unknown>) => {
+        const port = createPort();
+        port.config.toolPolicy.sandbox.networkAllowlist = ["discord.com"];
+        return buildIntegrationConnectionChecks(port, createIntegrationConnection(key, "channel", config));
+      };
+
+      const telegram = checks("telegram", { botToken: "123:abc", defaultChatId: "1" });
+      expect(telegram.filter((check) => check.key === "provider_hosts")).toEqual([]);
+      expect(telegram.find((check) => check.key === "url")).toEqual({
+        key: "url",
+        status: "warn",
+        message: "Telegram API host is not allowlisted.",
+      });
+      for (const [key, config] of [
+        ["mattermost", { serverUrl: "https://chat.example.test", botToken: "t", defaultChannel: "town-square" }],
+        [
+          "matrix",
+          { homeserverUrl: "https://matrix.example.test", accessToken: "t", defaultRoomId: "!r:example.test" },
+        ],
+        ["ntfy", { baseUrl: "https://ntfy.example.test", topic: "alerts" }],
+        ["nextcloud-talk", { baseUrl: "https://cloud.example.test", token: "t", defaultTarget: "room" }],
+        ["teams", { webhookUrl: "https://example.logic.azure.com/workflows/1" }],
+      ] as const) {
+        expect(
+          checks(key, config).filter((check) => check.key === "provider_hosts"),
+          key,
+        ).toEqual([]);
+      }
+    });
+
+    it("does not report a host twice when the address the operator gave is on it (a Discord or Google Chat webhook)", () => {
+      for (const [key, webhookUrl] of [
+        ["discord", "https://discord.com/api/webhooks/123/token"],
+        ["google-chat", "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=k&token=t"],
+      ] as const) {
+        const checks = (allowlist: string[]) => {
+          const port = createPort();
+          port.config.toolPolicy.sandbox.networkAllowlist = allowlist;
+          return buildIntegrationConnectionChecks(port, createIntegrationConnection(key, "channel", { webhookUrl }));
+        };
+
+        expect(
+          checks(["slack.com"]).filter((check) => check.key === "provider_hosts"),
+          key,
+        ).toEqual([]);
+        // The address check is the one that warns, so there is one warning for the one host.
+        expect(
+          checks(["slack.com"]).filter((check) => check.key === "url" && check.status === "warn"),
+          key,
+        ).toHaveLength(1);
+      }
+    });
+
+    it.each(CASES)("names, for $label, exactly the hosts the guide's Allow these hosts button adds", (testCase) => {
+      const connection = createIntegrationConnection(testCase.key, "channel", testCase.config);
+      const check = hostsCheckOf(connection, []);
+
+      // The button's side: the guide's own model, run on the draft the Gateway makes of this connection.
+      const runtime = requireChannelSetupDefinition(connection.catalogId);
+      const hydrated = runtime.hydrate(connection);
+      const draft = guideFinish(connection.catalogId).draftOf(hydrated.draft, { hydration: hydrated.hydration });
+      const offered = channelHosts(runtime.definition, draft, hydrated.draft);
+      const button = offered.filter((host) => !isBaseUrlAllowlisted(`https://${host}/`, []));
+
+      expect(button).toEqual(testCase.hosts);
+      expect(check === undefined ? [] : hostsNamedIn(check.message)).toEqual(button);
+    });
+
+    it("has a case for every channel with fixed hosts, so a new one can't skip the agreement test", () => {
+      const covered = new Set(CASES.map((testCase) => testCase.key));
+      const fixed = Object.keys(CHANNEL_REQUIRED_HOSTS).filter((key) => key !== "telegram");
+
+      expect(fixed.filter((key) => !covered.has(key))).toEqual([]);
+      expect(CHANNEL_REQUIRED_HOSTS.telegram).toEqual(["api.telegram.org"]);
     });
   });
 });

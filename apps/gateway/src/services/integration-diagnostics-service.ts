@@ -8,6 +8,7 @@ import { appendWecomStructuralChecks, runConfiguredWecomChecks } from "./wecom-l
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import {
   GOOGLE_WORKSPACE_CATALOG_ID,
+  channelAddressHost,
   describeRetiredChannel,
   evaluateChannelInboundAccess,
 } from "@goatcitadel/contracts";
@@ -35,7 +36,9 @@ import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import { evaluateHostEgress } from "@goatcitadel/policy-engine";
+import { getChannelSetupDefinition, requireChannelSetupDefinition } from "./channel-setup-definitions.js";
 import { secretEnvSuffixRule } from "./channel-setup-definitions/common.js";
+import { connectionFixedHosts } from "./channel-setup-definitions/picker-hints.js";
 import { FORCED_ALLOWLIST_INBOUND_CHANNELS } from "./channel-setup-inbound-access.js";
 import {
   isPermittedIntegrationSecretEnvVarName,
@@ -135,9 +138,15 @@ export function buildIntegrationConnectionChecks(
       message: value ? `${label} is set.` : `${label} is missing.`,
     });
   };
+  // The hosts of the addresses `checkUrl` has reported on, so the provider hosts check doesn't report them twice.
+  const addressHosts = new Set<string>();
   const checkUrl = (key: string, label: string, urlValue: string | undefined, required = false) => {
     if (!urlValue && !required) {
       return;
+    }
+    const addressHost = channelAddressHost(urlValue);
+    if (addressHost) {
+      addressHosts.add(addressHost);
     }
     const safeRemote = !urlValue || connectionUrlHelpers.isConnectionUrlRemoteSafe(urlValue);
     const allowlisted = !urlValue || deps.isConnectionUrlAllowlisted(urlValue);
@@ -377,6 +386,10 @@ export function buildIntegrationConnectionChecks(
         requireText("target", "Default target", resolveChannelConfigTarget(connection.key, config), "warn");
         requireSecretRef("auth", "Channel token", "token", "tokenEnv");
         break;
+    }
+    const providerHosts = buildProviderHostsCheck(deps, connection, addressHosts);
+    if (providerHosts) {
+      checks.push(providerHosts);
     }
   } else if (connection.kind === "model_provider") {
     checkUrl("url", "Provider base URL", deps.readConnectionConfigValue(config, "baseUrl"), true);
@@ -838,6 +851,48 @@ function refusedVariableNameMessage(
 
 function isHostAllowlisted(deps: IntegrationDiagnosticsPort, hostname: string): boolean {
   return connectionUrlHelpers.isHostAllowlistedInList(hostname, deps.config.toolPolicy.sandbox.networkAllowlist);
+}
+
+/** "a", "a and b", "a, b and c". */
+function listHosts(hosts: readonly string[]): string {
+  return hosts.length > 1 ? `${hosts.slice(0, -1).join(", ")} and ${hosts[hosts.length - 1]}` : (hosts[0] ?? "");
+}
+
+/**
+ * Whether the network allowlist has the fixed provider hosts a real send to this channel needs. The setup test reaches
+ * the provider through a fetcher that allows any public host, so without this check it passes and then the first real
+ * send is blocked. The hosts are the ones the guide's "Allow these hosts" button adds for this connection
+ * (`connectionFixedHosts`), so one click clears the warning. A host the operator gave as an address is left to the
+ * address check (`reportedAddressHosts`: a Discord webhook is on discord.com, which is also Discord's fixed host), and
+ * Telegram keeps its own check on `api.telegram.org`.
+ */
+function buildProviderHostsCheck(
+  deps: IntegrationDiagnosticsPort,
+  connection: IntegrationConnection,
+  reportedAddressHosts: ReadonlySet<string>,
+): ConnectorDiagnosticReport["checks"][number] | undefined {
+  if (connection.key === "telegram" || !getChannelSetupDefinition(connection.catalogId)) {
+    return undefined;
+  }
+  const hosts = connectionFixedHosts(requireChannelSetupDefinition(connection.catalogId), connection).filter(
+    (host) => !reportedAddressHosts.has(host),
+  );
+  if (hosts.length === 0) {
+    return undefined;
+  }
+  const missing = hosts.filter((host) => !isHostAllowlisted(deps, host));
+  if (missing.length === 0) {
+    return {
+      key: "provider_hosts",
+      status: "pass",
+      message: `Provider ${hosts.length === 1 ? "host" : "hosts"} ${listHosts(hosts)} ${hosts.length === 1 ? "is" : "are"} on the network allowlist.`,
+    };
+  }
+  return {
+    key: "provider_hosts",
+    status: "warn",
+    message: `Real sends need ${listHosts(missing)} on the network allowlist. Use Allow these hosts in the guide, or add ${missing.length === 1 ? "it" : "them"} in Settings.`,
+  };
 }
 
 /**

@@ -639,6 +639,34 @@ describe("Google Chat app path: can it finish?", () => {
     expect(deps.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
   });
 
+  it("holds Finalize back until Google's token host is allowed too, which a Chat app needs and a webhook does not (C7)", async () => {
+    const chatHostOnly = guideFinish("channel.google-chat", { networkAllowlist: ["chat.googleapis.com"] });
+
+    const app = await chatHostOnly.verdictOf(guide().normalize(draftOf(PASTED_APP_VALUES)));
+    const webhook = await chatHostOnly.verdictOf(
+      guide().normalize(draftOf({ mode: "webhook", webhookUrl: WEBHOOK_URL })),
+    );
+
+    // The Chat app signs in at oauth2.googleapis.com; the missing test message stays an advisory, this one blocks.
+    expect(app.issues.find((issue) => issue.key === "provider_hosts")).toEqual({
+      key: "provider_hosts",
+      level: "warn",
+      message:
+        "Real sends need oauth2.googleapis.com on the network allowlist. Use Allow these hosts in the guide, or add it in Settings.",
+      disposition: "blocking",
+    });
+    expect(app.eligibility.allowed).toBe(false);
+    expect(app.eligibility.blockingReasons).toEqual([
+      "Real sends need oauth2.googleapis.com on the network allowlist. Use Allow these hosts in the guide, or add it in Settings.",
+    ]);
+    expect(webhook.eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
+    // Both hosts allowed, as the button leaves them, and the Chat app finishes again.
+    const bothHosts = guideFinish("channel.google-chat", {
+      networkAllowlist: ["chat.googleapis.com", "oauth2.googleapis.com"],
+    });
+    expect((await bothHosts.verdictOf(guide().normalize(draftOf(PASTED_APP_VALUES)))).eligibility.allowed).toBe(true);
+  });
+
   it("finishes with the key in an environment variable too", async () => {
     vi.stubEnv("GOOGLE_CHAT_SA_KEY", "synthetic-service-account-key");
 

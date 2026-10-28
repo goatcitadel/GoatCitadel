@@ -33,6 +33,11 @@ const TIMESTAMP = "2026-03-29T00:00:00.000Z";
 export interface GuideFinishOptions {
   /** The fake network. Without it every request is answered with 200 and `{}`. */
   fetch?: IntegrationDiagnosticsPort["fetchWithDiagnosticsTimeout"];
+  /**
+   * The Gateway's network allowlist. Without it, every fixed host the guide lists for the channel is allowed, as the
+   * "Allow these hosts" button leaves it; a test of the hosts check passes the list it wants.
+   */
+  networkAllowlist?: string[];
 }
 
 /** Whether the wizard counts a value as filled in (`hasFieldValue`, without the saved-secret state). */
@@ -124,7 +129,13 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
     });
   }
 
-  /** The Gateway's diagnostics port with a fake network and every host allowed. */
+  /** The fixed hosts the guide lists for the channel, whatever the mode: the allowlist a finished setup has. */
+  function fixedHosts(): string[] {
+    const { requiredHosts = [], conditionalHosts = [] } = runtime().definition.wizard;
+    return [...new Set([...requiredHosts, ...conditionalHosts.map((rule) => rule.host)])];
+  }
+
+  /** The Gateway's diagnostics port with a fake network, the fixed hosts allowed and every address allowed. */
   function port(): IntegrationDiagnosticsPort {
     const readString = (values: Record<string, unknown>, key: string) => {
       const value = values[key];
@@ -132,7 +143,10 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
     };
     return {
       config: {
-        toolPolicy: { tools: { profile: "default" }, sandbox: { networkAllowlist: [] } },
+        toolPolicy: {
+          tools: { profile: "default" },
+          sandbox: { networkAllowlist: [...(options.networkAllowlist ?? fixedHosts())] },
+        },
       } as unknown as IntegrationDiagnosticsPort["config"],
       fetchWithDiagnosticsTimeout: vi.fn(
         options.fetch ?? (async () => new Response("{}", { status: 200 })),

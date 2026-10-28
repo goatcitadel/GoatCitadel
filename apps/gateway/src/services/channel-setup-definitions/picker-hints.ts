@@ -1,4 +1,9 @@
-import type { ChannelSetupHostRule, ChannelSetupInboundWebhook, ChannelSetupPickerHint } from "@goatcitadel/contracts";
+import type {
+  ChannelSetupHostRule,
+  ChannelSetupInboundWebhook,
+  ChannelSetupPickerHint,
+  IntegrationConnection,
+} from "@goatcitadel/contracts";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 
 type ChannelPickerHintEntry = Omit<ChannelSetupPickerHint, "order">;
@@ -44,12 +49,12 @@ export const CHANNEL_PICKER_HINTS: Readonly<Record<string, ChannelPickerHintEntr
  *
  * Each list comes from the code the channel sends through: `comms-executor.ts`, `qqbot-client.ts`,
  * `wecom-client.ts`, `google-chat-service-account.ts` and the live probes. A channel whose host the
- * operator chooses has no fixed host here; its URL field is in `CHANNEL_HOST_FIELDS` instead.
+ * operator chooses has no fixed host here; its URL field is in `CHANNEL_HOST_FIELDS` instead. Slack has
+ * none either: its API host only matters with a bot token, so it is in `CHANNEL_CONDITIONAL_HOSTS`.
  */
 export const CHANNEL_REQUIRED_HOSTS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   telegram: Object.freeze(["api.telegram.org"]),
   discord: Object.freeze(["discord.com"]),
-  slack: Object.freeze(["slack.com"]),
   whatsapp: Object.freeze(["graph.facebook.com"]),
   line: Object.freeze(["api.line.me"]),
   zalo: Object.freeze(["openapi.zalo.me"]),
@@ -85,9 +90,13 @@ const GOOGLE_CHAT_APP_FIELDS: readonly string[] = Object.freeze([
 /**
  * Hosts a channel needs only while certain fields are set, keyed by catalog key. Google's token host follows the
  * guide's "Connect with" choice, which the setup wizard always holds (an edit draft derives it from the saved keys), so
- * a key left behind after switching back to an incoming webhook does not ask for it.
+ * a key left behind after switching back to an incoming webhook does not ask for it. Slack's API host follows its bot
+ * token (pasted, or from an OAuth install): an incoming webhook posts to its own address and never contacts it.
  */
 export const CHANNEL_CONDITIONAL_HOSTS: Readonly<Record<string, readonly FrozenHostRule[]>> = Object.freeze({
+  slack: Object.freeze([
+    Object.freeze({ host: "slack.com", whenAnyFieldSet: Object.freeze(["botToken", "slackInstallId"]) }),
+  ]),
   qqbot: Object.freeze([
     Object.freeze({ host: "sandbox.api.sgroup.qq.com", whenAnyFieldSet: Object.freeze(["sandbox"]), equals: true }),
   ]),
@@ -151,6 +160,45 @@ function copyInboundWebhook(webhook: FrozenInboundWebhook): ChannelSetupInboundW
     ...(webhook.whenFieldEquals ? { whenFieldEquals: { ...webhook.whenFieldEquals } } : {}),
     ...(whenAnyFieldSet ? { whenAnyFieldSet: [...whenAnyFieldSet] } : {}),
   };
+}
+
+/** Whether the guide counts a field as filled in (`hasFieldValue` in Mission Control's `channel-wizard-model.ts`). */
+function isFieldFilled(value: unknown, savedState: string | undefined): boolean {
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (value && typeof value === "object") return Object.keys(value).length > 0;
+  return savedState === "configured";
+}
+
+/**
+ * The fixed provider hosts a saved connection needs: the guide's `requiredHosts`, then the `conditionalHosts` whose
+ * condition holds. It is what Mission Control's `channelHosts` offers on the "Allow these hosts" button for the draft
+ * the Gateway makes of this connection, minus the hosts of address fields, which the connection's URL check reports.
+ * The conditions read the draft the guide's own `hydrate` makes (that is where Google Chat's mode and QQ's Test mode
+ * come from), with the same defaults and the same idea of a filled field as the guide.
+ */
+export function connectionFixedHosts(
+  runtime: ChannelSetupRuntimeDefinition,
+  connection: IntegrationConnection,
+): string[] {
+  const { requiredHosts = [], conditionalHosts = [], steps } = runtime.definition.wizard;
+  if (requiredHosts.length === 0 && conditionalHosts.length === 0) return [];
+  const { draft, hydration } = runtime.hydrate(connection);
+  const defaults = steps.flatMap((step) => step.fields ?? []).filter((field) => field.defaultValue !== undefined);
+  // A value the guide leaves undefined is absent in the draft Mission Control receives, so it can't hide a default.
+  const values: Record<string, unknown> = {
+    ...Object.fromEntries(defaults.map((field) => [field.key, field.defaultValue])),
+    ...Object.fromEntries(Object.entries(draft).filter(([, value]) => value !== undefined)),
+  };
+  const holds = (rule: ChannelSetupHostRule) =>
+    rule.whenAnyFieldSet.some(
+      (key) =>
+        isFieldFilled(values[key], hydration.fieldState[key]) &&
+        (rule.equals === undefined || values[key] === rule.equals),
+    );
+  return [...new Set([...requiredHosts, ...conditionalHosts.filter(holds).map((rule) => rule.host)])];
 }
 
 /**

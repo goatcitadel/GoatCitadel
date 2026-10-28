@@ -528,6 +528,34 @@ describe("Zalo OA: can it finish?", () => {
     expect(paragraphs("test")[0]).toContain("The test doesn't delete it, so check that it arrived");
   });
 
+  it("holds Finalize back until openapi.zalo.me is on the network allowlist, though the test reaches Zalo (C7)", async () => {
+    const blocked = guideFinish("channel.zalo", { fetch: zalo(), networkAllowlist: ["discord.com"] });
+
+    const { live, issues, eligibility } = await blocked.verdictOf(guide().normalize(draftOf(VALUES)));
+
+    // The test fetcher allows any public host, so Zalo answers; the real send would be blocked, so the check says so.
+    expect(live.probe?.steps.map((step) => step.status)).toEqual(["pass"]);
+    expect(issues).toEqual([
+      {
+        key: "provider_hosts",
+        level: "warn",
+        message:
+          "Real sends need openapi.zalo.me on the network allowlist. Use Allow these hosts in the guide, or add it in Settings.",
+        disposition: "blocking",
+      },
+    ]);
+    expect(eligibility.allowed).toBe(false);
+    expect(eligibility.blockingReasons).toEqual([
+      "Real sends need openapi.zalo.me on the network allowlist. Use Allow these hosts in the guide, or add it in Settings.",
+    ]);
+    // Allow the host, as the button does, and the same connection can finish.
+    const allowed = guideFinish("channel.zalo", {
+      fetch: zalo(),
+      networkAllowlist: ["discord.com", "openapi.zalo.me"],
+    });
+    expect((await allowed.verdictOf(guide().normalize(draftOf(VALUES)))).eligibility.allowed).toBe(true);
+  });
+
   it("holds Finalize back for a refused or expired access token, says so plainly, and the guide names the fix", async () => {
     for (const refusal of [TOKEN_INVALID, TOKEN_EXPIRED]) {
       const { live, eligibility } = await refusedWith(refusal).verdictOf(guide().normalize(draftOf(VALUES)));
