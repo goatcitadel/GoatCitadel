@@ -1,5 +1,3 @@
-// Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
-// per-section settings decomposition.
 import type { ConnectorDiagnosticReport } from "@goatcitadel/contracts";
 import { SettingsActionList, SettingsCodeBlock } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";

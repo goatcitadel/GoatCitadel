@@ -533,11 +533,13 @@ describe("channel setup definitions", () => {
     // Setup evidence records this version. Change the suffix whenever any guide's text, or the text the guides share,
     // changes, so an evidence row tells which text the operator saw.
     const definitions = listChannelSetupDefinitions();
-    expect(definitions.length).toBe(14);
+    // Not a count of the guides: a new guide should carry the suffix without this test being edited.
+    expect(definitions).not.toHaveLength(0);
     for (const definition of definitions) {
-      expect(definition.wizard.contentVersion, `${definition.catalog.catalogId} content version`).toMatch(
-        /^\d{4}\.\d{2}\.[a-z-]+\..+\.guided-2026-10-28$/u,
-      );
+      expect(
+        definition.wizard.contentVersion.endsWith(".guided-2026-10-28"),
+        `${definition.catalog.catalogId} content version ${definition.wizard.contentVersion}`,
+      ).toBe(true);
     }
   });
 

@@ -157,7 +157,7 @@ describe("connection diagnostics check names", () => {
       renderer = create(<ChannelJourneyEvidence diagnostics={diagnostics} />);
     });
     const copy = text(renderer.root);
-    expect(copy).toContain("Sending and receiving");
+    expect(copy).toContain("how sending and receiving work");
     expect(copy).toContain("default room");
     expect(copy).not.toMatch(/posture/iu);
     expect(diagnostics.checks.map((check) => check.key)).toEqual(["delivery_posture", "default_room"]);

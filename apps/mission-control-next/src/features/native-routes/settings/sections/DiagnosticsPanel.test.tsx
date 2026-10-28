@@ -25,7 +25,7 @@ describe("Classic connection diagnostics", () => {
       renderer = create(<DiagnosticsPanel report={report} ariaLabel="Integration connection diagnostic checks" />);
     });
     const copy = text(renderer.root);
-    expect(copy).toContain("Sending and receiving");
+    expect(copy).toContain("how sending and receiving work");
     expect(copy).not.toMatch(/posture/iu);
     expect(report.checks.map((check) => check.key)).toEqual(["delivery_posture", "url"]);
     renderer.unmount();
