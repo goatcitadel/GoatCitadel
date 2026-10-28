@@ -216,7 +216,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
                   "When inbound channel voice is enabled, Slack audio file shares are transcribed: the gateway downloads the file from files.slack.com with the bot token (needs the files:read scope, 8 MB cap) and routes the transcript as an untrusted voice turn. files.slack.com must be in the network allowlist (toolPolicy.sandbox.networkAllowlist); otherwise the download is refused and the turn runs on the [voice message] fallback.",
                 ]
               : []),
-            "Guided setup can run a sandbox send/delete probe on the bot-token path before finalize.",
+            "With a bot token, guided setup can send a test message and delete it again before finalize.",
           ]
         : [
             "Webhook-only Slack connections support send only plus URL-backed attachment previews. Reactions, unsend, replies, and inline file uploads require a bot token.",
@@ -301,13 +301,13 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
             "Gateway-mode Discord connections keep a persistent Discord gateway session, so the bot can appear online and route inbound DMs or allowlisted guild messages.",
             "When inbound channel voice is enabled, Discord voice messages and audio attachments that pass the same pairing and guild allowlist gates as text are downloaded from the Discord CDN (8 MB cap) and transcribed into an untrusted voice turn. Voice messages cannot mention the bot, so in mention-gated guild channels they are not routed. cdn.discordapp.com and media.discordapp.net must be in the network allowlist (toolPolicy.sandbox.networkAllowlist; discord.com does not cover them); otherwise the download is refused and the turn runs on the [voice message] fallback.",
             "Outbound replies still use the shared Discord send bridge, so reactions and unsend follow the same REST constraints as bridge mode.",
-            "Guided setup can run token, channel, sandbox send/delete, and runtime-readiness probes before finalize.",
+            "Guided setup can check the token, channel and runtime, and send a test message and delete it again, before finalize.",
           ]
         : hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
           ? [
               "Bridge-mode Discord connections are outbound REST bridges. They support reactions, deleting messages in channels the bot can manage, and typing indicators through the REST typing endpoint, but they do not create a persistent online presence.",
               "Discord rich sends support uploaded inline files and URL-backed embeds.",
-              "Guided setup can run token, channel, and sandbox send/delete probes before finalize.",
+              "Guided setup can check the token and channel, and send a test message and delete it again, before finalize.",
             ]
           : hasAnyConfigured(config, ["webhookUrl", "url"])
             ? [
@@ -375,7 +375,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       "Telegram rich sends use photo/document delivery and apply the message body as the first caption when it fits provider limits.",
       "Telegram rich-message preflight blocks metadata-only attachments, caps rich batches at 10 attachments, and records provider delivery evidence before send.",
       resolveTelegramInboundNote(config),
-      "Guided setup can run a sandbox send/delete probe before finalize.",
+      "Guided setup can send a test message and delete it again before finalize.",
     ],
     requiredAnyOf: [["botTokenEnv", "botToken", "tokenEnv", "token"]],
   },
@@ -483,7 +483,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
         : [
             "Google Chat webhook sends support URL-backed rich cards for image and link attachments.",
             "Google Chat webhook mode is outbound; inbound requires Chat app (service-account) mode.",
-            "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+            "Guided setup can send a test message through the webhook before finalize. You confirm yourself that it arrived.",
           ],
     requiredAnyOf: [["webhookUrl", "url", "serviceAccountKeyEnv", "serviceAccountKey"]],
   },
@@ -508,7 +508,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     supportNotes: [
       "Teams webhook sends support URL-backed adaptive card attachments for images and links.",
       "Teams webhook mode is outbound only and does not provide inbound routing.",
-      "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+      "Guided setup can send a test message through the webhook before finalize. You confirm yourself that it arrived.",
     ],
     requiredAnyOf: [["webhookUrl", "url"]],
   },
@@ -553,49 +553,6 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
         : "WhatsApp inbound routing remains disabled until both the app secret and webhook verify token are configured.",
     ],
     requiredAnyOf: [["phoneNumberId"], ["accessTokenEnv", "accessToken", "tokenEnv", "token"]],
-  },
-  signal: {
-    supportedActions: ["channel.send", "channel.react", "channel.unsend", "channel.typing"],
-    resolveInboundModes: (config) => (isSignalInboundEnabled(config) ? ["stream"] : ["none"]),
-    threadCapabilities: {
-      direct: true,
-      groups: true,
-    },
-    chunkingMode: "fallback",
-    supportsStreaming: false,
-    resolveRuntimePosture: (config) =>
-      isSignalInboundEnabled(config)
-        ? {
-            outboundTransport: "api",
-            inboundTransport: "stream",
-            lifecycle: "persistent",
-            inboundReadiness: "ready",
-            operatorSummary:
-              "Signal sends through the signal-cli JSON-RPC bridge and, with receiveEvents enabled, keeps a persistent subscription to the signal-cli HTTP daemon event stream. Self-echo, receipts and typing events are ignored, and the sender plus message timestamp dedupes any reconnect overlap.",
-          }
-        : {
-            outboundTransport: "api",
-            lifecycle: "stateless",
-            inboundReadiness: "unsupported",
-            operatorSummary:
-              "Signal sends through the configured signal-cli JSON-RPC bridge. Inbound is opt-in: enable receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream.",
-          },
-    resolveSupportNotes: (config) => [
-      "Outbound Signal sends use the configured bridge JSON-RPC send path.",
-      "Signal typing indicators use the bridge JSON-RPC sendTyping method for a recipient or a group: target.",
-      "Signal reactions use sendReaction with the target message timestamp as messageId; group reactions also need targetAuthor.",
-      "Signal remote delete (unsend) uses remoteDelete and works only on messages this account sent.",
-      isSignalInboundEnabled(config)
-        ? "Signal inbound subscribes to the signal-cli daemon --http event stream (/api/v1/events); allow the sender UUIDs (or numbers for senders without a UUID) that may start turns, because inbound is default-deny."
-        : "Signal inbound is off; set receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream (/api/v1/events).",
-      "signal-cli acknowledges messages to the Signal server itself, so messages that arrive while the gateway's event stream is disconnected are not replayed and are lost.",
-      ...(isSignalInboundEnabled(config)
-        ? [
-            "signal-cli sends an SSE keepalive (every 15 seconds by default, --sse-keepalive-interval); an event stream silent for 90 seconds is treated as dropped and reconnected, so keep that interval well below 90 seconds.",
-          ]
-        : []),
-    ],
-    requiredAnyOf: [["baseUrl", "bridgeUrl"]],
   },
   mattermost: {
     supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
@@ -764,37 +721,6 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       "WeCom reactions and unsend are not supported by this adapter.",
     ],
     requiredAnyOf: [["corpId"], ["agentId"], ["secretEnv", "secret"]],
-  },
-  imessage: {
-    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
-    supportedAttachmentSources: ["url", "inline"],
-    inboundModes: ["none"],
-    threadCapabilities: {
-      replies: true,
-      direct: true,
-      groups: true,
-    },
-    chunkingMode: "fallback",
-    supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "iMessage defaults to a BlueBubbles local bridge. Photon/Spectrum is tracked as a third-party sidecar provider, but it is not the default runtime path and must be explicitly configured with a runnable adapter.",
-    },
-    supportNotes: [
-      "BlueBubbles is the local-first callable provider for this Gateway build.",
-      "Photon/Spectrum provider metadata is recognized for diagnostics, but sends fail closed until a Photon adapter is installed.",
-      "Attachment sends to brand-new handles require BlueBubbles chat creation support.",
-      "Reactions, unsend, and typing indicators require BlueBubbles Private API support.",
-      "Typing indicators post to the BlueBubbles chat typing endpoint and need a chat GUID target (chat_guid:iMessage;-;+15551234567); handles and chat ids are not resolved for typing.",
-      "BlueBubbles authenticates with a ?password= URL query parameter, so use an https:// bridge URL or a loopback bridge (127.0.0.1, localhost, [::1]); a schemeless non-loopback bridge URL defaults to https.",
-    ],
-    requiredAnyOf: [
-      ["bridgeUrl", "baseUrl", "serverUrl"],
-      ["passwordEnv", "password", "apiPasswordEnv", "apiPassword"],
-    ],
   },
   "nextcloud-talk": {
     platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS["nextcloud-talk"],
@@ -1450,11 +1376,6 @@ function isNtfyInboundEnabled(config: Record<string, unknown>): boolean {
     hasAnyConfigured(config, ["baseUrl"]) &&
     hasAnyConfigured(config, ["subscribeTopic", "topic", "defaultTopic"])
   );
-}
-
-/** Mirrors the Signal stream adapter: receiveEvents opt-in and a bridge URL. */
-function isSignalInboundEnabled(config: Record<string, unknown>): boolean {
-  return isExplicitTrue(config.receiveEvents) && hasAnyConfigured(config, ["baseUrl", "bridgeUrl"]);
 }
 
 /** Mirrors the Mattermost stream adapter: opt-in, server URL and a bot token. */

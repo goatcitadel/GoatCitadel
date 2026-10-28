@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { RETIRED_CHANNEL_REASONS } from "@goatcitadel/contracts";
 import {
   describeChannelCapabilities,
   isMatrixInboundEnabled,
@@ -89,22 +90,16 @@ describe("describeChannelCapabilities", () => {
     expect(capabilities.activityCapabilities.nativeEffects).toEqual(["mission_control"]);
   });
 
-  it("reports missing setup requirements for incomplete bridge configs", () => {
-    const capabilities = describeChannelCapabilities("imessage", {
-      defaultHandle: "imessage:+15551234567",
+  it("reports missing setup requirements for incomplete server configs", () => {
+    const capabilities = describeChannelCapabilities("nextcloud-talk", {
+      defaultRoomId: "room-1",
     });
 
     expect(capabilities.setupReady).toBe(false);
     expect(capabilities.setupDiagnostics).toEqual(
       expect.arrayContaining([
-        "Missing one of: config.bridgeUrl, config.baseUrl, config.serverUrl.",
-        "Missing one of: config.passwordEnv, config.password, config.apiPasswordEnv, config.apiPassword.",
-      ]),
-    );
-    expect(capabilities.supportNotes).toEqual(
-      expect.arrayContaining([
-        "BlueBubbles is the local-first callable provider for this Gateway build.",
-        "Photon/Spectrum provider metadata is recognized for diagnostics, but sends fail closed until a Photon adapter is installed.",
+        "Missing one of: config.baseUrl.",
+        "Missing one of: config.tokenEnv, config.token, config.botSecretEnv, config.botSecret, config.secretEnv, config.secret.",
       ]),
     );
   });
@@ -614,13 +609,34 @@ describe("describeChannelCapabilities", () => {
     expect(listChannelRuleKeys()).not.toContain("zalouser");
   });
 
+  it.each([
+    ["signal", "Signal", { baseUrl: "http://127.0.0.1:8080", receiveEvents: true, defaultRecipient: "+15551234567" }],
+    ["imessage", "iMessage", { bridgeUrl: "http://127.0.0.1:1234", passwordEnv: "BB_PASSWORD" }],
+  ] as const)(
+    "reports a saved %s connection as retired, with every action, inbound mode and readiness flag off",
+    (channelKey, label, config) => {
+      expect(RETIRED_CHANNEL_REASONS.has(channelKey)).toBe(true);
+      const capabilities = describeChannelCapabilities(channelKey, config);
+      expect(capabilities.supportedActions).toEqual([]);
+      expect(capabilities.supportedDeliveryActions).toEqual([]);
+      expect(capabilities.supportedAttachmentSources).toEqual([]);
+      expect(capabilities.inboundModes).toEqual(["none"]);
+      expect(capabilities.runtimePosture.inboundReadiness).toBe("unsupported");
+      expect(capabilities.activityCapabilities.supported).toBe(false);
+      expect(capabilities.setupReady).toBe(false);
+      expect(capabilities.setupDiagnostics).toEqual([
+        expect.stringMatching(new RegExp(`^${label} is not supported anymore`)),
+      ]);
+      expect(capabilities.runtimePosture.operatorSummary).toMatch(/unofficial .* can get the account banned/);
+      expect(listChannelRuleKeys()).not.toContain(channelKey);
+    },
+  );
+
   it("describes static channel rules and setup diagnostics", () => {
     const staticChannels = [
       ["google-chat", { webhookUrl: "https://chat.test" }],
       ["teams", { url: "https://teams.test" }],
-      ["signal", { baseUrl: "http://127.0.0.1:8080" }],
       ["mattermost", { serverUrl: "https://mattermost.test", botTokenEnv: "MATTERMOST_TOKEN" }],
-      ["imessage", { bridgeUrl: "http://127.0.0.1:1234", password: "pass" }],
       ["nextcloud-talk", { baseUrl: "https://cloud.test", token: "token" }],
       ["ntfy", { baseUrl: "https://ntfy.test", topic: "ops" }],
       ["zalo", { token: "token" }],
@@ -640,56 +656,6 @@ describe("describeChannelCapabilities", () => {
       "Missing one of: config.phoneNumberId.",
       "Missing one of: config.accessTokenEnv, config.accessToken, config.tokenEnv, config.token.",
     ]);
-  });
-
-  it("keeps Signal outbound-only unless receiveEvents is set, ignoring legacy inbound settings", () => {
-    const capabilities = describeChannelCapabilities("signal", {
-      baseUrl: "http://127.0.0.1:8080",
-      inboundEnabled: " TRUE ",
-      pollIntervalSeconds: 5,
-    });
-
-    expect(capabilities.supportedActions).toEqual(expect.arrayContaining(["channel.send"]));
-    expect(capabilities.setupReady).toBe(true);
-    expect(capabilities.inboundModes).toEqual(["none"]);
-    expect(capabilities.runtimePosture).toEqual(
-      expect.objectContaining({
-        outboundTransport: "api",
-        lifecycle: "stateless",
-        inboundReadiness: "unsupported",
-      }),
-    );
-    expect(capabilities.runtimePosture).not.toHaveProperty("inboundTransport");
-    expect(capabilities.runtimePosture.operatorSummary).toContain("receiveEvents");
-    const text = JSON.stringify([capabilities.runtimePosture, capabilities.supportNotes]);
-    expect(text).not.toMatch(/outbound-only|destructive receive|deprecated inboundEnabled/i);
-  });
-
-  it("describes Signal daemon-event inbound as a persistent stream with honest no-replay notes", () => {
-    for (const config of [
-      { baseUrl: "http://127.0.0.1:8080", receiveEvents: true },
-      { bridgeUrl: "http://127.0.0.1:8080", receiveEvents: "true" },
-    ]) {
-      const capabilities = describeChannelCapabilities("signal", config);
-      expect(capabilities.inboundModes).toEqual(["stream"]);
-      expect(capabilities.runtimePosture).toMatchObject({
-        outboundTransport: "api",
-        inboundTransport: "stream",
-        lifecycle: "persistent",
-        inboundReadiness: "ready",
-      });
-      expect(capabilities.supportNotes).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining("/api/v1/events"),
-          expect.stringContaining("not replayed"),
-          expect.stringContaining("silent for 90 seconds"),
-        ]),
-      );
-    }
-    expect(describeChannelCapabilities("signal", { receiveEvents: true }).inboundModes).toEqual(["none"]);
-    expect(
-      describeChannelCapabilities("signal", { baseUrl: "http://127.0.0.1:8080", receiveEvents: false }).inboundModes,
-    ).toEqual(["none"]);
   });
 
   it("falls back to default channel capabilities for unknown adapters", () => {
@@ -717,13 +683,13 @@ describe("describeChannelCapabilities", () => {
   });
 
   it("treats whitespace-only config values as missing setup fields", () => {
-    const capabilities = describeChannelCapabilities("signal", {
-      baseUrl: "   ",
-      bridgeUrl: "\t",
+    const capabilities = describeChannelCapabilities("teams", {
+      webhookUrl: "   ",
+      url: "\t",
     });
 
     expect(capabilities.setupReady).toBe(false);
-    expect(capabilities.setupDiagnostics).toEqual(["Missing one of: config.baseUrl, config.bridgeUrl."]);
+    expect(capabilities.setupDiagnostics).toEqual(["Missing one of: config.webhookUrl, config.url."]);
   });
 
   it("plans channel text chunks without splitting surrogate pairs or overclaiming rich formatting", () => {
@@ -965,15 +931,12 @@ describe("platform-unsupported channel actions", () => {
 });
 
 describe("provider typing support", () => {
-  it.each(["mattermost", "signal", "whatsapp"])(
-    "advertises channel.typing and a native typing effect for %s",
-    (key) => {
-      const capabilities = describeChannelCapabilities(key, {});
-      expect(capabilities.supportedActions).toContain("channel.typing");
-      expect(capabilities.activityCapabilities.nativeEffects).toContain("typing");
-      expect(capabilities.platformUnsupportedActions?.["channel.typing"]).toBeUndefined();
-    },
-  );
+  it.each(["mattermost", "whatsapp"])("advertises channel.typing and a native typing effect for %s", (key) => {
+    const capabilities = describeChannelCapabilities(key, {});
+    expect(capabilities.supportedActions).toContain("channel.typing");
+    expect(capabilities.activityCapabilities.nativeEffects).toContain("typing");
+    expect(capabilities.platformUnsupportedActions?.["channel.typing"]).toBeUndefined();
+  });
 });
 
 describe("inbound voice support notes", () => {
@@ -1020,7 +983,6 @@ describe("channel action matrix (#354)", () => {
     ],
     teams: [{ webhookUrl: "https://example.webhook.office.com/webhookb2/x" }],
     whatsapp: [{ phoneNumberId: "1", accessTokenEnv: "WA_TOKEN" }],
-    signal: [{ baseUrl: "http://127.0.0.1:8080" }],
     mattermost: [{ serverUrl: "https://mm.example.test", botTokenEnv: "MM_TOKEN" }],
     matrix: [
       { homeserverUrl: "https://matrix.example.test", accessTokenEnv: "MATRIX_TOKEN" },
@@ -1028,7 +990,6 @@ describe("channel action matrix (#354)", () => {
     ],
     qqbot: [{ appId: "1024", appSecretEnv: "QQBOT_APP_SECRET" }],
     wecom: [{ corpId: "ww1", agentId: "1000002", secretEnv: "WECOM_SECRET" }],
-    imessage: [{ bridgeUrl: "http://127.0.0.1:1234", passwordEnv: "BB_PASSWORD" }],
     "nextcloud-talk": [{ baseUrl: "https://cloud.example.test", tokenEnv: "NC_TOKEN" }],
     line: [{ channelAccessTokenEnv: "LINE_TOKEN" }],
     zalo: [{ accessTokenEnv: "ZALO_TOKEN" }],
@@ -1097,13 +1058,10 @@ describe("channel action matrix (#354)", () => {
     expect(bridge.platformUnsupportedActions).toEqual({});
   });
 
-  it("advertises ntfy unsend and iMessage typing", () => {
+  it("advertises ntfy unsend", () => {
     const ntfy = describeChannelCapabilities("ntfy", { baseUrl: "https://ntfy.sh", topic: "goat" });
     expect(ntfy.supportedActions).toContain("channel.unsend");
     expect(Object.keys(ntfy.platformUnsupportedActions).sort()).toEqual(["channel.react", "channel.typing"]);
-    const imessage = describeChannelCapabilities("imessage", { bridgeUrl: "http://127.0.0.1:1234" });
-    expect(imessage.supportedActions).toContain("channel.typing");
-    expect(imessage.activityCapabilities.nativeEffects).toContain("typing");
   });
 
   it("names the media hosts Slack and Discord voice need in the network allowlist", () => {

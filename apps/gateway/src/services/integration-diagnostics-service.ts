@@ -20,11 +20,9 @@ import type {
 } from "@goatcitadel/contracts";
 import { buildGoogleWorkspaceConfigChecks, buildGoogleWorkspaceSignInChecks } from "./google-workspace-diagnostics.js";
 import {
-  runIMessageBridgeLiveChecks,
   runLineBotLiveChecks,
   runMattermostBotLiveChecks,
   runNtfyLiveChecks,
-  runSignalBridgeLiveChecks,
   runSlackBotLiveChecks,
   runTelegramBotLiveChecks,
   runWhatsAppCloudLiveChecks,
@@ -46,7 +44,6 @@ const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
   "ntfy",
   "mattermost",
   "matrix",
-  "signal",
   "google-chat",
   "qqbot",
   "wecom",
@@ -182,38 +179,41 @@ export function buildIntegrationConnectionChecks(
       status: "pass",
       message: `Supported delivery actions: ${(channelFeatures?.supportedDeliveryActions ?? ["channel.send"]).join(", ")}.`,
     });
+    // A channel with no attachment source simply sends text. That is a fact about the channel, not a setup problem the
+    // operator can fix, so it is a plain statement (like the outbound-only inbound mode) and never blocks Finalize.
+    const attachmentSources = channelFeatures?.supportedAttachmentSources ?? [];
     checks.push({
       key: "attachments",
-      status: (channelFeatures?.supportedAttachmentSources.length ?? 0) > 0 ? "pass" : "warn",
+      status: "pass",
       message:
-        (channelFeatures?.supportedAttachmentSources.length ?? 0) > 0
-          ? `Supported attachment sources: ${channelFeatures?.supportedAttachmentSources.join(", ")}.`
-          : "No rich attachment source is advertised for this connector.",
+        attachmentSources.length > 0
+          ? `Supported attachment sources: ${attachmentSources.join(", ")}.`
+          : "This channel sends text. Attachments aren't supported.",
     });
     if (channelCapabilities) {
       checks.push(...buildChannelCapabilityDiagnosticChecks(channelCapabilities));
       checks.push(...buildChannelInboundAccessDiagnosticChecks(connection.key, config, channelCapabilities));
     }
     switch (connection.key) {
-      case "slack":
+      case "slack": {
+        const slackBotToken = Boolean(
+          deps.readConnectionConfigValue(config, "botToken") || hasConnectionEnvValue(deps, config, "botTokenEnv"),
+        );
+        const slackAuthSet = slackBotToken || Boolean(deps.readConnectionConfigValue(config, "webhookUrl"));
         checks.push({
           key: "auth",
-          status:
-            deps.readConnectionConfigValue(config, "webhookUrl") ||
-            deps.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(deps, config, "botTokenEnv")
-              ? "pass"
-              : "fail",
-          message:
-            deps.readConnectionConfigValue(config, "webhookUrl") ||
-            deps.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(deps, config, "botTokenEnv")
-              ? "Slack bot token or webhook is configured."
-              : "Slack bot token or webhook is missing.",
+          status: slackAuthSet ? "pass" : "fail",
+          message: slackAuthSet
+            ? "Slack bot token or webhook is configured."
+            : "Slack bot token or webhook is missing.",
         });
         checkUrl("url", "Slack webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), false);
-        requireText("target", "Default Slack channel", resolveChannelConfigTarget(connection.key, config), "warn");
+        // An incoming webhook posts to the one channel it was made for, so only a bot token needs a default channel.
+        if (slackBotToken) {
+          requireText("target", "Default Slack channel", resolveChannelConfigTarget(connection.key, config), "warn");
+        }
         break;
+      }
       case "discord":
         checks.push({
           key: "auth",
@@ -261,7 +261,7 @@ export function buildIntegrationConnectionChecks(
           key: "delivery_posture",
           status: "pass",
           message:
-            "ntfy sandbox diagnostics publish at most once and require manual receipt confirmation. Inbound is a separate opt-in topic subscription (inboundStreamEnabled with a token); anyone able to publish to the subscribed topic can start turns.",
+            "The guided test publishes the ntfy test message at most once; you confirm yourself that it arrived. Inbound is a separate opt-in topic subscription (inboundStreamEnabled with a token); anyone able to publish to the subscribed topic can start turns.",
         });
         break;
       case "google-chat":
@@ -308,15 +308,6 @@ export function buildIntegrationConnectionChecks(
             "WhatsApp rich-message policy: Cloud API image/video/audio/document delivery is preflighted, text-only fallbacks are labeled, pending attachment hydration is visible, and rich batches are capped at 10 attachments.",
         });
         break;
-      case "signal":
-        checkUrl(
-          "url",
-          "Signal bridge URL",
-          deps.readConnectionConfigValue(config, "baseUrl") ?? deps.readConnectionConfigValue(config, "bridgeUrl"),
-          true,
-        );
-        requireText("target", "Default Signal recipient", resolveChannelConfigTarget(connection.key, config), "warn");
-        break;
       case "mattermost":
         checkUrl("url", "Mattermost server URL", deps.readConnectionConfigValue(config, "serverUrl"), true);
         requireSecretRef("auth", "Mattermost bot token", "botToken", "botTokenEnv");
@@ -353,24 +344,6 @@ export function buildIntegrationConnectionChecks(
           requireSecretRef,
         });
         break;
-      case "imessage":
-        if (readIMessageBridgeProvider(deps, config) === "photon") {
-          checks.push({
-            key: "provider",
-            status: "warn",
-            message:
-              "Photon/Spectrum iMessage provider metadata is recognized, but this Gateway build blocks Photon sends until a runnable adapter is installed. BlueBubbles remains the callable local path.",
-          });
-        }
-        checkUrl(
-          "url",
-          "iMessage bridge URL",
-          deps.readConnectionConfigValue(config, "bridgeUrl") ?? deps.readConnectionConfigValue(config, "baseUrl"),
-          true,
-        );
-        requireSecretRef("auth", "iMessage bridge password", "password", "passwordEnv");
-        requireText("target", "Default iMessage handle", resolveChannelConfigTarget(connection.key, config), "warn");
-        break;
       case "nextcloud-talk":
         checkUrl("url", "Nextcloud base URL", deps.readConnectionConfigValue(config, "baseUrl"), true);
         requireSecretRef("auth", "Nextcloud Talk token", "token", "tokenEnv");
@@ -387,7 +360,7 @@ export function buildIntegrationConnectionChecks(
         break;
       case "zalo":
         requireSecretRef("auth", "Zalo access token", "accessToken", "accessTokenEnv");
-        requireText("target", "Default Zalo recipient", resolveChannelConfigTarget(connection.key, config), "warn");
+        requireText("target", "Default OA user ID", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
       default:
         requireText("target", "Default target", resolveChannelConfigTarget(connection.key, config), "warn");
@@ -723,21 +696,6 @@ export async function runIntegrationConnectionLiveChecks(
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
-    case "signal": {
-      const baseUrl =
-        deps.readConnectionConfigValue(config, "baseUrl") ?? deps.readConnectionConfigValue(config, "bridgeUrl");
-      if (!baseUrl) {
-        return { checks: [] };
-      }
-      return runSignalBridgeLiveChecks({
-        baseUrl,
-        accountId:
-          deps.readConnectionConfigValue(config, "accountId") ?? deps.readConnectionConfigValue(config, "account"),
-        defaultTarget: resolveChannelConfigTarget(connection.key, config),
-        includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
-      });
-    }
     case "google-chat":
       if (isGoogleChatAppConfig(deps, config)) {
         return {
@@ -746,7 +704,7 @@ export async function runIntegrationConnectionLiveChecks(
               key: "google_chat_app_live_send",
               status: "warn",
               message:
-                "Chat app (service-account) mode has no sandbox probe. Message the app from an allowed sender and confirm its reply in Google Chat.",
+                "Chat app (service-account) mode can't send a test message. Message the app from an allowed sender and confirm its reply in Google Chat.",
             },
           ],
         };
@@ -778,37 +736,6 @@ export async function runIntegrationConnectionLiveChecks(
         token,
         defaultChannel: deps.readConnectionConfigValue(config, "defaultChannel"),
         defaultTeam: deps.readConnectionConfigValue(config, "defaultTeam"),
-        includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
-      });
-    }
-    case "imessage": {
-      if (readIMessageBridgeProvider(deps, config) === "photon") {
-        return {
-          checks: [
-            {
-              key: "imessage_photon_runtime",
-              status: "fail",
-              message:
-                "Photon/Spectrum iMessage diagnostics are explicit, but runtime sends are blocked until a Photon adapter is installed. Use BlueBubbles for callable local iMessage sends.",
-            },
-          ],
-        };
-      }
-      const bridgeUrl =
-        deps.readConnectionConfigValue(config, "bridgeUrl") ??
-        deps.readConnectionConfigValue(config, "baseUrl") ??
-        deps.readConnectionConfigValue(config, "serverUrl");
-      const password = resolveSecret("password", "passwordEnv") ?? resolveSecret("apiPassword", "apiPasswordEnv");
-      if (!bridgeUrl || !password) {
-        return { checks: [] };
-      }
-      return runIMessageBridgeLiveChecks({
-        bridgeUrl,
-        password,
-        defaultHandle:
-          deps.readConnectionConfigValue(config, "defaultHandle") ??
-          deps.readConnectionConfigValue(config, "defaultTarget"),
         includeSandboxSend: options.includeSandboxSend,
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
@@ -874,15 +801,6 @@ function hasConnectionEnvValue(
 
 function isHostAllowlisted(deps: IntegrationDiagnosticsPort, hostname: string): boolean {
   return connectionUrlHelpers.isHostAllowlistedInList(hostname, deps.config.toolPolicy.sandbox.networkAllowlist);
-}
-
-function readIMessageBridgeProvider(
-  deps: IntegrationDiagnosticsPort,
-  config: Record<string, unknown>,
-): "bluebubbles" | "photon" {
-  const provider =
-    deps.readConnectionConfigValue(config, "bridgeProvider") ?? deps.readConnectionConfigValue(config, "provider");
-  return provider === "photon" ? "photon" : "bluebubbles";
 }
 
 /**

@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   runDiscordBotLiveChecks,
-  runIMessageBridgeLiveChecks,
   runLineBotLiveChecks,
   runMattermostBotLiveChecks,
-  runSignalBridgeLiveChecks,
   runSlackBotLiveChecks,
   runTelegramBotLiveChecks,
   runWhatsAppCloudLiveChecks,
@@ -272,7 +270,7 @@ describe("channel bot live probes loop 18 failure coverage", () => {
     });
   });
 
-  it("covers WhatsApp, LINE, Signal, and Zalo send failures", async () => {
+  it("covers WhatsApp, LINE, and Zalo send failures", async () => {
     const whatsappAuthOnlyFetcher = vi.fn(
       async () => new Response(JSON.stringify({ id: "123456789012345" }), { status: 200 }),
     );
@@ -325,29 +323,6 @@ describe("channel bot live probes loop 18 failure coverage", () => {
       message: "invalid user",
     });
 
-    const signalSkipped = await runSignalBridgeLiveChecks({
-      baseUrl: "https://signal.example.com/",
-      includeSandboxSend: false,
-      fetcher: vi.fn(),
-    });
-    expect(signalSkipped.probe.steps).toEqual([
-      expect.objectContaining({ key: "signal_sandbox_send", status: "skipped" }),
-    ]);
-
-    const signalFailure = await runSignalBridgeLiveChecks({
-      baseUrl: "https://signal.example.com/",
-      defaultTarget: "u:operator",
-      includeSandboxSend: true,
-      fetcher: vi.fn(
-        async () => new Response(JSON.stringify({ error: { message: "unknown recipient" } }), { status: 200 }),
-      ),
-    });
-    expect(signalFailure.probe.steps.at(-1)).toMatchObject({
-      key: "signal_sandbox_send",
-      status: "fail",
-      message: "unknown recipient",
-    });
-
     const zaloSkipped = await runZaloBotLiveChecks({
       accessToken: "zalo-token",
       includeSandboxSend: false,
@@ -366,76 +341,6 @@ describe("channel bot live probes loop 18 failure coverage", () => {
       status: "fail",
       message: "rate limited",
     });
-  });
-
-  it("covers BlueBubbles auth, send, cleanup, and target parsing failures", async () => {
-    const authFailure = await runIMessageBridgeLiveChecks({
-      bridgeUrl: "127.0.0.1:1234",
-      password: "bb-password",
-      defaultHandle: "bluebubbles:handle:operator@example.test",
-      includeSandboxSend: true,
-      fetcher: vi.fn(async () => new Response(JSON.stringify({ error: { message: "bad password" } }), { status: 401 })),
-    });
-    expect(authFailure.probe.steps).toEqual([
-      expect.objectContaining({
-        key: "imessage_bridge_auth",
-        status: "fail",
-        failureCategory: "credential_rejected",
-        message: "bad password",
-      }),
-    ]);
-
-    const sendFailure = await runIMessageBridgeLiveChecks({
-      bridgeUrl: "http://127.0.0.1:1234/",
-      password: "bb-password",
-      defaultHandle: "sms:+1 (555) 123-4567",
-      includeSandboxSend: true,
-      fetcher: vi.fn(async (url: string, init?: RequestInit) => {
-        if (url.includes("/chat/query")) {
-          return new Response(JSON.stringify({ data: [] }), { status: 200 });
-        }
-        expect(init?.method).toBe("POST");
-        return new Response(JSON.stringify({ message: "send denied" }), { status: 403 });
-      }),
-    });
-    expect(sendFailure.probe.steps).toEqual([
-      expect.objectContaining({ key: "imessage_bridge_auth", status: "pass" }),
-      expect.objectContaining({
-        key: "imessage_sandbox_send",
-        status: "fail",
-        failureCategory: "permission_mismatch",
-        message: "send denied",
-      }),
-    ]);
-
-    const cleanupFailureFetcher = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.includes("/chat/query")) {
-        return new Response(JSON.stringify({ data: [] }), { status: 200 });
-      }
-      if (url.includes("/chat/new")) {
-        return new Response(JSON.stringify({ data: { guid: "msg/with/slash" } }), { status: 200 });
-      }
-      expect(url).toContain("/message/msg/with/slash/unsend");
-      expect(init?.method).toBe("POST");
-      return new Response(JSON.stringify({ error: { error_user_msg: "unsend disabled" } }), { status: 403 });
-    });
-    const cleanupFailure = await runIMessageBridgeLiveChecks({
-      bridgeUrl: "http://127.0.0.1:1234/",
-      password: "bb-password",
-      defaultHandle: "bluebubbles:operator@example.test",
-      includeSandboxSend: true,
-      fetcher: cleanupFailureFetcher,
-    });
-    expect(cleanupFailure.probe.steps).toEqual([
-      expect.objectContaining({ key: "imessage_bridge_auth", status: "pass" }),
-      expect.objectContaining({ key: "imessage_sandbox_send", status: "pass" }),
-      expect.objectContaining({
-        key: "imessage_sandbox_cleanup",
-        status: "warn",
-        failureCategory: "permission_mismatch",
-        message: "unsend disabled",
-      }),
-    ]);
   });
 
   it("covers Discord transport, send, and cleanup failure tails", async () => {
@@ -633,81 +538,7 @@ describe("channel bot live probes loop 18 failure coverage", () => {
     ]);
   });
 
-  it("covers bridge missing-target and send transport tails", async () => {
-    const imessageAuthTransportFailure = await runIMessageBridgeLiveChecks({
-      bridgeUrl: "127.0.0.1:1234",
-      password: "bb-password",
-      defaultHandle: "operator@example.test",
-      includeSandboxSend: true,
-      fetcher: vi.fn(async () => {
-        throw new Error("bluebubbles unavailable");
-      }),
-    });
-    expect(imessageAuthTransportFailure.probe.steps).toEqual([
-      expect.objectContaining({
-        key: "imessage_bridge_auth",
-        status: "warn",
-        failureCategory: "platform_unavailable",
-      }),
-    ]);
-
-    const imessageAuthOnly = await runIMessageBridgeLiveChecks({
-      bridgeUrl: "127.0.0.1:1234",
-      password: "bb-password",
-      defaultHandle: "operator@example.test",
-      includeSandboxSend: false,
-      fetcher: vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 })),
-    });
-    expect(imessageAuthOnly.probe.steps).toEqual([
-      expect.objectContaining({ key: "imessage_bridge_auth", status: "pass" }),
-    ]);
-
-    const imessageSendTransportFailure = await runIMessageBridgeLiveChecks({
-      bridgeUrl: "127.0.0.1:1234",
-      password: "bb-password",
-      defaultHandle: "operator@example.test",
-      includeSandboxSend: true,
-      fetcher: vi.fn(async (url: string) => {
-        if (url.includes("/chat/query")) {
-          return new Response(JSON.stringify({ data: [] }), { status: 200 });
-        }
-        throw new Error("bluebubbles send timeout");
-      }),
-    });
-    expect(imessageSendTransportFailure.probe.steps.at(-1)).toMatchObject({
-      key: "imessage_sandbox_send",
-      status: "warn",
-      failureCategory: "platform_unavailable",
-    });
-
-    const signalMissingTarget = await runSignalBridgeLiveChecks({
-      baseUrl: "https://signal.example.com/",
-      defaultTarget: " ",
-      includeSandboxSend: true,
-      fetcher: vi.fn(),
-    });
-    expect(signalMissingTarget.probe.steps).toEqual([
-      expect.objectContaining({
-        key: "signal_sandbox_send",
-        status: "fail",
-        failureCategory: "missing_input",
-      }),
-    ]);
-
-    const signalTransportFailure = await runSignalBridgeLiveChecks({
-      baseUrl: "https://signal.example.com/",
-      defaultTarget: "group:ops",
-      includeSandboxSend: true,
-      fetcher: vi.fn(async () => {
-        throw new Error("signal bridge offline");
-      }),
-    });
-    expect(signalTransportFailure.probe.steps.at(-1)).toMatchObject({
-      key: "signal_sandbox_send",
-      status: "warn",
-      failureCategory: "platform_unavailable",
-    });
-
+  it("covers Zalo send transport tails", async () => {
     const zaloTransportFailure = await runZaloBotLiveChecks({
       accessToken: "zalo-token",
       defaultTarget: "chat-1",

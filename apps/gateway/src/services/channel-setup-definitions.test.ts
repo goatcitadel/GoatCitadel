@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
-import type { ChannelSetupDraft, IntegrationConnection } from "@goatcitadel/contracts";
+import type {
+  ChannelSetupDefinition,
+  ChannelSetupDraft,
+  ChannelSetupFieldDefinition,
+  ChannelSetupStepDefinition,
+  IntegrationConnection,
+} from "@goatcitadel/contracts";
 import { listChannelSetupDefinitions, requireChannelSetupDefinition } from "./channel-setup-definitions.js";
+import type { ChannelSetupRuntimeDefinition } from "./channel-setup-definitions.js";
+import {
+  plainSecretLabel,
+  requireSecureUrl,
+  secretEnvFieldCopy,
+  secretNameForVariable,
+} from "./channel-setup-definitions/common.js";
+import { withGuidedJourney } from "./channel-setup-definitions/guided-journey.js";
+import { createLineDefinition } from "./channel-setup-definitions/line.js";
+import { isAllowedSecretEnvName } from "./channel-secret-resolution.js";
+import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
 
 function createConnection(overrides: Partial<IntegrationConnection>): IntegrationConnection {
   return {
@@ -51,18 +68,18 @@ describe("channel setup definitions", () => {
         "channel.google-chat",
         "channel.teams",
         "channel.whatsapp",
-        "channel.signal",
         "channel.mattermost",
         "channel.matrix",
         "channel.qqbot",
         "channel.wecom",
-        "channel.imessage",
         "channel.nextcloud-talk",
         "channel.line",
         "channel.zalo",
       ]),
     );
     expect(catalogIds).not.toContain("channel.zalouser");
+    expect(catalogIds).not.toContain("channel.signal");
+    expect(catalogIds).not.toContain("channel.imessage");
   });
 
   it("exposes a guided test step followed by a confirm step for every guided definition", () => {
@@ -124,15 +141,17 @@ describe("channel setup definitions", () => {
     const finishStep = definition.wizard.steps.find((step) => step.id === "finish");
     const content = JSON.stringify(definition.wizard);
 
-    expect(createBot?.checklist?.map((item) => item.id)).toContain("message-content-intent");
+    // Message Content Intent is told in the step, not ticked: a webhook-only setup has no bot to turn it on for (R50).
+    expect(createBot?.checklist).toBeUndefined();
+    expect(JSON.stringify(createBot)).toContain("turn on Message Content Intent");
     expect(content).toContain("Message Content Intent");
     expect(JSON.stringify(installBot)).toMatch(/View Channel.*Send Messages.*Read Message History/);
     expect(JSON.stringify(collectValues)).toContain("@mention");
-    expect(JSON.stringify(testStep)).toMatch(/posts a visible sandbox message.*deletes it/);
+    expect(JSON.stringify(testStep)).toMatch(/posts one visible test message.*deletes it/);
     expect(JSON.stringify(finishStep)).toContain("pending code");
 
     const defaultGuildId = collectValues?.fields?.find((field) => field.key === "defaultGuildId");
-    expect(defaultGuildId).toMatchObject({ type: "id", required: false });
+    expect(defaultGuildId).toMatchObject({ type: "id", required: true });
     expect(defaultGuildId?.explanation).toMatch(/Required for the recommended server allowlist path/);
     expect(definition.validation.validationVersion).toBe("2026.08.discord.v3");
   });
@@ -399,7 +418,7 @@ describe("channel setup definitions", () => {
       inboundStreamEnabled: true,
     });
     expect(definition.validate(noToken)).toEqual(
-      expect.arrayContaining([expect.objectContaining({ fieldKey: "tokenEnv", failureCategory: "missing_input" })]),
+      expect.arrayContaining([expect.objectContaining({ fieldKey: "token", failureCategory: "missing_input" })]),
     );
 
     const withToken = createDraft("channel.ntfy", {
@@ -458,7 +477,7 @@ describe("channel setup definitions", () => {
     ]);
     const testStep = definition.wizard.steps.find((step) => step.kind === "test");
     expect(testStep?.title).toBe("Validate the draft");
-    expect(JSON.stringify(testStep)).toMatch(/dry-run/i);
+    expect(JSON.stringify(testStep)).toMatch(/dry run/i);
     expect(definition.wizard.contentVersion).toBe("2026.10.ntfy.stream.v3.guided-2026-10");
   });
 
@@ -467,6 +486,7 @@ describe("channel setup definitions", () => {
 
     expect(definition.wizard.steps.map((step) => step.kind)).toEqual([
       "intro",
+      "instruction",
       "field-collection",
       "field-collection",
       "field-collection",
@@ -483,10 +503,8 @@ describe("channel setup definitions", () => {
 
   it("ends every previously test-terminal guided wizard on a finalize confirmation step", () => {
     const expectations = [
-      { catalogId: "channel.imessage", contentVersion: "2026.08.imessage.v2" },
       { catalogId: "channel.line", contentVersion: "2026.08.line.v2" },
       { catalogId: "channel.mattermost", contentVersion: "2026.10.mattermost.stream.v3" },
-      { catalogId: "channel.signal", contentVersion: "2026.10.signal.stream.v5" },
       { catalogId: "channel.whatsapp", contentVersion: "2026.08.whatsapp.v3" },
       { catalogId: "channel.zalo", contentVersion: "2026.08.zalo.v2" },
     ] as const;
@@ -587,10 +605,11 @@ describe("channel setup definitions", () => {
         "audienceType",
         "audience",
         "defaultSpace",
-        "inboundAccessMode",
         "allowedSenders",
       ]),
     );
+    // The runtime always enforces the allowlist here, so the guide offers no access-mode choice.
+    expect(fieldKeys).not.toContain("inboundAccessMode");
     expect(JSON.stringify(definition.definition)).not.toContain("cannot accept an inbound conversation");
 
     const appDraft = createDraft("channel.google-chat", {
@@ -600,12 +619,15 @@ describe("channel setup definitions", () => {
       defaultSpace: "spaces/AAAA",
     });
     expect(definition.validate(appDraft)).toEqual([]);
+    // A Chat app clears the incoming webhook's keys (null), so an edited webhook connection cannot keep them.
     expect(definition.normalize(appDraft)).toEqual({
       serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
       audienceType: "project_number",
       audience: "123456789012",
       defaultSpace: "spaces/AAAA",
       inboundAccessMode: "allowlist",
+      webhookUrl: null,
+      defaultThreadKey: null,
     });
 
     // An edited legacy connection hydrated as open_legacy never carries that posture into app inbound.
@@ -683,7 +705,7 @@ describe("channel setup definitions", () => {
         }),
       ),
     ).toEqual([expect.objectContaining({ fieldKey: "addOnProjectNumber", failureCategory: "malformed_value" })]);
-    // Webhook mode never carries the add-on field.
+    // Webhook mode never carries the add-on field: it clears any that is saved (null).
     expect(
       definition.normalize(
         createDraft("channel.google-chat", {
@@ -691,7 +713,7 @@ describe("channel setup definitions", () => {
           addOnProjectNumber: "987654321098",
         }),
       ),
-    ).not.toHaveProperty("addOnProjectNumber");
+    ).toMatchObject({ addOnProjectNumber: null });
   });
 
   it("rejects malformed Teams webhook URLs", () => {
@@ -790,131 +812,6 @@ describe("channel setup definitions", () => {
         defaultTarget: "+15551234567",
       }),
     );
-  });
-
-  it("rejects incomplete Signal bridge drafts", () => {
-    const definition = requireChannelSetupDefinition("channel.signal");
-    const issues = definition.validate(
-      createDraft("channel.signal", {
-        baseUrl: "not-a-url",
-      }),
-    );
-
-    expect(issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          fieldKey: "baseUrl",
-          failureCategory: "malformed_value",
-        }),
-        expect.objectContaining({
-          fieldKey: "defaultRecipient",
-          failureCategory: "missing_input",
-        }),
-      ]),
-    );
-  });
-
-  it("advertises Signal daemon-event inbound with no-replay honesty and strips legacy polling settings", () => {
-    const signal = requireChannelSetupDefinition("channel.signal");
-    const wizardText = JSON.stringify(signal.definition.wizard);
-
-    expect(signal.definition.wizard.contentVersion).toBe("2026.10.signal.stream.v5.guided-2026-10");
-    expect(signal.definition.wizard.introSummary).not.toContain("outbound-only");
-    expect(wizardText).not.toMatch(/outbound-only|destructive receive/i);
-    expect(wizardText).toContain("signal-cli daemon --http");
-    expect(wizardText).toMatch(/not replayed/);
-    expect(wizardText).toContain('"key":"receiveEvents"');
-    expect(wizardText).not.toContain('"key":"inboundEnabled"');
-    expect(wizardText).not.toContain('"key":"pollIntervalSeconds"');
-
-    const hydrated = signal.hydrate(
-      createConnection({
-        catalogId: "channel.signal",
-        key: "signal",
-        config: {
-          baseUrl: "http://127.0.0.1:8080",
-          accountId: "+15551234567",
-          defaultRecipient: "+15557654321",
-          inboundEnabled: true,
-          pollIntervalSeconds: 5,
-        },
-      }),
-    );
-
-    expect(hydrated.draft).not.toHaveProperty("inboundEnabled");
-    expect(hydrated.draft).not.toHaveProperty("pollIntervalSeconds");
-    expect(hydrated.draft).toMatchObject({
-      baseUrl: "http://127.0.0.1:8080",
-      accountId: "+15551234567",
-      defaultRecipient: "+15557654321",
-      receiveEvents: false,
-    });
-    expect(hydrated.hydration.warnings).toEqual([expect.stringContaining("replaced by receiveEvents")]);
-    const normalized = signal.normalize({
-      ...createDraft("channel.signal", hydrated.draft, "edit"),
-      hydration: hydrated.hydration,
-    });
-    expect(normalized).not.toHaveProperty("inboundEnabled");
-    expect(normalized).not.toHaveProperty("pollIntervalSeconds");
-    expect(normalized).not.toHaveProperty("receiveEvents");
-
-    const legacyIssues = signal.validate(
-      createDraft("channel.signal", {
-        baseUrl: "http://127.0.0.1:8080",
-        defaultRecipient: "+15557654321",
-        inboundEnabled: true,
-        pollIntervalSeconds: 5,
-      }),
-    );
-    expect(legacyIssues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          fieldKey: "inboundEnabled",
-          failureCategory: "malformed_value",
-          message: expect.stringContaining("receiveEvents"),
-        }),
-        expect.objectContaining({ fieldKey: "pollIntervalSeconds", failureCategory: "malformed_value" }),
-      ]),
-    );
-    expect(
-      signal.validate(
-        createDraft("channel.signal", {
-          baseUrl: "http://127.0.0.1:8080",
-          defaultRecipient: "+15557654321",
-        }),
-      ),
-    ).toEqual([]);
-  });
-
-  it("collects the Signal receiveEvents opt-in and forces a default-deny allowlist when it is on", () => {
-    const signal = requireChannelSetupDefinition("channel.signal");
-    const fieldKeys = signal.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
-    expect(fieldKeys).toEqual(expect.arrayContaining(["receiveEvents", "allowedSenders"]));
-
-    for (const legacy of [{ inboundAccessMode: "open_legacy" }, {}]) {
-      const hydrated = signal.hydrate(
-        createConnection({
-          catalogId: "channel.signal",
-          key: "signal",
-          config: { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15557654321", ...legacy },
-        }),
-      );
-      const draft = {
-        ...createDraft("channel.signal", { ...hydrated.draft, receiveEvents: true }, "edit"),
-        hydration: hydrated.hydration,
-      };
-      expect(signal.validate(draft)).toEqual([]);
-      expect(signal.normalize(draft)).toMatchObject({ receiveEvents: true, inboundAccessMode: "allowlist" });
-    }
-    const created = signal.normalize(
-      createDraft("channel.signal", {
-        baseUrl: "http://127.0.0.1:8080",
-        defaultRecipient: "+15557654321",
-        receiveEvents: true,
-      }),
-    );
-    expect(created).toMatchObject({ receiveEvents: true, inboundAccessMode: "allowlist" });
-    expect(created.allowedSenders ?? []).toEqual([]);
   });
 
   it("preserves env-backed Mattermost auth during edit flows", () => {
@@ -1220,77 +1117,6 @@ describe("channel setup definitions", () => {
     expect(copy).not.toMatch(/anyone can/i);
   });
 
-  it("preserves env-backed iMessage bridge auth during edit flows", () => {
-    const definition = requireChannelSetupDefinition("channel.imessage");
-    const hydrated = definition.hydrate(
-      createConnection({
-        catalogId: "channel.imessage",
-        key: "imessage",
-        label: "iMessage Primary",
-        config: {
-          bridgeProvider: "bluebubbles",
-          bridgeUrl: "http://127.0.0.1:3001",
-          passwordEnv: "IMESSAGE_PASSWORD",
-          defaultHandle: "imessage:+15551234567",
-        },
-      }),
-    );
-    const draft = {
-      ...createDraft("channel.imessage", hydrated.draft, "edit"),
-      hydration: hydrated.hydration,
-    };
-
-    expect(definition.validate(draft)).toEqual([]);
-    expect(definition.normalize(draft)).toEqual(
-      expect.objectContaining({
-        bridgeProvider: "bluebubbles",
-        bridgeUrl: "http://127.0.0.1:3001",
-        passwordEnv: "IMESSAGE_PASSWORD",
-        defaultHandle: "imessage:+15551234567",
-      }),
-    );
-  });
-
-  it("preserves Photon iMessage provider metadata while warning that runtime sends are adapter-gated", () => {
-    const definition = requireChannelSetupDefinition("channel.imessage");
-    const hydrated = definition.hydrate(
-      createConnection({
-        catalogId: "channel.imessage",
-        key: "imessage",
-        label: "Photon iMessage",
-        config: {
-          bridgeProvider: "photon",
-          bridgeUrl: "http://127.0.0.1:4317",
-          passwordEnv: "PHOTON_AUTH_TOKEN",
-          photonSidecarUrl: "http://127.0.0.1:4317",
-          photonAuthEnv: "PHOTON_AUTH_TOKEN",
-          defaultHandle: "imessage:+15551234567",
-        },
-      }),
-    );
-    const draft = {
-      ...createDraft("channel.imessage", hydrated.draft, "edit"),
-      hydration: hydrated.hydration,
-    };
-
-    expect(definition.validate(draft)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: "imessage_photon_preview",
-          level: "warn",
-          fieldKey: "bridgeProvider",
-        }),
-      ]),
-    );
-    expect(definition.normalize(draft)).toEqual(
-      expect.objectContaining({
-        bridgeProvider: "photon",
-        photonSidecarUrl: "http://127.0.0.1:4317",
-        photonAuthEnv: "PHOTON_AUTH_TOKEN",
-      }),
-    );
-  });
-
   it("preserves env-backed Nextcloud Talk auth during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.nextcloud-talk");
     const hydrated = definition.hydrate(
@@ -1376,6 +1202,13 @@ describe("channel setup definitions", () => {
       webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=key&token=token",
       defaultThreadKey: "ops-thread",
       inboundAccessMode: "allowlist",
+      // A webhook clears the Chat app's keys (null), so an edited Chat app connection cannot keep them.
+      serviceAccountKeyEnv: null,
+      serviceAccountKey: null,
+      audienceType: null,
+      audience: null,
+      addOnProjectNumber: null,
+      defaultSpace: null,
     });
     expect(
       googleChat.validate(
@@ -1383,38 +1216,6 @@ describe("channel setup definitions", () => {
           webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=key&token=token",
         }),
       ),
-    ).toEqual([]);
-
-    const signal = requireChannelSetupDefinition("channel.signal");
-    const signalHydrated = signal.hydrate(
-      createConnection({
-        catalogId: "channel.signal",
-        key: "signal",
-        config: {
-          bridgeUrl: "http://127.0.0.1:8080",
-          accountId: "+15551234567",
-          defaultRecipient: "+15557654321",
-        },
-      }),
-    );
-    expect(signalHydrated.hydration.status).toBe("clean");
-    expect(signalHydrated.hydration.fieldState.baseUrl).toBe("configured");
-    expect(
-      signal.normalize({
-        ...createDraft("channel.signal", { defaultRecipient: "+15557654321" }, "edit"),
-        hydration: signalHydrated.hydration,
-      }),
-    ).toEqual({
-      baseUrl: "http://127.0.0.1:8080",
-      defaultRecipient: "+15557654321",
-      // Signal is a guided inbound channel; a draft with no saved mode defaults to the allowlist.
-      inboundAccessMode: "allowlist",
-    });
-    expect(
-      signal.validate({
-        ...createDraft("channel.signal", { defaultRecipient: "+15557654321" }, "edit"),
-        hydration: signalHydrated.hydration,
-      }),
     ).toEqual([]);
 
     const zalo = requireChannelSetupDefinition("channel.zalo");
@@ -1515,12 +1316,10 @@ describe("channel setup definitions", () => {
       "channel.teams",
       "channel.ntfy",
       "channel.whatsapp",
-      "channel.signal",
       "channel.mattermost",
       "channel.matrix",
       "channel.qqbot",
       "channel.wecom",
-      "channel.imessage",
       "channel.line",
       "channel.zalo",
     ] as const;
@@ -1539,7 +1338,6 @@ describe("channel setup definitions", () => {
       "channel.matrix",
       "channel.qqbot",
       "channel.wecom",
-      "channel.imessage",
       "channel.line",
     ] as const;
 
@@ -1568,20 +1366,18 @@ describe("channel setup definitions", () => {
   it("marks the steps that are only for setting a channel up, and no others", () => {
     const setupOnly: Record<string, string[]> = {
       discord: ["overview", "prerequisites", "create-bot", "install-bot"],
-      slack: ["overview", "prerequisites"],
+      slack: ["overview", "prerequisites", "create-app"],
       telegram: [],
       ntfy: ["overview", "prepare-topic"],
       "google-chat": ["overview", "create-webhook"],
       teams: ["overview", "create-webhook"],
       whatsapp: ["overview"],
-      signal: ["overview"],
-      mattermost: ["overview"],
-      matrix: ["overview"],
+      mattermost: ["overview", "create-bot"],
+      matrix: ["overview", "create-bot"],
       qqbot: ["overview"],
       wecom: ["overview"],
-      imessage: ["overview"],
-      "nextcloud-talk": ["overview"],
-      line: ["overview"],
+      "nextcloud-talk": ["overview", "install-bot"],
+      line: ["overview", "create-account"],
       zalo: ["overview"],
     };
     const definitions = listChannelSetupDefinitions();
@@ -1601,5 +1397,616 @@ describe("channel setup definitions", () => {
 
     expect(overview?.title).toBe("What you can change here");
     expect(overview?.createOnly).toBeUndefined();
+  });
+});
+
+type FieldCondition = { fieldKey: string; value: string | boolean } | undefined;
+
+function allFields(definition: ChannelSetupDefinition): ChannelSetupFieldDefinition[] {
+  return definition.wizard.steps.flatMap((step) => step.fields ?? []);
+}
+
+/** The wizard's own rule: a field's default counts until the draft sets a value. */
+function shownWith(
+  definition: ChannelSetupDefinition,
+  condition: FieldCondition,
+  values: Record<string, unknown> = {},
+): boolean {
+  const defaults = Object.fromEntries(
+    allFields(definition)
+      .filter((field) => field.defaultValue !== undefined)
+      .map((field) => [field.key, field.defaultValue]),
+  );
+  const effective: Record<string, unknown> = { ...defaults, ...values };
+  return !condition || effective[condition.fieldKey] === condition.value;
+}
+
+function guide(key: string): ChannelSetupDefinition {
+  return requireChannelSetupDefinition(`channel.${key}`).definition;
+}
+
+function senderStep(key: string): ChannelSetupStepDefinition | undefined {
+  return guide(key).wizard.steps.find((step) => step.id === "sender-access");
+}
+
+function fieldOf(key: string, fieldKey: string): ChannelSetupFieldDefinition | undefined {
+  return allFields(guide(key)).find((field) => field.key === fieldKey);
+}
+
+/** Fields that name an environment variable holding a secret the guide can also take pasted. */
+function secretEnvFields(definition: ChannelSetupDefinition): ChannelSetupFieldDefinition[] {
+  return allFields(definition).filter(
+    (field) => field.key.endsWith("Env") && definition.adapter.secretFieldKeys.includes(field.key.slice(0, -3)),
+  );
+}
+
+/** Env fields the inbound webhook reads through the stricter suffix check in channel-secret-resolution.ts. */
+const INBOUND_WEBHOOK_SECRET_ENV_FIELDS: Record<string, string[]> = {
+  telegram: ["webhookSecretEnv"],
+  whatsapp: ["appSecretEnv", "webhookVerifyTokenEnv"],
+  line: ["channelSecretEnv"],
+  "nextcloud-talk": ["tokenEnv"],
+  qqbot: ["appSecretEnv"],
+  wecom: ["callbackTokenEnv", "encodingAesKeyEnv"],
+};
+
+/** Set when a connection that was saved with open access is loaded, so the open-access choice stays on screen. */
+const OPEN_MARKER_KEY = "inboundAccessWasOpen";
+const OPEN_MARKER = { [OPEN_MARKER_KEY]: true };
+
+const ENV_RULE_PATTERN =
+  /The variable's name must start with ([A-Z0-9_]+)_ \(for example ([A-Z0-9_]+)\)\. Set it where GoatCitadel starts, then restart GoatCitadel\.( The name must also end in (_TOKEN or _SECRET|_AES_KEY)\.)?$/u;
+
+describe("the shared guide builder", () => {
+  describe("environment-variable fields (A5)", () => {
+    it("moves every environment-variable field to the expert options and states the variable's name rules", () => {
+      let checked = 0;
+      for (const definition of listChannelSetupDefinitions()) {
+        const key = definition.catalog.key;
+        for (const field of secretEnvFields(definition)) {
+          checked += 1;
+          const where = `${key}.${field.key}`;
+          expect(field.advanced, `${where} is an expert option`).toBe(true);
+          expect(field.label, where).toMatch(/ from an environment variable \(advanced\)$/u);
+          expect(field.explanation, `${where} no longer calls itself the preferred path`).not.toMatch(
+            /preferred path/iu,
+          );
+          // "It" after "restart GoatCitadel." reads as GoatCitadel, so the suffix sentence names the variable's name.
+          expect(field.explanation, `${where} says what must end the name, not "It"`).not.toMatch(/\bIt must\b/u);
+          const rule = ENV_RULE_PATTERN.exec(field.explanation);
+          expect(rule, `${where} explanation ends with the name rule`).not.toBeNull();
+          const [, prefix, example, , suffixes] = rule ?? [];
+          expect(prefix, where).toBe(key.toUpperCase().replaceAll("-", "_"));
+          // The example is the variable name a person would copy, so the Gateway must accept it.
+          expect(isPermittedIntegrationSecretEnvVarName(example ?? "", definition.catalog.catalogId), where).toBe(true);
+          const isInbound = INBOUND_WEBHOOK_SECRET_ENV_FIELDS[key]?.includes(field.key) ?? false;
+          if (isInbound) {
+            expect(isAllowedSecretEnvName(example ?? ""), `${where} example passes the inbound suffix check`).toBe(
+              true,
+            );
+            expect(suffixes, `${where} names the suffix it needs`).toBeDefined();
+            expect(
+              (suffixes ?? "").split(" or ").some((suffix) => (example ?? "").endsWith(suffix)),
+              `${where} example ends the way the explanation says`,
+            ).toBe(true);
+          } else {
+            expect(suffixes, `${where} needs no suffix`).toBeUndefined();
+          }
+        }
+      }
+      expect(checked).toBeGreaterThanOrEqual(17);
+    });
+
+    it("writes the shared rule with each channel's own prefix, example and suffix", () => {
+      const rule = "Set it where GoatCitadel starts, then restart GoatCitadel.";
+      expect(fieldOf("line", "channelAccessTokenEnv")?.label).toBe(
+        "Channel access token from an environment variable (advanced)",
+      );
+      expect(fieldOf("line", "channelAccessTokenEnv")?.explanation).toBe(
+        `Name of the env var that stores the LINE channel access token. The variable's name must start with LINE_ (for example LINE_CHANNEL_ACCESS_TOKEN). ${rule}`,
+      );
+      expect(fieldOf("line", "channelSecretEnv")?.explanation).toMatch(
+        new RegExp(
+          `The variable's name must start with LINE_ \\(for example LINE_CHANNEL_SECRET\\)\\. ${rule.replaceAll(".", "\\.")} The name must also end in _TOKEN or _SECRET\\.$`,
+          "u",
+        ),
+      );
+      expect(fieldOf("nextcloud-talk", "tokenEnv")?.explanation).toContain(
+        "must start with NEXTCLOUD_TALK_ (for example NEXTCLOUD_TALK_TOKEN)",
+      );
+      expect(fieldOf("google-chat", "serviceAccountKeyEnv")?.explanation).toContain(
+        "must start with GOOGLE_CHAT_ (for example GOOGLE_CHAT_SERVICE_ACCOUNT_KEY)",
+      );
+      // The WeCom key is read by its own suffix, not _TOKEN or _SECRET.
+      expect(fieldOf("wecom", "encodingAesKeyEnv")?.explanation).toMatch(
+        /\(for example WECOM_ENCODING_AES_KEY\)\. Set it where GoatCitadel starts, then restart GoatCitadel\. The name must also end in _AES_KEY\.$/u,
+      );
+      expect(fieldOf("whatsapp", "accessTokenEnv")?.explanation).toMatch(/restart GoatCitadel\.$/u);
+    });
+
+    it("names an environment-variable field after its pasted twin, or after its own label when it has none", () => {
+      expect(fieldOf("matrix", "accessTokenEnv")?.label).toBe("Access token from an environment variable (advanced)");
+      expect(fieldOf("wecom", "secretEnv")?.label).toBe("Application secret from an environment variable (advanced)");
+      expect(fieldOf("wecom", "encodingAesKeyEnv")?.label).toBe(
+        "EncodingAESKey from an environment variable (advanced)",
+      );
+      expect(fieldOf("ntfy", "tokenEnv")?.label).toBe("Access token from an environment variable (advanced)");
+      // Every guide's variable field has a pasted twin now. A field with none keeps its own words minus "env var".
+      expect(
+        secretEnvFieldCopy("ntfy", {
+          key: "tokenEnv",
+          label: "Token ENV var",
+          type: "text",
+          required: false,
+          explanation: "Optional.",
+        }).label,
+      ).toBe("Token from an environment variable (advanced)");
+      // Its pasted twin is "Service-account key (paste the JSON)", but the variable holds a name, not the JSON.
+      expect(fieldOf("google-chat", "serviceAccountKeyEnv")?.label).toBe(
+        "Service-account key from an environment variable (advanced)",
+      );
+      expect(fieldOf("google-chat", "serviceAccountKey")?.label).toBe("Service-account key (paste the JSON)");
+    });
+
+    it("keeps any paste hint out of the label of the field that takes a variable name", () => {
+      const labels = listChannelSetupDefinitions().flatMap((definition) =>
+        definition.wizard.steps
+          .flatMap((step) => step.fields ?? [])
+          .filter((field) => field.key.endsWith("Env"))
+          .map((field) => field.label),
+      );
+
+      expect(labels.length).toBeGreaterThanOrEqual(17);
+      for (const label of labels) expect(label, label).not.toMatch(/\(paste/iu);
+    });
+
+    it("leaves every other guide's variable label as it was", () => {
+      const labels = Object.fromEntries(
+        listChannelSetupDefinitions().flatMap((definition) =>
+          definition.wizard.steps
+            .flatMap((step) => step.fields ?? [])
+            .filter((field) => field.key.endsWith("Env") && definition.catalog.key !== "google-chat")
+            .map((field) => [`${definition.catalog.key}.${field.key}`, field.label]),
+        ),
+      );
+
+      expect(labels).toMatchObject({
+        "telegram.webhookSecretEnv": "Webhook secret from an environment variable (advanced)",
+        "ntfy.tokenEnv": "Access token from an environment variable (advanced)",
+        "nextcloud-talk.tokenEnv": "Bot secret from an environment variable (advanced)",
+        "discord.botTokenEnv": "Bot token from an environment variable (advanced)",
+        "whatsapp.accessTokenEnv": "Access token from an environment variable (advanced)",
+        "whatsapp.appSecretEnv": "App secret from an environment variable (advanced)",
+        "whatsapp.webhookVerifyTokenEnv": "Webhook verify token from an environment variable (advanced)",
+        "mattermost.botTokenEnv": "Bot token from an environment variable (advanced)",
+        "matrix.accessTokenEnv": "Access token from an environment variable (advanced)",
+        "qqbot.appSecretEnv": "App secret from an environment variable (advanced)",
+        "wecom.secretEnv": "Application secret from an environment variable (advanced)",
+        "wecom.callbackTokenEnv": "Callback token from an environment variable (advanced)",
+        "wecom.encodingAesKeyEnv": "EncodingAESKey from an environment variable (advanced)",
+        "line.channelAccessTokenEnv": "Channel access token from an environment variable (advanced)",
+        "line.channelSecretEnv": "Channel secret from an environment variable (advanced)",
+        "zalo.accessTokenEnv": "Access token from an environment variable (advanced)",
+      });
+    });
+
+    it("drops a trailing paste hint, and only that, from a secret's name for its variable field", () => {
+      expect(secretNameForVariable("Service-account key (paste the JSON)")).toBe("Service-account key");
+      expect(secretNameForVariable("Bot token (paste it)")).toBe("Bot token");
+      expect(secretNameForVariable("Access token (Paste)")).toBe("Access token");
+      expect(secretNameForVariable("Access token (manual fallback)")).toBe("Access token");
+      // No hint: unchanged.
+      expect(secretNameForVariable("Bot token")).toBe("Bot token");
+      expect(secretNameForVariable("Channel access token")).toBe("Channel access token");
+      // A parenthetical that does not describe pasting stays, and so does a hint that is not at the end.
+      expect(secretNameForVariable("Webhook URL (send-only)")).toBe("Webhook URL (send-only)");
+      expect(secretNameForVariable("Key (paste it) for sending")).toBe("Key (paste it) for sending");
+      expect(secretNameForVariable("Pasted key")).toBe("Pasted key");
+      // The pasted field itself keeps its hint.
+      expect(plainSecretLabel("Service-account key (paste the JSON)")).toBe("Service-account key (paste the JSON)");
+    });
+
+    it("makes the pasted secret the first choice and says where it is kept", () => {
+      let checked = 0;
+      for (const definition of listChannelSetupDefinitions()) {
+        for (const step of definition.wizard.steps) {
+          const fields = step.fields ?? [];
+          for (const envField of secretEnvFields(definition)) {
+            const pastedIndex = fields.findIndex((field) => field.key === envField.key.slice(0, -3));
+            if (pastedIndex < 0) continue;
+            checked += 1;
+            const where = `${definition.catalog.key}.${envField.key.slice(0, -3)}`;
+            const pasted = fields[pastedIndex]!;
+            expect(pastedIndex, `${where} comes before its environment-variable twin`).toBeLessThan(
+              fields.findIndex((field) => field.key === envField.key),
+            );
+            expect(pasted.label, where).not.toMatch(/manual fallback/iu);
+            expect(pasted.explanation, where).toBe(
+              "Paste it here. GoatCitadel keeps it in this computer's secure storage.",
+            );
+            expect(pasted.placeholder, `${where} no longer says to paste only as a last resort`).toBeUndefined();
+            expect(pasted.advanced, where).not.toBe(true);
+            expect(pasted.required, where).toBe(false);
+          }
+        }
+      }
+      expect(checked).toBeGreaterThanOrEqual(15);
+      expect(fieldOf("matrix", "accessToken")?.label).toBe("Access token");
+      expect(fieldOf("wecom", "secret")?.label).toBe("Application secret");
+      expect(fieldOf("whatsapp", "webhookVerifyToken")?.label).toBe("Webhook verify token");
+      const lineKeys = (stepId: string) =>
+        guide("line")
+          .wizard.steps.find((step) => step.id === stepId)
+          ?.fields?.map((field) => field.key);
+      expect(lineKeys("collect-values-identity")).toEqual(["channelAccessToken", "channelAccessTokenEnv"]);
+      expect(lineKeys("receive-messages")).toEqual(["channelSecret", "channelSecretEnv"]);
+    });
+  });
+
+  describe("steps that are split, kept and staged (A11, A12, A16)", () => {
+    function lineWithLaterSteps(): ChannelSetupRuntimeDefinition {
+      const base = createLineDefinition();
+      const steps = base.definition.wizard.steps;
+      // LINE writes its first field step and its "Receive messages (optional)" step itself; the fixture adds steps after them.
+      const collect = steps.find((step) => step.id === "collect-values");
+      const receive = steps.find((step) => step.id === "receive-messages");
+      if (!collect || !receive) throw new Error("LINE has a first field step and a receive step");
+      const first: ChannelSetupStepDefinition = { ...collect, createOnly: true };
+      const unstagedFields: ChannelSetupStepDefinition = {
+        id: "more-values",
+        kind: "field-collection",
+        title: "More values",
+        fields: [{ key: "extra", label: "Extra", type: "text", required: false, explanation: "Extra." }],
+      };
+      const staged: ChannelSetupStepDefinition = {
+        id: "staged-note",
+        kind: "instruction",
+        stage: "identity",
+        title: "Already staged",
+      };
+      const unstaged: ChannelSetupStepDefinition = { id: "unstaged-note", kind: "instruction", title: "No stage" };
+      return {
+        ...base,
+        definition: {
+          ...base.definition,
+          wizard: {
+            ...base.definition.wizard,
+            steps: steps.flatMap((step) =>
+              step === collect ? [first] : step === receive ? [receive, unstagedFields, staged, unstaged] : [step],
+            ),
+          },
+        },
+      };
+    }
+
+    it("splits and retitles only the first field step and leaves later field steps as written", () => {
+      const steps = withGuidedJourney(lineWithLaterSteps()).definition.wizard.steps;
+      const byId = (id: string) => steps.find((step) => step.id === id);
+
+      expect(steps.map((step) => step.id).slice(0, 7)).toEqual([
+        "overview",
+        "create-account",
+        "collect-values-identity",
+        "collect-values-destinations",
+        "receive-messages",
+        "more-values",
+        "staged-note",
+      ]);
+      expect(byId("collect-values-identity")).toMatchObject({ title: "Connect the account", stage: "identity" });
+      expect(byId("receive-messages")).toMatchObject({
+        title: "Receive messages (optional)",
+        stage: "destinations_access",
+      });
+      expect(byId("more-values")?.title).toBe("More values");
+      // An unset stage on a field step comes from what it asks for, never "Before you start".
+      expect(byId("more-values")?.stage).toBe("identity");
+    });
+
+    it("keeps later field steps' fields out of the required credential group but still applies the field rules", () => {
+      const steps = withGuidedJourney(lineWithLaterSteps()).definition.wizard.steps;
+      const identity = steps.find((step) => step.id === "collect-values-identity");
+      const receive = steps.find((step) => step.id === "receive-messages");
+
+      expect(identity?.requiredAnyOf).toEqual([["channelAccessToken", "channelAccessTokenEnv"]]);
+      expect(receive?.requiredAnyOf).toBeUndefined();
+      const secret = receive?.fields?.find((field) => field.key === "channelSecret");
+      const secretEnv = receive?.fields?.find((field) => field.key === "channelSecretEnv");
+      expect(secret?.required).toBe(false);
+      expect(secret?.label).toBe("Channel secret");
+      expect(secretEnv?.advanced).toBe(true);
+      expect(receive?.fields?.map((field) => field.key)).toEqual(["channelSecret", "channelSecretEnv"]);
+    });
+
+    it("keeps a stage the guide set and derives only the ones it left out", () => {
+      const steps = withGuidedJourney(lineWithLaterSteps()).definition.wizard.steps;
+      const stageOf = (id: string) => steps.find((step) => step.id === id)?.stage;
+
+      expect(stageOf("staged-note")).toBe("identity");
+      expect(stageOf("unstaged-note")).toBe("prerequisites");
+      expect(stageOf("test")).toBe("checks");
+      expect(stageOf("finish")).toBe("activation");
+    });
+
+    it("keeps a setup-only flag on both halves of a split step", () => {
+      const steps = withGuidedJourney(lineWithLaterSteps()).definition.wizard.steps;
+
+      expect(steps.find((step) => step.id === "collect-values-identity")?.createOnly).toBe(true);
+      expect(steps.find((step) => step.id === "collect-values-destinations")?.createOnly).toBe(true);
+      expect(steps.find((step) => step.id === "receive-messages")?.createOnly).toBeUndefined();
+    });
+
+    it("leaves a guide with one field step with the same step ids, titles and stages as before", () => {
+      const outline = (key: string) =>
+        guide(key).wizard.steps.map((step) => `${step.id} | ${step.stage} | ${step.title}`);
+
+      // LINE has a second field step of its own: it is split once, and the second keeps the title and stage it was written with.
+      expect(outline("line")).toEqual([
+        "overview | prerequisites | What this connection does",
+        "create-account | prerequisites | Create the LINE Official Account",
+        "collect-values-identity | identity | Connect the account",
+        "collect-values-destinations | destinations_access | Choose destinations and access",
+        "receive-messages | destinations_access | Receive messages (optional)",
+        "sender-access | destinations_access | Who may message this bot?",
+        "test | checks | Validate the draft",
+        "finish | activation | Finish setup",
+        "first-message | first_message | Verify the first conversation",
+      ]);
+      expect(outline("zalo")).toEqual([
+        "overview | prerequisites | What this connection does",
+        "collect-values-identity | identity | Connect the account",
+        "collect-values-destinations | destinations_access | Where should messages go?",
+        "test | checks | Validate the draft",
+        "finish | activation | Finish setup",
+        "first-message | first_message | Confirm delivery",
+      ]);
+      expect(outline("matrix").slice(0, 4)).toEqual([
+        "overview | prerequisites | What this connection does",
+        "create-bot | prerequisites | Make the bot account and a room for it",
+        "collect-values-identity | identity | Connect the account",
+        "collect-values-destinations | destinations_access | Choose destinations and access",
+      ]);
+    });
+
+    it("titles the destinations step of an outbound-only channel as a question", () => {
+      const destinationsTitle = (key: string) =>
+        guide(key).wizard.steps.find((step) => step.id.endsWith("-destinations"))?.title;
+
+      expect(destinationsTitle("zalo")).toBe("Where should messages go?");
+      // Teams has no destinations step at all, so there is no title to change.
+      expect(destinationsTitle("teams")).toBeUndefined();
+      // Channels that can also receive keep the title that covers who may message them. Discord's
+      // destinations step holds its direct-message and server policies, so it counts as one of them.
+      for (const key of ["discord", "slack", "telegram", "whatsapp", "ntfy", "matrix", "qqbot"]) {
+        expect(destinationsTitle(key), key).toBe("Choose destinations and access");
+      }
+    });
+  });
+
+  describe("the sender step (A7, A8)", () => {
+    it("explains in each channel's own words what a sender identity looks like", () => {
+      const explanations: Record<string, string> = {
+        whatsapp: "Your WhatsApp number with country code, digits only, no plus (for example 15551234567).",
+        matrix: "Your Matrix ID with the @ and the server, for example @alice:example.com.",
+        mattermost:
+          "Mattermost user IDs (26 letters and digits), not usernames. An admin sees them in System Console › User Management › Users.",
+        "nextcloud-talk": "users/ followed by your Nextcloud user name, for example users/alice.",
+        line: "Your LINE user ID (starts with U). For a one-to-one chat it is the same ID as Default target.",
+        slack: "Your Slack member ID (starts with U).",
+        ntfy: "Added for you as ntfy-topic:<subscribe topic>. If you change the topic later, change this too.",
+        // These keep their current text until the "dropped message" sentence can be backed by a screen.
+        telegram:
+          "Telegram pairing approval adds the approved user here. A destination chat ID is not permission to message the bot.",
+        "google-chat":
+          "Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied.",
+        qqbot:
+          "Add the QQ openids (the ids QQ assigns to senders, not QQ numbers) that may start conversations. Inbound is default-deny; empty means every inbound sender is denied.",
+        wecom:
+          "Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied.",
+      };
+
+      for (const [key, text] of Object.entries(explanations)) {
+        const field = senderStep(key)?.fields?.find((item) => item.key === "allowedSenders");
+        expect(field?.explanation, key).toBe(text);
+      }
+    });
+
+    it("hides the sender step while the channel is not set to receive", () => {
+      for (const key of ["ntfy", "matrix", "mattermost"]) {
+        const condition = senderStep(key)?.visibleWhenFieldEquals;
+        expect(condition, key).toEqual({ fieldKey: "inboundStreamEnabled", value: true });
+        expect(shownWith(guide(key), condition, {}), `${key} off`).toBe(false);
+        expect(shownWith(guide(key), condition, { inboundStreamEnabled: false }), `${key} off`).toBe(false);
+        expect(shownWith(guide(key), condition, { inboundStreamEnabled: true }), `${key} on`).toBe(true);
+      }
+      for (const key of ["slack", "telegram", "whatsapp", "line", "nextcloud-talk", "qqbot", "wecom"]) {
+        expect(senderStep(key)?.visibleWhenFieldEquals, key).toBeUndefined();
+      }
+    });
+
+    it("offers no access-mode choice where the runtime always enforces the allowlist", () => {
+      for (const key of ["ntfy", "mattermost", "matrix", "google-chat", "qqbot", "wecom"]) {
+        const keys = senderStep(key)?.fields?.map((field) => field.key);
+        expect(keys, key).toEqual(["allowedSenders"]);
+        // With no mode field to compare against, the sender list is always shown.
+        expect(senderStep(key)?.fields?.[0]?.visibleWhenFieldEquals, key).toBeUndefined();
+        expect(
+          allFields(guide(key)).map((field) => field.key),
+          key,
+        ).not.toContain("inboundAccessMode");
+      }
+    });
+
+    it("shows the open-access choice only for a connection that was already open", () => {
+      for (const key of ["slack", "telegram", "whatsapp", "line", "nextcloud-talk"]) {
+        const definition = guide(key);
+        const mode = senderStep(key)?.fields?.find((field) => field.key === "inboundAccessMode");
+        const list = senderStep(key)?.fields?.find((field) => field.key === "allowedSenders");
+
+        expect(
+          mode?.options?.map((option) => option.value),
+          key,
+        ).toEqual(["allowlist", "open_legacy"]);
+        expect(mode?.defaultValue, key).toBe("allowlist");
+        // A new draft has no saved mode, so it never sees the choice; it goes straight to the sender list.
+        expect(shownWith(definition, mode?.visibleWhenFieldEquals, {}), `${key} new draft`).toBe(false);
+        expect(shownWith(definition, list?.visibleWhenFieldEquals, {}), `${key} new draft list`).toBe(true);
+        expect(shownWith(definition, mode?.visibleWhenFieldEquals, { inboundAccessMode: "allowlist" }), key).toBe(
+          false,
+        );
+        // Picking a mode does not by itself make a draft one that was saved open.
+        expect(shownWith(definition, mode?.visibleWhenFieldEquals, { inboundAccessMode: "open_legacy" }), key).toBe(
+          false,
+        );
+        // A saved open connection is marked when it is loaded, so the choice shows whatever the mode is set to.
+        expect(shownWith(definition, mode?.visibleWhenFieldEquals, OPEN_MARKER), key).toBe(true);
+        expect(
+          shownWith(definition, mode?.visibleWhenFieldEquals, { ...OPEN_MARKER, inboundAccessMode: "allowlist" }),
+          key,
+        ).toBe(true);
+        expect(shownWith(definition, list?.visibleWhenFieldEquals, { inboundAccessMode: "open_legacy" }), key).toBe(
+          false,
+        );
+      }
+    });
+
+    it("describes the open-access choice for what it is when it is shown", () => {
+      for (const key of ["slack", "telegram", "whatsapp", "line", "nextcloud-talk"]) {
+        const mode = senderStep(key)?.fields?.find((field) => field.key === "inboundAccessMode");
+
+        expect(mode?.explanation, key).toBe(
+          "This connection lets any sender start a conversation. Choose Only allowed senders to limit it to the people you list.",
+        );
+        expect(
+          mode?.options?.map((option) => option.label),
+          key,
+        ).toEqual(["Only allowed senders", "Open legacy access (advanced)"]);
+      }
+    });
+
+    it("keeps the words this builder adds free of internal terms", () => {
+      const banned =
+        /posture|provenance|ingress|egress|sandbox message|activation plan|manual fallback|preferred path/iu;
+      for (const definition of listChannelSetupDefinitions()) {
+        const generated = [
+          ...definition.wizard.steps.filter((step) => step.id === "sender-access"),
+          ...secretEnvFields(definition),
+          ...allFields(definition).filter((field) => definition.adapter.secretFieldKeys.includes(field.key)),
+        ].map((item) => JSON.stringify(item));
+
+        for (const text of generated) {
+          expect(text, definition.catalog.key).not.toMatch(banned);
+        }
+      }
+    });
+
+    it("shows the open-access choice for a saved open connection and not for a saved allowlist", () => {
+      const runtime = requireChannelSetupDefinition("channel.whatsapp");
+      const mode = senderStep("whatsapp")?.fields?.find((field) => field.key === "inboundAccessMode");
+      const hydratedDraft = (config: Record<string, unknown>) =>
+        runtime.hydrate(createConnection({ catalogId: "channel.whatsapp", key: "whatsapp", config })).draft;
+
+      expect(
+        shownWith(
+          runtime.definition,
+          mode?.visibleWhenFieldEquals,
+          hydratedDraft({ inboundAccessMode: "open_legacy" }),
+        ),
+      ).toBe(true);
+      // A connection saved before the mode existed, with no senders listed, is open too.
+      expect(shownWith(runtime.definition, mode?.visibleWhenFieldEquals, hydratedDraft({}))).toBe(true);
+      expect(
+        shownWith(
+          runtime.definition,
+          mode?.visibleWhenFieldEquals,
+          hydratedDraft({ inboundAccessMode: "allowlist", allowedSenders: ["15551234567"] }),
+        ),
+      ).toBe(false);
+    });
+
+    it("keeps the open-access choice on screen after a saved open connection is switched to an allowlist", () => {
+      const runtime = requireChannelSetupDefinition("channel.whatsapp");
+      const mode = senderStep("whatsapp")?.fields?.find((field) => field.key === "inboundAccessMode");
+      const list = senderStep("whatsapp")?.fields?.find((field) => field.key === "allowedSenders");
+      const opened = runtime.hydrate(
+        createConnection({
+          catalogId: "channel.whatsapp",
+          key: "whatsapp",
+          config: { inboundAccessMode: "open_legacy" },
+        }),
+      ).draft;
+      const switched = { ...opened, inboundAccessMode: "allowlist" };
+
+      // The wizard hides a field when its condition fails, so the select must not vanish under the person using it.
+      expect(shownWith(runtime.definition, mode?.visibleWhenFieldEquals, switched)).toBe(true);
+      expect(shownWith(runtime.definition, list?.visibleWhenFieldEquals, switched)).toBe(true);
+      expect(
+        shownWith(runtime.definition, mode?.visibleWhenFieldEquals, { ...switched, inboundAccessMode: "open_legacy" }),
+      ).toBe(true);
+    });
+
+    it("marks only a saved open connection on a channel that has the choice", () => {
+      const marked = (key: string, config: Record<string, unknown>) =>
+        requireChannelSetupDefinition(`channel.${key}`).hydrate(
+          createConnection({ catalogId: `channel.${key}`, key, config }),
+        ).draft[OPEN_MARKER_KEY];
+
+      for (const key of ["slack", "telegram", "whatsapp", "line", "nextcloud-talk"]) {
+        expect(marked(key, { inboundAccessMode: "open_legacy" }), key).toBe(true);
+        expect(marked(key, { inboundAccessMode: "allowlist", allowedSenders: ["u1"] }), key).toBeUndefined();
+      }
+      // The runtime ignores a stored open mode on these, so a stored one is never carried over.
+      for (const key of ["ntfy", "mattermost", "matrix", "google-chat", "qqbot", "wecom"]) {
+        expect(marked(key, { inboundAccessMode: "open_legacy" }), key).toBeUndefined();
+      }
+      // These have no sender step at all.
+      for (const key of ["discord", "teams", "zalo"]) {
+        expect(marked(key, { inboundAccessMode: "open_legacy" }), key).toBeUndefined();
+      }
+    });
+
+    it("never writes the open-connection marker into the saved configuration", () => {
+      for (const definition of listChannelSetupDefinitions()) {
+        const key = definition.catalog.key;
+        const runtime = requireChannelSetupDefinition(definition.catalog.catalogId);
+        const draft = createDraft(
+          definition.catalog.catalogId,
+          { ...OPEN_MARKER, inboundAccessMode: "open_legacy", allowedSenders: ["u1"] },
+          "edit",
+        );
+        const normalized = runtime.normalize({ ...draft, connectionId: "11111111-1111-1111-1111-111111111111" });
+
+        expect(normalized, key).not.toHaveProperty(OPEN_MARKER_KEY);
+        expect(JSON.stringify(normalized), key).not.toContain(OPEN_MARKER_KEY);
+      }
+    });
+  });
+
+  describe("web addresses (A10)", () => {
+    const message = "Use https://. Plain http:// works only for this computer (127.0.0.1 or localhost).";
+
+    it("rejects plain http away from this computer with the message the live test would give", () => {
+      expect(requireSecureUrl("http://192.168.1.5", "baseUrl", "Base URL")).toMatchObject({
+        key: "baseUrl_malformed",
+        level: "error",
+        message,
+        fieldKey: "baseUrl",
+        failureCategory: "malformed_value",
+      });
+      expect(requireSecureUrl("http://ntfy.example.com/alerts", "baseUrl", "Base URL")?.message).toBe(message);
+      expect(requireSecureUrl("ntfy.example.com", "baseUrl", "Base URL")?.message).toBe(message);
+      expect(requireSecureUrl("ftp://files.example.com", "baseUrl", "Base URL")?.message).toBe(message);
+    });
+
+    it("accepts https and plain http for this computer", () => {
+      expect(requireSecureUrl("https://x", "baseUrl", "Base URL")).toBeUndefined();
+      expect(requireSecureUrl("https://matrix.example.com:8448/", "homeserverUrl", "Homeserver URL")).toBeUndefined();
+      expect(requireSecureUrl("http://127.0.0.1:8080", "baseUrl", "Base URL")).toBeUndefined();
+      expect(requireSecureUrl("http://localhost:2586", "baseUrl", "Base URL")).toBeUndefined();
+    });
+
+    it("leaves an empty value to the required-field check", () => {
+      expect(requireSecureUrl(undefined, "baseUrl", "Base URL")).toBeUndefined();
+      expect(requireSecureUrl("   ", "baseUrl", "Base URL")).toBeUndefined();
+    });
   });
 });

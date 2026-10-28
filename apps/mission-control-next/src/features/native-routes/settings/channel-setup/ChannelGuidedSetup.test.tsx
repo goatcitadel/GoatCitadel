@@ -483,8 +483,8 @@ describe("structured field interaction", () => {
   });
 });
 
-describe("current all16 guided definitions in both shells", () => {
-  it("shows immutable history, severity, deferred checks, cleanup, and acknowledgements for all16 without treating them as current proof", async () => {
+describe("current all14 guided definitions in both shells", () => {
+  it("shows immutable history, severity, deferred checks, cleanup, and acknowledgements for all14 without treating them as current proof", async () => {
     for (const definition of definitions)
       for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
         const draft = makeDraft(definition),
@@ -532,10 +532,10 @@ describe("current all16 guided definitions in both shells", () => {
                   steps: [
                     {
                       key: "cleanup",
-                      label: "Sandbox cleanup",
+                      label: "Test cleanup",
                       status: "warn" as const,
                       disposition: "advisory" as const,
-                      message: "Clean up the sandbox message.",
+                      message: "Clean up the test message.",
                       cleanupStatus: "manual_required" as const,
                       providerMessageId: "all14-provider-receipt",
                     },
@@ -561,7 +561,7 @@ describe("current all16 guided definitions in both shells", () => {
       }
   });
   it("renders every visible adapter step through shared fields with string destinations", async () => {
-    expect(definitions).toHaveLength(16);
+    expect(definitions).toHaveLength(14);
     expect(definitions.map((definition) => definition.catalog.catalogId)).toEqual(
       expect.arrayContaining(["channel.matrix", "channel.qqbot", "channel.wecom"]),
     );
@@ -686,9 +686,11 @@ describe("what a channel needs and the editing note, in both shells", () => {
         const draft: ChannelSetupDraft = { ...makeDraft(slack), lifecycleMode, label: "" };
         const r = await render(<Component {...propsFor(slack, draft)} />);
         const titles = stepButtons(r.root).map((item) => text(item));
-        expect(titles).toHaveLength(slack.wizard.steps.length - 2);
+        // Slack's overview, prerequisites and "create your Slack app" steps are setup-only.
+        expect(titles).toHaveLength(slack.wizard.steps.length - 3);
         expect(titles.some((title) => title.includes(slackTitle("overview")))).toBe(false);
         expect(titles.some((title) => title.includes(slackTitle("prerequisites")))).toBe(false);
+        expect(titles.some((title) => title.includes(slackTitle("create-app")))).toBe(false);
         const notes = editingNotes(r.root);
         expect(notes).toHaveLength(1);
         expect(text(notes[0]!).trim()).toBe("You're changing Slack. The steps for setting it up are hidden.");

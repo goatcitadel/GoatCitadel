@@ -6,6 +6,7 @@ import {
   paragraph,
   note,
   check,
+  troubleshoot,
   readString,
   hasAnyConfiguredSecret,
   compactRecord,
@@ -24,11 +25,12 @@ export function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
       estimatedMinutes: 6,
       difficulty: "beginner",
       manualModePolicy: "available-secondary",
-      introSummary: "Send outbound Adaptive Cards through a Microsoft Teams Workflows webhook.",
+      introSummary:
+        "Post cards to a Microsoft Teams channel through a Workflows webhook. Sends only: Teams can't message GoatCitadel. No public web address is needed.",
       prerequisites: [
-        "Access to the target Teams channel.",
-        "Permission to create a Workflows webhook with the Anyone trigger authentication option.",
-        "A workflow owner and at least one co-owner who can maintain its Teams connection.",
+        "A Teams Workflows webhook whose trigger allows Anyone. Tenant-only triggers don't work.",
+        "A co-owner on the workflow is recommended.",
+        "Old Office 365 connector URLs stopped working in May 2026; make a new Workflows webhook.",
       ],
       steps: [
         {
@@ -38,7 +40,7 @@ export function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph(
-              "GoatCitadel sends outbound Adaptive Cards through a Teams Workflows webhook. It does not install a conversational Teams bot.",
+              "GoatCitadel sends outbound Adaptive Cards through a Teams Workflows webhook. It does not install a Teams bot, so Teams can't message GoatCitadel.",
             ),
             note(
               "warning",
@@ -57,19 +59,21 @@ export function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
           title: "Create the Teams workflow",
           body: [
             paragraph(
-              "Open Workflows from the intended Teams channel. Create a flow with When a Teams webhook request is received and an action that posts the received Adaptive Card to that channel.",
+              "Easiest: in the channel, open More options (⋯) › Workflows › 'Send webhook alerts to a channel'. Then open its trigger and set Who can trigger the flow? to Anyone.",
             ),
             paragraph(
-              "Choose Anyone for trigger authentication. This adapter uses the signed webhook URL as its credential and sends no Microsoft Entra bearer token; tenant-only and specific-user triggers are unsupported.",
+              "Or build it yourself: create a flow with When a Teams webhook request is received and an action that posts the received Adaptive Card to that channel.",
             ),
             paragraph(
-              "Confirm the workflow owner, add a co-owner, and keep the Teams action connection signed in. Workflows belong to users and can stop when their owner or connection becomes unavailable.",
+              "Choose Anyone for trigger authentication. GoatCitadel uses the signed webhook URL as its credential and sends no Microsoft Entra token, so tenant-only and specific-user triggers don't work.",
+            ),
+            paragraph(
+              "Keep the Teams action connection signed in. Workflows belong to users and can stop when their owner or connection becomes unavailable. Adding a co-owner is recommended so the workflow keeps running if the owner leaves.",
             ),
           ],
           checklist: [
             check("channel", "Choose the intended Teams channel"),
             check("workflow", "Create the Adaptive Card workflow and select Anyone"),
-            check("owner", "Confirm an owner and co-owner"),
             check("copied", "Copy the full webhook URL"),
           ],
         },
@@ -119,10 +123,37 @@ export function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the connection",
           body: [
             paragraph(
-              "GoatCitadel validates the signed workflow URL shape and sends its Adaptive Card payload during guided test and retest flows. A valid URL alone does not prove compatibility.",
+              "GoatCitadel checks the shape of the signed workflow URL and posts one test card. A valid URL alone does not prove the workflow works.",
             ),
             paragraph(
-              "A successful HTTP response proves the workflow accepted the request. Check its run history and confirm the card arrived in the intended Teams channel before acknowledging the receipt.",
+              "A successful HTTP response proves the workflow accepted the request. Check the card arrived in the channel. If it didn't, open the workflow's run history.",
+            ),
+          ],
+          troubleshooting: [
+            troubleshoot(
+              "trigger-not-anyone",
+              "Teams refused the request (HTTP 401 or 403)",
+              "The workflow's trigger probably isn't set to Anyone. Open the workflow, open its trigger, set Who can trigger the flow? to Anyone, save it, and copy the new URL.",
+            ),
+            troubleshoot(
+              "incomplete-url",
+              "It says to use the complete HTTPS Teams Workflows URL",
+              "Copy the whole URL from the workflow's webhook trigger, including everything after the ?. A link to the Teams channel is not the webhook URL.",
+            ),
+            troubleshoot(
+              "retired-connector",
+              "It says the URL is an Office 365 connector",
+              "Old Office 365 connector URLs stopped working in May 2026; make a new Workflows webhook.",
+            ),
+            troubleshoot(
+              "host-not-allowed",
+              "It says the webhook's host is not in the outbound allowlist",
+              "GoatCitadel only reaches hosts you allow. Use Allow these hosts on this step to add your webhook's host, then run the test again.",
+            ),
+            troubleshoot(
+              "card-missing",
+              "The test passed but no card appeared",
+              "A passing test means the workflow accepted the request, not that Teams posted it. Open the workflow's run history in Teams and look at the step that failed. Check the post action points at the right channel and the Teams connection is signed in.",
             ),
           ],
         },
@@ -132,12 +163,12 @@ export function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "After a successful sandbox send and confirmed receipt, review activation in Chat. Keep the workflow owner and co-owner able to maintain its Teams connection.",
+              "Finish saves the connection. The test already posted a card; check that it arrived in the channel.",
             ),
           ],
           successCriteria: [
-            "The Anyone Workflows URL is configured securely.",
-            "A live sandbox card is confirmed in the intended Teams channel.",
+            "A Workflows webhook URL whose trigger allows Anyone is set.",
+            "The test card arrived in the Teams channel.",
           ],
         },
       ],
@@ -225,7 +256,7 @@ export function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
         draft.hydration?.fieldState.webhookUrl === "configured",
       );
       if (!hasConfiguredWebhook) {
-        issues.push(requiredFieldIssue("webhookUrl", "Webhook URL is required."));
+        issues.push(requiredFieldIssue("webhookUrl", "Paste the Workflows webhook URL."));
       } else if (webhookUrl) {
         const kind = classifyTeamsWebhookUrl(webhookUrl);
         if (!kind) {
@@ -242,7 +273,7 @@ export function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
             level: draft.lifecycleMode === "create" ? "error" : "warn",
             failureCategory: "deprecated_path",
             message:
-              "Office 365 connector webhooks retired in May 2026. Replace this saved URL with an Anyone Workflows webhook and run a live sandbox test.",
+              "Office 365 connector webhooks retired in May 2026. Replace this saved URL with an Anyone Workflows webhook and run a live test.",
           });
         } else if (kind === "legacy_workflow") {
           issues.push({

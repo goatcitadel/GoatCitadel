@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HOSTS_UNKNOWN } from "../channel-hosts";
 import { ChannelHostsCheck } from "./ChannelHostsCheck";
+import type { UnreadableHostField } from "./channel-wizard-model";
 
 const api = vi.hoisted(() => ({ fetchSettings: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
@@ -29,7 +30,16 @@ async function settle() {
   });
 }
 
-async function show(props: { hosts: readonly string[]; unreadable?: readonly string[]; workspaceId?: string }) {
+const saved = (label: string): UnreadableHostField => ({ label, kind: "saved" });
+const typed = (label: string): UnreadableHostField => ({ label, kind: "typed" });
+const savedLine = (label: string) =>
+  `GoatCitadel can't read the address in ${label} after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.`;
+
+async function show(props: {
+  hosts: readonly string[];
+  unreadable?: readonly UnreadableHostField[];
+  workspaceId?: string;
+}) {
   await act(async () => {
     root.render(
       <QueryClientProvider client={client}>
@@ -84,11 +94,22 @@ describe("ChannelHostsCheck", () => {
     expect(api.fetchSettings).not.toHaveBeenCalled();
   });
 
-  it("says, for each address it can't read, that it can't check that host, with no button and nothing to read", async () => {
-    await show({ hosts: [], unreadable: ["Webhook URL", "Server"] });
+  it("says, for each saved address it can't read, that it can't check that host, with no button and nothing to read", async () => {
+    await show({ hosts: [], unreadable: [saved("Webhook URL"), saved("Server")] });
     expect([...container.querySelectorAll("p")].map((item) => item.textContent)).toEqual([
-      "GoatCitadel can't read the address in Webhook URL after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.",
-      "GoatCitadel can't read the address in Server after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.",
+      savedLine("Webhook URL"),
+      savedLine("Server"),
+    ]);
+    expect(buttons()).toHaveLength(0);
+    expect(api.fetchSettings).not.toHaveBeenCalled();
+    expectNoLiveRegion();
+  });
+
+  it("asks for an address like https://example.com when a typed one names no host", async () => {
+    await show({ hosts: [], unreadable: [typed("Server"), saved("Webhook URL")] });
+    expect([...container.querySelectorAll("p")].map((item) => item.textContent)).toEqual([
+      "GoatCitadel can't find a host in Server. Use an address like https://example.com.",
+      savedLine("Webhook URL"),
     ]);
     expect(buttons()).toHaveLength(0);
     expect(api.fetchSettings).not.toHaveBeenCalled();
@@ -97,7 +118,7 @@ describe("ChannelHostsCheck", () => {
 
   it("shows the hosts it could read and the addresses it couldn't, side by side", async () => {
     api.fetchSettings.mockResolvedValue(settings(["api.line.me"]));
-    await show({ hosts: LINE, unreadable: ["Webhook URL"] });
+    await show({ hosts: LINE, unreadable: [saved("Webhook URL")] });
     expect(text()).toContain("GoatCitadel may reach api.line.me.");
     expect(text()).toContain("GoatCitadel can't read the address in Webhook URL after it's saved");
     expectNoLiveRegion();
@@ -105,10 +126,8 @@ describe("ChannelHostsCheck", () => {
 
   it("still shows what it couldn't read while the allowlist is being read, and still offers no button", async () => {
     api.fetchSettings.mockReturnValue(new Promise(() => undefined));
-    await show({ hosts: LINE, unreadable: ["Webhook URL"] });
-    expect(text()).toBe(
-      "GoatCitadel can't read the address in Webhook URL after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.",
-    );
+    await show({ hosts: LINE, unreadable: [saved("Webhook URL")] });
+    expect(text()).toBe(savedLine("Webhook URL"));
     expect(button("Allow these hosts")).toBeUndefined();
     expectNoLiveRegion();
   });

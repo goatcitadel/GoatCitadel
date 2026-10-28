@@ -15,7 +15,7 @@ import { OPENCLAW_PARITY_COMPLETION_ORDER, OPENCLAW_PARITY_EPICS } from "@goatci
 const BASE_UNSAFE_CLAIMS: string[] = [
   "Discord, Slack, and Telegram still need fresh per-provider operator proof whenever runtime or policy behavior changes.",
   "Google Chat and Teams are outbound webhook lanes only; do not over-claim inbound/runtime parity they do not implement.",
-  "WhatsApp, Signal, iMessage/BlueBubbles, Mattermost, LINE, and Zalo OA now have narrower beta lanes with guided live-probe coverage, but each still has explicit capability limits that must stay visible.",
+  "WhatsApp, Mattermost, LINE, and Zalo OA now have narrower beta lanes with guided live-probe coverage, but each still has explicit capability limits that must stay visible.",
   "Packaging still requires current clean-install, packaged-startup, and rollback evidence before parity can be called complete.",
 ];
 
@@ -129,17 +129,14 @@ function buildProgramEpicRecord(
       return record(definition, {
         status: resolvedStatus,
         summary:
-          "WhatsApp, Signal, and iMessage/BlueBubbles now ship with guided setup, live runtime probes, and truthful beta-lane documentation that matches the current runtime bounds of each provider.",
+          "WhatsApp now ships with guided setup, live runtime probes, and truthful beta-lane documentation that matches its current runtime bounds. Signal and iMessage were retired because they needed unofficial clients.",
         nextSlice:
           "Keep the Tier-1 operator proof current and only widen provider capabilities when the runtime and docs move together.",
         blockers:
           resolvedStatus === "complete"
             ? []
             : [
-                blocker(
-                  "repo_runtime",
-                  "WhatsApp unsend is a platform limit (the Cloud API has no delete endpoint), iMessage remains a local outbound bridge with platform-dependent limits, and Signal inbound is an opt-in receiveEvents subscription that does not replay messages missed while disconnected.",
-                ),
+                blocker("repo_runtime", "WhatsApp unsend is a platform limit (the Cloud API has no delete endpoint)."),
                 blocker(
                   "manual_operator",
                   "Tier-1 providers still need repeatable operator proof that matches each provider's actual supported action set before any further maturity claims are promoted.",

@@ -42,14 +42,14 @@ describe("buildGatewayConnectorRecords", () => {
   it("extracts approval delivery targets from additional channel-specific config keys", () => {
     const cases = [
       {
-        key: "signal",
+        key: "whatsapp",
         config: { defaultRecipient: "+15551234567" },
         expectedTarget: "+15551234567",
       },
       {
-        key: "imessage",
-        config: { defaultHandle: "+15557654321" },
-        expectedTarget: "+15557654321",
+        key: "matrix",
+        config: { defaultRoomId: "!ops:example.test" },
+        expectedTarget: "!ops:example.test",
       },
       {
         key: "nextcloud-talk",
@@ -83,7 +83,7 @@ describe("buildGatewayConnectorRecords", () => {
 
   it("publishes channel-specific guidance for missing approval delivery targets", () => {
     const records = buildGatewayConnectorRecords({
-      integrationConnections: [createIntegrationConnection("channel", "imessage")],
+      integrationConnections: [createIntegrationConnection("channel", "matrix")],
       mcpServers: [],
       mcpTools: [],
     });
@@ -91,23 +91,12 @@ describe("buildGatewayConnectorRecords", () => {
     const connector = records.find((item) => item.connectorId === "integration:conn-1");
     expect(connector?.metadata?.approvalDeliveryTarget).toBeUndefined();
     expect(connector?.metadata?.approvalDeliveryReason).toBe(
-      "Set config.defaultHandle or config.defaultTarget to enable approval delivery.",
+      "Set config.defaultRoomId or config.defaultTarget to enable approval delivery.",
     );
   });
 
   it("advertises richer channel actions and diagnostics only when the configured bridge mode supports them", () => {
     vi.stubEnv("TELEGRAM_WEBHOOK_SECRET", "resolved-telegram-webhook-secret");
-    const imessageRecords = buildGatewayConnectorRecords({
-      integrationConnections: [
-        createIntegrationConnection("channel", "imessage", {
-          bridgeUrl: "http://127.0.0.1:1234",
-          passwordEnv: "IMESSAGE_PASSWORD",
-          defaultHandle: "imessage:+15551234567",
-        }),
-      ],
-      mcpServers: [],
-      mcpTools: [],
-    });
     const slackRecords = buildGatewayConnectorRecords({
       integrationConnections: [
         createIntegrationConnection("channel", "slack", {
@@ -170,20 +159,6 @@ describe("buildGatewayConnectorRecords", () => {
       mcpTools: [],
     });
 
-    const imessage = imessageRecords.find((item) => item.connectorId === "integration:conn-1");
-    expect(imessage?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
-    expect(imessage?.metadata?.approvalInlineActionsReady).toBe(false);
-    expect(imessage?.metadata?.supportedDeliveryActions).toEqual(
-      expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend"]),
-    );
-    expect(imessage?.metadata?.setupReady).toBe(true);
-    expect(imessage?.metadata?.channelSupportNotes).toEqual(
-      expect.arrayContaining(["Reactions, unsend, and typing indicators require BlueBubbles Private API support."]),
-    );
-    expect(
-      (imessage?.metadata?.channelCapabilities as { runtimePolicy?: { typing?: boolean } })?.runtimePolicy?.typing,
-    ).toBe(true);
-
     const slack = slackRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(slack?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
     expect(slack?.metadata?.approvalInlineActionsReady).toBe(false);
@@ -193,7 +168,7 @@ describe("buildGatewayConnectorRecords", () => {
     expect(slack?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
     expect(slack?.metadata?.channelSupportNotes).toEqual(
       expect.arrayContaining([
-        "Guided setup can run a sandbox send/delete probe on the bot-token path before finalize.",
+        "With a bot token, guided setup can send a test message and delete it again before finalize.",
         "Slack inbound routing remains disabled until a signing secret is configured.",
       ]),
     );
@@ -220,7 +195,7 @@ describe("buildGatewayConnectorRecords", () => {
     expect(googleChat?.metadata?.supportedAttachmentSources).toEqual(["url"]);
     expect(googleChat?.metadata?.channelSupportNotes).toEqual(
       expect.arrayContaining([
-        "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+        "Guided setup can send a test message through the webhook before finalize. You confirm yourself that it arrived.",
         "Google Chat webhook mode is outbound; inbound requires Chat app (service-account) mode.",
       ]),
     );
@@ -229,7 +204,7 @@ describe("buildGatewayConnectorRecords", () => {
     expect(teams?.metadata?.supportedAttachmentSources).toEqual(["url"]);
     expect(teams?.metadata?.channelSupportNotes).toEqual(
       expect.arrayContaining([
-        "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+        "Guided setup can send a test message through the webhook before finalize. You confirm yourself that it arrived.",
         "Teams webhook mode is outbound only and does not provide inbound routing.",
       ]),
     );
@@ -244,7 +219,7 @@ describe("buildGatewayConnectorRecords", () => {
     ).toBe(true);
     expect(telegram?.metadata?.channelSupportNotes).toEqual(
       expect.arrayContaining([
-        "Guided setup can run a sandbox send/delete probe before finalize.",
+        "Guided setup can send a test message and delete it again before finalize.",
         "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path.",
       ]),
     );
@@ -297,11 +272,11 @@ describe("buildGatewayConnectorRecords", () => {
     expect(connector?.metadata?.approvalInlineActionsReady).toBe(false);
   });
 
-  it("publishes setup diagnostics for incomplete channel bridge configs", () => {
+  it("publishes setup diagnostics for incomplete channel server configs", () => {
     const records = buildGatewayConnectorRecords({
       integrationConnections: [
-        createIntegrationConnection("channel", "imessage", {
-          defaultHandle: "imessage:+15551234567",
+        createIntegrationConnection("channel", "nextcloud-talk", {
+          defaultRoomId: "room-1",
         }),
       ],
       mcpServers: [],
@@ -312,8 +287,8 @@ describe("buildGatewayConnectorRecords", () => {
     expect(connector?.metadata?.setupReady).toBe(false);
     expect(connector?.metadata?.setupDiagnostics).toEqual(
       expect.arrayContaining([
-        "Missing one of: config.bridgeUrl, config.baseUrl, config.serverUrl.",
-        "Missing one of: config.passwordEnv, config.password, config.apiPasswordEnv, config.apiPassword.",
+        "Missing one of: config.baseUrl.",
+        "Missing one of: config.tokenEnv, config.token, config.botSecretEnv, config.botSecret, config.secretEnv, config.secret.",
       ]),
     );
   });

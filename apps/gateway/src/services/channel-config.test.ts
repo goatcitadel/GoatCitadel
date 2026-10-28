@@ -4,18 +4,11 @@ import { resolveChannelConfigTarget } from "./channel-config.js";
 describe("resolveChannelConfigTarget", () => {
   it("uses channel-specific target precedence", () => {
     expect(
-      resolveChannelConfigTarget("signal", {
+      resolveChannelConfigTarget("matrix", {
         defaultTarget: "fallback",
-        defaultRecipient: "+15551234567",
+        defaultRoomId: "!room:example.test",
       }),
-    ).toBe("+15551234567");
-
-    expect(
-      resolveChannelConfigTarget("imessage", {
-        defaultTarget: "fallback",
-        defaultHandle: "+15557654321",
-      }),
-    ).toBe("+15557654321");
+    ).toBe("!room:example.test");
 
     expect(
       resolveChannelConfigTarget("nextcloud-talk", {
@@ -60,7 +53,7 @@ describe("resolveChannelConfigTarget", () => {
   });
 
   it("returns undefined when no configured target exists", () => {
-    expect(resolveChannelConfigTarget("signal", {})).toBeUndefined();
+    expect(resolveChannelConfigTarget("whatsapp", {})).toBeUndefined();
     expect(
       resolveChannelConfigTarget("discord", {
         defaultChannelId: "   ",

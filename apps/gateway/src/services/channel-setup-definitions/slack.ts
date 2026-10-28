@@ -2,6 +2,7 @@ import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/con
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
+  PASTED_SECRET_EXPLANATION,
   requireCatalog,
   baseCatalogMeta,
   definitionFailures,
@@ -9,6 +10,7 @@ import {
   note,
   linkBlock,
   check,
+  troubleshoot,
   readString,
   normalizeSlackTargets,
   hasAnyConfiguredSecret,
@@ -33,7 +35,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       prerequisites: [
         "A Slack workspace where you can approve your Slack app.",
         "Permission to install apps or ask an admin to approve the install.",
-        "At least one sandbox channel for the first test post.",
+        "At least one test channel for the first test post.",
       ],
       steps: [
         {
@@ -43,11 +45,15 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph(
-              "GoatCitadel can install into Slack through OAuth, store the workspace install, and route messages to multiple named Slack channels.",
+              "GoatCitadel posts to the Slack channels you choose, as a bot from your own Slack app. One connection can serve several channels.",
             ),
             note(
               "info",
-              "OAuth is the easiest path. Manual bot-token and webhook fields stay available below for advanced local-first fallback setups.",
+              "Paste a bot token from your own Slack app. Installing with OAuth is an advanced option: it needs your own Slack app, a public HTTPS redirect address and four settings on the Gateway.",
+            ),
+            note(
+              "warning",
+              "In this version Slack can receive messages only from an app installed with OAuth here, with message history scopes (set GOATCITADEL_SLACK_OAUTH_SCOPES) and a public HTTPS address. A pasted bot token can send but not receive.",
             ),
           ],
         },
@@ -56,26 +62,69 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           kind: "prerequisites",
           createOnly: true,
           title: "Before you start",
+          body: [
+            paragraph(
+              "With a bot token, pick at least one test channel for the first target. An incoming webhook posts to its own channel, so a webhook-only setup needs none.",
+            ),
+          ],
+          // Only the boxes every path needs: a box blocks Continue, so a webhook-only setup can't be asked to tick a channel.
           checklist: [
             check("workspace", "Choose the Slack workspace"),
-            check("sandbox", "Pick at least one sandbox channel for the first target"),
             check("permissions", "Confirm you can approve or request your Slack app"),
+          ],
+        },
+        {
+          id: "create-app",
+          kind: "instruction",
+          createOnly: true,
+          title: "Create your Slack app and copy its bot token",
+          body: [
+            {
+              kind: "list",
+              ordered: true,
+              items: [
+                "Open api.slack.com/apps › Create New App › From scratch, and pick your workspace.",
+                "Open OAuth & Permissions. Under Bot Token Scopes add chat:write. Add chat:write.public if you won't invite the bot to the channel.",
+                "Click Install to Workspace and allow it.",
+                "Copy the Bot User OAuth Token (it starts with xoxb-).",
+                "For a private channel, type /invite @your-app in that channel.",
+              ],
+            },
+            linkBlock("Your Slack apps", "https://api.slack.com/apps"),
           ],
         },
         {
           id: "oauth-install",
           kind: "instruction",
+          // Authored so an edit guide, which skips the steps above, opens on "Connect account" and shows the Connect Slack controls.
+          stage: "identity",
           title: "Connect Slack with OAuth",
           body: [
+            paragraph("This step is advanced and optional. Skip it if you paste a bot token on the next step."),
             paragraph(
-              "Use Connect Slack from Mission Control to approve your Slack app. After approval, return here and choose the channels GoatCitadel should use.",
+              "Connecting with OAuth is the only way, in this version, for GoatCitadel to receive messages from Slack. It needs your own Slack app and a public HTTPS redirect address.",
+            ),
+            paragraph("Set these four variables where GoatCitadel starts, then restart GoatCitadel:"),
+            {
+              kind: "list",
+              items: [
+                "GOATCITADEL_SLACK_OAUTH_CLIENT_ID",
+                "GOATCITADEL_SLACK_OAUTH_CLIENT_SECRET",
+                "GOATCITADEL_SLACK_OAUTH_REDIRECT_URI",
+                "GOATCITADEL_SLACK_OAUTH_STATE_SECRET",
+              ],
+            },
+            paragraph(
+              "Then choose Connect Slack with OAuth below, approve your Slack app, and check the workspace it shows.",
             ),
             linkBlock("Slack OAuth v2", "https://api.slack.com/authentication/oauth-v2"),
           ],
-          checklist: [
-            check("connect", "Click Connect Slack"),
-            check("approve", "Approve your Slack app"),
-            check("workspace", "Confirm Mission Control shows the connected workspace"),
+          troubleshooting: [
+            troubleshoot(
+              "oauth-needs-configuration",
+              "It says Slack OAuth needs configuration",
+              "One of the four variables above is not set. Set it where GoatCitadel starts, then restart GoatCitadel.",
+            ),
           ],
         },
         {
@@ -84,46 +133,12 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           title: "Choose Slack targets",
           fields: [
             {
-              key: "slackInstallId",
-              label: "Connected Slack install",
-              type: "text",
-              required: false,
-              explanation: "OAuth install identifier returned by the Slack connection flow.",
-              whyNeeded: "Used to connect this setup draft to the approved workspace install.",
-              whereToFind: [
-                paragraph(
-                  "Use the Connect Slack action in Mission Control. This field is filled automatically when possible.",
-                ),
-              ],
-              looksLike: "slack:T0123456789",
-              canChangeLater: true,
-            },
-            {
-              key: "targets",
-              label: "Slack channel targets",
-              type: "textarea",
-              required: true,
-              explanation: "Named Slack channels this one workspace install can use.",
-              whyNeeded: "Lets one Slack connection serve multiple channels without repeating setup.",
-              whereToFind: [
-                paragraph(
-                  "Add a target for each Slack channel. Use #channel-name for public channels or C/G ids for private channels.",
-                ),
-              ],
-              looksLike: "Default: #ops-sandbox",
-              commonMistakes: [
-                "Adding a private channel before inviting the app into that channel.",
-                "Creating separate full connections instead of adding targets here.",
-              ],
-              canChangeLater: true,
-            },
-            {
               key: "botToken",
-              label: "Advanced fallback: Bot User OAuth token",
+              label: "Bot token",
               type: "secret",
               required: false,
-              explanation: "Manual token fallback for self-owned Slack app setups.",
-              whyNeeded: "Used to validate the app installation and post as the bot.",
+              explanation: PASTED_SECRET_EXPLANATION,
+              whyNeeded: "Lets GoatCitadel check your Slack app and post as the bot.",
               whereToFind: [
                 paragraph("Open your Slack app, then OAuth & Permissions, then copy the Bot User OAuth Token."),
               ],
@@ -136,6 +151,42 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
               canChangeLater: true,
             },
             {
+              key: "slackInstallId",
+              label: "Connected Slack install (OAuth only)",
+              type: "text",
+              required: false,
+              explanation:
+                "Filled in for you when you connect Slack with OAuth. Leave it empty if you paste a bot token.",
+              whyNeeded: "Used to connect this setup draft to the approved workspace install.",
+              whereToFind: [
+                paragraph("Use the Connect Slack with OAuth button. This field is filled automatically when possible."),
+              ],
+              looksLike: "slack:T0123456789",
+              canChangeLater: true,
+            },
+            {
+              key: "targets",
+              label: "Slack channel targets",
+              type: "textarea",
+              // Not required here: an incoming webhook is bound to its own channel. A bot-token setup without a channel is
+              // caught by validate() (`targets_required`), which names this field so the wizard jumps back to it.
+              required: false,
+              explanation:
+                "Named Slack channels this one workspace install can use. Needed with a bot token. Leave this empty for a webhook-only setup.",
+              whyNeeded: "Lets one Slack connection serve multiple channels without repeating setup.",
+              whereToFind: [
+                paragraph(
+                  "Add a target for each Slack channel. Use #channel-name for public channels or C/G ids for private channels.",
+                ),
+              ],
+              looksLike: "Default: #ops-test",
+              commonMistakes: [
+                "Adding a private channel before inviting the app into that channel.",
+                "Creating separate full connections instead of adding targets here.",
+              ],
+              canChangeLater: true,
+            },
+            {
               key: "defaultChannel",
               label: "Legacy default channel",
               type: "text",
@@ -143,11 +194,9 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
               explanation: "Compatibility fallback for older single-channel Slack connections.",
               whyNeeded: "Used only when no target rows are configured.",
               whereToFind: [
-                paragraph(
-                  "Use the channel name like #ops-sandbox or copy the channel id for private channels if needed.",
-                ),
+                paragraph("Use the channel name like #ops-test or copy the channel id for private channels if needed."),
               ],
-              looksLike: "#ops-sandbox or C0123456789",
+              looksLike: "#ops-test or C0123456789",
               commonMistakes: ["Using a display title instead of the actual channel reference."],
               canChangeLater: true,
             },
@@ -162,11 +211,12 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
             },
             {
               key: "webhookUrl",
-              label: "Advanced fallback: incoming webhook URL",
+              label: "Incoming webhook URL (send-only)",
               type: "url",
               required: false,
-              explanation: "Optional send-only webhook fallback. Webhooks are tied to one selected Slack channel.",
-              whyNeeded: "Useful when you need a lightweight send-only path or a fallback route.",
+              explanation:
+                "Send-only. A webhook posts to the one Slack channel it was made for, so you don't need to add a channel target.",
+              whyNeeded: "Useful for a simple send-only setup without a bot token.",
               whereToFind: [
                 paragraph("Enable Incoming Webhooks in your Slack app, then copy the generated webhook URL."),
               ],
@@ -177,9 +227,11 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
             },
             {
               key: "signingSecret",
-              label: "Optional signing secret",
+              label: "Signing secret (OAuth installs that receive messages)",
               type: "secret",
               required: false,
+              // The Slack events route needs the team and app a Connect Slack install records, so a pasted token has no use for it.
+              visibleWhenFieldEquals: { fieldKey: "authMode", value: "oauth" },
               explanation: "Slack request signing secret for verified inbound event routing.",
               whyNeeded:
                 "Required if you want GoatCitadel to accept signed Slack Events API callbacks and reply inside Slack conversations.",
@@ -204,22 +256,42 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate and test the connection",
           body: [
             paragraph(
-              "GoatCitadel validates the bot token when present and sends a sandbox message plus cleanup probe for bot-token Slack connections.",
+              "With a bot token, Test checks the token, posts one test message in your default channel, then deletes it.",
             ),
-            paragraph("Webhook-only Slack fallback connections still rely on manual confirmation after finalize."),
+            paragraph("The webhook-only path sends one test post that stays in the channel."),
           ],
-          troubleshooting: definitionFailures("token"),
+          troubleshooting: [
+            ...definitionFailures("token"),
+            troubleshoot(
+              "not-in-channel",
+              "Slack says the app is not in the channel",
+              "Type /invite @your-app in the channel. Or add the chat:write.public scope under OAuth & Permissions and reinstall the app.",
+            ),
+            troubleshoot(
+              "channel-not-found",
+              "Slack can't find the channel",
+              "Use a channel name like #ops, or paste the channel ID. A private channel needs its ID.",
+            ),
+            troubleshoot(
+              "missing-scope",
+              "Slack says a scope is missing",
+              "Add the missing scope under OAuth & Permissions, then reinstall the app and copy the bot token again.",
+            ),
+          ],
         },
         {
           id: "finish",
           kind: "confirm",
           title: "Finish setup",
           body: [
-            paragraph("After finalizing, send a sandbox message to confirm the bot can reach the chosen channel."),
+            paragraph(
+              "Finish saves the connection. With a bot token, the test posts a message and deletes it, so check that the test passed. With only an incoming webhook, the test post stays in the channel, so check that it arrived there.",
+            ),
           ],
           successCriteria: [
-            "A default channel is configured.",
-            "The bot token validates successfully or the webhook path is confirmed manually.",
+            "A bot token or an incoming webhook URL is set.",
+            "A channel target is set when you use a bot token.",
+            "The test passed. With only an incoming webhook, the test post arrived in Slack.",
           ],
         },
       ],
@@ -258,8 +330,8 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       lastReviewedAt: "2026-05-02",
       volatility: "medium",
       deprecationRisk: "low",
-      preferredPathLabel: "Slack OAuth install with your Slack app",
-      legacyPathLabel: "Manual bot token or incoming webhook fallback",
+      preferredPathLabel: "Bot token from your own Slack app",
+      legacyPathLabel: "Incoming webhook (send-only) or OAuth install (advanced)",
     },
   };
 
@@ -272,8 +344,11 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
         ["webhookUrl"],
         ["signingSecret", "signingSecretEnv"],
       ]);
+      const authMode = readString(config, "authMode");
       return {
         draft: {
+          // Kept so the signing-secret field, which only an OAuth install uses, stays on screen when that install is edited.
+          ...(authMode ? { authMode } : {}),
           slackInstallId: readString(config, "slackInstallId"),
           targets: normalizeSlackTargets(config),
           defaultChannel: readString(config, "defaultChannel"),
@@ -349,10 +424,13 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       if (!hasConfiguredToken && !hasConfiguredWebhook) {
         issues.push({
           key: "slack_auth_missing",
+          fieldKey: "botToken",
           level: "error",
-          message: "Connect Slack with OAuth first, or use the advanced manual bot-token/webhook fallback.",
+          message: "Paste the bot token (starts with xoxb-), or a webhook URL for send-only.",
           failureCategory: "missing_input",
-          nextSteps: ["Click Connect Slack, approve the workspace, then add channel targets and rerun validation."],
+          nextSteps: [
+            "Paste the Bot User OAuth Token from your Slack app's OAuth & Permissions page, or an incoming webhook URL for a send-only setup, then validate again.",
+          ],
         });
       }
       if (token && !/^xox[baprs]-/i.test(token)) {
@@ -364,7 +442,9 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       if (signingSecret && /^xox[baprs]-/i.test(signingSecret)) {
         issues.push(malformedFieldIssue("signingSecret", "Signing secret should not look like a Slack OAuth token."));
       }
-      if (!defaultChannel) {
+      // An incoming webhook is bound to one channel already, so a webhook-only setup needs no target of its own.
+      const webhookOnly = hasConfiguredWebhook && !hasConfiguredToken;
+      if (!defaultChannel && !webhookOnly) {
         issues.push(requiredFieldIssue("targets", "Add at least one Slack channel target."));
       }
       for (const target of targets) {

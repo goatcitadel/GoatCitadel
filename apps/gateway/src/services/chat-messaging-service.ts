@@ -13,6 +13,7 @@ import {
   ConflictError,
   NotFoundError,
   ValidationError,
+  describeRetiredChannel,
   resolveChannelOwnerActorIds,
   type ChatMessagingChannel,
   type ChatMessagingChannelStatus,
@@ -244,10 +245,11 @@ async function buildConversation(
 /**
  * Enabled and connected is on; only a switched-off (disabled) connection is off; an enabled one that is paused,
  * disconnected or in error needs attention. "Off" asks the operator to turn the channel back on, which an enabled
- * connection's page could not offer (it shows "Turn off").
+ * connection's page could not offer (it shows "Turn off"). A saved connection of a retired channel is removed whatever
+ * its state: its conversations stay readable, but nothing can be sent through it.
  */
 function resolveChannelStatus(connection: IntegrationConnection | undefined): ChatMessagingChannelStatus {
-  if (!connection) {
+  if (!connection || describeRetiredChannel(connection.key)) {
     return "removed";
   }
   if (!connection.enabled) {

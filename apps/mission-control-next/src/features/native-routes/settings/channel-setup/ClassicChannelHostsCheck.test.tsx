@@ -47,12 +47,22 @@ describe("ClassicChannelHostsCheck", () => {
 
   it("passes on the addresses it can't read, with nothing to read for them", async () => {
     await act(async () =>
-      root.render(<ClassicChannelHostsCheck hosts={[]} unreadable={["Webhook URL"]} workspaceId="default" />),
+      root.render(
+        <ClassicChannelHostsCheck
+          hosts={[]}
+          unreadable={[
+            { label: "Webhook URL", kind: "saved" },
+            { label: "Server", kind: "typed" },
+          ]}
+          workspaceId="default"
+        />,
+      ),
     );
     await settle();
 
     expect(container.textContent).toBe(
-      "GoatCitadel can't read the address in Webhook URL after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.",
+      "GoatCitadel can't read the address in Webhook URL after it's saved, so it can't check its host. Make sure GoatCitadel may reach it." +
+        "GoatCitadel can't find a host in Server. Use an address like https://example.com.",
     );
     expect(api.fetchSettings).not.toHaveBeenCalled();
   });

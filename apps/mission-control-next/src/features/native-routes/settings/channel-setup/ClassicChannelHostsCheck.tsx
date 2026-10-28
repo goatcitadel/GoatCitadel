@@ -6,13 +6,14 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client-core";
 import { CockpitOwnerLink, cockpitShellHref } from "../../../../app/CockpitOwnerLink";
 import { ChannelHostsCheck, type InboxLink } from "./ChannelHostsCheck";
+import type { UnreadableHostField } from "./channel-wizard-model";
 
 /** Classic has no Inbox page, so a link to one opens it in the Cockpit shell. */
 const CockpitInboxLink: InboxLink = ({ href, scope, children }) => (
   <CockpitOwnerLink href={cockpitShellHref(href)} scope={scope} label={children} />
 );
 
-type HostsCheckProps = { hosts: readonly string[]; unreadable?: readonly string[]; workspaceId: string };
+type HostsCheckProps = { hosts: readonly string[]; unreadable?: readonly UnreadableHostField[]; workspaceId: string };
 
 /**
  * The hosts check for the Classic guide. Only the Cockpit has a query client, and the check reads the allowlist

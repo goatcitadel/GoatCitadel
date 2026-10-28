@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { ChannelTypingInput, ChannelTypingResult, IntegrationConnection } from "@goatcitadel/contracts";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 
@@ -81,14 +81,10 @@ export async function emitProviderTyping(args: ChannelTypingAdapterArgs): Promis
         return await emitMattermostTyping(args);
       case "matrix":
         return await emitMatrixTyping(args);
-      case "signal":
-        return await emitSignalTyping(args);
       case "whatsapp":
         return await emitWhatsAppTyping(args);
       case "discord":
         return await emitDiscordRestTyping(args);
-      case "imessage":
-        return await emitBlueBubblesTyping(args);
       default:
         return unsupported(args, `${args.connection.label} has not wired a typing adapter yet.`);
     }
@@ -200,43 +196,6 @@ export async function emitMattermostTyping(args: ChannelTypingAdapterArgs): Prom
   }
 }
 
-export async function emitSignalTyping(args: ChannelTypingAdapterArgs): Promise<ChannelTypingResult> {
-  try {
-    const { connection, input } = args;
-    const configured = readString(connection.config.baseUrl) ?? readString(connection.config.bridgeUrl);
-    if (!configured) return unsupported(args, `${connection.label} is missing a Signal base URL.`);
-    const baseUrl = (/^https?:\/\//i.test(configured) ? configured : `http://${configured}`).replace(/\/+$/, "");
-    const account = readString(connection.config.account) ?? readString(connection.config.accountId);
-    const target = (readString(input.target) ?? "").replace(/^signal:/i, "").trim();
-    const targetParams = buildSignalTypingTarget(target);
-    if (!targetParams) return unsupported(args, `${connection.label} is missing a Signal target.`);
-    const url = `${baseUrl}/api/v1/rpc`;
-    if (!args.isAllowlisted(url)) return unsupported(args, allowlistReason(url));
-    const response = await args.fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "sendTyping",
-        params: { ...(account ? { account } : {}), ...targetParams },
-        id: randomUUID(),
-      }),
-      signal: input.signal,
-    });
-    if (response.status === 201) return sent(args);
-    const body = await readBody(response, "Signal typing");
-    if (!response.ok) return unsupported(args, httpReason("Signal", response.status, body));
-    const rpcError = parseJsonRecord(body).error;
-    if (rpcError && typeof rpcError === "object") {
-      const detail = readString((rpcError as Record<string, unknown>).message);
-      return unsupported(args, `Signal sendTyping failed${detail ? `: ${detail}` : "."}`);
-    }
-    return sent(args);
-  } catch (error) {
-    return unsupported(args, errorMessage(error));
-  }
-}
-
 export async function emitWhatsAppTyping(args: ChannelTypingAdapterArgs): Promise<ChannelTypingResult> {
   try {
     const { connection, input } = args;
@@ -339,83 +298,6 @@ export async function emitDiscordRestTyping(args: ChannelTypingAdapterArgs): Pro
   }
 }
 
-/**
- * iMessage typing through the BlueBubbles server: POST /api/v1/chat/{chatGuid}/typing.
- * The route needs the BlueBubbles Private API, and the target must already be a chat GUID.
- */
-export async function emitBlueBubblesTyping(args: ChannelTypingAdapterArgs): Promise<ChannelTypingResult> {
-  let password: string | undefined;
-  try {
-    const { connection, input } = args;
-    const provider = (
-      readString(connection.config.bridgeProvider) ??
-      readString(connection.config.provider) ??
-      "bluebubbles"
-    ).toLowerCase();
-    if (provider !== "bluebubbles" && provider !== "blue_bubbles") {
-      return unsupported(args, `iMessage typing needs the BlueBubbles provider; ${provider} is not runnable here.`);
-    }
-    const configured =
-      readString(connection.config.bridgeUrl) ??
-      readString(connection.config.baseUrl) ??
-      readString(connection.config.serverUrl);
-    if (!configured) return unsupported(args, `${connection.label} is missing a BlueBubbles bridge URL.`);
-    password =
-      args.resolveSecret(connection.config, "password", "passwordEnv", connection.catalogId) ??
-      args.resolveSecret(connection.config, "apiPassword", "apiPasswordEnv", connection.catalogId);
-    if (!password) return unsupported(args, `${connection.label} is missing a BlueBubbles password.`);
-    const chatGuid = parseBlueBubblesChatGuid(readString(input.target) ?? "");
-    if (!chatGuid) {
-      return unsupported(
-        args,
-        "BlueBubbles typing needs a chat GUID target (chat_guid:iMessage;-;+15551234567); handles and chat ids are not resolved for typing.",
-      );
-    }
-    const baseUrl = normalizeBlueBubblesBaseUrl(configured);
-    const endpoint = new URL(`api/v1/chat/${encodeURIComponent(chatGuid)}/typing`, `${baseUrl}/`);
-    if (!args.isAllowlisted(endpoint.toString())) return unsupported(args, allowlistReason(endpoint.toString()));
-    endpoint.searchParams.set("password", password);
-    const response = await args.fetch(endpoint.toString(), { method: "POST", signal: input.signal });
-    const body = await readBody(response, "BlueBubbles typing");
-    if (!response.ok) {
-      return unsupported(
-        args,
-        redactSecret(
-          `${httpReason("BlueBubbles", response.status, body)} (typing needs the BlueBubbles Private API)`,
-          password,
-        ),
-      );
-    }
-    return sent(args);
-  } catch (error) {
-    return unsupported(args, redactSecret(errorMessage(error), password));
-  }
-}
-
-const BLUEBUBBLES_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
-
-/**
- * BlueBubbles authenticates with a `?password=` query parameter, so a schemeless
- * bridge URL must never silently become plain http on a remote host: schemeless
- * loopback hosts use http, every other schemeless host uses https, and an
- * explicitly configured http:// or https:// URL is kept as written.
- */
-export function normalizeBlueBubblesBaseUrl(configured: string): string {
-  const trimmed = configured.trim();
-  if (/^https?:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, "");
-  const authority = (trimmed.split(/[/?#]/, 1)[0] ?? "").replace(/^.*@/, "");
-  const hostname = (
-    authority.startsWith("[") ? authority.slice(0, authority.indexOf("]") + 1) : (authority.split(":")[0] ?? "")
-  ).toLowerCase();
-  const scheme = BLUEBUBBLES_LOOPBACK_HOSTS.has(hostname) ? "http" : "https";
-  return `${scheme}://${trimmed}`.replace(/\/+$/, "");
-}
-
-function redactSecret(text: string, secret: string | undefined): string {
-  if (!secret) return text;
-  return text.split(secret).join("[redacted]").split(encodeURIComponent(secret)).join("[redacted]");
-}
-
 export function validateWhatsAppBaseUrl(url: string): void {
   try {
     const parsed = new URL(url);
@@ -456,20 +338,6 @@ function parseMattermostChannelId(target: string): string | undefined {
   return MATTERMOST_ID_PATTERN.test(candidate) ? candidate : undefined;
 }
 
-function buildSignalTypingTarget(target: string): Record<string, unknown> | undefined {
-  if (!target) return undefined;
-  const lowered = target.toLowerCase();
-  if (lowered.startsWith("group:")) {
-    const groupId = target.slice("group:".length).trim();
-    return groupId ? { groupId } : undefined;
-  }
-  if (lowered.startsWith("username:") || lowered.startsWith("u:")) {
-    const username = target.slice(target.indexOf(":") + 1).trim();
-    return username ? { username: [username] } : undefined;
-  }
-  return { recipient: [target] };
-}
-
 function parseDiscordTypingTarget(target: string): { kind: "channel" | "user"; id: string } | undefined {
   const trimmed = target.trim();
   const mention = trimmed.match(/^<(#|@!?)(\d+)>$/);
@@ -485,14 +353,6 @@ function parseDiscordTypingTarget(target: string): { kind: "channel" | "user"; i
     id = trimmed.slice(trimmed.indexOf(":") + 1).trim();
   }
   return DISCORD_SNOWFLAKE_PATTERN.test(id) ? { kind, id } : undefined;
-}
-
-/** Accepts chat_guid:/chatguid:/guid: prefixed GUIDs or a raw `<service>;-;<address>` / `<service>;+;<id>` GUID. */
-function parseBlueBubblesChatGuid(target: string): string | undefined {
-  let candidate = target.trim().replace(/^(imessage|bluebubbles|sms|auto):/i, "");
-  const prefixed = candidate.match(/^(chat_guid|chatguid|guid):(.*)$/i);
-  if (prefixed) candidate = (prefixed[2] ?? "").trim();
-  return /^[^;\s]+;[+-];\S+$/u.test(candidate) ? candidate : undefined;
 }
 
 function sent(args: ChannelTypingAdapterArgs): ChannelTypingResult {

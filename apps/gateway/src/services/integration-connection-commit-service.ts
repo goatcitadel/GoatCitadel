@@ -6,7 +6,7 @@ interface IntegrationConnectionCommitPort {
     source: string,
     payload: Record<string, unknown>,
   ): Promise<unknown>;
-  /** Syncs every persistent channel runtime: Discord and the channel stream runtime (ntfy, Mattermost, Signal). */
+  /** Syncs every persistent channel runtime: Discord and the channel stream runtime (ntfy, Mattermost, Matrix, Telegram). */
   syncChannelRuntimes(): Promise<void>;
 }
 

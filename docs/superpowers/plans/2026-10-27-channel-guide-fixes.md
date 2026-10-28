@@ -30,7 +30,7 @@ The operator's order is A, then B, then C. **PR 1 pulls C1 forward, pending the 
 
 ## Global Constraints
 
-- **Official APIs only.** Use official vendor APIs and nothing that can get an account banned. Signal (signal-cli) and iMessage (BlueBubbles) work waits on N1.
+- **Official APIs only.** Use official vendor APIs and nothing that can get an account banned. Signal (signal-cli) and iMessage (BlueBubbles) were retired on 2026-10-28 (N1).
 - **Local-first.** There is no hosted relay. GoatCitadel does not know its public web address (that setting is plan 4), so no copy may claim or guess one.
 - **Operator copy:**
   - Use short plain sentences.
@@ -55,11 +55,11 @@ The operator's order is A, then B, then C. **PR 1 pulls C1 forward, pending the 
 
 ## Decisions (spec "Needs the operator")
 
-Each has a recommended default; the plan follows it unless the operator says otherwise. N1 has no default.
+Each has a recommended default; the plan follows it unless the operator says otherwise. N1 had no default; the operator decided it on 2026-10-28.
 
 | | Question | Default used by this plan | Gates |
 |---|---|---|---|
-| N1 | Signal and iMessage are unofficial clients | none: wait | B15, C8 |
+| N1 | Signal and iMessage are unofficial clients | Retired 2026-10-28 (operator): Signal and iMessage removed like Zalo personal (#602); see PR 3. C8 is moot. | B15, C8 |
 | N2 | WhatsApp test message | keep plain text; the guide says to message the business number first | C4 (copy only) |
 | N3 | Google Chat app mode can't be live-checked | let it finish with an advisory "message the app after you finish" | C2 (b) |
 | N4 | Connection id before Finalize | reuse the draft id as the connection id | C3 |
@@ -69,7 +69,7 @@ Each has a recommended default; the plan follows it unless the operator says oth
 | N8 | Plain `http://` to a LAN server | keep "https, or this computer only", and say so | B1 (A10) |
 | N9 | ntfy receiving on public ntfy.sh | warn only | B11 |
 | N10 | Default to "chat with my bot" | keep current defaults | — |
-| N11 | Zalo token lifetime | add a "tokens can expire; replace it in Edit setup" note; state no lifetime | B14 |
+| N11 | Zalo token lifetime | Changed (Ruling R58): the access token was checked at about 25 hours (Zalo's auth page: https://developers.zalo.me/docs/official-account/bat-dau/xac-thuc-va-uy-quyen-cho-ung-dung-new). The guide says so and says to paste a new one in Edit setup. GoatCitadel doesn't renew it. | B14 |
 
 ## Review Focus
 
@@ -176,7 +176,7 @@ inboundWebhook?: ChannelSetupInboundWebhook;
 | zalo | openapi.zalo.me | | | |
 | qqbot | bots.qq.com, api.bot.qq.com | | `sandbox.api.sgroup.qq.com` when `sandbox` = true | yes |
 | wecom | qyapi.weixin.qq.com | | | yes |
-| google-chat | chat.googleapis.com | webhookUrl | `oauth2.googleapis.com` when `serviceAccountKeyEnv` is set | yes |
+| google-chat | chat.googleapis.com | webhookUrl | `oauth2.googleapis.com` when `serviceAccountKeyEnv` or `serviceAccountKey` is set (Chat app mode) | yes, when `serviceAccountKeyEnv` or `serviceAccountKey` is set (Chat app mode) |
 | teams | | webhookUrl | | |
 | ntfy | | baseUrl | | |
 | matrix | | homeserverUrl | | |
@@ -186,6 +186,8 @@ inboundWebhook?: ChannelSetupInboundWebhook;
 | imessage | | bridgeUrl, photonSidecarUrl | | |
 
 `pathTemplate` is `/api/v1/integrations/connections/{connectionId}/<key>/webhook`.
+
+The signal and imessage rows above are retired (2026-10-28, N1) and not applied.
 
 **Setup-only steps** (spec A4), marked explicitly, not by kind:
 - the `overview` step of every guide except Telegram;
@@ -460,18 +462,38 @@ Each is one spec section, applied as above. The extra pins below are each guide'
 | B11 | Part B › ntfy (7) | ntfy.sh receiving warning (N9 default) |
 | B12 | Part B › QQ Bot (8) | the `webhook` step removed per spec; sender help per A7 |
 | B13 | Part B › WeCom (8) | the `webhook` step removed per spec; the trusted-IP prerequisite; 60020/81013 troubleshooting |
-| B14 | Part B › Zalo OA (6) | the token note (N11 default); no lifetime stated |
+| B14 | Part B › Zalo OA (6) | the token note; it states the verified lifetime of about 25 hours (R58) |
 
 New vendor-setup steps a guide adds are `createOnly: true` (A4).
 
-### Task B15: Signal and iMessage (gated: N1)
+### Task B15: Signal and iMessage (N1: retired)
 
 Apply `Part B › Signal` and `Part B › iMessage` only if N1 keeps them. If N1 hides or retires them, follow the operator's ruling instead (for retiring, the pattern is PR #602, which removed Zalo personal).
+
+**Decided 2026-10-28:** retire both, like Zalo personal. Their Part B entries are not applied.
 
 ### Task B16: PR 3 proof and PR
 
 - [ ] **Lanes:** gateway `src/services/channel-setup*`, `src/services/integration-diagnostics*`; Mission Control `ChannelGuidedSetup.test.tsx`; the gateway typecheck; `docs:check`; `git diff --check`.
 - [ ] **Browser proof** of three edited guides (LINE, Matrix, WeCom) on the sandbox; rebaseline `settings-channels` if needed. Open PR 3.
+
+### As built (PR 3)
+
+Tasks added while the PR ran:
+- **B15:** Signal and iMessage were removed instead of fixed. A saved connection to either shows as removed and can't send (R32, R38).
+- **B18:** the "attachments" check now passes with "This channel sends text. Attachments aren't supported." for LINE, Matrix, Nextcloud Talk, QQ Bot, WeCom and Zalo. It also added a shared test helper for the finish path (R45, R47).
+- **B17:** the gateway records the host of a saved secret webhook address, so the hosts check can offer it. Host names may contain underscores. A trailing dot is not stripped (R33, R59).
+- **B19:** test results and notes say "test message" or "Test send", not "sandbox" wording (R56, R60).
+
+Rulings that changed the plan's text:
+- **Zalo's v3 endpoint (R57):** Zalo's send and test now use `v3.0/oa/message/cs`. The v2 message API is shut down (error -240).
+- **R39:** the shared text for pasted and environment-variable secret fields wins. Guides don't re-author it.
+- **R42:** Discord keeps "Choose destinations and access". "Where should messages go?" is only for outbound-only channels.
+- **R44:** the environment-variable label drops a trailing "(paste …)".
+- **R46:** no vendor claim ships unless it was checked against the vendor's official docs, even where the spec's own text has one.
+- **R48:** each text-only guide says once, in its overview step, "This channel sends text. Attachments aren't supported."
+- **R49:** guide text must match what the test does with its message. No guide asks you to check a message the test deletes or never sends.
+- **R50:** a checklist box can't require a step the chosen path doesn't need.
 
 ---
 
@@ -487,7 +509,7 @@ Each task follows its spec entry: the failing test it names first, then the mini
 | C5 | C5 | for every `…Env` field, a token-shaped value fails `validate()` with that `fieldKey` and `failureCategory: "malformed_value"` | one shared check in `withGuidedJourney.validate`, with the spec's message. It runs on validate only, so a saved connection with a non-conforming name keeps working until it is next edited; the PR says so | |
 | C6 | C6 | `integration-diagnostics-service.contract.test.ts`: Mattermost with `botTokenEnv: "MY_TOKEN"` set fails `auth` naming `MATTERMOST_` | `requireSecretRef` resolves through `deps.resolveConnectionSecret`, with the spec's message | |
 | C7 | C7 | the same file: a Zalo connection with allowlist `["discord.com"]` gets a `url` warn naming `openapi.zalo.me`; likewise Slack, WhatsApp and LINE | Telegram-style checks driven by `CHANNEL_REQUIRED_HOSTS` | |
-| C8 | C8 | `channel-bot-live-probes.test.ts`: BlueBubbles unsend 400 gives `warn` | map every non-2xx unsend to `warn` with the spec's message | N1 |
+| C8 | C8 | Moot: iMessage was retired on 2026-10-28 (N1). | Skip. | N1 |
 | C9 | A6 | `channel-inbound-dispatch.test.ts` and the webhooks test: a dropped message's diagnostic `message` contains the sender id | the spec's message for both events, at `channel-inbound-dispatch.ts:363-385` and `integration-webhooks.ts:~150-170` | N5 default |
 
 ### Task C10: PR 4 proof and PR

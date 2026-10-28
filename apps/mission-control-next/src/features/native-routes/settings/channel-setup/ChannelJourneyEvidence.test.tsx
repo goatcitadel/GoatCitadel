@@ -118,6 +118,30 @@ describe("current reply delivery evidence", () => {
     renderer.unmount();
   });
 });
+describe("connection diagnostics check names", () => {
+  it("shows a stored `_sandbox_` check key as a test message, without changing the key", async () => {
+    const diagnostics = {
+      connectorType: "integration_connection" as const,
+      connectorId: "telegram-fixture",
+      status: "warn" as const,
+      checkedAt: "2026-10-09T03:00:00.000Z",
+      checks: [
+        { key: "slack_sandbox_send", status: "fail" as const, message: "Test send: Default channel is missing." },
+        { key: "ntfy_sandbox_cleanup", status: "warn" as const, message: "Test cleanup: not supported." },
+      ],
+    };
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChannelJourneyEvidence diagnostics={diagnostics} />);
+    });
+    const copy = text(renderer.root);
+    expect(copy).toContain("slack test send");
+    expect(copy).toContain("ntfy test cleanup");
+    expect(copy).not.toMatch(/sandbox/iu);
+    expect(diagnostics.checks.map((check) => check.key)).toEqual(["slack_sandbox_send", "ntfy_sandbox_cleanup"]);
+    renderer.unmount();
+  });
+});
 describe("platform-unsupported actions", () => {
   it("lists actions the platform does not offer, with the reason", async () => {
     const renderer = await render({

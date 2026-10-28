@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { listChannelSetupDefinitions, requireChannelSetupDefinition } from "./channel-setup-definitions.js";
 describe("guided setup progressive metadata", () => {
-  it("stages all 16 adapters without requiring optional auth alternatives", () => {
+  it("stages all 14 adapters without requiring optional auth alternatives", () => {
     const definitions = listChannelSetupDefinitions();
-    expect(definitions).toHaveLength(16);
+    expect(definitions).toHaveLength(14);
     for (const definition of definitions) {
       const stages = definition.wizard.steps.map((step) => step.stage);
       expect(stages).toContain("prerequisites");
@@ -24,8 +24,9 @@ describe("guided setup progressive metadata", () => {
   });
   it("accepts existing supported Slack and Discord webhook auth alternatives", () => {
     for (const key of ["slack", "discord"]) {
+      // Slack also has an instruction step on the account stage (its OAuth step); the fields are on the other one.
       const step = requireChannelSetupDefinition("channel." + key).definition.wizard.steps.find(
-        (step) => step.stage === "identity",
+        (step) => step.stage === "identity" && step.kind === "field-collection",
       );
       expect(step?.requiredAnyOf?.[0]).toEqual(expect.arrayContaining(["botToken", "botTokenEnv", "webhookUrl"]));
     }
@@ -41,9 +42,12 @@ describe("guided setup progressive metadata", () => {
     const fields = requireChannelSetupDefinition("channel.discord").definition.wizard.steps.flatMap(
       (step) => step.fields ?? [],
     );
-    expect(fields.find((field) => field.key === "defaultChannelId")).toMatchObject({
-      required: false,
-      visibleWhenFieldEquals: { fieldKey: "guildPolicy", value: "allowlist" },
-    });
+    // A direct-message setup defers both ids by hiding them; a server setup is asked for them.
+    for (const key of ["defaultChannelId", "defaultGuildId"]) {
+      expect(fields.find((field) => field.key === key)).toMatchObject({
+        required: true,
+        visibleWhenFieldEquals: { fieldKey: "guildPolicy", value: "allowlist" },
+      });
+    }
   });
 });

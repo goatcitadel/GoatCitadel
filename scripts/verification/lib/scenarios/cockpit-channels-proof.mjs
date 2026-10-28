@@ -189,7 +189,7 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
           const countBeforeReview = writes.length;
           await panel.getByRole("button", { name: "Review live test", exact: true }).click();
           const review = page.getByRole("dialog", { name: "Run a live channel test?", exact: true });
-          await review.getByText(/may send a sandbox message/u).waitFor();
+          await review.getByText(/may send a test message/u).waitFor();
           await capture("test-review");
           await review.getByRole("button", { name: "Cancel test", exact: true }).click();
           assert.equal(writes.length, countBeforeReview);

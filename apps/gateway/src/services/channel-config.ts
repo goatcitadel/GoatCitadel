@@ -5,8 +5,6 @@ const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
   ntfy: ["topic", "defaultTopic", "defaultTarget", "target"],
   "google-chat": ["defaultSpace", "defaultThreadKey", "defaultTarget", "target"],
   whatsapp: ["defaultTarget", "defaultRecipient", "target"],
-  signal: ["defaultRecipient", "defaultTarget", "target"],
-  imessage: ["defaultHandle", "defaultTarget", "target"],
   mattermost: ["defaultChannel", "defaultTarget", "target"],
   matrix: ["defaultRoomId", "defaultTarget", "target"],
   qqbot: ["defaultTarget", "target"],

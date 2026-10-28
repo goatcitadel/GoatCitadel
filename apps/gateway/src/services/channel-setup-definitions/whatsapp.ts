@@ -2,10 +2,13 @@ import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/con
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
+  PASTED_SECRET_EXPLANATION,
   requireCatalog,
   baseCatalogMeta,
   paragraph,
   note,
+  linkBlock,
+  troubleshoot,
   readString,
   hasAnyConfiguredSecret,
   compactRecord,
@@ -25,11 +28,11 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect a WhatsApp Cloud API sender identity with a phone-number id, access token, and a default direct recipient target.",
+        "Send WhatsApp messages from a WhatsApp Business number through Meta's Cloud API. Receiving messages needs a public HTTPS address. Personal WhatsApp (QR code linking) isn't supported.",
       prerequisites: [
-        "A Meta developer app with WhatsApp Cloud API access.",
-        "A sender phone-number id that is already provisioned in your Meta app.",
-        "A sandbox recipient or test number for manual confirmation.",
+        "A Meta app with WhatsApp set up, its phone number ID, and a permanent System User access token.",
+        "The recipient messages your business number first; WhatsApp delivers the plain-text test only in the 24 hours after that.",
+        "To receive messages: a public HTTPS address with a trusted certificate, the app secret, and a verify token you choose.",
       ],
       steps: [
         {
@@ -39,14 +42,11 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph(
-              "GoatCitadel uses the WhatsApp Cloud API for outbound sends, replies, reactions, and rich media delivery to direct recipients. It can also ingest signed inbound webhook events, but inbound routing stays disabled until BOTH the app secret and the webhook verify token are configured. With only one of the two, the connection remains outbound-only.",
-            ),
-            paragraph(
-              "Rich sends are preflighted before delivery: native media labels, text fallbacks, pending attachment hydration, provider evidence, and attachment-count limits are recorded before the Cloud API send.",
+              "Sending works from this computer. To chat with the bot, Meta must reach your Gateway over a public HTTPS address with a trusted certificate. GoatCitadel doesn't provide one; without it WhatsApp is send-only. Personal WhatsApp (QR code linking) isn't supported.",
             ),
             note(
               "warning",
-              "WhatsApp Cloud API is a guided beta lane. Guided setup now runs a live sender-auth probe and can post a sandbox message to the configured default recipient before finalize.",
+              "WhatsApp Cloud API is a guided beta lane. The setup test checks your access token live and will post a test message to your Default recipient.",
             ),
           ],
         },
@@ -56,14 +56,33 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           title: "Paste your connection values",
           fields: [
             {
+              key: "accessToken",
+              label: "Access token",
+              type: "secret",
+              required: false,
+              explanation: PASTED_SECRET_EXPLANATION,
+              whyNeeded: "Lets GoatCitadel send messages from your WhatsApp number.",
+              whereToFind: [
+                paragraph(
+                  "Use a permanent System User token, not the temporary one on the API Setup page (that one expires quickly). Business Settings › Users › System users › Add › assign your app and WhatsApp account › Generate token with whatsapp_business_messaging, whatsapp_business_management and business_management.",
+                ),
+                linkBlock(
+                  "Meta: Get started with the Cloud API",
+                  "https://developers.facebook.com/docs/whatsapp/cloud-api/get-started",
+                ),
+              ],
+              looksLike: "A long Meta access token string.",
+              commonMistakes: ["Using the temporary token from the API Setup page. It expires quickly."],
+              sensitive: true,
+              canChangeLater: true,
+            },
+            {
               key: "accessTokenEnv",
               label: "Access token env var",
               type: "text",
               required: false,
-              explanation:
-                "Preferred path. Name of the environment variable that stores your WhatsApp Cloud API access token.",
-              whyNeeded:
-                "Used to authenticate outbound API calls without storing the raw token in the connection draft.",
+              advanced: true,
+              explanation: "Name of the environment variable that holds your WhatsApp access token.",
               whereToFind: [
                 paragraph(
                   "Create or reuse an env var such as WHATSAPP_ACCESS_TOKEN and store the actual Cloud API token there.",
@@ -75,17 +94,6 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               placeholder: "WHATSAPP_ACCESS_TOKEN",
             },
             {
-              key: "accessToken",
-              label: "Access token (manual fallback)",
-              type: "secret",
-              required: false,
-              explanation: "Optional direct token entry if env-backed secret storage is not ready yet.",
-              looksLike: "A long Meta access token string.",
-              sensitive: true,
-              canChangeLater: true,
-              placeholder: "Paste only if you cannot use an env var",
-            },
-            {
               key: "phoneNumberId",
               label: "Phone number ID",
               type: "id",
@@ -94,7 +102,7 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               whyNeeded: "Required for all outbound Cloud API calls.",
               whereToFind: [
                 paragraph(
-                  "Copy the phone-number id from the WhatsApp Cloud API sender configuration in the Meta developer console.",
+                  "In Meta's App Dashboard open WhatsApp › API Setup. The Phone number ID is under the From number.",
                 ),
               ],
               looksLike: "123456789012345",
@@ -106,11 +114,47 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               label: "Default recipient",
               type: "text",
               required: true,
-              explanation: "Fallback direct recipient for manual sends and validation follow-up checks.",
+              explanation:
+                "The WhatsApp number that gets the test message and any send that names no one. First, from the recipient's phone, send any message to your business number. That opens WhatsApp's 24-hour window. Then run the live test. GoatCitadel's test is plain text, which WhatsApp only delivers inside that window.",
               whyNeeded: "Used when the operator does not provide an explicit recipient target.",
               whereToFind: [paragraph("Use an E.164 phone number such as +15551234567.")],
               looksLike: "+15551234567",
-              commonMistakes: ["Using a group JID. The current Cloud API sender is wired for direct recipients only."],
+              commonMistakes: [
+                "Using a group JID. The current Cloud API sender is wired for direct recipients only.",
+                "Choosing a recipient who has not messaged your business number in the last 24 hours.",
+              ],
+              canChangeLater: true,
+            },
+          ],
+        },
+        {
+          id: "receive-messages",
+          kind: "field-collection",
+          // Receiving is optional and comes after the destination fields, so it keeps the stage it is written with.
+          stage: "destinations_access",
+          title: "Receive messages (optional)",
+          body: [
+            paragraph(
+              "Skip this step if you only want to send. To receive, set both the app secret and the verify token. With only one of the two, WhatsApp stays send-only.",
+            ),
+            paragraph(
+              "Receiving needs a public HTTPS address with a trusted certificate. GoatCitadel doesn't provide one.",
+            ),
+          ],
+          fields: [
+            {
+              key: "appSecret",
+              label: "App secret",
+              type: "secret",
+              required: false,
+              explanation: PASTED_SECRET_EXPLANATION,
+              whyNeeded:
+                "Meta signs every message it sends you with your app secret. Without it GoatCitadel stays send-only, even if the verify token is set.",
+              whereToFind: [
+                paragraph("Copy the app secret from your Meta app in the App Dashboard. It is not the access token."),
+              ],
+              commonMistakes: ["Using the access token here instead of the app secret."],
+              sensitive: true,
               canChangeLater: true,
             },
             {
@@ -118,14 +162,10 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               label: "App secret env var",
               type: "text",
               required: false,
-              explanation:
-                "Optional but recommended if you want signed inbound webhook routing. Inbound is only enabled when BOTH this app secret and the webhook verify token are configured.",
-              whyNeeded:
-                "Meta signs WhatsApp webhook deliveries with your app secret. Without it GoatCitadel stays outbound only, even if the verify token is set.",
+              advanced: true,
+              explanation: "Name of the environment variable that holds your app secret.",
               whereToFind: [
-                paragraph(
-                  "Copy the app secret from the Meta developer app settings and store it in an env var such as WHATSAPP_APP_SECRET.",
-                ),
+                paragraph("Store the app secret in an env var such as WHATSAPP_APP_SECRET and give its name here."),
               ],
               looksLike: "WHATSAPP_APP_SECRET",
               commonMistakes: ["Using the access token here instead of the app secret."],
@@ -133,42 +173,38 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               placeholder: "WHATSAPP_APP_SECRET",
             },
             {
-              key: "appSecret",
-              label: "App secret (manual fallback)",
+              key: "webhookVerifyToken",
+              label: "Webhook verify token",
               type: "secret",
               required: false,
-              explanation: "Optional direct app-secret entry if env-backed storage is not ready yet.",
+              explanation: PASTED_SECRET_EXPLANATION,
+              whyNeeded:
+                "Meta sends this text when you register the webhook, and GoatCitadel checks it matches. Without it GoatCitadel stays send-only, even if the app secret is set.",
+              whereToFind: [
+                paragraph("Choose any random text yourself. Use the same text when you set up the webhook in Meta."),
+                linkBlock(
+                  "Meta: Webhooks getting started",
+                  "https://developers.facebook.com/docs/graph-api/webhooks/getting-started",
+                ),
+              ],
               sensitive: true,
               canChangeLater: true,
-              placeholder: "Paste only if you cannot use an env var",
             },
             {
               key: "webhookVerifyTokenEnv",
               label: "Webhook verify-token env var",
               type: "text",
               required: false,
-              explanation:
-                "Optional but recommended if you want GoatCitadel to answer the Meta webhook verification challenge. Inbound is only enabled when BOTH this verify token and the app secret are configured.",
-              whyNeeded:
-                "The verify token is compared during GET webhook subscription validation before Meta begins signed POST deliveries. Without it GoatCitadel stays outbound only, even if the app secret is set.",
+              advanced: true,
+              explanation: "Name of the environment variable that holds your webhook verify token.",
               whereToFind: [
                 paragraph(
-                  "Choose your own random token value, store it in an env var such as WHATSAPP_WEBHOOK_VERIFY_TOKEN, and use the same value when configuring the Meta webhook subscription.",
+                  "Store the text you chose in an env var such as WHATSAPP_WEBHOOK_VERIFY_TOKEN and give its name here.",
                 ),
               ],
               looksLike: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
               canChangeLater: true,
               placeholder: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
-            },
-            {
-              key: "webhookVerifyToken",
-              label: "Webhook verify token (manual fallback)",
-              type: "secret",
-              required: false,
-              explanation: "Optional direct verify-token entry if env-backed storage is not ready yet.",
-              sensitive: true,
-              canChangeLater: true,
-              placeholder: "Paste only if you cannot use an env var",
             },
           ],
         },
@@ -178,10 +214,47 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "Guided test validates the sender identity live against the Cloud API and can post a sandbox message to the configured default recipient. If you also configure BOTH the app secret and the verify token, the runtime can answer the Meta webhook challenge and accept signed inbound deliveries; with only one of the two, inbound stays disabled. Operator proof is still manual after finalize.",
+              "First, from the recipient's phone, send any message to your business number. That opens WhatsApp's 24-hour window. Then run the live test. GoatCitadel's test is plain text, which WhatsApp only delivers inside that window.",
             ),
             paragraph(
-              "Runtime rich-message evidence records whether media is native, text fallback, pending hydration, or blocked before provider delivery.",
+              "The test checks your access token and phone number ID with WhatsApp, then sends one test message to your Default recipient. Check that it arrived on that phone.",
+            ),
+          ],
+          troubleshooting: [
+            troubleshoot(
+              "token-rejected",
+              "WhatsApp rejected the access token",
+              "The usual cause is the temporary token from the API Setup page, which expires quickly. Make a permanent System User token (Business Settings › Users › System users) with whatsapp_business_messaging, whatsapp_business_management and business_management, paste it, and run the test again. The System User also needs your WhatsApp account assigned to it.",
+            ),
+            troubleshoot(
+              "phone-number-id",
+              "WhatsApp couldn't find the phone number ID",
+              "Copy the Phone number ID from WhatsApp › API Setup, under the From number. It is a long number, not the phone number people see in WhatsApp, and not the WhatsApp Business Account ID.",
+            ),
+            troubleshoot(
+              "recipient-invalid",
+              "It says the default recipient is missing or isn't a direct recipient",
+              "Use one person's phone number with country code, such as +15551234567. Group IDs don't work with this sender.",
+            ),
+            troubleshoot(
+              "no-message",
+              "The test passed but nothing arrived, or WhatsApp refused the message",
+              "WhatsApp delivers plain text only in the 24 hours after the recipient messaged your business number. From the recipient's phone, send any message to your business number, then run the test again. Also check that the phone you are looking at is the Default recipient.",
+            ),
+            troubleshoot(
+              "host-not-allowed",
+              "It says GoatCitadel can't reach graph.facebook.com yet",
+              "GoatCitadel only reaches hosts you allow. Use Allow these hosts on this step to add graph.facebook.com, then run the test again.",
+            ),
+            troubleshoot(
+              "variable-not-found",
+              "It says the access token is missing, and you used an environment variable",
+              "A variable's name must start with WHATSAPP_ (for example WHATSAPP_ACCESS_TOKEN), and you must restart GoatCitadel after you set it. Or paste the token instead.",
+            ),
+            troubleshoot(
+              "no-reply",
+              "You message the number and nothing comes back",
+              "Check these in order. In Meta's App Dashboard, WhatsApp › Configuration must show this connection's webhook address, verified with your verify token, with messages subscribed. Here, both the app secret and the verify token must be set, and the verify token must match the one in Meta. Your number (digits only, no plus) must be listed under Who may message this bot. And this Gateway must be reachable at a public HTTPS address with a trusted certificate.",
             ),
           ],
         },
@@ -191,13 +264,13 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finalize saves the connection for runtime sends. After finalizing, confirm the sandbox message arrived on the default recipient's WhatsApp; inbound routing stays disabled unless both the app secret and the webhook verify token are configured.",
+              "Finish saves the connection so GoatCitadel can send from it. To receive messages, the webhook also has to be registered in Meta (the last step shows how).",
             ),
           ],
           successCriteria: [
-            "The sender identity passed the live Cloud API auth probe.",
-            "The sandbox message reached the configured default recipient.",
-            "Both the app secret and the webhook verify token are configured when you want signed inbound routing.",
+            "WhatsApp accepted the access token and phone number ID.",
+            "The test message arrived on the Default recipient's WhatsApp.",
+            "To receive messages: the app secret and the verify token are both set.",
           ],
         },
       ],
@@ -331,9 +404,14 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
       if (!hasConfiguredToken) {
         issues.push({
           key: "whatsapp_auth_missing",
+          // The pasted field is where a person goes to fix this, not the expert variable name.
+          fieldKey: "accessToken",
           level: "error",
-          message: "Provide either a WhatsApp access token or an env-backed token reference.",
+          message: "Paste the WhatsApp access token.",
           failureCategory: "missing_input",
+          nextSteps: [
+            "Paste a permanent System User token from Meta (Business Settings › Users › System users), not the temporary one.",
+          ],
         });
       }
       if (!phoneNumberId) {

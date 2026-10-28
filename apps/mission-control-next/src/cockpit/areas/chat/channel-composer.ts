@@ -71,8 +71,9 @@ export function channelReplyPlaceholder(reply: ChannelReply | undefined, check?:
     : `Posts to ${reply.targetTitle} on ${reply.channelLabel} as your bot`;
 }
 
+/** A removed or switched-off channel's button says Send: like the placeholder, it never promises a destination. */
 export function channelReplySubmitLabel(reply: ChannelReply | undefined): string {
-  return reply?.mode === "post" ? `Post to ${reply.targetTitle}` : "Send";
+  return reply?.mode === "post" && !channelReplyBlock(reply) ? `Post to ${reply.targetTitle}` : "Send";
 }
 
 /**

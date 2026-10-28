@@ -1,12 +1,14 @@
 import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
+  PASTED_SECRET_EXPLANATION,
   requireCatalog,
   baseCatalogMeta,
   paragraph,
   note,
   linkBlock,
   check,
+  troubleshoot,
   readString,
   hasAnyConfiguredSecret,
   compactRecord,
@@ -14,11 +16,20 @@ import {
   requiredFieldIssue,
   malformedFieldIssue,
   looksLikeHttpUrl,
+  requireSecureUrl,
 } from "./common.js";
 
 function isTruthyFlag(value: unknown): boolean {
   return value === true || (typeof value === "string" && value.trim().toLowerCase() === "true");
 }
+
+/** What ntfy allows in a topic name: https://docs.ntfy.sh/publish/ (letters, numbers, underscores and dashes, up to 64). */
+const TOPIC_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const TOPIC_MESSAGE = "Topics use letters, numbers, _ and -, up to 64 characters.";
+
+/** Why receiving needs a topic nobody else can post to. It warns; it does not refuse (N9). */
+const RECEIVING_WARNING =
+  "Receiving is only safe on a topic nobody else can post to: one on your own ntfy server with access control, or a reserved topic that others can't write to. On public ntfy.sh, anyone who knows an unreserved topic's name can post and start conversations. Use a long random topic name.";
 
 export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
   const catalog = requireCatalog("channel.ntfy");
@@ -31,11 +42,11 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "beginner",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect ntfy as an outbound notification target for operator-visible status, approvals, and dry-run validation, with optional inbound from a subscribed topic whose write access is limited to trusted publishers.",
+        "Send notifications to an ntfy topic. Optionally, messages posted to a topic can start conversations; only do that on a topic nobody else can post to. No public web address is needed.",
       prerequisites: [
-        "An ntfy.sh topic or a self-hosted ntfy base URL.",
-        "A topic name that is safe for GoatCitadel to publish to.",
-        "An optional token stored in an environment variable if the topic requires auth (required for inbound).",
+        "An ntfy server (ntfy.sh or your own) and a topic name.",
+        "The ntfy app subscribed to that topic, to see the test.",
+        "To receive: an access token that can read the topic.",
       ],
       steps: [
         {
@@ -44,10 +55,19 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
           createOnly: true,
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel can send outbound notifications to an ntfy topic using the HTTP publish API."),
+            paragraph(
+              "Sending. ntfy is send-only unless you turn on Receive messages. GoatCitadel publishes notifications to a topic with ntfy's HTTP publish API. No public web address is needed.",
+            ),
+            paragraph(
+              "Receiving (optional). With Receive messages on, GoatCitadel connects out to the topic's stream and starts a conversation from each message posted there. It needs an access token that can read the topic. ntfy messages carry no sender identity: the topic is the sender, so anyone who can post to the topic can start conversations. Messages posted while GoatCitadel isn't running, or is restarting, are skipped. GoatCitadel's own notifications are tagged and ignored on the way back in.",
+            ),
+            paragraph(
+              "Limits. Webhooks and remote commands aren't supported. The test notification stays on the topic.",
+            ),
+            note("warning", RECEIVING_WARNING),
             note(
-              "warning",
-              "ntfy is outbound-only unless you opt in to inbound. Inbound subscribes to the topic's JSON stream and requires a token, because ntfy carries no sender identity: the topic is the sender. The token gates reading the topic; anyone able to publish to the subscribed topic can start turns, so use a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped (no history is fetched on reconnect after a restart). Outbound publishes are tagged and ignored on the way back in. Webhooks and remote commands are not supported.",
+              "info",
+              "GoatCitadel can reach your ntfy server only once the server is in the hosts GoatCitadel may reach: the setup test has an Allow these hosts button for that.",
             ),
           ],
         },
@@ -58,14 +78,20 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
           title: "Prepare the topic",
           body: [
             paragraph(
-              "Choose an ntfy topic and decide whether it should use the public ntfy.sh service or a local/self-hosted server.",
+              "Choose an ntfy topic, and whether it lives on the public ntfy.sh service or on a server of your own.",
             ),
+            paragraph(
+              "On public ntfy.sh a topic name works like a password: anyone who knows it can read and post. Pick a long random name, using letters, numbers, _ and -, up to 64 characters.",
+            ),
+            paragraph("If the topic needs a token, have it ready. Receiving always needs one that can read the topic."),
             linkBlock("ntfy publish API", "https://docs.ntfy.sh/publish/"),
+            linkBlock("ntfy configuration and access control", "https://docs.ntfy.sh/config/"),
           ],
+          // Only what every setup needs. The token is plain guidance above: a public topic needs none, and each box here
+          // blocks Continue.
           checklist: [
             check("base-url", "Choose the base URL, such as https://ntfy.sh or your self-hosted origin"),
             check("topic", "Choose the exact topic GoatCitadel may publish to"),
-            check("token-env", "Store any token in an environment variable instead of pasting it into prompts"),
           ],
         },
         {
@@ -79,7 +105,8 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
               type: "url",
               required: true,
               defaultValue: "https://ntfy.sh",
-              explanation: "HTTP origin for the ntfy server.",
+              explanation:
+                "The address of your ntfy server. Use https://. Plain http:// works only for this computer (127.0.0.1 or localhost).",
               whyNeeded: "Used as the publish API base before appending the topic path.",
               looksLike: "https://ntfy.sh or https://ntfy.example.com",
               canChangeLater: true,
@@ -89,9 +116,32 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
               label: "Topic",
               type: "text",
               required: true,
-              explanation: "The ntfy topic GoatCitadel will publish to.",
+              explanation:
+                "The ntfy topic GoatCitadel publishes to. Use letters, numbers, _ and -, up to 64 characters.",
               whyNeeded: "Keeps outbound notifications scoped to a visible operator-approved destination.",
               looksLike: "goatcitadel-ops",
+              commonMistakes: [
+                "A short, guessable name on public ntfy.sh. Anyone who knows the name can read and post to it.",
+                "A dot or a space in the name. ntfy topics use letters, numbers, _ and - only.",
+              ],
+              canChangeLater: true,
+            },
+            {
+              key: "token",
+              label: "Access token",
+              type: "secret",
+              required: false,
+              explanation: PASTED_SECRET_EXPLANATION,
+              whyNeeded:
+                "A protected topic needs one to publish. Receiving needs one that can read the topic: GoatCitadel won't listen without a token.",
+              whereToFind: [
+                paragraph(
+                  "Create one with ntfy token add <user> on your server, or in the ntfy web app under Account when you're logged in. It starts with tk_.",
+                ),
+                linkBlock("ntfy: access tokens", "https://docs.ntfy.sh/publish/#access-tokens"),
+              ],
+              commonMistakes: ["Pasting your account password. This field takes an access token (it starts with tk_)."],
+              sensitive: true,
               canChangeLater: true,
             },
             {
@@ -99,8 +149,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
               label: "Token ENV var",
               type: "text",
               required: false,
-              explanation: "Optional environment variable that contains the ntfy bearer token.",
-              whyNeeded: "Lets protected ntfy topics authenticate without storing the token in the connection config.",
+              explanation: "Name of the env var that stores the ntfy access token.",
               looksLike: "NTFY_TOKEN",
               placeholder: "NTFY_TOKEN",
               canChangeLater: true,
@@ -111,10 +160,9 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
               type: "boolean",
               required: false,
               defaultValue: false,
-              explanation:
-                "Subscribe to the topic's JSON stream so messages published to it start conversations. Requires a token. The token gates reading the topic; anyone able to publish to the subscribed topic can start turns, so use a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped (no history is fetched on reconnect after a restart).",
+              explanation: `Listen to the topic so messages posted to it start conversations. Needs an access token that can read the topic. ${RECEIVING_WARNING} Messages posted while GoatCitadel isn't running are skipped.`,
               whyNeeded:
-                "ntfy has no sender identity, so anyone who can publish to the subscribed topic can start turns. Inbound is therefore opt-in, needs a token to read the topic, and should only subscribe to a write-restricted topic.",
+                "ntfy carries no sender identity, so the topic is the sender and anyone who can post to it can start a conversation. Receiving stays off unless you turn it on.",
               canChangeLater: true,
             },
             {
@@ -122,7 +170,8 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
               label: "Subscribe topic",
               type: "text",
               required: false,
-              explanation: "Topic to receive from. Defaults to the publish topic.",
+              explanation:
+                "Topic to receive from, if it isn't the publish topic. Use letters, numbers, _ and -, up to 64 characters.",
               whyNeeded: "Lets inbound messages arrive on a different topic than outbound notifications.",
               looksLike: "goatcitadel-inbox",
               canChangeLater: true,
@@ -150,7 +199,8 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
               type: "boolean",
               required: false,
               defaultValue: false,
-              explanation: "Validate routing without sending a real ntfy publish request.",
+              explanation:
+                "Check the settings without sending a notification. With dry run on, nothing is ever sent. Turn it off after testing.",
               canChangeLater: true,
             },
           ],
@@ -161,7 +211,39 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "Guided test publishes a sandbox notification to the configured topic through the ntfy publish API. Enable dry-run first if you only want routing validation without a visible notification.",
+              'The test publishes one notification titled "GoatCitadel channel setup probe" to the topic and doesn\'t delete it, so it stays on the topic: check that it arrived in your ntfy app. With dry run on, the test sends nothing.',
+            ),
+          ],
+          troubleshooting: [
+            troubleshoot(
+              "token-rejected",
+              "ntfy refused the notification (401 or 403)",
+              "The topic needs an access token that can publish to it. Paste one (it starts with tk_), or set the variable your token is in. Create one with ntfy token add <user> on your server, or in the ntfy web app under Account.",
+            ),
+            troubleshoot(
+              "host-not-allowed",
+              "It says GoatCitadel can't reach your ntfy server yet",
+              "GoatCitadel only reaches hosts you allow. Use Allow these hosts on this step to add your ntfy server (ntfy.sh if you use the public one), then run the test again.",
+            ),
+            troubleshoot(
+              "topic-rejected",
+              "It says the topic isn't valid",
+              "Topics use letters, numbers, _ and -, up to 64 characters. Remove dots, spaces and slashes.",
+            ),
+            troubleshoot(
+              "nothing-arrived",
+              "The test passed but nothing shows on your phone",
+              "Check that the ntfy app is subscribed to this exact topic on this server, and that dry run is off: with dry run on, nothing is sent.",
+            ),
+            troubleshoot(
+              "variable-not-found",
+              "It says the token is missing, and you used an environment variable",
+              "A variable's name must start with NTFY_ (for example NTFY_TOKEN), and you must restart GoatCitadel after you set it. Or paste the token instead.",
+            ),
+            troubleshoot(
+              "no-reply",
+              "You post to the topic and nothing comes back",
+              "Check these in order. Receive messages from the topic must be on, with an access token that can read the topic. Post to the subscribe topic (the publish topic, if you set no other) from another device. Under Who may message this bot, the entry must be ntfy-topic: followed by the subscribe topic; if you changed the topic, change it there too. GoatCitadel must be running: messages posted while it isn't are skipped. And your ntfy server must be in the hosts GoatCitadel may reach.",
             ),
           ],
         },
@@ -171,14 +253,14 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "After finalizing, send a sandbox notification or enable dry-run mode first if you only want setup validation.",
+              "Finish saves the connection so GoatCitadel can publish to the topic. With dry run on, nothing is ever sent. Turn it off after testing.",
             ),
           ],
           successCriteria: [
-            "The base URL is an HTTP or HTTPS origin.",
-            "A topic is configured.",
-            "Dry-run behavior is intentional when enabled.",
-            "Inbound is enabled only with a token and on a topic whose write access is limited to trusted publishers; no webhook or remote command behavior is claimed.",
+            "The server address is https, or http for this computer only.",
+            "A topic is set.",
+            "Dry run is off once you've tested, so notifications are really sent.",
+            "Receiving is on only for a topic nobody else can post to, with an access token that can read it.",
           ],
         },
       ],
@@ -286,22 +368,22 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
       const baseUrl = readString(draft.draft, "baseUrl") ?? "https://ntfy.sh";
       const topic = readString(draft.draft, "topic") ?? readString(draft.draft, "defaultTopic");
       const priority = readString(draft.draft, "priority");
-      if (!looksLikeHttpUrl(baseUrl)) {
-        issues.push(malformedFieldIssue("baseUrl", "Base URL must start with http:// or https://."));
+      // Plain http is refused the same way the live test refuses it. That rule lets "ftp://localhost" through, so the
+      // scheme is checked here too.
+      const insecure = requireSecureUrl(baseUrl, "baseUrl", "Base URL");
+      if (insecure) {
+        issues.push(insecure);
+      } else if (!looksLikeHttpUrl(baseUrl)) {
+        issues.push(malformedFieldIssue("baseUrl", "Base URL should start with https://."));
       }
       if (!topic) {
         issues.push(requiredFieldIssue("topic", "Topic is required."));
-      } else if (!/^[A-Za-z0-9._-]{1,128}$/.test(topic)) {
-        issues.push(malformedFieldIssue("topic", "Topic may contain letters, numbers, dots, underscores, and dashes."));
+      } else if (!TOPIC_PATTERN.test(topic)) {
+        issues.push(malformedFieldIssue("topic", TOPIC_MESSAGE));
       }
       const subscribeTopic = readString(draft.draft, "subscribeTopic");
-      if (subscribeTopic && !/^[A-Za-z0-9._-]{1,128}$/.test(subscribeTopic)) {
-        issues.push(
-          malformedFieldIssue(
-            "subscribeTopic",
-            "Subscribe topic may contain letters, numbers, dots, underscores, and dashes.",
-          ),
-        );
+      if (subscribeTopic && !TOPIC_PATTERN.test(subscribeTopic)) {
+        issues.push(malformedFieldIssue("subscribeTopic", TOPIC_MESSAGE));
       }
       if (
         isTruthyFlag(draft.draft.inboundStreamEnabled) &&
@@ -309,7 +391,10 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
         !readString(draft.draft, "token") &&
         !readLegacyString(draft, "token", "tokenEnv")
       ) {
-        issues.push(requiredFieldIssue("tokenEnv", "ntfy inbound requires a token to read the topic (tokenEnv)."));
+        // The pasted field is where a person goes to fix this, not the expert variable name.
+        issues.push(
+          requiredFieldIssue("token", "Paste the ntfy access token. Receiving needs one that can read the topic."),
+        );
       }
       if (priority && !/^[1-5]$/.test(priority)) {
         issues.push(malformedFieldIssue("priority", "Priority must be an integer from 1 to 5."));

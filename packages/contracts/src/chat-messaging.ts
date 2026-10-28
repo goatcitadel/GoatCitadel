@@ -10,8 +10,9 @@
 /**
  * `on` the connection is enabled and connected. `off` it is switched off
  * (disabled). `needs_attention` it is enabled but not connected: paused,
- * disconnected or in error. `removed` the connection no longer exists; its
- * conversations are kept for reference.
+ * disconnected or in error. `removed` the connection no longer exists, or it
+ * belongs to a retired channel that can no longer send; its conversations are
+ * kept for reference.
  */
 export type ChatMessagingChannelStatus = "on" | "off" | "needs_attention" | "removed";
 
