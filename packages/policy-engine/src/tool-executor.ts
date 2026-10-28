@@ -58,7 +58,11 @@ import {
 } from "./tool-executor/background-processes.js";
 import { executeArtifactTool, isArtifactToolName } from "./tool-executor/artifact-executor.js";
 import type { PreparePresentationVisuals } from "./presentation-visual-runtime.js";
-import { executeCommsTool } from "./tool-executor/comms-executor.js";
+import {
+  executeCommsTool,
+  type ChannelEnvSecretRequest,
+  type ChannelEnvSecretResolution,
+} from "./tool-executor/comms-executor.js";
 import {
   executeRoutedContextTool,
   isRoutedContextToolName,
@@ -129,6 +133,8 @@ export function setShellOutputRetentionBytesForTesting(
   shellOutputKeepTailBytes = Math.max(1, Math.floor(tailBytes));
 }
 
+export type { ChannelEnvSecretRequest, ChannelEnvSecretResolution };
+
 export interface ToolExecutorRuntimeHooks {
   /**
    * Gateway-owned eligibility for writes outside every write root (an ordinary
@@ -174,6 +180,12 @@ export interface ToolExecutorRuntimeHooks {
    * reference kept in the connection config. Absent means a send that needs a saved key fails before any request.
    */
   resolveChannelConnectionSecret?: (secretRef: string) => string | undefined;
+  /**
+   * Reads the variable a channel connection names for a secret, so a real send never reads `process.env` by a name
+   * the connection config chose. The Gateway answers with the value only when its name rule allows that name, or with a
+   * plain refusal that holds neither the name nor a value. Absent means a send that needs a variable fails as missing.
+   */
+  resolveChannelEnvSecret?: (input: ChannelEnvSecretRequest) => ChannelEnvSecretResolution;
   /** Called at the concrete provider or irreversible mutation boundary. */
   beforeExternalSideEffect?: () => void | Promise<void>;
   /**

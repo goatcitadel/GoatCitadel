@@ -33,7 +33,7 @@ vi.mock("./browser-tools.js", () => ({
 }));
 
 import {
-  executeTool,
+  executeTool as executeToolWithHooks,
   killAllBackgroundProcesses,
   killBackgroundProcess,
   resolveExecutableCommand,
@@ -43,6 +43,11 @@ import {
   setShellOutputRetentionBytesForTesting,
 } from "./tool-executor.js";
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
+import { channelEnvSecretStandIn } from "./tool-executor/channel-env-secret.test-support.js";
+
+/** A send reads a connection's variable only through the hook the Gateway supplies, so every test gets a stand-in. */
+const executeTool: typeof executeToolWithHooks = (request, config, storage, runtimeHooks = {}) =>
+  executeToolWithHooks(request, config, storage, { resolveChannelEnvSecret: channelEnvSecretStandIn, ...runtimeHooks });
 
 const LOCALHOST_HOST = new URL("http://localhost").hostname;
 const EXAMPLE_HOST = new URL("https://example.com").hostname;

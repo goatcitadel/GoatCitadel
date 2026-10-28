@@ -1860,3 +1860,38 @@ describe("GatewayService Loop 13 workspace and runtime helpers", () => {
     ).toBe("default");
   });
 });
+
+describe("GatewayService refuses an unbound variable name without logging a pasted token", () => {
+  it("logs a refused name only when it has the shape of one, and a fixed marker otherwise", () => {
+    const { gateway } = createGatewayHarness();
+    const pasted = "xoxb-pasted-token-0010-not-a-name";
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-openai-value-0011");
+    vi.stubEnv(pasted, "synthetic-pasted-env-value-0012");
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let logged: string;
+    try {
+      for (const envName of [pasted, "OPENAI_API_KEY"]) {
+        expect(
+          GatewayService.prototype.resolveConnectionSecret.call(
+            gateway,
+            { tokenEnv: envName },
+            "token",
+            "tokenEnv",
+            "channel.slack",
+          ),
+        ).toBeUndefined();
+      }
+      logged = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+    } finally {
+      stderr.mockRestore();
+      vi.unstubAllEnvs();
+    }
+
+    expect(logged).toContain("Refusing to resolve integration secret from an unbound env var name");
+    expect(logged).not.toContain(pasted);
+    expect(logged).not.toContain("synthetic-pasted-env-value-0012");
+    expect(logged).not.toContain("synthetic-openai-value-0011");
+    expect(logged).toContain("(not a variable name)");
+    expect(logged).toContain('"envName":"OPENAI_API_KEY"');
+  });
+});

@@ -1598,6 +1598,7 @@ describe("DiscordRuntimeService internals", () => {
           { tokenEnv: "DISCORD_RUNTIME_SECRET_FOR_TEST" },
           "token",
           "tokenEnv",
+          "channel.discord",
         ),
       ).toBe("env-token");
       expect(
@@ -1605,6 +1606,7 @@ describe("DiscordRuntimeService internals", () => {
           { token: " direct-wins ", tokenEnv: "DISCORD_RUNTIME_SECRET_FOR_TEST" },
           "token",
           "tokenEnv",
+          "channel.discord",
         ),
       ).toBe("direct-wins");
     } finally {
@@ -1914,6 +1916,119 @@ function createSlashInteraction(
     },
   };
 }
+
+describe("the Discord bot token variable and the Gateway's name rule", () => {
+  const DISCORD_SECRET = "synthetic-discord-bot-value-0008";
+  const REFUSAL = "The variable name must start with DISCORD_. Rename it and restart GoatCitadel.";
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ["an LLM provider key", "OPENAI_API_KEY"],
+    ["a Gateway key", "GOATCITADEL_AUTH_TOKEN"],
+    ["another channel's variable", "SLACK_BOT_TOKEN"],
+    ["a token pasted into the name field", "pasted-token-0009-not-a-name"],
+  ])("does not read %s as the bot token", (_label, envName) => {
+    vi.stubEnv(envName, DISCORD_SECRET);
+
+    for (const envKey of ["botTokenEnv", "tokenEnv"]) {
+      expect(
+        __discordRuntimeServiceInternals.readDiscordSecret(
+          { [envKey]: envName },
+          "botToken",
+          envKey,
+          "channel.discord",
+        ),
+      ).toBeUndefined();
+    }
+  });
+
+  it("reads nothing from a variable when the connection has no catalog entry", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", DISCORD_SECRET);
+
+    expect(
+      __discordRuntimeServiceInternals.readDiscordSecret(
+        { botTokenEnv: "DISCORD_BOT_TOKEN" },
+        "botToken",
+        "botTokenEnv",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("still reads a correctly named variable, and lets a pasted token win over a refused name", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", `  ${DISCORD_SECRET} `);
+
+    expect(
+      __discordRuntimeServiceInternals.readDiscordSecret(
+        { botTokenEnv: "DISCORD_BOT_TOKEN" },
+        "botToken",
+        "botTokenEnv",
+        "channel.discord",
+      ),
+    ).toBe(DISCORD_SECRET);
+    expect(
+      __discordRuntimeServiceInternals.readDiscordSecret(
+        { botToken: "pasted-wins", botTokenEnv: "OPENAI_API_KEY" },
+        "botToken",
+        "botTokenEnv",
+        "channel.discord",
+      ),
+    ).toBe("pasted-wins");
+  });
+
+  it("does not start a runtime for a refused name, and says why without printing the name or a value", async () => {
+    vi.stubEnv("OPENAI_API_KEY", DISCORD_SECRET);
+    const connection = createConnection({ botTokenEnv: "OPENAI_API_KEY", guilds: {} });
+    const service = createService({ listConnections: () => [connection] });
+    const createManagedRuntime = vi.spyOn(service as any, "createManagedRuntime");
+
+    await service.sync();
+
+    expect(createManagedRuntime).not.toHaveBeenCalled();
+    const status = service.getConnectionStatus(connection.connectionId);
+    expect(status).toMatchObject({ ready: false, lastError: REFUSAL });
+    expect(JSON.stringify(status)).not.toContain("OPENAI_API_KEY");
+    expect(JSON.stringify(status)).not.toContain(DISCORD_SECRET);
+    await service.close();
+  });
+
+  it("keeps the generic message when no token and no variable is set at all", async () => {
+    const connection = createConnection({ guilds: {} });
+    const service = createService({ listConnections: () => [connection] });
+
+    await service.sync();
+
+    expect(service.getConnectionStatus(connection.connectionId)).toMatchObject({
+      ready: false,
+      lastError: "Discord gateway mode requires a bot token or env-backed bot token.",
+    });
+    await service.close();
+  });
+
+  it("starts a runtime for a correctly named variable", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", DISCORD_SECRET);
+    const connection = createConnection({ botTokenEnv: "DISCORD_BOT_TOKEN", guilds: {} });
+    const service = createService({ listConnections: () => [connection] });
+    const runtime: any = {
+      token: DISCORD_SECRET,
+      client: { destroy: vi.fn().mockResolvedValue(undefined) },
+      connectionIds: new Set<string>(),
+      active: true,
+      guildIds: [],
+      ready: false,
+    };
+    const createManagedRuntime = vi.spyOn(service as any, "createManagedRuntime");
+    (service as any).runtimesByToken.set(DISCORD_SECRET, runtime);
+
+    await service.sync();
+
+    expect(createManagedRuntime).not.toHaveBeenCalled();
+    expect([...runtime.connectionIds]).toEqual([connection.connectionId]);
+    await service.close();
+  });
+});
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;

@@ -51,6 +51,37 @@ const CATALOG_ENV_EXACT_ALIASES: Readonly<Record<string, readonly string[]>> = {
   "productivity.things3": ["LOCAL_AGENT_AUTH_TOKEN"],
 };
 
+/** Shown or logged in place of a variable name that does not have the shape of one: a token pasted into a name field. */
+export const NOT_A_VARIABLE_NAME = "(not a variable name)";
+
+/** The name itself when it has the shape of a variable name, so it is safe to print or log; undefined otherwise. */
+export function printableEnvVarName(value: string | undefined): string | undefined {
+  const name = value?.trim();
+  return name && PERMITTED_INTEGRATION_ENV_NAME_PATTERN.test(name) ? name : undefined;
+}
+
+/** The name to put in a log line: the name when it has the shape of one, otherwise a fixed marker. */
+export function envNameForLog(value: string): string {
+  return printableEnvVarName(value) ?? NOT_A_VARIABLE_NAME;
+}
+
+/**
+ * The sentence a refused variable name gets. The prefix is the one `isPermittedIntegrationSecretEnvVarName` requires
+ * (the catalog entry's own key in capitals), so the sentence cannot drift from the rule. It holds no name and no value.
+ */
+export function refusedEnvVarNameMessage(catalogId: string | undefined): string {
+  const catalogKey = catalogId
+    ?.trim()
+    .toLowerCase()
+    .split(".")
+    .at(-1)
+    ?.replace(/[^a-z0-9]+/gu, "_")
+    .toUpperCase();
+  return catalogKey
+    ? `The variable name must start with ${catalogKey}_. Rename it and restart GoatCitadel.`
+    : "That variable name is not allowed for this connection. Rename it and restart GoatCitadel.";
+}
+
 export function isPermittedIntegrationSecretEnvVarName(envName: string, catalogId?: string): boolean {
   const normalized = envName.trim();
   if (!normalized || normalized.length > 128) {

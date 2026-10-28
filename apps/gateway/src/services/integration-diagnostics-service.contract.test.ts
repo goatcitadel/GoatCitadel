@@ -217,6 +217,44 @@ describe("integration-diagnostics-service contract behavior", () => {
       ).toMatchObject({ status: "pass" });
     });
 
+    it("does not name the variable when a direct value is what answered", () => {
+      vi.stubEnv("MATTERMOST_BOT_TOKEN", SECRET);
+
+      expect(
+        authOf(
+          createIntegrationConnection("mattermost", "channel", {
+            serverUrl: "https://chat.example.test",
+            botToken: "pasted-direct-value",
+            botTokenEnv: "MATTERMOST_BOT_TOKEN",
+          }),
+        ),
+      ).toEqual({ key: "auth", status: "pass", message: "Mattermost bot token is configured." });
+    });
+
+    it.each([
+      ["a token pasted into the name field while a direct value answers", { botToken: "pasted-direct-value" }],
+      ["a token pasted into the name field and nothing else", {}],
+    ])("never prints %s", (_label, direct) => {
+      const pasted = "xoxb-pasted-token-0005-not-a-name";
+      vi.stubEnv(pasted, SECRET);
+      const auth = authOf(
+        createIntegrationConnection("mattermost", "channel", {
+          serverUrl: "https://chat.example.test",
+          botTokenEnv: pasted,
+          ...direct,
+        }),
+      );
+
+      expect(auth).toBeDefined();
+      expect(JSON.stringify(auth)).not.toContain(pasted);
+      expect(JSON.stringify(auth)).not.toContain(SECRET);
+      if (Object.keys(direct).length > 0) {
+        expect(auth).toMatchObject({ status: "pass", message: "Mattermost bot token is configured." });
+      } else {
+        expect(auth).toMatchObject({ status: "fail", message: expect.stringContaining("MATTERMOST_") });
+      }
+    });
+
     it("keeps a model provider's key variable a plain is-it-set check, since no resolver reads it", () => {
       vi.stubEnv("OPENAI_API_KEY", SECRET);
       const connection = (apiKeyEnv: string) =>

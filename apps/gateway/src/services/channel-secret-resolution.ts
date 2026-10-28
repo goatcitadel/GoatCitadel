@@ -1,4 +1,9 @@
 import type { IntegrationConnection } from "@goatcitadel/contracts";
+import type { ChannelEnvSecretRequest, ChannelEnvSecretResolution } from "@goatcitadel/policy-engine";
+import {
+  isPermittedIntegrationSecretEnvVarName,
+  refusedEnvVarNameMessage,
+} from "./gateway/integration-secret-envvar-guard.js";
 
 const CHANNEL_SECRET_ENV_PATTERNS: readonly RegExp[] = [
   /^(?:SLACK|DISCORD|TELEGRAM|WHATSAPP|LINE|NEXTCLOUD|QQBOT|WECOM)(?:_[A-Z0-9]+)*_(?:WEBHOOK_SECRET|AES_KEY|SIGNING_SECRET|CHANNEL_SECRET|BOT_SECRET|APP_SECRET|VERIFY_TOKEN|SECRET_TOKEN|TOKEN|SECRET)$/,
@@ -112,6 +117,20 @@ export function resolveAllowlistedEnvSecret(envName: string | undefined): string
   }
   const resolved = process.env[envName.trim()];
   return resolved?.trim() ? resolved.trim() : undefined;
+}
+
+/**
+ * Reads the variable a channel connection names for a send, but only when the name passes the same credential rule the
+ * setup test and the live probes use (`isPermittedIntegrationSecretEnvVarName`, bound to the connection's catalog entry).
+ * A connection config must not be able to carry an LLM or Gateway key to the server address it names, so a refused name
+ * gives a plain sentence that holds neither the name nor a value, and nothing is read.
+ */
+export function resolveChannelSendEnvSecret(input: ChannelEnvSecretRequest): ChannelEnvSecretResolution {
+  const envName = input.envName.trim();
+  if (!isPermittedIntegrationSecretEnvVarName(envName, input.catalogId)) {
+    return { refusal: refusedEnvVarNameMessage(input.catalogId) };
+  }
+  return { value: process.env[envName]?.trim() || undefined };
 }
 
 export function resolveTelegramBotTokenEnvSecret(envName: string | undefined): string | undefined {

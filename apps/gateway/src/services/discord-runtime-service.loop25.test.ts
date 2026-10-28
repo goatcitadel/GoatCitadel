@@ -5,7 +5,7 @@ import { DiscordRuntimeService } from "./discord-runtime-service.js";
 describe("DiscordRuntimeService loop25 runtime status", () => {
   it("persists fallback status for enabled gateway connections that have no bot token", async () => {
     const service = createService({
-      listConnections: () => [createConnection({ botToken: "", botTokenEnv: "MISSING_DISCORD_TOKEN_FOR_LOOP25" })],
+      listConnections: () => [createConnection({ botToken: "", botTokenEnv: "DISCORD_MISSING_TOKEN_FOR_LOOP25" })],
     });
 
     await service.sync();

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createConnectionSecretReferenceResolver,
   readConfigSecret,
+  resolveChannelSendEnvSecret,
   resolveTelegramWebhookSecret,
 } from "./channel-secret-resolution.js";
 
@@ -113,5 +114,88 @@ describe("resolveTelegramWebhookSecret with a reference resolver", () => {
 
   it("keeps direct secrets working without a resolver", () => {
     expect(resolveTelegramWebhookSecret({ secretToken: "direct-telegram" })).toBe("direct-telegram");
+  });
+});
+
+describe("resolveChannelSendEnvSecret", () => {
+  const SECRET = "synthetic-send-env-value";
+
+  it("reads a variable whose name the credential rule allows for the connection's catalog entry", () => {
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", `  ${SECRET} `);
+    vi.stubEnv("INTEGRATION_MATTERMOST_TOKEN", "other-synthetic-value");
+
+    expect(
+      resolveChannelSendEnvSecret({
+        catalogId: "channel.mattermost",
+        channelKey: "mattermost",
+        field: "botTokenEnv",
+        envName: " MATTERMOST_BOT_TOKEN ",
+      }),
+    ).toEqual({ value: SECRET });
+    expect(
+      resolveChannelSendEnvSecret({
+        catalogId: "channel.mattermost",
+        channelKey: "mattermost",
+        field: "botTokenEnv",
+        envName: "INTEGRATION_MATTERMOST_TOKEN",
+      }),
+    ).toEqual({ value: "other-synthetic-value" });
+  });
+
+  it("gives neither a value nor a refusal when the allowed variable is not set or is blank", () => {
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", "   ");
+
+    for (const envName of ["MATTERMOST_BOT_TOKEN", "MATTERMOST_NOT_SET_ANYWHERE"]) {
+      expect(
+        resolveChannelSendEnvSecret({
+          catalogId: "channel.mattermost",
+          channelKey: "mattermost",
+          field: "botTokenEnv",
+          envName,
+        }),
+      ).toEqual({ value: undefined });
+    }
+  });
+
+  it.each([
+    ["an LLM provider key", "OPENAI_API_KEY"],
+    ["a Gateway key", "GOATCITADEL_AUTH_TOKEN"],
+    ["another channel's variable", "SLACK_BOT_TOKEN"],
+    ["a database password", "POSTGRES_PASSWORD"],
+    ["a cloud key", "AWS_SECRET_ACCESS_KEY"],
+    ["a lowercase name", "mattermost_bot_token"],
+    ["a token pasted into the name field", "xoxb-1234-pasted-token-not-a-name"],
+  ])("refuses %s without reading it, and the sentence holds no name or value", (_label, envName) => {
+    vi.stubEnv(envName, SECRET);
+
+    const resolution = resolveChannelSendEnvSecret({
+      catalogId: "channel.mattermost",
+      channelKey: "mattermost",
+      field: "botTokenEnv",
+      envName,
+    });
+
+    expect(resolution).toEqual({
+      refusal: "The variable name must start with MATTERMOST_. Rename it and restart GoatCitadel.",
+    });
+    expect(JSON.stringify(resolution)).not.toContain(SECRET);
+    expect(JSON.stringify(resolution)).not.toContain(envName);
+  });
+
+  it("refuses every name when the connection has no catalog entry, and says so plainly", () => {
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", SECRET);
+
+    for (const catalogId of [undefined, ""] as unknown as string[]) {
+      expect(
+        resolveChannelSendEnvSecret({
+          catalogId,
+          channelKey: "mattermost",
+          field: "botTokenEnv",
+          envName: "MATTERMOST_BOT_TOKEN",
+        }),
+      ).toEqual({
+        refusal: "That variable name is not allowed for this connection. Rename it and restart GoatCitadel.",
+      });
+    }
   });
 });

@@ -3,6 +3,7 @@ import { parseWecomTarget } from "@goatcitadel/policy-engine";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import { mapProbeStepsToChecks } from "./channel-probe-result.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
+import { readConfigSecret } from "./channel-secret-resolution.js";
 import type { StructuralCheckContext } from "./qqbot-live-probes.js";
 import type { IntegrationDiagnosticsPort } from "./integration-diagnostics-service.js";
 
@@ -19,12 +20,9 @@ export function appendWecomStructuralChecks(context: StructuralCheckContext): vo
   context.requireText("agent_id", "WeCom agent id", read("agentId"));
   context.requireSecretRef("auth", "WeCom application secret", "secret", "secretEnv");
   context.requireText("target", "Default WeCom target", context.target, "warn");
-  // The env names must resolve to non-empty values, not merely be set.
-  const resolved = (directKey: string, envKey: string) => {
-    if (read(directKey)) return true;
-    const envName = read(envKey);
-    return Boolean(envName && process.env[envName]);
-  };
+  // The encrypted callback reads these two with `readConfigSecret`, so this asks the same reader: a variable counts
+  // only when its name is one the callback reads and it holds a value, not merely when a name is set.
+  const resolved = (directKey: string, envKey: string) => Boolean(readConfigSecret(config, directKey, envKey));
   const callbackReady =
     resolved("callbackToken", "callbackTokenEnv") && resolved("encodingAesKey", "encodingAesKeyEnv");
   checks.push({

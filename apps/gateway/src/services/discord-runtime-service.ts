@@ -33,6 +33,10 @@ import {
   normalizeChannelApprovalToken,
 } from "./channel-command-contract.js";
 import { buildChannelConversation } from "./channel-conversation.js";
+import {
+  isPermittedIntegrationSecretEnvVarName,
+  refusedEnvVarNameMessage,
+} from "./gateway/integration-secret-envvar-guard.js";
 
 const log = logger.child("discord-runtime-service");
 
@@ -150,8 +154,8 @@ export class DiscordRuntimeService {
     const nextGroups = new Map<string, IntegrationConnection[]>();
     for (const connection of gatewayConnections) {
       const token =
-        readDiscordSecret(connection.config, "botToken", "botTokenEnv") ??
-        readDiscordSecret(connection.config, "token", "tokenEnv");
+        readDiscordSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId) ??
+        readDiscordSecret(connection.config, "token", "tokenEnv", connection.catalogId);
       if (!token) {
         this.statusByConnectionId.set(connection.connectionId, {
           connectionId: connection.connectionId,
@@ -159,7 +163,9 @@ export class DiscordRuntimeService {
           enabled: connection.enabled,
           ready: false,
           guildIds: [],
-          lastError: "Discord gateway mode requires a bot token or env-backed bot token.",
+          lastError:
+            describeRefusedDiscordVariable(connection.config, connection.catalogId) ??
+            "Discord gateway mode requires a bot token or env-backed bot token.",
         });
         continue;
       }
@@ -1122,13 +1128,34 @@ function throwIfDiscordRuntimeAborted(signal?: AbortSignal): void {
     : new Error(typeof reason === "string" ? reason : "Discord typing delivery aborted.");
 }
 
-function readDiscordSecret(config: Record<string, unknown>, key: string, envKey: string): string | undefined {
+/**
+ * A pasted bot token wins. Otherwise the variable the config names is read only when the credential guard allows that
+ * name for this connection's catalog entry (the rule the setup test and the sends use); with no catalog entry, nothing is.
+ */
+function readDiscordSecret(
+  config: Record<string, unknown>,
+  key: string,
+  envKey: string,
+  catalogId?: string,
+): string | undefined {
   const direct = readConfigString(config, key);
   if (direct) {
     return direct;
   }
   const envName = readConfigString(config, envKey);
-  return envName ? process.env[envName]?.trim() || undefined : undefined;
+  if (!envName || !isPermittedIntegrationSecretEnvVarName(envName, catalogId)) {
+    return undefined;
+  }
+  return process.env[envName]?.trim() || undefined;
+}
+
+/** The sentence for a bot-token variable the guard refuses, or undefined when none is set or every one is allowed. */
+function describeRefusedDiscordVariable(config: Record<string, unknown>, catalogId?: string): string | undefined {
+  const refused = ["botTokenEnv", "tokenEnv"].some((envKey) => {
+    const envName = readConfigString(config, envKey);
+    return envName !== undefined && !isPermittedIntegrationSecretEnvVarName(envName, catalogId);
+  });
+  return refused ? refusedEnvVarNameMessage(catalogId) : undefined;
 }
 
 function readConfigString(config: Record<string, unknown>, key: string): string | undefined {

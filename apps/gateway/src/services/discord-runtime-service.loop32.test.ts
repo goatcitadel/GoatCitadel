@@ -4,17 +4,17 @@ import { __discordRuntimeServiceInternals } from "./discord-runtime-service.js";
 
 afterEach(() => {
   vi.useRealTimers();
-  delete process.env.GOATCITADEL_DISCORD_LOOP32_TOKEN;
+  delete process.env.DISCORD_LOOP32_TOKEN;
 });
 
 describe("discord runtime service loop32 internals", () => {
   it("normalizes runtime config, guild rules, targets, and bounded response text", () => {
-    process.env.GOATCITADEL_DISCORD_LOOP32_TOKEN = " env-token ";
+    process.env.DISCORD_LOOP32_TOKEN = " env-token ";
     const config = {
       runtimeMode: "gateway",
       inboundDmPolicy: "open",
       guildPolicy: "off",
-      botTokenEnv: "GOATCITADEL_DISCORD_LOOP32_TOKEN",
+      botTokenEnv: "DISCORD_LOOP32_TOKEN",
       defaultGuildId: "guild-default",
       defaultChannelId: "channel-default",
       guilds: {
@@ -34,7 +34,9 @@ describe("discord runtime service loop32 internals", () => {
     expect(__discordRuntimeServiceInternals.getDiscordRuntimeMode(config)).toBe("gateway");
     expect(__discordRuntimeServiceInternals.getDiscordInboundDmPolicy(config)).toBe("open");
     expect(__discordRuntimeServiceInternals.getDiscordGuildPolicy(config)).toBe("off");
-    expect(__discordRuntimeServiceInternals.readDiscordSecret(config, "botToken", "botTokenEnv")).toBe("env-token");
+    expect(
+      __discordRuntimeServiceInternals.readDiscordSecret(config, "botToken", "botTokenEnv", "channel.discord"),
+    ).toBe("env-token");
     expect(__discordRuntimeServiceInternals.normalizeDiscordRuntimeTarget(" <#12345> ")).toEqual({
       kind: "channel",
       id: "12345",

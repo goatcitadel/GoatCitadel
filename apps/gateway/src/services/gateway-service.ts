@@ -800,7 +800,7 @@ import {
   assertDeploymentProfileUpdate as assertGatewayDeploymentProfileUpdate,
   assertFirecrawlRuntimeUpdate as assertGatewayFirecrawlRuntimeUpdate,
 } from "./gateway/runtime-settings-guards.js";
-import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
+import { isPermittedIntegrationSecretEnvVarName, envNameForLog } from "./gateway/integration-secret-envvar-guard.js";
 import {
   executeApprovedExternalRuntimePendingAction as executeApprovedExternalRuntimePendingActionWithPort,
   isApprovedExternalRuntimePendingAction,
@@ -909,7 +909,7 @@ import {
   policyContextHasOperatorApproval,
 } from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
-import { isTelegramApprovalActionConnectorReady } from "./channel-secret-resolution.js";
+import { isTelegramApprovalActionConnectorReady, resolveChannelSendEnvSecret } from "./channel-secret-resolution.js";
 import {
   recordInboundChannelMessage,
   routeOperatorDeskSend,
@@ -1476,8 +1476,8 @@ export class GatewayService {
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
       isApprovalActionConnectorReady: (connectionId) =>
         isTelegramApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
-      // A real send reads the key the connection saved at setup, the way the setup test does.
       resolveChannelConnectionSecret: (ref) => this.resolveConnectionSecret({ ref }, "ref", "refEnv"),
+      resolveChannelEnvSecret: resolveChannelSendEnvSecret,
       resolveGoogleWorkspaceAccessToken: (input) => this.googleWorkspaceOAuth.resolveToolAccessToken(input),
       acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
       prepareEmbeddingUsageDispatch: (input) => this.llmService.prepareScopedModelUsageDispatch(input),
@@ -12071,7 +12071,7 @@ export class GatewayService {
     // catalog convention and refuse broadly-scoped gateway/infra secrets.
     if (!isPermittedIntegrationSecretEnvVarName(envName, catalogId)) {
       log.warn("Refusing to resolve integration secret from an unbound env var name (codex finding #13/#23).", {
-        envName,
+        envName: envNameForLog(envName),
         directKey,
         envKey,
         catalogId,

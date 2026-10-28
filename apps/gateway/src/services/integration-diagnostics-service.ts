@@ -34,9 +34,13 @@ import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import { evaluateHostEgress } from "@goatcitadel/policy-engine";
-import { secretEnvPrefix, secretEnvSuffixRule } from "./channel-setup-definitions/common.js";
+import { secretEnvSuffixRule } from "./channel-setup-definitions/common.js";
 import { FORCED_ALLOWLIST_INBOUND_CHANNELS } from "./channel-setup-inbound-access.js";
-import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
+import {
+  isPermittedIntegrationSecretEnvVarName,
+  printableEnvVarName,
+  refusedEnvVarNameMessage,
+} from "./gateway/integration-secret-envvar-guard.js";
 
 const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
   "slack",
@@ -108,14 +112,17 @@ export function buildIntegrationConnectionChecks(
   const requireSecretRef = (key: string, label: string, directKey: string, envKey: string) => {
     const envName = deps.readConnectionConfigValue(config, envKey);
     if (deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId)) {
-      checks.push({ key, status: "pass", message: `${label} is configured${envName ? ` via ${envName}` : ""}.` });
+      // The name is printed only when the variable is what answered, and only when it has the shape of a name: an old
+      // connection can hold a token in the name field, and a direct value can answer while a stale name sits there.
+      const via = deps.readConnectionConfigValue(config, directKey) ? undefined : printableEnvVarName(envName);
+      checks.push({ key, status: "pass", message: `${label} is configured${via ? ` via ${via}` : ""}.` });
       return;
     }
     const refused = envName !== undefined && !isPermittedIntegrationSecretEnvVarName(envName, connection.catalogId);
     checks.push({
       key,
       status: "fail",
-      message: refused ? refusedVariableNameMessage(connection.key, envKey) : `${label} is missing.`,
+      message: refused ? refusedVariableNameMessage(connection, envKey) : `${label} is missing.`,
     });
   };
   const requireText = (key: string, label: string, value: string | undefined, status: "warn" | "fail" = "fail") => {
@@ -823,9 +830,12 @@ function hasProcessEnvValue(
 }
 
 /** What to tell the operator about a variable name the Gateway will not read, from the same rule the setup guide gives. */
-function refusedVariableNameMessage(channelKey: string, envKey: string): string {
-  const rule = `The variable name must start with ${secretEnvPrefix(channelKey)}_. Rename it and restart GoatCitadel.`;
-  const suffixRule = secretEnvSuffixRule(channelKey, envKey);
+function refusedVariableNameMessage(
+  connection: Pick<IntegrationConnection, "catalogId" | "key">,
+  envKey: string,
+): string {
+  const rule = refusedEnvVarNameMessage(connection.catalogId);
+  const suffixRule = secretEnvSuffixRule(connection.key, envKey);
   return suffixRule ? `${rule} ${suffixRule}` : rule;
 }
 
