@@ -2,12 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   ChannelSetupDraft,
   ChannelSetupFieldDefinition,
+  ChannelSetupIssue,
   ChannelSetupRichBlock,
   ChannelSetupStepDefinition,
+  ChannelSetupTestResult,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
 import { runSlackBotLiveChecks } from "../channel-bot-live-probes.js";
 import { requireChannelSetupDefinition } from "../channel-setup-definitions.js";
+import { evaluateChannelSetupEligibility } from "../channel-setup-eligibility.js";
+import {
+  buildIntegrationConnectionChecks,
+  type IntegrationDiagnosticsPort,
+} from "../integration-diagnostics-service.js";
 import * as slackModule from "./slack.js";
 
 function guide() {
@@ -349,6 +356,109 @@ describe("Slack setup guide: a webhook needs no channel target (item 8)", () => 
         .validate(draftOf({}))
         .map((issue) => issue.key),
     ).toEqual(expect.arrayContaining(["slack_auth_missing", "targets_required"]));
+  });
+});
+
+/** The Gateway's own structural checks for a Slack connection, as the setup test reads them. */
+function slackChecks(config: Record<string, unknown>) {
+  const port: IntegrationDiagnosticsPort = {
+    config: {
+      toolPolicy: { tools: { profile: "default" }, sandbox: { networkAllowlist: [] } },
+    } as unknown as IntegrationDiagnosticsPort["config"],
+    fetchWithDiagnosticsTimeout: vi.fn(async () => new Response("{}")),
+    getDiscordRuntimeStatus: vi.fn(() => undefined),
+    // The webhook host is allowed here, so only the target check can hold a webhook-only setup back.
+    isConnectionUrlAllowlisted: vi.fn(() => true),
+    readConnectionConfigValue: vi.fn((values: Record<string, unknown>, key: string) => {
+      const value = values[key];
+      return typeof value === "string" ? value : undefined;
+    }),
+    resolveConnectionSecret: vi.fn((values: Record<string, unknown>, key: string) => {
+      const value = values[key];
+      return typeof value === "string" ? value : undefined;
+    }),
+  };
+  return buildIntegrationConnectionChecks(port, { ...connectionOf(config), key: "slack" });
+}
+
+/** What the setup test does with those checks: every one that is not a pass becomes an issue, then eligibility reads them. */
+function eligibilityOf(config: Record<string, unknown>) {
+  const issues: ChannelSetupIssue[] = slackChecks(config)
+    .filter((check) => check.status !== "pass")
+    .map((check) => ({
+      key: check.key,
+      level: check.status === "fail" ? ("error" as const) : ("warn" as const),
+      message: check.message,
+    }));
+  const result: ChannelSetupTestResult = {
+    draftId: "22222222-2222-2222-2222-222222222222",
+    draftRevision: 1,
+    status: issues.some((issue) => issue.level === "error") ? "error" : issues.length > 0 ? "warn" : "ok",
+    levels: [],
+    issues,
+    checkedAt: "2026-03-29T00:00:00.000Z",
+  };
+  return { issues, eligibility: evaluateChannelSetupEligibility(result, connectionOf(config)) };
+}
+
+const MISSING_TARGET = "Default Slack channel is missing.";
+
+describe("Slack setup guide: a webhook-only setup can finish (item 8, fix round 1)", () => {
+  it("does not stop a webhook-only person on the channel targets step", () => {
+    // The wizard blocks Continue on a required field that is shown and empty.
+    expect(field("targets").required).toBe(false);
+  });
+
+  it("still sends a bot-token setup with no channel to the targets field", () => {
+    const [issue] = guide().validate(draftOf({ botToken: BOT_TOKEN }));
+
+    expect(issue).toMatchObject({ key: "targets_required", fieldKey: "targets", level: "error" });
+  });
+
+  it("does not tell a person who has not connected yet to add a channel target", () => {
+    const [issue] = guide().validate(draftOf({}));
+
+    expect(issue?.key).toBe("slack_auth_missing");
+    expect((issue?.nextSteps ?? []).join(" ")).not.toMatch(/target|channel/iu);
+    expect((issue?.nextSteps ?? []).join(" ")).toContain("webhook");
+  });
+
+  it("says a webhook-only setup needs no channel, in the targets field's own words", () => {
+    expect(field("targets").explanation).toContain("Leave this empty for a webhook-only setup");
+  });
+
+  it("raises no channel check for a webhook-only connection", () => {
+    const checks = slackChecks({ webhookUrl: WEBHOOK_URL });
+
+    expect(checks.find((check) => check.key === "target")).toBeUndefined();
+    expect(checks.find((check) => check.key === "auth")).toMatchObject({ status: "pass" });
+  });
+
+  it("lets a webhook-only test finalize without a channel", () => {
+    const { issues, eligibility } = eligibilityOf({ webhookUrl: WEBHOOK_URL });
+
+    expect(issues.map((issue) => issue.message)).not.toContain(MISSING_TARGET);
+    expect(eligibility.blockingReasons).not.toContain(MISSING_TARGET);
+  });
+
+  it("still warns, and still blocks, when a bot-token connection has no default channel", () => {
+    const checks = slackChecks({ botToken: BOT_TOKEN });
+    const { eligibility } = eligibilityOf({ botToken: BOT_TOKEN });
+
+    expect(checks.find((check) => check.key === "target")).toMatchObject({ status: "warn", message: MISSING_TARGET });
+    expect(eligibility.blockingReasons).toContain(MISSING_TARGET);
+  });
+
+  it("still warns when a webhook comes with a bot token and no default channel", () => {
+    const checks = slackChecks({ botToken: BOT_TOKEN, webhookUrl: WEBHOOK_URL });
+
+    expect(checks.find((check) => check.key === "target")).toMatchObject({ status: "warn", message: MISSING_TARGET });
+  });
+
+  it("is satisfied by a default channel on a bot-token connection", () => {
+    const checks = slackChecks({ botToken: BOT_TOKEN, defaultChannel: "#ops" });
+
+    expect(checks.find((check) => check.key === "target")).toMatchObject({ status: "pass" });
   });
 });
 

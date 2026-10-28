@@ -163,8 +163,11 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
               key: "targets",
               label: "Slack channel targets",
               type: "textarea",
-              required: true,
-              explanation: "Named Slack channels this one workspace install can use.",
+              // Not required here: an incoming webhook is bound to its own channel. A bot-token setup without a channel is
+              // caught by validate() (`targets_required`), which names this field so the wizard jumps back to it.
+              required: false,
+              explanation:
+                "Named Slack channels this one workspace install can use. Needed with a bot token. Leave this empty for a webhook-only setup.",
               whyNeeded: "Lets one Slack connection serve multiple channels without repeating setup.",
               whereToFind: [
                 paragraph(
@@ -423,7 +426,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           message: "Paste the bot token (starts with xoxb-), or a webhook URL for send-only.",
           failureCategory: "missing_input",
           nextSteps: [
-            "Paste the Bot User OAuth Token from your Slack app's OAuth & Permissions page, add a channel target, then validate again.",
+            "Paste the Bot User OAuth Token from your Slack app's OAuth & Permissions page, or an incoming webhook URL for a send-only setup, then validate again.",
           ],
         });
       }

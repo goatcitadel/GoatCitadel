@@ -192,25 +192,25 @@ export function buildIntegrationConnectionChecks(
       checks.push(...buildChannelInboundAccessDiagnosticChecks(connection.key, config, channelCapabilities));
     }
     switch (connection.key) {
-      case "slack":
+      case "slack": {
+        const slackBotToken = Boolean(
+          deps.readConnectionConfigValue(config, "botToken") || hasConnectionEnvValue(deps, config, "botTokenEnv"),
+        );
+        const slackAuthSet = slackBotToken || Boolean(deps.readConnectionConfigValue(config, "webhookUrl"));
         checks.push({
           key: "auth",
-          status:
-            deps.readConnectionConfigValue(config, "webhookUrl") ||
-            deps.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(deps, config, "botTokenEnv")
-              ? "pass"
-              : "fail",
-          message:
-            deps.readConnectionConfigValue(config, "webhookUrl") ||
-            deps.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(deps, config, "botTokenEnv")
-              ? "Slack bot token or webhook is configured."
-              : "Slack bot token or webhook is missing.",
+          status: slackAuthSet ? "pass" : "fail",
+          message: slackAuthSet
+            ? "Slack bot token or webhook is configured."
+            : "Slack bot token or webhook is missing.",
         });
         checkUrl("url", "Slack webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), false);
-        requireText("target", "Default Slack channel", resolveChannelConfigTarget(connection.key, config), "warn");
+        // An incoming webhook posts to the one channel it was made for, so only a bot token needs a default channel.
+        if (slackBotToken) {
+          requireText("target", "Default Slack channel", resolveChannelConfigTarget(connection.key, config), "warn");
+        }
         break;
+      }
       case "discord":
         checks.push({
           key: "auth",
