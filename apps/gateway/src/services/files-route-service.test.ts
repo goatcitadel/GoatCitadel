@@ -258,7 +258,7 @@ describe("paged workspace file listing (LB-08)", () => {
 
     // Paths that compare equal under locale collation still page one at a time without loss.
     await fs.mkdir(path.join(workspace, "accents"));
-    const accentNames = ["é.txt", "é.txt"];
+    const accentNames = [`${String.fromCodePoint(0xe9)}.txt`, `e${String.fromCodePoint(0x301)}.txt`]; // composed vs decomposed e-acute
     const tieTime = new Date(Date.UTC(2026, 1, 1));
     for (const name of accentNames) {
       const full = path.join(workspace, "accents", name);
