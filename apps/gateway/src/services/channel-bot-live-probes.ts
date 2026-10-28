@@ -392,7 +392,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
       status: input.webhookUrl ? "skipped" : "fail",
       message: input.webhookUrl
         ? "Webhook-only bridge path configured, so bot-token auth probe was skipped."
-        : "Discord bot token is missing, so auth and channel probes could not run.",
+        : "Discord bot token not found. If you used an environment variable, check its name starts with DISCORD_ and restart GoatCitadel.",
       failureCategory: input.webhookUrl ? undefined : "credential_rejected",
     });
     probe.steps.push({

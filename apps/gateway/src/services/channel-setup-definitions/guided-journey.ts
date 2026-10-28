@@ -18,13 +18,14 @@ import {
 
 const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstMessage: string }> = {
   discord: {
-    summary: "Connect an online Discord bot for paired direct messages or an allowlisted server channel.",
+    summary:
+      "Chat with your Discord bot in direct messages, or let it answer in one server channel when mentioned. No public web address is needed.",
     prerequisites: [
-      "A Discord application with a bot token and Message Content Intent enabled.",
-      "For server messages, permission to install the bot and grant View Channel, Send Messages and Read Message History in the chosen channel.",
+      "A Discord application with a bot. Turn on Message Content Intent on its Bot page.",
+      "To use it in a server: permission to add the bot, and View Channel, Send Messages and Read Message History in that channel.",
     ],
     firstMessage:
-      "Wait for the saved Gateway connection to become ready. For server setup, mention the bot in the chosen channel. For direct messages, send a DM, approve the pending pairing, then send another message and confirm its reply.",
+      "Wait until the connection shows ready. In a server, mention the bot in the chosen channel. For a direct message, send one, approve the pairing request in Settings › Channels › this connection › Connection operations, then send another and check the reply.",
   },
   slack: {
     summary: "Connect a Slack workspace bot, choose channels, and optionally enable verified inbound conversations.",
@@ -307,10 +308,10 @@ function guidedField(
   if (key === "whatsapp" && field.key === "phoneNumberId") return { ...field, inputMode: "numeric" };
   if (field.key === "targets")
     return { ...field, type: "target-list", targetAddressKey: key === "telegram" ? "chatId" : "channel" };
+  // Both ids are required while the bot listens in a server channel; a direct-message setup hides them and is not asked.
   if (key === "discord" && ["defaultChannelId", "defaultGuildId"].includes(field.key))
     return {
       ...field,
-      required: false,
       inputMode: "numeric",
       visibleWhenFieldEquals: { fieldKey: "guildPolicy", value: "allowlist" },
     };

@@ -140,11 +140,11 @@ describe("channel setup definitions", () => {
     expect(content).toContain("Message Content Intent");
     expect(JSON.stringify(installBot)).toMatch(/View Channel.*Send Messages.*Read Message History/);
     expect(JSON.stringify(collectValues)).toContain("@mention");
-    expect(JSON.stringify(testStep)).toMatch(/posts a visible sandbox message.*deletes it/);
+    expect(JSON.stringify(testStep)).toMatch(/posts one visible test message.*deletes it/);
     expect(JSON.stringify(finishStep)).toContain("pending code");
 
     const defaultGuildId = collectValues?.fields?.find((field) => field.key === "defaultGuildId");
-    expect(defaultGuildId).toMatchObject({ type: "id", required: false });
+    expect(defaultGuildId).toMatchObject({ type: "id", required: true });
     expect(defaultGuildId?.explanation).toMatch(/Required for the recommended server allowlist path/);
     expect(definition.validation.validationVersion).toBe("2026.08.discord.v3");
   });

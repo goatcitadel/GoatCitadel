@@ -2,6 +2,7 @@ import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/con
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
+  PASTED_SECRET_EXPLANATION,
   requireCatalog,
   baseCatalogMeta,
   definitionFailures,
@@ -19,6 +20,8 @@ import {
   requiredFieldIssue,
   malformedFieldIssue,
 } from "./common.js";
+
+const DISCORD_QUICK_START_URL = "https://docs.discord.com/developers/quick-start/getting-started";
 
 export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
   const catalog = requireCatalog("channel.discord");
@@ -77,20 +80,21 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           createOnly: true,
           title: "Create the Discord application and bot",
           body: [
+            paragraph("Open the Discord Developer Portal and create a new application."),
             paragraph(
-              "Open the Discord Developer Portal, create a new application, then open the Bot tab and add a bot user.",
+              "A new application already has a bot. Open Bot › Reset Token and copy the token now; Discord shows it once. On the same page, turn on Message Content Intent.",
             ),
             paragraph(
-              "In Privileged Gateway Intents, enable Message Content Intent. GoatCitadel identifies with that intent so it can receive normal message text; Discord can reject the gateway session when the intent is not enabled for the application.",
+              "GoatCitadel needs Message Content Intent to read normal message text. Without it, Discord can close the bot's connection even though the token is valid.",
             ),
             linkBlock("Discord Developer Portal", "https://discord.com/developers/applications"),
+            linkBlock("Discord getting-started guide", DISCORD_QUICK_START_URL),
             linkBlock("Discord Gateway intent reference", "https://docs.discord.com/developers/events/gateway"),
           ],
           checklist: [
             check("app-created", "Create a new Discord application"),
-            check("bot-added", "Add a bot user in the Bot section"),
+            check("bot-added", "Copy the bot token (Bot › Reset Token)"),
             check("message-content-intent", "Enable Message Content Intent under Privileged Gateway Intents"),
-            check("token-copied", "Copy the bot token or store it in an environment variable"),
           ],
           troubleshooting: [
             troubleshoot(
@@ -107,12 +111,14 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           title: "Add the bot to your server",
           body: [
             paragraph(
-              "Use the Installation section to create a server install with the bot scope. Discord currently includes the applications.commands scope with bot installs. Give the bot View Channel, Send Messages, and Read Message History in the sandbox channel. Gateway mode needs the bot installed in every server where you want inbound routing.",
+              "Open Installation. Set Install Link to Discord Provided Link. Under Default Install Settings › Guild Install, add the scopes applications.commands and bot, and the permissions View Channels, Send Messages, Read Message History. Open the install link and choose Add to server.",
             ),
+            paragraph("Install the bot in every server where you want it to answer."),
             note(
               "info",
               "Add Reactions enables GoatCitadel's best-effort seen marker. Send Messages in Threads, Attach Files, and Embed Links are needed only when you want those corresponding capabilities.",
             ),
+            linkBlock("Discord getting-started guide", DISCORD_QUICK_START_URL),
           ],
           checklist: [
             check("bot-scope", "Use a server install with the bot scope and application commands enabled"),
@@ -120,16 +126,6 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
             check("channel-visible", "Grant View Channel in the destination channel"),
             check("channel-send", "Grant Send Messages in the destination channel"),
             check("channel-history", "Grant Read Message History in the destination channel"),
-          ],
-        },
-        {
-          id: "webhook-path",
-          kind: "instruction",
-          title: "Optional legacy bridge-only webhook path",
-          body: [
-            paragraph(
-              "If you intentionally want a webhook-only outbound connection, add a Discord webhook URL in advanced settings. That path stays on bridge mode and does not support reactions, inbound routing, or online presence.",
-            ),
           ],
         },
         {
@@ -144,44 +140,83 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           ],
           fields: [
             {
+              key: "botToken",
+              label: "Bot token",
+              type: "secret",
+              required: false,
+              explanation: PASTED_SECRET_EXPLANATION,
+              whereToFind: [
+                paragraph(
+                  "In the Discord Developer Portal, open your application, then open the Bot page. Choose Reset Token and copy the token.",
+                ),
+              ],
+              looksLike: "A long opaque token string.",
+              commonMistakes: ["Pasting the application ID or public key instead of the bot token."],
+              sensitive: true,
+              canChangeLater: true,
+            },
+            {
               key: "botTokenEnv",
               label: "Bot token env var",
               type: "text",
               required: false,
-              explanation: "Preferred path. Name of the environment variable that stores your Discord bot token.",
-              whyNeeded:
-                "Bot-token setups default to gateway mode so GoatCitadel can create the persistent online bot session.",
-              whereToFind: [
-                paragraph(
-                  "Create or reuse an env var such as DISCORD_BOT_TOKEN and store the actual token there. If you add or change the process environment, restart GoatCitadel before testing so the Gateway can read it.",
-                ),
-              ],
+              explanation: "Name of the environment variable that holds your Discord bot token.",
+              whereToFind: [paragraph("Set a variable such as DISCORD_BOT_TOKEN to the real token.")],
               looksLike: "DISCORD_BOT_TOKEN",
               commonMistakes: [
-                "Pasting the token value here instead of the env var name.",
-                "Using an env var that is not available to the gateway process.",
+                "Pasting the token value here instead of the variable name.",
+                "Using a variable that is not available to the process GoatCitadel runs in.",
               ],
               canChangeLater: true,
               placeholder: "DISCORD_BOT_TOKEN",
             },
             {
-              key: "botToken",
-              label: "Bot token (manual fallback)",
-              type: "secret",
+              key: "webhookUrl",
+              label: "Webhook URL (send-only, advanced)",
+              type: "url",
               required: false,
-              explanation: "Optional direct token entry for manual fallback or temporary debugging.",
-              whyNeeded: "Use only if you cannot supply an env reference right now.",
+              advanced: true,
+              explanation:
+                "Send-only: posts to one channel and cannot receive messages or show the bot online. You still need a Default channel ID.",
+              whyNeeded: "Use it only if you want a send-only connection with no bot.",
               whereToFind: [
-                paragraph("In the Discord Developer Portal, open your application, then open the Bot tab."),
+                paragraph(
+                  "Open channel settings in Discord, then Integrations or Webhooks, then copy the webhook URL.",
+                ),
               ],
-              looksLike: "A long opaque token string.",
-              commonMistakes: [
-                "Pasting the application id instead of the bot token.",
-                "Leaving a temporary token here after you intended to switch to env-backed config.",
-              ],
+              looksLike: "https://discord.com/api/webhooks/...",
+              commonMistakes: ["Using the channel URL instead of the webhook URL."],
               sensitive: true,
               canChangeLater: true,
-              placeholder: "Paste token directly only if needed",
+            },
+            {
+              key: "guildPolicy",
+              label: "Where should the bot listen?",
+              type: "select",
+              required: false,
+              defaultValue: "allowlist",
+              explanation:
+                "Choose one server channel, where the bot answers when someone mentions it, or direct messages only.",
+              options: [
+                { value: "allowlist", label: "In one server channel, when mentioned", hint: "Recommended" },
+                { value: "off", label: "Direct messages only" },
+              ],
+              canChangeLater: true,
+            },
+            {
+              key: "inboundDmPolicy",
+              label: "Gateway DM policy",
+              type: "select",
+              required: false,
+              defaultValue: "pairing",
+              explanation:
+                "Gateway mode only. Pairing gives an unknown DM sender a pending code that an operator must approve before messages are accepted. Open accepts DMs immediately; disabled ignores them.",
+              options: [
+                { value: "pairing", label: "Require pairing approval", hint: "Recommended" },
+                { value: "open", label: "Accept all DMs", hint: "Any reachable Discord user may start a DM route" },
+                { value: "disabled", label: "Disable DMs" },
+              ],
+              canChangeLater: true,
             },
             {
               key: "defaultChannelId",
@@ -206,7 +241,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               key: "defaultGuildId",
               label: "Default server (guild) ID",
               type: "id",
-              required: false,
+              required: true,
               explanation:
                 "Required for the recommended server allowlist path. It may be omitted only when Gateway guild traffic is off, such as a DM-only setup, or when an existing advanced connection already has explicit guild rules.",
               whyNeeded:
@@ -221,54 +256,6 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               ],
               canChangeLater: true,
             },
-            {
-              key: "webhookUrl",
-              label: "Optional bridge webhook URL",
-              type: "url",
-              required: false,
-              explanation:
-                "Advanced legacy bridge path for outbound sends when you intentionally want webhook-only delivery.",
-              whyNeeded:
-                "Used only when you explicitly want the older bridge behavior instead of the default gateway bot runtime.",
-              whereToFind: [
-                paragraph(
-                  "Open channel settings in Discord, then Integrations or Webhooks, then copy the webhook URL.",
-                ),
-              ],
-              looksLike: "https://discord.com/api/webhooks/...",
-              commonMistakes: ["Using the channel URL instead of the webhook URL."],
-              sensitive: true,
-              canChangeLater: true,
-            },
-            {
-              key: "inboundDmPolicy",
-              label: "Gateway DM policy",
-              type: "select",
-              required: false,
-              defaultValue: "pairing",
-              explanation:
-                "Gateway mode only. Pairing gives an unknown DM sender a pending code that an operator must approve before messages are accepted. Open accepts DMs immediately; disabled ignores them.",
-              options: [
-                { value: "pairing", label: "Require pairing approval", hint: "Recommended" },
-                { value: "open", label: "Accept all DMs", hint: "Any reachable Discord user may start a DM route" },
-                { value: "disabled", label: "Disable DMs" },
-              ],
-              canChangeLater: true,
-            },
-            {
-              key: "guildPolicy",
-              label: "Gateway guild policy",
-              type: "select",
-              required: false,
-              defaultValue: "allowlist",
-              explanation:
-                "Gateway mode only. Allowlist accepts the configured server/channel route; the default route requires an @mention for normal messages. Off ignores guild traffic and is appropriate for DM-only setups.",
-              options: [
-                { value: "allowlist", label: "Allow selected server and channel", hint: "Recommended" },
-                { value: "off", label: "Disable server messages", hint: "DM-only setup" },
-              ],
-              canChangeLater: true,
-            },
           ],
         },
         {
@@ -277,14 +264,26 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate and test the connection",
           body: [
             paragraph(
-              "For bot-token setups, Test checks token auth and channel access, confirms the channel belongs to the configured server, posts a visible sandbox message, then deletes it. A new gateway connection cannot start its persistent runtime until it has been saved, so that one readiness check is explicitly deferred until Finish creates the durable connection. Retests of existing gateway connections still check current runtime readiness.",
+              "For a bot token, Test checks the token and the channel, confirms the channel is in the server you chose, posts one visible test message, then deletes it. A new connection can't start its bot session until you finish, so that one check waits until then. When you retest a saved connection, it checks the bot session too.",
             ),
             note(
               "warning",
-              "The webhook-only bridge fallback is structurally validated but does not receive an automatic live webhook send. Confirm that path manually in Discord.",
+              "The webhook-only path sends one visible test post. A webhook can't delete it, so it stays in the channel.",
             ),
           ],
-          troubleshooting: definitionFailures("token"),
+          troubleshooting: [
+            ...definitionFailures("token"),
+            troubleshoot(
+              "token-not-found",
+              "Bot token not found",
+              "If you used an environment variable, check that its name starts with DISCORD_ and restart GoatCitadel after you set it. Or paste the bot token instead.",
+            ),
+            troubleshoot(
+              "message-content-intent-disabled",
+              "The token is valid but the bot never comes online",
+              "Open the application's Bot page and turn on Message Content Intent. Discord can close the bot's connection without it, even when the token and channel checks pass.",
+            ),
+          ],
         },
         {
           id: "finish",
@@ -296,6 +295,9 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
             ),
             paragraph(
               "Then mention the bot in the sandbox channel and confirm it replies. If DM policy is pairing, the first DM creates a pending code that must be approved before that sender's next message is accepted.",
+            ),
+            paragraph(
+              "Approve DM pairing requests in Settings › Channels › this connection › Connection operations. No public web address is needed.",
             ),
           ],
           successCriteria: [
@@ -376,7 +378,9 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
             botToken: readString(config, "botToken") || readString(config, "botTokenEnv") ? "configured" : "missing",
             webhookUrl: readString(config, "webhookUrl") ? "configured" : "unknown",
             defaultChannelId: readString(config, "defaultChannelId") ? "configured" : "missing",
-            defaultGuildId: readString(config, "defaultGuildId") ? "configured" : "unknown",
+            // A saved connection with its own server rules already has its route, so the wizard need not ask for the id again.
+            defaultGuildId:
+              readString(config, "defaultGuildId") || hasConfiguredGuildRules(config.guilds) ? "configured" : "unknown",
             inboundDmPolicy: "configured",
             guildPolicy: "configured",
           },
@@ -438,9 +442,11 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
       }
       if (runtimeMode === "gateway") {
         if (!hasConfiguredBotToken) {
-          issues.push(
-            requiredFieldIssue("botTokenEnv", "Gateway mode requires a Discord bot token or bot token env var."),
-          );
+          // The issue keeps its key; the pasted token field is where a person goes to fix it, not the expert variable name.
+          issues.push({
+            ...requiredFieldIssue("botTokenEnv", "Paste the bot token."),
+            fieldKey: "botToken",
+          });
         }
         if (guildPolicy === "allowlist" && !defaultGuildId && !hasSavedExplicitGuildRules) {
           issues.push(
@@ -454,10 +460,11 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
         issues.push({
           key: "discord_bridge_auth_missing",
           level: "error",
-          message: "Bridge mode requires either a Discord bot token/env var or a webhook URL.",
+          fieldKey: "botToken",
+          message: "Paste the bot token, or a webhook URL for send-only.",
           failureCategory: "missing_input",
           nextSteps: [
-            "Add a bot token env var for the recommended bridge path, or provide a webhook URL for the legacy bridge-only path.",
+            "Paste the bot token from your application's Bot page, or add a webhook URL under the advanced options.",
           ],
         });
       }

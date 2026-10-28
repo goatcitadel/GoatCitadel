@@ -41,9 +41,12 @@ describe("guided setup progressive metadata", () => {
     const fields = requireChannelSetupDefinition("channel.discord").definition.wizard.steps.flatMap(
       (step) => step.fields ?? [],
     );
-    expect(fields.find((field) => field.key === "defaultChannelId")).toMatchObject({
-      required: false,
-      visibleWhenFieldEquals: { fieldKey: "guildPolicy", value: "allowlist" },
-    });
+    // A direct-message setup defers both ids by hiding them; a server setup is asked for them.
+    for (const key of ["defaultChannelId", "defaultGuildId"]) {
+      expect(fields.find((field) => field.key === key)).toMatchObject({
+        required: true,
+        visibleWhenFieldEquals: { fieldKey: "guildPolicy", value: "allowlist" },
+      });
+    }
   });
 });
