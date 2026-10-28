@@ -600,6 +600,88 @@ describe("Chat form: a field a choice in the same form reveals (R82)", () => {
     );
   });
 
+  it("fails closed when the fields a form shows never settle, and saves nothing", async () => {
+    // Each field's visibility depends on the other's value in a way that never reaches a fixed set: a ends up shown,
+    // then a and b, then b, then neither, then a again. No real guide does this; the cap must not accept the last guess.
+    const oscillating = {
+      catalog: { catalogId: "channel.oscillating", label: "Oscillating channel" },
+      adapter: { adapterVersion: "1", secretFieldKeys: [] },
+      wizard: {
+        steps: [
+          {
+            fields: [
+              {
+                key: "a",
+                label: "A",
+                type: "text",
+                defaultValue: "0",
+                explanation: "A.",
+                visibleWhenFieldEquals: { fieldKey: "b", value: "0" },
+              },
+              {
+                key: "b",
+                label: "B",
+                type: "text",
+                defaultValue: "0",
+                explanation: "B.",
+                visibleWhenFieldEquals: { fieldKey: "a", value: "1" },
+              },
+            ],
+          },
+        ],
+      },
+    } as unknown as ChannelSetupDefinition;
+    const f = reviewedSettingsFixture({ catalogId: "channel.oscillating", draft: {}, secretState: {} });
+    f.deps.getDefinition.mockReturnValue(oscillating);
+    const plan = {
+      ...slackRecord(),
+      request: { kind: "channel_connection" as const, channelKind: "oscillating", draftId: "draft-1" },
+    };
+
+    await expect(f.adapter.respond(f.ctx, plan, { a: "1", b: "1" })).rejects.toThrow("don't settle");
+    expect(f.deps.updateDraft).not.toHaveBeenCalled();
+    expect(f.deps.validateDraft).not.toHaveBeenCalled();
+  });
+
+  it("lets the form switch a choice away from the one that showed a field, and drops that field without saving it", async () => {
+    // The form submits every field it showed, so switching a Google Chat draft stored in app mode to the incoming
+    // webhook sends the app-only field along with the new mode.
+    const { f, result } = respondTo(
+      "google-chat",
+      { draft: { mode: "app" } },
+      { mode: "webhook", audienceType: "project_number" },
+    );
+
+    await expect(result).resolves.toBeDefined();
+    const saved = f.deps.updateDraft.mock.calls[0]?.[1] as { draft: Record<string, unknown> };
+    expect(saved.draft.mode).toBe("webhook");
+    expect(saved.draft).not.toHaveProperty("audienceType");
+    expect(f.deps.updateDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not save a dropped field's submitted value over the saved one", async () => {
+    const { f, result } = respondTo(
+      "google-chat",
+      { draft: { mode: "app", audienceType: "project_number", audience: "123456789012" } },
+      { mode: "webhook", audienceType: "endpoint_url" },
+    );
+
+    await expect(result).resolves.toBeDefined();
+    const saved = f.deps.updateDraft.mock.calls[0]?.[1] as { draft: Record<string, unknown> };
+    expect(saved.draft.audienceType).toBe("project_number");
+  });
+
+  it("still rejects a key the form never offered, even next to a field it dropped", async () => {
+    const { f, result } = respondTo(
+      "google-chat",
+      { draft: { mode: "app" } },
+      { mode: "webhook", audienceType: "project_number", notAField: "forged" },
+    );
+
+    await expect(result).rejects.toThrow("not registered");
+    expect(f.deps.updateDraft).not.toHaveBeenCalled();
+  });
+
   it("still rejects a field its controlling choice does not reveal", async () => {
     const hidden = respondTo("google-chat", {}, { audience: "123456789012" });
     const wrongChoice = respondTo("google-chat", {}, { mode: "webhook", audience: "123456789012" });

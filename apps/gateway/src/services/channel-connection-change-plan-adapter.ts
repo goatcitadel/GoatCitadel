@@ -119,13 +119,20 @@ export class ChannelConnectionChangePlanAdapter implements EvolutionControlPlane
   ): Promise<EvolutionControlPlaneAdapterOutcome> {
     const { definition, draft } = await this.requireCurrentDraft(plan);
     const allowed = acceptedFieldIds(definition, draft, values);
-    for (const key of Object.keys(values)) {
-      if (!allowed.has(key))
+    // The form submits every field it showed. A choice switched in the same submission can hide one of them, so a key
+    // the form did show but the new choices no longer do is dropped, not saved. A key the form never showed is forged.
+    const offered = new Set(publicFields(definition, draft).map((field) => field.fieldId));
+    const accepted: Record<string, string | number | boolean> = {};
+    for (const [key, value] of Object.entries(values)) {
+      if (allowed.has(key)) {
+        accepted[key] = value;
+      } else if (!offered.has(key)) {
         throw new SemanticValidationError(`Channel setup field ${key} is not registered for this adapter.`);
+      }
     }
     const updated = await this.deps.updateDraft(draft.draftId, {
       expectedRevision: draft.revision,
-      draft: { ...draft.draft, ...values },
+      draft: { ...draft.draft, ...accepted },
     });
     return await this.nextInputOrConfirmation(context, definition, updated);
   }
@@ -500,6 +507,10 @@ function valuesWithDefaults(definition: ChannelSetupDefinition, draft: ChannelSe
  * nothing more is revealed. Only a value for a field that is already shown counts toward showing another, so a hidden
  * field, or a value no field registers (such as the marker that a connection was already open access, which only the
  * stored draft carries), never makes a field visible, and two submitted fields can't show each other.
+ *
+ * The choices must settle. If the shown set is still changing after `MAX_REVEAL_PASSES` rounds, the definition's
+ * conditions chase each other, and no round's guess is trusted: the submission is refused rather than accepting the
+ * last set.
  */
 function acceptedFieldIds(
   definition: ChannelSetupDefinition,
@@ -514,7 +525,9 @@ function acceptedFieldIds(
     if (next.size === accepted.size && [...next].every((id) => accepted.has(id))) return next;
     accepted = next;
   }
-  return accepted;
+  throw new SemanticValidationError(
+    "The choices in this form change which fields it shows, and they don't settle. Nothing was saved.",
+  );
 }
 
 /** Whether a value is set: typed in, already saved, or kept in secure storage (as the guide reads it). */
