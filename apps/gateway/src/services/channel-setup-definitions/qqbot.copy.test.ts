@@ -132,6 +132,12 @@ describe("QQ Bot setup copy", () => {
     expect(wizardText()).not.toMatch(/must approve|QQ's approval|can only use the sandbox/iu);
   });
 
+  it("claims nothing about what QQ shows or hides: it says only what GoatCitadel can't do yet (R46)", () => {
+    // No QQ page was checked for "QQ doesn't show your openid", so the guide keeps to what is true of GoatCitadel.
+    expect(wizardText()).not.toMatch(/QQ (?:doesn't|does not|never|won't) show/iu);
+    expect(wizardText().match(/GoatCitadel can't show (?:it|your openid) yet/gu)?.length).toBeGreaterThan(0);
+  });
+
   it("promises no screen that shows the sender's openid: none does yet (A6 waits for C9)", () => {
     expect(wizardText()).not.toMatch(/Diagnostics/u);
     expect(issueText()).not.toMatch(/Diagnostics/u);
@@ -215,7 +221,7 @@ describe("QQ Bot setup guide: what it says up front (items 3, 6, 7, 8, R46, R48)
 
   it("says no screen shows the openid yet, and what to do about it (item 1, without A6)", () => {
     expect(paragraphs("overview")).toContain(
-      "QQ doesn't show your openid, and GoatCitadel can't show it yet either. Until it can, use this connection for sending unless you already know your openid.",
+      "GoatCitadel can't show your openid yet. Until it can, use this connection for sending unless you already know your openid.",
     );
   });
 
@@ -671,7 +677,7 @@ describe("QQ Bot receiving path: can it finish?", () => {
     // A person who doesn't know their openid can't finish receiving. Part C item C9 (the sender id in the dropped-message
     // diagnostic, PR 4) is what fixes that; until then the guide says it plainly instead of promising a screen.
     expect(paragraphs("overview")).toContain(
-      "QQ doesn't show your openid, and GoatCitadel can't show it yet either. Until it can, use this connection for sending unless you already know your openid.",
+      "GoatCitadel can't show your openid yet. Until it can, use this connection for sending unless you already know your openid.",
     );
     expect(paragraphs("first-message")[0]).toContain("GoatCitadel can't show your openid yet");
   });

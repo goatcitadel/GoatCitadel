@@ -56,7 +56,7 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
               "Receiving is default-deny: only the openids you allow can start conversations. An openid is the id QQ gives each sender for your app, not a QQ number. A group member's openid and a one-to-one user's openid are different, so allow each one you need.",
             ),
             paragraph(
-              "QQ doesn't show your openid, and GoatCitadel can't show it yet either. Until it can, use this connection for sending unless you already know your openid.",
+              "GoatCitadel can't show your openid yet. Until it can, use this connection for sending unless you already know your openid.",
             ),
             paragraph("This channel sends text. Attachments aren't supported."),
             note(
