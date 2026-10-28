@@ -163,13 +163,14 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Check the test message arrived. To receive: in LINE Developers Console › Messaging API set Webhook URL to this connection's webhook address, click Verify, turn on Use webhook, and turn off auto-reply and greeting messages in Official Account Manager. Allow your LINE user ID under Who may message this bot.",
   },
   zalo: {
-    summary: "Send outbound messages from a Zalo Official Account to eligible recipients.",
+    summary: "Send messages from a Zalo Official Account. Sends only: Zalo can't message GoatCitadel.",
+    // The audit says "follows your Official Account and has messaged it recently". Zalo's messages overview states the
+    // rule as an interaction in the last 7 days (a message to the Official Account is one) and does not say "follows".
     prerequisites: [
-      "An authorized Zalo Official Account access token.",
-      "The recipient OA user ID and eligibility to receive messages.",
+      "A Zalo Official Account access token.",
+      "The Zalo user_id of someone who has messaged your Official Account in the last 7 days.",
     ],
-    firstMessage:
-      "Confirm the sandbox message arrives at the intended OA recipient. This narrow outbound adapter does not receive conversations.",
+    firstMessage: "Check the test message arrived in the recipient's Zalo.",
   },
 };
 const DESTINATION_KEYS = new Set([

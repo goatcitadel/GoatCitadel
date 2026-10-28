@@ -1052,10 +1052,12 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
   }
 }
 
+const ZALO_TEST_MESSAGE_LABEL = "Test message";
+
 /**
- * Exercises ntfy's exact publish path once. ntfy has no non-destructive auth
- * endpoint and no portable delete operation, so non-send and dry-run checks
- * stay explicitly skipped instead of being presented as provider proof.
+ * Exercises Zalo's Official Account message call once. Zalo has no non-destructive auth endpoint and the message
+ * cannot be deleted, so a non-send run stays explicitly skipped instead of being presented as provider proof.
+ * The step is keyed `zalo_sandbox_send` for the stored receipts; the person reads it as the test message.
  */
 export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotProbeChecks> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
@@ -1069,9 +1071,9 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
   if (!input.includeSandboxSend) {
     probe.steps.push({
       key: "zalo_sandbox_send",
-      label: "Sandbox send",
+      label: ZALO_TEST_MESSAGE_LABEL,
       status: "skipped",
-      message: "Sandbox send skipped for non-destructive probe mode.",
+      message: "Test message skipped for non-destructive probe mode.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
@@ -1080,9 +1082,9 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
   if (!target) {
     probe.steps.push({
       key: "zalo_sandbox_send",
-      label: "Sandbox send",
+      label: ZALO_TEST_MESSAGE_LABEL,
       status: "fail",
-      message: "Default Zalo recipient is missing.",
+      message: "Default OA user ID is missing.",
       failureCategory: "missing_input",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
@@ -1100,32 +1102,67 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
       }),
     );
     if (send.status < 200 || send.status >= 300 || isZaloApiErrorPayload(send.payload)) {
+      const refusal = describeZaloRefusal(parseZaloErrorCode(send.payload.error));
       probe.steps.push({
         key: "zalo_sandbox_send",
-        label: "Sandbox send",
+        label: ZALO_TEST_MESSAGE_LABEL,
         status: send.status >= 500 ? "warn" : "fail",
-        message: send.detail ?? `Zalo returned HTTP ${send.status}.`,
-        failureCategory: inferFailureCategory(send.status),
+        message: refusal?.message ?? send.detail ?? `Zalo returned HTTP ${send.status}.`,
+        failureCategory: refusal?.failureCategory ?? inferFailureCategory(send.status),
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
     probe.steps.push({
       key: "zalo_sandbox_send",
-      label: "Sandbox send",
+      label: ZALO_TEST_MESSAGE_LABEL,
       status: "pass",
       providerMessageId: asString(asRecord(send.payload.data).message_id),
-      message: "Sandbox OA send succeeded.",
+      message: "Zalo accepted the test message. Check that it arrived.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "zalo_sandbox_send",
-      label: "Sandbox send",
+      label: ZALO_TEST_MESSAGE_LABEL,
       status: "warn",
-      message: `Probe failed before Zalo responded: ${(error as Error).message}`,
+      message: `Couldn't reach Zalo: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
+  }
+}
+
+/**
+ * What to do about the refusals Zalo reports with its own error code. Zalo answers HTTP 200 and puts the code in the
+ * body (developers.zalo.me › Official Account API › error codes). Any other code is shown in Zalo's own words.
+ */
+function describeZaloRefusal(
+  code: number | undefined,
+):
+  | { message: string; failureCategory: "credential_rejected" | "destination_mismatch" | "permission_mismatch" }
+  | undefined {
+  switch (code) {
+    case -216: // Access token is invalid
+    case -220: // access_token is expired or removed
+      return {
+        message: `Zalo refused the access token (error ${code}). It may have expired. Paste a new access token and run the test again.`,
+        failureCategory: "credential_rejected",
+      };
+    case -213: // User has not followed OA
+    case -230: // User has not interacted with the OA in the past 7 days
+    case -232: // User has not interacted with the OA, or the last interaction has expired
+      return {
+        message: `Zalo won't let your Official Account message that person yet (error ${code}). Zalo only allows messages to people who interacted with it in the last 7 days. Send your Official Account a message from their Zalo, then run the test again.`,
+        failureCategory: "destination_mismatch",
+      };
+    case -212: // App has not registered this API
+    case -223: // Official Account has not authorized this API
+      return {
+        message: `Zalo says your app can't send messages for this Official Account (error ${code}). Check the app's permission to send messages on developers.zalo.me.`,
+        failureCategory: "permission_mismatch",
+      };
+    default:
+      return undefined;
   }
 }
 

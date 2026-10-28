@@ -360,7 +360,7 @@ export function buildIntegrationConnectionChecks(
         break;
       case "zalo":
         requireSecretRef("auth", "Zalo access token", "accessToken", "accessTokenEnv");
-        requireText("target", "Default Zalo recipient", resolveChannelConfigTarget(connection.key, config), "warn");
+        requireText("target", "Default OA user ID", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
       default:
         requireText("target", "Default target", resolveChannelConfigTarget(connection.key, config), "warn");
