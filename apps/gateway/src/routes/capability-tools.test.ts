@@ -186,15 +186,31 @@ describe("capability tool groups route", () => {
     expect(response.headers["x-ratelimit-limit"]).toBe("60");
   });
 
-  it("answers 503 when the list is not composed", async () => {
+  it("answers 503 in plain words when the list is not composed", async () => {
     const server = await build({});
 
     const response = await server.inject({ method: "GET", url: "/api/v1/capabilities/tools?workspaceId=default" });
 
     expect(response.statusCode).toBe(503);
+    expect(response.body).toContain("Tool groups can't be listed right now.");
+    expect(response.body).not.toContain("composed");
   });
 
-  it("answers with plain wording when the list fails, never the real error", async () => {
+  it("accepts a 200-character workspaceId", async () => {
+    const list = vi.fn(async () => TOOLS_RESPONSE);
+    const server = await build({ capabilityTools: { list } });
+    const workspaceId = "w".repeat(200);
+
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/v1/capabilities/tools?workspaceId=${workspaceId}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(list).toHaveBeenCalledWith(workspaceId, expect.any(Object));
+  });
+
+  it("never echoes the real error when the list fails", async () => {
     const list = vi.fn(async () => {
       throw new Error("database is locked at C:\\data\\goatcitadel.sqlite");
     });

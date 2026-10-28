@@ -63,8 +63,10 @@ export interface CapabilityToolItem {
   risk: ToolRiskLevel;
   asks: CapabilityToolAsks;
   /**
-   * Set only when one of the rules above blocks the tool, in an on or a switched-off group. A group's own switch is
-   * its `state`, never a block, so a tool that is only switched off has none.
+   * Set only when one of the rules above blocks the tool. A group's own switch is its `state`, never a block, so a
+   * tool that is only switched off has none. In a switched-off group only `safety_rules` and `install_profile` can
+   * show: the engine answers the switch before the permission profile, Ward and grant checks, so those read
+   * `unknown` until the group is switched on.
    */
   blockedBy?: CapabilityToolBlock;
 }

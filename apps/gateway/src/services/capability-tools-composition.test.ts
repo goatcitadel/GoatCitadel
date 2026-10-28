@@ -70,6 +70,36 @@ describe("composeCapabilityTools", () => {
     expect(inspectToolAccess.mock.calls.map(([request]) => request.toolName)).toContain("browser.cookies.get");
   });
 
+  it("writes a failed rule check to the server log once, with secrets redacted", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const { wired } = owners("trusted_local");
+      const failing: CapabilityToolListOwners = {
+        ...wired,
+        tools: {
+          ...wired.tools,
+          inspectToolAccess: vi.fn(async () => {
+            throw new Error("upstream rejected Authorization: Bearer sk-live-abcdefghijklmnopqrstuvwxyz0123456789");
+          }),
+        },
+      };
+
+      const response = await composeCapabilityTools(failing).list("default");
+
+      const logged = stderr.mock.calls
+        .map(([chunk]) => String(chunk))
+        .filter((line) => line.includes("tool rule checks failed"));
+      expect(logged).toHaveLength(1);
+      expect(JSON.parse(logged[0] ?? "{}")).toMatchObject({ level: "error", failedProbes: 2 });
+      expect(logged[0]).toContain("upstream rejected");
+      expect(logged[0]).not.toContain("sk-live-abcdefghijklmnopqrstuvwxyz0123456789");
+      // The operator-visible answer names none of it.
+      expect(JSON.stringify(response)).not.toContain("upstream rejected");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
   it("reports cookies and storage tools as blocked by the install on a hardened or dev profile", async () => {
     for (const profile of ["remote_hardened", "local_dev"] as const) {
       const { wired, inspectToolAccess } = owners(profile);

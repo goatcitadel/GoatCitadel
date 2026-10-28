@@ -15,6 +15,7 @@ import {
   type ToolPolicyActorContext,
   type ToolRiskLevel,
 } from "@goatcitadel/contracts";
+import { mapWithConcurrency } from "./memory-learning-file-probe.js";
 
 /** The probes run this many at a time, the same as the chat runner's per-turn policy probes. */
 const PROBE_CONCURRENCY = 8;
@@ -59,14 +60,23 @@ export interface CapabilityToolsSources {
   probeArgs(toolName: string): Record<string, unknown>;
   /** Whether this install's deployment profile keeps the tool off, whatever the policy says. */
   isBlockedByInstall(toolName: string, args: Record<string, unknown>): boolean;
+  /**
+   * Where the real error goes when a rule check fails. It is called once per list, never once per tool, with the first
+   * error that left a tool's rules unchecked (in the order the tools are listed) and how many tools were left
+   * unchecked. The answer to the operator never carries the error.
+   */
+  reportError?(error: unknown, failedProbes: number): void;
 }
 
 interface ToolVerdict {
   asks: CapabilityToolAsks;
   blockedBy?: CapabilityToolBlock;
-  /** True when the rules couldn't be read, which the response says once. */
-  unchecked?: boolean;
+  /** Set when the tool's rules couldn't be read, which the response says once. */
+  failure?: { error: unknown };
 }
+
+/** The permission profile for the probes, or the error that stopped it from being resolved. */
+type PolicyContextResult = { policyContext: ToolPolicyActorContext } | { error: unknown };
 
 const UNKNOWN_VERDICT: ToolVerdict = { asks: "unknown" };
 
@@ -125,10 +135,10 @@ export class CapabilityToolsService {
     // that is also denied still reports its rule, which tells the operator that switching the group on won't be enough.
     // A tool that is only switched off answers `tool_group_off`, which reads as unknown with no rule named.
     const probed = TOOL_GROUPS.flatMap((group) => catalogByGroup.get(group.id) ?? []);
-    const policyContext = await this.resolvePolicyContext(workspaceId, actor);
+    const context = await this.resolvePolicyContext(workspaceId, actor);
     const verdicts = new Map<string, ToolVerdict>();
     const results = await mapWithConcurrency(probed, PROBE_CONCURRENCY, (tool) =>
-      this.probe(tool.toolName, workspaceId, policyContext),
+      this.probe(tool.toolName, workspaceId, context),
     );
     probed.forEach((tool, index) => verdicts.set(tool.toolName, results[index] ?? UNKNOWN_VERDICT));
 
@@ -154,7 +164,12 @@ export class CapabilityToolsService {
       };
     });
 
-    const unchecked = policyContext === undefined || [...verdicts.values()].some((verdict) => verdict.unchecked);
+    // The operator sees one plain line. The real error goes to the log, once per list with a count, never per tool.
+    const failures = [...verdicts.values()].flatMap((verdict) => (verdict.failure ? [verdict.failure] : []));
+    const unchecked = "error" in context || failures.length > 0;
+    if (unchecked) {
+      this.sources.reportError?.("error" in context ? context.error : failures[0]?.error, failures.length);
+    }
     return {
       workspaceId,
       groups,
@@ -164,34 +179,30 @@ export class CapabilityToolsService {
     };
   }
 
-  /** The permission profile and overrides that apply to this operator in this workspace's chats, or undefined. */
-  private async resolvePolicyContext(
-    workspaceId: string,
-    actor: CapabilityToolsActor,
-  ): Promise<ToolPolicyActorContext | undefined> {
+  /** The permission profile and overrides that apply to this operator in this workspace's chats. */
+  private async resolvePolicyContext(workspaceId: string, actor: CapabilityToolsActor): Promise<PolicyContextResult> {
     try {
-      return await this.sources.resolvePolicyContext({
-        workspaceId,
-        surface: "chat",
-        operatorId: actor.operatorId,
-        authActorId: actor.authActorId,
-        authActorSource: actor.authActorSource,
-      });
-    } catch {
-      return undefined;
+      return {
+        policyContext: await this.sources.resolvePolicyContext({
+          workspaceId,
+          surface: "chat",
+          operatorId: actor.operatorId,
+          authActorId: actor.authActorId,
+          authActorSource: actor.authActorSource,
+        }),
+      };
+    } catch (error) {
+      return { error };
     }
   }
 
-  private async probe(
-    toolName: string,
-    workspaceId: string,
-    policyContext: ToolPolicyActorContext | undefined,
-  ): Promise<ToolVerdict> {
+  private async probe(toolName: string, workspaceId: string, context: PolicyContextResult): Promise<ToolVerdict> {
     try {
       const args = this.sources.probeArgs(toolName);
       // The install's guard runs before the engine on a real call, so it is the reason a real call would give.
       if (this.sources.isBlockedByInstall(toolName, args)) return { asks: "unknown", blockedBy: "install_profile" };
-      if (!policyContext) return { asks: "unknown", unchecked: true };
+      if ("error" in context) return { asks: "unknown", failure: { error: context.error } };
+      const { policyContext } = context;
       const access = await this.sources.inspectAccess({
         toolName,
         agentId: "assistant",
@@ -203,8 +214,8 @@ export class CapabilityToolsService {
         permissionProfileId: policyContext.permissionProfileId,
       });
       return verdictFor(access);
-    } catch {
-      return { asks: "unknown", unchecked: true };
+    } catch (error) {
+      return { asks: "unknown", failure: { error } };
     }
   }
 }
@@ -223,23 +234,4 @@ function riskiestOf(tools: readonly CapabilityToolItem[]): ToolRiskLevel {
     (riskiest, tool) => (RISK_ORDER.indexOf(tool.risk) > RISK_ORDER.indexOf(riskiest) ? tool.risk : riskiest),
     "safe",
   );
-}
-
-/** Maps `items` with at most `limit` calls running at once, keeping the input order. */
-async function mapWithConcurrency<TItem, TResult>(
-  items: readonly TItem[],
-  limit: number,
-  run: (item: TItem) => Promise<TResult>,
-): Promise<TResult[]> {
-  const results: TResult[] = new Array<TResult>(items.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      results[index] = await run(items[index] as TItem);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
 }

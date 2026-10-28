@@ -1,15 +1,19 @@
-import type {
-  DeploymentProfile,
-  ToolAccessEvaluateRequest,
-  ToolAccessEvaluateResponse,
-  ToolCatalogEntry,
+import {
+  redactStructuredSecrets,
+  type DeploymentProfile,
+  type ToolAccessEvaluateRequest,
+  type ToolAccessEvaluateResponse,
+  type ToolCatalogEntry,
 } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
 import type { ChatToolCallCount } from "@goatcitadel/storage";
 import { evaluateDeploymentProfileToolAccess } from "../browser-runtime-guardrails.js";
 import { buildToolAccessProbeArgs } from "./chat-turn-agent-runner.js";
 import { CapabilityToolsService, type CapabilityToolsSources } from "./capability-tools-service.js";
 import { CapabilityToolUsageService } from "./capability-tool-usage-service.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+
+const log = logger.child("capability-tools");
 
 /** The existing owner of each source the Capabilities Tools tab reads. Each is read-only here. */
 export interface CapabilityToolsOwners {
@@ -54,5 +58,13 @@ export function composeCapabilityTools({
     probeArgs: (toolName) => buildToolAccessProbeArgs(toolName, safeWriteFallbackDir()),
     isBlockedByInstall: (toolName, args) =>
       evaluateDeploymentProfileToolAccess(deploymentProfile(), toolName, args) !== null,
+    reportError: reportFailedRuleChecks,
   });
+}
+
+/** The operator sees a plain line; the real error stays in the redacted server log, once per list. */
+function reportFailedRuleChecks(error: unknown, failedProbes: number): void {
+  const diagnostic =
+    error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { value: error };
+  log.error("tool rule checks failed", { err: redactStructuredSecrets(diagnostic).value, failedProbes });
 }

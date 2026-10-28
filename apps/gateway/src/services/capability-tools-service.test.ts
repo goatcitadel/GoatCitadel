@@ -59,6 +59,7 @@ function defaultSources() {
     inspectAccess: vi.fn(async (_request: ToolAccessEvaluateRequest) => access()),
     probeArgs: vi.fn((toolName: string): Record<string, unknown> => ({ probe: toolName })),
     isBlockedByInstall: vi.fn((_toolName: string, _args: Record<string, unknown>) => false),
+    reportError: vi.fn((_error: unknown, _failedProbes: number) => undefined),
   } satisfies CapabilityToolsSources;
 }
 
@@ -326,6 +327,90 @@ describe("CapabilityToolsService", () => {
     expect(files?.tools.find((tool) => tool.toolName === "fs.read")?.asks).toBe("runs_freely");
     // The real error stays out of the answer.
     expect(JSON.stringify(response)).not.toContain("sqlite");
+  });
+
+  it("logs the first probe error once per list with a count", async () => {
+    const first = new Error("storage unavailable at C:\\data\\goatcitadel.sqlite");
+    const second = new Error("a different failure");
+    const { service, sources } = build({
+      inspectAccess: vi.fn(async (request: ToolAccessEvaluateRequest) => {
+        if (request.toolName === "fs.write") throw first;
+        if (request.toolName === "shell.exec") throw second;
+        return access();
+      }),
+    });
+
+    const response = await service.list("default", ACTOR);
+
+    // One report for the whole list, never one per tool: the first error in tool order and how many probes failed.
+    expect(sources.reportError).toHaveBeenCalledTimes(1);
+    expect(sources.reportError).toHaveBeenCalledWith(first, 2);
+    // The operator-visible answer is unchanged and carries none of the error text.
+    expect(response.issues).toEqual([ISSUE]);
+    expect(JSON.stringify(response)).not.toContain("sqlite");
+  });
+
+  it("logs nothing when every rule check succeeds or the answer is only a denial", async () => {
+    const { service, sources } = build({
+      inspectAccess: vi.fn(async (request: ToolAccessEvaluateRequest) =>
+        request.toolName === "fs.write" ? denied("structural_safety_block") : access(),
+      ),
+    });
+
+    await service.list("default", ACTOR);
+
+    expect(sources.reportError).not.toHaveBeenCalled();
+  });
+
+  it("logs a failed permission profile once, with the number of tools it left unchecked", async () => {
+    const failure = new Error("Bypass permission profiles are unavailable in remote_hardened deployment profile.");
+    const { service, sources } = build({
+      resolvePolicyContext: vi.fn(async () => {
+        throw failure;
+      }),
+    });
+
+    const response = await service.list("default", ACTOR);
+
+    expect(sources.reportError).toHaveBeenCalledTimes(1);
+    expect(sources.reportError).toHaveBeenCalledWith(failure, CATALOG.length);
+    expect(response.issues).toEqual([ISSUE]);
+  });
+
+  it("logs a list once however many requests share it", async () => {
+    const gate = deferred<ToolAccessEvaluateResponse>();
+    const { service, sources } = build({
+      inspectAccess: vi.fn(async (request: ToolAccessEvaluateRequest) => {
+        await gate.promise;
+        if (request.toolName === "fs.write") throw new Error("boom");
+        return access();
+      }),
+    });
+
+    const first = service.list("default", ACTOR);
+    const second = service.list("default", ACTOR);
+    await vi.waitFor(() => expect(sources.inspectAccess).toHaveBeenCalled());
+    gate.resolve(access());
+    await Promise.all([first, second]);
+
+    expect(sources.reportError).toHaveBeenCalledTimes(1);
+  });
+
+  it("still lists the groups when no error reader is wired", async () => {
+    const { reportError: _unused, ...rest } = defaultSources();
+    const service = new CapabilityToolsService(
+      {
+        ...rest,
+        inspectAccess: vi.fn(async () => {
+          throw new Error("boom");
+        }),
+      },
+      () => NOW,
+    );
+
+    const response = await service.list("default", ACTOR);
+
+    expect(response.issues).toEqual([ISSUE]);
   });
 
   it("reads every tool as unknown, with one issue, when the permission profile can't be resolved", async () => {

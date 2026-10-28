@@ -105,7 +105,7 @@ describe("Capabilities tool groups over the real Gateway", { timeout: 300_000 },
     vi.restoreAllMocks();
   });
 
-  it("shows a group switch on the next request, and keeps the other rules on that group's tools", async () => {
+  it("shows a group switch on the next request, and keeps a deny rule on that group's tools", async () => {
     const before = await readList();
     const filesBefore = before.groups.find((group) => group.groupId === "files");
     expect(filesBefore?.state).toBe("on");

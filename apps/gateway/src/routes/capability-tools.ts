@@ -61,7 +61,7 @@ export const capabilityToolsRoutes: FastifyPluginAsync = async (fastify) => {
 
 function requireListOwner(fastify: FastifyInstance) {
   const owner = fastify.services.capabilityTools;
-  if (!owner) throw new ServiceUnavailableError("The capability tool list is not composed.");
+  if (!owner) throw new ServiceUnavailableError("Tool groups can't be listed right now.");
   return owner;
 }
 
