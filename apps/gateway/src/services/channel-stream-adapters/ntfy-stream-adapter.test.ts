@@ -242,7 +242,12 @@ describe("ntfy stream adapter", () => {
     await runtime.sync();
     await vi.waitFor(() =>
       expect(recordDevDiagnostic).toHaveBeenCalledWith(
-        expect.objectContaining({ event: "channel.sender_not_allowlisted" }),
+        expect.objectContaining({
+          event: "channel.sender_not_allowlisted",
+          message: expect.stringMatching(
+            /^Dropped a ntfy message from ntfy-topic:\S+: that sender isn't allowed yet\. To allow them, add ntfy-topic:\S+ under Who may message this bot\.$/,
+          ),
+        }),
       ),
     );
     await runtime.close();

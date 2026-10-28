@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { GatewayDevDiagnosticsService } from "../dev-diagnostics/service.js";
 import type { DurableInboundChannelAcceptInput } from "../services/channel-inbound-dispatch.js";
 import { buildGenericChannelInboundSignature } from "../services/generic-channel-webhook.js";
 import { integrationWebhookRoutes } from "./integration-webhooks.js";
@@ -141,6 +142,123 @@ describe("integration webhook security routes", () => {
     expect(ingestChannelMessage).not.toHaveBeenCalled();
     expect(recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({ event: "channel.inbound_access_invalid_config", category: "channels" }),
+    );
+  });
+
+  it("names the sender in the diagnostic when generic inbound is dropped for an empty allowed list", async () => {
+    const diagnostics = new GatewayDevDiagnosticsService(true, undefined, false, 10);
+    app = buildApp({
+      ingestChannelMessage: vi.fn(),
+      recordDevDiagnostic: (input: Parameters<GatewayDevDiagnosticsService["record"]>[0]) => diagnostics.record(input),
+      getIntegrationConnection: vi.fn(() =>
+        buildConnection("discord", { inboundSecret: "generic-secret", inboundAccessMode: "allowlist" }),
+      ),
+    });
+    await app.register(integrationWebhookRoutes);
+
+    const response = await signedInboundRequest("discord", {
+      eventId: "evt-empty-named",
+      account: connectionId,
+      actorId: "user-1",
+      content: "hello",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const [item] = diagnostics.list({ limit: 5 }).items;
+    expect(item?.event).toBe("channel.inbound_allowlist_empty");
+    expect(item?.message).toBe(
+      "Dropped a Discord message from user-1: that sender isn't allowed yet. To allow them, add user-1 under Who may message this bot.",
+    );
+    expect(item?.context).toMatchObject({ channel: "discord", actorId: "user-1" });
+  });
+
+  it("names the sender in the diagnostic when generic inbound is dropped for a sender not on the list", async () => {
+    const diagnostics = new GatewayDevDiagnosticsService(true, undefined, false, 10);
+    app = buildApp({
+      ingestChannelMessage: vi.fn(),
+      recordDevDiagnostic: (input: Parameters<GatewayDevDiagnosticsService["record"]>[0]) => diagnostics.record(input),
+      getIntegrationConnection: vi.fn(() =>
+        buildConnection("discord", {
+          inboundSecret: "generic-secret",
+          inboundAccessMode: "allowlist",
+          allowedSenders: ["user-owner"],
+        }),
+      ),
+    });
+    await app.register(integrationWebhookRoutes);
+
+    const response = await signedInboundRequest("discord", {
+      eventId: "evt-intruder-named",
+      account: connectionId,
+      actorId: "user-intruder",
+      content: "hello",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const [item] = diagnostics.list({ limit: 5 }).items;
+    expect(item?.event).toBe("channel.sender_not_allowlisted");
+    expect(item?.message).toBe(
+      "Dropped a Discord message from user-intruder: that sender isn't allowed yet. To allow them, add user-intruder under Who may message this bot.",
+    );
+    expect(item?.context).toMatchObject({ channel: "discord", actorId: "user-intruder", allowedSenderCount: 1 });
+  });
+
+  it("reads cleanly in the generic diagnostic when the sender id is blank", async () => {
+    const diagnostics = new GatewayDevDiagnosticsService(true, undefined, false, 10);
+    app = buildApp({
+      ingestChannelMessage: vi.fn(),
+      recordDevDiagnostic: (input: Parameters<GatewayDevDiagnosticsService["record"]>[0]) => diagnostics.record(input),
+      getIntegrationConnection: vi.fn(() =>
+        buildConnection("discord", {
+          inboundSecret: "generic-secret",
+          inboundAccessMode: "allowlist",
+          allowedSenders: ["user-owner"],
+        }),
+      ),
+    });
+    await app.register(integrationWebhookRoutes);
+
+    const response = await signedInboundRequest("discord", {
+      eventId: "evt-blank-actor",
+      account: connectionId,
+      actorId: "   ",
+      content: "hello",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const [item] = diagnostics.list({ limit: 5 }).items;
+    expect(item?.message).toBe(
+      "Dropped a Discord message that came with no sender id, so it can't match anyone under Who may message this bot.",
+    );
+    expect(item?.message).not.toMatch(/undefined|from\s*[:.]/);
+  });
+
+  it("keeps the generic malformed-config message as it was", async () => {
+    const diagnostics = new GatewayDevDiagnosticsService(true, undefined, false, 10);
+    app = buildApp({
+      ingestChannelMessage: vi.fn(),
+      recordDevDiagnostic: (input: Parameters<GatewayDevDiagnosticsService["record"]>[0]) => diagnostics.record(input),
+      getIntegrationConnection: vi.fn(() =>
+        buildConnection("discord", {
+          inboundSecret: "generic-secret",
+          inboundAccessMode: "allow_list",
+          allowedSenders: ["user-owner"],
+        }),
+      ),
+    });
+    await app.register(integrationWebhookRoutes);
+
+    await signedInboundRequest("discord", {
+      eventId: "evt-invalid-named",
+      account: connectionId,
+      actorId: "user-intruder",
+      content: "hello",
+    });
+
+    const [item] = diagnostics.list({ limit: 5 }).items;
+    expect(item?.event).toBe("channel.inbound_access_invalid_config");
+    expect(item?.message).toBe(
+      "Dropped an inbound generic channel message because its inbound access config is malformed.",
     );
   });
 

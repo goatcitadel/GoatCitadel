@@ -205,7 +205,12 @@ describe("Google Chat app webhook route", () => {
     expect(response.json()).toEqual({});
     expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
     expect(ctx.recordDevDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "channel.sender_not_allowlisted" }),
+      expect.objectContaining({
+        event: "channel.sender_not_allowlisted",
+        message: expect.stringContaining(
+          "Dropped a Google Chat message from users/999: that sender isn't allowed yet. To allow them, add users/999 under Who may message this bot.",
+        ),
+      }),
     );
   });
 
