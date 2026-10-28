@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
-import { ToolPolicyEngine } from "@goatcitadel/policy-engine";
+import { ToolPolicyEngine, type ToolPolicyInvokeOptions } from "@goatcitadel/policy-engine";
 import { ChannelDeliveryRuntimeService } from "./channel-delivery-runtime-service.js";
 import { sendQueuedChannelDeliveryWithParts } from "./channel-delivery-part-service.js";
 import type { CommsHost } from "./comms-service.js";
@@ -15,7 +15,10 @@ afterEach(async () => {
   for (const close of cleanup.splice(0)) await close();
 });
 
-async function fixture(message = "one acknowledged message") {
+async function fixture(
+  message = "one acknowledged message",
+  extra: { payload?: Record<string, unknown>; disabledGroups?: string[] } = {},
+) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "goat-channel-handoff-"));
   const options = {
     dbPath: path.join(root, "index.db"),
@@ -36,7 +39,7 @@ async function fixture(message = "one acknowledged message") {
   });
   const policy: ToolPolicyConfig = {
     profiles: { minimal: ["channel.send"] },
-    tools: { profile: "minimal", allow: ["channel.send"], deny: [] },
+    tools: { profile: "minimal", allow: ["channel.send"], deny: [], disabledGroups: extra.disabledGroups },
     agents: {},
     sandbox: {
       writeJailRoots: [root],
@@ -59,8 +62,8 @@ async function fixture(message = "one acknowledged message") {
   const host = {
     getIntegrationConnection: (id: string) => storage.integrationConnections.get(id),
     readChatAttachmentContent: vi.fn(),
-    invokeAndUnwrap: async (request: ToolInvokeRequest) => {
-      const result = await engine.invoke(request);
+    invokeAndUnwrap: async (request: ToolInvokeRequest, _realtimeType: string, options?: ToolPolicyInvokeOptions) => {
+      const result = await (options ? engine.invoke(request, options) : engine.invoke(request));
       return result.outcome === "executed" ? (result.result ?? {}) : result;
     },
   } as unknown as CommsHost;
@@ -76,7 +79,7 @@ async function fixture(message = "one acknowledged message") {
     connectionId: connection.connectionId,
     channelKey: "telegram",
     target: "-123456",
-    payload: { connectionId: connection.connectionId, target: "-123456", message },
+    payload: { connectionId: connection.connectionId, target: "-123456", message, ...extra.payload },
     baseBackoffMs: 1_000,
   });
   async function drain() {
@@ -120,6 +123,19 @@ async function fixture(message = "one acknowledged message") {
 }
 
 describe("canonical channel approval handoff", () => {
+  it("asks the engine with the queued payload's own-delivery fact while Messaging is off", async () => {
+    // An own part gets past the switch and reaches its usual approval gate.
+    const own = await fixture("own reply", { payload: { ownDelivery: true }, disabledGroups: ["messaging"] });
+    expect((await own.drain())[0]).toMatchObject({ status: "waiting_approval" });
+
+    // A part without it is stopped by the switch before any provider request.
+    const plain = await fixture("plain send", { disabledGroups: ["messaging"] });
+    const [blocked] = await plain.drain();
+    expect(blocked).toMatchObject({ status: "failed" });
+    expect(blocked?.error).toContain("tool group switched off");
+    expect(plain.calls).toHaveLength(0);
+  }, 60_000);
+
   it("keeps a provider request in progress pending until its single acknowledgement commits", async () => {
     const f = await fixture();
     await f.drain();

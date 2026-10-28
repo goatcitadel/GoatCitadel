@@ -51,11 +51,27 @@ describe("SF6 Markdown work counts", () => {
     for (const [name, chunks] of Object.entries(cases)) {
       counts.sources = [];
       counts.markdownSources = [];
-      const renderer = create(<AssistantMessageRenderer role="assistant" content="" running streamTurnId={name} />);
+      const renderer = create(
+        <AssistantMessageRenderer
+          role="assistant"
+          content=""
+          running
+          streamPresentationMode="instant"
+          streamTurnId={name}
+        />,
+      );
       let content = "";
       for (const chunk of chunks) {
         content += chunk;
-        renderer.update(<AssistantMessageRenderer role="assistant" content={content} running streamTurnId={name} />);
+        renderer.update(
+          <AssistantMessageRenderer
+            role="assistant"
+            content={content}
+            running
+            streamPresentationMode="instant"
+            streamTurnId={name}
+          />,
+        );
       }
       results[name] = {
         parses: counts.sources.length,
@@ -82,6 +98,7 @@ describe("SF6 Markdown work counts", () => {
         role="assistant"
         content={"Completed first.\n\nMutable second.\nMore"}
         running
+        streamPresentationMode="instant"
         streamTurnId="retain"
       />,
     );
@@ -92,6 +109,7 @@ describe("SF6 Markdown work counts", () => {
           role="assistant"
           content={"Completed first.\n\nMutable second.\nMore tail"}
           running
+          streamPresentationMode="instant"
           streamTurnId="retain"
         />,
       );
@@ -103,6 +121,7 @@ describe("SF6 Markdown work counts", () => {
           role="assistant"
           content={"Completed first.\n\nMutable second.\nMore tail\n\nIndependent third.\n"}
           running
+          streamPresentationMode="instant"
           streamTurnId="retain"
         />,
       );

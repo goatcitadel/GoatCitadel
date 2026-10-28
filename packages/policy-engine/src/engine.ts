@@ -36,6 +36,8 @@ import {
   isOutsideRootWriteTool,
   resolveWebSearchEngineCandidates,
   splitUtf8HeadTail,
+  toolGroupForTool,
+  toolNamesSwitchedOff,
   type OutsideRootWriteApprovalDetails,
   type OutsideRootWriteGrantDuration,
 } from "@goatcitadel/contracts";
@@ -76,6 +78,12 @@ import {
   type McpToolPolicyBinding,
 } from "./mcp-tool-policy-binding.js";
 import { readMcpApprovalRelief, type McpApprovalRelief } from "./mcp-approval-relief.js";
+import {
+  isOwnDeliveryMarker,
+  mintOwnDeliveryFromRegistration,
+  ownDeliveryRegistrationFact,
+  type OwnDeliveryMarker,
+} from "./own-delivery.js";
 import {
   readMeshToolPolicyBinding,
   MESH_TOOL_POLICY_DEFINITION,
@@ -349,6 +357,11 @@ export interface ToolPolicyEvaluateOptions {
    * read from ToolInvokeRequest or policyContext. It must name this call's exact MCP target.
    */
   mcpApprovalRelief?: McpApprovalRelief;
+  /**
+   * Gateway-minted for GoatCitadel's own deliveries (channel replies, the operator's own sends, Library actions),
+   * never read from ToolInvokeRequest or policyContext. A genuine marker skips only the switched-off tool group check.
+   */
+  ownDelivery?: OwnDeliveryMarker;
 }
 
 export interface ToolPolicyInvokeOptions extends ToolPolicyEvaluateOptions {
@@ -388,6 +401,14 @@ export class ToolPolicyEngine {
 
   public listCatalog() {
     return this.registry.toCatalog();
+  }
+
+  /**
+   * Names of built-in tools in a group the operator switched off. Read from the live config on every
+   * call, so a Settings save shows on the next call. Never lists Core, MCP or mesh tools.
+   */
+  public listSwitchedOffToolNames(): ReadonlySet<string> {
+    return new Set(toolNamesSwitchedOff(this.config.tools.disabledGroups).keys());
   }
 
   public listGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): Promise<ToolGrantRecord[]> {
@@ -636,6 +657,7 @@ export class ToolPolicyEngine {
         externalSideEffect: options.externalSideEffect,
         mcpToolBinding: options.mcpToolBinding,
         meshToolBinding: options.meshToolBinding,
+        ownDelivery: options.ownDelivery,
       });
       if (result) {
         return result;
@@ -758,6 +780,8 @@ export class ToolPolicyEngine {
               reasonCodes: evaluation.reasonCodes,
               wardEffect: evaluation.wardEffect,
               ...(evaluation.outsideRootWrite ? { outsideRootWrite: evaluation.outsideRootWrite } : {}),
+              // Only from a minted marker; executeApprovedAction re-mints from it (P2-R4a).
+              ...ownDeliveryRegistrationFact(options.ownDelivery),
             },
           });
 
@@ -968,6 +992,7 @@ export class ToolPolicyEngine {
       externalSideEffect?: ToolPolicyInvokeOptions["externalSideEffect"];
       mcpToolBinding?: McpToolPolicyBinding;
       meshToolBinding?: MeshToolPolicyBinding;
+      ownDelivery?: OwnDeliveryMarker;
     },
   ): Promise<ToolInvokeResult | undefined> {
     const pending = await this.storage.pendingApprovalActions.find(approvalId);
@@ -1026,7 +1051,11 @@ export class ToolPolicyEngine {
     }
     const approvedCapabilityPolicy = identity.capabilityPolicy;
     const internalCall = buildInternalToolCall(executionRequest, approvedCapabilityPolicy, startedAt);
-    const evaluation = await this.evaluateInvocationAccess(executionRequest, options, true);
+    const evaluation = await this.evaluateInvocationAccess(
+      executionRequest,
+      { ...options, ownDelivery: await this.resolveApprovedOwnDelivery(approvalId, request.toolName, options) },
+      true,
+    );
 
     if (!evaluation.allowed) {
       const reason = `blocked: ${evaluation.policyReason}`;
@@ -1131,6 +1160,25 @@ export class ToolPolicyEngine {
     return result;
   }
 
+  /**
+   * The approval runtime runs an approved action knowing only its id. A caller's own marker still counts; otherwise
+   * the marker is re-minted only from the own fact this engine recorded when it registered the approval. Read only
+   * while a group is off, the one check a marker skips.
+   */
+  private async resolveApprovedOwnDelivery(
+    approvalId: string,
+    toolName: string,
+    options: { ownDelivery?: OwnDeliveryMarker } | undefined,
+  ): Promise<OwnDeliveryMarker | undefined> {
+    if (isOwnDeliveryMarker(options?.ownDelivery)) {
+      return options.ownDelivery;
+    }
+    if (this.listSwitchedOffToolNames().size === 0) {
+      return undefined;
+    }
+    return mintOwnDeliveryFromRegistration(await this.storage.approvalEvents.listByApprovalId(approvalId), toolName);
+  }
+
   private resolveInvocationPolicy(request: ToolAccessEvaluateRequest, options: ToolPolicyEvaluateOptions = {}) {
     if (options.mcpToolBinding && options.meshToolBinding) {
       throw new ToolExecutionPreconditionError("Remote policy mappings are mutually exclusive");
@@ -1216,6 +1264,24 @@ export class ToolPolicyEngine {
     });
     if (toolNames.some((name) => matchesAnyToolPattern(policy.denySet, name))) {
       return withPolicy(deny(riskLevel, "policy_deny", "tool denied by policy"));
+    }
+
+    // A switched-off group is deny-wins like tools.deny: tools.allow, allow grants and a local operator
+    // override cannot lift it. It sits after the deny gate so a tool that is also denied reports policy_deny,
+    // the remedy switching the group on would not fix. Core, MCP and mesh names are never in the map.
+    // The switch stops the AI only: a Gateway-minted own-delivery marker skips this one check and nothing else.
+    // The reason can reach the operator (a failed channel delivery, a Chat tool run), so it names the group's label.
+    for (const name of isOwnDeliveryMarker(options.ownDelivery) ? [] : toolNames) {
+      if (policy.switchedOffTools?.has(name)) {
+        const label = toolGroupForTool(name)?.label;
+        return withPolicy(
+          deny(
+            riskLevel,
+            "tool_group_off",
+            `tool ${request.toolName} is in a tool group switched off by the operator${label ? ` (${label})` : ""}`,
+          ),
+        );
+      }
     }
 
     if (!toolDef) {

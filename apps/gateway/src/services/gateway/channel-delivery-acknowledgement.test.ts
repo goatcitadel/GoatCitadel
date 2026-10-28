@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelDeliveryPayload, sendQueuedChannelDelivery } from "./channel-delivery-helpers.js";
+import {
+  buildChannelDeliveryPayload,
+  readChannelDeliveryOwnDelivery,
+  sendQueuedChannelDelivery,
+} from "./channel-delivery-helpers.js";
 
 const input = {
   deliveryId: "delivery-1",
@@ -128,5 +132,21 @@ describe("channel provider acknowledgement", () => {
       message: expect.stringContaining("1 of 3 chunks"),
     });
     expect(send).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("own-delivery fact on the queued payload", () => {
+  it("records it only from the server-side option and reads back only a literal true", () => {
+    const send = { connectionId: "c", target: "t", message: "m" };
+    expect(buildChannelDeliveryPayload(send, "telegram", { ownDelivery: true })).toMatchObject({ ownDelivery: true });
+    expect(buildChannelDeliveryPayload(send, "telegram")).not.toHaveProperty("ownDelivery");
+    // A flag on the public send input is not copied: the payload uses an explicit field list.
+    expect(buildChannelDeliveryPayload({ ...send, ownDelivery: true } as never, "telegram")).not.toHaveProperty(
+      "ownDelivery",
+    );
+    expect(readChannelDeliveryOwnDelivery({ ownDelivery: true })).toEqual({ ownDelivery: true });
+    for (const value of [undefined, false, "true", 1, {}]) {
+      expect(readChannelDeliveryOwnDelivery({ ownDelivery: value })).toBeUndefined();
+    }
   });
 });

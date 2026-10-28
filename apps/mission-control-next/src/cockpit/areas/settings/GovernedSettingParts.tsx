@@ -1,6 +1,7 @@
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { SettingsApprovalDialog } from "./SettingsApprovalDialog";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { ApprovedSettingsContinuation } from "./ApprovedSettingsContinuation";
 import { presentChangeStatusLabel } from "./settings-vocabulary";
@@ -101,17 +102,33 @@ export function GovernedSettingChangeStatus<T extends GovernedSettingValue>({
               Refresh change status
             </Button>
             {change.change.receipt.requiredAction?.kind === "approval" && !confirmed ? (
-              <SettingsApprovalOwnerAction
-                plan={change.change.plan}
-                receipt={change.change.receipt}
-                owner={owner}
-                workspaceId="default"
-                viewIdentity={draft.key}
-                label="Review approval"
-              />
+              <>
+                {/* The approval opens here; the Inbox copy stays one link away for whoever prefers it. */}
+                {change.change.receipt.requiredAction.approvalId ? (
+                  <SettingsApprovalDialog
+                    approvalId={change.change.receipt.requiredAction.approvalId}
+                    onResolved={change.refresh}
+                  />
+                ) : null}
+                <SettingsApprovalOwnerAction
+                  plan={change.change.plan}
+                  receipt={change.change.receipt}
+                  owner={owner}
+                  workspaceId="default"
+                  viewIdentity={draft.key}
+                  label="Open in Inbox"
+                />
+              </>
             ) : null}
           </div>
-          {!confirmed ? <ApprovedSettingsContinuation plan={change.change.plan} onSettled={change.refresh} /> : null}
+          {/* Approving a Settings change applies it (Gateway reconciliation), so the separate Continue step is only
+              offered when this card has no in-place approval to decide. */}
+          {!confirmed &&
+          !(
+            change.change.receipt.requiredAction?.kind === "approval" && change.change.receipt.requiredAction.approvalId
+          ) ? (
+            <ApprovedSettingsContinuation plan={change.change.plan} onSettled={change.refresh} />
+          ) : null}
         </div>
       ) : null}
       {notice && !(confirmed && notice.message.startsWith("Change submitted.")) ? (

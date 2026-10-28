@@ -11,6 +11,7 @@ import type {
   DurableRunRecord,
 } from "@goatcitadel/contracts";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import type { OwnDeliveryOption } from "./comms-service.js";
 import type { ChatSteerService } from "./chat-steer-service.js";
 import type { ActiveChatTurnStreamExecution } from "./chat-turn-execution-registry.js";
 import type { SessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
@@ -216,7 +217,8 @@ export interface ChatTurnIntegrationDispatch {
     toolName: string,
     result: ToolInvokeResult | Record<string, unknown>,
   ): Record<string, unknown>;
-  commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
+  /** `options` marks the operator's own send; it is never read from the turn request. */
+  commsSend(input: ChannelSendInput, options?: OwnDeliveryOption): Promise<ToolInvokeResult | Record<string, unknown>>;
 }
 
 export interface ChatTurnSteerCollaborator {

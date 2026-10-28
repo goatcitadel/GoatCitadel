@@ -8,7 +8,11 @@ import {
 } from "@goatcitadel/contracts";
 import type { EvolutionControlPlaneActor } from "../services/evolution-control-plane-service.js";
 import { sendRouteError } from "./_error-handler.js";
-import { globalToolAccessChangeFields, operatorWriteRootChangeFields } from "./operator-write-access-schemas.js";
+import {
+  globalToolAccessChangeFields,
+  operatorWriteRootChangeFields,
+  toolGroupChangeFields,
+} from "./operator-write-access-schemas.js";
 
 const identifier = z
   .string()
@@ -259,6 +263,7 @@ const requestSchema = z.discriminatedUnion("kind", [
         // contract validator before the plan is created.
         z.object({ operation: z.literal("operator_write_root"), ...operatorWriteRootChangeFields }).strict(),
         z.object({ operation: z.literal("tool_global_access"), ...globalToolAccessChangeFields }).strict(),
+        z.object({ operation: z.literal("tool_group_access"), ...toolGroupChangeFields }).strict(),
         z
           .object({
             operation: z.literal("feature_flags"),

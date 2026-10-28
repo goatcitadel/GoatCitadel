@@ -10,9 +10,15 @@ export function buildMcpServerModeManifest(input: {
   inspectableCatalog: CapabilityCatalogEntry[];
   callableCatalog: CapabilityCatalogEntry[];
   callPreviewAvailable?: boolean;
+  /** Built-in tools in a group the operator switched off; the AI cannot call them, so outside clients are not told of them. */
+  switchedOffToolNames?: ReadonlySet<string>;
 }): McpServerModeManifestResponse {
   const callPreviewAvailable = Boolean(input.callPreviewAvailable);
-  const tools = input.callableCatalog.map((entry) => buildServerModeToolDescriptor(entry, callPreviewAvailable));
+  const switchedOff = input.switchedOffToolNames;
+  const callableCatalog = switchedOff?.size
+    ? input.callableCatalog.filter((entry) => !entry.toolName || !switchedOff.has(entry.toolName))
+    : input.callableCatalog;
+  const tools = callableCatalog.map((entry) => buildServerModeToolDescriptor(entry, callPreviewAvailable));
   return {
     generatedAt: new Date().toISOString(),
     readOnly: true,
@@ -58,7 +64,7 @@ export function buildMcpServerModeManifest(input: {
     },
     summary: {
       inspectableCapabilities: input.inspectableCatalog.length,
-      gatewayCallableCapabilities: input.callableCatalog.length,
+      gatewayCallableCapabilities: callableCatalog.length,
       exportedToolDescriptors: tools.length,
       blockedDescriptors: tools.filter((tool) => tool.serverModeState === "blocked").length,
     },
@@ -75,7 +81,7 @@ export function buildMcpServerModeManifest(input: {
     ],
     evidence: {
       catalogScope: "callable",
-      catalogSnapshot: input.callableCatalog.map((entry) => ({
+      catalogSnapshot: callableCatalog.map((entry) => ({
         capabilityId: entry.capabilityId,
         kind: entry.kind,
         callable: entry.callable,

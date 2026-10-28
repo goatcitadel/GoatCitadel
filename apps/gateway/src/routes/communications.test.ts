@@ -728,8 +728,16 @@ describe("communications routes", () => {
     });
 
     expect(disabledResponse.statusCode).toBe(200);
-    expect(commsGmailRead).toHaveBeenCalledWith(expect.objectContaining({ connectionId: connection.connectionId }));
-    expect(commsCalendarList).toHaveBeenCalledWith(expect.objectContaining({ connectionId: connection.connectionId }));
+    // The Communications page reads are the operator's own, so they pass the own-delivery option.
+    const own = { ownDelivery: true };
+    expect(commsGmailRead).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: connection.connectionId }),
+      own,
+    );
+    expect(commsCalendarList).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: connection.connectionId }),
+      own,
+    );
     expect(disabledResponse.body).not.toContain("Fixture inbox readiness");
     expect(disabledResponse.body).not.toContain("Fixture usability agenda");
   });

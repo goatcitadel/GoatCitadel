@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
+import { isOwnDeliveryMarker } from "@goatcitadel/policy-engine";
 import type {
   CalendarCreateEventInput,
   ChatAttachmentRecord,
@@ -21,6 +22,7 @@ import {
   commsSmtpSend,
   commsTyping,
   commsUnsend,
+  OWN_DELIVERY,
   type CommsHost,
   type CommsPreApproval,
 } from "./comms-service.js";
@@ -1294,5 +1296,47 @@ describe("comms typing platform limits", () => {
     expect(result.status).toBe("unsupported");
     expect(result.reason).toMatch(/does not advertise typing support in the current runtime mode/);
     expect(result.reason).not.toMatch(/^Platform does not support this/);
+  });
+});
+
+describe("comms own delivery", () => {
+  it("hands the engine a minted marker only when the server-side caller marks the call as its own", async () => {
+    const host = createHost();
+    const channel = { connectionId: "conn-1", target: "-123456" };
+
+    await commsSend(host, { ...channel, message: "own" }, OWN_DELIVERY);
+    await commsSend(host, { ...channel, message: "not own" });
+    // A flag on the public input is not the server-only option.
+    await commsSend(host, { ...channel, message: "smuggled", ownDelivery: true } as never);
+    await commsReact(host, { ...channel, messageId: "message-1", reaction: "👍" }, OWN_DELIVERY);
+
+    const calls = host.invokeAndUnwrap.mock.calls;
+    expect(calls).toHaveLength(4);
+    expect(calls[1]).toHaveLength(2);
+    expect(calls[2]).toHaveLength(2);
+    for (const [index, reason] of [
+      [0, "channel_reply"],
+      [3, "operator_action"],
+    ] as const) {
+      const marker = (calls[index]?.[2] as { ownDelivery?: unknown } | undefined)?.ownDelivery;
+      expect(isOwnDeliveryMarker(marker)).toBe(true);
+      expect(marker).toMatchObject({ reason });
+    }
+  });
+
+  it("carries the operator's mark through the ledger and a pre-approved send", async () => {
+    const { host } = createGmailHost();
+    const preApproval = createRecordingPreApproval("ap-own");
+
+    await commsGmailSend(host, gmailInput({ idempotencyKey: "mail-own" }), undefined, OWN_DELIVERY);
+    await commsGmailSend(host, gmailInput({ idempotencyKey: "mail-approved" }), preApproval, OWN_DELIVERY);
+    await commsGmailSend(host, gmailInput({ idempotencyKey: "mail-plain" }));
+
+    const calls = host.invokeAndUnwrap.mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(isOwnDeliveryMarker((calls[0]?.[2] as { ownDelivery?: unknown }).ownDelivery)).toBe(true);
+    expect((calls[1]?.[0] as ToolInvokeRequest).consentContext).toEqual({ source: "ui", reason: "approval:ap-own" });
+    expect(isOwnDeliveryMarker((calls[1]?.[2] as { ownDelivery?: unknown }).ownDelivery)).toBe(true);
+    expect(calls[2]).toHaveLength(2);
   });
 });

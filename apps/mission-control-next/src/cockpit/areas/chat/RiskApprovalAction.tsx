@@ -22,6 +22,7 @@ export function RiskApprovalAction({
   pending,
   onApprove,
   specialistReview,
+  reviewedInPlace = false,
 }: {
   approval: ChatPendingApprovalState;
   workspaceId?: string;
@@ -29,6 +30,11 @@ export function RiskApprovalAction({
   pending: boolean;
   onApprove: () => void;
   specialistReview?: ReactNode;
+  /**
+   * The surrounding dialog already shows this approval's review, so a danger-level approval with an action
+   * preview approves in one click instead of opening a second review. Nuclear keeps its typed confirmation.
+   */
+  reviewedInPlace?: boolean;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
@@ -70,6 +76,13 @@ export function RiskApprovalAction({
     const actionToolName = reviewed?.linkage?.toolName ?? approval.toolName;
     const actionKind = reviewed?.kind ?? approval.kind;
     const confirmed = !critical || typedConfirmationMatches(typed, CRITICAL_CONFIRMATION);
+    if (reviewedInPlace && !critical && !specialistReview && hasActionPreview)
+      return (
+        <Button type="button" variant="danger" size="sm" disabled={disabled} onClick={onApprove}>
+          <ShieldAlert aria-hidden="true" className="size-4 shrink-0" />
+          Approve once
+        </Button>
+      );
     return (
       <>
         <Button

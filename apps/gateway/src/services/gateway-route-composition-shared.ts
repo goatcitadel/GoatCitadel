@@ -93,7 +93,7 @@ export function createChatThreadKnowledgeDependenciesForGateway(
   gateway: GatewayRouteCompositionPort,
 ): chatThreadKnowledgeService.ChatThreadKnowledgeDependencies {
   const knowledgeFacade = new KnowledgeFacadeService({
-    invokeAndUnwrap: (request, realtimeType) => gateway.invokeAndUnwrap(request, realtimeType),
+    invokeAndUnwrap: (...args) => gateway.invokeAndUnwrap(...args),
   });
   return {
     storage: gateway.storage,

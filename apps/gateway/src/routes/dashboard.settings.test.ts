@@ -274,6 +274,14 @@ describe("dashboard settings routes", () => {
       { outsideRootWriteMode: "approval_required" },
       { operation: "outside_root_write_policy", mode: "approval_required" },
     ],
+    [
+      { toolGroupChange: { groupId: "shell_and_code", enabled: false } },
+      { operation: "tool_group_access", groupId: "shell_and_code", enabled: false },
+    ],
+    [
+      { toolGroupChange: { groupId: "email_and_calendar", enabled: true } },
+      { operation: "tool_group_access", groupId: "email_and_calendar", enabled: true },
+    ],
   ])("routes write-access Settings save %o through one Change Plan", async (patch, change) => {
     const updateSettings = vi.fn();
     const create = vi.fn(async (input: Record<string, unknown>) => ({
@@ -327,6 +335,13 @@ describe("dashboard settings routes", () => {
       { operatorWriteRootChange: { action: "add", path: "/srv", extra: 1 } },
       { globalToolAccessChange: { toolName: "shell.exec", posture: "available" } },
       { globalToolAccessChange: { toolName: "fs.write", posture: "available", scope: "agent" } },
+      { toolGroupChange: { groupId: "core", enabled: false } },
+      { toolGroupChange: { groupId: "nope", enabled: false } },
+      { toolGroupChange: { groupId: "files" } },
+      { toolGroupChange: { enabled: true } },
+      { toolGroupChange: { groupId: "files", enabled: "off" } },
+      { toolGroupChange: { groupId: "files", enabled: false, scope: "agent" } },
+      { toolGroupChange: { groupId: ["files", "git"], enabled: false } },
     ]) {
       const response = await app.inject({
         method: "PATCH",
@@ -347,6 +362,77 @@ describe("dashboard settings routes", () => {
       expectedRevision: 7,
       operatorWriteRootChange: { action: "remove", preset: "os_temp" },
     });
+  });
+
+  it("refuses Core or an unknown tool group with a plain message", async () => {
+    const updateSettings = vi.fn();
+    app = Fastify();
+    app.decorate("services", {
+      settings: { updateSettings },
+      evolution: { isEnabled: vi.fn(async () => false) },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    for (const groupId of ["core", "nope", 7]) {
+      const response = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        payload: { expectedRevision: 7, toolGroupChange: { groupId, enabled: false } },
+      });
+      expect(response.statusCode, String(groupId)).toBe(400);
+      expect(response.json(), String(groupId)).toEqual({ error: "That tool group can't be switched off." });
+    }
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("saves directly when Change Plans are off, for a tool group switch", async () => {
+    const updateSettings = vi.fn((input: Record<string, unknown>) => ({ revision: 22, ...input }));
+    const create = vi.fn();
+    app = Fastify();
+    app.decorate("services", {
+      settings: { getSettings: vi.fn(() => ({ revision: 21 })), updateSettings },
+      evolution: { isEnabled: vi.fn(async () => false), create },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 21, toolGroupChange: { groupId: "git", enabled: false } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(updateSettings).toHaveBeenCalledWith({
+      expectedRevision: 21,
+      toolGroupChange: { groupId: "git", enabled: false },
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a group switch combined with another change while the Control Plane is enabled", async () => {
+    const updateSettings = vi.fn();
+    const create = vi.fn();
+    app = Fastify();
+    app.decorate("services", {
+      settings: { getSettings: vi.fn(() => ({ revision: 21 })), updateSettings },
+      evolution: { isEnabled: vi.fn(async () => true), create },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    // One group per save (the schema takes a single group id), and one mutation per governed save.
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: {
+        expectedRevision: 21,
+        toolGroupChange: { groupId: "git", enabled: false },
+        globalToolAccessChange: { toolName: "fs.write", posture: "denied" },
+      },
+    });
+
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    expect(create).not.toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
   });
 
   it("fails closed on path-bearing generic Settings saves while the Control Plane is enabled", async () => {

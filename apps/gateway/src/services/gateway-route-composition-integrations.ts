@@ -150,16 +150,17 @@ export function composeIntegrationChannelRouteDependencies(
   });
   const commsDeps = createCommsHostForGateway(gateway, integrationChannel);
   const comms = createCommsRoutePort({
-    commsCalendarCreate: (input) => commsCalendarCreateImpl(commsDeps, input),
-    commsCalendarList: (input) => commsCalendarListImpl(commsDeps, input),
+    // `own` is the route's own-delivery option (an operator send), never part of the request body.
+    commsCalendarCreate: (input, own) => commsCalendarCreateImpl(commsDeps, input, undefined, own),
+    commsCalendarList: (input, own) => commsCalendarListImpl(commsDeps, input, own),
     commsActivity: (input) => commsActivityImpl(commsDeps, input),
-    commsGmailRead: (input) => commsGmailReadImpl(commsDeps, input),
-    commsGmailSend: (input) => commsGmailSendImpl(commsDeps, input),
-    commsReact: (input) => commsReactImpl(commsDeps, input),
-    commsReply: (input) => gateway.commsReply(input),
-    commsSend: (input) => gateway.commsSend(input),
+    commsGmailRead: (input, own) => commsGmailReadImpl(commsDeps, input, own),
+    commsGmailSend: (input, own) => commsGmailSendImpl(commsDeps, input, undefined, own),
+    commsReact: (input, own) => commsReactImpl(commsDeps, input, own),
+    commsReply: (input, own) => gateway.commsReply(input, own),
+    commsSend: (input, own) => gateway.commsSend(input, own),
     commsTyping: (input) => commsTypingImpl(commsDeps, input),
-    commsUnsend: (input) => commsUnsendImpl(commsDeps, input),
+    commsUnsend: (input, own) => commsUnsendImpl(commsDeps, input, own),
     getIntegrationConnectionChannelCapabilities: (connectionId) =>
       integrationChannel.getIntegrationConnectionChannelCapabilities(connectionId),
     getIntegrationConnectionChannelRuntimeStatus: (connectionId) =>
@@ -681,7 +682,7 @@ export function createCommsHostForGateway(
   integrationChannel = createIntegrationChannelServiceForGateway(gateway),
 ): CommsHost {
   return {
-    invokeAndUnwrap: (request, realtimeType) => gateway.invokeAndUnwrap(request, realtimeType),
+    invokeAndUnwrap: (...args) => gateway.invokeAndUnwrap(...args),
     readChatAttachmentContent: (attachmentId) => readChatAttachmentContentForGateway(gateway, attachmentId),
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
     emitDiscordTyping: (connection, input) =>

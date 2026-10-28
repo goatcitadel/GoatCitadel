@@ -7,7 +7,11 @@ import {
 import { ChannelDeliveryApprovalPendingError } from "./channel-delivery-approval-pending.js";
 import type { ChannelDeliveryRuntimeSendInput } from "./channel-delivery-runtime-service.js";
 import { commsSend, type CommsHost } from "./comms-service.js";
-import { createChannelDeliveryFailureError, sendQueuedChannelDelivery } from "./gateway/channel-delivery-helpers.js";
+import {
+  createChannelDeliveryFailureError,
+  readChannelDeliveryOwnDelivery,
+  sendQueuedChannelDelivery,
+} from "./gateway/channel-delivery-helpers.js";
 
 type ChannelDeliveryPartStorage = Pick<
   AsyncStorage,
@@ -22,12 +26,14 @@ export async function sendQueuedChannelDeliveryWithParts(
   input: ChannelDeliveryRuntimeSendInput,
 ) {
   let partIndex = 0;
+  // An own delivery (a channel reply, the operator's own send) was recorded on the queued payload at enqueue time.
+  const own = readChannelDeliveryOwnDelivery(input.payload);
   return sendQueuedChannelDelivery((sendInput) => {
     const index = partIndex++;
     return commsSend(
       {
         ...host,
-        invokeAndUnwrap: async (request, realtimeType) => {
+        invokeAndUnwrap: async (request, realtimeType, options) => {
           const part = await storage.channelDeliveryParts.prepare({
             deliveryId: input.deliveryId,
             attempt: input.attempts,
@@ -39,7 +45,8 @@ export async function sendQueuedChannelDeliveryWithParts(
           if (part.status !== "prepared") return replayPart(storage, part, input);
           let result: Awaited<ReturnType<CommsHost["invokeAndUnwrap"]>>;
           try {
-            result = await host.invokeAndUnwrap({ ...request, toolRunId: part.partId }, realtimeType);
+            const ownOptions: [] | [NonNullable<typeof options>] = options ? [options] : [];
+            result = await host.invokeAndUnwrap({ ...request, toolRunId: part.partId }, realtimeType, ...ownOptions);
           } catch (error) {
             const current = await storage.channelDeliveryParts.find(part.partId);
             if (current?.approvalId) throw new ChannelDeliveryApprovalPendingError(part.partId);
@@ -58,6 +65,7 @@ export async function sendQueuedChannelDeliveryWithParts(
         },
       },
       sendInput,
+      own,
     );
   }, input);
 }

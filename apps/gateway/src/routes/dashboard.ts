@@ -17,7 +17,12 @@ import {
 } from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
 import { settingsChangePlanRequest, type SettingsChangePlanInput } from "./dashboard-settings-change-plan.js";
-import { globalToolAccessChangeSchema, operatorWriteRootChangeSchema } from "./operator-write-access-schemas.js";
+import {
+  TOOL_GROUP_REFUSAL,
+  globalToolAccessChangeSchema,
+  operatorWriteRootChangeSchema,
+  toolGroupChangeSchema,
+} from "./operator-write-access-schemas.js";
 import { bindPublicCronCreator } from "./dashboard-cron-authority.js";
 import { CRON_JOBS_LIST_ROUTE_OPTIONS, replyWithCronJobs } from "./dashboard-cron-citadel.js";
 import { cronJobCreateSchema, cronJobUpdateSchema } from "./dashboard-cron-schemas.js";
@@ -127,6 +132,7 @@ export const updateSettingsSchema = z.object({
   networkAllowlist: z.array(z.string().min(1)).optional(),
   operatorWriteRootChange: operatorWriteRootChangeSchema.optional(),
   globalToolAccessChange: globalToolAccessChangeSchema.optional(),
+  toolGroupChange: toolGroupChangeSchema.optional(),
   auth: authUpdateSchema.optional(),
   llm: z
     .object({
@@ -775,7 +781,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const parsed = updateSettingsSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
+      // A refused tool group gets its plain sentence; other shape errors keep the flattened detail.
+      const toolGroupRefused = parsed.error.issues.some((issue) => issue.message === TOOL_GROUP_REFUSAL);
+      return reply.code(400).send({ error: toolGroupRefused ? TOOL_GROUP_REFUSAL : parsed.error.flatten() });
     }
 
     try {

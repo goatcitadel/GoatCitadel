@@ -527,6 +527,16 @@ const AUTONOMOUS_CHAT_POST_COMMIT_TIMEOUT_MS = 60_000;
 // retried without allowing its stale completion to release a newer owner.
 const GENERAL_CHAT_POST_COMMIT_IN_FLIGHT_TTL_MS = TERMINAL_CHAT_ADMISSION_RECOVERY_TIMEOUT_MS;
 const GENERAL_CHAT_POST_COMMIT_SWEEP_CONCURRENCY = 8;
+// A run that keeps failing the same recovery (for example a terminal admission
+// conflict) is retried on a capped backoff instead of on every recovery sweep.
+const RECOVERY_FAILURE_BACKOFF_FREE_FAILURES = 2;
+const RECOVERY_FAILURE_BACKOFF_BASE_MS = 2_000;
+const RECOVERY_FAILURE_BACKOFF_MAX_MS = 5 * 60_000;
+
+interface RecoveryFailureBackoff {
+  consecutiveFailures: number;
+  nextAttemptAtMs: number;
+}
 
 interface GeneralChatPostCommitInFlight {
   ownershipGeneration: string;
@@ -694,6 +704,7 @@ export class DurableRunService {
   private readonly workerId = buildDurableLocalProcessLeaseOwnerId();
   private readonly activeRunAbortControllers = new Map<string, { controller: AbortController; leaseOwnerId: string }>();
   private readonly generalChatPostCommitInFlight = new Map<string, GeneralChatPostCommitInFlight>();
+  private readonly recoveryFailureBackoff = new Map<string, RecoveryFailureBackoff>();
   private readonly deliveredBackgroundAttentionEvents = new Set<string>();
   private lastEventLoopLagMs = 0;
   private lastEventLoopLagAt: string | undefined;
@@ -4686,9 +4697,13 @@ export class DurableRunService {
         while (nextIndex < runIds.length) {
           const runId = runIds[nextIndex++];
           if (!runId) continue;
+          const backoff = this.recoveryFailureBackoff.get(runId);
+          if (backoff && backoff.nextAttemptAtMs > Date.now()) continue;
           try {
             await settleTerminalChatReconciliationBeforeDeadline(
-              this.reconcileGeneralChatPostCommit(runId),
+              this.reconcileGeneralChatPostCommit(runId).then((settled) => {
+                if (settled) this.recoveryFailureBackoff.delete(runId);
+              }),
               Date.now() + GENERAL_CHAT_POST_COMMIT_IN_FLIGHT_TTL_MS,
             );
           } catch (error) {
@@ -4962,6 +4977,7 @@ export class DurableRunService {
 
   private async reportDurableRunRecoveryFailure(runId: string, error: unknown): Promise<void> {
     const message = redactRawRemoteApprovalBearerText(error instanceof Error ? error.message : String(error));
+    const backoff = this.recordRecoveryFailureBackoff(runId);
     const publishFailure = async () => {
       await this.publishRealtimeSafely(
         "system",
@@ -4975,13 +4991,33 @@ export class DurableRunService {
       );
     };
     try {
-      this.resolveLogger().error({ runId, error: message }, "durable run recovery failed; continuing with other runs");
+      this.resolveLogger().error(
+        {
+          runId,
+          error: message,
+          consecutiveFailures: backoff.consecutiveFailures,
+          nextAttemptAt: new Date(backoff.nextAttemptAtMs).toISOString(),
+        },
+        "durable run recovery failed; continuing with other runs",
+      );
     } catch {
       // Recovery isolation must not depend on the logger.
       await publishFailure();
       return;
     }
     await publishFailure();
+  }
+
+  private recordRecoveryFailureBackoff(runId: string): RecoveryFailureBackoff {
+    const consecutiveFailures = (this.recoveryFailureBackoff.get(runId)?.consecutiveFailures ?? 0) + 1;
+    const backoffSteps = consecutiveFailures - RECOVERY_FAILURE_BACKOFF_FREE_FAILURES;
+    const delayMs =
+      backoffSteps <= 0
+        ? 0
+        : Math.min(RECOVERY_FAILURE_BACKOFF_BASE_MS * 2 ** (backoffSteps - 1), RECOVERY_FAILURE_BACKOFF_MAX_MS);
+    const backoff = { consecutiveFailures, nextAttemptAtMs: Date.now() + delayMs };
+    this.recoveryFailureBackoff.set(runId, backoff);
+    return backoff;
   }
 
   private async drainQueuedRuns(): Promise<void> {

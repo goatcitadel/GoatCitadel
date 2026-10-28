@@ -125,6 +125,8 @@ describe("Change Plan resource routes", () => {
       { operation: "operator_write_root", action: "add", path: "/srv/scratch", allowDelete: true, label: "Scratch" },
       { operation: "operator_write_root", action: "remove", preset: "os_temp" },
       { operation: "tool_global_access", toolName: "fs.delete", posture: "available" },
+      { operation: "tool_group_access", groupId: "files", enabled: false },
+      { operation: "tool_group_access", groupId: "messaging", enabled: true },
     ]) {
       const response = await app.inject({
         method: "POST",
@@ -142,6 +144,10 @@ describe("Change Plan resource routes", () => {
       { operation: "operator_write_root", action: "add", preset: "home" },
       { operation: "tool_global_access", toolName: "shell.exec", posture: "available" },
       { operation: "tool_global_access", toolName: "fs.write", posture: "available", agentId: "main" },
+      { operation: "tool_group_access", groupId: "core", enabled: false },
+      { operation: "tool_group_access", groupId: "nope", enabled: false },
+      { operation: "tool_group_access", groupId: "files" },
+      { operation: "tool_group_access", groupId: "files", enabled: false, agentId: "main" },
     ]) {
       const response = await app.inject({
         method: "POST",
@@ -150,7 +156,7 @@ describe("Change Plan resource routes", () => {
       });
       expect(response.statusCode).toBe(400);
     }
-    expect(create).toHaveBeenCalledTimes(3);
+    expect(create).toHaveBeenCalledTimes(5);
     await app.close();
   });
 

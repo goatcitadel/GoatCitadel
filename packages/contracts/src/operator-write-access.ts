@@ -1,9 +1,11 @@
 import { OUTSIDE_ROOT_WRITE_MODES, type OutsideRootWriteMode } from "./outside-root-write.js";
+import { isToolGroupChange, type ToolGroupChange } from "./tool-groups.js";
 /**
- * Governed operator changes to where model-driven filesystem tools may write
- * and to the global posture of the curated filesystem mutation tools. The
- * Gateway settings owner validates and applies them; Settings and Change Plans
- * share these shapes so neither becomes a second mutation authority.
+ * Governed operator changes to where model-driven filesystem tools may write,
+ * to the global posture of the curated filesystem mutation tools, and to which
+ * built-in tool groups are switched on. The Gateway settings owner validates
+ * and applies them; Settings and Change Plans share these shapes so neither
+ * becomes a second mutation authority.
  */
 
 /** The only tools whose global allow/deny posture these changes may touch. */
@@ -48,6 +50,7 @@ export interface GlobalToolAccessChange {
 export type RuntimeWriteAccessOperation =
   | ({ readonly operation: "operator_write_root" } & OperatorWriteRootChange)
   | ({ readonly operation: "tool_global_access" } & GlobalToolAccessChange)
+  | ({ readonly operation: "tool_group_access" } & ToolGroupChange)
   | { readonly operation: "outside_root_write_policy"; readonly mode: OutsideRootWriteMode };
 
 /** Public projection of one configured operator write root. */
@@ -75,6 +78,7 @@ export function isRuntimeWriteAccessOperation(value: unknown): value is RuntimeW
       hasOnlyKeys(change, ["mode"]) && (OUTSIDE_ROOT_WRITE_MODES as readonly string[]).includes(String(change.mode))
     );
   }
+  if (operation === "tool_group_access") return isToolGroupChange(change);
   return operation === "tool_global_access" && isGlobalToolAccessChange(change);
 }
 

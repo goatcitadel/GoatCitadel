@@ -14,7 +14,7 @@ import type {
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { PolicyViolationError, TOOL_EFFECT_CLASSIFICATION_VERSION } from "@goatcitadel/contracts";
-import { createMcpToolPolicyBinding, ToolPolicyEngine } from "@goatcitadel/policy-engine";
+import { createMcpToolPolicyBinding, createOwnDeliveryMarker, ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import {
   ToolInvocationCoordinatorService,
@@ -1037,6 +1037,35 @@ describe("ToolInvocationCoordinatorService", () => {
         }),
       }),
     );
+  });
+
+  it("forwards the own-delivery marker to the policy engine, and drops it when a hook renames the tool", async () => {
+    const ownDelivery = createOwnDeliveryMarker("channel_reply");
+    const send = createToolRequest({ toolName: "channel.send", args: { connectionId: "conn-1", message: "hi" } });
+    const kept = createHost();
+    await new ToolInvocationCoordinatorService(kept).invokeTool(send, { ownDelivery });
+    expect(kept.policyEngine.invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "channel.send" }),
+      expect.objectContaining({ ownDelivery }),
+    );
+
+    // The marker vouches for the tool its caller named; a hook that swaps in another tool loses it.
+    const renamed = createHost({
+      hooksService: {
+        runInlineHooks: vi.fn(async (request) => ({
+          runs: [],
+          patch: request.mergePatch(
+            undefined,
+            request.parsePatch({ toolName: "shell.exec", args: { command: "pwd", cwd: VERIFIED_WORKSPACE_CWD } }),
+          ),
+        })),
+        enqueueAfterHooks: vi.fn(),
+      },
+    });
+    await new ToolInvocationCoordinatorService(renamed).invokeTool(send, { ownDelivery });
+    const [renamedRequest, renamedOptions] = vi.mocked(renamed.policyEngine.invoke).mock.calls[0] ?? [];
+    expect(renamedRequest).toMatchObject({ toolName: "shell.exec" });
+    expect(renamedOptions).not.toHaveProperty("ownDelivery");
   });
 
   it("blocks hooks from rewriting protected approval action templates or injecting their bearer", async () => {

@@ -33,6 +33,7 @@ import {
   type McpApprovalRelief,
   type McpToolPolicyBinding,
   type MeshToolPolicyBinding,
+  type OwnDeliveryMarker,
   type ToolProcessSpawnBoundary,
 } from "@goatcitadel/policy-engine";
 import { resolveMcpApprovalRelief } from "./mcp-approval-relief.js";
@@ -582,6 +583,7 @@ export interface ToolInvocationCoordinatorHost {
         mcpToolBinding?: McpToolPolicyBinding;
         meshToolBinding?: MeshToolPolicyBinding;
         mcpApprovalRelief?: McpApprovalRelief;
+        ownDelivery?: OwnDeliveryMarker;
       },
     ): Promise<ToolInvokeResult>;
     evaluateAccess(
@@ -714,6 +716,12 @@ export interface ToolInvocationRuntimeOptions {
   auxiliaryEffectFence?: () => Promise<void>;
   /** Process-local concrete external-side-effect boundary; never serialize this object. */
   externalSideEffect?: ToolExternalSideEffectBoundary;
+  /**
+   * Gateway-minted marker for GoatCitadel's own deliveries (channel replies, the operator's own sends, Library
+   * actions); never accepted from a tool request body. It lets the built-in call past a switched-off tool group
+   * and nothing else, and is dropped when a tool hook renames the tool.
+   */
+  ownDelivery?: OwnDeliveryMarker;
   /**
    * Process-local Chat correlation reserved for a canonical execution owner.
    * The coordinator does not infer receipts from result payloads and currently
@@ -1295,11 +1303,17 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     const workspacePathBridgeSnapshotIds = bridgeApplication.snapshotId ? [bridgeApplication.snapshotId] : [];
     let approvedExternalRuntimeReplayId: string | undefined;
     let finalPolicyCheck: ToolInvokeResult | undefined;
+    // The own-delivery marker vouches for the tool its caller named; a hook that renames the tool loses it.
+    const ownDelivery = hookableRequest.toolName === normalizedRequest.toolName ? options.ownDelivery : undefined;
+    const ownDeliveryOptions: [] | [{ ownDelivery: OwnDeliveryMarker }] = ownDelivery ? [{ ownDelivery }] : [];
     if (overrideHandler) {
-      finalPolicyCheck = await this.host.policyEngine.invoke({
-        ...executionRequest,
-        externalRuntime: true,
-      });
+      finalPolicyCheck = await this.host.policyEngine.invoke(
+        {
+          ...executionRequest,
+          externalRuntime: true,
+        },
+        ...ownDeliveryOptions,
+      );
       const overridePolicyFailure = buildExternalRuntimePolicyFailure(finalPolicyCheck);
       if (overridePolicyFailure) {
         return overridePolicyFailure;
@@ -1444,9 +1458,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         const policyOptions = {
           ...(beforeExecute ? { beforeExecute } : {}),
           ...(options.externalSideEffect ? { externalSideEffect: options.externalSideEffect } : {}),
+          ...(ownDelivery ? { ownDelivery } : {}),
         };
         result =
-          beforeExecute || options.externalSideEffect
+          beforeExecute || options.externalSideEffect || ownDelivery
             ? await this.host.policyEngine.invoke(executionRequest, policyOptions)
             : await this.host.policyEngine.invoke(executionRequest);
       }

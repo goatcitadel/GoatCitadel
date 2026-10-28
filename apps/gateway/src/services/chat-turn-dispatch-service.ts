@@ -55,6 +55,7 @@ import type {
 } from "./chat-turn-runtime-collaborators.js";
 import { DurableWorkerInterruptionError } from "./durable-run-service.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
+import { OWN_DELIVERY } from "./comms-service.js";
 
 export interface ChatTurnDispatchHost
   extends
@@ -844,14 +845,18 @@ export async function launchPreparedAgentChatTurnStream(
     onChildDurableRunAdmitted: options?.onChildDurableRunAdmitted
       ? async (runId) => {
           if (input.parentDelegationStepId && !prepared.capabilityProfile) {
-            await assertLocalDelegationTurnAuthority(host.storage, {
-              sessionId,
-              request: input,
-              admission: prepared.turnAdmission,
-              turnId: prepared.turnId,
-              userMessageId: prepared.userMessage.messageId,
-              assistantMessageId: prepared.assistantMessageId,
-            }, host);
+            await assertLocalDelegationTurnAuthority(
+              host.storage,
+              {
+                sessionId,
+                request: input,
+                admission: prepared.turnAdmission,
+                turnId: prepared.turnId,
+                userMessageId: prepared.userMessage.messageId,
+                assistantMessageId: prepared.assistantMessageId,
+              },
+              host,
+            );
           }
           await options.onChildDurableRunAdmitted!(runId);
         }
@@ -1101,23 +1106,27 @@ export async function sendPreparedIntegrationChatTurn(
     await fencedWrite(() => undefined);
     const deliveryResult = host.requireExecutedToolResult(
       "channel.send",
-      await host.commsSend({
-        connectionId: binding.connectionId,
-        target: binding.target,
-        message: prepared.content,
-        sessionId,
-        workspaceId: prepared.workspaceId,
-        agentId: input.operatorId ?? input.authActorId ?? "operator",
-        operatorId: input.operatorId,
-        authActorId: input.authActorId,
-        authActorSource: input.authActorSource,
-        taskId: input.policyTaskId,
-        runId: input.policyRunId,
-        permissionProfileId: input.permissionProfileId,
-        localOperatorOverrideId: input.localOperatorOverrideId,
-        surface: input.mode ?? resolvePreparedTurnMode(prepared),
-        signal: controller.signal,
-      }),
+      await host.commsSend(
+        {
+          connectionId: binding.connectionId,
+          target: binding.target,
+          message: prepared.content,
+          sessionId,
+          workspaceId: prepared.workspaceId,
+          agentId: input.operatorId ?? input.authActorId ?? "operator",
+          operatorId: input.operatorId,
+          authActorId: input.authActorId,
+          authActorSource: input.authActorSource,
+          taskId: input.policyTaskId,
+          runId: input.policyRunId,
+          permissionProfileId: input.permissionProfileId,
+          localOperatorOverrideId: input.localOperatorOverrideId,
+          surface: input.mode ?? resolvePreparedTurnMode(prepared),
+          signal: controller.signal,
+        },
+        // The operator's own message, sent verbatim: it keeps working while Messaging is switched off.
+        OWN_DELIVERY,
+      ),
     );
     deliveryEvidence = readIntegrationDeliveryEvidence(deliveryResult);
     deliveryCommitted = true;

@@ -1,3 +1,4 @@
+import { toolNamesSwitchedOff } from "@goatcitadel/contracts";
 import type {
   EffectiveToolPolicy,
   LocalOperatorOverrideRecord,
@@ -81,6 +82,8 @@ export function resolveEffectivePolicy(
     allowSet,
     denySet,
     effectiveTools,
+    // Install-wide: read from `tools` only, so a per-agent `disabledGroups` can neither add nor lift a switch.
+    switchedOffTools: toolNamesSwitchedOff(config.tools.disabledGroups),
     readAccessMode: stricterReadAccessMode(config.sandbox.readAccessMode, permissionProfile?.readAccessMode),
   };
 }
@@ -97,7 +100,7 @@ function isActiveLocalOperatorOverride(
 }
 
 export function isToolAllowed(policy: EffectiveToolPolicy, toolName: string): boolean {
-  if (matchesPatternSet(policy.denySet, toolName)) {
+  if (policy.switchedOffTools?.has(toolName) || matchesPatternSet(policy.denySet, toolName)) {
     return false;
   }
 

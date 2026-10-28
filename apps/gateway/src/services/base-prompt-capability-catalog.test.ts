@@ -36,6 +36,53 @@ describe("filterBasePromptToolsetByPolicy", () => {
     expect(filtered.skills).toEqual([{ name: "Deep research" }]);
   });
 
+  it("reports switched-off tools apart from denied ones", async () => {
+    // A switched-off group is the operator's switch; a tools.deny entry is a policy edit. The prompt words them
+    // differently, so the probe has to tell them apart by reason code. Both stay out of the callable list.
+    const reasons: Record<string, string> = {
+      "fs.write": "tool_group_off",
+      "shell.exec": "policy_deny",
+      "channel.send": "tool_group_off",
+    };
+    const inspect = vi.fn(async (request: ToolAccessEvaluateRequest) => {
+      const reason = reasons[request.toolName];
+      return reason
+        ? ({
+            toolName: request.toolName,
+            allowed: false,
+            requiresApproval: false,
+            reasonCodes: [reason],
+            riskLevel: "safe",
+          } as ToolAccessEvaluateResponse)
+        : decision(request.toolName, true);
+    });
+    const filtered = await filterBasePromptToolsetByPolicy(
+      { toolNames: ["fs.read", "fs.write", "shell.exec", "channel.send"] },
+      SCOPE,
+      inspect,
+    );
+
+    expect(filtered.toolNames).toEqual(["fs.read"]);
+    // Switched-off names are also denied names, so existing "what is off" wording keeps working.
+    expect(filtered.policyDeniedToolNames).toEqual(["fs.write", "shell.exec", "channel.send"]);
+    expect(filtered.switchedOffToolNames).toEqual(["fs.write", "channel.send"]);
+  });
+
+  it("reports no switched-off tools when nothing is switched off, or when the policy check itself fails", async () => {
+    const inspect = vi.fn(async (request: ToolAccessEvaluateRequest) => {
+      if (request.toolName === "fs.patch") throw new Error("policy store unavailable");
+      return decision(request.toolName, request.toolName !== "fs.write");
+    });
+    const filtered = await filterBasePromptToolsetByPolicy(
+      { toolNames: ["fs.read", "fs.write", "fs.patch"] },
+      SCOPE,
+      inspect,
+    );
+
+    expect(filtered.policyDeniedToolNames).toEqual(["fs.write", "fs.patch"]);
+    expect(filtered.switchedOffToolNames).toEqual([]);
+  });
+
   it("probes each tool with the runner's probe arguments and the turn's session, workspace and surface", async () => {
     const inspect = vi.fn(async (request: ToolAccessEvaluateRequest) => decision(request.toolName, true));
     await filterBasePromptToolsetByPolicy({ toolNames: ["fs.write"] }, SCOPE, inspect, "/workspace/goatcitadel_out");

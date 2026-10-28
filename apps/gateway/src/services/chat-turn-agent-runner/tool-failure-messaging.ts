@@ -82,11 +82,41 @@ function isWebTool(toolName: string): boolean {
 const OPERATOR_BOUNDARY_NEXT_STEP =
   "This is an operator policy boundary, not a pending approval, so retrying it with different input will not help.";
 
+// The policy engine's reason code, and the sentence it puts in its reason, for a tool in a switched-off group.
+export const TOOL_GROUP_OFF_REASON_CODE = "tool_group_off";
+const TOOL_GROUP_OFF_ERROR_FRAGMENT = "tool group switched off";
+const POLICY_DENY_REASON_CODE = "policy_deny";
+
+/** Reason codes the Chat runner recorded when it re-checked policy before the call (`result.policyRevalidation`). */
+function readPolicyRevalidationReasonCodes(result: Record<string, unknown> | undefined): readonly string[] {
+  const codes = readRecord(result?.policyRevalidation)?.reasonCodes;
+  return Array.isArray(codes) ? codes.filter((code): code is string => typeof code === "string") : [];
+}
+
+/**
+ * True when the operator's tool group switch stopped the tool. The policy engine's own reason names the switch, but
+ * the Chat runner re-checks policy before a call and writes an error of its own ("Current deny-wins policy blocks
+ * ..."), so that path is recognised from the re-check's reason codes. A tool that is also denied reports
+ * policy_deny, and switching its group on alone would not run it, so that is not a switch-off block.
+ */
+function isSwitchedOffGroupBlock(lowercasedError: string, result: Record<string, unknown> | undefined): boolean {
+  if (lowercasedError.includes(TOOL_GROUP_OFF_ERROR_FRAGMENT)) {
+    return true;
+  }
+  const codes = readPolicyRevalidationReasonCodes(result);
+  return codes.includes(TOOL_GROUP_OFF_REASON_CODE) && !codes.includes(POLICY_DENY_REASON_CODE);
+}
+
+function isSwitchedOffRun(run: ChatToolRunRecord): boolean {
+  return run.status === "blocked" && isSwitchedOffGroupBlock((run.error ?? "").toLowerCase(), run.result);
+}
+
 /**
  * Guidance for a tool stopped by operator governance: a tools.deny entry, a
  * tool outside the resolved allow list or permission profile, a Citadel Ward
- * deny, or a target outside the write roots. Only the operator can lift these,
- * so the guidance names the setting to change and never invites a retry.
+ * deny, a switched-off tool group, or a target outside the write roots. Only
+ * the operator can lift these, so the guidance names the setting to change and
+ * never invites a retry.
  *
  * Write-root errors are thrown before any write, so they qualify whether the
  * run settled as blocked or failed. The policy-decision reasons qualify only
@@ -96,6 +126,7 @@ export function buildGovernanceBlockGuidance(input: {
   toolName: string;
   status: ChatToolRunRecord["status"];
   error?: string;
+  result?: Record<string, unknown>;
 }): string | undefined {
   const error = (input.error ?? "").toLowerCase();
   const tool = input.toolName;
@@ -104,6 +135,10 @@ export function buildGovernanceBlockGuidance(input: {
   }
   if (input.status !== "blocked") {
     return undefined;
+  }
+  // Before the tools.deny branch: the remedy is the operator's switch, and nothing in tools.deny needs editing.
+  if (isSwitchedOffGroupBlock(error, input.result)) {
+    return `${tool} is switched off: the operator turned off its tool group in Capabilities › Tools. ${OPERATOR_BOUNDARY_NEXT_STEP} Only the operator can switch that group back on; tell them which tool you needed.`;
   }
   if (error.includes("tool denied by policy")) {
     return `${tool} is denied by the operator's tool policy. ${OPERATOR_BOUNDARY_NEXT_STEP} The operator must remove ${tool} (or the pattern that matches it) from tools.deny before it can run.`;
@@ -126,6 +161,10 @@ export function buildGovernanceBlockGuidance(input: {
  * excluded, because their fix may be a different request or a repair.
  */
 function isToolPolicyBlock(run: ChatToolRunRecord): boolean {
+  // A switched-off group is a policy block on a web or browser tool too; a different URL won't lift it (P2-R20).
+  if (isSwitchedOffRun(run)) {
+    return true;
+  }
   if (run.status !== "blocked" || isWebTool(run.toolName) || isPathBridgeBlock(run)) {
     return false;
   }
@@ -233,10 +272,14 @@ export function buildPolicyBlockedRecoveryText(failedOrBlocked: readonly ChatToo
   const guidance = [
     ...new Set(failedOrBlocked.map((run) => buildGovernanceBlockGuidance(run)).filter((line) => line !== undefined)),
   ].slice(0, MAX_POLICY_GUIDANCE_LINES);
+  // A switched-off group is lifted in Capabilities › Tools, not by editing the tool policy.
+  const closing = failedOrBlocked.every(isSwitchedOffRun)
+    ? "The operator can switch tool groups back on in Capabilities › Tools. Once the group is on, ask again and I'll retry."
+    : "The operator can review what this workspace's tools may do in Settings > Tools. Once the policy allows it, ask again and I'll retry.";
   return [
     `I couldn't do that: this workspace's tool policy blocked ${tools}. A policy block is not caused by the input, so I stopped instead of retrying it with a different one.`,
     ...guidance.map((line) => `Why: ${line}`),
-    "The operator can review what this workspace's tools may do in Settings > Tools. Once the policy allows it, ask again and I'll retry.",
+    closing,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -244,8 +287,9 @@ export function buildPolicyBlockedRecoveryText(failedOrBlocked: readonly ChatToo
 
 /**
  * User-facing appendix for failed or blocked tool runs. Only failures and web
- * tool blocks get the URL/query hint; a policy block on another tool is not
- * fixed by a different URL or a narrower query.
+ * tool blocks get the URL/query hint; a policy block on another tool, or on a
+ * web tool in a switched-off group, is not fixed by a different URL or a
+ * narrower query.
  */
 export function buildToolFailureAppendixText(failedOrBlocked: readonly ChatToolRunRecord[]): string | undefined {
   if (failedOrBlocked.length === 0) {
@@ -254,7 +298,9 @@ export function buildToolFailureAppendixText(failedOrBlocked: readonly ChatToolR
   if (failedOrBlocked.every(isMemoryConsentBlock)) {
     return `Note: nothing was saved to memory. Long-term memory is saved only when your message uses an accepted consent phrasing, for example ${MEMORY_CONSENT_EXAMPLES}.`;
   }
-  const policyBlocksOnly = failedOrBlocked.every((run) => run.status === "blocked" && !isWebTool(run.toolName));
+  const policyBlocksOnly = failedOrBlocked.every(
+    (run) => isSwitchedOffRun(run) || (run.status === "blocked" && !isWebTool(run.toolName)),
+  );
   const uniqueTools = [...new Set(failedOrBlocked.map((run) => formatToolLabel(run.toolName)))];
   const outcome = policyBlocksOnly ? "was blocked by policy" : "failed while I was working";
   const opening =

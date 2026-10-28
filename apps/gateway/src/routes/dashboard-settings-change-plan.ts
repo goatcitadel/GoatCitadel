@@ -19,6 +19,7 @@ export interface SettingsChangePlanInput {
   readonly networkAllowlist?: readonly string[];
   readonly operatorWriteRootChange?: Omit<RuntimeChangeFor<"operator_write_root">, "operation">;
   readonly globalToolAccessChange?: Omit<RuntimeChangeFor<"tool_global_access">, "operation">;
+  readonly toolGroupChange?: Omit<RuntimeChangeFor<"tool_group_access">, "operation">;
   readonly llm?: {
     readonly activeProviderId?: string;
     readonly activeModel?: string;
@@ -110,6 +111,13 @@ export function settingsChangePlanRequest(input: SettingsChangePlanInput): Chang
         ? {
             kind: "runtime_configuration",
             change: { operation: "tool_global_access", ...input.globalToolAccessChange },
+          }
+        : null;
+    case "toolGroupChange":
+      return input.toolGroupChange
+        ? {
+            kind: "runtime_configuration",
+            change: { operation: "tool_group_access", ...input.toolGroupChange },
           }
         : null;
     case "llm": {

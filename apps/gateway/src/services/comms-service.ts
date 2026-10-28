@@ -20,6 +20,7 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import { createOwnDeliveryMarker, type OwnDeliveryMarker } from "@goatcitadel/policy-engine";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
 import { isDiscordGatewayMode } from "./channel-typing-adapters.js";
@@ -33,11 +34,25 @@ import {
 import { COMMUNICATIONS_IDEMPOTENCY_PREFIX } from "./communications-approval-payload.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
+export type CommsInvokeResult = ToolInvokeResult | Record<string, unknown>;
+
+/**
+ * Server-only: the send is GoatCitadel's own (a channel reply or the operator's own send), so a switched-off tool
+ * group does not stop it. Callers pass it as a separate argument; it is never a field of a public comms input, so
+ * no request body, tool argument or model output can set it. Unset means the call is subject to the switch.
+ */
+export interface OwnDeliveryOption {
+  readonly ownDelivery?: true;
+}
+
+export const OWN_DELIVERY: OwnDeliveryOption = Object.freeze({ ownDelivery: true });
+
 export interface CommsHost {
   invokeAndUnwrap(
     request: ToolInvokeRequest,
     realtimeType: string,
-  ): Promise<ToolInvokeResult | Record<string, unknown>>;
+    options?: { ownDelivery?: OwnDeliveryMarker },
+  ): Promise<CommsInvokeResult>;
   readChatAttachmentContent(attachmentId: string): Promise<{
     record: ChatAttachmentRecord;
     bytes: Buffer;
@@ -138,14 +153,26 @@ async function invokeCommsTool(
   request: ToolInvokeRequest,
   realtimeType: string,
   preApproved?: { preApproval: CommsPreApproval; claim: ExternalSideEffectExecutionContext },
-): Promise<ToolInvokeResult | Record<string, unknown>> {
+  own?: OwnDeliveryOption,
+): Promise<CommsInvokeResult> {
   // Native optional fields (including normalized attachments) must have the same
   // shape before admission and after approval storage's JSON round trip.
   const normalized: ToolInvokeRequest = {
     ...request,
     args: omitAbsentCommsFields(request.args) as ToolInvokeRequest["args"],
   };
-  const invoke = (toolRequest: ToolInvokeRequest) => host.invokeAndUnwrap(toolRequest, realtimeType);
+  // A marker is minted only when the server-side caller passed the own-delivery option.
+  const ownOptions: [] | [{ ownDelivery: OwnDeliveryMarker }] =
+    own?.ownDelivery === true
+      ? [
+          {
+            ownDelivery: createOwnDeliveryMarker(
+              request.toolName === "channel.send" ? "channel_reply" : "operator_action",
+            ),
+          },
+        ]
+      : [];
+  const invoke = (toolRequest: ToolInvokeRequest) => host.invokeAndUnwrap(toolRequest, realtimeType, ...ownOptions);
   if (!preApproved) {
     return invoke(normalized);
   }
@@ -189,7 +216,8 @@ function omitAbsentCommsFields(value: unknown): unknown {
 export async function commsSend(
   host: CommsHost,
   input: ChannelSendInput,
-): Promise<ToolInvokeResult | Record<string, unknown>> {
+  options?: OwnDeliveryOption,
+): Promise<CommsInvokeResult> {
   throwIfCommsAborted(input.signal);
   const connection = await readCommsConnection(host, input.connectionId);
   const sanitized = sanitizeChannelOutboundMessage(input.message ?? "", {
@@ -245,6 +273,8 @@ export async function commsSend(
       signal: input.signal,
     },
     "comms_send",
+    undefined,
+    options,
   );
 }
 
@@ -264,18 +294,20 @@ function hasOutboundSanitizerEffect(result: ReturnType<typeof sanitizeChannelOut
 export async function commsReply(
   host: CommsHost,
   input: ChannelReplyInput,
-): Promise<ToolInvokeResult | Record<string, unknown>> {
+  options?: OwnDeliveryOption,
+): Promise<CommsInvokeResult> {
   throwIfCommsAborted(input.signal);
   if (!input.replyToMessageId?.trim()) {
     throw new Error("replyToMessageId is required for channel replies.");
   }
-  return commsSend(host, input);
+  return commsSend(host, input, options);
 }
 
 export async function commsReact(
   host: CommsHost,
   input: ChannelReactInput,
-): Promise<ToolInvokeResult | Record<string, unknown>> {
+  options?: OwnDeliveryOption,
+): Promise<CommsInvokeResult> {
   throwIfCommsAborted(input.signal);
   return invokeCommsTool(
     host,
@@ -296,13 +328,16 @@ export async function commsReact(
       signal: input.signal,
     },
     "comms_react",
+    undefined,
+    options,
   );
 }
 
 export async function commsUnsend(
   host: CommsHost,
   input: ChannelUnsendInput,
-): Promise<ToolInvokeResult | Record<string, unknown>> {
+  options?: OwnDeliveryOption,
+): Promise<CommsInvokeResult> {
   throwIfCommsAborted(input.signal);
   return invokeCommsTool(
     host,
@@ -321,6 +356,8 @@ export async function commsUnsend(
       signal: input.signal,
     },
     "comms_unsend",
+    undefined,
+    options,
   );
 }
 
@@ -476,7 +513,8 @@ function summarizeChannelActivityStatus(
 export async function commsGmailRead(
   host: CommsHost,
   input: GmailReadQuery,
-): Promise<ToolInvokeResult | Record<string, unknown>> {
+  options?: OwnDeliveryOption,
+): Promise<CommsInvokeResult> {
   return invokeCommsTool(
     host,
     {
@@ -491,6 +529,8 @@ export async function commsGmailRead(
       taskId: input.taskId,
     },
     "comms_gmail_read",
+    undefined,
+    options,
   );
 }
 
@@ -614,6 +654,7 @@ interface LedgeredCommsInvoke {
   request: ToolInvokeRequest;
   realtimeType: string;
   preApproval?: CommsPreApproval;
+  own?: OwnDeliveryOption;
 }
 
 /**
@@ -663,6 +704,7 @@ async function runLedgeredCommsInvoke(
         spec.request,
         spec.realtimeType,
         spec.preApproval ? { preApproval: spec.preApproval, claim } : undefined,
+        spec.own,
       );
       return classifyCommsSideEffectResult(result, claim);
     },
@@ -712,7 +754,8 @@ function runLedgeredMailSend(
   input: GmailSendInput,
   mail: LedgeredMailSendProvider,
   preApproval?: CommsPreApproval,
-): Promise<ToolInvokeResult | Record<string, unknown>> {
+  own?: OwnDeliveryOption,
+): Promise<CommsInvokeResult> {
   const message = {
     connectionId: input.connectionId,
     to: input.to,
@@ -739,6 +782,7 @@ function runLedgeredMailSend(
     },
     realtimeType: mail.boundary,
     preApproval,
+    own,
   });
 }
 
@@ -746,8 +790,9 @@ export async function commsGmailSend(
   host: CommsHost,
   input: GmailSendInput,
   preApproval?: CommsPreApproval,
-): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return runLedgeredMailSend(host, input, GMAIL_SEND_PROVIDER, preApproval);
+  options?: OwnDeliveryOption,
+): Promise<CommsInvokeResult> {
+  return runLedgeredMailSend(host, input, GMAIL_SEND_PROVIDER, preApproval, options);
 }
 
 /** Sends an approved draft from an IMAP/SMTP account through the governed `smtp.send` tool, on the same ledger as Gmail. */
@@ -755,14 +800,16 @@ export async function commsSmtpSend(
   host: CommsHost,
   input: GmailSendInput,
   preApproval?: CommsPreApproval,
-): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return runLedgeredMailSend(host, input, SMTP_SEND_PROVIDER, preApproval);
+  options?: OwnDeliveryOption,
+): Promise<CommsInvokeResult> {
+  return runLedgeredMailSend(host, input, SMTP_SEND_PROVIDER, preApproval, options);
 }
 
 export async function commsCalendarList(
   host: CommsHost,
   input: CalendarListQuery,
-): Promise<ToolInvokeResult | Record<string, unknown>> {
+  options?: OwnDeliveryOption,
+): Promise<CommsInvokeResult> {
   return invokeCommsTool(
     host,
     {
@@ -779,6 +826,8 @@ export async function commsCalendarList(
       taskId: input.taskId,
     },
     "comms_calendar_list",
+    undefined,
+    options,
   );
 }
 
@@ -786,7 +835,8 @@ export async function commsCalendarCreate(
   host: CommsHost,
   input: CalendarCreateEventInput & { idempotencyKey?: string },
   preApproval?: CommsPreApproval,
-): Promise<ToolInvokeResult | Record<string, unknown>> {
+  options?: OwnDeliveryOption,
+): Promise<CommsInvokeResult> {
   const eventFields = {
     connectionId: input.connectionId,
     calendarId: input.calendarId,
@@ -817,5 +867,6 @@ export async function commsCalendarCreate(
     },
     realtimeType: "comms_calendar_create",
     preApproval,
+    own: options,
   });
 }

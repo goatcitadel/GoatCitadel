@@ -2796,15 +2796,24 @@ export class SessionMutationAdmissionRepository {
       const existing = this.findFeatureReferences(input);
       if (existing) {
         if (existing.referenceSha256 !== referenceSha256) {
-          throw admissionConflict("SESSION_MUTATION_FEATURE_REFERENCE_CONFLICT", "Admitted feature references cannot change.");
+          throw admissionConflict(
+            "SESSION_MUTATION_FEATURE_REFERENCE_CONFLICT",
+            "Admitted feature references cannot change.",
+          );
         }
         return existing;
       }
-      this.db.prepare(`INSERT INTO chat_turn_feature_references (
+      this.db
+        .prepare(
+          `INSERT INTO chat_turn_feature_references (
         admission_id, reference_sha256, references_json
-      ) VALUES (@admissionId, @referenceSha256, @referencesJson)`).run({
-        admissionId: input.admissionId, referenceSha256, referencesJson,
-      });
+      ) VALUES (@admissionId, @referenceSha256, @referencesJson)`,
+        )
+        .run({
+          admissionId: input.admissionId,
+          referenceSha256,
+          referencesJson,
+        });
       return { references, referenceSha256 };
     });
   }
@@ -2813,15 +2822,22 @@ export class SessionMutationAdmissionRepository {
   public findFeatureReferences(input: TurnWriteAdmissionIdentity): ChatTurnFeatureReferenceBinding | undefined {
     const normalized = normalizeTurnWriteIdentity(input);
     this.assertTurnWriteIdentity(this.requireRow(normalized.admissionId, false), normalized);
-    const row = this.db.prepare(`SELECT reference_sha256, references_json FROM chat_turn_feature_references
-      WHERE admission_id = @admissionId`).get<{ reference_sha256: string; references_json: string }>({
-      admissionId: normalized.admissionId,
-    });
+    const row = this.db
+      .prepare(
+        `SELECT reference_sha256, references_json FROM chat_turn_feature_references
+      WHERE admission_id = @admissionId`,
+      )
+      .get<{ reference_sha256: string; references_json: string }>({
+        admissionId: normalized.admissionId,
+      });
     if (!row) return undefined;
     const references = readChatTurnFeatureReferences(JSON.parse(row.references_json) as unknown);
     const referenceSha256 = createHash("sha256").update(canonicalJsonString(references)).digest("hex");
     if (referenceSha256 !== row.reference_sha256) {
-      throw admissionConflict("SESSION_MUTATION_FEATURE_REFERENCE_CORRUPT", "Admitted feature references failed integrity verification.");
+      throw admissionConflict(
+        "SESSION_MUTATION_FEATURE_REFERENCE_CORRUPT",
+        "Admitted feature references failed integrity verification.",
+      );
     }
     return { references, referenceSha256 };
   }
@@ -5731,7 +5747,9 @@ export class SessionMutationAdmissionRepository {
     const checkpointHeartbeatRawOutput = checkpointState.heartbeatDecisionRawOutput;
     let heartbeatFeatureBinding = false;
     if (heartbeatOccurrenceId && payload.featureReferenceSha256 !== undefined) {
-      const feature = this.db.prepare(`SELECT feature.references_json, feature.reference_sha256,
+      const feature = this.db
+        .prepare(
+          `SELECT feature.references_json, feature.reference_sha256,
           occurrence.claim_sha256, occurrence.aggregate_revision
         FROM chat_heartbeat_occurrences occurrence
         JOIN chat_turn_feature_references feature ON feature.admission_id = occurrence.admission_id
@@ -5740,20 +5758,39 @@ export class SessionMutationAdmissionRepository {
           AND occurrence.session_incarnation_id = @sessionIncarnationId AND occurrence.turn_id = @turnId
           AND occurrence.durable_run_id = @runId AND occurrence.feature_reference_sha256 = @referenceSha256
           AND feature.reference_sha256 = @referenceSha256
-          AND occurrence.state IN ('durable_bound', 'terminal')`).get<{
-            references_json: string; reference_sha256: string; claim_sha256: string; aggregate_revision: number;
-          }>({ occurrenceId: heartbeatOccurrenceId, admissionId: payload.admissionId as string,
-            workspaceId: payload.workspaceId as string, sessionId: payload.sessionId as string,
-            sessionIncarnationId: payload.sessionIncarnationId as string, turnId: payload.turnId as string,
-            runId: run.run_id, referenceSha256: payload.featureReferenceSha256 as string });
+          AND occurrence.state IN ('durable_bound', 'terminal')`,
+        )
+        .get<{
+          references_json: string;
+          reference_sha256: string;
+          claim_sha256: string;
+          aggregate_revision: number;
+        }>({
+          occurrenceId: heartbeatOccurrenceId,
+          admissionId: payload.admissionId as string,
+          workspaceId: payload.workspaceId as string,
+          sessionId: payload.sessionId as string,
+          sessionIncarnationId: payload.sessionIncarnationId as string,
+          turnId: payload.turnId as string,
+          runId: run.run_id,
+          referenceSha256: payload.featureReferenceSha256 as string,
+        });
       if (feature) {
         const references = readChatTurnFeatureReferences(parseJsonObject(feature.references_json));
-        heartbeatFeatureBinding = sha256(canonicalJsonString(references)) === feature.reference_sha256 &&
-          canonicalJsonString(references.heartbeatOccurrence) === canonicalJsonString({ ownerId: heartbeatOccurrenceId,
-            revision: String(feature.aggregate_revision), sha256: feature.claim_sha256 });
+        heartbeatFeatureBinding =
+          sha256(canonicalJsonString(references)) === feature.reference_sha256 &&
+          canonicalJsonString(references.heartbeatOccurrence) ===
+            canonicalJsonString({
+              ownerId: heartbeatOccurrenceId,
+              revision: String(feature.aggregate_revision),
+              sha256: feature.claim_sha256,
+            });
       }
-      if (!heartbeatFeatureBinding) throw admissionConflict("SESSION_MUTATION_HEARTBEAT_DECISION_CONFLICT",
-        "Heartbeat terminal runtime authority lost its exact occurrence feature binding.");
+      if (!heartbeatFeatureBinding)
+        throw admissionConflict(
+          "SESSION_MUTATION_HEARTBEAT_DECISION_CONFLICT",
+          "Heartbeat terminal runtime authority lost its exact occurrence feature binding.",
+        );
     }
     if (heartbeatOccurrenceId && !isExactSilentHeartbeatEligibility(authority.material.postCommitEligibility)) {
       throw admissionConflict(
@@ -5763,7 +5800,13 @@ export class SessionMutationAdmissionRepository {
     }
     if (
       heartbeatOccurrenceId &&
-      !readExactHeartbeatAutonomousAdmissionSeal(metadata.autonomousAdmission, payload, metadata, run.run_id, heartbeatFeatureBinding)
+      !readExactHeartbeatAutonomousAdmissionSeal(
+        metadata.autonomousAdmission,
+        payload,
+        metadata,
+        run.run_id,
+        heartbeatFeatureBinding,
+      )
     ) {
       throw admissionConflict(
         "SESSION_MUTATION_HEARTBEAT_DECISION_CONFLICT",
@@ -5884,15 +5927,26 @@ export class SessionMutationAdmissionRepository {
       );
     }
     if (run.status !== "completed") {
-      const unexpectedPartialOutput =
+      // A partial trace is a failed turn that may still have streamed its
+      // linked answer (for example after the tool budget ran out). The runtime
+      // strips that answer from the failed seal, so only an exact agent reply in
+      // this session is allowed; any other row is unbound output.
+      const partialOutput =
         run.status === "failed" && authority.material.traceStatus === "partial"
           ? this.db
               .prepare(
-                `SELECT message_id FROM chat_messages
+                `SELECT message_id, session_id, role, actor_type FROM chat_messages
                  WHERE message_id = @messageId${this.db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
               )
-              .get({ messageId: payload.assistantMessageId })
+              .get<{ message_id: string; session_id: string; role: string; actor_type: string | null }>({
+                messageId: payload.assistantMessageId,
+              })
           : undefined;
+      const unexpectedPartialOutput =
+        partialOutput &&
+        (partialOutput.session_id !== payload.sessionId ||
+          partialOutput.role !== "assistant" ||
+          partialOutput.actor_type !== "agent");
       if (
         output ||
         unexpectedPartialOutput ||
@@ -8556,11 +8610,17 @@ function readExactHeartbeatAutonomousAdmissionSeal(
     admission.admissionMaterialSha256 !== payload.admissionMaterialSha256 ||
     admission.effectiveRequestMaterialSha256 !== payload.effectiveRequestMaterialSha256 ||
     (verifiedHeartbeatFeatureBinding
-      ? material.capability !== null || payload.capabilityProfileId !== undefined || payload.capabilityProfileHash !== undefined ||
-        metadata.capabilityProfileId !== undefined || metadata.capabilityProfileHash !== undefined
-      : !capability || !hasExactKeys(capability, ["profileHash", "profileId", "snapshotId"]) ||
-        capability.profileId !== payload.capabilityProfileId || capability.profileHash !== payload.capabilityProfileHash ||
-        capability.profileId !== metadata.capabilityProfileId || capability.profileHash !== metadata.capabilityProfileHash ||
+      ? material.capability !== null ||
+        payload.capabilityProfileId !== undefined ||
+        payload.capabilityProfileHash !== undefined ||
+        metadata.capabilityProfileId !== undefined ||
+        metadata.capabilityProfileHash !== undefined
+      : !capability ||
+        !hasExactKeys(capability, ["profileHash", "profileId", "snapshotId"]) ||
+        capability.profileId !== payload.capabilityProfileId ||
+        capability.profileHash !== payload.capabilityProfileHash ||
+        capability.profileId !== metadata.capabilityProfileId ||
+        capability.profileHash !== metadata.capabilityProfileHash ||
         !isNonEmptyRuntimeString(capability.snapshotId)) ||
     material.cronAdmission !== null ||
     !isSha256Digest(seal.materialSha256) ||

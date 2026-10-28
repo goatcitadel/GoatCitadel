@@ -437,6 +437,8 @@ export interface RuntimeSettingsResponse {
   operatorWriteRoots?: import("@goatcitadel/contracts").OperatorWriteRootSummary[];
   /** Global tool allow and deny lists (agent and permission-profile lists are separate). */
   globalToolAccess?: import("@goatcitadel/contracts").GlobalToolAccessSummary;
+  /** Built-in tool groups the operator switched off, in the group map's order. Core is never listed. */
+  switchedOffToolGroups?: import("@goatcitadel/contracts").ToolGroupId[];
   readAccessMode?: "roots_only" | "approval_required" | "full_disk";
   /** Whether writes outside every write root may raise an approval. */
   outsideRootWriteMode?: "deny" | "approval_required";
