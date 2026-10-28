@@ -351,7 +351,7 @@ describe("ChatThreadPrimitives", () => {
 
     const text = renderedText(renderer);
     expect(text).toContain("Search memory");
-    expect(renderer.root.findByProps({ "aria-label": "Open execution detail for memory.search" })).toBeTruthy();
+    expect(renderer.root.findByProps({ "aria-label": "Open execution detail for Search memory" })).toBeTruthy();
     expect(text).toContain("2 results returned.");
     // A tool without a display name of its own reads as words, not as its registry id.
     expect(text).toContain("Artifact write");
@@ -363,7 +363,7 @@ describe("ChatThreadPrimitives", () => {
     expect(text).not.toContain("network failed");
 
     TestRenderer.act(() => {
-      renderer.root.findByProps({ "aria-label": "Open execution detail for memory.search" }).props.onClick();
+      renderer.root.findByProps({ "aria-label": "Open execution detail for Search memory" }).props.onClick();
     });
     expect(onOpenRunDetails).toHaveBeenCalledWith("turn-1");
   });

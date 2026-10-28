@@ -64,7 +64,7 @@ export function ChatTurnActivityRows({
               type="button"
               className={`mc-next-thread-tool-activity-row tone-${tone}`}
               onClick={onOpenRunDetails}
-              aria-label={`Open execution detail for ${run.toolName}`}
+              aria-label={`Open execution detail for ${chatToolDisplayName(run)}`}
             >
               <span className="mc-next-thread-tool-activity-status">
                 {diagnostics.hasFailureSignal && run.status === "executed"
@@ -308,7 +308,7 @@ function LiveActivityRow({
       type="button"
       className="mc-next-live-activity-row"
       onClick={onOpenRunDetails}
-      aria-label={`Open execution detail for ${run.toolName}`}
+      aria-label={`Open execution detail for ${chatToolDisplayName(run)}`}
     >
       <LiveActivityRowGlyph run={run} hasFailureSignal={diagnostics.hasFailureSignal} />
       <span className="mc-next-live-activity-name" title={run.toolName}>

@@ -266,7 +266,9 @@ describe("ChatLiveActivityRail", () => {
     const renderer = TestRenderer.create(
       <ChatTurnActivityRows mode="chat" toolRuns={toolRuns} onOpenRunDetails={vi.fn()} />,
     );
-    expect(renderer.root.findAllByProps({ "aria-label": "Open execution detail for tool.4" })).toHaveLength(1);
+    // The accessible name matches the visible one, never the raw registry id.
+    expect(renderer.root.findAllByProps({ "aria-label": "Open execution detail for Tool 4" })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ "aria-label": "Open execution detail for tool.4" })).toHaveLength(0);
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -447,7 +449,7 @@ describe("ChatLiveActivityRail", () => {
     const row = renderer.root.findByProps({ className: "mc-next-live-activity-row" });
     expect(row.type).toBe("button");
     expect(row.props.type).toBe("button");
-    expect(row.props["aria-label"]).toBe("Open execution detail for memory.search");
+    expect(row.props["aria-label"]).toBe("Open execution detail for Search memory");
     TestRenderer.act(() => {
       row.props.onClick();
     });
