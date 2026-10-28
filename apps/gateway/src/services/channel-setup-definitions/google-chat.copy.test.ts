@@ -71,7 +71,7 @@ describe("Google Chat setup guide: no key-shaped example text", () => {
 
   it("describes the key file in plain words instead of showing key JSON", () => {
     expect(field("serviceAccountKey").looksLike).toBe(
-      "The whole JSON key file from Google Cloud: it starts with { and names your project and the service account's email.",
+      "The whole JSON key file from Google Cloud. It starts with { and names your project and the service account's email.",
     );
   });
 
