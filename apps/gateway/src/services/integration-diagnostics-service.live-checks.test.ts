@@ -270,7 +270,14 @@ describe("integration diagnostics live-check routing", () => {
     );
 
     expect(webhookProbeMock).not.toHaveBeenCalled();
-    expect(result.checks).toEqual([expect.objectContaining({ key: "google_chat_app_live_send", status: "warn" })]);
+    expect(result.checks).toEqual([
+      {
+        key: "google_chat_app_live_send",
+        status: "warn",
+        message:
+          "GoatCitadel can't send a test message in Chat app mode. After you finish, message the app from an allowed sender and check that it replies.",
+      },
+    ]);
   });
 
   it("lets public HTTPS webhook destinations through governed live checks without a sandbox allowlist entry", async () => {

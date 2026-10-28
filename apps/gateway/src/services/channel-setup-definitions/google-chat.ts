@@ -116,7 +116,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
               ],
             },
             paragraph(
-              "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which you only get after finishing). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL.",
+              "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which you only get after finishing). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL, then message the app from an allowed sender and check that it replies.",
             ),
             paragraph(
               "GoatCitadel doesn't provide a public address. A Chat app needs your own public HTTPS address (a reverse proxy or tunnel) in front of this Gateway.",
@@ -284,7 +284,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
           body: [
             paragraph("Incoming webhook: GoatCitadel sends one test message into the space. Check that it appears."),
             paragraph(
-              "Chat app: GoatCitadel checks that the key is set and the audience looks right; it doesn't contact Google in this mode. After you finish, message the app from an allowed sender and check its reply.",
+              "Chat app: GoatCitadel checks that the key is set and the audience looks right. It doesn't contact Google or send a test message in this mode, so the result carries a note about that. You can still finish. After you finish, message the app from an allowed sender and check that it replies.",
             ),
           ],
           troubleshooting: [
@@ -304,19 +304,14 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
               "GoatCitadel only reaches hosts you allow. Use Allow these hosts on this step to add chat.googleapis.com (and oauth2.googleapis.com for a Chat app), then run the test again.",
             ),
             troubleshoot(
-              "thread-key-missing",
-              "It says the default thread key is missing",
-              "The thread key is optional, but this test still asks for one. Open Advanced connection options, enter any name in Optional default thread key (for example goatcitadel-ops), and run the test again. It only groups messages into one thread.",
-            ),
-            troubleshoot(
               "message-missing",
               "The test passed but nothing appeared in the space",
               "A passing test means Google Chat accepted the message. Check that you are looking at the space you made the webhook in, and open the thread if you set a thread key.",
             ),
             troubleshoot(
               "app-not-checked",
-              "It says Chat app mode has no probe",
-              "GoatCitadel can't check a Chat app yet, so Finalize stays off in Chat app mode for now. Use webhook mode to send now.",
+              "It says GoatCitadel can't send a test message in Chat app mode",
+              "That is expected. GoatCitadel can't send a test message in Chat app mode, and you can still finish setup. After you finish, message the app from an allowed sender and check that it replies. If it does not reply, see: You message the app and nothing comes back.",
             ),
             troubleshoot(
               "no-reply",
@@ -336,13 +331,13 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finish saves the connection. For an incoming webhook, the test already posted a message; check that it appeared in the space. For a Chat app, finish first, then message the app from an allowed sender and check its reply.",
+              "Finish saves the connection. For an incoming webhook, the test already posted a message; check that it appeared in the space. A Chat app gets no test message. After you finish, message the app from an allowed sender and check that it replies.",
             ),
           ],
           successCriteria: [
             "An incoming webhook URL or a service-account key is set.",
             "A Chat app has an audience that matches the Chat app's setting.",
-            "The test message appeared in the space, or the Chat app replied.",
+            "Incoming webhook: the test message appeared in the space.",
           ],
         },
       ],

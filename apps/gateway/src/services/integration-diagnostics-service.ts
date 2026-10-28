@@ -281,13 +281,8 @@ export function buildIntegrationConnectionChecks(
           );
           break;
         }
+        // An incoming webhook is already bound to its space, and its thread key is optional, so nothing asks for one.
         checkUrl("url", "Google Chat webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), true);
-        requireText(
-          "target",
-          "Default Google Chat thread key",
-          resolveChannelConfigTarget(connection.key, config),
-          "warn",
-        );
         break;
       case "teams":
         checkUrl("url", "Teams webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), true);
@@ -704,7 +699,7 @@ export async function runIntegrationConnectionLiveChecks(
               key: "google_chat_app_live_send",
               status: "warn",
               message:
-                "Chat app (service-account) mode can't send a test message. Message the app from an allowed sender and confirm its reply in Google Chat.",
+                "GoatCitadel can't send a test message in Chat app mode. After you finish, message the app from an allowed sender and check that it replies.",
             },
           ],
         };

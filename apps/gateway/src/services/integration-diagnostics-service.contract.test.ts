@@ -296,6 +296,38 @@ describe("integration-diagnostics-service contract behavior", () => {
     expect(outboundOnly.some((check) => check.key.startsWith("inbound_access"))).toBe(false);
   });
 
+  it("asks an incoming Google Chat webhook for nothing but its link: the thread key is optional", () => {
+    const host = createPort();
+    host.isConnectionUrlAllowlisted = vi.fn(() => true);
+    const webhook = "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=k&token=t";
+
+    const checks = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("google-chat", "channel", { webhookUrl: webhook }),
+    );
+
+    expect(checks.map((check) => check.key)).not.toContain("target");
+    expect(checks.filter((check) => check.status !== "pass")).toEqual([]);
+  });
+
+  it("still asks a Google Chat app for its default space, as a warning that does not fail the check", () => {
+    const host = createPort();
+    const app = {
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "project_number",
+      audience: "123456789012",
+    };
+
+    const without = buildIntegrationConnectionChecks(host, createIntegrationConnection("google-chat", "channel", app));
+    const withSpace = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("google-chat", "channel", { ...app, defaultSpace: "spaces/AAAA" }),
+    );
+
+    expect(without.find((check) => check.key === "target")).toMatchObject({ status: "warn" });
+    expect(withSpace.find((check) => check.key === "target")).toMatchObject({ status: "pass" });
+  });
+
   it("requires local bridge posture for local-app productivity entries", () => {
     const host = createPort();
     const connection = createIntegrationConnection("apple-notes", "productivity", {

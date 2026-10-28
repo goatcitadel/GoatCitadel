@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ChannelSetupFieldDefinition,
   ChannelSetupHostRule,
@@ -41,7 +41,7 @@ function textOf(blocks: readonly ChannelSetupRichBlock[] | undefined): string {
   return (blocks ?? []).map((block) => JSON.stringify(block)).join("\n");
 }
 
-const { draftOf, connectionOf, verdictOf } = guideFinish("channel.google-chat");
+const { draftOf, connectionOf, continueBlockers, verdictOf } = guideFinish("channel.google-chat");
 
 const WEBHOOK_URL = "https://chat.googleapis.com/v1/spaces/AAAAxxxx/messages?key=synthetic-key&token=synthetic-token";
 const APP_VALUES = {
@@ -61,6 +61,12 @@ describe("Google Chat setup copy", () => {
 
   it("never claims a public web address for GoatCitadel", () => {
     expect(JSON.stringify(guide().definition.wizard)).not.toMatch(/https:\/\/<your public address>/u);
+  });
+
+  it("never says Finalize stays off, or sends a Chat app to webhook mode to get past setup", () => {
+    expect(JSON.stringify(guide().definition.wizard)).not.toMatch(
+      /Finalize stays off|stays off in Chat app mode|Use webhook mode to send now/iu,
+    );
   });
 });
 
@@ -321,9 +327,9 @@ describe("Google Chat setup guide: the Chat app (items 3 and 6)", () => {
     expect(text).toContain("https://developers.google.com/workspace/chat/authenticate-authorize-chat-app");
   });
 
-  it("says to pick the project number now and paste this connection's address after finishing", () => {
+  it("says to pick the project number now and, after finishing, paste this connection's address and message the app", () => {
     expect(paragraphs("create-webhook")).toContain(
-      "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which you only get after finishing). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL.",
+      "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which you only get after finishing). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL, then message the app from an allowed sender and check that it replies.",
     );
   });
 
@@ -408,23 +414,35 @@ describe("Google Chat setup guide: the service-account key (item 7, A5)", () => 
 });
 
 describe("Google Chat setup guide: the test and finishing (item 9)", () => {
-  it("says what the test does in each mode, and not to expect a Google check for a Chat app", () => {
+  it("says what the test does in each mode, and that a Chat app gets no test message but can still finish", () => {
     expect(paragraphs("test")).toEqual([
       "Incoming webhook: GoatCitadel sends one test message into the space. Check that it appears.",
-      "Chat app: GoatCitadel checks that the key is set and the audience looks right; it doesn't contact Google in this mode. After you finish, message the app from an allowed sender and check its reply.",
+      "Chat app: GoatCitadel checks that the key is set and the audience looks right. It doesn't contact Google or send a test message in this mode, so the result carries a note about that. You can still finish. After you finish, message the app from an allowed sender and check that it replies.",
     ]);
     expect(JSON.stringify(step("test").body)).not.toMatch(/sandbox/iu);
   });
 
-  it("finishes on the message that already arrived, or on a message to the app", () => {
+  it("finishes on the message that already arrived, or on a message to the app after finishing", () => {
     expect(paragraphs("finish")).toEqual([
-      "Finish saves the connection. For an incoming webhook, the test already posted a message; check that it appeared in the space. For a Chat app, finish first, then message the app from an allowed sender and check its reply.",
+      "Finish saves the connection. For an incoming webhook, the test already posted a message; check that it appeared in the space. A Chat app gets no test message. After you finish, message the app from an allowed sender and check that it replies.",
     ]);
     expect(step("finish").successCriteria).toEqual([
       "An incoming webhook URL or a service-account key is set.",
       "A Chat app has an audience that matches the Chat app's setting.",
-      "The test message appeared in the space, or the Chat app replied.",
+      "Incoming webhook: the test message appeared in the space.",
     ]);
+  });
+
+  it("tells one story for a Chat app everywhere: finish, then message the app and check that it replies", () => {
+    const story = [paragraphs("create-webhook"), paragraphs("test"), paragraphs("finish")]
+      .flat()
+      .filter((text) => /message the app/u.test(text));
+
+    expect(story).toHaveLength(3);
+    for (const text of story) {
+      expect(text).toContain("After you finish");
+      expect(text).toContain("message the app from an allowed sender and check that it replies");
+    }
   });
 
   it("tells a person where to find the default space", () => {
@@ -446,12 +464,18 @@ describe("Google Chat setup guide: when the test fails (A13)", () => {
         "incomplete-url",
         "host-not-allowed",
         "message-missing",
-        "thread-key-missing",
         "app-not-checked",
         "no-reply",
         "key-not-found",
       ]),
     );
+  });
+
+  it("does not list a thread-key workaround: the thread key is optional and nothing asks for it", () => {
+    const items = step("test").troubleshooting ?? [];
+
+    expect(items.map((item) => item.id)).not.toContain("thread-key-missing");
+    expect(JSON.stringify(items)).not.toMatch(/Advanced connection options|still asks for one|thread key is missing/iu);
   });
 
   it("points a silent Chat app at the endpoint address, the audience and the allowed sender", () => {
@@ -463,16 +487,19 @@ describe("Google Chat setup guide: when the test fails (A13)", () => {
     expect(noReply).toContain("public HTTPS address");
   });
 
-  it("says what Chat app mode does today: Finalize stays off, so it doesn't call that expected or say to finish (R61)", () => {
-    // Until PR 4 (C2b, decision N3) turns the Gateway's 'no probe' warning into an advisory, a Chat app can't be
-    // finalized, and the 'Google Chat app path: can it finish?' pin below says so. PR 4 changes this text and that pin together.
+  it("says a Chat app finishes without a test message, and how to check it afterwards (decision N3)", () => {
+    // The Gateway turns the 'can't send a test message' warning into an advisory, and the 'Google Chat app path: can
+    // it finish?' pin below proves a Chat app can be finished, so this item says to finish and what to check after.
     const item = (step("test").troubleshooting ?? []).find((candidate) => candidate.id === "app-not-checked");
 
-    expect(item?.title).toBe("It says Chat app mode has no probe");
+    expect(item?.title).toBe("It says GoatCitadel can't send a test message in Chat app mode");
     expect(item?.body).toBe(
-      "GoatCitadel can't check a Chat app yet, so Finalize stays off in Chat app mode for now. Use webhook mode to send now.",
+      "That is expected. GoatCitadel can't send a test message in Chat app mode, and you can still finish setup. After you finish, message the app from an allowed sender and check that it replies. If it does not reply, see: You message the app and nothing comes back.",
     );
-    expect(item?.body).not.toMatch(/expected|Finish setup/u);
+    expect(item?.body).not.toMatch(/probe|webhook mode/iu);
+    expect((step("test").troubleshooting ?? []).map((candidate) => candidate.title)).toContain(
+      "You message the app and nothing comes back",
+    );
   });
 
   it("tells a person the allowed-hosts button covers both Google hosts in Chat app mode", () => {
@@ -542,49 +569,86 @@ describe("Google Chat setup guide: asking for what is missing (A15)", () => {
 });
 
 describe("Google Chat incoming webhook path: can it finish?", () => {
-  it("finishes when the optional thread key is filled in (the workaround the test step names)", async () => {
-    const config = guide().normalize(
-      draftOf({ mode: "webhook", webhookUrl: WEBHOOK_URL, defaultThreadKey: "goatcitadel" }),
-    );
-    const { issues, eligibility } = await verdictOf(config);
+  it("finishes with just the webhook link: the optional thread key is not asked for", async () => {
+    const values = { mode: "webhook", webhookUrl: WEBHOOK_URL };
+    const { issues, eligibility } = await verdictOf(guide().normalize(draftOf(values)));
 
-    expect(
-      guide().validate(draftOf({ mode: "webhook", webhookUrl: WEBHOOK_URL, defaultThreadKey: "goatcitadel" })),
-    ).toEqual([]);
+    expect(continueBlockers(values)).toEqual([]);
+    expect(guide().validate(draftOf(values))).toEqual([]);
     expect(issues).toEqual([]);
     expect(eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
   });
 
-  it("is held back without a thread key by a Gateway check that Part C (C2, PR 4) removes", async () => {
-    const config = guide().normalize(draftOf({ mode: "webhook", webhookUrl: WEBHOOK_URL }));
-    const { eligibility } = await verdictOf(config);
+  it("finishes the same way with a thread key, which only groups the messages", async () => {
+    const values = { mode: "webhook", webhookUrl: WEBHOOK_URL, defaultThreadKey: "goatcitadel" };
+    const { issues, eligibility } = await verdictOf(guide().normalize(draftOf(values)));
 
-    expect(eligibility.allowed).toBe(false);
-    expect(eligibility.blockingReasons).toEqual(["Default Google Chat thread key is missing."]);
+    expect(guide().validate(draftOf(values))).toEqual([]);
+    expect(issues).toEqual([]);
+    expect(eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
   });
 
-  it("names that workaround on the test step", () => {
-    const item = (step("test").troubleshooting ?? []).find((candidate) => candidate.id === "thread-key-missing");
+  it("keeps the thread key an optional field that only matters for webhook mode", () => {
+    const threadKey = field("defaultThreadKey");
 
-    expect(item?.body).toContain("Advanced connection options");
-    expect(item?.body).toContain("Optional default thread key");
+    expect(threadKey.label).toBe("Optional default thread key");
+    expect(threadKey.required).toBe(false);
+    expect(threadKey.explanation).toBe(
+      "Optional thread key for grouping outbound webhook messages into a stable thread.",
+    );
+    expect(threadKey.visibleWhenFieldEquals).toEqual({ fieldKey: "mode", value: "webhook" });
   });
 });
 
 describe("Google Chat app path: can it finish?", () => {
+  // A pasted key is saved as a secret reference, which the structural check counts as set.
+  const { serviceAccountKeyEnv: _env, ...appWithoutEnv } = APP_VALUES;
+  const PASTED_APP_VALUES = { ...appWithoutEnv, serviceAccountKey: "secret-reference" };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("passes the guide's own validation with a key, an audience and a space", () => {
     expect(guide().validate(draftOf(APP_VALUES))).toEqual([]);
   });
 
-  it("is held back by the Gateway's 'no probe' warning that Part C (C2b, PR 4, decision N3) turns into an advisory", async () => {
-    // A pasted key is saved as a secret reference, which the structural check counts as set.
-    const { serviceAccountKeyEnv: _env, ...rest } = APP_VALUES;
-    const config = guide().normalize(draftOf({ ...rest, serviceAccountKey: "secret-reference" }));
-    const { eligibility } = await verdictOf(config);
+  it("finishes with a key, an audience and a space, and calls the missing test message an advisory", async () => {
+    const { deps, issues, eligibility } = await verdictOf(guide().normalize(draftOf(PASTED_APP_VALUES)));
+
+    expect(continueBlockers(PASTED_APP_VALUES)).toEqual([]);
+    expect(eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
+    expect(issues.find((issue) => issue.key === "google_chat_app_live_send")).toMatchObject({
+      level: "warn",
+      disposition: "advisory",
+      message:
+        "GoatCitadel can't send a test message in Chat app mode. After you finish, message the app from an allowed sender and check that it replies.",
+    });
+    expect(deps.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+  });
+
+  it("finishes with the key in an environment variable too", async () => {
+    vi.stubEnv("GOOGLE_CHAT_SA_KEY", "synthetic-service-account-key");
+
+    const { eligibility } = await verdictOf(guide().normalize(draftOf(APP_VALUES)));
+
+    expect(continueBlockers(APP_VALUES)).toEqual([]);
+    expect(eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
+  });
+
+  it("finishes with no default space, which only defers the warning about it", async () => {
+    const { defaultSpace: _space, ...noSpace } = PASTED_APP_VALUES;
+    const { issues, eligibility } = await verdictOf(guide().normalize(draftOf(noSpace)));
+
+    expect(eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
+    expect(issues.find((issue) => issue.key === "target")).toMatchObject({ disposition: "deferred" });
+  });
+
+  it("does not finish without an audience: the advisory waives only the missing test message", async () => {
+    const { audience: _audience, ...noAudience } = PASTED_APP_VALUES;
+    const { eligibility } = await verdictOf(guide().normalize(draftOf(noAudience)));
 
     expect(eligibility.allowed).toBe(false);
-    expect(eligibility.blockingReasons).toEqual([
-      "Chat app (service-account) mode can't send a test message. Message the app from an allowed sender and confirm its reply in Google Chat.",
-    ]);
+    expect(eligibility.blockingReasons).toEqual(["Google Chat app audience is missing."]);
   });
 });
