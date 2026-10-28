@@ -313,6 +313,55 @@ describe("ChatTurnAgentRunner incremental thinking stream", () => {
     expect(seen[0]?.streamReasoningDeltas).toBe(true);
     expect(chunks.find((chunk) => chunk.type === "message_done")?.content).toBe("Done.");
   });
+
+  it("moves inline <think> reasoning from streamed content into thinking_delta, never the answer", async () => {
+    const inlineStream = ["<thi", "nk>Check the ", "units.</thi", "nk>\n\n42", " metres."].map((content) => ({
+      id: "s3",
+      model: "m",
+      choices: [{ index: 0, delta: { content } }],
+    }));
+    const runInline = async (thinkingOn: boolean) => {
+      const orchestrator = new ChatTurnAgentRunner({
+        ...streamingDeps(inlineStream, []),
+        chatThinkingStreamV1Enabled: () => thinkingOn,
+      } as never);
+      const chunks: Array<Record<string, unknown>> = [];
+      for await (const chunk of orchestrator.runStream(baseTurn(`sess-inline-${thinkingOn}`, "How far?"))) {
+        chunks.push(chunk as Record<string, unknown>);
+      }
+      return chunks;
+    };
+
+    for (const thinkingOn of [true, false]) {
+      const chunks = await runInline(thinkingOn);
+      const visible = chunks.filter((chunk) => chunk.type === "delta").map((chunk) => chunk.delta);
+      expect(visible.join("")).toBe("42 metres.");
+      expect(chunks.find((chunk) => chunk.type === "message_done")?.content).toBe("42 metres.");
+      const thinking = chunks.filter((chunk) => chunk.type === "thinking_delta").map((chunk) => chunk.delta);
+      expect(thinking.join("")).toBe(thinkingOn ? "Check the units." : "");
+    }
+  });
+
+  it("shows inline reasoning from a non-streamed reply in the thinking disclosure only", async () => {
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion: async (): Promise<ChatCompletionResponse> => ({
+        model: "qwen3",
+        choices: [{ index: 0, message: { role: "assistant", content: "<think>Short reply.</think>\n\nHello!" } }],
+      }),
+      invokeTool: async () => {
+        throw new Error("not expected");
+      },
+      chatThinkingStreamV1Enabled: () => true,
+    });
+    const chunks: Array<Record<string, unknown>> = [];
+    for await (const chunk of orchestrator.runStream(baseTurn("sess-inline-nonstream", "Hi"))) {
+      chunks.push(chunk as Record<string, unknown>);
+    }
+    expect(chunks.find((chunk) => chunk.type === "thinking_delta")?.delta).toBe("Short reply.");
+    expect(chunks.find((chunk) => chunk.type === "message_done")?.content).toBe("Hello!");
+  });
 });
 
 function reasoningChunks(fragments: string[]): Array<Record<string, unknown>> {

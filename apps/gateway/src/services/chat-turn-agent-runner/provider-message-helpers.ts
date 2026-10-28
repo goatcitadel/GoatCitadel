@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { ChatCompletionRequest } from "@goatcitadel/contracts";
+import { splitInlineReasoning, type ChatCompletionRequest } from "@goatcitadel/contracts";
+import { extractStructuredTextContent } from "../chat-agent-completion-adapters.js";
 
 export type ChatCompletionMessage = ChatCompletionRequest["messages"][number];
 
@@ -82,7 +83,7 @@ export function messageHasReasoningContent(message: Record<string, unknown> | un
       return true;
     }
   }
-  return false;
+  return readInlineReasoning(message).trim().length > 0;
 }
 
 /**
@@ -121,5 +122,10 @@ export function extractReasoningText(message: Record<string, unknown> | undefine
       parts.push(text);
     }
   }
-  return parts.join("");
+  return parts.length > 0 ? parts.join("") : readInlineReasoning(message);
+}
+
+/** Reasoning a local model wrote inline as a leading `<think>…</think>` block in its content. */
+function readInlineReasoning(message: Record<string, unknown>): string {
+  return splitInlineReasoning(extractStructuredTextContent(message.content)).reasoning;
 }
