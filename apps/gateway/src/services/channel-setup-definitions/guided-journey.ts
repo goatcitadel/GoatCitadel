@@ -1,5 +1,7 @@
 import type {
+  ChannelSetupDraft,
   ChannelSetupFieldDefinition,
+  ChannelSetupIssue,
   ChannelSetupStage,
   ChannelSetupStepDefinition,
 } from "@goatcitadel/contracts";
@@ -9,10 +11,15 @@ import {
   hydrateGuidedChannelInboundAccess,
   normalizeGuidedChannelInboundAccess,
 } from "../channel-setup-inbound-access.js";
+import { PERMITTED_INTEGRATION_ENV_NAME_PATTERN } from "../gateway/integration-secret-envvar-guard.js";
 import {
+  malformedFieldIssue,
   PASTED_SECRET_EXPLANATION,
   plainSecretLabel,
+  readString,
   secretEnvFieldCopy,
+  secretEnvNameIsReadable,
+  secretEnvVariableRule,
   type ChannelSetupRuntimeDefinition,
 } from "./common.js";
 
@@ -284,7 +291,7 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
         : normalized;
     },
     validate(draft) {
-      const issues = runtime.validate(draft);
+      const issues = [...runtime.validate(draft), ...variableNameIssues(runtime, authoredFields, draft)];
       try {
         normalizeGuidedChannelInboundAccess(key, draft, draft.hydration?.rawLegacyConfig ?? {});
       } catch {
@@ -299,6 +306,40 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
       return issues;
     },
   };
+}
+
+/**
+ * A variable-name field takes the name of a variable the Gateway can read, never the secret itself: a token typed
+ * there would be saved in plain config and never used. A value that is not shaped like a name at all is told to go
+ * to the pasted field; a name the Gateway would not read gets the field's own name rule. The value is never repeated.
+ * Only validation runs this: a connection saved with another name keeps working until it is next edited.
+ */
+function variableNameIssues(
+  runtime: ChannelSetupRuntimeDefinition,
+  authoredFields: readonly ChannelSetupFieldDefinition[],
+  draft: ChannelSetupDraft,
+): ChannelSetupIssue[] {
+  const { key, catalogId } = runtime.definition.catalog;
+  return authoredFields.flatMap((field) => {
+    const name = field.key.endsWith("Env") ? readString(draft.draft, field.key) : undefined;
+    if (!name || isHiddenByChoice(field, draft)) return [];
+    if (!PERMITTED_INTEGRATION_ENV_NAME_PATTERN.test(name)) {
+      const twin = authoredFields.find((candidate) => candidate.key === field.key.slice(0, -"Env".length));
+      const where = twin ? ` Paste it into ${plainSecretLabel(twin.label)} instead.` : "";
+      return [malformedFieldIssue(field.key, `That looks like a token, not a variable name.${where}`)];
+    }
+    return secretEnvNameIsReadable(catalogId, key, field.key, name)
+      ? []
+      : [malformedFieldIssue(field.key, secretEnvVariableRule(key, field.key))];
+  });
+}
+
+/** True when the draft has chosen the other option of the field that shows this one, so the person cannot see it. */
+function isHiddenByChoice(field: ChannelSetupFieldDefinition, draft: ChannelSetupDraft): boolean {
+  const condition = field.visibleWhenFieldEquals;
+  if (!condition) return false;
+  const chosen = draft.draft[condition.fieldKey];
+  return chosen !== undefined && chosen !== "" && chosen !== condition.value;
 }
 
 /** The wizard's field after the shared rules: expert options, optional secrets, and the secret/variable wording. */

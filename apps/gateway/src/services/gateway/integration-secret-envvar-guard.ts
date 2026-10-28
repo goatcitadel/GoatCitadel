@@ -1,4 +1,5 @@
-const PERMITTED_INTEGRATION_ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/;
+/** The shape a variable name must have before any other rule applies. Setup reuses it to tell a pasted token from a name. */
+export const PERMITTED_INTEGRATION_ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/;
 const FORBIDDEN_INTEGRATION_ENV_NAMES = new Set<string>([
   // LLM provider keys - never resolvable as an integration secret because
   // an attacker-controlled connection config could otherwise exfiltrate

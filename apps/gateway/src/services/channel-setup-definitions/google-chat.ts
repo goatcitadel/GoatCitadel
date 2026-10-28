@@ -481,12 +481,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
 
 function validateAppMode(values: Record<string, unknown>): ChannelSetupIssue[] {
   const issues: ChannelSetupIssue[] = [];
-  const keyEnv = readString(values, "serviceAccountKeyEnv");
-  if (keyEnv && !/^[A-Z_][A-Z0-9_]*$/.test(keyEnv)) {
-    issues.push(
-      malformedFieldIssue("serviceAccountKeyEnv", "Use an environment variable name such as GOOGLE_CHAT_SA_KEY."),
-    );
-  }
+  // The key variable's name is checked for every guide by withGuidedJourney, against what the Gateway can read.
   const audienceType = readString(values, "audienceType") ?? "project_number";
   const audience = readString(values, "audience");
   if (!AUDIENCE_TYPES.has(audienceType)) {

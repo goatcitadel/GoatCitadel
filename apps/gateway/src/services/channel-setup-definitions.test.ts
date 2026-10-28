@@ -12,6 +12,7 @@ import {
   plainSecretLabel,
   requireSecureUrl,
   secretEnvFieldCopy,
+  secretEnvVariableRule,
   secretNameForVariable,
 } from "./channel-setup-definitions/common.js";
 import { withGuidedJourney } from "./channel-setup-definitions/guided-journey.js";
@@ -1640,6 +1641,207 @@ describe("the shared guide builder", () => {
           ?.fields?.map((field) => field.key);
       expect(lineKeys("collect-values-identity")).toEqual(["channelAccessToken", "channelAccessTokenEnv"]);
       expect(lineKeys("receive-messages")).toEqual(["channelSecret", "channelSecretEnv"]);
+    });
+  });
+
+  describe("variable names a Gateway can read (C5)", () => {
+    const TOKEN = "MTA0NjY3ODkwMTIzNDU2Nzg5MA.Gx1234.abcdefghijklmnopqrstuvwx";
+
+    /**
+     * Which runtime resolvers read each variable-name field. "outbound" is the credential guard that sends and the
+     * setup test go through (`isPermittedIntegrationSecretEnvVarName`), "inbound" is the webhook secret allowlist
+     * (`isAllowedSecretEnvName`), and "both" means a send and a webhook read the same variable.
+     */
+    const READERS: Record<string, "outbound" | "inbound" | "both"> = {
+      "discord.botTokenEnv": "outbound",
+      "google-chat.serviceAccountKeyEnv": "outbound",
+      "line.channelAccessTokenEnv": "outbound",
+      "line.channelSecretEnv": "inbound",
+      "matrix.accessTokenEnv": "outbound",
+      "mattermost.botTokenEnv": "outbound",
+      "nextcloud-talk.tokenEnv": "both",
+      "ntfy.tokenEnv": "outbound",
+      "qqbot.appSecretEnv": "both",
+      "telegram.webhookSecretEnv": "inbound",
+      "wecom.secretEnv": "outbound",
+      "wecom.callbackTokenEnv": "both",
+      "wecom.encodingAesKeyEnv": "both",
+      "whatsapp.accessTokenEnv": "outbound",
+      "whatsapp.appSecretEnv": "inbound",
+      "whatsapp.webhookVerifyTokenEnv": "inbound",
+      "zalo.accessTokenEnv": "outbound",
+    };
+
+    function envFields(): Array<{
+      definition: ChannelSetupDefinition;
+      key: string;
+      field: ChannelSetupFieldDefinition;
+      where: string;
+    }> {
+      return listChannelSetupDefinitions().flatMap((definition) =>
+        allFields(definition)
+          .filter((field) => field.key.endsWith("Env"))
+          .map((field) => ({
+            definition,
+            key: definition.catalog.key,
+            field,
+            where: `${definition.catalog.key}.${field.key}`,
+          })),
+      );
+    }
+
+    /** A draft that shows the field: a field a choice hides (Google Chat's app key, Telegram's webhook secret) gets that choice. */
+    function draftWith(definition: ChannelSetupDefinition, field: ChannelSetupFieldDefinition, value: string) {
+      const condition = field.visibleWhenFieldEquals;
+      return createDraft(definition.catalog.catalogId, {
+        ...(condition ? { [condition.fieldKey]: condition.value } : {}),
+        [field.key]: value,
+      });
+    }
+
+    function issuesFor(definition: ChannelSetupDefinition, field: ChannelSetupFieldDefinition, value: string) {
+      const runtime = requireChannelSetupDefinition(definition.catalog.catalogId);
+      return runtime.validate(draftWith(definition, field, value)).filter((issue) => issue.fieldKey === field.key);
+    }
+
+    function pastedLabel(definition: ChannelSetupDefinition, field: ChannelSetupFieldDefinition): string {
+      const twin = allFields(definition).find((candidate) => candidate.key === field.key.slice(0, -3));
+      return plainSecretLabel(twin?.label ?? "");
+    }
+
+    function upperSnake(camel: string): string {
+      return camel.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toUpperCase();
+    }
+
+    it("refuses a token pasted into any variable-name field, and tells the person where to paste it", () => {
+      let checked = 0;
+      for (const { definition, field, where } of envFields()) {
+        checked += 1;
+        const issues = issuesFor(definition, field, TOKEN);
+        expect(issues, where).toEqual([
+          expect.objectContaining({
+            fieldKey: field.key,
+            level: "error",
+            failureCategory: "malformed_value",
+            message: `That looks like a token, not a variable name. Paste it into ${pastedLabel(definition, field)} instead.`,
+          }),
+        ]);
+        // The pasted text can be a real credential, so no message, detail or key repeats it.
+        expect(JSON.stringify(issues), `${where} does not repeat the pasted value`).not.toContain(TOKEN);
+      }
+      expect(checked).toBeGreaterThanOrEqual(17);
+    });
+
+    it("refuses a well-formed name the Gateway would not read, with the field's own name rule", () => {
+      for (const { definition, key, field, where } of envFields()) {
+        expect(issuesFor(definition, field, "MY_TOKEN"), where).toEqual([
+          expect.objectContaining({
+            fieldKey: field.key,
+            level: "error",
+            failureCategory: "malformed_value",
+            message: secretEnvVariableRule(key, field.key),
+          }),
+        ]);
+      }
+    });
+
+    it("names every variable-name field's runtime reader, so a new field must pick one", () => {
+      expect(
+        envFields()
+          .map((item) => item.where)
+          .sort(),
+      ).toEqual(Object.keys(READERS).sort());
+    });
+
+    it("accepts exactly the names the runtime resolver of each field accepts", () => {
+      for (const { definition, key, field, where } of envFields()) {
+        const reader = READERS[where];
+        const catalogId = definition.catalog.catalogId;
+        const prefix = key.toUpperCase().replaceAll("-", "_");
+        const names = [
+          `${prefix}_${upperSnake(field.key.slice(0, -3))}`,
+          `${prefix}_BOT_TOKEN`,
+          `${prefix}_APP_SECRET`,
+          `${prefix}_ENCODING_AES_KEY`,
+          `${prefix}_KEY`,
+          `${prefix}_NOTES`,
+          `INTEGRATION_${prefix}_TOKEN`,
+          `GC_${prefix}_TOKEN`,
+          `GOATCITADEL_${prefix}_TOKEN`,
+          "MY_TOKEN",
+          "WEBHOOK_SECRET",
+          "CHANNEL_SECRET",
+          "OPENAI_API_KEY",
+          "GITHUB_TOKEN",
+          "AB",
+          `${prefix.toLowerCase()}_bot_token`,
+        ];
+        const readable = (name: string) =>
+          (reader === "inbound" || isPermittedIntegrationSecretEnvVarName(name, catalogId)) &&
+          (reader === "outbound" || isAllowedSecretEnvName(name));
+        const accepted: string[] = [];
+        const refused: string[] = [];
+        for (const name of names) {
+          const issues = issuesFor(definition, field, name);
+          // Same answer as the resolver: no name the resolver reads is refused, and none it refuses is accepted.
+          expect(issues.length === 0, `${where} ${name}`).toBe(readable(name));
+          (issues.length === 0 ? accepted : refused).push(name);
+        }
+        // The table is not vacuous: each field has a name it takes and several it does not.
+        expect(accepted.length, `${where} accepts its own rule's example`).toBeGreaterThanOrEqual(1);
+        expect(refused.length, `${where} refuses what the resolver refuses`).toBeGreaterThanOrEqual(5);
+      }
+    });
+
+    it("says the name rule for a name that has the shape of one, and the token message for anything else", () => {
+      const { definition, field } = envFields().find((item) => item.where === "mattermost.botTokenEnv")!;
+      const messageOf = (value: string) => issuesFor(definition, field, value)[0]?.message;
+      const token = "That looks like a token, not a variable name. Paste it into Bot token instead.";
+
+      for (const notAName of [
+        "xoxb-1234-abcd",
+        "123:ABC-def",
+        "my.token",
+        "sk_live_abc",
+        "AB",
+        "9ABC_DEF",
+        `A${"B".repeat(128)}`,
+      ]) {
+        expect(messageOf(notAName), notAName).toBe(token);
+      }
+      expect(messageOf("OPENAI_API_KEY")).toBe(secretEnvVariableRule("mattermost", "botTokenEnv"));
+      expect(messageOf("GOATCITADEL_MATTERMOST_TOKEN")).toBe(secretEnvVariableRule("mattermost", "botTokenEnv"));
+      expect(messageOf("MATTERMOST_BOT_TOKEN")).toBeUndefined();
+      // A name with spaces round it is the name; the Gateway trims it too.
+      expect(messageOf("  MATTERMOST_BOT_TOKEN  ")).toBeUndefined();
+    });
+
+    it("leaves a blank variable name, and a field a choice hides, alone", () => {
+      const googleChat = envFields().find((item) => item.where === "google-chat.serviceAccountKeyEnv")!;
+      const runtime = requireChannelSetupDefinition("channel.google-chat");
+      const webhook = runtime.validate(
+        createDraft("channel.google-chat", {
+          mode: "webhook",
+          webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=k&token=t",
+          serviceAccountKeyEnv: TOKEN,
+        }),
+      );
+      // Webhook mode drops the app key when it saves, so a leftover value in the hidden field is not a problem.
+      expect(webhook.filter((issue) => issue.fieldKey === googleChat.field.key)).toEqual([]);
+
+      for (const { definition, field, where } of envFields()) {
+        expect(issuesFor(definition, field, ""), `${where} blank`).toEqual([]);
+        expect(issuesFor(definition, field, "   "), `${where} spaces`).toEqual([]);
+      }
+    });
+
+    it("checks a bare Google Chat draft that holds only the key's variable, as the app mode it implies", () => {
+      const runtime = requireChannelSetupDefinition("channel.google-chat");
+      const issues = runtime.validate(createDraft("channel.google-chat", { serviceAccountKeyEnv: TOKEN }));
+
+      expect(issues.filter((issue) => issue.fieldKey === "serviceAccountKeyEnv")).toEqual([
+        expect.objectContaining({ failureCategory: "malformed_value" }),
+      ]);
     });
   });
 
