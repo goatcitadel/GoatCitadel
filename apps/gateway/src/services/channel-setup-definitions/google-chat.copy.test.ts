@@ -166,17 +166,16 @@ describe("Google Chat setup guide: one mode field (item 4)", () => {
     expect(app).toMatchObject({ serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY", audience: "123456789012" });
   });
 
-  it("saves only the chosen mode's fields, so a changed mind leaves no mixed connection", () => {
+  it("saves only the chosen mode's fields and clears the other's (null), so a changed mind leaves no mixed connection", () => {
     const appWithOldWebhook = guide().normalize(
       draftOf({ ...APP_VALUES, webhookUrl: WEBHOOK_URL, defaultThreadKey: "ops" }),
     );
     const webhookWithOldApp = guide().normalize(draftOf({ ...APP_VALUES, mode: "webhook", webhookUrl: WEBHOOK_URL }));
 
-    expect(appWithOldWebhook).not.toHaveProperty("webhookUrl");
-    expect(appWithOldWebhook).not.toHaveProperty("defaultThreadKey");
+    expect(appWithOldWebhook).toMatchObject({ webhookUrl: null, defaultThreadKey: null });
     expect(webhookWithOldApp).toEqual(expect.objectContaining({ webhookUrl: WEBHOOK_URL }));
     for (const key of ["serviceAccountKeyEnv", "audienceType", "audience", "defaultSpace"]) {
-      expect(webhookWithOldApp, key).not.toHaveProperty(key);
+      expect(webhookWithOldApp[key], key).toBeNull();
     }
   });
 

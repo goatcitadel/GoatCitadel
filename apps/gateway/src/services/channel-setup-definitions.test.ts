@@ -619,12 +619,15 @@ describe("channel setup definitions", () => {
       defaultSpace: "spaces/AAAA",
     });
     expect(definition.validate(appDraft)).toEqual([]);
+    // A Chat app clears the incoming webhook's keys (null), so an edited webhook connection cannot keep them.
     expect(definition.normalize(appDraft)).toEqual({
       serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
       audienceType: "project_number",
       audience: "123456789012",
       defaultSpace: "spaces/AAAA",
       inboundAccessMode: "allowlist",
+      webhookUrl: null,
+      defaultThreadKey: null,
     });
 
     // An edited legacy connection hydrated as open_legacy never carries that posture into app inbound.
@@ -702,7 +705,7 @@ describe("channel setup definitions", () => {
         }),
       ),
     ).toEqual([expect.objectContaining({ fieldKey: "addOnProjectNumber", failureCategory: "malformed_value" })]);
-    // Webhook mode never carries the add-on field.
+    // Webhook mode never carries the add-on field: it clears any that is saved (null).
     expect(
       definition.normalize(
         createDraft("channel.google-chat", {
@@ -710,7 +713,7 @@ describe("channel setup definitions", () => {
           addOnProjectNumber: "987654321098",
         }),
       ),
-    ).not.toHaveProperty("addOnProjectNumber");
+    ).toMatchObject({ addOnProjectNumber: null });
   });
 
   it("rejects malformed Teams webhook URLs", () => {
@@ -1199,6 +1202,13 @@ describe("channel setup definitions", () => {
       webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=key&token=token",
       defaultThreadKey: "ops-thread",
       inboundAccessMode: "allowlist",
+      // A webhook clears the Chat app's keys (null), so an edited Chat app connection cannot keep them.
+      serviceAccountKeyEnv: null,
+      serviceAccountKey: null,
+      audienceType: null,
+      audience: null,
+      addOnProjectNumber: null,
+      defaultSpace: null,
     });
     expect(
       googleChat.validate(

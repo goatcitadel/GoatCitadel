@@ -28,6 +28,17 @@ type GoogleChatMode = "webhook" | "app";
 const FOR_WEBHOOK = { fieldKey: "mode", value: "webhook" } as const;
 const FOR_APP = { fieldKey: "mode", value: "app" } as const;
 
+/** The saved keys only a Chat app holds, and the ones only an incoming webhook holds. A mode change clears the other set. */
+const APP_ONLY_KEYS = [
+  "serviceAccountKeyEnv",
+  "serviceAccountKey",
+  "audienceType",
+  "audience",
+  "addOnProjectNumber",
+  "defaultSpace",
+] as const;
+const WEBHOOK_ONLY_KEYS = ["webhookUrl", "defaultThreadKey"] as const;
+
 /**
  * An inline service-account key is a credential: it lives only in secure draft custody
  * (secretState) or as a custody-hydrated value during validation/test, never in plain draft JSON.
@@ -415,19 +426,25 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
     normalize(draft) {
       const appMode = connectionMode(draft) === "app";
       // The mode itself is never saved: the Gateway and the diagnostics tell a Chat app from a webhook by its key.
-      return compactRecord({
-        webhookUrl: appMode ? undefined : readString(draft.draft, "webhookUrl"),
-        defaultThreadKey: appMode ? undefined : readString(draft.draft, "defaultThreadKey"),
-        // Present only on a custody-hydrated draft; finalize replaces it with the promoted secret reference.
-        serviceAccountKey: appMode ? readString(draft.draft, "serviceAccountKey") : undefined,
-        serviceAccountKeyEnv: appMode ? readString(draft.draft, "serviceAccountKeyEnv") : undefined,
-        audienceType: appMode ? (readString(draft.draft, "audienceType") ?? "project_number") : undefined,
-        audience: appMode ? readString(draft.draft, "audience") : undefined,
-        addOnProjectNumber: appMode ? readString(draft.draft, "addOnProjectNumber") : undefined,
-        defaultSpace: appMode ? readString(draft.draft, "defaultSpace") : undefined,
-        // Google Chat never had inbound: app inbound is default-deny and never inherits a legacy-open posture.
-        ...(appMode ? { inboundAccessMode: "allowlist" } : {}),
-      });
+      // So the other mode's keys are cleared (null), or an edited connection would keep them and stay in its old mode.
+      const otherModeKeys = appMode ? WEBHOOK_ONLY_KEYS : APP_ONLY_KEYS;
+      const clearedOtherMode = Object.fromEntries(otherModeKeys.map((key) => [key, null]));
+      return {
+        ...clearedOtherMode,
+        ...compactRecord({
+          webhookUrl: appMode ? undefined : readString(draft.draft, "webhookUrl"),
+          defaultThreadKey: appMode ? undefined : readString(draft.draft, "defaultThreadKey"),
+          // Present only on a custody-hydrated draft; finalize replaces it with the promoted secret reference.
+          serviceAccountKey: appMode ? readString(draft.draft, "serviceAccountKey") : undefined,
+          serviceAccountKeyEnv: appMode ? readString(draft.draft, "serviceAccountKeyEnv") : undefined,
+          audienceType: appMode ? (readString(draft.draft, "audienceType") ?? "project_number") : undefined,
+          audience: appMode ? readString(draft.draft, "audience") : undefined,
+          addOnProjectNumber: appMode ? readString(draft.draft, "addOnProjectNumber") : undefined,
+          defaultSpace: appMode ? readString(draft.draft, "defaultSpace") : undefined,
+          // Google Chat never had inbound: app inbound is default-deny and never inherits a legacy-open posture.
+          ...(appMode ? { inboundAccessMode: "allowlist" } : {}),
+        }),
+      };
     },
     validate(draft) {
       const issues: ChannelSetupIssue[] = [];

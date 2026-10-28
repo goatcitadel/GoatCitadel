@@ -18,6 +18,11 @@ export interface ChannelSetupRuntimeDefinition {
     draft: Record<string, unknown>;
     hydration: ChannelSetupHydrationResult;
   };
+  /**
+   * The config this draft saves. A key left out (or undefined) keeps the saved connection's value; a key set to `null`
+   * is cleared, so the saved value is dropped when the config is merged over the saved one. Only a guide whose
+   * saved connection holds either of two sets of keys (such as Google Chat's app or webhook) needs `null`.
+   */
   normalize(draft: ChannelSetupDraft): Record<string, unknown>;
   validate(draft: ChannelSetupDraft): ChannelSetupIssue[];
 }

@@ -39,6 +39,7 @@ import {
   buildChannelSetupValidationResult,
   buildDefaultChannelSetupDraft,
   buildEphemeralChannelConnection,
+  clearedChannelConfigKeys,
   getReusableChannelSetupTestResult,
 } from "./channel-setup-helpers.js";
 import {
@@ -879,8 +880,11 @@ async function persistConnectionWithSecretReferences(
   payload: Parameters<Storage["channelSetupDrafts"]["finalizeConnection"]>[2],
   onCommitted?: () => Promise<void>,
 ): Promise<IntegrationConnection> {
+  // A key the guide clears (such as the other mode's) is not saved, so a stored secret reference for it is not added back.
+  const cleared = clearedChannelConfigKeys(requireChannelSetupDefinition(draft.catalogId).normalize(draft));
+  const savedSecretStates = Object.entries(draft.secretState ?? {}).filter(([fieldKey]) => !cleared.has(fieldKey));
   const configWithTemporaryRefs = { ...payload.config };
-  for (const [fieldKey, state] of Object.entries(draft.secretState ?? {})) {
+  for (const [fieldKey, state] of savedSecretStates) {
     if (state.configured && state.secretRef) configWithTemporaryRefs[fieldKey] = state.secretRef;
     else delete configWithTemporaryRefs[fieldKey];
   }
@@ -890,7 +894,7 @@ async function persistConnectionWithSecretReferences(
   const promotedRefs: string[] = [];
   let committed = false;
   try {
-    for (const [fieldKey, state] of Object.entries(draft.secretState ?? {})) {
+    for (const [fieldKey, state] of savedSecretStates) {
       if (!state.configured || !state.secretRef || !custody) continue;
       const promoted = custody.copyToConnection(state.secretRef, payload.connectionId, fieldKey);
       promotedRefs.push(promoted);

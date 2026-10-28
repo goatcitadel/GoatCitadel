@@ -19,7 +19,12 @@ import {
 
 export interface ChannelSetupHost {
   getIntegrationConnection(connectionId: string): Promise<IntegrationConnection>;
-  resolveConnectionSecret?: (config: Record<string, unknown>, directKey: string, envKey: string, catalogId: string) => string | undefined;
+  resolveConnectionSecret?: (
+    config: Record<string, unknown>,
+    directKey: string,
+    envKey: string,
+    catalogId: string,
+  ) => string | undefined;
 }
 
 export function buildDefaultChannelSetupDraft(definition: ChannelSetupDefinition): Record<string, unknown> {
@@ -54,6 +59,18 @@ export function buildChannelSetupValidationResult(
   };
 }
 
+/**
+ * The keys a guide's `normalize` clears on purpose: the ones it sets to `null`. A key it leaves out keeps its saved
+ * value; a key it sets to `null` loses it, so an edit that switches a guide's mode cannot leave the old mode's keys behind.
+ */
+export function clearedChannelConfigKeys(nextConfig: Record<string, unknown>): ReadonlySet<string> {
+  return new Set(
+    Object.entries(nextConfig)
+      .filter(([, value]) => value === null)
+      .map(([key]) => key),
+  );
+}
+
 export async function buildEphemeralChannelConnection(
   host: ChannelSetupHost,
   draft: ChannelSetupDraft,
@@ -65,12 +82,19 @@ export async function buildEphemeralChannelConnection(
     throw new Error(`Unknown integration catalog id: ${draft.catalogId}`);
   }
   const nextConfig = runtime.normalize(draft);
+  const cleared = clearedChannelConfigKeys(nextConfig);
   const currentConfig = (await requireReviewedChannelConnection(host, draft))?.config ?? {};
   const preservedSecrets = Object.fromEntries(
     (secretFieldKeys ?? runtime.definition.adapter.secretFieldKeys)
       .filter((key) => nextConfig[key] === undefined && currentConfig[key] !== undefined)
       .map((key) => [key, currentConfig[key]]),
   );
+  const mergedConfig = {
+    ...currentConfig,
+    ...preservedSecrets,
+    ...nextConfig,
+    ...normalizeGuidedChannelInboundAccess(catalog.key, draft, currentConfig),
+  };
   return {
     connectionId: draft.connectionId ?? draft.draftId,
     // Validation-only records cannot be used as a persisted connection review.
@@ -81,12 +105,7 @@ export async function buildEphemeralChannelConnection(
     label: draft.label?.trim() || catalog.label,
     enabled: draft.enabled,
     status: "connected",
-    config: {
-      ...currentConfig,
-      ...preservedSecrets,
-      ...nextConfig,
-      ...normalizeGuidedChannelInboundAccess(catalog.key, draft, currentConfig),
-    },
+    config: Object.fromEntries(Object.entries(mergedConfig).filter(([key]) => !cleared.has(key))),
     createdAt: draft.createdAt,
     updatedAt: new Date().toISOString(),
   };
@@ -101,9 +120,18 @@ export async function getReusableChannelSetupTestResult(
   const connection = await buildEphemeralChannelConnection(host, draft, runtime.definition.adapter.secretFieldKeys);
   return resolveReusableChannelSetupTestResult({
     cache,
-    draft: { ...draft, contentVersion: runtime.definition.wizard.contentVersion, validationVersion: runtime.definition.validation.validationVersion },
+    draft: {
+      ...draft,
+      contentVersion: runtime.definition.wizard.contentVersion,
+      validationVersion: runtime.definition.validation.validationVersion,
+    },
     connection,
     testVersion: runtime.definition.testing.testVersion,
-    signature: buildChannelSetupRecentTestSignature(draft, connection, runtime.definition.testing.testVersion, { contentVersion: runtime.definition.wizard.contentVersion, validationVersion: runtime.definition.validation.validationVersion, secretFieldKeys: runtime.definition.adapter.secretFieldKeys, resolveConnectionSecret: host.resolveConnectionSecret }),
+    signature: buildChannelSetupRecentTestSignature(draft, connection, runtime.definition.testing.testVersion, {
+      contentVersion: runtime.definition.wizard.contentVersion,
+      validationVersion: runtime.definition.validation.validationVersion,
+      secretFieldKeys: runtime.definition.adapter.secretFieldKeys,
+      resolveConnectionSecret: host.resolveConnectionSecret,
+    }),
   });
 }
