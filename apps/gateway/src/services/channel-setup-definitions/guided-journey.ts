@@ -316,13 +316,28 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
 
 /** The shape of a variable name (`PERMITTED_INTEGRATION_ENV_NAME_PATTERN`) in any case: letters, digits and `_`, 3 to 128 characters. */
 const NAME_SHAPED_APART_FROM_CASE = /^[A-Za-z][A-Za-z0-9_]{2,127}$/;
+/** One word of a name: all lowercase, all capitals, or capitalised. A word that mixes case inside (`AbCd`) is a token's. */
+const NAME_WORD = /^(?:[a-z0-9]*|[A-Z0-9]*|[A-Z][a-z0-9]*)$/u;
 const CAPITAL_LETTERS_RULE = "Variable names use capital letters.";
 
 /**
+ * A name typed in the wrong case (`mattermost_bot_token`, `Mattermost_Bot_Token`). Names join words with `_`; many
+ * tokens are one long run of letters and digits (Mattermost) or mix case inside a word (`ghp_AbCd…`, `syt_YWxp…`), and
+ * those keep the token message.
+ */
+function isNameInWrongCase(value: string): boolean {
+  return (
+    NAME_SHAPED_APART_FROM_CASE.test(value) &&
+    value.includes("_") &&
+    value.split("_").every((word) => NAME_WORD.test(word))
+  );
+}
+
+/**
  * A variable-name field takes the name of a variable the Gateway can read, never the secret itself: a token typed
- * there would be saved in plain config and never used. A value that is not shaped like a name at all is told to go
- * to the pasted field; a name the Gateway would not read (including one in lowercase or mixed case) gets the field's
- * own name rule. The value is never repeated.
+ * there would be saved in plain config and never used. A value that is not shaped like a name is told to go to the
+ * pasted field; a name the Gateway would not read (including a name typed in the wrong case) gets the field's own name
+ * rule. The value is never repeated.
  * Only validation runs this: a connection saved with another name keeps working until it is next edited.
  */
 function variableNameIssues(
@@ -337,7 +352,7 @@ function variableNameIssues(
     if (!PERMITTED_INTEGRATION_ENV_NAME_PATTERN.test(name)) {
       // A name written in lowercase or mixed case is a name with the wrong case, not a token: the person could paste the
       // name itself into the secret field if told it looks like one.
-      if (NAME_SHAPED_APART_FROM_CASE.test(name)) {
+      if (isNameInWrongCase(name)) {
         return [malformedFieldIssue(field.key, `${secretEnvVariableRule(key, field.key)} ${CAPITAL_LETTERS_RULE}`)];
       }
       const twin = authoredFields.find((candidate) => candidate.key === field.key.slice(0, -"Env".length));

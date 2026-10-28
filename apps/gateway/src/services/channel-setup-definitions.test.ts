@@ -1825,6 +1825,17 @@ describe("the shared guide builder", () => {
       for (const notAName of ["my-bot-token", "Discord-Bot-Token", "my.bot.token"]) {
         expect(messageOf(notAName), notAName).toBe(token);
       }
+      // Tokens made only of letters, digits and underscores: one long run (a Mattermost token), or case mixed inside a
+      // word (GitHub, Matrix, Meta). They still point to the pasted field.
+      for (const notAName of [
+        "xuqwrwgstrb3mzrxb83nb357a",
+        "ghp_AbCdEf1234567890abcdEF",
+        "syt_YWxpY2U_HPaSfakefake",
+        "EAAGm0PX4ZCpsBAfakefake",
+        "abc",
+      ]) {
+        expect(messageOf(notAName), notAName).toBe(token);
+      }
       expect(messageOf("OPENAI_API_KEY")).toBe(secretEnvVariableRule("mattermost", "botTokenEnv"));
       expect(messageOf("GOATCITADEL_MATTERMOST_TOKEN")).toBe(secretEnvVariableRule("mattermost", "botTokenEnv"));
       expect(messageOf("MATTERMOST_BOT_TOKEN")).toBeUndefined();
@@ -1836,14 +1847,13 @@ describe("the shared guide builder", () => {
       const { definition, field } = envFields().find((item) => item.where === "mattermost.botTokenEnv")!;
       const expected = `${secretEnvVariableRule("mattermost", "botTokenEnv")} Variable names use capital letters.`;
 
-      // Anything of letters, digits and underscores, 3 to 128 characters, is the shape of a name (so is sk_live_abc).
+      // Words of letters and digits joined by underscores, each in one case or capitalised, are a name in the wrong case.
       for (const name of [
         "my_bot_token",
         "Mattermost_Bot_Token",
         "mattermost_bot_token",
         "sk_live_abc",
-        "abc",
-        `a${"b".repeat(127)}`,
+        `a_${"b".repeat(126)}`,
       ]) {
         const issues = issuesFor(definition, field, name);
 
