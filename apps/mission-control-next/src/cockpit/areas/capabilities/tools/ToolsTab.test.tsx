@@ -336,6 +336,40 @@ describe("Tools tab", () => {
     }
   });
 
+  it("names a card for the heading it sits under, never 'most used' under Essentials", async () => {
+    api.fetchCapabilityToolUsage.mockResolvedValue(STARTER);
+    await render();
+
+    expect(headings()).toEqual(["Essentials", "All tools"]);
+    const cardNames = (title: string) =>
+      cardsIn(title).flatMap((card) =>
+        [...card.querySelectorAll("button")].map((entry) => entry.getAttribute("aria-label")),
+      );
+    expect(cardNames("Essentials")).toEqual([
+      "Files, essentials",
+      "View Files, essentials",
+      "Web search, essentials",
+      "View Web search, essentials",
+      "Memory, essentials",
+      "View Memory, essentials",
+      "Browser, essentials",
+      "View Browser, essentials",
+    ]);
+    expect(switchNames().some((name) => name?.includes("most used"))).toBe(false);
+    expect(button("View Files, most used")).toBeUndefined();
+    expect(cardOf("Essentials", "Files").contains(switchNamed("Files, essentials"))).toBe(true);
+    // The list keeps its plain names, so each place is still named once.
+    expect(rowOf("Files").contains(switchNamed("Files"))).toBe(true);
+    expect(new Set(switchNames()).size).toBe(switchNames().length);
+
+    // Under Most used the same card says so.
+    api.fetchCapabilityToolUsage.mockResolvedValue(MOST_USED);
+    await click(button("Refresh counts"));
+    expect(headings()).toEqual(["Most used", "All tools"]);
+    expect(cardNames("Most used")).toContain("Files, most used");
+    expect(switchNames().some((name) => name?.includes("essentials"))).toBe(false);
+  });
+
   it("opens the group from its button and from nothing else", async () => {
     await render();
 
@@ -470,6 +504,58 @@ describe("Tools tab", () => {
     await click(button("Reload", rowOf("Files")));
     expect(api.fetchCapabilityTools.mock.calls.length).toBeGreaterThan(reads);
     expect(rowOf("Files").textContent).not.toContain(message);
+  });
+
+  describe("a failure the switch store keeps", () => {
+    const message = "Changed elsewhere. Reload to see the latest.";
+    const alerts = () => container.querySelectorAll('[role="alert"]');
+
+    async function remount() {
+      await act(async () => root.render(null));
+      await render();
+    }
+
+    it("is shown again, quietly, when the tab comes back", async () => {
+      settings.patchSettings.mockRejectedValueOnce(conflict());
+      await render();
+      await click(switchNamed("Files"));
+      // It announced once, when it happened.
+      expect(rowOf("Files").querySelector('[role="alert"]')?.textContent).toContain(message);
+
+      await remount();
+      // The store still holds it, so the row shows it with its Reload button; nothing reads it out a second time.
+      expect(rowOf("Files").textContent).toContain(message);
+      expect(button("Reload", rowOf("Files"))).toBeDefined();
+      expect(alerts()).toHaveLength(0);
+    });
+
+    it("announces a failure that is new to a view that was showing an old one", async () => {
+      settings.patchSettings.mockRejectedValueOnce(conflict()).mockRejectedValueOnce(conflict());
+      await render();
+      await click(switchNamed("Files"));
+      await remount();
+      expect(alerts()).toHaveLength(0);
+
+      // Reload clears the old failure; the next one is new to this view and announces.
+      await click(button("Reload", rowOf("Files")));
+      expect(rowOf("Files").textContent).not.toContain(message);
+      await click(switchNamed("Files"));
+      expect(rowOf("Files").querySelector('[role="alert"]')?.textContent).toContain(message);
+      expect(alerts()).toHaveLength(1);
+    });
+
+    it("announces an identical failure that comes after the first one cleared", async () => {
+      settings.patchSettings.mockRejectedValue(conflict());
+      await render();
+      await click(switchNamed("Files"));
+      await remount();
+      expect(alerts()).toHaveLength(0);
+
+      // Trying again clears the failure while it saves; the same words failing again are a new failure.
+      await click(switchNamed("Files"));
+      expect(settings.patchSettings).toHaveBeenCalledTimes(2);
+      expect(alerts()).toHaveLength(1);
+    });
   });
 
   describe("narrow screens", () => {

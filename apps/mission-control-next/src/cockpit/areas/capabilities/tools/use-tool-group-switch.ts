@@ -53,7 +53,11 @@ export interface ToolGroupSwitch {
   waiting: boolean;
   /** The Inbox approval the change waits on, when the plan names it. */
   waitingApprovalId?: string;
-  /** Why the last change didn't happen, in plain words. `conflict` means `reload` is the way forward. */
+  /**
+   * Why the last change didn't happen, in plain words. `conflict` means `reload` is the way forward. It is the same
+   * object for as long as that failure stands, in every view, so a view can tell a failure it was already showing from
+   * a new one.
+   */
   failure?: { message: string; conflict: boolean };
   setEnabled(next: boolean): void;
   /** Reads the list again and drops the last failure. */
@@ -68,6 +72,17 @@ interface ListContext {
 
 const contexts = new Map<ToolGroupId, ListContext>();
 const reading = new Set<ToolGroupId>();
+
+/** What a failed entry shows as `failure`, made once per entry so its identity says which failure it is. */
+const failures = new WeakMap<ToolGroupSwitchEntry, NonNullable<ToolGroupSwitch["failure"]>>();
+
+function failureOf(entry: Extract<ToolGroupSwitchEntry, { phase: "failed" }>) {
+  const known = failures.get(entry);
+  if (known) return known;
+  const made = { message: entry.message, conflict: entry.conflict };
+  failures.set(entry, made);
+  return made;
+}
 
 const approvalIdOf = (action: ChangePlanRequiredAction | undefined) =>
   action?.kind === "approval" ? action.approvalId : undefined;
@@ -281,7 +296,7 @@ export function useToolGroupSwitch(group: CapabilityToolGroupItem, settingsRevis
     pending: entry?.phase === "saving" || entry?.phase === "applying" || entry?.phase === "confirming",
     waiting,
     ...(entry?.phase === "waiting" && entry.approvalId ? { waitingApprovalId: entry.approvalId } : {}),
-    ...(entry?.phase === "failed" ? { failure: { message: entry.message, conflict: entry.conflict } } : {}),
+    ...(entry?.phase === "failed" ? { failure: failureOf(entry) } : {}),
     setEnabled: (next) => void save(group, next, settingsRevision, { client, listKey }),
     reload: () => {
       if (readToolGroupSwitch(group.groupId)?.phase === "failed") setToolGroupSwitch(group.groupId, undefined);

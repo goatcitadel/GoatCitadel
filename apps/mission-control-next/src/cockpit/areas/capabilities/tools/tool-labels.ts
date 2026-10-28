@@ -141,7 +141,12 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
 /** What the panel says for a tool that has no label, so an ID never stands where a sentence should. */
 export const UNKNOWN_TOOL_LABEL = "A tool GoatCitadel can use";
 
+/** The plain label this map holds for a tool, or `undefined` for a name it doesn't hold. */
+export function knownToolLabel(toolName: string): string | undefined {
+  return Object.hasOwn(TOOL_LABELS, toolName) ? TOOL_LABELS[toolName] : undefined;
+}
+
 /** The plain label of a tool, or `UNKNOWN_TOOL_LABEL` for a name this map doesn't hold. Never the raw name. */
 export function toolLabel(toolName: string): string {
-  return Object.hasOwn(TOOL_LABELS, toolName) ? TOOL_LABELS[toolName]! : UNKNOWN_TOOL_LABEL;
+  return knownToolLabel(toolName) ?? UNKNOWN_TOOL_LABEL;
 }

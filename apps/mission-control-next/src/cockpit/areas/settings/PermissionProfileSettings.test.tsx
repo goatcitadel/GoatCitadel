@@ -319,7 +319,9 @@ describe("native Chat permission profile", () => {
     expect(button("Change profile").props["aria-expanded"]).toBe(false);
     // The precedence explainer is a plain section on this page; expert owners sit inside one closed disclosure.
     expect(text(view.root)).toContain("How allow and deny rules combine");
-    expect(text(view.root)).toContain("Tool groups. A group switched off in Capabilities › Tools blocks its tools");
+    expect(text(view.root)).toContain(
+      "Tool groups (Capabilities). A group switched off in Capabilities › Tools blocks its tools",
+    );
     const advanced = view.root.findAllByType("details")[0]!;
     expect(advanced.props.open).toBeUndefined();
     expect(text(advanced.findAllByType("summary")[0]!)).toContain("Advanced");

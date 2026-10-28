@@ -9,6 +9,7 @@ import {
 } from "@goatcitadel/contracts";
 import { formatRelativeTime, plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { knownToolLabel } from "./tool-labels";
 
 // Wording and ordering for the list the Gateway already built. Nothing here decides a group's risk, what blocks it or
 // which groups are used most (mc-next AGENTS.md, Frontend Authority Boundary).
@@ -68,14 +69,19 @@ export function presentMostUsed(
 }
 
 /**
- * Keeps the groups that match the search text: their label, description or any of their tools' descriptions, ignoring
- * case. Tool ids are not searched, because the page never shows them.
+ * Keeps the groups that match the search text: their label, description, or any of their tools' descriptions or plain
+ * labels (the words the panel shows), ignoring case. Tool ids are not searched, because the page never shows them, and
+ * neither is the stand-in label of a tool that has none.
  */
 export function filterToolGroups(groups: readonly CapabilityToolGroupItem[], query: string): CapabilityToolGroupItem[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [...groups];
   return groups.filter((group) =>
-    [group.label, group.description, ...group.tools.map((entry) => entry.description)]
+    [
+      group.label,
+      group.description,
+      ...group.tools.flatMap((entry) => [entry.description, knownToolLabel(entry.toolName) ?? ""]),
+    ]
       .join("\n")
       .toLowerCase()
       .includes(needle),

@@ -6,8 +6,18 @@ import { LetterIcon } from "../LetterIcon";
 import { GroupSwitch, GroupSwitchNotes, GroupSwitchState } from "./GroupSwitchParts";
 import type { ToolGroupViewProps } from "./ToolGroupRow";
 
-function MostUsedCard({ group, calls, settingsRevision, onOpen }: ToolGroupViewProps) {
+type MostUsedHeading = "Most used" | "Essentials";
+
+function MostUsedCard({
+  group,
+  calls,
+  settingsRevision,
+  onOpen,
+  heading,
+}: ToolGroupViewProps & { heading: MostUsedHeading }) {
   const noteId = useId();
+  // Named for the heading the card sits under, so "most used" is never said of a group that is only a starter pick.
+  const where = `${group.label}, ${heading.toLowerCase()}`;
   return (
     <li className="flex min-w-0 flex-col gap-2 rounded-lg border border-line-subtle bg-raised p-3">
       <GroupSwitchState group={group} settingsRevision={settingsRevision}>
@@ -20,11 +30,11 @@ function MostUsedCard({ group, calls, settingsRevision, onOpen }: ToolGroupViewP
             <p className="text-sm text-fg-secondary">{calls}</p>
             {/* The group's row in the list names its switch by the label alone; this one adds where it sits. */}
             <div>
-              <GroupSwitch control={control} label={`${group.label}, most used`} describedBy={noteId} />
+              <GroupSwitch control={control} label={where} describedBy={noteId} />
             </div>
             {/* The card is narrow, so the lines wrap inside it. The row below announces them; the card only shows them. */}
             <GroupSwitchNotes group={group} control={control} id={noteId} announce={false} />
-            <Button size="sm" aria-label={`View ${group.label}, most used`} onClick={() => onOpen(group.groupId)}>
+            <Button size="sm" aria-label={`View ${where}`} onClick={() => onOpen(group.groupId)}>
               View
             </Button>
           </>
@@ -46,7 +56,7 @@ export function MostUsedRow({
   settingsRevision,
   onOpen,
 }: {
-  heading: "Most used" | "Essentials";
+  heading: MostUsedHeading;
   groups: readonly CapabilityToolGroupItem[];
   callsFor: (group: CapabilityToolGroupItem) => string;
   settingsRevision: number;
@@ -58,6 +68,7 @@ export function MostUsedRow({
         {groups.map((group) => (
           <MostUsedCard
             key={group.groupId}
+            heading={heading}
             group={group}
             calls={callsFor(group)}
             settingsRevision={settingsRevision}

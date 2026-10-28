@@ -153,9 +153,10 @@ export function ConfiguredFolders({ title, paths }: { title: string; paths: read
 }
 
 /**
- * One line above the folders and the tool list when the Files tools are switched off in Capabilities › Tools. Those
- * settings still save, but nothing reads them until the group is back on, so the page says so rather than implying
- * the AI can use them.
+ * One line at the top of the Files tools' access settings when the group is switched off in Capabilities › Tools.
+ * Those tool settings still save, but nothing reads them until the group is back on, so the page says so rather than
+ * implying the AI can use them. It belongs to the tool list only: write roots and the outside-root mode also govern
+ * document, slide and browser outputs, which belong to other groups.
  */
 export function FilesToolsOffNote({
   switchedOffToolGroups,
@@ -164,7 +165,7 @@ export function FilesToolsOffNote({
 }) {
   if (!switchedOffToolGroups?.includes("files")) return null;
   return (
-    <p className="mt-3 text-sm text-status-waiting">
+    <p className="mt-2 text-sm text-status-waiting">
       The Files tools are switched off in{" "}
       <NativeOwnerLink scope="files" href={toolGroupItemHref("files")}>
         Capabilities › Tools

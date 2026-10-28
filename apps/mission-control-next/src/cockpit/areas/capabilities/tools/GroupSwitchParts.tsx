@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import type { CapabilityToolGroupItem } from "@goatcitadel/contracts";
 import { cn } from "../../../lib/cn";
 import { Button } from "../../../ui/Button";
@@ -111,7 +111,12 @@ export function GroupSwitchNotes({
   announce?: boolean;
   className?: string;
 }) {
+  // The store keeps a failure for the whole app session, so one can already stand when this view mounts (the tab
+  // comes back, or a modal panel opens). It was read out when it happened; only a failure that is new to this view
+  // is announced. A new failure is a different object, even with the same words.
+  const mountedWith = useRef(control?.failure);
   if (!control) return null;
+  const announceFailure = announce && control.failure !== mountedWith.current;
   return (
     <div className={cn("space-y-1 text-xs text-fg-secondary", className)}>
       <div id={id} role={announce ? "status" : undefined}>
@@ -130,7 +135,7 @@ export function GroupSwitchNotes({
         )}
       </div>
       {control.failure ? (
-        <div role={announce ? "alert" : undefined} className="space-y-1 text-status-failed">
+        <div role={announceFailure ? "alert" : undefined} className="space-y-1 text-status-failed">
           <p>{control.failure.message}</p>
           {control.failure.conflict ? (
             <Button size="sm" variant="ghost" onClick={control.reload}>

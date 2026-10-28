@@ -14,7 +14,7 @@ export const RULES_PRECEDENCE_STEPS = [
     detail: "A deny in settings or in the permission profile blocks the tool. Nothing else can allow it.",
   },
   {
-    title: "Tool groups",
+    title: "Tool groups (Capabilities)",
     detail:
       "A group switched off in Capabilities › Tools blocks its tools for the AI. Allow rules and grants can't lift it.",
   },

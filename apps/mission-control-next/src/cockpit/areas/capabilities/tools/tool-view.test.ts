@@ -216,6 +216,29 @@ describe("filterToolGroups", () => {
     expect(filterToolGroups(all, "fs.search")).toEqual([]);
   });
 
+  describe("plain tool labels", () => {
+    // The panel shows these labels, so a word seen only there ("invite") has to find the group that holds the tool.
+    const email = group("email_and_calendar", {
+      label: "Email and calendar",
+      description: "Read and send email, and read and add calendar events.",
+      tools: [tool({ toolName: "calendar.create_event", description: "Create an event on a Google calendar." })],
+    });
+
+    it("finds a group by a word that only a tool's plain label holds", () => {
+      expect(filterToolGroups([files, browser, email], "invite").map((entry) => entry.groupId)).toEqual([
+        "email_and_calendar",
+      ]);
+      expect(filterToolGroups([files, browser, email], "  INVITE people ").map((entry) => entry.groupId)).toEqual([
+        "email_and_calendar",
+      ]);
+    });
+
+    it("does not match the stand-in label of a tool that has none", () => {
+      const unlabelled = group("files", { tools: [tool({ toolName: "made.up", description: "Does a thing." })] });
+      expect(filterToolGroups([unlabelled], "goatcitadel")).toEqual([]);
+    });
+  });
+
   it("keeps the order it was given", () => {
     expect(filterToolGroups([browser, files], "open").map((entry) => entry.groupId)).toEqual(["browser", "files"]);
   });

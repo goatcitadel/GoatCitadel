@@ -9,7 +9,6 @@ import { FilesystemToolAccessPanel, type ToolAccessReviewRequest } from "./Files
 import { OutsideRootWriteModeControl } from "./OutsideRootWriteModeControl";
 import {
   ConfiguredFolders,
-  FilesToolsOffNote,
   WriteAccessOutcomeStatus,
   WriteAccessReviewDialog,
   type WriteAccessReview,
@@ -212,7 +211,6 @@ export function FilesystemWriteRootsControl() {
       ) : null}
       {ready && settings.data ? (
         <>
-          <FilesToolsOffNote switchedOffToolGroups={settings.data.switchedOffToolGroups} />
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <ConfiguredFolders title="Workspace write folders" paths={settings.data.writeJailRoots} />
             <ConfiguredFolders title="Read-only folders" paths={settings.data.readOnlyRoots} />

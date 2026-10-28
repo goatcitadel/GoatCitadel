@@ -397,11 +397,20 @@ describe("global filesystem tool access", () => {
     expect(target.pathname).toBe("/capabilities/tools");
     expect(target.searchParams.get("item")).toBe("group:files");
     expect(links[0]!.getAttribute("href")).toContain("item=group%3Afiles");
-    // The note sits above the folders and the tool list it speaks about.
+    // The note sits inside the Files tools' access panel, between its heading and its tool list. Write roots and the
+    // outside-root mode also govern document, slide and browser outputs, so the note is not above them.
     const note = links[0]!.closest("p")!;
-    expect(note.compareDocumentPosition(container.querySelector("#operator-write-roots-title")!)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
+    const toolAccessTitle = container.querySelector("#filesystem-tool-access-title")!;
+    const toolAccessList = container.querySelector('ul[aria-labelledby="filesystem-tool-access-title"]')!;
+    const toolAccessPanel = toolAccessTitle.parentElement!;
+    expect(toolAccessPanel.contains(note)).toBe(true);
+    expect(toolAccessPanel.contains(toolAccessList)).toBe(true);
+    expect(toolAccessTitle.compareDocumentPosition(note)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(note.compareDocumentPosition(toolAccessList)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    const writeRootsTitle = container.querySelector("#operator-write-roots-title")!;
+    expect(toolAccessPanel.contains(writeRootsTitle)).toBe(false);
+    expect(writeRootsTitle.compareDocumentPosition(note)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(toolAccessPanel.contains(container.querySelector("#outside-root-writes-title")!)).toBe(false);
     // The settings stay editable; the note is information, not a lock.
     expect(pathInput().disabled).toBe(false);
   });

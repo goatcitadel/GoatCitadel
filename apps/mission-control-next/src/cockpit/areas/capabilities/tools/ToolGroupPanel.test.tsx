@@ -381,7 +381,7 @@ describe("Tool group panel", () => {
       await vi.waitFor(() => expect(body()).not.toBeNull());
       expect(switchIn(body()!, "Turn it on or off: Files")?.getAttribute("aria-checked")).toBe("true");
       expect(switchIn(container, "Files")).not.toBeNull();
-      expect(switchIn(container, "Files, most used")).not.toBeNull();
+      expect(switchIn(container, "Files, essentials")).not.toBeNull();
       expect(panelText()).toContain("Turn it on or off");
 
       settings.patchSettings.mockReturnValueOnce(new Promise(() => {}));
@@ -393,7 +393,7 @@ describe("Tool group panel", () => {
       // Switching off shows at once, in the panel and on the page behind it.
       expect(switchIn(body()!, "Turn it on or off: Files")?.getAttribute("aria-checked")).toBe("false");
       expect(switchIn(container, "Files")?.getAttribute("aria-checked")).toBe("false");
-      expect(switchIn(container, "Files, most used")?.getAttribute("aria-checked")).toBe("false");
+      expect(switchIn(container, "Files, essentials")?.getAttribute("aria-checked")).toBe("false");
       expect(panelText()).toContain("The AI can't use these in any chat.");
       expect(entryOf(body()!, "fs.read").textContent).toContain("Switched off");
     });
@@ -492,6 +492,35 @@ describe("Tool group panel", () => {
       );
       await act(async () => setToolGroupSwitch("git", failed));
       expect(dialog.querySelectorAll('[role="status"]')).toHaveLength(1);
+      expect(dialog.querySelectorAll('[role="alert"]')).toHaveLength(1);
+      await act(async () => modalRoot.unmount());
+      dialog.remove();
+    });
+
+    it("shows a failure the store kept from before a modal window opened, without announcing it again", async () => {
+      // The row read this out when it happened; opening the panel later is not a new failure.
+      setToolGroupSwitch("git", failed);
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      document.body.append(dialog);
+      const modalRoot = createRoot(dialog);
+      client.setQueryData(LIST_KEY, listOf(FILES));
+      await act(async () =>
+        modalRoot.render(
+          <QueryClientProvider client={client}>
+            <ToolGroupPanel groupId="git" />
+          </QueryClientProvider>,
+        ),
+      );
+      expect(dialog.textContent).toContain("Not switched on. The request expired.");
+      expect(dialog.querySelectorAll('[role="alert"]')).toHaveLength(0);
+      // The note about what the switch means still announces: only the carried failure is quiet.
+      expect(dialog.querySelectorAll('[role="status"]')).toHaveLength(1);
+
+      // A failure that comes while the window is open is new to it.
+      await act(async () =>
+        setToolGroupSwitch("git", { ...failed, message: "Not switched on. The request was cancelled." }),
+      );
       expect(dialog.querySelectorAll('[role="alert"]')).toHaveLength(1);
       await act(async () => modalRoot.unmount());
       dialog.remove();
@@ -673,7 +702,7 @@ describe("Opening the panel", () => {
 describe("Focus", () => {
   it.each([
     ["its row", (label: string) => rowOf(label), "View Files"],
-    ["its Most used card", (label: string) => cardOf(label), "View Files, most used"],
+    ["its Essentials card", (label: string) => cardOf(label), "View Files, essentials"],
   ])("returns to the View button of %s when the panel closes", async (_where, place, name) => {
     await renderTab();
     const opener = buttonIn(place("Files"), name)!;
@@ -690,7 +719,7 @@ describe("Focus", () => {
 
   it("returns to the button that opened it, not to the other View button of the same group", async () => {
     await renderTab();
-    const card = buttonIn(cardOf("Files"), "View Files, most used")!;
+    const card = buttonIn(cardOf("Files"), "View Files, essentials")!;
     const row = buttonIn(rowOf("Files"), "View Files")!;
     expect(card).not.toBe(row);
     await press(card);
