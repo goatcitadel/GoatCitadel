@@ -133,7 +133,7 @@ describe("Slack setup guide: what it says up front (items 4 and 5)", () => {
       "To receive messages: an OAuth install from here with message history scopes, and a public HTTPS address for this Gateway.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot.",
+      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a Slack message from …\", and add that id under Who may message this bot with Edit setup.",
     ]);
   });
 

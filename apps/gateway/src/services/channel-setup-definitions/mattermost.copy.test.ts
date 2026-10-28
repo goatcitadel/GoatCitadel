@@ -135,7 +135,7 @@ describe("Mattermost setup guide: what it says up front (items 1 and 6)", () => 
     // Ruling R46: the audit's "(or message the bot directly)" is a Mattermost claim its docs do not make, so it is not shipped.
     // Ruling R49: the probe deletes its test post right away, so the audit's "Check the test post arrived" is not asked.
     expect(paragraphs("first-message")).toEqual([
-      "Check the test passed. To receive: turn on Receive posts, allow your user ID, post in a channel the bot is in, and check the reply.",
+      'Check the test passed. To receive: turn on Receive posts, allow your user ID, post in a channel the bot is in, and check the reply. If the bot doesn\'t answer your message, open System › Diagnostics, find "Dropped a Mattermost message from …", and add that id under Who may message this bot with Edit setup.',
     ]);
   });
 

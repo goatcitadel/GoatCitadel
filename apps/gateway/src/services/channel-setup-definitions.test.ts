@@ -1431,6 +1431,11 @@ function senderStep(key: string): ChannelSetupStepDefinition | undefined {
   return guide(key).wizard.steps.find((step) => step.id === "sender-access");
 }
 
+function firstMessageText(key: string): string {
+  const step = guide(key).wizard.steps.find((candidate) => candidate.id === "first-message");
+  return (step?.body ?? []).flatMap((block) => (block.kind === "paragraph" ? [block.text] : [])).join("\n");
+}
+
 function fieldOf(key: string, fieldKey: string): ChannelSetupFieldDefinition | undefined {
   return allFields(guide(key)).find((field) => field.key === fieldKey);
 }
@@ -1990,8 +1995,13 @@ describe("the shared guide builder", () => {
     // say where to find an id they don't show anywhere else.
     const FIND_SENDER_ID =
       'Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".';
+    // With diagnostics off the list route answers 404, and System › Diagnostics shows a red "Diagnostics unavailable: …"
+    // alert (SystemDiagnostics.tsx), not an empty page. The sender step comes before Finalize, so it says to finish first.
     const DIAGNOSTICS_ON_DOCKER =
-      "You can add an id any time with Edit setup. On a Docker install, System › Diagnostics stays empty until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.";
+      'If you don\'t know an id yet, finish setup first; you can add it any time with Edit setup. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.';
+    /** What the first message says after the operator finishes and messages the bot (Slack, WhatsApp and the rest). */
+    const FIND_SENDER_ID_AFTER_FINISHING = (name: string) =>
+      `If the bot doesn't answer your message, open System › Diagnostics, find "Dropped a ${name} message from …", and add that id under Who may message this bot with Edit setup.`;
     const SENDER_ID_IN_DIAGNOSTICS = [
       "slack",
       "whatsapp",
@@ -2058,6 +2068,38 @@ describe("the shared guide builder", () => {
         // The guide's line has the sentence's start and its "from"; the real message has both.
         const message = describeDroppedSender(key, "THE-ID");
         expect(message, key).toMatch(/^Dropped a .+ message from THE-ID: /u);
+      }
+    });
+
+    it("tells the person, in the first message after they finish, to look for the dropped message and add its id", () => {
+      for (const key of SENDER_ID_IN_DIAGNOSTICS.filter((candidate) => candidate !== "qqbot")) {
+        const text = firstMessageText(key);
+        // The channel's name in the quote is the one the gateway puts in the real message.
+        const named =
+          describeDroppedSender(key, "THE-ID")
+            .split(" message from ")[0]
+            ?.replace(/^Dropped a /u, "") ?? "";
+
+        expect(text, key).toContain(FIND_SENDER_ID_AFTER_FINISHING(named));
+        expect(text, key).toMatch(new RegExp(`find "Dropped a ${named} message from …"`, "u"));
+        // It asks for the bot's answer to the person's own message, never a test message (R49).
+        expect(text, key).not.toMatch(/Dropped a [^"]*arrived/u);
+      }
+    });
+
+    it("keeps the Docker note to the sender step, so each guide says it once (QQ also repeats it in its walkthrough)", () => {
+      for (const key of SENDER_ID_IN_DIAGNOSTICS) {
+        const occurrences = JSON.stringify(guide(key)).match(/GOATCITADEL_DEV_DIAGNOSTICS_ENABLED/gu) ?? [];
+        expect(occurrences, key).toHaveLength(key === "qqbot" ? 2 : 1);
+      }
+      for (const key of SENDER_ID_IN_DIAGNOSTICS.filter((candidate) => candidate !== "qqbot")) {
+        expect(firstMessageText(key), key).not.toContain("GOATCITADEL_DEV_DIAGNOSTICS_ENABLED");
+      }
+    });
+
+    it("leaves the first message of a channel with no dropped-by-sender path as it was", () => {
+      for (const key of ["telegram", "discord", "teams", "zalo"]) {
+        expect(firstMessageText(key), key).not.toContain("Dropped a");
       }
     });
 

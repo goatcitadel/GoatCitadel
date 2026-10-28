@@ -113,7 +113,7 @@ describe("Google Chat setup guide: what it says up front (item 9)", () => {
       "Chat app: the Google user ids (users/…) allowed to message it.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "Incoming webhook: check the test message appeared in the space. Chat app: paste this connection's webhook address into the Chat app's HTTP endpoint URL, allow your users/… id, then message the app and check the reply.",
+      "Incoming webhook: check the test message appeared in the space. Chat app: paste this connection's webhook address into the Chat app's HTTP endpoint URL, allow your users/… id, then message the app and check the reply. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a Google Chat message from …\", and add that id under Who may message this bot with Edit setup.",
     ]);
   });
 });

@@ -105,7 +105,7 @@ describe("Matrix setup guide: what it says up front (item 6, R48)", () => {
     // Ruling R49: the test posts a notice only when a Default room ID is set, so the audit's unconditional
     // "Check the test notice arrived" is made conditional.
     expect(paragraphs("first-message")).toEqual([
-      "If you set a Default room ID, check the test notice arrived in that room. To receive: turn on Receive messages, allow your Matrix ID (for example @alice:example.com), post in the room, and check the reply.",
+      'If you set a Default room ID, check the test notice arrived in that room. To receive: turn on Receive messages, allow your Matrix ID (for example @alice:example.com), post in the room, and check the reply. If the bot doesn\'t answer your message, open System › Diagnostics, find "Dropped a Matrix message from …", and add that id under Who may message this bot with Edit setup.',
     ]);
   });
 

@@ -150,7 +150,7 @@ describe("Nextcloud Talk setup guide: what it says up front (items 6 and 9, R48)
     ]);
     // Ruling R49: the test posts one visible message into the room and does not delete it, so asking for it is true.
     expect(paragraphs("first-message")).toEqual([
-      "Check the test message arrived. To receive: reinstall the bot with this connection's webhook address and the same secret, turn it on for the room again, allow users/<your user name>, and send a message. Talk sends every message posted in the room to that address, so use only an address you control.",
+      "Check the test message arrived. To receive: reinstall the bot with this connection's webhook address and the same secret, turn it on for the room again, allow users/<your user name>, and send a message. Talk sends every message posted in the room to that address, so use only an address you control. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a Nextcloud Talk message from …\", and add that id under Who may message this bot with Edit setup.",
     ]);
   });
 

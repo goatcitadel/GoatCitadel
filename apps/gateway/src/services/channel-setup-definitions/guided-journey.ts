@@ -131,7 +131,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     ],
     // QQ's approval for group and direct-message events (audit line) is on no QQ page, so it is not claimed here.
     firstMessage:
-      "In the QQ Bot console set the callback URL to this connection's webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. If you already added your openid under Who may message this bot, message the bot and check the reply. If not, message the bot once; it won't answer. Open System › Diagnostics, find \"Dropped a QQBot message from …\" and copy the openid. Add it under Who may message this bot with Edit setup, then message again. On a Docker install, System › Diagnostics stays empty until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.",
+      'In the QQ Bot console set the callback URL to this connection\'s webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. If you already added your openid under Who may message this bot, message the bot and check the reply. If not, message the bot once; it won\'t answer. Open System › Diagnostics, find "Dropped a QQBot message from …" and copy the openid. Add it under Who may message this bot with Edit setup, then message again. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.',
   },
   wecom: {
     // WeCom's callback page allows http or https and recommends https (developer.work.weixin.qq.com/document/path/90238),
@@ -249,7 +249,7 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
     kind: "instruction",
     stage: "first_message",
     title: takesConversations(key) ? "Verify the first conversation" : "Confirm delivery",
-    body: [{ kind: "paragraph", text: profile.firstMessage }],
+    body: [{ kind: "paragraph", text: firstMessageText(key, runtime.definition.catalog.label, profile.firstMessage) }],
   });
   return {
     ...runtime,
@@ -516,13 +516,29 @@ const SENDER_ID_IN_DIAGNOSTICS: ReadonlySet<string> = new Set([
 ]);
 const FIND_SENDER_ID_LINE =
   'Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".';
-/** Diagnostics are off in production mode, which a Docker install runs in; the native desktop hosts don't. */
+/**
+ * Diagnostics are off in production mode, which a Docker install runs in; the native desktop hosts don't. With them
+ * off the events list answers 404 and System › Diagnostics shows an alert that begins "Diagnostics unavailable:"
+ * (SystemDiagnostics.tsx), so that is the symptom this names. The sender step comes before Finalize, so it also says
+ * to finish first: the bot can't be messaged until then.
+ */
 const DIAGNOSTICS_ON_DOCKER_NOTE =
-  "You can add an id any time with Edit setup. On a Docker install, System › Diagnostics stays empty until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.";
+  'If you don\'t know an id yet, finish setup first; you can add it any time with Edit setup. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.';
 
 function senderExplanation(key: string): string {
   const explanation = SENDER_EXPLANATIONS[key] ?? GENERIC_SENDER_EXPLANATION;
   return SENDER_ID_IN_DIAGNOSTICS.has(key) ? `${explanation} ${FIND_SENDER_ID_LINE}` : explanation;
+}
+
+/**
+ * The first message is the step where the operator messages the bot after finishing, so it is where a silent bot gets
+ * traced to a dropped sender. QQ's own first message walks the whole path, so it needs no extra sentence. The channel
+ * is named by its catalog label, the name the gateway puts in the dropped message (describeDroppedSender). The Docker
+ * note stays on the sender step: one place per guide.
+ */
+function firstMessageText(key: string, channelLabel: string, firstMessage: string): string {
+  if (!SENDER_ID_IN_DIAGNOSTICS.has(key) || key === "qqbot") return firstMessage;
+  return `${firstMessage} If the bot doesn't answer your message, open System › Diagnostics, find "Dropped a ${channelLabel} message from …", and add that id under Who may message this bot with Edit setup.`;
 }
 
 /** Receiving here is a switch the operator turns on, so the sender step has nothing to say while it is off. */

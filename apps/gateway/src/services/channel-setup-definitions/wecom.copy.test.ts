@@ -170,7 +170,7 @@ describe("WeCom setup guide: what it says up front (items 2, 4, 8, R46, R48)", (
 
   it("asks for the test message only when one was sent: the probe sends nothing without a default target (R49)", () => {
     expect(paragraphs("first-message")).toEqual([
-      "If you set a default target, check the test message arrived. To receive: in the app's receive messages settings enter this connection's webhook address with the same Token and EncodingAESKey, and save. Allow your WeCom userid, message the app, and check the reply.",
+      "If you set a default target, check the test message arrived. To receive: in the app's receive messages settings enter this connection's webhook address with the same Token and EncodingAESKey, and save. Allow your WeCom userid, message the app, and check the reply. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a WeCom message from …\", and add that id under Who may message this bot with Edit setup.",
     ]);
   });
 

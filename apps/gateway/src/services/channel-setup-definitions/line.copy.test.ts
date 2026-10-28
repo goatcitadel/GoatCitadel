@@ -81,7 +81,7 @@ describe("LINE setup guide: what it says up front (items 4 and 6)", () => {
       "To receive: a public HTTPS address and the channel secret.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "Check the test message arrived. To receive: in LINE Developers Console › Messaging API set Webhook URL to this connection's webhook address, click Verify, turn on Use webhook, and turn off auto-reply and greeting messages in Official Account Manager. Allow your LINE user ID under Who may message this bot.",
+      "Check the test message arrived. To receive: in LINE Developers Console › Messaging API set Webhook URL to this connection's webhook address, click Verify, turn on Use webhook, and turn off auto-reply and greeting messages in Official Account Manager. Allow your LINE user ID under Who may message this bot. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a LINE message from …\", and add that id under Who may message this bot with Edit setup.",
     ]);
   });
 

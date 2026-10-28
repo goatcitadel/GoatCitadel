@@ -168,7 +168,7 @@ describe("QQ Bot setup guide: what it says up front (items 3, 6, 7, 8, R46, R48)
     // Ruling R49: this asks the person to check no test message; the only reply it asks for is the bot's answer to
     // a message from an allowed sender. Ruling R65: diagnostics are off in a Docker install until switched on.
     expect(paragraphs("first-message")).toEqual([
-      "In the QQ Bot console set the callback URL to this connection's webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. If you already added your openid under Who may message this bot, message the bot and check the reply. If not, message the bot once; it won't answer. Open System › Diagnostics, find \"Dropped a QQBot message from …\" and copy the openid. Add it under Who may message this bot with Edit setup, then message again. On a Docker install, System › Diagnostics stays empty until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.",
+      'In the QQ Bot console set the callback URL to this connection\'s webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. If you already added your openid under Who may message this bot, message the bot and check the reply. If not, message the bot once; it won\'t answer. Open System › Diagnostics, find "Dropped a QQBot message from …" and copy the openid. Add it under Who may message this bot with Edit setup, then message again. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.',
     ]);
   });
 
@@ -350,7 +350,7 @@ describe("QQ Bot setup guide: the sender step (item 1, A7, A8)", () => {
 
   it("says on the sender step that a Docker install needs diagnostics switched on first (R65)", () => {
     expect(paragraphs("sender-access")).toContain(
-      "You can add an id any time with Edit setup. On a Docker install, System › Diagnostics stays empty until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.",
+      'If you don\'t know an id yet, finish setup first; you can add it any time with Edit setup. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.',
     );
   });
 

@@ -86,7 +86,7 @@ describe("WhatsApp setup guide: what it says up front (item 7)", () => {
       "To receive messages: a public HTTPS address with a trusted certificate, the app secret, and a verify token you choose.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "Check the test message arrived. To receive: in Meta's App Dashboard open WhatsApp › Configuration, paste this connection's webhook address and your verify token, verify, and subscribe to messages. Allow your number (digits only, no plus) under Who may message this bot, then send a message and check the reply.",
+      "Check the test message arrived. To receive: in Meta's App Dashboard open WhatsApp › Configuration, paste this connection's webhook address and your verify token, verify, and subscribe to messages. Allow your number (digits only, no plus) under Who may message this bot, then send a message and check the reply. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a WhatsApp message from …\", and add that id under Who may message this bot with Edit setup.",
     ]);
   });
 
