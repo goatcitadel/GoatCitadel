@@ -59,7 +59,7 @@ The Gateway and Mission Control run locally; models can run locally or through a
 
 ## Tour The Cockpit
 
-Mission Control opens in the **Cockpit** layout: seven areas built around one question, _what needs me right now?_ The sidebar carries **Chat**, **Inbox**, **Work**, **Capabilities**, **Library**, and **System**, with **Settings** in the gear menu. The switcher at the top of the sidebar picks the active Citadel and workspace; it changes your view, not who owns the work or what it may access.
+Mission Control opens in the **Cockpit** layout: seven areas built around one question, _what needs me right now?_ The sidebar carries **Chat**, **Inbox**, **Work**, **Capabilities**, **Library**, and **System**, with **Settings** in the gear menu. **Capabilities** holds your connectors and a **Tools** tab where you switch a group of built-in tools, such as Files, Web search or Browser, off for the AI; the Core group always stays on. The switcher at the top of the sidebar picks the active Citadel and workspace; it changes your view, not who owns the work or what it may access.
 
 The images are regenerated from a sanitized demo runtime built from shipped defaults (captured 2026-10-11). Every conversation, task, and record in them is fictional demo content, and the seeded Chat answers are labeled as seeded rather than model-generated. Release visual proof is owned by the checked-in visual regression baselines and `pnpm verify:visual:regression`.
 
