@@ -176,13 +176,37 @@ describe("retired channels as notification destinations", () => {
           credentialSecretRef: "",
         });
       });
-      let created = true;
       await act(async () => {
-        created = await s.handleCreateTarget();
+        await s.handleCreateTarget();
       });
-      expect(created, connection.key).toBe(false);
+      // handleCreateTarget answers false both for a refusal and for a review it opened, and nothing is sent before a
+      // review is confirmed. So the refusal is what the operator sees: the notice, and no review to confirm.
+      expect(s.notice?.tone, connection.key).toBe("warning");
+      expect(s.notice?.message, connection.key).toContain("Choose an enabled channel");
+      expect(s.review, connection.key).toBeNull();
     }
     expect(api.createNotificationTarget).not.toHaveBeenCalled();
+  });
+
+  it("opens a review for the working channel beside them, which is what the refusals are not", async () => {
+    await act(async () => {
+      root = create(<RetiredHarness />);
+    });
+    await act(async () => {
+      s.setEditor("target");
+      s.setTargetForm({
+        label: "Working destination",
+        kind: "channel_connection",
+        channelConnectionId: channel.connectionId,
+        webhookUrlSecretRef: "",
+        credentialSecretRef: "",
+      });
+    });
+    await act(async () => {
+      await s.handleCreateTarget();
+    });
+    expect(s.review?.title).toBe("Create notification destination?");
+    expect(s.notice).toBeNull();
   });
 });
 
@@ -410,11 +434,19 @@ describe("shared notification routing owner", () => {
     await act(async () => {
       await s.confirmReview();
     });
+    // Nothing is sent before a review is confirmed either, so the refusal is what the operator sees.
+    expect(s.notice?.tone).toBe("error");
+    expect(s.notice?.message).toContain("The reviewed notification configuration changed");
+    expect(s.review).toBeNull();
     expect(api.updateNotificationTarget).not.toHaveBeenCalled();
     await act(async () => s.handleTest(target));
+    expect(s.notice).toBeNull();
     await act(async () => {
       await s.confirmReview();
     });
+    expect(s.notice?.tone).toBe("error");
+    expect(s.notice?.message).toContain("The reviewed notification configuration changed");
+    expect(s.review).toBeNull();
     expect(api.sendTestNotification).not.toHaveBeenCalled();
   });
   it.each(["delivered", "unknown_after_send"] as const)(
