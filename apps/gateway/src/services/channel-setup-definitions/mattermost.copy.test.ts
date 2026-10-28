@@ -314,8 +314,10 @@ describe("Mattermost setup guide: where the test post goes (item 3)", () => {
     const channel = field("defaultChannel");
 
     expect(channel.label).toBe("Where should the test post go?");
+    // Ruling R51: the audit's unscoped "The bot must already be a member." is scoped to a channel, because a direct
+    // message to @your-username asks for no membership (R50).
     expect(channel.explanation).toBe(
-      "The channel name from its web address (for example town-square), or @your-username to have the bot message you. The bot must already be a member.",
+      "The channel name from its web address (for example town-square), or @your-username to have the bot message you. For a channel, the bot must already be a member.",
     );
     expect(channel.looksLike).toBe("town-square");
     // A direct message to you is the same probe, so its post is deleted right away too (R49).
@@ -593,7 +595,7 @@ describe("Mattermost send-only path to a direct message (@your-username): can it
 
   it("asks this path to tick nothing about a team or channel: the setup step's boxes are the bot account and its token", () => {
     // The shared helper doesn't model checklists, so assert the step's boxes directly. Continue is blocked until each
-    // box is ticked, and a direct-message setup needs no team or channel membership.
+    // box is ticked, and GoatCitadel's direct-message setup never looks up a team or channel.
     const boxes = (step("create-bot").checklist ?? []).map((item) => item.label);
 
     expect(boxes).toEqual(["Turn on bot account creation", "Add the bot account and copy its token"]);
@@ -621,6 +623,22 @@ describe("Mattermost send-only path to a direct message (@your-username): can it
   it("says in the setup step that the team and channel step can be skipped for a direct message", () => {
     expect(paragraphs("create-bot").join("\n")).toContain("@your-username (a direct message)");
     expect(field("defaultChannel").explanation).toContain("@your-username to have the bot message you");
+  });
+
+  it("scopes the direct-message skip to GoatCitadel's own steps, not a Mattermost rule (R52)", () => {
+    // Mattermost's API page for creating a direct channel (POST /api/v4/channels/direct) says nothing about teams, so
+    // the copy says only which of this guide's steps can be skipped, and never that Mattermost needs no membership.
+    expect(paragraphs("create-bot")[1]).toBe(
+      "Step 4 is only for channels. You can skip it if the test post goes to @your-username (a direct message) and you won't receive posts from channels.",
+    );
+    expect(JSON.stringify(guide().definition.wizard)).not.toMatch(
+      /direct message[^"]{0,60}(needs|requires|does not need|doesn't need) (no |any )?(team|channel|membership)/iu,
+    );
+  });
+
+  it("no longer says, unscoped, that the bot must already be a member (R51)", () => {
+    expect(field("defaultChannel").explanation).not.toMatch(/\. The bot must already be a member\.$/u);
+    expect(field("defaultChannel").explanation).toMatch(/For a channel, the bot must already be a member\.$/u);
   });
 });
 

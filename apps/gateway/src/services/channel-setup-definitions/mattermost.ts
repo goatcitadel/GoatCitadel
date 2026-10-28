@@ -82,8 +82,8 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
               "https://docs.mattermost.com/developers/integrate/reference/bot-accounts",
             ),
           ],
-          // Only what every setup needs. Adding the bot to a team and channels is list item 4 above: a direct-message
-          // setup (@your-username) needs neither, and each box here blocks Continue.
+          // Only what every setup needs. Adding the bot to a team and channels is list item 4 above: GoatCitadel's
+          // direct-message setup (@your-username) never looks up a team or channel, and each box here blocks Continue.
           checklist: [
             check("enable", "Turn on bot account creation"),
             check("add-bot", "Add the bot account and copy its token"),
@@ -141,7 +141,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
               type: "text",
               required: true,
               explanation:
-                "The channel name from its web address (for example town-square), or @your-username to have the bot message you. The bot must already be a member.",
+                "The channel name from its web address (for example town-square), or @your-username to have the bot message you. For a channel, the bot must already be a member.",
               whyNeeded:
                 "GoatCitadel posts one test post here and deletes it again right away when the bot is allowed to, so you may not see it, even in a direct message. A send that names no channel goes here too.",
               looksLike: "town-square",
