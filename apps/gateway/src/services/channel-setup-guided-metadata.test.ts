@@ -24,8 +24,9 @@ describe("guided setup progressive metadata", () => {
   });
   it("accepts existing supported Slack and Discord webhook auth alternatives", () => {
     for (const key of ["slack", "discord"]) {
+      // Slack also has an instruction step on the account stage (its OAuth step); the fields are on the other one.
       const step = requireChannelSetupDefinition("channel." + key).definition.wizard.steps.find(
-        (step) => step.stage === "identity",
+        (step) => step.stage === "identity" && step.kind === "field-collection",
       );
       expect(step?.requiredAnyOf?.[0]).toEqual(expect.arrayContaining(["botToken", "botTokenEnv", "webhookUrl"]));
     }

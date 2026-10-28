@@ -1348,7 +1348,7 @@ describe("channel setup definitions", () => {
   it("marks the steps that are only for setting a channel up, and no others", () => {
     const setupOnly: Record<string, string[]> = {
       discord: ["overview", "prerequisites", "create-bot", "install-bot"],
-      slack: ["overview", "prerequisites"],
+      slack: ["overview", "prerequisites", "create-app"],
       telegram: [],
       ntfy: ["overview", "prepare-topic"],
       "google-chat": ["overview", "create-webhook"],

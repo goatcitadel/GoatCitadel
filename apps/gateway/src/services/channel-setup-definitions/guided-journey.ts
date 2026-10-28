@@ -28,14 +28,15 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Wait until the connection shows ready. In a server, mention the bot in the chosen channel. For a direct message, send one, approve the pairing request in Settings › Channels › this connection › Connection operations, then send another and check the reply.",
   },
   slack: {
-    summary: "Connect a Slack workspace bot, choose channels, and optionally enable verified inbound conversations.",
+    summary:
+      "Send messages from your own Slack app into the channels you choose. Receiving messages needs an app installed with OAuth and a public HTTPS address.",
     prerequisites: [
-      "Permission to install a Slack app in the intended workspace.",
-      "Bot scopes for the actions you need and an invitation to the selected channels.",
-      "A reachable HTTPS Gateway URL and Slack signing secret for Events API conversations.",
+      "Your own Slack app with the chat:write scope, installed to your workspace.",
+      "The bot invited to each private channel (/invite @your-app).",
+      "To receive messages: an OAuth install from here with message history scopes, and a public HTTPS address for this Gateway.",
     ],
     firstMessage:
-      "Register the connection webhook URL in Slack Events, enable message events, and allow your Slack user ID. Send a message from that user in a selected channel and confirm the reply. A webhook fallback remains a notification destination.",
+      "Check the test message arrived. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot.",
   },
   telegram: {
     summary:
@@ -488,7 +489,8 @@ function senderAccessStep(key: string): ChannelSetupStepDefinition {
 }
 
 function credentialAlternatives(key: string, alternatives: string[][]): string[][] | undefined {
-  if (key === "slack") return [["slackInstallId", "botToken", "botTokenEnv", "webhookUrl", "webhookUrlEnv"]];
+  // The pasted bot token is the main way in, so a missing-value message names it first.
+  if (key === "slack") return [["botToken", "botTokenEnv", "webhookUrl", "webhookUrlEnv", "slackInstallId"]];
   if (key === "discord") return [["botToken", "botTokenEnv", "webhookUrl", "webhookUrlEnv"]];
   if (key === "google-chat") return [["webhookUrl", "webhookUrlEnv", "serviceAccountKeyEnv"]];
   return alternatives.length ? [alternatives[0]!] : undefined;

@@ -1175,6 +1175,9 @@ function readProbeDetail(payload: unknown): string | undefined {
   return undefined;
 }
 
+/** What to do about a rejected token or a missing scope. The token is pasted, so reconnecting Slack is no help. */
+const SLACK_TOKEN_ADVICE = "Copy the bot token again, or add the missing scope and reinstall the app.";
+
 function formatSlackProbeDetail(detail: string | undefined): string | undefined {
   switch (detail) {
     case "not_in_channel":
@@ -1182,10 +1185,10 @@ function formatSlackProbeDetail(detail: string | undefined): string | undefined 
     case "channel_not_found":
       return "Slack could not find that channel. Use a channel name like #ops or paste the channel ID.";
     case "missing_scope":
-      return "The Slack app is missing a required permission scope. Reconnect Slack so GoatCitadel can request the current scopes.";
+      return `The Slack app is missing a required permission scope. ${SLACK_TOKEN_ADVICE}`;
     case "invalid_auth":
     case "token_revoked":
-      return "Slack rejected the stored bot token. Reconnect Slack to refresh the workspace install.";
+      return `Slack rejected the stored bot token. ${SLACK_TOKEN_ADVICE}`;
     case "is_archived":
       return "That Slack channel is archived. Choose an active channel target.";
     case "no_permission":

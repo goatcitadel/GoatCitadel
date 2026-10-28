@@ -113,7 +113,7 @@ describe("the missing-values message", () => {
     const message = container.querySelector('[role="alert"]')?.textContent ?? "";
     expect(message).toContain("Complete the required setup values before continuing:");
     expect(message).not.toMatch(/[a-z]Env\b/);
-    expect(message).toContain("Bot User OAuth token or Advanced fallback: incoming webhook URL");
+    expect(message).toContain("Bot token or Incoming webhook URL (send-only) or Connected Slack install (OAuth only)");
   });
 
   it("leaves out an alternative that has no field, and says each label once", () => {
