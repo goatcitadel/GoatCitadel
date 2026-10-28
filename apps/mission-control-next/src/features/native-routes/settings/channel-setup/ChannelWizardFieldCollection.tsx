@@ -1,6 +1,7 @@
 import type { ChannelSetupDraft, ChannelSetupFieldDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
 import { updateFieldValue, SECRET_REDACTION_MARKER, isFieldVisible, hasFieldValue } from "./channel-wizard-model";
 import { ChannelRichBlocks } from "../../../../cockpit/areas/settings/ChannelWizardContent";
+import { Button } from "../../../../cockpit/ui/Button";
 import { ChannelStructuredField } from "./ChannelStructuredField";
 
 export const channelInputClass =
@@ -62,6 +63,9 @@ export function ChannelWizardFields({
         "authMode",
       ].includes(field.key);
     const receiptValue = draft.draft[field.key];
+    // The Gateway withholds a public value it reads as possibly secret: a token typed into a variable-name field, or
+    // that field left empty. The value is never shown; it can be replaced, or cleared with an explicit empty value.
+    const withheld = !sensitive && !receiptField && value === SECRET_REDACTION_MARKER;
     const common = {
       id,
       "aria-describedby": [
@@ -155,12 +159,39 @@ export function ChannelWizardFields({
             inputMode={field.inputMode}
             autoComplete={sensitive ? "new-password" : "off"}
             value={value === SECRET_REDACTION_MARKER ? "" : String(value)}
-            placeholder={sensitive && configured ? "Configured — enter a replacement to rotate" : field.placeholder}
+            placeholder={
+              sensitive && configured
+                ? "Configured — enter a replacement to rotate"
+                : withheld
+                  ? "Saved value hidden"
+                  : field.placeholder
+            }
             onChange={(e) => change(e.target.value)}
           />
         )}
+        {withheld ? (
+          <Button
+            size="sm"
+            className="mt-2"
+            aria-label={`Clear saved value: ${field.label}`}
+            aria-describedby={help}
+            disabled={disabled}
+            onClick={() => {
+              change("");
+              document.getElementById(id)?.focus();
+            }}
+          >
+            Clear saved value
+          </Button>
+        ) : null}
         <div id={help} className="mt-1 space-y-1 text-xs text-fg-muted">
           <p>{field.explanation}</p>
+          {withheld ? (
+            <p>
+              The Gateway hides this saved value because it might be a secret. An empty value is hidden too. Type a
+              replacement, or clear it.
+            </p>
+          ) : null}
           {sensitive ? (
             <p>
               {configured
