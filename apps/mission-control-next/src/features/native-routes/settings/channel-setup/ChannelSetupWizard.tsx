@@ -339,7 +339,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
       <Dialog
         open={reviewTest !== null}
         title="Run a live channel test?"
-        description="Review this draft and destination. The Gateway may post a visible sandbox message; this action does not activate the connection."
+        description="Review this draft and destination. The Gateway may post a visible test message; this action does not activate the connection."
         onOpenChange={(open) => {
           if (!open) setReviewTest(null);
         }}

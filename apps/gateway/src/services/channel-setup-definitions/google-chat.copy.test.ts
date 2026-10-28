@@ -540,7 +540,7 @@ describe("Google Chat app path: can it finish?", () => {
 
     expect(eligibility.allowed).toBe(false);
     expect(eligibility.blockingReasons).toEqual([
-      "Chat app (service-account) mode has no sandbox probe. Message the app from an allowed sender and confirm its reply in Google Chat.",
+      "Chat app (service-account) mode can't send a test message. Message the app from an allowed sender and confirm its reply in Google Chat.",
     ]);
   });
 });

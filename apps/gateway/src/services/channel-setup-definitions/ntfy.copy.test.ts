@@ -491,11 +491,7 @@ describe("ntfy send-only path: can it finish?", () => {
     expect(headers.get("title")).toBe("GoatCitadel channel setup probe");
     expect(headers.has("authorization")).toBe(false);
     expect(live.probe?.steps.map((candidate) => [candidate.key, candidate.status, candidate.message])).toEqual([
-      [
-        "ntfy_sandbox_send",
-        "pass",
-        "Sandbox notification publish was accepted by ntfy; confirm receipt on the configured topic.",
-      ],
+      ["ntfy_sandbox_send", "pass", "ntfy accepted the test message. Check that it arrived on the topic."],
       ["ntfy_sandbox_cleanup", "skipped", "The test message stays on the topic."],
     ]);
     expect(issues).toEqual([]);

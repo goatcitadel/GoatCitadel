@@ -184,10 +184,10 @@ export async function runWecomLiveChecks(input: {
   if (!input.includeSandboxSend) {
     probe.steps.push({
       key: "wecom_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "skipped",
       disposition: "deferred",
-      message: "Run the explicit guided test to send a sandbox message.",
+      message: "Run the explicit guided test to send a test message.",
     });
     return finish(probe);
   }
@@ -263,10 +263,10 @@ async function sandboxSend(
   if (!input.target?.trim()) {
     steps.push({
       key: "wecom_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "skipped",
       disposition: "deferred",
-      message: "Sandbox send skipped because no default target is configured.",
+      message: "Test message skipped because no default target is configured.",
     });
     return;
   }
@@ -277,10 +277,10 @@ async function sandboxSend(
   } catch (error) {
     steps.push({
       key: "wecom_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "fail",
       disposition: "blocking",
-      message: `Sandbox send refused: ${error instanceof Error ? error.message : "invalid default target."}`,
+      message: `Test message refused: ${error instanceof Error ? error.message : "invalid default target."}`,
       failureCategory: "destination_mismatch",
     });
     return;
@@ -300,10 +300,10 @@ async function sandboxSend(
     if (!response.ok) {
       steps.push({
         key: "wecom_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: response.status >= 500 ? "warn" : "fail",
         disposition: "blocking",
-        message: `WeCom rejected the sandbox send (HTTP ${response.status}).`,
+        message: `WeCom rejected the test message (HTTP ${response.status}).`,
         failureCategory: "destination_mismatch",
       });
       return;
@@ -313,10 +313,10 @@ async function sandboxSend(
     if (errcode !== 0) {
       steps.push({
         key: "wecom_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "fail",
         disposition: "blocking",
-        message: `WeCom refused the sandbox send (errcode ${Number.isInteger(errcode) ? errcode : "unknown"}). Verify the recipient can see the application.`,
+        message: `WeCom refused the test message (errcode ${Number.isInteger(errcode) ? errcode : "unknown"}). Verify the recipient can see the application.`,
         failureCategory: errcode === TRUSTED_IP_ERRCODE ? "permission_mismatch" : "destination_mismatch",
       });
       return;
@@ -325,26 +325,26 @@ async function sandboxSend(
     if (invalid) {
       steps.push({
         key: "wecom_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "fail",
         disposition: "blocking",
-        message: `WeCom reported the sandbox recipient invalid (${invalid}). Verify the user, department or tag can see the application.`,
+        message: `WeCom reported the test message's recipient invalid (${invalid}). Verify the user, department or tag can see the application.`,
         failureCategory: "destination_mismatch",
       });
       return;
     }
     steps.push({
       key: "wecom_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
       disposition: "blocking",
       ...(typeof body.msgid === "string" ? { providerMessageId: body.msgid } : {}),
-      message: "WeCom accepted the sandbox message. Confirm receipt manually.",
+      message: "WeCom accepted the test message. Check that it arrived.",
     });
   } catch {
     steps.push({
       key: "wecom_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       disposition: "blocking",
       message: "WeCom send outcome is uncertain. Inspect the conversation before running another send.",

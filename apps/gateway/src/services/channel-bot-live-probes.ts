@@ -149,7 +149,7 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
   if (!input.channel) {
     probe.steps.push({
       key: "slack_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "fail",
       message: "Default channel is missing.",
       failureCategory: "missing_input",
@@ -175,7 +175,7 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
     if (send.status < 200 || send.status >= 300 || send.payload.ok === false) {
       probe.steps.push({
         key: "slack_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: send.status >= 500 ? "warn" : "fail",
         message: formatSlackProbeDetail(send.detail) ?? `Slack returned HTTP ${send.status}.`,
         failureCategory: inferFailureCategory(send.status),
@@ -184,17 +184,17 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
     }
     probe.steps.push({
       key: "slack_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
       providerMessageId: asString(send.payload.ts),
-      message: "Sandbox message post succeeded.",
+      message: "Sent the test message.",
     });
     const messageTs = asString(send.payload.ts);
     const channelId = asString(send.payload.channel) ?? input.channel;
     if (!messageTs) {
       probe.steps.push({
         key: "slack_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: "warn",
         message: "Message posted, but Slack did not return a message timestamp for cleanup.",
         failureCategory: "unknown",
@@ -218,26 +218,26 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
     if (cleanup.status < 200 || cleanup.status >= 300 || cleanup.payload.ok === false) {
       probe.steps.push({
         key: "slack_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: cleanup.status === 403 ? "warn" : cleanup.status >= 500 ? "warn" : "fail",
         message:
           formatSlackProbeDetail(cleanup.detail) ??
-          `Slack returned HTTP ${cleanup.status} while deleting the sandbox message.`,
+          `Slack returned HTTP ${cleanup.status} while deleting the test message.`,
         failureCategory: inferFailureCategory(cleanup.status),
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
     probe.steps.push({
       key: "slack_sandbox_cleanup",
-      label: "Sandbox cleanup",
+      label: "Test cleanup",
       status: "pass",
-      message: "Sandbox cleanup delete succeeded.",
+      message: "Deleted the test message.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "slack_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       message: `Probe failed before Slack responded: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",
@@ -290,7 +290,7 @@ export async function runTelegramBotLiveChecks(input: TelegramProbeInput): Promi
   if (!input.chatId) {
     probe.steps.push({
       key: "telegram_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "fail",
       message: "Default chat target is missing.",
       failureCategory: "missing_input",
@@ -312,7 +312,7 @@ export async function runTelegramBotLiveChecks(input: TelegramProbeInput): Promi
     if (send.status < 200 || send.status >= 300 || send.payload.ok === false) {
       probe.steps.push({
         key: "telegram_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: send.status >= 500 ? "warn" : "fail",
         message: send.detail ?? `Telegram returned HTTP ${send.status}.`,
         failureCategory: inferFailureCategory(send.status),
@@ -321,16 +321,16 @@ export async function runTelegramBotLiveChecks(input: TelegramProbeInput): Promi
     }
     probe.steps.push({
       key: "telegram_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
       providerMessageId: asNumber(asRecord(send.payload.result).message_id)?.toString(),
-      message: "Sandbox message post succeeded.",
+      message: "Sent the test message.",
     });
     const messageId = asNumber(send.payload.result && asRecord(send.payload.result).message_id);
     if (!messageId) {
       probe.steps.push({
         key: "telegram_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: "warn",
         message: "Message posted, but Telegram did not return a message id for cleanup.",
         failureCategory: "unknown",
@@ -350,24 +350,24 @@ export async function runTelegramBotLiveChecks(input: TelegramProbeInput): Promi
     if (cleanup.status < 200 || cleanup.status >= 300 || cleanup.payload.ok === false) {
       probe.steps.push({
         key: "telegram_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: cleanup.status === 403 ? "warn" : cleanup.status >= 500 ? "warn" : "fail",
-        message: cleanup.detail ?? `Telegram returned HTTP ${cleanup.status} while deleting the sandbox message.`,
+        message: cleanup.detail ?? `Telegram returned HTTP ${cleanup.status} while deleting the test message.`,
         failureCategory: inferFailureCategory(cleanup.status),
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
     probe.steps.push({
       key: "telegram_sandbox_cleanup",
-      label: "Sandbox cleanup",
+      label: "Test cleanup",
       status: "pass",
-      message: "Sandbox cleanup delete succeeded.",
+      message: "Deleted the test message.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "telegram_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       message: `Probe failed before Telegram responded: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",
@@ -404,9 +404,9 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
     if (input.includeSandboxSend) {
       probe.steps.push({
         key: "discord_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "skipped",
-        message: "Sandbox send probe requires a Discord bot token.",
+        message: "The test message needs a Discord bot token.",
       });
     }
     if (input.runtimeMode === "gateway") {
@@ -480,7 +480,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
     if (input.includeSandboxSend) {
       probe.steps.push({
         key: "discord_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "fail",
         message: "Default channel ID is missing.",
         failureCategory: "destination_mismatch",
@@ -528,9 +528,9 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
         if (input.includeSandboxSend) {
           probe.steps.push({
             key: "discord_sandbox_send",
-            label: "Sandbox send",
+            label: "Test send",
             status: "skipped",
-            message: "Sandbox send was skipped because the channel does not belong to the configured server.",
+            message: "The test message was not sent because the channel does not belong to the configured server.",
           });
         }
         if (input.runtimeMode === "gateway") {
@@ -574,7 +574,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
         }),
       );
       if (send.status < 200 || send.status >= 300) {
-        probe.steps.push(buildDiscordProbeFailure("discord_sandbox_send", "Sandbox send", send.status));
+        probe.steps.push(buildDiscordProbeFailure("discord_sandbox_send", "Test send", send.status));
         if (input.runtimeMode === "gateway") {
           probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
         }
@@ -583,17 +583,17 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
 
       probe.steps.push({
         key: "discord_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "pass",
         providerMessageId: asString(send.payload.id),
-        message: "Sandbox message post succeeded.",
+        message: "Sent the test message.",
       });
 
       const messageId = asString(send.payload.id);
       if (!messageId) {
         probe.steps.push({
           key: "discord_sandbox_cleanup",
-          label: "Sandbox cleanup",
+          label: "Test cleanup",
           status: "warn",
           message: "Message was posted, but Discord did not return a message id for automatic cleanup.",
           failureCategory: "unknown",
@@ -618,9 +618,9 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
       if (cleanup.status < 200 || cleanup.status >= 300) {
         probe.steps.push({
           key: "discord_sandbox_cleanup",
-          label: "Sandbox cleanup",
+          label: "Test cleanup",
           status: cleanup.status === 403 ? "warn" : cleanup.status >= 500 ? "warn" : "fail",
-          message: `Sandbox message posted successfully, but cleanup delete failed with HTTP ${cleanup.status}.`,
+          message: `Sent the test message, but deleting it failed with HTTP ${cleanup.status}.`,
           failureCategory: cleanup.status === 403 ? "permission_mismatch" : inferFailureCategory(cleanup.status),
         });
         if (input.runtimeMode === "gateway") {
@@ -630,14 +630,14 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
       }
       probe.steps.push({
         key: "discord_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: "pass",
-        message: "Sandbox cleanup delete succeeded.",
+        message: "Deleted the test message.",
       });
     } catch (error) {
       probe.steps.push({
         key: "discord_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "warn",
         message: `Probe failed before Discord responded: ${(error as Error).message}`,
         failureCategory: "platform_unavailable",
@@ -712,7 +712,7 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
     if (input.includeSandboxSend) {
       probe.steps.push({
         key: "mattermost_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "fail",
         message: "Default channel is missing.",
         failureCategory: "destination_mismatch",
@@ -769,7 +769,7 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
     if (send.status < 200 || send.status >= 300) {
       probe.steps.push({
         key: "mattermost_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: send.status >= 500 ? "warn" : "fail",
         message: send.detail ?? `Mattermost returned HTTP ${send.status}.`,
         failureCategory: inferFailureCategory(send.status),
@@ -778,16 +778,16 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
     }
     probe.steps.push({
       key: "mattermost_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
       providerMessageId: asString(send.payload.id),
-      message: "Sandbox post succeeded.",
+      message: "Sent the test message.",
     });
     const postId = asString(send.payload.id);
     if (!postId) {
       probe.steps.push({
         key: "mattermost_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: "warn",
         message: "Post was created, but Mattermost did not return a post id for cleanup.",
         failureCategory: "unknown",
@@ -807,24 +807,24 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
     if (cleanup.status < 200 || cleanup.status >= 300) {
       probe.steps.push({
         key: "mattermost_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: cleanup.status === 403 ? "warn" : cleanup.status >= 500 ? "warn" : "fail",
-        message: `Sandbox post succeeded, but cleanup delete failed with HTTP ${cleanup.status}.`,
+        message: `Sent the test message, but deleting it failed with HTTP ${cleanup.status}.`,
         failureCategory: cleanup.status === 403 ? "permission_mismatch" : inferFailureCategory(cleanup.status),
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
     probe.steps.push({
       key: "mattermost_sandbox_cleanup",
-      label: "Sandbox cleanup",
+      label: "Test cleanup",
       status: "pass",
-      message: "Sandbox cleanup delete succeeded.",
+      message: "Deleted the test message.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "mattermost_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       message: `Probe failed before Mattermost responded: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",
@@ -888,7 +888,7 @@ export async function runWhatsAppCloudLiveChecks(input: WhatsAppProbeInput): Pro
   if (!recipient) {
     probe.steps.push({
       key: "whatsapp_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "fail",
       message: "Default recipient is missing or not a direct-recipient target.",
       failureCategory: "destination_mismatch",
@@ -918,7 +918,7 @@ export async function runWhatsAppCloudLiveChecks(input: WhatsAppProbeInput): Pro
     if (send.status < 200 || send.status >= 300) {
       probe.steps.push({
         key: "whatsapp_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: send.status >= 500 ? "warn" : "fail",
         message: send.detail ?? `WhatsApp returned HTTP ${send.status}.`,
         failureCategory: inferFailureCategory(send.status),
@@ -927,16 +927,16 @@ export async function runWhatsAppCloudLiveChecks(input: WhatsAppProbeInput): Pro
     }
     probe.steps.push({
       key: "whatsapp_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
       providerMessageId: asString(asRecord(asRecordArray(send.payload.messages)[0]).id),
-      message: "Sandbox message post succeeded.",
+      message: "Sent the test message.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "whatsapp_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       message: `Probe failed before WhatsApp responded: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",
@@ -997,7 +997,7 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
   if (!target) {
     probe.steps.push({
       key: "line_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "fail",
       message: "Default target is missing.",
       failureCategory: "destination_mismatch",
@@ -1026,7 +1026,7 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
       const failure = await readJsonResponse(send);
       probe.steps.push({
         key: "line_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: send.status >= 500 ? "warn" : "fail",
         message: failure.detail ?? `LINE returned HTTP ${send.status}.`,
         failureCategory: inferFailureCategory(send.status),
@@ -1035,15 +1035,15 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
     }
     probe.steps.push({
       key: "line_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
-      message: "Sandbox push request succeeded.",
+      message: "Sent the test message.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "line_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       message: `Probe failed before LINE responded: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",

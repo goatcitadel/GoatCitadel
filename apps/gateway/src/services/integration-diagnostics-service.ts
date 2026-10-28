@@ -261,7 +261,7 @@ export function buildIntegrationConnectionChecks(
           key: "delivery_posture",
           status: "pass",
           message:
-            "ntfy sandbox diagnostics publish at most once and require manual receipt confirmation. Inbound is a separate opt-in topic subscription (inboundStreamEnabled with a token); anyone able to publish to the subscribed topic can start turns.",
+            "The ntfy test message is published at most once, and you confirm that it arrived yourself. Inbound is a separate opt-in topic subscription (inboundStreamEnabled with a token); anyone able to publish to the subscribed topic can start turns.",
         });
         break;
       case "google-chat":
@@ -704,7 +704,7 @@ export async function runIntegrationConnectionLiveChecks(
               key: "google_chat_app_live_send",
               status: "warn",
               message:
-                "Chat app (service-account) mode has no sandbox probe. Message the app from an allowed sender and confirm its reply in Google Chat.",
+                "Chat app (service-account) mode can't send a test message. Message the app from an allowed sender and confirm its reply in Google Chat.",
             },
           ],
         };

@@ -245,7 +245,7 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
       <Dialog
         open={reviewTest !== null}
         title="Run a live channel test?"
-        description="This test checks credentials and may send a sandbox message to the configured destination. It does not finalize the connection."
+        description="This test checks credentials and may send a test message to the configured destination. It does not finalize the connection."
         onOpenChange={(open) => {
           if (!open) setReviewTest(null);
         }}

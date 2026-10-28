@@ -31,7 +31,7 @@ export function evaluateChannelSetupEligibility(
   const requireCleanup = () => {
     if (cleanupAcknowledged) return;
     requiresAcknowledgement = true;
-    blockingReasons.push("The sandbox message was accepted, but cleanup needs an explicit operator acknowledgement.");
+    blockingReasons.push("The test message was accepted, but cleanup needs an explicit operator acknowledgement.");
   };
   if (result.status === "error") blockingReasons.push("Required setup checks failed. Resolve the errors and retest.");
   for (const issue of result.issues) {

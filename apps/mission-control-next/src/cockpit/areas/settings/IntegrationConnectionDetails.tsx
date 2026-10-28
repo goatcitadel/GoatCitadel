@@ -75,7 +75,7 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
         <p className="text-sm text-fg-muted">Connector diagnostics are not enabled in Runtime settings.</p>
       ) : (
         <p className="text-xs text-fg-muted">
-          Diagnostics may contact this connection's service. They do not send a sandbox message.
+          Diagnostics may contact this connection's service. They do not send a test message.
         </p>
       )}
       {s.diagnostics ? (

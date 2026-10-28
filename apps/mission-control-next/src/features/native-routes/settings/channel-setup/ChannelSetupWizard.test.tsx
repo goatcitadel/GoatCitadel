@@ -1272,7 +1272,7 @@ describe("shared channel setup safety and native controls", () => {
     expect(renderer.root.findByType(ChannelDraftEditor)).toBeDefined();
     await click(findStepButton(renderer.root, "Validate and test the connection"));
     await click(findButton(renderer.root, "Review live test"));
-    expect(textOf(renderer.root)).toContain("may send a sandbox message");
+    expect(textOf(renderer.root)).toContain("may send a test message");
     await click(findButton(renderer.root, "Cancel test"));
     expect(channelApiMocks.validateChannelSetupDraft).not.toHaveBeenCalled();
     expect(channelApiMocks.testChannelSetupDraft).not.toHaveBeenCalled();

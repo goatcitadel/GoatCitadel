@@ -273,7 +273,7 @@ export function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
             level: draft.lifecycleMode === "create" ? "error" : "warn",
             failureCategory: "deprecated_path",
             message:
-              "Office 365 connector webhooks retired in May 2026. Replace this saved URL with an Anyone Workflows webhook and run a live sandbox test.",
+              "Office 365 connector webhooks retired in May 2026. Replace this saved URL with an Anyone Workflows webhook and run a live test.",
           });
         } else if (kind === "legacy_workflow") {
           issues.push({

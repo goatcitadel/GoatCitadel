@@ -30,12 +30,12 @@ export async function runNtfyLiveChecks(input: NtfyProbeInput): Promise<BotProbe
   if (!input.includeSandboxSend || input.dryRun) {
     probe.steps.push({
       key: "ntfy_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "skipped",
       disposition: input.dryRun ? "deferred" : "blocking",
       message: input.dryRun
-        ? "Sandbox publish skipped because this connection is configured for dry-run validation."
-        : "Sandbox publish skipped for non-destructive probe mode; ntfy has no separate auth-only endpoint.",
+        ? "Test message skipped because this connection is configured for dry-run validation."
+        : "Test message skipped for non-destructive probe mode; ntfy has no separate auth-only endpoint.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
@@ -67,7 +67,7 @@ export async function runNtfyLiveChecks(input: NtfyProbeInput): Promise<BotProbe
     if (!response.ok) {
       probe.steps.push({
         key: "ntfy_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: response.status >= 500 ? "warn" : "fail",
         message: detail || `ntfy returned HTTP ${response.status}.`,
         failureCategory: inferFailureCategory(response.status),
@@ -76,14 +76,14 @@ export async function runNtfyLiveChecks(input: NtfyProbeInput): Promise<BotProbe
     }
     probe.steps.push({
       key: "ntfy_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
       providerMessageId: asString(parseJsonRecord(detail).id),
-      message: "Sandbox notification publish was accepted by ntfy; confirm receipt on the configured topic.",
+      message: "ntfy accepted the test message. Check that it arrived on the topic.",
     });
     probe.steps.push({
       key: "ntfy_sandbox_cleanup",
-      label: "Sandbox cleanup",
+      label: "Test cleanup",
       status: "skipped",
       disposition: "deferred",
       cleanupStatus: "unsupported",
@@ -93,7 +93,7 @@ export async function runNtfyLiveChecks(input: NtfyProbeInput): Promise<BotProbe
   } catch (error) {
     probe.steps.push({
       key: "ntfy_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: publishStarted ? "warn" : "fail",
       message: `${
         publishStarted

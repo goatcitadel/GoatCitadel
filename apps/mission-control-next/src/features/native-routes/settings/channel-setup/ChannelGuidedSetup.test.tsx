@@ -532,10 +532,10 @@ describe("current all14 guided definitions in both shells", () => {
                   steps: [
                     {
                       key: "cleanup",
-                      label: "Sandbox cleanup",
+                      label: "Test cleanup",
                       status: "warn" as const,
                       disposition: "advisory" as const,
-                      message: "Clean up the sandbox message.",
+                      message: "Clean up the test message.",
                       cleanupStatus: "manual_required" as const,
                       providerMessageId: "all14-provider-receipt",
                     },

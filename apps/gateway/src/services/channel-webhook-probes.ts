@@ -23,7 +23,14 @@ export async function runWebhookDestinationLiveChecks(
 ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const prefix = input.channelKey.replace(/-/g, "_");
-  const connectionLabel = input.channelKey === "google-chat" ? "Google Chat" : input.channelKey === "teams" ? "Teams" : input.channelKey === "slack" ? "Slack" : "Discord";
+  const connectionLabel =
+    input.channelKey === "google-chat"
+      ? "Google Chat"
+      : input.channelKey === "teams"
+        ? "Teams"
+        : input.channelKey === "slack"
+          ? "Slack"
+          : "Discord";
   const probe: ChannelProbeReport = {
     kind: `${prefix}_webhook`,
     mode: "webhook",
@@ -34,7 +41,7 @@ export async function runWebhookDestinationLiveChecks(
   if (!input.webhookUrl) {
     probe.steps.push({
       key: `${prefix}_sandbox_send`,
-      label: "Sandbox send",
+      label: "Test send",
       status: "fail",
       message: "Webhook URL is missing, so the webhook probe could not run.",
       failureCategory: "missing_input",
@@ -48,10 +55,10 @@ export async function runWebhookDestinationLiveChecks(
   if (!input.includeSandboxSend) {
     probe.steps.push({
       key: `${prefix}_sandbox_send`,
-      label: "Sandbox send",
+      label: "Test send",
       status: "skipped",
       message:
-        "Non-destructive diagnostics skipped the sandbox post. Run the guided test or retest flow to send a webhook probe and confirm delivery manually.",
+        "Non-destructive diagnostics did not send the test message. Run the guided test or retest flow to send it, then confirm it arrived.",
     });
     return {
       checks: [
@@ -72,7 +79,7 @@ export async function runWebhookDestinationLiveChecks(
       const detail = await readWebhookProbeDetail(response, [input.webhookUrl, request.url]);
       probe.steps.push({
         key: `${prefix}_sandbox_send`,
-        label: "Sandbox send",
+        label: "Test send",
         status: response.status >= 500 ? "warn" : "fail",
         message: detail
           ? `${connectionLabel} returned HTTP ${response.status}: ${detail}`
@@ -87,9 +94,9 @@ export async function runWebhookDestinationLiveChecks(
 
     probe.steps.push({
       key: `${prefix}_sandbox_send`,
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
-      message: "Webhook accepted the sandbox message. Confirm it arrived in the intended destination.",
+      message: "Webhook accepted the test message. Confirm it arrived in the intended destination.",
     });
     return {
       checks: mapProbeStepsToChecks(probe.steps),
@@ -98,7 +105,7 @@ export async function runWebhookDestinationLiveChecks(
   } catch {
     probe.steps.push({
       key: `${prefix}_sandbox_send`,
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       message: `Probe outcome is uncertain because ${connectionLabel} did not provide a response. Inspect the destination before sending again.`,
       failureCategory: "platform_unavailable",
@@ -143,7 +150,15 @@ function buildWebhookProbeRequest(input: RunWebhookLiveChecksInput): { url: stri
     };
   }
 
-  if (input.channelKey === "slack" || input.channelKey === "discord") return { url: input.webhookUrl ?? "", init: { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input.channelKey === "slack" ? { text: probeMessage } : { content: probeMessage }) } };
+  if (input.channelKey === "slack" || input.channelKey === "discord")
+    return {
+      url: input.webhookUrl ?? "",
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input.channelKey === "slack" ? { text: probeMessage } : { content: probeMessage }),
+      },
+    };
 
   const title = input.cardTitle?.trim() || "GoatCitadel";
   return {
@@ -186,11 +201,13 @@ function buildWebhookProbeRequest(input: RunWebhookLiveChecksInput): { url: stri
 async function readWebhookProbeDetail(response: Response, webhookUrls: readonly string[]): Promise<string | undefined> {
   let text: string;
   try {
-    text = (await readBoundedResponseText(response, {
-      maxBytes: 64 * 1024,
-      timeoutMs: 5_000,
-      label: "channel webhook probe",
-    })).trim();
+    text = (
+      await readBoundedResponseText(response, {
+        maxBytes: 64 * 1024,
+        timeoutMs: 5_000,
+        label: "channel webhook probe",
+      })
+    ).trim();
   } catch {
     // The HTTP status is already known even when the optional body is unreadable.
     return undefined;
@@ -199,9 +216,12 @@ async function readWebhookProbeDetail(response: Response, webhookUrls: readonly 
   try {
     const payload = JSON.parse(text) as Record<string, unknown>;
     for (const candidate of [payload.error, payload.description, payload.message]) {
-      if (typeof candidate === "string" && candidate.trim()) return sanitizeWebhookProbeDetail(candidate.trim(), webhookUrls);
+      if (typeof candidate === "string" && candidate.trim())
+        return sanitizeWebhookProbeDetail(candidate.trim(), webhookUrls);
     }
-  } catch { return sanitizeWebhookProbeDetail(text, webhookUrls); }
+  } catch {
+    return sanitizeWebhookProbeDetail(text, webhookUrls);
+  }
   return sanitizeWebhookProbeDetail(text, webhookUrls);
 }
 
@@ -211,8 +231,17 @@ function sanitizeWebhookProbeDetail(text: string, webhookUrls: readonly string[]
     if (!value) return;
     secrets.add(value);
     secrets.add(value.replaceAll("/", "\\/"));
-    try { secrets.add(encodeURIComponent(value)); secrets.add(encodeURI(value)); } catch { secrets.add(JSON.stringify(value).slice(1, -1)); }
-    try { secrets.add(decodeURIComponent(value)); } catch { secrets.add(JSON.stringify(value).slice(1, -1)); }
+    try {
+      secrets.add(encodeURIComponent(value));
+      secrets.add(encodeURI(value));
+    } catch {
+      secrets.add(JSON.stringify(value).slice(1, -1));
+    }
+    try {
+      secrets.add(decodeURIComponent(value));
+    } catch {
+      secrets.add(JSON.stringify(value).slice(1, -1));
+    }
     secrets.add(new URLSearchParams({ credential: value }).toString().slice("credential=".length));
   };
   for (const value of webhookUrls) {
@@ -221,17 +250,33 @@ function sanitizeWebhookProbeDetail(text: string, webhookUrls: readonly string[]
       const url = new URL(value);
       addForms(url.toString());
       for (const [key, credential] of url.searchParams) {
-        if (/^(?:sig|signature|key|api[_-]?key|token|access[_-]?token|auth|authorization|code|secret|client[_-]?secret)$/i.test(key)) addForms(credential);
+        if (
+          /^(?:sig|signature|key|api[_-]?key|token|access[_-]?token|auth|authorization|code|secret|client[_-]?secret)$/i.test(
+            key,
+          )
+        )
+          addForms(credential);
       }
       for (const part of url.search.slice(1).split("&")) {
         const separator = part.indexOf("=");
         const key = new URLSearchParams(part).keys().next().value;
-        if (separator >= 0 && key && /^(?:sig|signature|key|api[_-]?key|token|access[_-]?token|auth|authorization|code|secret|client[_-]?secret)$/i.test(key)) addForms(part.slice(separator + 1));
+        if (
+          separator >= 0 &&
+          key &&
+          /^(?:sig|signature|key|api[_-]?key|token|access[_-]?token|auth|authorization|code|secret|client[_-]?secret)$/i.test(
+            key,
+          )
+        )
+          addForms(part.slice(separator + 1));
       }
       // Slack and Discord callback credentials can live in the path rather than a query.
-      const pathCredential = url.pathname.match(/\/(?:api\/(?:v[0-9]+\/)?webhooks\/[^/]+|services\/[^/]+\/[^/]+)\/([^/]+)\/?$/i)?.[1];
+      const pathCredential = url.pathname.match(
+        /\/(?:api\/(?:v[0-9]+\/)?webhooks\/[^/]+|services\/[^/]+\/[^/]+)\/([^/]+)\/?$/i,
+      )?.[1];
       if (pathCredential) addForms(pathCredential);
-    } catch { continue; }
+    } catch {
+      continue;
+    }
   }
   let safe = text;
   for (const credential of [...secrets].sort((left, right) => right.length - left.length)) {
