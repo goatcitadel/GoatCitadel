@@ -1,28 +1,35 @@
+import { useId } from "react";
 import type { CapabilityToolGroupItem } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { Section } from "../../../ui/Section";
 import { LetterIcon } from "../LetterIcon";
-import { GroupSwitchControl } from "./GroupSwitchControl";
+import { GroupSwitch, GroupSwitchNotes, GroupSwitchState } from "./GroupSwitchControl";
 import type { ToolGroupViewProps } from "./ToolGroupRow";
 
 function MostUsedCard({ group, calls, settingsRevision, onOpen }: ToolGroupViewProps) {
+  const noteId = useId();
   return (
     <li className="flex min-w-0 flex-col gap-2 rounded-lg border border-line-subtle bg-raised p-3">
-      <div className="flex min-w-0 items-center gap-2">
-        <LetterIcon name={group.label} className="size-8 text-base" />
-        <h3 className="min-w-0 truncate text-base font-semibold text-fg">{group.label}</h3>
-      </div>
-      <p className="text-sm text-fg-secondary">{calls}</p>
-      {/* The group's row in the list names its switch by the label alone; this one adds where it sits. */}
-      <GroupSwitchControl
-        group={group}
-        settingsRevision={settingsRevision}
-        switchLabel={`${group.label}, most used`}
-        announce={false}
-      />
-      <Button size="sm" aria-label={`View ${group.label}, most used`} onClick={() => onOpen(group.groupId)}>
-        View
-      </Button>
+      <GroupSwitchState group={group} settingsRevision={settingsRevision}>
+        {(control) => (
+          <>
+            <div className="flex min-w-0 items-center gap-2">
+              <LetterIcon name={group.label} className="size-8 text-base" />
+              <h3 className="min-w-0 truncate text-base font-semibold text-fg">{group.label}</h3>
+            </div>
+            <p className="text-sm text-fg-secondary">{calls}</p>
+            {/* The group's row in the list names its switch by the label alone; this one adds where it sits. */}
+            <div>
+              <GroupSwitch control={control} label={`${group.label}, most used`} describedBy={noteId} />
+            </div>
+            {/* The card is narrow, so the lines wrap inside it. The row below announces them; the card only shows them. */}
+            <GroupSwitchNotes group={group} control={control} id={noteId} announce={false} />
+            <Button size="sm" aria-label={`View ${group.label}, most used`} onClick={() => onOpen(group.groupId)}>
+              View
+            </Button>
+          </>
+        )}
+      </GroupSwitchState>
     </li>
   );
 }

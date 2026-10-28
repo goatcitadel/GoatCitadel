@@ -10,9 +10,11 @@ import {
   type CapabilityToolUsageResponse,
   type ToolGroupId,
 } from "@goatcitadel/contracts";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toolListQuery, toolUsageQuery } from "../../../data/capability-tools-query";
+import { setToolGroupSwitch } from "./tool-group-switch-store";
 import { ToolsTab } from "./ToolsTab";
 import { __resetToolGroupSwitchesForTests } from "./use-tool-group-switch";
 
@@ -256,7 +258,8 @@ describe("Tools tab", () => {
     expect(rowOf("Git").textContent).toContain("40 calls in the last year");
     expect(text()).not.toContain("Calls unknown");
     expect(text()).not.toContain("Call counts can't be read right now.");
-    expect(text()).toMatch(/Call counts can't be refreshed right now\. Showing the last version/);
+    expect(text()).toContain(`Call counts can't be refreshed right now. ${describeApiError(httpFailure(503)).summary}`);
+    expect(text()).toMatch(/Showing the last version from/);
     expect(button("Try again")).toBeUndefined();
   });
 
@@ -286,7 +289,8 @@ describe("Tools tab", () => {
     await click(button("Refresh counts"));
 
     expect(rowOf("Git").textContent).toContain("40 calls in the last year");
-    expect(text()).toContain("Call counts can't be refreshed right now.");
+    // The line says why, in the same words the list's own warning would use.
+    expect(text()).toContain(`Call counts can't be refreshed right now. ${describeApiError(httpFailure(503)).summary}`);
     // The button is there to try again.
     expect(button("Refresh counts")).toBeDefined();
   });
@@ -458,6 +462,76 @@ describe("Tools tab", () => {
     await click(button("Reload", rowOf("Files")));
     expect(api.fetchCapabilityTools.mock.calls.length).toBeGreaterThan(reads);
     expect(rowOf("Files").textContent).not.toContain(message);
+  });
+
+  describe("narrow screens", () => {
+    // The longest line a switch can show, from a change that waited in Inbox and then met changed settings.
+    const LONG = "Not switched on. Settings changed while this waited in Inbox. Switch it on again.";
+
+    /** The ancestors between `element` and `card` that can't shrink: text inside one takes its full unwrapped width. */
+    const fixedWidthAncestors = (element: Element, card: Element) => {
+      const found: Element[] = [];
+      for (let parent = element.parentElement; parent && parent !== card; parent = parent.parentElement) {
+        if (parent.classList.contains("shrink-0")) found.push(parent);
+      }
+      return found;
+    };
+
+    beforeEach(() => {
+      api.fetchCapabilityTools.mockResolvedValue(listOf({ git: { state: "off" } }));
+    });
+
+    it("keeps the note and a long failure in the card's text flow, not in a column that can't shrink", async () => {
+      await render();
+      await act(async () => setToolGroupSwitch("git", { phase: "failed", message: LONG, conflict: true }));
+
+      for (const card of [rowOf("Git"), cardOf("Most used", "Git")]) {
+        expect(card.textContent).toContain(LONG);
+        const failure = [...card.querySelectorAll("p")].find((line) => line.textContent === LONG)!;
+        const note = [...card.querySelectorAll("p")].find(
+          (line) => line.textContent === "The AI can't use these in any chat.",
+        )!;
+        expect(failure).toBeDefined();
+        expect(note).toBeDefined();
+        expect(fixedWidthAncestors(failure, card)).toEqual([]);
+        expect(fixedWidthAncestors(note, card)).toEqual([]);
+        // The Reload button stands with the failure, not in the switch's column.
+        expect(fixedWidthAncestors(button("Reload", card)!, card)).toEqual([]);
+      }
+    });
+
+    it("keeps the wait and its link in the card's text flow too", async () => {
+      await render();
+      await act(async () =>
+        setToolGroupSwitch("git", {
+          phase: "waiting",
+          approvalId: "approval-1",
+          groupId: "git",
+          planId: "plan-git",
+          enabled: true,
+        }),
+      );
+
+      for (const card of [rowOf("Git"), cardOf("Most used", "Git")]) {
+        const link = [...card.querySelectorAll("a")].find((entry) => entry.textContent === "Open in Inbox")!;
+        expect(link).toBeDefined();
+        expect(fixedWidthAncestors(link, card)).toEqual([]);
+      }
+    });
+
+    it("keeps the switch beside the name and lets the name column take the rest of the row", async () => {
+      await render();
+      const row = rowOf("Git");
+
+      // The switch sits in a column that holds only the switch and the View button; the name column shrinks and grows.
+      const column = [...row.querySelectorAll("div.shrink-0")].find((entry) => entry.contains(switchNamed("Git")))!;
+      expect(column).toBeDefined();
+      expect(column.textContent).toBe("OffView");
+      const names = row.querySelector("h3")!.parentElement!.parentElement!;
+      expect(names.classList.contains("flex-1")).toBe(true);
+      expect(names.classList.contains("min-w-0")).toBe(true);
+      expect(column.parentElement).toBe(names.parentElement);
+    });
   });
 
   describe("search", () => {

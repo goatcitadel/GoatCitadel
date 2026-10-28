@@ -2,9 +2,12 @@ import { useCallback, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CapabilityToolGroupItem, CapabilityToolUsageResponse } from "@goatcitadel/contracts";
 import { fetchCapabilityToolUsage } from "@goatcitadel/mission-control-shared/api/capability-tools";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { toolUsageQuery } from "../../../data/capability-tools-query";
 import { lastVersionNote, recordView } from "../../../data/record-view";
 import { presentGroupCalls } from "./tool-view";
+
+const OLD_COUNTS = "Call counts can't be refreshed right now.";
 
 export interface ToolUsage {
   /** The last counts read. They stay beside a failed recheck. */
@@ -35,7 +38,7 @@ export function useToolUsage(): ToolUsage {
   const usage = view.record;
   const [refreshing, setRefreshing] = useState(false);
   // The refresh that failed is tied to the counts it failed on, so a newer answer from anywhere clears the line.
-  const [failedOn, setFailedOn] = useState<number | undefined>();
+  const [failed, setFailed] = useState<{ on: number; reason: string } | undefined>();
   const running = useRef(false);
 
   const refresh = useCallback(() => {
@@ -46,9 +49,9 @@ export function useToolUsage(): ToolUsage {
     void fetchCapabilityToolUsage({ refresh: true })
       .then((fresh) => {
         client.setQueryData(toolUsageQuery().queryKey, fresh);
-        setFailedOn(undefined);
+        setFailed(undefined);
       })
-      .catch(() => setFailedOn(before ?? 0))
+      .catch((error: unknown) => setFailed({ on: before ?? 0, reason: describeApiError(error).summary }))
       .finally(() => {
         running.current = false;
         setRefreshing(false);
@@ -59,12 +62,12 @@ export function useToolUsage(): ToolUsage {
   // (and the button, with its focus) until it answers.
   const unavailable =
     usage === undefined && (view.phase === "error" || (query.isFetching && query.errorUpdateCount > 0));
-  const refreshFailed = failedOn !== undefined && failedOn === (query.dataUpdatedAt || 0);
+  const refreshFailure = failed && failed.on === (query.dataUpdatedAt || 0) ? failed : undefined;
   const lastVersion = lastVersionNote(view);
+  // The reason comes from the refresh that failed, else from the recheck that did, as the list's own warning does.
+  const reason = refreshFailure?.reason ?? (query.error ? describeApiError(query.error).summary : undefined);
   const oldCountsNote =
-    usage && (refreshFailed || lastVersion)
-      ? `Call counts can't be refreshed right now.${lastVersion ? ` ${lastVersion}` : ""}`
-      : undefined;
+    usage && (refreshFailure || lastVersion) ? [OLD_COUNTS, reason, lastVersion].filter(Boolean).join(" ") : undefined;
   const status = usage ? "ready" : "unknown";
 
   return {
