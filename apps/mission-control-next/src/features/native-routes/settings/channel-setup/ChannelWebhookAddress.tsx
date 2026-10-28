@@ -21,7 +21,8 @@ export function ChannelWebhookAddress({ path, className = "" }: { path: string; 
       await navigator.clipboard.writeText(address);
       setCopiedAddress(address);
     } catch {
-      // No clipboard, or it said no. The address stays on screen to select by hand.
+      // Copying is best-effort: with no clipboard, or one that says no, leave the label on Copy. The address stays on
+      // screen to select by hand.
     }
   }
 
