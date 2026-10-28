@@ -214,7 +214,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
               explanation: "Name of the environment variable that holds the whole JSON key.",
               whyNeeded:
                 "A Chat app signs in as its service account with this key to send, reply and delete its own messages.",
-              placeholder: "GOOGLE_CHAT_SA_KEY",
+              placeholder: "GOOGLE_CHAT_SERVICE_ACCOUNT_KEY",
               canChangeLater: true,
               visibleWhenFieldEquals: FOR_APP,
             },

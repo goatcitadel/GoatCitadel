@@ -676,6 +676,22 @@ describe("Google Chat app path: can it finish?", () => {
     expect(eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
   });
 
+  it("shows the same variable name in the example and the placeholder, and finishes with that name", async () => {
+    const env = field("serviceAccountKeyEnv");
+    const example = /\(for example ([A-Z0-9_]+)\)/u.exec(env.explanation)?.[1];
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_KEY", "synthetic-service-account-key");
+    const values = { ...APP_VALUES, serviceAccountKeyEnv: example };
+
+    expect(example).toBeDefined();
+    expect(env.placeholder).toBe(example);
+    expect(continueBlockers(values)).toEqual([]);
+    expect(guide().validate(draftOf(values))).toEqual([]);
+    expect((await verdictOf(guide().normalize(draftOf(values)))).eligibility).toMatchObject({
+      allowed: true,
+      blockingReasons: [],
+    });
+  });
+
   it("finishes with no default space, which only defers the warning about it", async () => {
     const { defaultSpace: _space, ...noSpace } = PASTED_APP_VALUES;
     const { issues, eligibility } = await verdictOf(guide().normalize(draftOf(noSpace)));
