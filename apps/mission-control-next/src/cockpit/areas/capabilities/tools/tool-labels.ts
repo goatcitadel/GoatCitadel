@@ -13,18 +13,18 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
   "skills.read": "Read a skill's instructions",
   "tool_artifact.read": "Read saved tool output",
   "change.request": "Ask to change your setup",
-  "runtime.configure": "Set up a search provider",
+  "runtime.configure": "Ask to set up a search provider",
   "session.status": "Check the chat's status",
   "session.search": "Search this chat's history",
-  "session.history": "Reopen earlier chat messages",
+  "session.history": "Read earlier chat messages",
   "user_input.request": "Ask you a question",
-  submit_work_result: "Report back on a task",
+  submit_work_result: "Report back, or ask for file access",
   "time.now": "Check the time",
   "context.list": "List the context for this turn",
   "context.grep": "Find text in this turn's context",
   "context.query": "Look up this turn's context",
   "context.read_range": "Read part of this turn's context",
-  "mcp.invoke": "Use a connected app",
+  "mcp.invoke": "Use a connector's tool",
 
   // Files
   "fs.read": "Read a file",
@@ -44,7 +44,7 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
   "shell.exec": "Run a shell command",
   "shell.exec_background": "Start a command in the background",
   "tests.run": "Run the project's tests",
-  "lint.run": "Check the project's code style",
+  "lint.run": "Check the project's code for problems",
   "build.run": "Build the project",
 
   // Git
@@ -60,7 +60,7 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
   // Web search
   "browser.search": "Search the web",
   "local_business.research": "Research a local business",
-  "citations.build": "Gather sources to cite",
+  "citations.build": "Build a list of sources to cite",
 
   // Web requests
   "http.get": "Fetch from a web address",
@@ -77,13 +77,13 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
   "browser.storage.get": "Read a page's stored data",
   "browser.storage.set": "Store data for a page",
   "browser.storage.clear": "Clear a page's stored data",
-  "browser.context.configure": "Change the browser's settings",
+  "browser.context.configure": "Set the browser's location, language and sign-in",
 
   // Memory
   "memory.read": "Read saved memory",
   "memory.search": "Search memory",
   "memory.write": "Save a memory note",
-  "memory.upsert": "Update a memory note",
+  "memory.upsert": "Add or update a memory note",
 
   // Documents
   "docs.ingest": "Add a document for searching",
@@ -100,7 +100,7 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
   "gmail.send": "Send a Gmail message",
   "smtp.send": "Send an email",
   "calendar.list": "List calendar events",
-  "calendar.create_event": "Add a calendar event",
+  "calendar.create_event": "Add a calendar event and invite people",
 
   // Messaging
   "notify.request": "Ask for your attention",
