@@ -304,7 +304,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
             troubleshoot(
               "app-not-checked",
               "It says Chat app mode has no probe",
-              "That is expected. In Chat app mode the test doesn't contact Google. Finish setup, then message the app from an allowed sender and check its reply.",
+              "GoatCitadel can't check a Chat app yet, so Finalize stays off in Chat app mode for now. Use webhook mode to send now.",
             ),
             troubleshoot(
               "no-reply",

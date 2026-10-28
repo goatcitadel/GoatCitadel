@@ -431,6 +431,18 @@ describe("Google Chat setup guide: when the test fails (A13)", () => {
     expect(noReply).toContain("public HTTPS address");
   });
 
+  it("says what Chat app mode does today: Finalize stays off, so it doesn't call that expected or say to finish (R61)", () => {
+    // Until PR 4 (C2b, decision N3) turns the Gateway's 'no probe' warning into an advisory, a Chat app can't be
+    // finalized, and the 'Google Chat app path: can it finish?' pin below says so. PR 4 changes this text and that pin together.
+    const item = (step("test").troubleshooting ?? []).find((candidate) => candidate.id === "app-not-checked");
+
+    expect(item?.title).toBe("It says Chat app mode has no probe");
+    expect(item?.body).toBe(
+      "GoatCitadel can't check a Chat app yet, so Finalize stays off in Chat app mode for now. Use webhook mode to send now.",
+    );
+    expect(item?.body).not.toMatch(/expected|Finish setup/u);
+  });
+
   it("tells a person the allowed-hosts button covers both Google hosts in Chat app mode", () => {
     const hosts = (step("test").troubleshooting ?? []).find((item) => item.id === "host-not-allowed")?.body ?? "";
 
