@@ -8,7 +8,12 @@ import type {
 } from "@goatcitadel/contracts";
 import { listChannelSetupDefinitions, requireChannelSetupDefinition } from "./channel-setup-definitions.js";
 import type { ChannelSetupRuntimeDefinition } from "./channel-setup-definitions.js";
-import { plainSecretLabel, requireSecureUrl, secretNameForVariable } from "./channel-setup-definitions/common.js";
+import {
+  plainSecretLabel,
+  requireSecureUrl,
+  secretEnvFieldCopy,
+  secretNameForVariable,
+} from "./channel-setup-definitions/common.js";
 import { withGuidedJourney } from "./channel-setup-definitions/guided-journey.js";
 import { createLineDefinition } from "./channel-setup-definitions/line.js";
 import { isAllowedSecretEnvName } from "./channel-secret-resolution.js";
@@ -411,7 +416,7 @@ describe("channel setup definitions", () => {
       inboundStreamEnabled: true,
     });
     expect(definition.validate(noToken)).toEqual(
-      expect.arrayContaining([expect.objectContaining({ fieldKey: "tokenEnv", failureCategory: "missing_input" })]),
+      expect.arrayContaining([expect.objectContaining({ fieldKey: "token", failureCategory: "missing_input" })]),
     );
 
     const withToken = createDraft("channel.ntfy", {
@@ -470,7 +475,7 @@ describe("channel setup definitions", () => {
     ]);
     const testStep = definition.wizard.steps.find((step) => step.kind === "test");
     expect(testStep?.title).toBe("Validate the draft");
-    expect(JSON.stringify(testStep)).toMatch(/dry-run/i);
+    expect(JSON.stringify(testStep)).toMatch(/dry run/i);
     expect(definition.wizard.contentVersion).toBe("2026.10.ntfy.stream.v3.guided-2026-10");
   });
 
@@ -1511,8 +1516,17 @@ describe("the shared guide builder", () => {
       expect(fieldOf("wecom", "encodingAesKeyEnv")?.label).toBe(
         "EncodingAESKey from an environment variable (advanced)",
       );
-      // ntfy has no pasted twin yet, so the label keeps its own words minus "env var".
-      expect(fieldOf("ntfy", "tokenEnv")?.label).toBe("Token from an environment variable (advanced)");
+      expect(fieldOf("ntfy", "tokenEnv")?.label).toBe("Access token from an environment variable (advanced)");
+      // Every guide's variable field has a pasted twin now. A field with none keeps its own words minus "env var".
+      expect(
+        secretEnvFieldCopy("ntfy", {
+          key: "tokenEnv",
+          label: "Token ENV var",
+          type: "text",
+          required: false,
+          explanation: "Optional.",
+        }).label,
+      ).toBe("Token from an environment variable (advanced)");
       // Its pasted twin is "Service-account key (paste the JSON)", but the variable holds a name, not the JSON.
       expect(fieldOf("google-chat", "serviceAccountKeyEnv")?.label).toBe(
         "Service-account key from an environment variable (advanced)",
@@ -1544,7 +1558,7 @@ describe("the shared guide builder", () => {
 
       expect(labels).toMatchObject({
         "telegram.webhookSecretEnv": "Webhook secret from an environment variable (advanced)",
-        "ntfy.tokenEnv": "Token from an environment variable (advanced)",
+        "ntfy.tokenEnv": "Access token from an environment variable (advanced)",
         "nextcloud-talk.tokenEnv": "Bot secret from an environment variable (advanced)",
         "discord.botTokenEnv": "Bot token from an environment variable (advanced)",
         "whatsapp.accessTokenEnv": "Access token from an environment variable (advanced)",

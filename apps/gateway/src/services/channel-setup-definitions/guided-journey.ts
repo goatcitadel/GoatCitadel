@@ -51,14 +51,14 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
   },
   ntfy: {
     summary:
-      "Publish notifications to an ntfy topic and, optionally, subscribe to a topic's JSON stream for inbound conversations. Anyone able to publish to the subscribed topic can start turns, so limit its write access to trusted publishers; messages published while the gateway is down are skipped.",
+      "Send notifications to an ntfy topic. Optionally, messages posted to a topic can start conversations; only do that on a topic nobody else can post to. No public web address is needed.",
     prerequisites: [
-      "A reachable ntfy server and topic you control.",
-      "Subscribe to that exact topic on a device before testing.",
-      "For protected topics and for inbound, an environment variable holding an authorized token that can read and publish the topic.",
+      "An ntfy server (ntfy.sh or your own) and a topic name.",
+      "The ntfy app subscribed to that topic, to see the test.",
+      "To receive: an access token that can read the topic.",
     ],
     firstMessage:
-      "Run a publish test and confirm receipt on the subscribed device. Dry-run validates configuration without publishing; it cannot establish delivery proof. For inbound, publish a message to the topic from another client and allow the sender ntfy-topic:<topic>.",
+      "If dry run is off, check the test notification arrived. If dry run is on, nothing was sent: turn it off in Edit setup and test again. To receive: post to the subscribe topic from another device and check the reply.",
   },
   "google-chat": {
     summary:
@@ -511,6 +511,8 @@ function senderAccessStep(key: string): ChannelSetupStepDefinition {
 }
 
 function credentialAlternatives(key: string, alternatives: string[][]): string[][] | undefined {
+  // An ntfy topic can be public, so sending needs no token. Receiving asks for one itself (see ntfy.ts).
+  if (key === "ntfy") return undefined;
   // The pasted bot token is the main way in, so a missing-value message names it first.
   if (key === "slack") return [["botToken", "botTokenEnv", "webhookUrl", "webhookUrlEnv", "slackInstallId"]];
   if (key === "discord") return [["botToken", "botTokenEnv", "webhookUrl", "webhookUrlEnv"]];

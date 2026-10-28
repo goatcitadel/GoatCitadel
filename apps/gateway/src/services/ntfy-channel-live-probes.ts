@@ -87,7 +87,7 @@ export async function runNtfyLiveChecks(input: NtfyProbeInput): Promise<BotProbe
       status: "skipped",
       disposition: "deferred",
       cleanupStatus: "unsupported",
-      message: "ntfy does not expose a portable delete operation for a published notification.",
+      message: "The test message stays on the topic.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
@@ -108,8 +108,8 @@ export async function runNtfyLiveChecks(input: NtfyProbeInput): Promise<BotProbe
 
 function buildNtfyProbeUrl(baseUrl: string, topic: string): string {
   const normalizedTopic = topic.trim();
-  if (!/^[A-Za-z0-9._-]{1,128}$/.test(normalizedTopic)) {
-    throw new Error("ntfy topic must contain only letters, numbers, dots, underscores, and dashes.");
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(normalizedTopic)) {
+    throw new Error("Topics use letters, numbers, _ and -, up to 64 characters.");
   }
   const parsed = new URL(baseUrl);
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
