@@ -65,7 +65,7 @@ export interface MemoryFileEntry {
 export interface WorkspaceFilePageOptions {
   /** Case-insensitive substring matched against each path relative to the listed folder. */
   query?: string;
-  /** Opaque continuation from a previous page with the same folder and query. */
+  /** Opaque continuation from a previous page with the same folder and query; it marks the last item returned. */
   cursor?: string;
 }
 
@@ -185,20 +185,24 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     limit = 100,
     options: WorkspaceFilePageOptions = {},
   ): Promise<WorkspaceFilePage> => {
-    const offset = parseFilePageCursor(options.cursor);
+    const after = parseFilePageCursor(options.cursor);
     const baseDir = resolveListDir(relativeDir);
     const needle = options.query?.trim().toLowerCase() ?? "";
     const scanned: MemoryFileEntry[] = [];
     const state: WorkspaceFileWalkState = { statCalls: 0, truncated: false };
     await walkFiles(baseDir, baseDir, scanned, MAX_WORKSPACE_FILE_PAGE_SCAN, state, 0);
-    const matches = (
-      needle ? scanned.filter((item) => item.relativePath.toLowerCase().includes(needle)) : scanned
-    ).sort(
-      (left, right) =>
-        Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt) ||
-        left.relativePath.localeCompare(right.relativePath),
-    );
-    const end = offset + limit;
+    // Keyset paging: a page resumes after the last item it returned, so files written,
+    // touched or deleted between pages cannot shift later pages into repeats or gaps.
+    const matches = scanned
+      .map((item) => ({ item, position: { modifiedMs: Date.parse(item.modifiedAt), relativePath: item.relativePath } }))
+      .filter(
+        ({ item, position }) =>
+          (!needle || item.relativePath.toLowerCase().includes(needle)) &&
+          (!after || compareFilePagePositions(position, after) > 0),
+      )
+      .sort((left, right) => compareFilePagePositions(left.position, right.position));
+    const page = matches.slice(0, limit);
+    const last = page.at(-1);
     const folders = await fs
       .readdir(baseDir, { withFileTypes: true, encoding: "utf8" })
       .then((entries) =>
@@ -209,9 +213,9 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
       )
       .catch((): string[] => []);
     return {
-      items: matches.slice(offset, end),
+      items: page.map(({ item }) => item),
       folders,
-      ...(end < matches.length ? { nextCursor: String(end) } : {}),
+      ...(last && matches.length > limit ? { nextCursor: writeFilePageCursor(last.position) } : {}),
       complete: !state.truncated,
     };
   };
@@ -491,12 +495,40 @@ interface WorkspaceFileWalkState {
   truncated?: boolean;
 }
 
-function parseFilePageCursor(cursor: string | undefined): number {
-  if (cursor === undefined) return 0;
-  if (!/^\d{1,9}$/u.test(cursor)) {
-    throw new ValidationError({ message: "File list cursor is not valid. Start the listing again." });
+/** Where a paged listing stopped, in its newest-first, then path, order. */
+interface FilePagePosition {
+  modifiedMs: number;
+  relativePath: string;
+}
+
+export const MAX_FILE_PAGE_CURSOR_LENGTH = 4_096;
+
+function compareFilePagePositions(left: FilePagePosition, right: FilePagePosition): number {
+  // The exact comparison breaks locale ties (e.g. composed vs decomposed accents), so
+  // distinct paths always get distinct positions and a cursor never skips one.
+  return (
+    right.modifiedMs - left.modifiedMs ||
+    left.relativePath.localeCompare(right.relativePath) ||
+    (left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0)
+  );
+}
+
+function writeFilePageCursor(position: FilePagePosition): string {
+  return Buffer.from(JSON.stringify({ m: position.modifiedMs, p: position.relativePath })).toString("base64url");
+}
+
+function parseFilePageCursor(cursor: string | undefined): FilePagePosition | undefined {
+  if (cursor === undefined) return undefined;
+  const invalid = () => new ValidationError({ message: "File list cursor is not valid. Start the listing again." });
+  if (!/^[A-Za-z0-9_-]+$/u.test(cursor) || cursor.length > MAX_FILE_PAGE_CURSOR_LENGTH) throw invalid();
+  let value: { m?: unknown; p?: unknown } | null;
+  try {
+    value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as { m?: unknown; p?: unknown } | null;
+  } catch {
+    throw invalid();
   }
-  return Number(cursor);
+  if (!value || !Number.isSafeInteger(value.m) || typeof value.p !== "string" || !value.p) throw invalid();
+  return { modifiedMs: value.m as number, relativePath: value.p };
 }
 
 async function walkFiles(

@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { queryBoolean } from "./query-boolean.js";
 import {
+  MAX_FILE_PAGE_CURSOR_LENGTH,
   MAX_FILE_UPLOAD_BYTES,
   MAX_HTML_PREVIEW_BYTES,
   MAX_INLINE_FILE_DOWNLOAD_BYTES,
@@ -41,7 +42,7 @@ const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(5000).default(1000),
   // Optional and additive: any of these returns one page ({ items, folders, nextCursor?, complete }).
   query: z.string().max(200).optional(),
-  cursor: z.string().max(12).optional(),
+  cursor: z.string().max(MAX_FILE_PAGE_CURSOR_LENGTH).optional(),
   paged: z.enum(["1", "true"]).optional(),
 });
 

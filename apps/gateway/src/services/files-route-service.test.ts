@@ -234,7 +234,12 @@ describe("paged workspace file listing (LB-08)", () => {
       "readme-3.md",
       "docs/deep/readme-2.md",
     ]);
-    expect(first).toMatchObject({ folders: ["docs"], nextCursor: "2", complete: true });
+    expect(first).toMatchObject({ folders: ["docs"], nextCursor: expect.any(String), complete: true });
+    // A file written between pages sorts ahead of the cursor; it must not shift later pages.
+    const newer = path.join(workspace, "readme-new.md");
+    await fs.writeFile(newer, "new", "utf8");
+    const newerTime = new Date(Date.UTC(2026, 0, 10));
+    await fs.utimes(newer, newerTime, newerTime);
     const second = await port.pageWorkspaceFiles(".", 2, { query: "readme", cursor: first.nextCursor });
     expect(second.items.map((item: { relativePath: string }) => item.relativePath)).toEqual(["docs/readme-1.md"]);
     expect(second.nextCursor).toBeUndefined();
@@ -246,8 +251,29 @@ describe("paged workspace file listing (LB-08)", () => {
       "readme-1.md",
     ]);
     expect(folder.folders).toEqual(["deep"]);
-    await expect(port.pageWorkspaceFiles(".", 2, { cursor: "-1" })).rejects.toMatchObject({ code: "FIELD_INVALID" });
+    for (const cursor of ["-1", "2", "not base64!", Buffer.from('{"m":"x","p":""}').toString("base64url")]) {
+      await expect(port.pageWorkspaceFiles(".", 2, { cursor })).rejects.toMatchObject({ code: "FIELD_INVALID" });
+    }
     await expect(port.pageWorkspaceFiles("../outside", 2)).rejects.toThrow();
+
+    // Paths that compare equal under locale collation still page one at a time without loss.
+    await fs.mkdir(path.join(workspace, "accents"));
+    const accentNames = [`${String.fromCodePoint(0xe9)}.txt`, `e${String.fromCodePoint(0x301)}.txt`]; // composed vs decomposed e-acute
+    const tieTime = new Date(Date.UTC(2026, 1, 1));
+    for (const name of accentNames) {
+      const full = path.join(workspace, "accents", name);
+      await fs.writeFile(full, name, "utf8");
+      await fs.utimes(full, tieTime, tieTime);
+    }
+    const accentSeen: string[] = [];
+    let accentCursor: string | undefined;
+    do {
+      const page = await port.pageWorkspaceFiles("accents", 1, { cursor: accentCursor });
+      accentSeen.push(...page.items.map((item: { relativePath: string }) => item.relativePath));
+      accentCursor = page.nextCursor;
+    } while (accentCursor && accentSeen.length < 5);
+    expect(new Set(accentSeen)).toEqual(new Set(await fs.readdir(path.join(workspace, "accents"))));
+    expect(accentSeen).toHaveLength(new Set(accentSeen).size);
   }, 30_000);
 });
 
