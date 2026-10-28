@@ -1,4 +1,5 @@
 import type { ToolGroupId } from "./tool-groups.js";
+import type { ToolRiskLevel } from "./tools.js";
 
 // ---------------------------------------------------------------------------
 // Tool call counts: GET /api/v1/capabilities/tools/usage
@@ -35,4 +36,55 @@ export interface CapabilityToolUsageResponse {
    * `essentials` is the fixed starter set before that. Core is never in it.
    */
   mostUsed: { kind: "most_used" | "essentials"; groupIds: ToolGroupId[] };
+}
+
+// ---------------------------------------------------------------------------
+// Tool groups: GET /api/v1/capabilities/tools?workspaceId=<id>
+// ---------------------------------------------------------------------------
+
+/** Whether the AI can use a group. `always_on` is Core, which can't be switched off. */
+export type CapabilityToolGroupState = "on" | "off" | "always_on";
+
+/**
+ * The rule that blocks a tool even though its group is on. `install_profile` is this install's deployment profile,
+ * which keeps some tools (browser cookies and storage) off unless the install is a trusted local one.
+ */
+export type CapabilityToolBlock = "safety_rules" | "permission_profile" | "citadel_ward" | "grant" | "install_profile";
+
+/**
+ * Whether the AI asks before using a tool. `unknown` covers a tool in a switched-off group, a tool that is blocked,
+ * and one whose rules couldn't be checked; it is never a guess.
+ */
+export type CapabilityToolAsks = "asks_first" | "runs_freely" | "unknown";
+
+export interface CapabilityToolItem {
+  toolName: string;
+  description: string;
+  risk: ToolRiskLevel;
+  asks: CapabilityToolAsks;
+  /** Set only when a tool in an on group is blocked by one of the rules above. */
+  blockedBy?: CapabilityToolBlock;
+}
+
+export interface CapabilityToolGroupItem {
+  groupId: ToolGroupId;
+  label: string;
+  description: string;
+  state: CapabilityToolGroupState;
+  /** The riskiest tool's risk. A group with no tools offered on this install reads as safe. */
+  risk: ToolRiskLevel;
+  /** The tools this install offers, in registry order. */
+  tools: CapabilityToolItem[];
+  blockedToolCount: number;
+}
+
+export interface CapabilityToolsResponse {
+  workspaceId: string;
+  /** Every group, in display order. */
+  groups: CapabilityToolGroupItem[];
+  /** The Settings revision the switches were read at. */
+  settingsRevision: number;
+  /** Plain-language notes about parts of the list that couldn't be read. */
+  issues: string[];
+  generatedAt: string;
 }

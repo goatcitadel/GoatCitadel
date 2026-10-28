@@ -613,6 +613,7 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
     "GET",
     `/api/v1/capabilities/connectors?workspaceId=${encodeURIComponent(workspaceId)}`,
   );
+  await requestNotServerError(app, "GET", `/api/v1/capabilities/tools?workspaceId=${encodeURIComponent(workspaceId)}`);
   await requestNotServerError(app, "GET", "/api/v1/capabilities/tools/usage");
   await requestNotServerError(app, "GET", "/api/v1/capabilities/tools/usage?refresh=true");
   if (serverId) {
