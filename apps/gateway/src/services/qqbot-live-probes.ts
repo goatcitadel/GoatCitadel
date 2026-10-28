@@ -43,7 +43,7 @@ export function appendQqbotStructuralChecks(context: StructuralCheckContext): vo
   });
 }
 
-/** Setup preflight for QQBot: allowlist, token mint, bot identity and an optional active sandbox message. */
+/** Setup preflight for QQBot: allowlist, token mint, bot identity and an optional active test message. */
 export async function runConfiguredQqbotChecks(
   deps: IntegrationDiagnosticsPort,
   connection: IntegrationConnection,
@@ -166,10 +166,10 @@ export async function runQqbotLiveChecks(input: {
   if (!input.includeSandboxSend) {
     probe.steps.push({
       key: "qqbot_sandbox_send",
-      label: "Sandbox send",
+      label: "Test message",
       status: "skipped",
       disposition: "deferred",
-      message: "Run the explicit guided test to send a sandbox message.",
+      message: "Run the explicit guided test to send a test message.",
     });
     return finish(probe);
   }
@@ -228,10 +228,10 @@ async function sandboxSend(
   if (!target) {
     probe.steps.push({
       key: "qqbot_sandbox_send",
-      label: "Sandbox send",
+      label: "Test message",
       status: "skipped",
       disposition: "deferred",
-      message: "Sandbox send skipped because no default target is configured.",
+      message: "Test message skipped because no default target is configured.",
     });
     return;
   }
@@ -239,7 +239,7 @@ async function sandboxSend(
   if (!route) {
     probe.steps.push({
       key: "qqbot_sandbox_send",
-      label: "Sandbox send",
+      label: "Test message",
       status: "fail",
       disposition: "blocking",
       message: "The default target must start with group:, user:, channel: or dm:.",
@@ -256,10 +256,10 @@ async function sandboxSend(
     if (!response.ok) {
       probe.steps.push({
         key: "qqbot_sandbox_send",
-        label: "Sandbox send",
+        label: "Test message",
         status: response.status >= 500 ? "warn" : "fail",
         disposition: "blocking",
-        message: `QQBot rejected the sandbox send (HTTP ${response.status}). QQ limits active (unprompted) messages; message the bot first or verify the target.`,
+        message: `QQ rejected the test message (HTTP ${response.status}). QQ limits messages a bot sends unprompted. Message the bot first, check the target, or leave Default target empty.`,
         failureCategory:
           response.status === 401 || response.status === 403 ? "permission_mismatch" : "destination_mismatch",
       });
@@ -268,16 +268,16 @@ async function sandboxSend(
     const body = record(await readBoundedResponseJson(response, { ...READ_LIMITS, label: "QQBot send probe" }));
     probe.steps.push({
       key: "qqbot_sandbox_send",
-      label: "Sandbox send",
+      label: "Test message",
       status: "pass",
       disposition: "blocking",
       ...(typeof body.id === "string" ? { providerMessageId: body.id } : {}),
-      message: "QQ accepted the sandbox message. Confirm receipt manually.",
+      message: "QQ accepted the test message. Check that it arrived.",
     });
   } catch {
     probe.steps.push({
       key: "qqbot_sandbox_send",
-      label: "Sandbox send",
+      label: "Test message",
       status: "warn",
       disposition: "blocking",
       message: "QQBot send outcome is uncertain. Inspect the conversation before running another send.",

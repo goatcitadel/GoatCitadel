@@ -117,15 +117,14 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
   },
   qqbot: {
     summary:
-      "Send QQ group, C2C, channel and direct-message text through a QQ Bot Open Platform app and receive messages on a signed webhook.",
+      "Send and receive QQ messages through a QQ Bot Open Platform app. Receiving needs a public HTTPS address on port 443, 8443, 80 or 8080.",
     prerequisites: [
-      "A QQ Bot Open Platform app with its AppID and its AppSecret in a gateway environment variable (for example QQBOT_APP_SECRET).",
-      "The QQ hosts (bots.qq.com and api.bot.qq.com, or sandbox.api.sgroup.qq.com for the sandbox) added to the network allowlist.",
-      "A public HTTPS Gateway URL registered as the callback URL in the QQ console.",
-      "For inbound, the QQ openids allowed to start conversations.",
+      "The QQ Bot app's AppID and AppSecret.",
+      "A public HTTPS address for this Gateway (a reverse proxy or tunnel); GoatCitadel doesn't provide one.",
     ],
+    // QQ's approval for group and direct-message events (audit line) is on no QQ page, so it is not claimed here.
     firstMessage:
-      "Register the connection webhook URL in the QQ console and pass its validation. Allow your QQ openid, message the bot, and confirm its reply; messages from openids that are not allowed are dropped. Outbound is text-only, and QQ limits active (unprompted) messages to platform quotas.",
+      "In the QQ Bot console set the callback URL to this connection's webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. Message the bot once; it won't answer yet. Add your openid (see Who may message this bot) with Edit setup, then message again. GoatCitadel can't show your openid yet, so you need to know it already.",
   },
   wecom: {
     summary:
@@ -198,7 +197,6 @@ const ADVANCED_KEYS = new Set([
   "dryRun",
   "setupCode",
   "profile",
-  "sandbox",
 ]);
 /** A draft value `hydrate` sets when the saved connection was open access. It is never part of the saved config. */
 const OPEN_ACCESS_MARKER = "inboundAccessWasOpen";
