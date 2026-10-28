@@ -314,10 +314,15 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
   };
 }
 
+/** The shape of a variable name (`PERMITTED_INTEGRATION_ENV_NAME_PATTERN`) in any case: letters, digits and `_`, 3 to 128 characters. */
+const NAME_SHAPED_APART_FROM_CASE = /^[A-Za-z][A-Za-z0-9_]{2,127}$/;
+const CAPITAL_LETTERS_RULE = "Variable names use capital letters.";
+
 /**
  * A variable-name field takes the name of a variable the Gateway can read, never the secret itself: a token typed
  * there would be saved in plain config and never used. A value that is not shaped like a name at all is told to go
- * to the pasted field; a name the Gateway would not read gets the field's own name rule. The value is never repeated.
+ * to the pasted field; a name the Gateway would not read (including one in lowercase or mixed case) gets the field's
+ * own name rule. The value is never repeated.
  * Only validation runs this: a connection saved with another name keeps working until it is next edited.
  */
 function variableNameIssues(
@@ -330,6 +335,11 @@ function variableNameIssues(
     const name = field.key.endsWith("Env") ? readString(draft.draft, field.key) : undefined;
     if (!name || isHiddenByChoice(field, draft)) return [];
     if (!PERMITTED_INTEGRATION_ENV_NAME_PATTERN.test(name)) {
+      // A name written in lowercase or mixed case is a name with the wrong case, not a token: the person could paste the
+      // name itself into the secret field if told it looks like one.
+      if (NAME_SHAPED_APART_FROM_CASE.test(name)) {
+        return [malformedFieldIssue(field.key, `${secretEnvVariableRule(key, field.key)} ${CAPITAL_LETTERS_RULE}`)];
+      }
       const twin = authoredFields.find((candidate) => candidate.key === field.key.slice(0, -"Env".length));
       const where = twin ? ` Paste it into ${plainSecretLabel(twin.label)} instead.` : "";
       return [malformedFieldIssue(field.key, `That looks like a token, not a variable name.${where}`)];

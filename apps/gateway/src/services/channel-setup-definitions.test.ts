@@ -1816,15 +1816,11 @@ describe("the shared guide builder", () => {
       const messageOf = (value: string) => issuesFor(definition, field, value)[0]?.message;
       const token = "That looks like a token, not a variable name. Paste it into Bot token instead.";
 
-      for (const notAName of [
-        "xoxb-1234-abcd",
-        "123:ABC-def",
-        "my.token",
-        "sk_live_abc",
-        "AB",
-        "9ABC_DEF",
-        `A${"B".repeat(128)}`,
-      ]) {
+      for (const notAName of ["xoxb-1234-abcd", "123:ABC-def", "my.token", "AB", "9ABC_DEF", `A${"B".repeat(128)}`]) {
+        expect(messageOf(notAName), notAName).toBe(token);
+      }
+      // A dash or a dot is not in a variable name, so these stay the token message whatever their case.
+      for (const notAName of ["my-bot-token", "Discord-Bot-Token", "my.bot.token"]) {
         expect(messageOf(notAName), notAName).toBe(token);
       }
       expect(messageOf("OPENAI_API_KEY")).toBe(secretEnvVariableRule("mattermost", "botTokenEnv"));
@@ -1832,6 +1828,46 @@ describe("the shared guide builder", () => {
       expect(messageOf("MATTERMOST_BOT_TOKEN")).toBeUndefined();
       // A name with spaces round it is the name; the Gateway trims it too.
       expect(messageOf("  MATTERMOST_BOT_TOKEN  ")).toBeUndefined();
+    });
+
+    it("does not call a lowercase or mixed-case variable name a token, and says names use capital letters", () => {
+      const { definition, field } = envFields().find((item) => item.where === "mattermost.botTokenEnv")!;
+      const expected = `${secretEnvVariableRule("mattermost", "botTokenEnv")} Variable names use capital letters.`;
+
+      // Anything of letters, digits and underscores, 3 to 128 characters, is the shape of a name (so is sk_live_abc).
+      for (const name of [
+        "my_bot_token",
+        "Mattermost_Bot_Token",
+        "mattermost_bot_token",
+        "sk_live_abc",
+        "abc",
+        `a${"b".repeat(127)}`,
+      ]) {
+        const issues = issuesFor(definition, field, name);
+
+        expect(issues, name).toEqual([
+          expect.objectContaining({
+            fieldKey: field.key,
+            level: "error",
+            failureCategory: "malformed_value",
+            message: expected,
+          }),
+        ]);
+        expect(issues[0]?.message, name).not.toMatch(/token, not a variable name/u);
+        expect(JSON.stringify(issues), `${name} is not repeated`).not.toContain(name);
+      }
+    });
+
+    it("says the same for the lowercase form of a name each variable-name field would read", () => {
+      for (const { definition, key, field, where } of envFields()) {
+        const name = `${key.replaceAll("-", "_")}_${field.key.slice(0, -3)}`.toLowerCase();
+        const issues = issuesFor(definition, field, name);
+
+        expect(
+          issues.map((issue) => issue.message),
+          where,
+        ).toEqual([`${secretEnvVariableRule(key, field.key)} Variable names use capital letters.`]);
+      }
     });
 
     it("leaves a blank variable name, and a field a choice hides, alone", () => {
