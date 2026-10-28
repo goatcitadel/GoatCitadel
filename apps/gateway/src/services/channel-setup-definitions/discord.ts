@@ -41,6 +41,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "overview",
           kind: "intro",
+          createOnly: true,
           title: "What this connection does",
           body: [
             paragraph(
@@ -55,6 +56,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "prerequisites",
           kind: "prerequisites",
+          createOnly: true,
           title: "Before you start",
           checklist: [
             check("discord-account", "Discord account signed in"),
@@ -72,6 +74,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "create-bot",
           kind: "instruction",
+          createOnly: true,
           title: "Create the Discord application and bot",
           body: [
             paragraph(
@@ -100,6 +103,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "install-bot",
           kind: "instruction",
+          createOnly: true,
           title: "Add the bot to your server",
           body: [
             paragraph(

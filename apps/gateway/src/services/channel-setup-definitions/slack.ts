@@ -39,6 +39,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "overview",
           kind: "intro",
+          createOnly: true,
           title: "What this connection does",
           body: [
             paragraph(
@@ -53,6 +54,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "prerequisites",
           kind: "prerequisites",
+          createOnly: true,
           title: "Before you start",
           checklist: [
             check("workspace", "Choose the Slack workspace"),

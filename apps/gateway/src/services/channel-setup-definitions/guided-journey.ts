@@ -55,7 +55,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     prerequisites: [
       "Webhook mode: permission to create an incoming webhook in the intended Google Chat Space, and the complete webhook URL treated as a credential.",
       "Chat app mode: a Chat app whose HTTP endpoint is this connection's Google Chat webhook URL, its authentication audience (project number or endpoint URL), and the service-account JSON key in a gateway environment variable.",
-      "For inbound, the Google Chat user resource names (users/...) allowed to start conversations; a dropped message's sender_not_allowlisted diagnostic shows the id.",
+      "For inbound, the Google Chat user resource names (users/...) allowed to start conversations.",
     ],
     firstMessage:
       "Webhook mode: confirm the test card appears in the selected Space and thread; webhook mode cannot receive messages. Chat app mode: allow your users/... id, message the app (or @mention it in a space), and confirm its threaded reply.",
@@ -86,7 +86,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     prerequisites: [
       "A reachable Signal JSON-RPC bridge with an already linked sender account.",
       "The recipient or group identifier and permission to send to it.",
-      "For inbound, a signal-cli daemon --http bridge and the sender UUIDs allowed to start conversations (a dropped message's sender_not_allowlisted diagnostic shows the id; senders without a UUID use their number).",
+      "For inbound, a signal-cli daemon --http bridge and the sender UUIDs allowed to start conversations (senders without a UUID use their number).",
     ],
     firstMessage:
       "Confirm the sandbox message arrives in Signal. For inbound, enable receiveEvents, allow your sender id, send a message and confirm its reply; messages from senders who are not allowed are dropped, and messages sent while the event stream is disconnected are not replayed.",
@@ -97,7 +97,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     prerequisites: [
       "A reachable Mattermost server and bot token.",
       "The bot joined to the intended team/channel, with posting permissions.",
-      "For inbound, the bot must be a member of each channel you want it to hear, and you need the Mattermost user ids allowed to start conversations (in Mattermost, open a person's profile and choose Copy user ID; a dropped post's sender_not_allowlisted diagnostic also shows the id).",
+      "For inbound, the bot must be a member of each channel you want it to hear, and you need the Mattermost user ids allowed to start conversations (in Mattermost, open a person's profile and choose Copy user ID).",
     ],
     firstMessage:
       "Confirm the test post arrives in the chosen channel. For inbound, allow your Mattermost user id, post in a channel the bot has joined, and confirm its reply; inbound posts from users who are not allowed are dropped.",
@@ -110,7 +110,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "The bot invited to and joined in the intended room, with permission to post.",
       "The homeserver host added to the network allowlist.",
       "End-to-end encrypted rooms are not supported: inbound ignores encrypted events and outbound sends unencrypted messages; use an unencrypted room.",
-      "For inbound, the Matrix user ids (such as @alice:example.com) allowed to start conversations; a dropped message's sender_not_allowlisted diagnostic shows the id.",
+      "For inbound, the Matrix user ids (such as @alice:example.com) allowed to start conversations.",
     ],
     firstMessage:
       "Confirm the sandbox notice arrives in the chosen room. For inbound, allow your Matrix user id, post in a room the bot has joined, and confirm its reply; messages from users who are not allowed are dropped. Outbound is text-only.",
@@ -122,7 +122,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "A QQ Bot Open Platform app with its AppID and its AppSecret in a gateway environment variable (for example QQBOT_APP_SECRET).",
       "The QQ hosts (bots.qq.com and api.bot.qq.com, or sandbox.api.sgroup.qq.com for the sandbox) added to the network allowlist.",
       "A public HTTPS Gateway URL registered as the callback URL in the QQ console.",
-      "For inbound, the QQ openids allowed to start conversations; a dropped message's sender_not_allowlisted diagnostic shows the id.",
+      "For inbound, the QQ openids allowed to start conversations.",
     ],
     firstMessage:
       "Register the connection webhook URL in the QQ console and pass its validation. Allow your QQ openid, message the bot, and confirm its reply; messages from openids that are not allowed are dropped. Outbound is text-only, and QQ limits active (unprompted) messages to platform quotas.",
@@ -134,7 +134,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "A WeCom self-built application with its CorpID, AgentId and Secret (the Secret in a gateway environment variable such as WECOM_SECRET).",
       "qyapi.weixin.qq.com in the network allowlist and the gateway host's public IP on the application's trusted IP list.",
       "For inbound, the callback Token and EncodingAESKey in gateway environment variables and a public HTTPS Gateway URL for the callback.",
-      "For inbound, the WeCom userids allowed to start conversations; a dropped message's sender_not_allowlisted diagnostic shows the id.",
+      "For inbound, the WeCom userids allowed to start conversations.",
     ],
     firstMessage:
       "Confirm the sandbox message arrives in WeCom. For inbound, save the connection webhook URL, Token and EncodingAESKey in the application's message-receiving settings, allow your WeCom userid, message the application, and confirm its reply; messages from users who are not allowed are dropped. Outbound is text-only.",

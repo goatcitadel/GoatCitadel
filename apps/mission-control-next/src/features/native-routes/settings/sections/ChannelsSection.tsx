@@ -22,6 +22,7 @@ import { NativeButton, NativeSelectableList } from "../../primitives";
 import { ChannelSetupWizard } from "../channel-setup/ChannelSetupWizard";
 import { DiscordConnectionOperationsPanel } from "../channel-setup/DiscordConnectionOperationsPanel";
 import { ChannelJourneyPanel } from "../channel-setup/ChannelJourneyPanel";
+import { ChannelConnectionWebhook } from "../channel-setup/ChannelWebhookAddress";
 import { formatDateTime } from "../helpers/input-format";
 import { hasCredentialInput as hasSessionDraft } from "../credential-input-owner";
 import { FocusedDetail } from "../../shared/FocusedDetail";
@@ -29,18 +30,11 @@ import { DetailInspector } from "../../../../components/DetailInspector";
 import { IntegrationConnectionReview } from "./IntegrationConnectionReview";
 import { useChannelSettings } from "./use-channel-settings";
 import { ChannelOutcomeCheck } from "./ChannelOutcomeCheck";
-import { CockpitOwnerLink } from "../../../../app/CockpitOwnerLink";
+import { CockpitOwnerLink, cockpitShellHref } from "../../../../app/CockpitOwnerLink";
 import {
   chatSetupHref,
   chatSetupHrefForDraft,
 } from "../../../../cockpit/areas/chat/channel-setup/channel-picker-model";
-
-/** A Cockpit address opened from this Classic page: the same address, asking for the Cockpit shell. */
-function cockpitShellHref(href: string): string {
-  const url = new URL(href, "http://goatcitadel.local");
-  url.searchParams.set("shell", "cockpit");
-  return url.pathname + url.search;
-}
 
 export function ChannelsSection({ activeWorkspaceId, navigate, route }: SettingsSectionProps) {
   const owner = useChannelSettings(activeWorkspaceId, (plan) =>
@@ -374,6 +368,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                   connections={[selectedConnection]}
                   connectorDiagnosticsEnabled={data.connectorDiagnosticsEnabled}
                 />
+                <ChannelConnectionWebhook connection={selectedConnection} definitions={data.definitions} />
                 <NativeDisclosureCard id="channel-operations" title="Connection operations">
                   <DiscordConnectionOperationsPanel connections={[selectedConnection]} />
                   <TelegramPairingPanel connection={selectedConnection} onUpdated={reload} />

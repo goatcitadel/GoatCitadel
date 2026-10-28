@@ -2,15 +2,12 @@ import type { ChangePlanRecord, ChangePlanRequiredAction, ChangePlanStatus } fro
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import {
   confirmChangePlan,
-  createChangePlan,
   fetchChangePlan,
-  fetchSettings,
   resolveApproval,
   respondToChangePlan,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
-import { isBaseUrlAllowlisted } from "../../settings/web-search-state";
 
 /**
  * Where a change ended up after the page did all it may.
@@ -44,10 +41,9 @@ const STILL_WORKING: ReadonlySet<ChangePlanStatus> = new Set(["applying", "verif
 const ANOTHER_CHANGE = "This approval belongs to another change.";
 const TURNED_DOWN = "The approval was turned down.";
 const STILL_TURNING_ON = "GoatCitadel is still turning this on. Check again in a moment.";
-const unlistedHost = (host: string) =>
-  `GoatCitadel needs to reach ${host}. Reload this page to see the change before turning it on.`;
 
-const failed = (message: string): InPlaceOutcome => ({ kind: "failed", message });
+/** The outcome of a change that stopped or a call that failed; the message is plain words. */
+export const failed = (message: string): InPlaceOutcome => ({ kind: "failed", message });
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const refusedSignIn = (error: unknown) => isApiRequestError(error) && (error.status === 401 || error.status === 403);
 
@@ -127,44 +123,5 @@ async function approveOwnApproval(
     default:
       // Turned down, edited, or expired: an expired approval is a rejection, and nothing else may proceed.
       return failed(TURNED_DOWN);
-  }
-}
-
-/**
- * Makes sure GoatCitadel may reach every host a channel needs. Any missing hosts go into the outbound allowlist as
- * their own change in the caller's workspace, which is approved in place like the channel's change. It does not use
- * the Settings save: that route plans in the default workspace and applies with the operator's approval skip, and
- * Turn on never takes the skip. A finished allowlist change is "allowed", never "completed": that word is for the
- * channel's own change. A host missing now that is not in `shownHosts`, the ones the page listed, is never added:
- * the click is blocked so the operator can see the change first.
- */
-export async function ensureHostsAllowed(
-  hosts: readonly string[],
-  workspaceId: string,
-  shownHosts: readonly string[],
-): Promise<{ kind: "allowed" } | InPlaceOutcome | { kind: "blocked"; reasons: string[] }> {
-  if (hosts.length === 0) return { kind: "allowed" };
-  try {
-    const settings = await fetchSettings();
-    const missing = [...new Set(hosts)].filter(
-      (host) => !isBaseUrlAllowlisted(`https://${host}/`, settings.networkAllowlist),
-    );
-    if (missing.length === 0) return { kind: "allowed" };
-    const shown = new Set(shownHosts.map((host) => host.trim().toLowerCase()));
-    const unshown = missing.filter((host) => !shown.has(host.trim().toLowerCase()));
-    if (unshown.length > 0) return { kind: "blocked", reasons: unshown.map(unlistedHost) };
-    const plan = await createChangePlan({
-      workspaceId,
-      surface: "settings",
-      request: {
-        kind: "runtime_configuration",
-        change: { operation: "network_allowlist", entries: [...settings.networkAllowlist, ...missing] },
-      },
-      idempotencyKey: `messaging-allow-hosts:${[...missing].sort().join(",")}:${settings.revision}`,
-    });
-    const outcome = await approvePlanInPlace(plan.planId, workspaceId);
-    return outcome.kind === "completed" ? { kind: "allowed" } : outcome;
-  } catch (error) {
-    return failed(describeApiError(error).summary);
   }
 }

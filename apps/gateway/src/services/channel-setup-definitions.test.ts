@@ -1564,4 +1564,42 @@ describe("channel setup definitions", () => {
       expect(JSON.stringify(definition.definition)).not.toMatch(/planned parity work|still counts as planned/i);
     }
   });
+
+  it("marks the steps that are only for setting a channel up, and no others", () => {
+    const setupOnly: Record<string, string[]> = {
+      discord: ["overview", "prerequisites", "create-bot", "install-bot"],
+      slack: ["overview", "prerequisites"],
+      telegram: [],
+      ntfy: ["overview", "prepare-topic"],
+      "google-chat": ["overview", "create-webhook"],
+      teams: ["overview", "create-webhook"],
+      whatsapp: ["overview"],
+      signal: ["overview"],
+      mattermost: ["overview"],
+      matrix: ["overview"],
+      qqbot: ["overview"],
+      wecom: ["overview"],
+      imessage: ["overview"],
+      "nextcloud-talk": ["overview"],
+      line: ["overview"],
+      zalo: ["overview"],
+    };
+    const definitions = listChannelSetupDefinitions();
+
+    expect(definitions.map((definition) => definition.catalog.key).sort()).toEqual(Object.keys(setupOnly).sort());
+    for (const definition of definitions) {
+      const key = definition.catalog.key;
+      const createOnlyIds = definition.wizard.steps.filter((step) => step.createOnly).map((step) => step.id);
+      expect(createOnlyIds, `${key} setup-only steps`).toEqual(setupOnly[key]);
+    }
+  });
+
+  it("keeps Telegram's overview visible when a saved channel is changed", () => {
+    const overview = requireChannelSetupDefinition("channel.telegram").definition.wizard.steps.find(
+      (step) => step.id === "overview",
+    );
+
+    expect(overview?.title).toBe("What you can change here");
+    expect(overview?.createOnly).toBeUndefined();
+  });
 });

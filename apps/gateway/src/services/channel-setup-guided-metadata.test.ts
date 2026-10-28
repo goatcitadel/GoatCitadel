@@ -14,6 +14,14 @@ describe("guided setup progressive metadata", () => {
       expect(definition.wizard.prerequisites.length).toBeGreaterThan(0);
     }
   });
+  it("promises no screen that shows a dropped sender's id in any prerequisite", () => {
+    // No setup screen shows a `sender_not_allowlisted` diagnostic, so a prerequisite must not send the operator to one.
+    for (const definition of listChannelSetupDefinitions()) {
+      for (const prerequisite of definition.wizard.prerequisites) {
+        expect(prerequisite, `${definition.catalog.key}: ${prerequisite}`).not.toMatch(/sender_not_allowlisted/u);
+      }
+    }
+  });
   it("accepts existing supported Slack and Discord webhook auth alternatives", () => {
     for (const key of ["slack", "discord"]) {
       const step = requireChannelSetupDefinition("channel." + key).definition.wizard.steps.find(

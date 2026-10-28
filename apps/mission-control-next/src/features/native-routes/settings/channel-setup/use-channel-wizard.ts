@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useChannelProofFreshness } from "./use-channel-proof-freshness";
 import { useSessionViewState } from "../../../../hooks/use-session-view-state";
 import {
+  isStepForLifecycle,
   isStepVisible,
   formatJson,
   findMissingFieldLabels,
@@ -28,10 +29,14 @@ export function useChannelWizard({
   onFinalize,
 }: ChannelSetupWizardProps) {
   useChannelProofFreshness(feedback);
-  const visibleSteps = useMemo(
-    () => definition.wizard.steps.filter((step) => isStepVisible(step, wizardValuesWithDefaults(definition, values))),
-    [definition, values],
-  );
+  const { visibleSteps, stepsHidden } = useMemo(() => {
+    const effectiveValues = wizardValuesWithDefaults(definition, values);
+    const allowedSteps = definition.wizard.steps.filter((step) => isStepVisible(step, effectiveValues));
+    const lifecycleSteps = allowedSteps.filter((step) => isStepForLifecycle(step, draft.lifecycleMode));
+    const shown = lifecycleSteps.length > 0 ? lifecycleSteps : allowedSteps;
+    // True only when the lifecycle filter really removed a step that would otherwise be shown.
+    return { visibleSteps: shown, stepsHidden: shown.length < allowedSteps.length };
+  }, [definition, values, draft.lifecycleMode]);
   const viewKey = "channel:" + scopeId + ":" + draft.draftId;
   const [activeStepId, setActiveStepId] = useSessionViewState(viewKey + ":step", visibleSteps[0]?.id ?? "");
   const [visitedStepIds, setVisitedStepIds] = useSessionViewState<Record<string, boolean>>(viewKey + ":visited", {});
@@ -175,9 +180,12 @@ export function useChannelWizard({
       setLocalError(`Complete the required setup values before continuing: ${missing.join(", ")}.`);
       return;
     }
-    const unchecked = activeStep.checklist?.filter((item) => !checkedItems[`${draft.draftId}:${activeStep.id}:${item.id}`]) ?? [];
+    const unchecked =
+      activeStep.checklist?.filter((item) => !checkedItems[`${draft.draftId}:${activeStep.id}:${item.id}`]) ?? [];
     if (unchecked.length) {
-      setLocalError("Confirm the preparation items before continuing: " + unchecked.map((item) => item.label).join(", ") + ".");
+      setLocalError(
+        "Confirm the preparation items before continuing: " + unchecked.map((item) => item.label).join(", ") + ".",
+      );
       return;
     }
     if ((activeStep.fields?.length ?? 0) > 0 && !(await handleSave())) {
@@ -194,6 +202,7 @@ export function useChannelWizard({
 
   return {
     visibleSteps,
+    stepsHidden,
     activeStepId,
     activeStepIndex,
     activeStep,

@@ -41,6 +41,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "overview",
           kind: "intro",
+          createOnly: true,
           title: "What this connection does",
           body: [
             paragraph("GoatCitadel can send outbound notifications to an ntfy topic using the HTTP publish API."),
@@ -53,6 +54,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "prepare-topic",
           kind: "instruction",
+          createOnly: true,
           title: "Prepare the topic",
           body: [
             paragraph(
