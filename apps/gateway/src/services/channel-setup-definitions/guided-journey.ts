@@ -106,16 +106,14 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
   },
   matrix: {
     summary:
-      "Send Matrix room messages, replies, reactions and redactions through a bot account and, optionally, receive messages over the /sync long-poll.",
+      "Send and receive Matrix messages through a bot account on your homeserver. No public web address is needed: GoatCitadel connects out, and only hears messages while it's running.",
     prerequisites: [
-      "A Matrix bot account on a reachable homeserver and its access token in a gateway environment variable (for example MATRIX_ACCESS_TOKEN).",
-      "The bot invited to and joined in the intended room, with permission to post.",
-      "The homeserver host added to the network allowlist.",
-      "End-to-end encrypted rooms are not supported: inbound ignores encrypted events and outbound sends unencrypted messages; use an unencrypted room.",
-      "For inbound, the Matrix user ids (such as @alice:example.com) allowed to start conversations.",
+      "A Matrix account for the bot and its access token.",
+      "The bot invited to and joined in a room with encryption off. GoatCitadel can't read encrypted rooms and doesn't accept invites.",
+      "Your homeserver in the hosts GoatCitadel may reach.",
     ],
     firstMessage:
-      "Confirm the sandbox notice arrives in the chosen room. For inbound, allow your Matrix user id, post in a room the bot has joined, and confirm its reply; messages from users who are not allowed are dropped. Outbound is text-only.",
+      "Check the test notice arrived. To receive: turn on Receive messages, allow your Matrix ID (for example @alice:example.com), post in the room, and check the reply.",
   },
   qqbot: {
     summary:

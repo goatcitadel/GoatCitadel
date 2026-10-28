@@ -1355,7 +1355,7 @@ describe("channel setup definitions", () => {
       teams: ["overview", "create-webhook"],
       whatsapp: ["overview"],
       mattermost: ["overview"],
-      matrix: ["overview"],
+      matrix: ["overview", "create-bot"],
       qqbot: ["overview"],
       wecom: ["overview"],
       "nextcloud-talk": ["overview"],
@@ -1730,8 +1730,9 @@ describe("the shared guide builder", () => {
         "finish | activation | Finish setup",
         "first-message | first_message | Confirm delivery",
       ]);
-      expect(outline("matrix").slice(0, 3)).toEqual([
+      expect(outline("matrix").slice(0, 4)).toEqual([
         "overview | prerequisites | What this connection does",
+        "create-bot | prerequisites | Make the bot account and a room for it",
         "collect-values-identity | identity | Connect the account",
         "collect-values-destinations | destinations_access | Choose destinations and access",
       ]);

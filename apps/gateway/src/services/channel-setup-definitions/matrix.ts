@@ -3,10 +3,14 @@ import { isExplicitTrue as isTruthyFlag } from "@goatcitadel/gateway-core";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
+  PASTED_SECRET_EXPLANATION,
   requireCatalog,
   baseCatalogMeta,
   paragraph,
   note,
+  linkBlock,
+  check,
+  troubleshoot,
   readString,
   looksLikeHttpUrl,
   hasAnyConfiguredSecret,
@@ -14,6 +18,7 @@ import {
   readLegacyString,
   requiredFieldIssue,
   malformedFieldIssue,
+  requireSecureUrl,
 } from "./common.js";
 
 export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
@@ -27,10 +32,11 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect a Matrix bot account using your homeserver URL and an access token, with optional inbound over the /sync long-poll.",
+        "Send and receive Matrix messages through a bot account on your homeserver. No public web address is needed: GoatCitadel connects out, and only hears messages while it's running.",
       prerequisites: [
-        "A Matrix account for the bot on a homeserver you can reach, and an access token for it.",
-        "A sandbox room the bot has joined, where it may post.",
+        "A Matrix account for the bot and its access token.",
+        "The bot invited to and joined in a room with encryption off. GoatCitadel can't read encrypted rooms and doesn't accept invites.",
+        "Your homeserver in the hosts GoatCitadel may reach.",
       ],
       steps: [
         {
@@ -40,15 +46,48 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph(
-              "GoatCitadel uses the Matrix client-server API with a bot access token for text sends, replies, reactions, redactions and typing notices.",
+              "GoatCitadel signs in to your Matrix homeserver as a bot account. It can send text, replies, reactions and message removals, and show typing.",
             ),
             paragraph(
-              "Optionally, GoatCitadel long-polls /sync so messages in rooms the bot has joined can start conversations. Inbound is opt-in and default-deny: only the Matrix user ids you allow (for example @alice:example.com) can start turns. The sync position is saved, so a restart resumes where it stopped (if the homeserver rejects the stored token, GoatCitadel re-primes and messages in that gap are skipped).",
+              "Receiving is optional and off by default. When it is on, GoatCitadel connects out to your homeserver and listens for new messages in rooms the bot has joined, so no public web address is needed. It only hears messages while it's running. If the homeserver rejects the saved sync position, GoatCitadel starts a fresh sync and the messages in between are skipped. Only Matrix IDs you allow (for example @alice:example.com) can start conversations.",
             ),
+            paragraph("This channel sends text. Attachments aren't supported."),
             note(
               "warning",
-              "Matrix is a guided beta lane. Outbound is text-only (no attachments), and the homeserver host must be in the network allowlist. End-to-end encrypted rooms are not supported: inbound ignores encrypted events and outbound sends unencrypted messages; use an unencrypted room.",
+              "Matrix is a guided beta lane. GoatCitadel can't read encrypted rooms and sends unencrypted messages, so use a room with encryption off. It can reach your homeserver only once the homeserver is in the hosts GoatCitadel may reach: the setup test has an Allow these hosts button for that.",
             ),
+          ],
+        },
+        {
+          id: "create-bot",
+          kind: "instruction",
+          createOnly: true,
+          title: "Make the bot account and a room for it",
+          body: [
+            paragraph(
+              "GoatCitadel signs in as a bot account, so make one first. The menus here are Element's; other Matrix apps differ.",
+            ),
+            {
+              kind: "list",
+              ordered: true,
+              items: [
+                "Create a Matrix account for the bot and sign in as the bot.",
+                "Copy the bot's access token. In Element it is under Settings › Help & About, as Your Access Token. Signing that session out makes the token stop working, and GoatCitadel doesn't renew tokens.",
+                "From your own account, create a new room with encryption off and invite the bot into it. GoatCitadel can't read encrypted rooms. Element encrypts a new private room unless you turn that off when you create it.",
+                "Sign in as the bot in a Matrix app and accept the invite. GoatCitadel doesn't accept invites for you.",
+              ],
+            },
+            linkBlock("Matrix: Client-Server API (login)", "https://spec.matrix.org/latest/client-server-api/"),
+            linkBlock("Element: Help & About", "https://ems-docs.element.io/books/element-support/page/help-about"),
+            linkBlock(
+              "Element: encryption defaults",
+              "https://github.com/element-hq/element-web/blob/develop/docs/e2ee.md",
+            ),
+          ],
+          checklist: [
+            check("account", "Create the bot's Matrix account and copy its access token"),
+            check("room", "Create a room with encryption off and invite the bot"),
+            check("accept", "Sign in as the bot and accept the invite"),
           ],
         },
         {
@@ -61,8 +100,32 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
               label: "Homeserver URL",
               type: "url",
               required: true,
-              explanation: "Reachable base URL of the Matrix homeserver (client-server API).",
+              explanation:
+                "The address of your homeserver's client API. Use https://. Plain http:// works only for this computer (127.0.0.1 or localhost).",
+              whereToFind: [
+                paragraph(
+                  "Your server's admin can tell you. Matrix apps find it in the server's /.well-known/matrix/client file (m.homeserver › base_url), and it can differ from the part of your Matrix ID after the colon.",
+                ),
+                linkBlock("Matrix: Server discovery", "https://spec.matrix.org/latest/client-server-api/"),
+              ],
               looksLike: "https://matrix.example.com",
+              canChangeLater: true,
+            },
+            {
+              key: "accessToken",
+              label: "Access token",
+              type: "secret",
+              required: false,
+              explanation: PASTED_SECRET_EXPLANATION,
+              whyNeeded: "Lets GoatCitadel send as the bot account.",
+              whereToFind: [
+                paragraph(
+                  "Sign in as the bot. In Element it is under Settings › Help & About, as Your Access Token. Signing that session out makes the token stop working.",
+                ),
+                linkBlock("Element: Help & About", "https://ems-docs.element.io/books/element-support/page/help-about"),
+              ],
+              commonMistakes: ["Copying the token, then signing that session out. A signed-out token stops working."],
+              sensitive: true,
               canChangeLater: true,
             },
             {
@@ -70,20 +133,11 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
               label: "Access token env var",
               type: "text",
               required: false,
-              explanation: "Preferred path. Name of the env var that stores the bot's Matrix access token.",
+              advanced: true,
+              explanation: "Name of the env var that stores the bot's Matrix access token.",
               looksLike: "MATRIX_ACCESS_TOKEN",
               canChangeLater: true,
               placeholder: "MATRIX_ACCESS_TOKEN",
-            },
-            {
-              key: "accessToken",
-              label: "Access token (manual fallback)",
-              type: "secret",
-              required: false,
-              explanation: "Optional direct token entry if env-backed storage is not ready yet.",
-              sensitive: true,
-              canChangeLater: true,
-              placeholder: "Paste only if you cannot use an env var",
             },
             {
               key: "defaultRoomId",
@@ -91,20 +145,28 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
               type: "text",
               required: false,
               explanation:
-                "Optional room used for the guided sandbox test and as a fallback target. Sends normally take the room from the target.",
-              looksLike: "!roomid",
+                "The room that gets the test notice and any send that names no room. Leave it empty to skip the test notice.",
+              whereToFind: [
+                paragraph("In Element, open the room's settings › Advanced › Internal Room ID."),
+                linkBlock(
+                  "Element: Room settings",
+                  "https://ems-docs.element.io/books/element-support/page/managing-a-room-room-settings",
+                ),
+              ],
+              looksLike: "!roomid:example.com",
+              commonMistakes: ["Using the room's name or #alias:example.com. GoatCitadel needs the internal room ID."],
               canChangeLater: true,
             },
             {
               key: "inboundStreamEnabled",
-              label: "Receive messages over /sync",
+              label: "Receive messages",
               type: "boolean",
               required: false,
               defaultValue: false,
               explanation:
-                "Keep a persistent /sync long-poll open so messages in rooms the bot has joined can start conversations.",
+                "Listen for messages in rooms the bot has joined, so people can start conversations with it.",
               whyNeeded:
-                "Matrix has no inbound webhook path here; /sync is how new messages reach GoatCitadel. Inbound stays off unless you opt in, and only allowed Matrix user ids can start turns.",
+                "GoatCitadel connects out to your homeserver to hear new messages, so no public web address is needed. Receiving stays off unless you turn it on, and only allowed Matrix IDs can start conversations.",
               canChangeLater: true,
             },
           ],
@@ -115,7 +177,39 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "Guided test authenticates the access token (whoami), checks the bot has joined the default room, and sends a sandbox m.notice to that room when one is configured.",
+              "The test checks the access token with your homeserver. If you set a Default room ID, it also checks that the bot has joined that room and posts a test notice there. Check that the notice arrived in the room.",
+            ),
+          ],
+          troubleshooting: [
+            troubleshoot(
+              "token-rejected",
+              "The homeserver rejected the access token",
+              "Sign in as the bot and copy its access token again. A token stops working when its session is signed out, and GoatCitadel can't renew it. If you made a new one, paste the newest.",
+            ),
+            troubleshoot(
+              "not-joined",
+              "It says the bot hasn't joined the room",
+              "Invite the bot from your own account, then sign in as the bot in a Matrix app and accept the invite. GoatCitadel doesn't accept invites for you. Then run the test again.",
+            ),
+            troubleshoot(
+              "room-rejected",
+              "The homeserver refused the test notice",
+              "Check the Default room ID. Use the room's internal ID, not its name or an alias (in Element: Room settings › Advanced › Internal Room ID). The bot must have joined the room and be allowed to post in it.",
+            ),
+            troubleshoot(
+              "host-not-allowed",
+              "It says GoatCitadel can't reach your homeserver yet",
+              "GoatCitadel only reaches hosts you allow. Use Allow these hosts on this step to add your homeserver, then run the test again.",
+            ),
+            troubleshoot(
+              "variable-not-found",
+              "It says the access token is missing, and you used an environment variable",
+              "A variable's name must start with MATRIX_ (for example MATRIX_ACCESS_TOKEN), and you must restart GoatCitadel after you set it. Or paste the token instead.",
+            ),
+            troubleshoot(
+              "no-reply",
+              "You post in the room and nothing comes back",
+              "Check these in order. Receive messages must be on. Your Matrix ID, with the @ and the server (for example @alice:example.com), must be listed under Who may message this bot. The room must have encryption off, because GoatCitadel can't read encrypted rooms. The bot must have joined the room, not just been invited. And GoatCitadel must be running: it only hears messages while it's running.",
             ),
           ],
         },
@@ -125,13 +219,13 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finalize saves the connection for runtime sends and, when enabled, the inbound /sync loop. After finalizing, post in the default room and confirm the bot replies before relying on this connection.",
+              "Finish saves the connection so GoatCitadel can send from it. To receive messages, turn on Receive messages and allow your Matrix ID (the last step shows how).",
             ),
           ],
           successCriteria: [
-            "The access token authenticated against the homeserver.",
-            "The bot has joined the default room, or you chose to supply the room per send.",
-            "The sandbox notice arrived in the room, or you confirmed delivery manually.",
+            "The homeserver accepted the access token.",
+            "The bot has joined the Default room, or you chose to supply the room per send.",
+            "The test notice arrived in the room, or you set no Default room ID.",
           ],
         },
       ],
@@ -230,15 +324,25 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
       );
       if (!homeserverUrl) {
         issues.push(requiredFieldIssue("homeserverUrl", "Homeserver URL is required."));
-      } else if (!looksLikeHttpUrl(homeserverUrl)) {
-        issues.push(malformedFieldIssue("homeserverUrl", "Homeserver URL should start with http:// or https://."));
+      } else {
+        // Plain http is refused the same way the live test refuses it. That rule lets "ftp://localhost" through, so the
+        // scheme is checked here too.
+        const insecure = requireSecureUrl(homeserverUrl, "homeserverUrl", "Homeserver URL");
+        if (insecure) {
+          issues.push(insecure);
+        } else if (!looksLikeHttpUrl(homeserverUrl)) {
+          issues.push(malformedFieldIssue("homeserverUrl", "Homeserver URL should start with https://."));
+        }
       }
       if (!hasConfiguredToken) {
         issues.push({
           key: "matrix_auth_missing",
+          // The pasted field is where a person goes to fix this, not the expert variable name.
+          fieldKey: "accessToken",
           level: "error",
-          message: "Provide either a Matrix access token or an env-backed access-token reference.",
+          message: "Paste the Matrix access token.",
           failureCategory: "missing_input",
+          nextSteps: ["Sign in as the bot and copy its access token."],
         });
       }
       const roomId = readString(draft.draft, "defaultRoomId");
