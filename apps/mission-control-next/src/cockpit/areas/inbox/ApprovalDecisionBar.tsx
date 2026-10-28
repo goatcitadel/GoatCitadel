@@ -56,6 +56,8 @@ interface ApprovalDecisionBarProps {
   compact?: boolean;
   /** Pin the Approve/Deny buttons to the bottom of the scrolling panel so they never need a scroll to reach. */
   stickyDecisions?: boolean;
+  /** The bar sits inside a dialog that is this approval's review, so a danger-level Approve is one click. */
+  reviewedInPlace?: boolean;
   onResolved: (message: string) => void;
   onInvalidated: (message?: string) => void;
 }
@@ -91,6 +93,7 @@ function ApprovalDecisionReview({
   expiryShownNearby = false,
   compact = false,
   stickyDecisions = false,
+  reviewedInPlace = false,
   onResolved,
   onInvalidated,
   activeWorkspaceId,
@@ -343,6 +346,7 @@ function ApprovalDecisionReview({
                 ) : undefined
               }
               pending={Boolean(attempt) || (specializedReview && !specialistReady)}
+              reviewedInPlace={reviewedInPlace}
               onApprove={() => void decide("approve")}
             />
           </span>

@@ -555,4 +555,59 @@ describe("risk approval action", () => {
     );
     expect(onApprove).not.toHaveBeenCalled();
   });
+
+  it("approves a reviewed-in-place danger approval in one click without a second review", async () => {
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("danger")}
+          reviewedApproval={reviewedApproval}
+          reviewedInPlace
+          pending={false}
+          onApprove={onApprove}
+        />,
+      ),
+    );
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => dialogButton("Approve once").click());
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("keeps the typed confirmation for a nuclear approval even when reviewed in place", async () => {
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("nuclear")}
+          reviewedApproval={{ ...reviewedApproval, riskLevel: "nuclear" }}
+          reviewedInPlace
+          pending={false}
+          onApprove={onApprove}
+        />,
+      ),
+    );
+    expect(dialogButton("Approve once")).toBeUndefined();
+    await act(async () => dialogButton("Review nuclear approval").click());
+    expect(dialogButton("Approve once").disabled).toBe(true);
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it("keeps the review dialog for a danger approval without an action preview", async () => {
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("danger")}
+          reviewedApproval={{ ...reviewedApproval, preview: {} }}
+          reviewedInPlace
+          pending={false}
+          onApprove={onApprove}
+        />,
+      ),
+    );
+    expect(dialogButton("Approve once")).toBeUndefined();
+    expect(dialogButton("Review danger approval")).toBeDefined();
+  });
 });

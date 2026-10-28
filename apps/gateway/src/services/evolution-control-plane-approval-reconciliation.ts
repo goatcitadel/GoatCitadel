@@ -123,10 +123,11 @@ function isLlamaCppAutoResumePlan(plan: ChangePlanRecord): boolean {
 }
 
 /**
- * Plans whose approval is the operator's last word, so approving applies them. Besides llama.cpp setup, that is a
- * switch the operator flipped in Settings: a separate "Continue approved change" step after approving only made the
- * one decision two (#496). The same holds for a connector the operator installed from Capabilities. A rollback
- * approval and anything proposed from Chat keep their explicit continuation.
+ * Plans whose approval is the operator's last word, so approving applies them. Besides llama.cpp setup, that is any
+ * runtime setting the operator saved in Settings: a separate "Continue approved change" step after approving only
+ * made the one decision two (#496). The same holds for a connector the operator installed from Capabilities. A
+ * rollback approval, anything proposed from Chat, and a Gateway authentication change (which still needs its
+ * credential after approval) keep their explicit continuation.
  */
 export function isAutoResumeOnApprovalPlan(plan: ChangePlanRecord): boolean {
   if (isLlamaCppAutoResumePlan(plan)) return true;
@@ -141,7 +142,7 @@ export function isAutoResumeOnApprovalPlan(plan: ChangePlanRecord): boolean {
   return (
     plan.origin.surface === "settings" &&
     plan.request.kind === "runtime_configuration" &&
-    (plan.request.change.operation === "feature_flag" || plan.request.change.operation === "feature_flags")
+    plan.request.change.operation !== "gateway_auth_configuration"
   );
 }
 

@@ -73,9 +73,12 @@ class TestAdapter implements EvolutionControlPlaneAdapter<ChangePlanRuntimeConfi
       risk:
         this.mode === "review_then_approval"
           ? ("danger" as const)
-          : request.change.operation === "llama_cpp_setup" || request.change.operation === "feature_flag"
-            ? ("caution" as const)
-            : ("safe" as const),
+          : request.change.operation === "network_allowlist" ||
+              request.change.operation === "gateway_auth_configuration"
+            ? ("danger" as const)
+            : request.change.operation === "llama_cpp_setup" || request.change.operation === "feature_flag"
+              ? ("caution" as const)
+              : ("safe" as const),
       status: "awaiting_confirmation" as const,
       requiredAction: context.actions.confirmation({
         title: "Confirm budget mode",
@@ -493,6 +496,43 @@ describe("EvolutionControlPlaneService", () => {
     await f.service.reconcileApproval("approval-final");
     expect((await f.service.get(settingsActor, plan.planId)).status).toBe("completed");
     expect(f.adapter.applyCount).toBe(1);
+  });
+
+  it("applies any approved Settings runtime change once the approval is decided, with no separate Continue step", async () => {
+    const settingsActor = { workspaceId: "default", actorId: "operator-1", surface: "settings" as const };
+    const allowlistRequest: ChangePlanRuntimeConfigurationRequest = {
+      kind: "runtime_configuration",
+      change: { operation: "network_allowlist", entries: ["api.openai.com", "192.168.0.199:3002"] },
+    };
+    const f = fixture();
+    const plan = await f.service.create({ actor: settingsActor, request: allowlistRequest });
+    await f.service.confirm(settingsActor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+    f.approve();
+    await f.service.reconcileApproval("approval-final");
+    expect((await f.service.get(settingsActor, plan.planId)).status).toBe("completed");
+    expect(f.adapter.applyCount).toBe(1);
+  });
+
+  it("keeps an approved Settings authentication change waiting for its credential continuation", async () => {
+    const settingsActor = { workspaceId: "default", actorId: "operator-1", surface: "settings" as const };
+    const f = fixture();
+    const plan = await f.service.create({
+      actor: settingsActor,
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "gateway_auth_configuration", mode: "token", allowLoopbackBypass: false },
+      },
+    });
+    const waiting = await f.service.confirm(
+      settingsActor,
+      plan.planId,
+      plan.revision,
+      plan.requiredAction!.actionNonce,
+    );
+    f.approve();
+    expect(await f.service.reconcileApproval("approval-final")).toBe(0);
+    expect(await f.service.get(settingsActor, plan.planId)).toEqual(waiting);
+    expect(f.adapter.applyCount).toBe(0);
   });
 
   it("keeps a 'settings' plan bound to a conversation waiting for its continuation", async () => {

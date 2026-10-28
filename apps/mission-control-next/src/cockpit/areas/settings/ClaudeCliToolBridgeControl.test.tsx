@@ -13,6 +13,10 @@ import {
 } from "../../../features/native-routes/settings/llama-setup.test-support";
 
 const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
+// The in-place approval dialog reads its approval; these tests cover the save, so the read never settles.
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
+  fetchApproval: () => new Promise(() => undefined),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchSettings: api.fetchSettings,
   patchSettings: api.patchSettings,
