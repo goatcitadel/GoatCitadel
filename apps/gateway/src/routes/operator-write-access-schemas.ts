@@ -3,6 +3,7 @@ import {
   CURATED_FS_MUTATION_TOOLS,
   GLOBAL_TOOL_ACCESS_POSTURES,
   OPERATOR_WRITE_ROOT_PRESETS,
+  SWITCHABLE_TOOL_GROUP_IDS,
   isOperatorWriteRootLabel,
   isOperatorWriteRootPathText,
 } from "@goatcitadel/contracts";
@@ -49,3 +50,11 @@ export const globalToolAccessChangeFields = {
 } as const;
 
 export const globalToolAccessChangeSchema = z.object(globalToolAccessChangeFields).strict();
+
+/** One switchable tool group per save; Core is not in the enum, so it can never be named. */
+export const toolGroupChangeFields = {
+  groupId: z.enum(SWITCHABLE_TOOL_GROUP_IDS),
+  enabled: z.boolean(),
+} as const;
+
+export const toolGroupChangeSchema = z.object(toolGroupChangeFields).strict();

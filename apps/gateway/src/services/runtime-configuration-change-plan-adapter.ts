@@ -20,8 +20,10 @@ import type { UpdateSettingsInput } from "./settings-auth-service.js";
 import {
   describeGlobalToolAccessChange,
   describeOperatorWriteRootChange,
+  describeToolGroupChange,
   matchesGlobalToolAccessChange,
   matchesOperatorWriteRootChange,
+  matchesToolGroupChange,
 } from "./runtime-write-access-change.js";
 import type { LlamaCppSetupSelection } from "./llama-cpp-setup-selection-service.js";
 import {
@@ -322,11 +324,12 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     if (
       request.change.operation === "operator_write_root" ||
       request.change.operation === "tool_global_access" ||
+      request.change.operation === "tool_group_access" ||
       request.change.operation === "web_firecrawl_configuration"
     ) {
-      // The settings owner canonicalizes folders, checks tool posture, and
-      // requires an allowlisted Firecrawl URL; a plan is never prepared (or
-      // sent for approval) for a change the owner would refuse at apply.
+      // The settings owner canonicalizes folders, checks tool posture and group
+      // switches, and requires an allowlisted Firecrawl URL; a plan is never
+      // prepared (or sent for approval) for a change the owner would refuse at apply.
       const validateSettingsUpdate = this.deps.validateSettingsUpdate;
       if (!validateSettingsUpdate) {
         throw new SemanticValidationError("The runtime write-access settings owner is unavailable.");
@@ -406,6 +409,8 @@ function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<Upd
     }
     case "tool_global_access":
       return { globalToolAccessChange: { toolName: request.change.toolName, posture: request.change.posture } };
+    case "tool_group_access":
+      return { toolGroupChange: { groupId: request.change.groupId, enabled: request.change.enabled } };
     case "feature_flag":
       return { features: { [request.change.flag]: request.change.enabled } };
     case "feature_flags":
@@ -460,6 +465,8 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
       return matchesOperatorWriteRootChange(request.change, settings);
     case "tool_global_access":
       return matchesGlobalToolAccessChange(request.change, settings);
+    case "tool_group_access":
+      return matchesToolGroupChange(request.change, settings);
     case "feature_flag":
       return settings.features[request.change.flag] === request.change.enabled;
     case "feature_flags":
@@ -477,6 +484,8 @@ function targetResourceId(request: ChangePlanRuntimeConfigurationRequest): strin
       return `operator_write_root:${request.change.preset ?? "path"}`;
     case "tool_global_access":
       return `tool_global_access:${request.change.toolName}`;
+    case "tool_group_access":
+      return `tool_group_access:${request.change.groupId}`;
     default:
       return request.change.operation;
   }
@@ -625,6 +634,8 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
       return describeOperatorWriteRootChange(request.change);
     case "tool_global_access":
       return describeGlobalToolAccessChange(request.change, settings);
+    case "tool_group_access":
+      return describeToolGroupChange(request.change);
     case "feature_flag":
       return describeFeatureFlagChange(request.change.flag, request.change.enabled);
     case "feature_flags": {

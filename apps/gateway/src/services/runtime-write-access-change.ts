@@ -1,16 +1,18 @@
-import type {
-  ChangePlanRisk,
-  GlobalToolAccessChange,
-  GlobalToolAccessPosture,
-  OperatorWriteRootChange,
+import {
+  TOOL_GROUPS,
+  type ChangePlanRisk,
+  type GlobalToolAccessChange,
+  type GlobalToolAccessPosture,
+  type OperatorWriteRootChange,
+  type ToolGroupChange,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { isSameOperatorWriteRootFolder } from "./settings-operator-write-access.js";
 
 /**
  * Change Plan descriptions and owner-match checks for the runtime write-access
- * operations (operator write roots and curated fs tool posture). The settings
- * owner applies them; see `settings-operator-write-access.ts`.
+ * operations (operator write roots, curated fs tool posture and tool group
+ * switches). The settings owner applies them; see `settings-operator-write-access.ts`.
  */
 
 interface WriteAccessDescription {
@@ -89,8 +91,35 @@ function currentPosture(toolName: string, settings: RuntimeSettings): GlobalTool
   return "unlisted";
 }
 
+/** Off is safe and on is caution: switching a group on can only widen what the AI may try, never lift another rule. */
+export function describeToolGroupChange(change: ToolGroupChange): WriteAccessDescription {
+  const label = TOOL_GROUPS.find((group) => group.id === change.groupId)?.label ?? change.groupId;
+  if (change.enabled) {
+    return {
+      title: `Switch the ${label} tools back on`,
+      summary: `Let the AI use the ${label} tools again.`,
+      completedSummary: `The ${label} tools are back on. Other safety rules still apply.`,
+      impact:
+        "Only this switch changes. Denied tools, permission profiles, Citadel Wards and approvals still apply to these tools.",
+      risk: "caution",
+    };
+  }
+  return {
+    title: `Switch off the ${label} tools`,
+    summary: `Stop the AI from using the ${label} tools in any chat.`,
+    completedSummary: `The AI can't use the ${label} tools in any chat.`,
+    impact:
+      "The AI can't use these tools until you switch them back on. What GoatCitadel does for you, such as Library actions and channel replies, keeps working.",
+    risk: "safe",
+  };
+}
+
 export function matchesGlobalToolAccessChange(change: GlobalToolAccessChange, settings: RuntimeSettings): boolean {
   return currentPosture(change.toolName, settings) === change.posture;
+}
+
+export function matchesToolGroupChange(change: ToolGroupChange, settings: RuntimeSettings): boolean {
+  return settings.switchedOffToolGroups.includes(change.groupId) === !change.enabled;
 }
 
 export function matchesOperatorWriteRootChange(change: OperatorWriteRootChange, settings: RuntimeSettings): boolean {

@@ -12,6 +12,7 @@ import type {
   OperatorWriteRootChange,
   PersonalityCatalogResponse,
   PersonalityCatalogMutationInput,
+  ToolGroupChange,
 } from "@goatcitadel/contracts";
 
 import type { OnboardingCompleteResponse, RuntimeSettingsResponse } from "./types.js";
@@ -68,6 +69,7 @@ export async function patchSettings(input: {
   networkAllowlist?: string[];
   operatorWriteRootChange?: OperatorWriteRootChange;
   globalToolAccessChange?: GlobalToolAccessChange;
+  toolGroupChange?: ToolGroupChange;
   auth?: AuthSettingsUpdateInput;
   llm?: {
     activeProviderId?: string;

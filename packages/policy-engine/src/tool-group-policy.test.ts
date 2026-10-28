@@ -135,6 +135,19 @@ describe("switched-off tool groups in the policy engine", () => {
     expect(resolveEffectivePolicy(policy).switchedOffTools?.size ?? 0).toBe(0);
   });
 
+  it("keeps evaluating when a hand-edited disabledGroups isn't a list", async () => {
+    const policy = config();
+    const engine = new ToolPolicyEngine(policy, asyncStorage);
+
+    for (const handEdited of [5, true, {}, "git"]) {
+      policy.tools.disabledGroups = handEdited as never;
+      const access = await engine.inspectAccess(request("git.status"));
+      expect(access.allowed).toBe(true);
+      expect(access.reasonCodes).not.toContain("tool_group_off");
+      expect(engine.listSwitchedOffToolNames().size).toBe(0);
+    }
+  });
+
   it("ignores disabledGroups set for one agent", async () => {
     const policy = config();
     policy.agents.assistant = { tools: { disabledGroups: ["git"] } };

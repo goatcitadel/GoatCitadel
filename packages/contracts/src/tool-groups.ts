@@ -249,10 +249,32 @@ export function toolGroupForTool(toolName: string): ToolGroupDefinition | undefi
   return TOOL_GROUP_BY_TOOL_NAME.get(toolName);
 }
 
-/** Tool name → its group, for the switchable groups in `disabled`. Core and unknown ids are ignored. */
+/** One governed switch: turn one switchable group on (`enabled: true`) or off. Core can't be named. */
+export interface ToolGroupChange {
+  readonly groupId: ToolGroupId;
+  readonly enabled: boolean;
+}
+
+export function isToolGroupChange(value: unknown): value is ToolGroupChange {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  const record = value as Record<string, unknown>;
+  return (
+    keys.length === 2 &&
+    keys.every((key) => key === "groupId" || key === "enabled") &&
+    isSwitchableToolGroupId(record.groupId) &&
+    typeof record.enabled === "boolean"
+  );
+}
+
+/**
+ * Tool name → its group, for the switchable groups in `disabled`. Core and unknown ids are ignored.
+ * `disabled` comes from a config file the operator may edit by hand, so a value that isn't a list
+ * switches nothing off, and entries that aren't strings are skipped.
+ */
 export function toolNamesSwitchedOff(disabled: readonly string[] | undefined): ReadonlyMap<string, ToolGroupId> {
   const switchedOff = new Map<string, ToolGroupId>();
-  for (const groupId of disabled ?? []) {
+  for (const groupId of Array.isArray(disabled) ? disabled : []) {
     if (!isSwitchableToolGroupId(groupId)) {
       continue;
     }

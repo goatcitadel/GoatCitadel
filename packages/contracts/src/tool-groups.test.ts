@@ -4,6 +4,7 @@ import {
   SWITCHABLE_TOOL_GROUP_IDS,
   TOOL_GROUPS,
   isSwitchableToolGroupId,
+  isToolGroupChange,
   toolGroupForTool,
   toolNamesSwitchedOff,
 } from "./tool-groups.js";
@@ -58,5 +59,38 @@ describe("tool group map contract", () => {
     expect(switchedOff.has("mcp.invoke")).toBe(false);
     expect(switchedOff.size).toBe(toolsIn("files").length);
     expect(toolNamesSwitchedOff(undefined).size).toBe(0);
+  });
+
+  it("ignores a disabledGroups value that isn't a list", () => {
+    for (const handEdited of [5, true, {}, "files", null]) {
+      expect(toolNamesSwitchedOff(handEdited as never).size).toBe(0);
+    }
+    // Entries that aren't group ids are skipped; the valid ones around them still count.
+    const mixed = toolNamesSwitchedOff(["git", 7, null, {}, "files"] as never);
+    expect(mixed.get("git.status")).toBe("git");
+    expect(mixed.get("fs.read")).toBe("files");
+    expect(mixed.size).toBe(toolsIn("git").length + toolsIn("files").length);
+  });
+});
+
+describe("tool group change contract", () => {
+  it("accepts exactly a switchable group id and a boolean", () => {
+    expect(isToolGroupChange({ groupId: "files", enabled: false })).toBe(true);
+    expect(isToolGroupChange({ groupId: "subagents", enabled: true })).toBe(true);
+    for (const groupId of SWITCHABLE_TOOL_GROUP_IDS) {
+      expect(isToolGroupChange({ groupId, enabled: false })).toBe(true);
+    }
+  });
+
+  it("refuses Core, unknown ids, other types and extra or missing keys", () => {
+    expect(isToolGroupChange({ groupId: "core", enabled: false })).toBe(false);
+    expect(isToolGroupChange({ groupId: "nope", enabled: false })).toBe(false);
+    expect(isToolGroupChange({ groupId: "files", enabled: "no" })).toBe(false);
+    expect(isToolGroupChange({ groupId: "files" })).toBe(false);
+    expect(isToolGroupChange({ enabled: true })).toBe(false);
+    expect(isToolGroupChange({ groupId: "files", enabled: false, scope: "agent" })).toBe(false);
+    expect(isToolGroupChange(null)).toBe(false);
+    expect(isToolGroupChange(["files", false])).toBe(false);
+    expect(isToolGroupChange("files")).toBe(false);
   });
 });

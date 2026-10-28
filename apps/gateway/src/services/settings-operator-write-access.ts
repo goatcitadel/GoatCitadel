@@ -2,14 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   OPERATOR_WRITE_ROOT_LIMIT,
+  SWITCHABLE_TOOL_GROUP_IDS,
   ValidationError,
   isGlobalToolAccessChange,
   isOperatorWriteRootChange,
+  isToolGroupChange,
   type GlobalToolAccessChange,
   type GlobalToolAccessSummary,
   type OperatorWriteRoot,
   type OperatorWriteRootChange,
   type OperatorWriteRootSummary,
+  type ToolGroupChange,
+  type ToolGroupId,
   type ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import {
@@ -20,10 +24,11 @@ import {
 } from "@goatcitadel/policy-engine";
 
 /**
- * Settings-owner rules for operator write roots and the global posture of the
- * curated filesystem mutation tools. Both helpers mutate only the candidate
- * tool policy they are handed (settings candidates are isolated clones); the
- * live config changes through the shared settings commit path.
+ * Settings-owner rules for operator write roots, the global posture of the
+ * curated filesystem mutation tools, and which tool groups are switched off.
+ * These helpers mutate only the candidate tool policy they are handed (settings
+ * candidates are isolated clones); the live config changes through the shared
+ * settings commit path, which updates the object the policy engine holds.
  */
 
 export function projectOperatorWriteRoots(toolPolicy: ToolPolicyConfig): OperatorWriteRootSummary[] {
@@ -38,6 +43,15 @@ export function projectOperatorWriteRoots(toolPolicy: ToolPolicyConfig): Operato
 
 export function projectGlobalToolAccess(toolPolicy: ToolPolicyConfig): GlobalToolAccessSummary {
   return { deny: [...(toolPolicy.tools.deny ?? [])], allow: [...(toolPolicy.tools.allow ?? [])] };
+}
+
+/**
+ * The switchable groups that are off, once each, in the group map's order. `disabledGroups` can be hand-edited,
+ * so a value that is not a list reads as nothing switched off, and Core, unknown ids and non-strings are dropped.
+ */
+export function projectSwitchedOffToolGroups(toolPolicy: ToolPolicyConfig): ToolGroupId[] {
+  const disabled: unknown = toolPolicy.tools.disabledGroups;
+  return Array.isArray(disabled) ? SWITCHABLE_TOOL_GROUP_IDS.filter((groupId) => disabled.includes(groupId)) : [];
 }
 
 export function applyOperatorWriteRootChange(
@@ -110,6 +124,22 @@ export function applyGlobalToolAccessChange(toolPolicy: ToolPolicyConfig, change
   }
   toolPolicy.tools.deny = deny;
   toolPolicy.tools.allow = allow;
+}
+
+/**
+ * Switches one group off or on. Only `tools.disabledGroups` changes, so tools.allow, tools.deny and every other
+ * deny keep their say. The list is rewritten once per group in the group map's order, dropping unusable entries.
+ */
+export function applyToolGroupChange(toolPolicy: ToolPolicyConfig, change: ToolGroupChange): void {
+  if (!isToolGroupChange(change)) {
+    throw new ValidationError({
+      message: "toolGroupChange must name a tool group other than Core, and say whether to switch it on.",
+    });
+  }
+  const switchedOff = new Set(projectSwitchedOffToolGroups(toolPolicy));
+  if (change.enabled) switchedOff.delete(change.groupId);
+  else switchedOff.add(change.groupId);
+  toolPolicy.tools.disabledGroups = SWITCHABLE_TOOL_GROUP_IDS.filter((groupId) => switchedOff.has(groupId));
 }
 
 function writeRootSafetyContext(toolPolicy: ToolPolicyConfig): WriteRootSafetyContext {
