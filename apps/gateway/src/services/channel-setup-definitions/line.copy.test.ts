@@ -1,20 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-  ChannelSetupDraft,
   ChannelSetupFieldDefinition,
-  ChannelSetupIssue,
   ChannelSetupRichBlock,
   ChannelSetupStepDefinition,
-  ChannelSetupTestResult,
-  IntegrationConnection,
 } from "@goatcitadel/contracts";
 import { requireChannelSetupDefinition } from "../channel-setup-definitions.js";
-import { evaluateChannelSetupEligibility } from "../channel-setup-eligibility.js";
-import {
-  buildIntegrationConnectionChecks,
-  runIntegrationConnectionLiveChecks,
-  type IntegrationDiagnosticsPort,
-} from "../integration-diagnostics-service.js";
+import { buildIntegrationConnectionChecks } from "../integration-diagnostics-service.js";
+import { guideFinish } from "./guide-finish.test-support.js";
 
 function guide() {
   return requireChannelSetupDefinition("channel.line");
@@ -50,44 +42,7 @@ function stepIds(): string[] {
   return guide().definition.wizard.steps.map((candidate) => candidate.id);
 }
 
-function draftOf(
-  values: Record<string, unknown>,
-  extra: Partial<ChannelSetupDraft> = {},
-  lifecycleMode: ChannelSetupDraft["lifecycleMode"] = "create",
-): ChannelSetupDraft {
-  return {
-    draftId: "22222222-2222-2222-2222-222222222222",
-    catalogId: "channel.line",
-    lifecycleMode,
-    enabled: true,
-    draft: values,
-    revision: 1,
-    secretState: {},
-    contentVersion: "content.v1",
-    adapterVersion: "adapter.v1",
-    validationVersion: "validation.v1",
-    testVersion: "test.v1",
-    createdAt: "2026-03-29T00:00:00.000Z",
-    updatedAt: "2026-03-29T00:00:00.000Z",
-    ...extra,
-  };
-}
-
-function connectionOf(config: Record<string, unknown>): IntegrationConnection {
-  return {
-    connectionId: "11111111-1111-1111-1111-111111111111",
-    catalogId: "channel.line",
-    kind: "channel",
-    key: "line",
-    label: "LINE",
-    revision: "1",
-    enabled: true,
-    status: "connected",
-    config,
-    createdAt: "2026-03-29T00:00:00.000Z",
-    updatedAt: "2026-03-29T00:00:00.000Z",
-  };
-}
+const { draftOf, connectionOf, continueBlockers, port, verdictOf } = guideFinish("channel.line");
 
 const USER_ID = "U0123456789abcdef0123456789abcdef";
 const SEND_ONLY_VALUES = {
@@ -413,88 +368,6 @@ describe("LINE setup guide: asking for what is missing (A15)", () => {
   });
 });
 
-/** The values the wizard reads for each field: the visible, required ones must be filled before Continue. */
-function continueBlockers(
-  values: Record<string, unknown>,
-  lifecycleMode: ChannelSetupDraft["lifecycleMode"] = "create",
-) {
-  const withDefaults = {
-    ...Object.fromEntries(
-      guide()
-        .definition.wizard.steps.flatMap((candidate) => candidate.fields ?? [])
-        .filter((candidate) => candidate.defaultValue !== undefined)
-        .map((candidate) => [candidate.key, candidate.defaultValue]),
-    ),
-    ...values,
-  };
-  const has = (key: string) => {
-    const value = withDefaults[key];
-    return Array.isArray(value)
-      ? value.length > 0
-      : typeof value === "string"
-        ? value.trim().length > 0
-        : Boolean(value);
-  };
-  const blockers: string[] = [];
-  for (const candidate of guide().definition.wizard.steps) {
-    const condition = candidate.visibleWhenFieldEquals;
-    if (condition && withDefaults[condition.fieldKey] !== condition.value) continue;
-    if (lifecycleMode !== "create" && candidate.createOnly) continue;
-    for (const item of candidate.fields ?? []) {
-      const shown = item.visibleWhenFieldEquals;
-      if (shown && withDefaults[shown.fieldKey] !== shown.value) continue;
-      if (item.required && !has(item.key)) blockers.push(item.label);
-    }
-    for (const group of candidate.requiredAnyOf ?? []) {
-      if (!group.some(has)) blockers.push(group.join(" or "));
-    }
-  }
-  return blockers;
-}
-
-function port(): IntegrationDiagnosticsPort {
-  return {
-    config: {
-      toolPolicy: { tools: { profile: "default" }, sandbox: { networkAllowlist: [] } },
-    } as unknown as IntegrationDiagnosticsPort["config"],
-    fetchWithDiagnosticsTimeout: vi.fn(async () => new Response("{}", { status: 200 })),
-    getDiscordRuntimeStatus: vi.fn(() => undefined),
-    isConnectionUrlAllowlisted: vi.fn(() => true),
-    readConnectionConfigValue: vi.fn((values: Record<string, unknown>, key: string) => {
-      const value = values[key];
-      return typeof value === "string" ? value : undefined;
-    }),
-    resolveConnectionSecret: vi.fn((values: Record<string, unknown>, key: string) => {
-      const value = values[key];
-      return typeof value === "string" ? value : undefined;
-    }),
-  };
-}
-
-/** What the setup test does: structural checks plus the live send, every non-pass becomes an issue, then eligibility. */
-async function verdictOf(config: Record<string, unknown>) {
-  const connection = connectionOf(config);
-  const deps = port();
-  const live = await runIntegrationConnectionLiveChecks(deps, connection, { includeSandboxSend: true });
-  const issues: ChannelSetupIssue[] = [...buildIntegrationConnectionChecks(deps, connection), ...live.checks]
-    .filter((check) => check.status !== "pass")
-    .map((check) => ({
-      key: check.key,
-      level: check.status === "fail" ? ("error" as const) : ("warn" as const),
-      message: check.message,
-    }));
-  const result: ChannelSetupTestResult = {
-    draftId: "22222222-2222-2222-2222-222222222222",
-    draftRevision: 1,
-    status: issues.some((issue) => issue.level === "error") ? "error" : issues.length > 0 ? "warn" : "ok",
-    levels: [],
-    issues,
-    ...(live.probe ? { probe: live.probe } : {}),
-    checkedAt: "2026-03-29T00:00:00.000Z",
-  };
-  return { deps, live, issues, eligibility: evaluateChannelSetupEligibility(result, connection) };
-}
-
 describe("LINE send-only path: can it finish?", () => {
   it("lets Continue pass with just a channel access token and a target", () => {
     expect(continueBlockers(SEND_ONLY_VALUES)).toEqual([]);
@@ -502,7 +375,10 @@ describe("LINE send-only path: can it finish?", () => {
   });
 
   it("asks for those two and nothing about receiving", () => {
-    expect(continueBlockers({})).toEqual(["channelAccessToken or channelAccessTokenEnv", "Default target"]);
+    expect(continueBlockers({})).toEqual([
+      "Channel access token or Channel access token from an environment variable (advanced)",
+      "Default target",
+    ]);
   });
 
   it("passes the setup test's own checks: the token check and the test message", async () => {
