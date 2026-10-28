@@ -19,6 +19,18 @@ import {
   requireSecureUrl,
 } from "./common.js";
 
+/**
+ * The occ commands that install the bot again with a webhook address, for receiving. They are shown on "Add the bot to
+ * Nextcloud Talk" (setup only) and again on the finish step, which an edit still shows.
+ */
+const RECEIVE_REINSTALL_COMMANDS = [
+  "occ talk:bot:list",
+  "occ talk:bot:uninstall <bot-id>",
+  'occ talk:bot:install --feature webhook --feature response "GoatCitadel" "<secret>" "<webhook address>"',
+  "occ talk:bot:list",
+  "occ talk:bot:setup <new-bot-id> <room-token>",
+].join("\n");
+
 export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
   const catalog = requireCatalog("channel.nextcloud-talk");
   const definition: ChannelSetupDefinition = {
@@ -101,17 +113,7 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
                 "Turn it on for the conversation again with occ talk:bot:setup, giving it that ID and the room token.",
               ],
             },
-            {
-              kind: "code",
-              language: "shell",
-              code: [
-                "occ talk:bot:list",
-                "occ talk:bot:uninstall <bot-id>",
-                'occ talk:bot:install --feature webhook --feature response "GoatCitadel" "<secret>" "<webhook address>"',
-                "occ talk:bot:list",
-                "occ talk:bot:setup <new-bot-id> <room-token>",
-              ].join("\n"),
-            },
+            { kind: "code", language: "shell", code: RECEIVE_REINSTALL_COMMANDS },
             linkBlock("Nextcloud Talk: occ commands", "https://nextcloud-talk.readthedocs.io/en/latest/occ/"),
             linkBlock("Nextcloud Talk: bots", "https://nextcloud-talk.readthedocs.io/en/latest/bots/"),
           ],
@@ -259,8 +261,13 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finish saves the connection so GoatCitadel can send from it. To receive messages, install the bot again with this connection's webhook address and the same secret (the last step shows how). Talk sends every message posted in the conversation to that address, so use only an address you control.",
+              "Finish saves the connection so GoatCitadel can send from it. To receive messages, install the bot again with this connection's webhook address and the same secret. Talk sends every message posted in the conversation to that address, so use only an address you control.",
             ),
+            // The setup-only step that first lists these is hidden when a saved channel is edited, so they are here too.
+            paragraph(
+              "Run these on your Nextcloud server, with your own values in place of the <…> parts. GoatCitadel shows this connection's webhook address in Settings › Channels › this connection.",
+            ),
+            { kind: "code", language: "shell", code: RECEIVE_REINSTALL_COMMANDS },
           ],
           successCriteria: ["Nextcloud accepted the signed test message.", "The test message arrived in the room."],
         },

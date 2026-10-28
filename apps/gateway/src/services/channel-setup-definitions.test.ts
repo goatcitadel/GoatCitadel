@@ -1445,7 +1445,7 @@ const OPEN_MARKER_KEY = "inboundAccessWasOpen";
 const OPEN_MARKER = { [OPEN_MARKER_KEY]: true };
 
 const ENV_RULE_PATTERN =
-  /The variable's name must start with ([A-Z0-9_]+)_ \(for example ([A-Z0-9_]+)\)\. Set it where GoatCitadel starts, then restart GoatCitadel\.( It must also end in (_TOKEN or _SECRET|_AES_KEY)\.)?$/u;
+  /The variable's name must start with ([A-Z0-9_]+)_ \(for example ([A-Z0-9_]+)\)\. Set it where GoatCitadel starts, then restart GoatCitadel\.( The name must also end in (_TOKEN or _SECRET|_AES_KEY)\.)?$/u;
 
 describe("the shared guide builder", () => {
   describe("environment-variable fields (A5)", () => {
@@ -1461,6 +1461,8 @@ describe("the shared guide builder", () => {
           expect(field.explanation, `${where} no longer calls itself the preferred path`).not.toMatch(
             /preferred path/iu,
           );
+          // "It" after "restart GoatCitadel." reads as GoatCitadel, so the suffix sentence names the variable's name.
+          expect(field.explanation, `${where} says what must end the name, not "It"`).not.toMatch(/\bIt must\b/u);
           const rule = ENV_RULE_PATTERN.exec(field.explanation);
           expect(rule, `${where} explanation ends with the name rule`).not.toBeNull();
           const [, prefix, example, , suffixes] = rule ?? [];
@@ -1495,7 +1497,7 @@ describe("the shared guide builder", () => {
       );
       expect(fieldOf("line", "channelSecretEnv")?.explanation).toMatch(
         new RegExp(
-          `The variable's name must start with LINE_ \\(for example LINE_CHANNEL_SECRET\\)\\. ${rule.replaceAll(".", "\\.")} It must also end in _TOKEN or _SECRET\\.$`,
+          `The variable's name must start with LINE_ \\(for example LINE_CHANNEL_SECRET\\)\\. ${rule.replaceAll(".", "\\.")} The name must also end in _TOKEN or _SECRET\\.$`,
           "u",
         ),
       );
@@ -1507,7 +1509,7 @@ describe("the shared guide builder", () => {
       );
       // The WeCom key is read by its own suffix, not _TOKEN or _SECRET.
       expect(fieldOf("wecom", "encodingAesKeyEnv")?.explanation).toMatch(
-        /\(for example WECOM_ENCODING_AES_KEY\)\. Set it where GoatCitadel starts, then restart GoatCitadel\. It must also end in _AES_KEY\.$/u,
+        /\(for example WECOM_ENCODING_AES_KEY\)\. Set it where GoatCitadel starts, then restart GoatCitadel\. The name must also end in _AES_KEY\.$/u,
       );
       expect(fieldOf("whatsapp", "accessTokenEnv")?.explanation).toMatch(/restart GoatCitadel\.$/u);
     });

@@ -387,7 +387,8 @@ export function secretEnvVariableRule(channelKey: string, envFieldKey: string): 
   if (!INBOUND_WEBHOOK_SECRET_ENV_FIELDS[channelKey]?.includes(envFieldKey)) {
     return rule;
   }
-  return `${rule} It must also end in ${INBOUND_SECRET_ENV_SUFFIXES[envFieldKey] ?? "_TOKEN or _SECRET"}.`;
+  // "It" would read as GoatCitadel (the subject of the sentence before), so the sentence names the variable's name.
+  return `${rule} The name must also end in ${INBOUND_SECRET_ENV_SUFFIXES[envFieldKey] ?? "_TOKEN or _SECRET"}.`;
 }
 
 /** The pasted field's label without the old "(manual fallback)" tag. */

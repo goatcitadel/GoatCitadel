@@ -302,7 +302,7 @@ describe("QQ Bot setup guide: connecting the app (items 4, 5, 8, A5)", () => {
     expect(env.advanced).toBe(true);
     expect(env.label).toBe("App secret from an environment variable (advanced)");
     expect(env.explanation).toBe(
-      "Name of the env var that stores the bot's AppSecret. The variable's name must start with QQBOT_ (for example QQBOT_APP_SECRET). Set it where GoatCitadel starts, then restart GoatCitadel. It must also end in _TOKEN or _SECRET.",
+      "Name of the env var that stores the bot's AppSecret. The variable's name must start with QQBOT_ (for example QQBOT_APP_SECRET). Set it where GoatCitadel starts, then restart GoatCitadel. The name must also end in _TOKEN or _SECRET.",
     );
   });
 

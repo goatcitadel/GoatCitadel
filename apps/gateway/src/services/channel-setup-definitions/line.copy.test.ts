@@ -273,7 +273,7 @@ describe("LINE setup guide: the secret fields (A5)", () => {
     expect(field("channelSecretEnv").advanced).toBe(true);
     expect(field("channelSecretEnv").label).toBe("Channel secret from an environment variable (advanced)");
     expect(field("channelSecretEnv").explanation).toBe(
-      "Name of the environment variable that holds your channel secret. The variable's name must start with LINE_ (for example LINE_CHANNEL_SECRET). Set it where GoatCitadel starts, then restart GoatCitadel. It must also end in _TOKEN or _SECRET.",
+      "Name of the environment variable that holds your channel secret. The variable's name must start with LINE_ (for example LINE_CHANNEL_SECRET). Set it where GoatCitadel starts, then restart GoatCitadel. The name must also end in _TOKEN or _SECRET.",
     );
   });
 });

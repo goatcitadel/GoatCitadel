@@ -404,7 +404,7 @@ describe("Nextcloud Talk setup guide: the bot secret and the room token (items 3
     expect(env.advanced).toBe(true);
     expect(env.label).toBe("Bot secret from an environment variable (advanced)");
     expect(env.explanation).toBe(
-      "Name of the env var that stores the bot secret. The variable's name must start with NEXTCLOUD_TALK_ (for example NEXTCLOUD_TALK_TOKEN). Set it where GoatCitadel starts, then restart GoatCitadel. It must also end in _TOKEN or _SECRET.",
+      "Name of the env var that stores the bot secret. The variable's name must start with NEXTCLOUD_TALK_ (for example NEXTCLOUD_TALK_TOKEN). Set it where GoatCitadel starts, then restart GoatCitadel. The name must also end in _TOKEN or _SECRET.",
     );
   });
 
@@ -525,10 +525,40 @@ describe("Nextcloud Talk setup guide: the test and finishing (item 10, R49)", ()
     expect(paragraphs("test")[0]).toContain(TEST_MESSAGE);
   });
 
-  it("finishes by saving for sending, and points receiving at the next step", () => {
+  it("finishes by saving for sending, and gives the receiving commands right there instead of pointing at a step", () => {
     expect(paragraphs("finish")).toEqual([
-      "Finish saves the connection so GoatCitadel can send from it. To receive messages, install the bot again with this connection's webhook address and the same secret (the last step shows how). Talk sends every message posted in the conversation to that address, so use only an address you control.",
+      "Finish saves the connection so GoatCitadel can send from it. To receive messages, install the bot again with this connection's webhook address and the same secret. Talk sends every message posted in the conversation to that address, so use only an address you control.",
+      "Run these on your Nextcloud server, with your own values in place of the <…> parts. GoatCitadel shows this connection's webhook address in Settings › Channels › this connection.",
     ]);
+    expect(JSON.stringify(step("finish"))).not.toMatch(/last step/iu);
+    expect((step("finish").body ?? []).filter((block) => block.kind === "code")).toEqual([
+      {
+        kind: "code",
+        language: "shell",
+        code: [
+          "occ talk:bot:list",
+          "occ talk:bot:uninstall <bot-id>",
+          'occ talk:bot:install --feature webhook --feature response "GoatCitadel" "<secret>" "<webhook address>"',
+          "occ talk:bot:list",
+          "occ talk:bot:setup <new-bot-id> <room-token>",
+        ].join("\n"),
+      },
+    ]);
+  });
+
+  it("shows the receiving commands on the finish step because an edit hides the setup-only step that first lists them", () => {
+    const code = (id: string) =>
+      (step(id).body ?? []).flatMap((block) =>
+        block.kind === "code" && /talk:bot:install/u.test(block.code) ? [block.code] : [],
+      );
+
+    expect(step("install-bot").createOnly).toBe(true);
+    expect(step("finish").createOnly).toBeUndefined();
+    expect(code("finish")).toHaveLength(1);
+    expect(code("finish")).toEqual(code("install-bot"));
+  });
+
+  it("keeps the finish step's success criteria", () => {
     expect(step("finish").successCriteria).toEqual([
       "Nextcloud accepted the signed test message.",
       "The test message arrived in the room.",

@@ -397,11 +397,11 @@ describe("WeCom setup guide: receiving, as an optional step (item 1, 6, A5, A12)
   it("gives each variable its own name rule: _TOKEN for the Token, _AES_KEY for the key (item 6)", () => {
     expect(field("callbackTokenEnv").label).toBe("Callback token from an environment variable (advanced)");
     expect(field("callbackTokenEnv").explanation).toBe(
-      "Name of the env var that stores the callback Token. The variable's name must start with WECOM_ (for example WECOM_CALLBACK_TOKEN). Set it where GoatCitadel starts, then restart GoatCitadel. It must also end in _TOKEN or _SECRET.",
+      "Name of the env var that stores the callback Token. The variable's name must start with WECOM_ (for example WECOM_CALLBACK_TOKEN). Set it where GoatCitadel starts, then restart GoatCitadel. The name must also end in _TOKEN or _SECRET.",
     );
     expect(field("encodingAesKeyEnv").label).toBe("EncodingAESKey from an environment variable (advanced)");
     expect(field("encodingAesKeyEnv").explanation).toBe(
-      "Name of the env var that stores the callback's EncodingAESKey. The variable's name must start with WECOM_ (for example WECOM_ENCODING_AES_KEY). Set it where GoatCitadel starts, then restart GoatCitadel. It must also end in _AES_KEY.",
+      "Name of the env var that stores the callback's EncodingAESKey. The variable's name must start with WECOM_ (for example WECOM_ENCODING_AES_KEY). Set it where GoatCitadel starts, then restart GoatCitadel. The name must also end in _AES_KEY.",
     );
     expect(field("callbackTokenEnv").advanced).toBe(true);
     expect(field("encodingAesKeyEnv").advanced).toBe(true);

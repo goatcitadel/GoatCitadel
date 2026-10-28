@@ -262,13 +262,13 @@ describe("WhatsApp setup guide: the secret fields (A5)", () => {
     expect(field("appSecret").label).toBe("App secret");
     expect(field("appSecretEnv").label).toBe("App secret from an environment variable (advanced)");
     expect(field("appSecretEnv").explanation).toBe(
-      "Name of the environment variable that holds your app secret. The variable's name must start with WHATSAPP_ (for example WHATSAPP_APP_SECRET). Set it where GoatCitadel starts, then restart GoatCitadel. It must also end in _TOKEN or _SECRET.",
+      "Name of the environment variable that holds your app secret. The variable's name must start with WHATSAPP_ (for example WHATSAPP_APP_SECRET). Set it where GoatCitadel starts, then restart GoatCitadel. The name must also end in _TOKEN or _SECRET.",
     );
     expect(field("webhookVerifyToken").label).toBe("Webhook verify token");
     expect(field("webhookVerifyTokenEnv").explanation).toContain(
       "The variable's name must start with WHATSAPP_ (for example WHATSAPP_WEBHOOK_VERIFY_TOKEN).",
     );
-    expect(field("webhookVerifyTokenEnv").explanation).toContain("It must also end in _TOKEN or _SECRET.");
+    expect(field("webhookVerifyTokenEnv").explanation).toContain("The name must also end in _TOKEN or _SECRET.");
     for (const key of ["appSecretEnv", "webhookVerifyTokenEnv"]) {
       expect(field(key).advanced, key).toBe(true);
     }
