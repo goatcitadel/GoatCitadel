@@ -247,6 +247,60 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(tail).not.toContain("tool policy file");
   });
 
+  it("points at Capabilities › Tools when Files is switched off", () => {
+    const tail = buildBaseAgentSystemPrompt(
+      input({
+        toolset: {
+          toolNames: ["fs.read", "change.request"],
+          policyDeniedToolNames: ["fs.write", "fs.patch"],
+          switchedOffToolNames: ["fs.write", "fs.patch"],
+        },
+      }),
+    ).volatileTail;
+    expect(tail).toContain("## Writing and running code");
+    expect(tail).toContain(
+      "To allow file writes, the operator switches the Files tools back on in Capabilities › Tools.",
+    );
+    // The tools.deny-era remedy is wrong here: the operator's switch is what has to change.
+    expect(tail).not.toContain("Settings › Tools › Global filesystem tool access");
+    expect(tail).not.toContain("fs.write to Available");
+    expect(tail).not.toContain("danger-risk change");
+  });
+
+  it("points at Capabilities › Tools when Shell and code is switched off", () => {
+    const tail = buildBaseAgentSystemPrompt(
+      input({
+        toolset: {
+          toolNames: ["fs.read"],
+          policyDeniedToolNames: ["shell.exec", "shell.exec_background", "tests.run"],
+          switchedOffToolNames: ["shell.exec", "shell.exec_background", "tests.run"],
+        },
+      }),
+    ).volatileTail;
+    expect(tail).toContain(
+      "To allow shell commands, the operator switches the Shell and code tools back on in Capabilities › Tools.",
+    );
+    expect(tail).not.toContain("tool policy file");
+  });
+
+  it("words each write-and-run tool by why it is off: the switch for one, the policy for the other", () => {
+    const tail = buildBaseAgentSystemPrompt(
+      input({
+        toolset: {
+          toolNames: ["fs.read"],
+          policyDeniedToolNames: ["fs.write", "shell.exec"],
+          switchedOffToolNames: ["shell.exec"],
+        },
+      }),
+    ).volatileTail;
+    // fs.write is only denied (tools.deny), so it keeps its Settings remedy.
+    expect(tail).toContain("Settings › Tools › Global filesystem tool access");
+    expect(tail).not.toContain("switches the Files tools back on");
+    // shell.exec is switched off, so it points at the switch instead of the policy file.
+    expect(tail).toContain("switches the Shell and code tools back on in Capabilities › Tools.");
+    expect(tail).not.toContain("tool policy file");
+  });
+
   it("leaves the write-and-run note out when writes and shell are allowed, or when no tools can be called", () => {
     const allowed = buildBaseAgentSystemPrompt(
       input({ toolset: { toolNames: ["fs.write", "shell.exec"], policyDeniedToolNames: ["browser.cookies.get"] } }),

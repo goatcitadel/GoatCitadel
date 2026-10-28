@@ -165,6 +165,89 @@ describe("buildGovernanceBlockGuidance", () => {
     expect(guidance).not.toMatch(RETRY_INVITATION);
   });
 
+  it("tells the model a switched-off group is the operator's switch, not tools.deny", () => {
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "channel.send",
+      status: "blocked",
+      error: "blocked: tool channel.send is in a tool group switched off by the operator (messaging)",
+    });
+
+    expect(guidance).toContain("channel.send is switched off");
+    expect(guidance).toContain("Capabilities › Tools");
+    expect(guidance).toContain("Only the operator can switch that group back on");
+    expect(guidance).toMatch(/not a pending approval/i);
+    expect(guidance).not.toContain("tools.deny");
+    expect(guidance).not.toMatch(RETRY_INVITATION);
+  });
+
+  it("recognises a switched-off group from the run's policy revalidation reason codes", () => {
+    // The Chat runner re-probes before the call and writes its own error, so the engine's sentence never reaches it.
+    for (const error of [
+      "Current deny-wins policy blocks channel.send.",
+      "Current deny-wins policy narrowed channel.send after capability admission.",
+      "Capability profile profile-1 does not authorize channel.send.",
+    ]) {
+      const guidance = buildGovernanceBlockGuidance({
+        toolName: "channel.send",
+        status: "blocked",
+        error,
+        result: { policyRevalidation: { status: "blocked", reasonCodes: ["tool_group_off"] } },
+      });
+
+      expect(guidance, error).toContain("channel.send is switched off");
+      expect(guidance, error).toContain("Capabilities › Tools");
+      expect(guidance, error).not.toContain("tools.deny");
+    }
+  });
+
+  it("keeps the tools.deny wording when the tool is denied as well as switched off", () => {
+    // The engine reports policy_deny first for a denied tool, because switching the group on would not run it.
+    const denied = buildGovernanceBlockGuidance({
+      toolName: "fs.write",
+      status: "blocked",
+      error: "tool denied by policy",
+    });
+    expect(denied).toContain("tools.deny");
+    expect(denied).not.toContain("switched off");
+
+    expect(
+      buildGovernanceBlockGuidance({
+        toolName: "fs.write",
+        status: "blocked",
+        error: "Current deny-wins policy blocks fs.write.",
+        result: { policyRevalidation: { status: "blocked", reasonCodes: ["policy_deny", "tool_group_off"] } },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("ignores revalidation reason codes that are not about a switched-off group, and malformed ones", () => {
+    for (const result of [
+      { policyRevalidation: { status: "blocked", reasonCodes: ["current_deny"] } },
+      { policyRevalidation: { status: "blocked", reasonCodes: "tool_group_off" } },
+      { policyRevalidation: "tool_group_off" },
+      {},
+    ]) {
+      expect(
+        buildGovernanceBlockGuidance({
+          toolName: "channel.send",
+          status: "blocked",
+          error: "Current deny-wins policy blocks channel.send.",
+          result,
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("gives no switched-off guidance to a run that settled as failed", () => {
+    expect(
+      buildGovernanceBlockGuidance({
+        toolName: "channel.send",
+        status: "failed",
+        error: "tool channel.send is in a tool group switched off by the operator (messaging)",
+      }),
+    ).toBeUndefined();
+  });
+
   it("names tools.allow and the permission profile when the tool is outside the resolved policy", () => {
     const guidance = buildGovernanceBlockGuidance({
       toolName: "shell.exec_background",
@@ -231,6 +314,41 @@ describe("buildPolicyBlockedRecoveryText", () => {
     expect(text).toContain("Settings > Tools");
     expect(text).not.toMatch(/narrower|specific URL|keep going/i);
     expect(text).not.toContain("sandbox policy blocked");
+  });
+
+  it("sends the operator to Capabilities › Tools, not Settings > Tools, when every block is a switched-off group", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({
+        toolName: "channel.send",
+        error: "blocked: tool channel.send is in a tool group switched off by the operator (messaging)",
+      }),
+      toolRun({
+        toolRunId: "run-2",
+        toolName: "channel.react",
+        error: "Current deny-wins policy blocks channel.react.",
+        result: { policyRevalidation: { status: "blocked", reasonCodes: ["tool_group_off"] } },
+      }),
+    ]);
+
+    expect(text).toContain("channel.send is switched off");
+    expect(text).toContain("channel.react is switched off");
+    expect(text).toContain("switch tool groups back on in Capabilities › Tools");
+    expect(text).not.toContain("Settings > Tools");
+    expect(text).not.toContain("tools.deny");
+  });
+
+  it("keeps the Settings > Tools pointer when a switched-off block is mixed with another policy block", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({
+        toolName: "channel.send",
+        error: "tool channel.send is in a tool group switched off by the operator (messaging)",
+      }),
+      toolRun({ toolRunId: "run-2", toolName: "fs.delete", error: "tool denied by policy" }),
+    ]);
+
+    expect(text).toContain("Settings > Tools");
+    expect(text).toContain("channel.send is switched off");
+    expect(text).toContain("tools.deny");
   });
 
   it("says plainly that nothing was saved when a memory write fails before storing anything (#566, #571)", () => {

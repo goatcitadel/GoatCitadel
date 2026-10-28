@@ -7980,6 +7980,20 @@ export class ChatTurnAgentRunner {
       if (isExactSystemHeartbeatRunnerPosture(input.input)) {
         throwSystemHeartbeatToolInvocationBlocked(preflight.toolName);
       }
+      const blockedResult = {
+        policyRevalidation: {
+          status: preDispatchPathRepair?.status === "blocked" ? "blocked_after_path_repair" : "blocked",
+          reasonCodes: [...capabilityProfileDecision.reasonCodes],
+          ...(preDispatchPathRepair
+            ? {
+                originalPath: preDispatchPathRepair.originalPath,
+                repairedPath: preDispatchPathRepair.fallbackPath,
+                originalReasonCodes: preDispatchPathRepair.originalReasonCodes,
+                repairedReasonCodes: preDispatchPathRepair.repairedReasonCodes,
+              }
+            : {}),
+        },
+      };
       const updated = await this.createToolRun(input.input, {
         toolRunId,
         turnId: input.turnId,
@@ -7988,25 +8002,14 @@ export class ChatTurnAgentRunner {
         status: "blocked",
         args: preflight.args,
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
-        result: {
-          policyRevalidation: {
-            status: preDispatchPathRepair?.status === "blocked" ? "blocked_after_path_repair" : "blocked",
-            reasonCodes: [...capabilityProfileDecision.reasonCodes],
-            ...(preDispatchPathRepair
-              ? {
-                  originalPath: preDispatchPathRepair.originalPath,
-                  repairedPath: preDispatchPathRepair.fallbackPath,
-                  originalReasonCodes: preDispatchPathRepair.originalReasonCodes,
-                  repairedReasonCodes: preDispatchPathRepair.repairedReasonCodes,
-                }
-              : {}),
-          },
-        },
+        result: blockedResult,
         error: capabilityProfileBlock,
         failureGuidance: buildToolFailureGuidance({
           toolName: preflight.toolName,
           status: "blocked",
           args: preflight.args,
+          // The block's own error is the runner's, so the reason codes are what name a switched-off tool group.
+          result: blockedResult,
           error: capabilityProfileBlock,
           blockerStrictness: await this.readBlockerStrictness(),
         }),

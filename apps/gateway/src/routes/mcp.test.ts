@@ -1308,7 +1308,10 @@ describe("mcp routes", () => {
         listMcpTools: vi.fn(() => [{ serverId: "srv-1", toolName: "tool.echo", enabled: true }]),
       }),
       capabilities: { listCapabilityCatalog: vi.fn(() => catalog) },
-      tools: { resolveToolPolicyContext: vi.fn(() => ({ operatorId: "operator", surface: "mcp" })) },
+      tools: {
+        resolveToolPolicyContext: vi.fn(() => ({ operatorId: "operator", surface: "mcp" })),
+        listSwitchedOffToolNames: vi.fn(() => new Set<string>()),
+      },
       toolsInvoke: { invokeTool },
     } as never);
     await registerMcpRoutesForTest(app);
@@ -1609,6 +1612,7 @@ describe("mcp routes", () => {
       capabilities: {
         listCapabilityCatalog,
       },
+      tools: { listSwitchedOffToolNames: vi.fn(() => new Set<string>()) },
     } as never);
     await registerMcpRoutesForTest(app);
 
@@ -1724,7 +1728,7 @@ describe("mcp routes", () => {
     app.decorate("services", {
       mcp: createMcpService(),
       capabilities: { listCapabilityCatalog },
-      tools: { resolveToolPolicyContext },
+      tools: { resolveToolPolicyContext, listSwitchedOffToolNames: vi.fn(() => new Set<string>()) },
       toolsInvoke: { invokeTool },
     } as never);
     await registerMcpRoutesForTest(app);
@@ -1807,6 +1811,58 @@ describe("mcp routes", () => {
         openWorldHint: false,
       },
     });
+  });
+
+  it("leaves switched-off tools out of the server-mode tool list", async () => {
+    const readFile = {
+      capabilityId: "tool:fs.read",
+      kind: "tool",
+      category: "built_in",
+      title: "Read file",
+      summary: "Read a file through Gateway policy.",
+      callable: true,
+      toolName: "fs.read",
+      wrapperVisibility: { readOnly: true, deterministic: true, codeModeAllowed: true },
+    };
+    const sendMessage = {
+      capabilityId: "tool:channel.send",
+      kind: "tool",
+      category: "built_in",
+      title: "Send message",
+      summary: "Send a message to a channel.",
+      callable: true,
+      toolName: "channel.send",
+      wrapperVisibility: { readOnly: false, deterministic: false, codeModeAllowed: false },
+    };
+    const listCapabilityCatalog = vi.fn(() => [readFile, sendMessage]);
+    // The operator's switch is read per call, so switching Messaging back on shows on the next request.
+    const listSwitchedOffToolNames = vi
+      .fn<() => ReadonlySet<string>>()
+      .mockReturnValueOnce(new Set(["channel.send"]))
+      .mockReturnValueOnce(new Set());
+    app = Fastify();
+    app.decorate("services", {
+      mcp: createMcpService(),
+      capabilities: { listCapabilityCatalog },
+      tools: { listSwitchedOffToolNames },
+    } as never);
+    await registerMcpRoutesForTest(app);
+
+    const switchedOff = await app.inject({ method: "GET", url: "/api/v1/mcp/server-mode/manifest" });
+    expect(switchedOff.statusCode).toBe(200);
+    const switchedOffManifest = switchedOff.json();
+    expect(switchedOffManifest.tools.map((tool: { name: string }) => tool.name)).toEqual(["goatcitadel.fs.read"]);
+    expect(switchedOffManifest.summary).toMatchObject({ gatewayCallableCapabilities: 1, exportedToolDescriptors: 1 });
+    expect(
+      switchedOffManifest.evidence.catalogSnapshot.map((entry: { capabilityId: string }) => entry.capabilityId),
+    ).toEqual(["tool:fs.read"]);
+    expect(switchedOff.body).not.toContain("channel.send");
+
+    const switchedBackOn = await app.inject({ method: "GET", url: "/api/v1/mcp/server-mode/manifest" });
+    expect(switchedBackOn.json().tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "goatcitadel.fs.read",
+      "goatcitadel.channel.send",
+    ]);
   });
 
   it("blocks MCP server-mode call preview for open-world or non-tool descriptors", async () => {

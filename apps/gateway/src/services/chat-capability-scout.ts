@@ -98,6 +98,7 @@ const POLICY_ACCESS_DENIAL_REASONS = new Set([
   "policy_disallow",
   "permission_profile_upper_bound",
   "grant_deny",
+  "tool_group_off",
 ]);
 
 export async function scoutCapabilityUpgradeSuggestions(
@@ -161,7 +162,9 @@ export async function scoutCapabilityUpgradeSuggestions(
 
   // A probe without the admitted turn's permission context can falsely report
   // that an available tool is blocked by an unrelated default policy.
-  for (const tool of input.policyContext ? rankToolMatches(input.content, input.deps.listToolCatalog()).slice(0, 4) : []) {
+  for (const tool of input.policyContext
+    ? rankToolMatches(input.content, input.deps.listToolCatalog()).slice(0, 4)
+    : []) {
     let access: ToolAccessEvaluateResponse;
     try {
       access = await input.deps.evaluateToolAccess({

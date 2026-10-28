@@ -18,6 +18,7 @@ import type {
 import { SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
 import type { BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
 import { buildToolAccessProbeArgs } from "./chat-turn-agent-runner.js";
+import { TOOL_GROUP_OFF_REASON_CODE } from "./chat-turn-agent-runner/tool-failure-messaging.js";
 
 export interface BasePromptCatalogScope {
   sessionId: string;
@@ -36,8 +37,9 @@ export async function filterBasePromptToolsetByPolicy(
   inspect: BasePromptToolAccessProbe,
   safeWriteFallbackDir?: string,
 ): Promise<BaseAgentPromptToolset> {
-  /** `undefined` when the tool is not callable this turn; otherwise whether it asks the operator first. */
-  const probe = async (toolName: string): Promise<{ requiresApproval: boolean } | undefined> => {
+  type Verdict = { callable: true; requiresApproval: boolean } | { callable: false; switchedOff: boolean };
+  /** Whether the tool is callable this turn and, if so, whether it asks the operator first; if not, whether the operator's tool group switch is why. */
+  const probe = async (toolName: string): Promise<Verdict> => {
     try {
       const access = await inspect({
         toolName,
@@ -47,14 +49,19 @@ export async function filterBasePromptToolsetByPolicy(
         surface: scope.mode,
         args: buildToolAccessProbeArgs(toolName, safeWriteFallbackDir),
       });
-      return access.allowed ? { requiresApproval: access.requiresApproval } : undefined;
+      // A tool that is also denied reports policy_deny, not tool_group_off, so a switched-off tool here is
+      // one that switching its group on would let through.
+      return access.allowed
+        ? { callable: true, requiresApproval: access.requiresApproval }
+        : { callable: false, switchedOff: access.reasonCodes.includes(TOOL_GROUP_OFF_REASON_CODE) };
     } catch {
       // Like the runner: a tool whose policy cannot be evaluated is not callable this turn.
-      return undefined;
+      return { callable: false, switchedOff: false };
     }
   };
   const allowed = new Set<string>();
   const asksFirst = new Set<string>();
+  const switchedOff = new Set<string>();
   const names = [...toolset.toolNames];
   for (let start = 0; start < names.length; start += PROBE_CONCURRENCY) {
     const batch = names.slice(start, start + PROBE_CONCURRENCY);
@@ -62,6 +69,10 @@ export async function filterBasePromptToolsetByPolicy(
     batch.forEach((toolName, index) => {
       const verdict = verdicts[index];
       if (!verdict) return;
+      if (!verdict.callable) {
+        if (verdict.switchedOff) switchedOff.add(toolName);
+        return;
+      }
       allowed.add(toolName);
       if (verdict.requiresApproval) asksFirst.add(toolName);
     });
@@ -69,7 +80,9 @@ export async function filterBasePromptToolsetByPolicy(
   return {
     ...toolset,
     toolNames: names.filter((toolName) => allowed.has(toolName)),
+    // Switched-off tools are denied tools too; switchedOffToolNames lets the prompt word them as the operator's switch.
     policyDeniedToolNames: names.filter((toolName) => !allowed.has(toolName)),
+    switchedOffToolNames: names.filter((toolName) => switchedOff.has(toolName)),
     approvalRequiredToolNames: names.filter((toolName) => asksFirst.has(toolName)),
   };
 }
