@@ -89,9 +89,10 @@ const FILES = {
   files: {
     risk: "danger",
     tools: [
-      tool("fs.read", { description: "Read a file from your folders. It fails when the file is missing." }),
-      tool("fs.write", { description: "Write a file in your folders.", risk: "caution", asks: "asks_first" }),
-      tool("fs.delete", { description: "Delete a file.", risk: "danger", asks: "unknown" }),
+      // The registry's own descriptions, written for the model: the panel shows plain labels instead (tool-labels.ts).
+      tool("fs.read", { description: "Read a file inside allowed read roots." }),
+      tool("fs.write", { description: "Write a file inside write jail roots.", risk: "caution", asks: "asks_first" }),
+      tool("fs.delete", { description: "Delete a file or directory in write jail.", risk: "danger", asks: "unknown" }),
     ],
   },
 } satisfies Overrides;
@@ -223,19 +224,19 @@ describe("Tool group panel", () => {
       usageOf([{ toolName: "fs.read", calls: 12, lastCalledAt: minutesAgo(5) }]),
     );
 
-    expect(text()).toContain("Files");
-    // The group's own risk and state, beside its name.
+    // The group's own risk and state lead the panel. Its name is the inspector's title, not repeated here.
     expect([...container.querySelectorAll("[data-tone]")].slice(0, 2).map((badge) => badge.textContent)).toEqual([
       "Danger",
       "On",
     ]);
+    expect([...container.querySelectorAll("p, h3, span")].some((entry) => entry.textContent === "Files")).toBe(false);
     expect(text()).toContain(TOOL_GROUPS.find((entry) => entry.id === "files")!.description);
     expect(container.querySelector("h3")?.textContent).toBe("Tools in this group");
 
     const read = entryOf(container, "fs.read");
-    // Only the first sentence of a tool's description.
-    expect(read.textContent).toContain("Read a file from your folders.");
-    expect(read.textContent).not.toContain("It fails when the file is missing.");
+    // A plain label for the tool, not the registry's description of it.
+    expect(read.textContent).toContain("Read a file");
+    expect(read.textContent).not.toContain("allowed read roots");
     expect(read.textContent).toContain("Safe");
     expect(read.textContent).toContain("Runs freely");
     expect(read.textContent).toContain("Last used 5 minutes ago");
@@ -258,6 +259,25 @@ describe("Tool group panel", () => {
     for (const name of ["fs.read", "fs.write", "fs.delete"]) expect(text().split(name)).toHaveLength(2);
   });
 
+  describe("names each tool in plain words", () => {
+    it("shows a label for each tool, and never the model-facing description", async () => {
+      await renderPanel("files");
+      expect(entryOf(container, "fs.read").textContent).toContain("Read a file");
+      expect(entryOf(container, "fs.write").textContent).toContain("Write a file");
+      expect(entryOf(container, "fs.delete").textContent).toContain("Delete a file or folder");
+      for (const jargon of ["jail", "read roots", "allowed"]) expect(text()).not.toContain(jargon);
+    });
+
+    it("says a plain line for a tool with no label, never its raw name", async () => {
+      await renderPanel("git");
+      // The fixture's tools (`git.a`, `git.b`) are not in the label map.
+      for (const entry of container.querySelectorAll("li")) {
+        expect(entry.querySelector("p")?.textContent).toBe("A tool GoatCitadel can use");
+      }
+      expect(text()).toContain("A tool GoatCitadel can use");
+    });
+  });
+
   describe("links a blocked tool to the rule that blocks it", () => {
     const BLOCKS: Array<[CapabilityToolBlock, string, string]> = [
       ["safety_rules", "Blocked by your safety rules", "/settings/safety#permission-profile"],
@@ -268,9 +288,9 @@ describe("Tool group panel", () => {
     ];
 
     it.each(BLOCKS)("%s", async (block, line, href) => {
-      const blocked = tool("git.push", { asks: "unknown", blockedBy: block });
+      const blocked = tool("git.commit", { asks: "unknown", blockedBy: block });
       await renderPanel("git", listOf({ git: { tools: [blocked], blockedToolCount: 1 } }));
-      const entry = entryOf(container, "git.push");
+      const entry = entryOf(container, "git.commit");
       expect(entry.textContent).toContain(line);
       const links = [...entry.querySelectorAll("a")];
       expect(links.map((link) => link.textContent)).toEqual(["See the rule"]);
@@ -491,9 +511,11 @@ describe("Tool group panel", () => {
     expect(container.querySelector('[role="switch"]')).toBeNull();
   });
 
-  it("keeps the group id and tool names in Technical details only when they are shown", async () => {
+  it("keeps the group id, tool names and the registry's descriptions in Technical details only", async () => {
     await renderPanel("files");
     expect(container.querySelector("details")).toBeNull();
+    // Hidden, the registry's wording is nowhere on the panel.
+    expect(text()).not.toContain("write jail");
     await act(async () => root.unmount());
     root = createRoot(container);
     prefs.showTechnicalDetails = true;
@@ -501,7 +523,17 @@ describe("Tool group panel", () => {
     const details = container.querySelector("details");
     expect(details?.querySelector("summary")?.textContent).toBe("Technical details");
     expect(details?.textContent).toContain("files");
-    expect(details?.textContent).toContain("fs.read, fs.write, fs.delete");
+    // Each tool's name stands beside the description the Gateway sent for it.
+    const terms = [...(details?.querySelectorAll("dt") ?? [])].map((entry) => entry.textContent);
+    expect(terms).toEqual(["Group", "fs.read", "fs.write", "fs.delete"]);
+    expect(details?.textContent).toContain("Write a file inside write jail roots.");
+    expect(details?.textContent).toContain("Read a file inside allowed read roots.");
+    // The tool-name slot beside each label stays, and carries only the name.
+    expect([...container.querySelectorAll("li code")].map((entry) => entry.textContent)).toEqual([
+      "fs.read",
+      "fs.write",
+      "fs.delete",
+    ]);
   });
 });
 
@@ -519,6 +551,11 @@ describe("Opening the panel", () => {
     expect(document.body.querySelector('[aria-label="Inspector: Files"]')).not.toBeNull();
     expect(panelText()).toContain("Tools in this group");
     expect(address()).toContain("item=group%3Afiles");
+    // The inspector's title names the group, so the body doesn't say its name again.
+    expect(document.body.querySelector("aside h2")?.textContent).toBe("Files");
+    expect([...(body()?.querySelectorAll("p, h3, span") ?? [])].some((entry) => entry.textContent === "Files")).toBe(
+      false,
+    );
   });
 
   it("opens the Core group from its address too", async () => {

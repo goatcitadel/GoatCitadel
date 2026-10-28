@@ -154,9 +154,3 @@ export function presentToolLastUse(
   // A clock a little ahead of this one still reads as just now, not as a time to come.
   return Number.isNaN(at) ? "Last use unknown" : `Last used ${formatRelativeTime(Math.min(at, now), now)}`;
 }
-
-/** The first sentence of a description. A dot inside a name or a number doesn't end it. */
-export function firstSentence(text: string): string {
-  const trimmed = text.trim();
-  return /^[\s\S]*?[.!?](?=\s|$)/.exec(trimmed)?.[0] ?? trimmed;
-}

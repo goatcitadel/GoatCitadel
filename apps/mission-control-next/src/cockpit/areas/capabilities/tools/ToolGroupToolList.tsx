@@ -1,13 +1,15 @@
 import type { CapabilityToolGroupItem, CapabilityToolItem, CapabilityToolUsageResponse } from "@goatcitadel/contracts";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { RiskBadge } from "../../../ui/RiskBadge";
+import { toolLabel } from "./tool-labels";
 import { toolBlockHref } from "./tool-links";
-import { firstSentence, presentToolAsks, presentToolLastUse } from "./tool-view";
+import { presentToolAsks, presentToolLastUse } from "./tool-view";
 
 /**
- * One tool of the open group: what it does in a sentence, its risk, whether the AI asks first (or which rule blocks it,
- * with the way to that rule), and when it was last used. The tool's name stands last in the monospace slot the
- * inspector keeps for IDs, so it never reads as part of the sentences.
+ * One tool of the open group: its plain label, its risk, whether the AI asks first (or which rule blocks it, with the
+ * way to that rule), and when it was last used. The label comes from the cockpit's own map, because the registry's
+ * description is written for the model; that text is in the group's Technical details. The tool's name stands last in
+ * the monospace slot the inspector keeps for IDs, so it never reads as part of the sentences.
  */
 function ToolEntry({
   group,
@@ -22,7 +24,7 @@ function ToolEntry({
   return (
     <li className="space-y-1 py-2">
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
-        <p className="min-w-0 flex-1 text-sm text-fg">{firstSentence(tool.description)}</p>
+        <p className="min-w-0 flex-1 text-sm text-fg">{toolLabel(tool.toolName)}</p>
         <RiskBadge risk={tool.risk} />
       </div>
       <p className="text-sm text-fg-secondary">

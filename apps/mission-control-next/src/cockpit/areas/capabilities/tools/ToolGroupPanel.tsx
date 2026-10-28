@@ -9,7 +9,6 @@ import { RiskBadge } from "../../../ui/RiskBadge";
 import { Section } from "../../../ui/Section";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
-import { LetterIcon } from "../LetterIcon";
 import { GroupSwitch, GroupSwitchNotes, GroupSwitchState } from "./GroupSwitchParts";
 import { ToolGroupToolList } from "./ToolGroupToolList";
 import { TOOL_GROUP_NOTES } from "./tool-group-notes";
@@ -75,20 +74,15 @@ function GroupDetails({
   const lines = presentGroupBlockLines(group);
   return (
     <div className="space-y-4">
-      <div className="space-y-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <LetterIcon name={group.label} className="size-8 text-base" />
-          <p className="min-w-0 flex-1 break-words text-base font-semibold text-fg">{group.label}</p>
-          <RiskBadge risk={group.risk} />
-        </div>
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <StatusBadge status={presentToolGroupState(group.state)} />
-          {lines.map((line) => (
-            <span key={line} className="text-sm text-fg-secondary">
-              {line}
-            </span>
-          ))}
-        </div>
+      {/* The inspector's title names the group, so the panel starts with its risk and state (P2-R44). */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <RiskBadge risk={group.risk} />
+        <StatusBadge status={presentToolGroupState(group.state)} />
+        {lines.map((line) => (
+          <span key={line} className="text-sm text-fg-secondary">
+            {line}
+          </span>
+        ))}
       </div>
       <p className="text-sm text-fg-secondary">{group.description}</p>
       <SwitchBlock group={group} settingsRevision={settingsRevision} announce={announce} />
@@ -101,18 +95,19 @@ function GroupDetails({
         Detailed rules are in Settings › Safety
       </NativeOwnerLink>
 
+      {/* The registry's description of each tool is written for the model, so it stays here with the tool's name. */}
       <TechnicalDetails>
-        <dl className="space-y-1">
+        <dl className="space-y-2">
           <div>
             <dt className="text-xs text-fg-muted">Group</dt>
             <dd className="break-all font-mono text-xs text-fg-secondary">{group.groupId}</dd>
           </div>
-          <div>
-            <dt className="text-xs text-fg-muted">Tools</dt>
-            <dd className="break-all font-mono text-xs text-fg-secondary">
-              {group.tools.map((tool) => tool.toolName).join(", ")}
-            </dd>
-          </div>
+          {group.tools.map((tool) => (
+            <div key={tool.toolName}>
+              <dt className="break-all font-mono text-xs text-fg-secondary">{tool.toolName}</dt>
+              <dd className="text-xs text-fg-muted">{tool.description}</dd>
+            </div>
+          ))}
         </dl>
       </TechnicalDetails>
     </div>

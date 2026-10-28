@@ -9,7 +9,6 @@ import { describe, expect, it } from "vitest";
 import {
   TOOL_BLOCK_LINES,
   filterToolGroups,
-  firstSentence,
   presentGroupBlock,
   presentGroupBlockLines,
   presentGroupCalls,
@@ -324,22 +323,6 @@ describe("presentToolLastUse", () => {
     expect(presentToolLastUse(withTools(called("fs.read", "2026-10-28T13:00:00.000Z")), "fs.read", NOW)).toBe(
       "Last used just now",
     );
-  });
-});
-
-describe("firstSentence", () => {
-  it.each([
-    ["Read a file. Fails when it is missing.", "Read a file."],
-    ["Read a file", "Read a file"],
-    ["  Read a file.  ", "Read a file."],
-    ["Does it work? Yes.", "Does it work?"],
-    ["Stops at once! Then waits.", "Stops at once!"],
-    ["Read a file.\nAlso lists folders.", "Read a file."],
-    // A dot inside a name or a number is not the end of a sentence.
-    ["Uses fs.read for v1.2 files. More.", "Uses fs.read for v1.2 files."],
-    ["", ""],
-  ])("reads %j as %j", (text, expected) => {
-    expect(firstSentence(text)).toBe(expected);
   });
 });
 
