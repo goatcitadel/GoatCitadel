@@ -51,15 +51,17 @@ export function ChannelWebhookAddress({
           "GoatCitadel doesn't provide a public address. Put your own HTTPS address (a reverse proxy or tunnel) in front of GoatCitadel, then give the vendor this address."
         }
       </p>
-      {notLiveYet ? <p className="text-sm text-fg-secondary">{"This address works once you finish."}</p> : null}
+      {notLiveYet ? (
+        <p className="text-sm text-fg-secondary">{"This address works once you finish and the connection is on."}</p>
+      ) : null}
     </section>
   );
 }
 
 /**
  * What the guides' first-message step says about the webhook. A new setup keeps its draft's id as its connection's id
- * when it is finished, so it shows the real address now, and says it works once the setup is finished. A saved
- * connection that is being changed shows its own address.
+ * when it is finished, so it shows the real address now, and says it works once the setup is finished and the
+ * connection is on. A saved connection that is being changed shows its own address.
  */
 export function ChannelFirstMessageWebhook({
   definition,

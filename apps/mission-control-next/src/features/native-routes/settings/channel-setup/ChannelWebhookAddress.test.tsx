@@ -9,7 +9,7 @@ const SLACK_PATH = "/api/v1/integrations/connections/conn-1/slack/webhook";
 const SLACK_ADDRESS = `https://<your public address>${SLACK_PATH}`;
 const NOTE =
   "GoatCitadel doesn't provide a public address. Put your own HTTPS address (a reverse proxy or tunnel) in front of GoatCitadel, then give the vendor this address.";
-const WORKS_ONCE_FINISHED = "This address works once you finish.";
+const WORKS_ONCE_FINISHED = "This address works once you finish and the connection is on.";
 
 let root: Root;
 let container: HTMLDivElement;

@@ -127,7 +127,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
               ],
             },
             paragraph(
-              "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which the Verify the first conversation step shows before you finish). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL, then message the app from an allowed sender and check that it replies.",
+              "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which GoatCitadel shows on the Verify the first conversation step, before you finish). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL. Then message the app from an allowed sender and check that it replies.",
             ),
             paragraph(
               "GoatCitadel doesn't provide a public address. A Chat app needs your own public HTTPS address (a reverse proxy or tunnel) in front of this Gateway.",
@@ -225,7 +225,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
               required: false,
               defaultValue: "project_number",
               explanation:
-                "Must match the Chat app's Authentication audience setting in the Google Cloud console. Project number is the easy choice: the endpoint URL option needs this connection's address, which the Verify the first conversation step shows before you finish.",
+                "Must match the Chat app's Authentication audience setting in the Google Cloud console. Project number is the easy choice: the endpoint URL option needs this connection's public webhook address.",
               whyNeeded: "Inbound requests are accepted only when Google's bearer token carries this audience.",
               options: [
                 { value: "project_number", label: "Project number", hint: "Recommended" },
@@ -295,7 +295,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
           body: [
             paragraph("Incoming webhook: GoatCitadel sends one test message into the space. Check that it appears."),
             paragraph(
-              "Chat app: GoatCitadel checks that the key is set and the audience looks right. It doesn't contact Google or send a test message in this mode, so the result carries a note about that. You can still finish. After you finish, message the app from an allowed sender and check that it replies.",
+              "Chat app: GoatCitadel checks that the key is set and the audience looks right. It doesn't contact Google in this mode, so you'll see a note that no test message was sent. You can still finish. After you finish, message the app from an allowed sender and check that it replies.",
             ),
           ],
           troubleshooting: [

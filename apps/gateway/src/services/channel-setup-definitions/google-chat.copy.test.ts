@@ -329,8 +329,16 @@ describe("Google Chat setup guide: the Chat app (items 3 and 6)", () => {
 
   it("says to pick the project number now and, after finishing, paste this connection's address and message the app", () => {
     expect(paragraphs("create-webhook")).toContain(
-      "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which the Verify the first conversation step shows before you finish). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL, then message the app from an allowed sender and check that it replies.",
+      "Pick Project number as the audience (the endpoint-URL audience needs this connection's address, which GoatCitadel shows on the Verify the first conversation step, before you finish). After you finish, paste this connection's webhook address into the Chat app's HTTP endpoint URL. Then message the app from an allowed sender and check that it replies.",
     );
+  });
+
+  it("keeps each sentence of that paragraph short enough to read at a glance", () => {
+    const paragraph = paragraphs("create-webhook").find((text) => text.startsWith("Pick Project number")) ?? "";
+
+    for (const sentence of paragraph.split(/(?<=\.)\s+/u)) {
+      expect(sentence.split(/\s+/u).length, sentence).toBeLessThanOrEqual(30);
+    }
   });
 
   it("says a Chat app needs the person's own public HTTPS address, without naming one", () => {
@@ -341,7 +349,7 @@ describe("Google Chat setup guide: the Chat app (items 3 and 6)", () => {
 
   it("keeps the audience fields honest about where the address is shown: before Finalize, on the step that shows it (N4)", () => {
     const addressStep = guide().definition.wizard.steps.find((candidate) => candidate.stage === "first_message");
-    const named = `the ${addressStep?.title} step shows before you finish`;
+    const named = `on the ${addressStep?.title} step, before you finish`;
 
     // That step is the one that shows the Chat app's address, and the address exists once the draft does.
     expect(addressStep?.id).toBe("first-message");
@@ -349,8 +357,12 @@ describe("Google Chat setup guide: the Chat app (items 3 and 6)", () => {
     expect(guide().definition.wizard.inboundWebhook?.pathTemplate).toBe(
       "/api/v1/integrations/connections/{connectionId}/google-chat/webhook",
     );
-    expect(field("audienceType").explanation).toContain(named);
     expect(paragraphs("create-webhook").join("\n")).toContain(named);
+    // The field's explanation is also the Chat form's description, and Chat has no such step, so it names none.
+    expect(field("audienceType").explanation).toBe(
+      "Must match the Chat app's Authentication audience setting in the Google Cloud console. Project number is the easy choice: the endpoint URL option needs this connection's public webhook address.",
+    );
+    expect(field("audienceType").explanation).not.toMatch(/\bstep\b/u);
     // Nothing still says the address has to wait for Finalize to exist.
     expect(JSON.stringify(guide().definition.wizard)).not.toMatch(/only get after/iu);
     expect(field("audience").explanation).toBe(
@@ -424,7 +436,7 @@ describe("Google Chat setup guide: the test and finishing (item 9)", () => {
   it("says what the test does in each mode, and that a Chat app gets no test message but can still finish", () => {
     expect(paragraphs("test")).toEqual([
       "Incoming webhook: GoatCitadel sends one test message into the space. Check that it appears.",
-      "Chat app: GoatCitadel checks that the key is set and the audience looks right. It doesn't contact Google or send a test message in this mode, so the result carries a note about that. You can still finish. After you finish, message the app from an allowed sender and check that it replies.",
+      "Chat app: GoatCitadel checks that the key is set and the audience looks right. It doesn't contact Google in this mode, so you'll see a note that no test message was sent. You can still finish. After you finish, message the app from an allowed sender and check that it replies.",
     ]);
     expect(JSON.stringify(step("test").body)).not.toMatch(/sandbox/iu);
   });

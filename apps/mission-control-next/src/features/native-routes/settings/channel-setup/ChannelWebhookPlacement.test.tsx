@@ -34,7 +34,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/channel-setup-operations", asyn
 
 const definitions = (await Object.values(runtimeDefinitions)[0]!()).listChannelSetupDefinitions();
 const byKey = (key: string) => definitions.find((item) => item.catalog.key === key)!;
-const WORKS_ONCE_FINISHED = "This address works once you finish.";
+const WORKS_ONCE_FINISHED = "This address works once you finish and the connection is on.";
 const address = (key: string, connectionId: string) =>
   `https://<your public address>/api/v1/integrations/connections/${connectionId}/${key}/webhook`;
 
