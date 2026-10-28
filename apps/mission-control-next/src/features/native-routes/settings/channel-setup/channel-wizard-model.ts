@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { channelAddressHost, isChannelAddressHost } from "@goatcitadel/contracts";
 import type {
   ChannelProbeReport,
   ChannelSetupDefinition,
@@ -238,7 +239,7 @@ export function isFieldVisible(field: ChannelSetupFieldDefinition, values: Recor
 /**
  * The hosts the channel must be allowed to reach, first occurrence kept: the fixed hosts, then the
  * hosts of conditions that hold, then the hosts of the addresses entered. An address that isn't an
- * http or https URL names no host.
+ * http or https URL names no host. A saved secret address names the host the Gateway recorded for it.
  */
 export function channelHosts(
   definition: ChannelSetupDefinition,
@@ -258,53 +259,57 @@ export function channelHosts(
         ),
       )
       .map((rule) => rule.host),
-    ...(wizard.hostFields ?? []).flatMap((key) => hostOfAddress(effectiveValues[key]) ?? []),
+    ...(wizard.hostFields ?? []).flatMap((key) => hostOfField(draft, effectiveValues, key) ?? []),
   ];
   return [...new Set(hosts)];
 }
 
-/** Labels of letters, digits and hyphens joined by dots: a DNS name, or the dotted digits of an IPv4 address. */
-const DNS_NAME = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/;
-/** An IPv6 address as the URL parser gives it back, in brackets. */
-const IPV6_LITERAL = /^\[[0-9a-f:.]+\]$/;
-
-/**
- * The one host an http or https address names, with its port when the address gives one, so allowing it allows that
- * port and not every port on the host (the Gateway's allowlist matches `host:port` entries as well as bare hosts). A
- * wildcard such as `*` or `*.example.com` is not a host (the URL parser takes one as a hostname, written plainly or
- * percent-encoded, and the allowlist reads `*` as every host), and neither is anything else that is not a DNS name or
- * an IP address, so none of them is ever returned for the page to offer.
- */
-function hostOfAddress(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-    const hostname = url.hostname.toLowerCase();
-    if (!DNS_NAME.test(hostname) && !IPV6_LITERAL.test(hostname)) return undefined;
-    return url.port ? `${hostname}:${url.port}` : hostname;
-  } catch {
-    return undefined;
-  }
+/** Whether the editor holds an address the operator typed, rather than nothing or the marker of a saved secret. */
+function isTypedAddress(value: unknown): boolean {
+  if (typeof value === "string") return value.trim().length > 0 && value !== SECRET_REDACTION_MARKER;
+  return value !== undefined && value !== null;
 }
 
 /**
- * The labels of the address fields that are set but name no host: a saved secret address that the editor holds only as
- * a marker, a value that is not an http or https address, or a wildcard. The page can't check these, so it says so
- * rather than leave the operator to think no host is needed. A field with no label is one the operator can't see, so it
- * is not named.
+ * The host an address field names. A typed address is read where it is (`channelAddressHost`). A saved secret address
+ * is only a marker, so it names the host the Gateway read when it was saved: from the address saved in this draft
+ * when there is one, else from the saved connection. A recorded value that is not a host is never offered.
+ */
+function hostOfField(draft: ChannelSetupDraft, values: Record<string, unknown>, key: string): string | undefined {
+  if (isTypedAddress(values[key])) return channelAddressHost(values[key]);
+  const state = draft.secretState[key];
+  const recorded = state?.configured ? state.host : draft.hydration?.addressHosts?.[key];
+  return isChannelAddressHost(recorded) ? recorded : undefined;
+}
+
+/**
+ * An address field that is set but names no host the page can offer: a saved secret address with no recorded host
+ * (`saved`), or a typed value that is not an http or https address of one host, such as a wildcard (`typed`).
+ */
+export interface UnreadableHostField {
+  label: string;
+  kind: "saved" | "typed";
+}
+
+/**
+ * The address fields that are set but name no host. The page can't check these, so it says so rather than leave the
+ * operator to think no host is needed. A field with no label is one the operator can't see, so it is not named; a
+ * label is named once.
  */
 export function unreadableHostFields(
   definition: ChannelSetupDefinition,
   draft: ChannelSetupDraft,
   values: Record<string, unknown>,
-): string[] {
+): UnreadableHostField[] {
   const effectiveValues = wizardValuesWithDefaults(definition, values);
   const fields = definition.wizard.steps.flatMap((step) => step.fields ?? []);
-  const labels = (definition.wizard.hostFields ?? [])
-    .filter((key) => hasFieldValue(draft, effectiveValues, key) && hostOfAddress(effectiveValues[key]) === undefined)
-    .flatMap((key) => fields.find((field) => field.key === key)?.label ?? []);
-  return [...new Set(labels)];
+  const unreadable = (definition.wizard.hostFields ?? [])
+    .filter((key) => hasFieldValue(draft, effectiveValues, key) && !hostOfField(draft, effectiveValues, key))
+    .flatMap((key): UnreadableHostField[] => {
+      const label = fields.find((field) => field.key === key)?.label;
+      return label ? [{ label, kind: isTypedAddress(effectiveValues[key]) ? "typed" : "saved" }] : [];
+    });
+  return unreadable.filter((item, index) => unreadable.findIndex((other) => other.label === item.label) === index);
 }
 
 /** A value that counts as set for a webhook condition: some text, or a checked box. */

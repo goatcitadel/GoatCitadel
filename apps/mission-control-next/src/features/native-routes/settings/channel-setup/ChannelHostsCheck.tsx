@@ -3,6 +3,7 @@ import { Button } from "../../../../cockpit/ui/Button";
 import { Callout } from "../../../../cockpit/ui/Callout";
 import { NativeOwnerLink } from "../../../../cockpit/ui/NativeOwnerLink";
 import { ensureHostsAllowed, HOSTS_UNKNOWN, inboxApprovalHref, inboxPlanHref, useMissingHosts } from "../channel-hosts";
+import type { UnreadableHostField } from "./channel-wizard-model";
 
 /** The link to an Inbox page. Cockpit opens it in place; the Classic guide passes one that lands in Cockpit. */
 export type InboxLink = ComponentType<{ href: string; scope: string; children: string }>;
@@ -21,9 +22,8 @@ const IDLE: Answer = { state: "idle" };
  * Whether GoatCitadel may reach the hosts a channel needs, on the step that tests it. The list is checked, never
  * changed, by itself. Only a click on Allow these hosts adds a host, and it adds exactly the hosts listed beside it:
  * `ensureHostsAllowed` is given that list both as what to allow and as what the page showed. An address that is set but
- * names no host, because a saved secret address is only a marker once it is saved, can't be checked, so each gets a
- * line saying so (`unreadable` holds the field labels). Those lines have no button and nothing to read. It adds no live
- * region.
+ * names no host can't be checked, so each gets a line saying so: a saved secret address with no recorded host, or a
+ * typed value that names no host. Those lines have no button and nothing to read. It adds no live region.
  */
 export function ChannelHostsCheck({
   hosts,
@@ -32,8 +32,8 @@ export function ChannelHostsCheck({
   inboxLink = NativeOwnerLink,
 }: {
   hosts: readonly string[];
-  /** Labels of the address fields that are set but name no host. */
-  unreadable?: readonly string[];
+  /** The address fields that are set but name no host. */
+  unreadable?: readonly UnreadableHostField[];
   workspaceId: string;
   inboxLink?: InboxLink;
 }) {
@@ -41,9 +41,11 @@ export function ChannelHostsCheck({
   return (
     <>
       {hosts.length > 0 ? <HostsCheck hosts={hosts} workspaceId={workspaceId} InboxLink={inboxLink} /> : null}
-      {unreadable.map((label) => (
+      {unreadable.map(({ label, kind }) => (
         <p key={label} className="text-sm text-fg-secondary">
-          {`GoatCitadel can't read the address in ${label} after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.`}
+          {kind === "saved"
+            ? `GoatCitadel can't read the address in ${label} after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.`
+            : `GoatCitadel can't find a host in ${label}. Use an address like https://example.com.`}
         </p>
       ))}
     </>

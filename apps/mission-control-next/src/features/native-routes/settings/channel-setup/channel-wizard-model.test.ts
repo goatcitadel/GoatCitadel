@@ -198,11 +198,18 @@ describe("channelHosts", () => {
       "https://%2A/",
       "https://*.x/",
       "https://*.example.com/hook",
-      "https://a_b.example.com/",
+      // The Gateway's network guard reads `example.com.` and `example.com` as different hosts, so neither is offered.
       "https://example.com./",
     ]) {
       expect(channelHosts(definition, draft(), { a }), a).toEqual([]);
     }
+  });
+
+  it("names a host with underscores, as Docker and LAN names use them", () => {
+    const definition = def({ hostFields: ["a", "b"] });
+    expect(
+      channelHosts(definition, draft(), { a: "http://signal_cli:8080/v1", b: "https://a_b.example.com/" }),
+    ).toEqual(["signal_cli:8080", "a_b.example.com"]);
   });
 
   it("names a DNS name or an IP address, including a bracketed IPv6 address", () => {
@@ -215,6 +222,58 @@ describe("channelHosts", () => {
         d: "https://xn--bcher-kva.example/",
       }),
     ).toEqual(["my-host.example.co.uk", "192.168.0.199:3002", "[::1]:8080", "xn--bcher-kva.example"]);
+  });
+
+  describe("for a saved secret address", () => {
+    const definition = def({ hostFields: ["webhookUrl"] });
+    const pasted = (host?: string) =>
+      draft({
+        secretState: {
+          webhookUrl: { configured: true, custody: "temporary", source: "operator", ...(host ? { host } : {}) },
+        },
+      });
+    const edited = (host: string) =>
+      draft({
+        lifecycleMode: "edit",
+        hydration: {
+          status: "opaque-secret",
+          fieldState: { webhookUrl: "configured" },
+          warnings: [],
+          addressHosts: { webhookUrl: host },
+        },
+      });
+
+    it("offers the host the Gateway recorded when the address was saved", () => {
+      expect(channelHosts(definition, pasted("hooks.slack.com"), { webhookUrl: SECRET_REDACTION_MARKER })).toEqual([
+        "hooks.slack.com",
+      ]);
+    });
+
+    it("offers the host the saved connection recorded, on a draft that holds no value for it", () => {
+      expect(channelHosts(definition, edited("tenant.environment.api.powerplatform.com"), {})).toEqual([
+        "tenant.environment.api.powerplatform.com",
+      ]);
+    });
+
+    it("takes the address saved in this draft over the connection's, even when the new one names no host", () => {
+      const replaced = { ...edited("old.example.com"), secretState: pasted("new.example.com").secretState };
+      expect(channelHosts(definition, replaced, { webhookUrl: SECRET_REDACTION_MARKER })).toEqual(["new.example.com"]);
+      const unreadable = { ...edited("old.example.com"), secretState: pasted().secretState };
+      expect(channelHosts(definition, unreadable, { webhookUrl: SECRET_REDACTION_MARKER })).toEqual([]);
+    });
+
+    it("reads an address being typed, not the recorded host", () => {
+      expect(channelHosts(definition, pasted("old.example.com"), { webhookUrl: "https://new.example.com/x" })).toEqual([
+        "new.example.com",
+      ]);
+    });
+
+    it("never offers a recorded value that is not a host", () => {
+      for (const host of ["*", "*.example.com", "[REDACTED]", "a/b", "https://x.example.com"]) {
+        expect(channelHosts(definition, pasted(host), { webhookUrl: SECRET_REDACTION_MARKER }), host).toEqual([]);
+        expect(channelHosts(definition, edited(host), {}), host).toEqual([]);
+      }
+    });
   });
 
   it("never changes the definition, draft or values it reads", () => {
@@ -248,15 +307,34 @@ describe("unreadableHostFields", () => {
       ],
     });
 
+  const saved = (label: string) => ({ label, kind: "saved" });
+  const typed = (label: string) => ({ label, kind: "typed" });
+
   it("names a set address whose value is redacted, as the editor holds a saved secret", () => {
     expect(unreadableHostFields(withFields(), draft(), { webhookUrl: SECRET_REDACTION_MARKER })).toEqual([
-      "Webhook URL",
+      saved("Webhook URL"),
     ]);
   });
 
   it("names a saved secret the editor holds no value for", () => {
-    const saved = draft({ secretState: { webhookUrl: { configured: true, custody: "connection" } } });
-    expect(unreadableHostFields(withFields(), saved, {})).toEqual(["Webhook URL"]);
+    const configured = draft({ secretState: { webhookUrl: { configured: true, custody: "connection" } } });
+    expect(unreadableHostFields(withFields(), configured, {})).toEqual([saved("Webhook URL")]);
+  });
+
+  it("names no saved address whose host the Gateway recorded", () => {
+    const pasted = draft({
+      secretState: { webhookUrl: { configured: true, custody: "temporary", host: "hooks.example.com" } },
+    });
+    expect(unreadableHostFields(withFields(), pasted, { webhookUrl: SECRET_REDACTION_MARKER })).toEqual([]);
+    const edited = draft({
+      hydration: {
+        status: "opaque-secret",
+        fieldState: { webhookUrl: "configured" },
+        warnings: [],
+        addressHosts: { webhookUrl: "hooks.example.com" },
+      },
+    });
+    expect(unreadableHostFields(withFields(), edited, {})).toEqual([]);
   });
 
   it("names nothing for an address that names a host, or for one that is not set", () => {
@@ -266,14 +344,17 @@ describe("unreadableHostFields", () => {
     expect(unreadableHostFields(definition, draft(), { webhookUrl: "", baseUrl: "   " })).toEqual([]);
   });
 
-  it("names a set address that is not an http or https URL, and a wildcard", () => {
+  it("names, as typed, a set address that is not an http or https URL, a wildcard and a trailing dot", () => {
     const definition = withFields();
-    expect(unreadableHostFields(definition, draft(), { baseUrl: "ntfy.example.com" })).toEqual(["Server"]);
-    expect(unreadableHostFields(definition, draft(), { baseUrl: "ftp://files.example.com/" })).toEqual(["Server"]);
-    expect(unreadableHostFields(definition, draft(), { baseUrl: "https://*/" })).toEqual(["Server"]);
+    expect(unreadableHostFields(definition, draft(), { baseUrl: "ntfy.example.com" })).toEqual([typed("Server")]);
+    expect(unreadableHostFields(definition, draft(), { baseUrl: "ftp://files.example.com/" })).toEqual([
+      typed("Server"),
+    ]);
+    expect(unreadableHostFields(definition, draft(), { baseUrl: "https://*/" })).toEqual([typed("Server")]);
+    expect(unreadableHostFields(definition, draft(), { baseUrl: "https://example.com./" })).toEqual([typed("Server")]);
     expect(unreadableHostFields(definition, draft(), { webhookUrl: "https://*.example.com/", baseUrl: "x" })).toEqual([
-      "Webhook URL",
-      "Server",
+      typed("Webhook URL"),
+      typed("Server"),
     ]);
   });
 
@@ -281,7 +362,9 @@ describe("unreadableHostFields", () => {
     const definition = withFields();
     expect(unreadableHostFields(definition, draft(), { unlabelled: "nonsense" })).toEqual([]);
     const twice = def({ ...withFields().wizard, hostFields: ["webhookUrl", "webhookUrl"] });
-    expect(unreadableHostFields(twice, draft(), { webhookUrl: SECRET_REDACTION_MARKER })).toEqual(["Webhook URL"]);
+    expect(unreadableHostFields(twice, draft(), { webhookUrl: SECRET_REDACTION_MARKER })).toEqual([
+      saved("Webhook URL"),
+    ]);
   });
 
   it("gives nothing for a channel with no host fields, and never changes what it reads", () => {

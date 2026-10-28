@@ -274,6 +274,11 @@ export interface ChannelSetupHydrationResult {
   fieldState: Record<string, "configured" | "missing" | "needs_replacement" | "unknown">;
   warnings: string[];
   rawLegacyConfig?: Record<string, unknown>;
+  /**
+   * The hosts of the saved connection's secret addresses, by field key, as the connection recorded them when each
+   * address was saved (`channelAddressHost`). A saved address with no recorded host has no entry.
+   */
+  addressHosts?: Record<string, string>;
 }
 
 export interface ChannelSetupSecretState {
@@ -283,6 +288,11 @@ export interface ChannelSetupSecretState {
   source?: "inherited" | "operator";
   /** Internal opaque locator. Public Gateway projections omit this field. */
   secretRef?: string;
+  /**
+   * For a secret address field: the host the address names (`channelAddressHost`), read when the address was saved.
+   * Never the credentials, path, query or fragment; absent when the address names no host.
+   */
+  host?: string;
 }
 
 export interface ChannelSetupDraft {

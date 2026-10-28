@@ -16,6 +16,7 @@ import { createLineDefinition } from "./channel-setup-definitions/line.js";
 import { createZaloDefinition } from "./channel-setup-definitions/zalo.js";
 import type { ChannelSetupRuntimeDefinition } from "./channel-setup-definitions/common.js";
 import { withPickerHints } from "./channel-setup-definitions/picker-hints.js";
+import { withSavedAddressHosts } from "./channel-setup-address-hosts.js";
 
 export type { ChannelSetupRuntimeDefinition } from "./channel-setup-definitions/common.js";
 
@@ -37,7 +38,10 @@ const GUIDED_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = {
 };
 
 const RUNTIME_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = Object.fromEntries(
-  Object.entries(GUIDED_DEFINITIONS).map(([catalogId, runtime]) => [catalogId, withPickerHints(runtime)]),
+  Object.entries(GUIDED_DEFINITIONS).map(([catalogId, runtime]) => [
+    catalogId,
+    withSavedAddressHosts(withPickerHints(runtime)),
+  ]),
 );
 
 export function getChannelSetupDefinition(catalogId: string): ChannelSetupDefinition | undefined {

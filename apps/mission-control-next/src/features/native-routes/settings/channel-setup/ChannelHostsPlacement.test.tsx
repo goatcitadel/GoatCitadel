@@ -49,10 +49,33 @@ const makeDraft = (definition: ChannelSetupDefinition): ChannelSetupDraft => ({
   updatedAt: "2026-10-08T10:00:00.000Z",
 });
 
-const propsFor = (definition: ChannelSetupDefinition, scopeId?: string, values: Record<string, unknown> = {}) => ({
+const WORKFLOW_HOST = "default0123456789abcdef.00.environment.api.powerplatform.com";
+/** After a save: the address is a marker in the editor, and the Gateway recorded its host beside the secret. */
+const savedInDraft = (definition: ChannelSetupDefinition): ChannelSetupDraft => ({
+  ...makeDraft(definition),
+  secretState: { webhookUrl: { configured: true, custody: "temporary", source: "operator", host: WORKFLOW_HOST } },
+});
+/** A draft of a saved connection: the address stays in the connection, which recorded its host when it was saved. */
+const savedInConnection = (definition: ChannelSetupDefinition): ChannelSetupDraft => ({
+  ...makeDraft(definition),
+  lifecycleMode: "edit",
+  hydration: {
+    status: "opaque-secret",
+    fieldState: { webhookUrl: "configured" },
+    warnings: [],
+    addressHosts: { webhookUrl: WORKFLOW_HOST },
+  },
+});
+
+const propsFor = (
+  definition: ChannelSetupDefinition,
+  scopeId?: string,
+  values: Record<string, unknown> = {},
+  draft: ChannelSetupDraft = makeDraft(definition),
+) => ({
   ...(scopeId ? { scopeId } : {}),
   definition,
-  draft: makeDraft(definition),
+  draft,
   values,
   label: "Sandbox",
   enabled: true,
@@ -188,16 +211,40 @@ describe.each([
     expect(container.textContent).not.toContain("can't read the address");
   });
 
-  it("never offers to allow a wildcard typed into an address; it says it can't read it", async () => {
+  it("never offers to allow a wildcard typed into an address; it asks for an address with a host", async () => {
     api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: [] });
     await show(Component, propsFor(teams, undefined, { webhookUrl: "https://*/" }));
 
     await openStep(teamsTestStep.title);
 
-    expect(container.textContent).toContain(unreadableLine("Webhook URL"));
+    expect(container.textContent).toContain(
+      "GoatCitadel can't find a host in Webhook URL. Use an address like https://example.com.",
+    );
+    expect(container.textContent).not.toContain("after it's saved");
     expect(container.textContent).not.toContain("*");
     expect(buttonNamed("Allow these hosts")).toBeUndefined();
   });
+
+  it.each([
+    ["saved in this draft", { webhookUrl: "[REDACTED]" }, savedInDraft],
+    ["saved in the connection being changed", {}, savedInConnection],
+  ] as const)(
+    "offers to allow the host the Gateway recorded for Teams' webhook address %s",
+    async (_case, values, draftOf) => {
+      api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: [] });
+      hosts.ensureHostsAllowed.mockResolvedValue({ kind: "failed", message: "Stopped." });
+      await show(Component, propsFor(teams, "w-2", values, draftOf(teams)));
+
+      await openStep(teamsTestStep.title);
+
+      expect(container.textContent).toContain(`GoatCitadel can't reach these yet: ${WORKFLOW_HOST}.`);
+      expect(container.textContent).not.toContain("can't read the address");
+      expect(hosts.ensureHostsAllowed).not.toHaveBeenCalled();
+      await act(async () => buttonNamed("Allow these hosts")!.click());
+      expect(hosts.ensureHostsAllowed).toHaveBeenCalledExactlyOnceWith([WORKFLOW_HOST], "w-2", [WORKFLOW_HOST]);
+      expect(container.querySelectorAll('[role="status"], [role="alert"], [aria-live="polite"]')).toHaveLength(0);
+    },
+  );
 
   it("checks nothing before the test step, and nothing for a channel that needs no host", async () => {
     api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: [] });

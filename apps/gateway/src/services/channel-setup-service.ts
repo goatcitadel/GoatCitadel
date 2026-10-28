@@ -49,6 +49,7 @@ import { type ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cach
 import { preserveChannelSetupDraftSecretsForPublicUpdate } from "./channel-setup-public-projection.js";
 import type { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
 import { requireReviewedChannelConnection } from "./channel-setup-connection-review.js";
+import { pastedAddressHosts, recordAddressHosts } from "./channel-setup-address-hosts.js";
 
 export interface ChannelSetupHost {
   readonly storage: Pick<Storage, "channelSetupDrafts"> &
@@ -506,7 +507,7 @@ export async function finalizeChannelSetupDraft(
     label: readyDraft.label ?? runtime.definition.catalog.label,
     enabled: readyDraft.enabled ?? true,
     status: "connected" as const,
-    config: ephemeral.config,
+    config: recordAddressHosts(runtime.definition, readyDraft.secretState ?? {}, ephemeral.config),
     lastSyncAt: test.checkedAt,
     lastError: undefined,
   };
@@ -591,6 +592,8 @@ export async function setChannelSetupDraftSecrets(
   }
 
   const staged: Array<{ fieldKey: string; secretRef: string }> = [];
+  // Read in memory now, while the pasted addresses are here; only their hosts are kept.
+  const addressHosts = pastedAddressHosts(runtime.definition, input.values);
   let committed = false;
   try {
     for (const [fieldKey, secret] of entries) {
@@ -603,6 +606,7 @@ export async function setChannelSetupDraftSecrets(
         custody: "temporary",
         source: "operator",
         secretRef: item.secretRef,
+        ...(addressHosts[item.fieldKey] ? { host: addressHosts[item.fieldKey] } : {}),
       };
     }
     const updated = await host.storage.channelSetupDrafts.update(draftId, {
@@ -865,6 +869,7 @@ function buildReconciledHydration(
           "One or more legacy channel credentials must be replaced through secure input.",
         ]
       : (sanitized?.warnings ?? []),
+    ...(sanitized?.addressHosts ? { addressHosts: sanitized.addressHosts } : {}),
   };
 }
 
