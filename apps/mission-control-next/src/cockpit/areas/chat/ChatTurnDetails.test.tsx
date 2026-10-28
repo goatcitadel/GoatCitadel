@@ -151,16 +151,79 @@ describe("ChatTurnDetails copy feedback (CH-31)", () => {
     }
   });
 
+  const tools = () => container.querySelector<HTMLDetailsElement>('details[aria-label="Tool activity for this turn"]')!;
+  const operatorToggles = (open: boolean) =>
+    act(() => {
+      tools().open = open;
+      tools().dispatchEvent(new Event("toggle"));
+    });
+
   it("keeps an operator-opened tool list open after streaming ends (CH-39)", () => {
     const executed = toolRun({ bytesWritten: 1 });
     act(() =>
       root.render(<ChatTurnDetails turn={turnWith([executed])} streaming readOnly={false} actions={actions} />),
     );
-    const tools = () =>
-      container.querySelector<HTMLDetailsElement>('details[aria-label="Tool activity for this turn"]')!;
     expect(tools().open).toBe(true);
+    operatorToggles(false);
+    operatorToggles(true);
     render(turnWith([executed]));
     expect(tools().open).toBe(true);
+  });
+
+  it("folds a list that only opened for streaming once the turn settles cleanly", () => {
+    const executed = toolRun({ bytesWritten: 1 });
+    act(() =>
+      root.render(<ChatTurnDetails turn={turnWith([executed])} streaming readOnly={false} actions={actions} />),
+    );
+    expect(tools().open).toBe(true);
+    render(turnWith([executed]));
+    expect(tools().open).toBe(false);
+  });
+});
+
+describe("ChatTurnDetails tool rows", () => {
+  it("names what a call touched, how long it took and the lines it changed", () => {
+    const edit = {
+      ...toolRun({ bytesWritten: 1 }),
+      toolName: "fs.patch",
+      args: { path: "src/hero.css", oldText: "a {}\n", newText: "a { color: red; }\nb {}\n" },
+    } as ChatToolRunRecord;
+    render(turnWith([edit]));
+    const summary = container.querySelector('details[aria-label="Tool activity for this turn"] > summary')!;
+    expect(summary.textContent).toContain("Changed hero.css");
+    const row = container.querySelector('[data-tool-run-id="tool-run-1"]')!;
+    expect(row.querySelector('[title="src/hero.css"]')?.textContent).toBe("hero.css");
+    expect(row.textContent).toContain("+2 −1");
+    expect(row.textContent).toContain("2 lines added, 1 line removed");
+    expect(row.textContent).toContain("1 s");
+  });
+});
+
+describe("ChatTurnDetails retried tools", () => {
+  const attempt = (id: string, status: ChatToolRunRecord["status"], error?: string) =>
+    ({ ...toolRun({}), toolRunId: id, toolName: "shell.exec", status, error }) as ChatToolRunRecord;
+
+  it("shows back-to-back tries of a failed tool as one row and keeps the failures listed", () => {
+    render(
+      turnWith([
+        attempt("a", "failed", "exit code 1"),
+        attempt("b", "failed", "exit code 2"),
+        attempt("c", "executed"),
+      ]),
+    );
+    const rows = container.querySelectorAll('details[aria-label="Tool activity for this turn"] > ul > li');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.getAttribute("data-tool-run-id")).toBe("c");
+    expect(rows[0]!.textContent).toContain("3 tries");
+    expect(rows[0]!.textContent).toContain("2 earlier tries");
+    expect([...rows[0]!.querySelectorAll("ol > li")].map((li) => li.getAttribute("data-tool-run-id"))).toEqual([
+      "a",
+      "b",
+    ]);
+    // The summary still counts every call, failures included.
+    expect(
+      container.querySelector('details[aria-label="Tool activity for this turn"] > summary')!.textContent,
+    ).toContain("3 tool calls");
   });
 });
 

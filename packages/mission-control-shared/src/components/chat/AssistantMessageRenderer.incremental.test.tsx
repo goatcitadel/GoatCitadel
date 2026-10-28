@@ -181,14 +181,36 @@ describe("StreamingMarkdown incremental wiring", () => {
       "See [the spec][spec].\n\n[spec]: https://example.com/spec\n\nAfter.",
     ];
     for (const full of documents) {
-      const streamed = create(<AssistantMessageRenderer role="assistant" content="" running streamTurnId="semantic" />);
+      const streamed = create(
+        <AssistantMessageRenderer
+          role="assistant"
+          content=""
+          running
+          streamPresentationMode="instant"
+          streamTurnId="semantic"
+        />,
+      );
       const settled = create(<AssistantMessageRenderer role="assistant" content={full} />);
       try {
         for (let i = 1; i <= full.length; i += 3)
           streamed.update(
-            <AssistantMessageRenderer role="assistant" content={full.slice(0, i)} running streamTurnId="semantic" />,
+            <AssistantMessageRenderer
+              role="assistant"
+              content={full.slice(0, i)}
+              running
+              streamPresentationMode="instant"
+              streamTurnId="semantic"
+            />,
           );
-        streamed.update(<AssistantMessageRenderer role="assistant" content={full} running streamTurnId="semantic" />);
+        streamed.update(
+          <AssistantMessageRenderer
+            role="assistant"
+            content={full}
+            running
+            streamPresentationMode="instant"
+            streamTurnId="semantic"
+          />,
+        );
         expect(shape(streamed), full).toEqual(shape(settled));
       } finally {
         streamed.unmount();
@@ -202,13 +224,22 @@ describe("StreamingMarkdown incremental wiring", () => {
       "## Heading\n\n- First\n- Second\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |\n\n```ts\nconst v = 1;\n```\n\n[Safe](https://example.com) and [unsafe](javascript:alert(1)).\n\n<script>alert(1)</script>\n\nPara two closing.";
 
     // Stream it token-by-token through the running renderer with a stable turn id.
-    renderer = create(<AssistantMessageRenderer role="assistant" content="" running streamTurnId="turn-stream" />);
+    renderer = create(
+      <AssistantMessageRenderer
+        role="assistant"
+        content=""
+        running
+        streamPresentationMode="instant"
+        streamTurnId="turn-stream"
+      />,
+    );
     for (let length = 1; length <= full.length; length += 1) {
       renderer.update(
         <AssistantMessageRenderer
           role="assistant"
           content={full.slice(0, length)}
           running
+          streamPresentationMode="instant"
           streamTurnId="turn-stream"
         />,
       );
@@ -233,13 +264,27 @@ describe("StreamingMarkdown incremental wiring", () => {
   it("does not leak fence parsing across a turn-id change while running", () => {
     const turnAContent = "before\n\n```ts\nopen fence still going";
     renderer = create(
-      <AssistantMessageRenderer role="assistant" content={turnAContent} running streamTurnId="turn-a" />,
+      <AssistantMessageRenderer
+        role="assistant"
+        content={turnAContent}
+        running
+        streamPresentationMode="instant"
+        streamTurnId="turn-a"
+      />,
     );
 
     // New turn id with plain prose; if fence-state leaked, the second paragraph would be
     // swallowed into the tail as 'still inside a fence'.
     const turnBContent = "clean para.\n\nsecond clean para to finalize.\n\nnow streaming tail";
-    renderer.update(<AssistantMessageRenderer role="assistant" content={turnBContent} running streamTurnId="turn-b" />);
+    renderer.update(
+      <AssistantMessageRenderer
+        role="assistant"
+        content={turnBContent}
+        running
+        streamPresentationMode="instant"
+        streamTurnId="turn-b"
+      />,
+    );
 
     const expected = splitStreamingMarkdown(turnBContent);
     // The stable prefix should be present in the rendered output as its own block.
@@ -264,7 +309,13 @@ describe("link reference definitions across the stable/tail split", () => {
     expect(stable).not.toContain("https://example.com/spec");
 
     const streaming = create(
-      <AssistantMessageRenderer role="assistant" content={full} running streamTurnId="turn-ref" />,
+      <AssistantMessageRenderer
+        role="assistant"
+        content={full}
+        running
+        streamPresentationMode="instant"
+        streamTurnId="turn-ref"
+      />,
     );
     const settled = create(<AssistantMessageRenderer role="assistant" content={full} running={false} />);
     try {
@@ -280,7 +331,15 @@ describe("link reference definitions across the stable/tail split", () => {
 
   it("never renders a link to a half-arrived destination", () => {
     const full = "See [the spec][spec].\n\n[spec]: https://example.com/spec";
-    const renderer = create(<AssistantMessageRenderer role="assistant" content="" running streamTurnId="turn-safe" />);
+    const renderer = create(
+      <AssistantMessageRenderer
+        role="assistant"
+        content=""
+        running
+        streamPresentationMode="instant"
+        streamTurnId="turn-safe"
+      />,
+    );
     try {
       for (let length = 1; length <= full.length; length += 1) {
         renderer.update(
@@ -288,6 +347,7 @@ describe("link reference definitions across the stable/tail split", () => {
             role="assistant"
             content={full.slice(0, length)}
             running
+            streamPresentationMode="instant"
             streamTurnId="turn-safe"
           />,
         );

@@ -2,6 +2,7 @@ import type { Definition, Root, RootContent } from "mdast";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
+import { healStreamingMarkdownTail } from "./streaming-markdown-heal";
 
 // The same CommonMark + GFM parser used by ReactMarkdown. No boundary grammar of
 // our own: a partial new line never establishes a completed top-level block.
@@ -102,6 +103,51 @@ function suppressPartialAutoLinks(tree: Root, source: string, lastLineStart: num
   });
 }
 
+function plainTailTree(
+  state: IncrementalSplitState,
+  pending: string,
+  lastLineStart: number,
+  tailNodes: RootContent[],
+): Root {
+  const tree: Root = {
+    type: "root",
+    children: [...definitionsTree(state), ...tailNodes.filter((node) => node.type !== "definition")],
+  };
+  suppressPartialAutoLinks(tree, pending, lastLineStart);
+  return tree;
+}
+
+/**
+ * The tail parsed from its healed source (an open **bold** closed for now, see healStreamingMarkdownTail), or
+ * undefined when healing changes nothing or the tail ends inside code or raw HTML. Display only: content, stable
+ * and tail keep every original byte.
+ */
+function healedTailTree(
+  state: IncrementalSplitState,
+  pending: string,
+  boundary: number,
+  tailEnd: number,
+  tailNodes: RootContent[],
+): Root | undefined {
+  const last = tailNodes.filter((node) => node.type !== "definition").at(-1);
+  if (!last || last.type === "code" || last.type === "html") return undefined;
+  const source = pending.slice(boundary, tailEnd);
+  const healed = healStreamingMarkdownTail(source);
+  if (healed === source) return undefined;
+  const parsed = parser.parse(healed + buildDefinitionSuffix(state.definitions, healed));
+  const tree: Root = {
+    type: "root",
+    children: [
+      ...definitionsTree(state),
+      ...parsed.children.filter(
+        (node) => node.type !== "definition" && (node.position?.start.offset ?? healed.length) < healed.length,
+      ),
+    ],
+  };
+  suppressPartialAutoLinks(tree, healed, source.lastIndexOf("\n") + 1);
+  return tree;
+}
+
 export function splitIncremental(state: IncrementalSplitState, content: string): { stable: string; tail: string } {
   if (content === state.content)
     return { stable: content.slice(0, state.resumeIndex), tail: content.slice(state.resumeIndex) };
@@ -168,11 +214,9 @@ export function splitIncremental(state: IncrementalSplitState, content: string):
   }
   state.resumeIndex = base + boundary;
   const tailNodes = nodes.filter((node) => (node.position?.start.offset ?? pending.length) >= boundary);
-  state.tailTree = {
-    type: "root",
-    children: [...definitionsTree(state), ...tailNodes.filter((node) => node.type !== "definition")],
-  };
-  suppressPartialAutoLinks(state.tailTree, pending, lastLineStart);
+  state.tailTree =
+    healedTailTree(state, pending, boundary, partialDefinition?.position?.start.offset ?? pending.length, tailNodes) ??
+    plainTailTree(state, pending, lastLineStart, tailNodes);
   state.content = content;
   return { stable: content.slice(0, state.resumeIndex), tail: content.slice(state.resumeIndex) };
 }
