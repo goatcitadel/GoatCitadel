@@ -471,16 +471,13 @@ function port(): IntegrationDiagnosticsPort {
   };
 }
 
-/**
- * What the setup test does: structural checks plus the live send, every non-pass becomes an issue, then eligibility.
- * `setAside` names diagnostics to leave out, to show what else would hold Finalize back.
- */
-async function verdictOf(config: Record<string, unknown>, setAside: readonly string[] = []) {
+/** What the setup test does: structural checks plus the live send, every non-pass becomes an issue, then eligibility. */
+async function verdictOf(config: Record<string, unknown>) {
   const connection = connectionOf(config);
   const deps = port();
   const live = await runIntegrationConnectionLiveChecks(deps, connection, { includeSandboxSend: true });
   const issues: ChannelSetupIssue[] = [...buildIntegrationConnectionChecks(deps, connection), ...live.checks]
-    .filter((check) => check.status !== "pass" && !setAside.includes(check.key))
+    .filter((check) => check.status !== "pass")
     .map((check) => ({
       key: check.key,
       level: check.status === "fail" ? ("error" as const) : ("warn" as const),
@@ -497,12 +494,6 @@ async function verdictOf(config: Record<string, unknown>, setAside: readonly str
   };
   return { deps, live, issues, eligibility: evaluateChannelSetupEligibility(result, connection) };
 }
-
-/**
- * The Gateway reports every connector with no rich attachment source as a warning, and Finalize treats any warning as
- * blocking. LINE sends text only, so it always trips this. The audit did not list it; the task report names the fix.
- */
-const NO_ATTACHMENT_SOURCE_WARNING = "No rich attachment source is advertised for this connector.";
 
 describe("LINE send-only path: can it finish?", () => {
   it("lets Continue pass with just a channel access token and a target", () => {
@@ -530,16 +521,25 @@ describe("LINE send-only path: can it finish?", () => {
     expect(JSON.parse(String(send?.[1]?.body))).toMatchObject({ to: USER_ID });
   });
 
-  it("is cleared by everything but one Gateway warning the audit missed (see the task report)", async () => {
+  it("is cleared by the setup test end to end: LINE sends text, and that does not hold Finalize back (R45)", async () => {
     const config = guide().normalize(draftOf(SEND_ONLY_VALUES));
-    const held = await verdictOf(config);
-    const cleared = await verdictOf(config, ["attachments"]);
+    const { issues, eligibility } = await verdictOf(config);
 
-    expect(held.issues.map((issue) => issue.key)).toEqual(["attachments"]);
-    expect(held.eligibility.allowed).toBe(false);
-    expect(held.eligibility.blockingReasons).toEqual([NO_ATTACHMENT_SOURCE_WARNING]);
-    expect(cleared.issues).toEqual([]);
-    expect(cleared.eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
+    expect(issues).toEqual([]);
+    expect(eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
+  });
+
+  it("still tells the operator that attachments aren't supported", () => {
+    const config = guide().normalize(draftOf(SEND_ONLY_VALUES));
+    const attachments = buildIntegrationConnectionChecks(port(), connectionOf(config)).find(
+      (check) => check.key === "attachments",
+    );
+
+    expect(attachments).toEqual({
+      key: "attachments",
+      status: "pass",
+      message: "This channel sends text. Attachments aren't supported.",
+    });
   });
 
   it("is also cleared when the token is a variable name rather than a pasted token", () => {
@@ -555,7 +555,7 @@ describe("LINE send-only path: can it finish?", () => {
     try {
       const structural = buildIntegrationConnectionChecks(port(), connectionOf(config));
 
-      expect(structural.filter((check) => check.status !== "pass").map((check) => check.key)).toEqual(["attachments"]);
+      expect(structural.filter((check) => check.status !== "pass")).toEqual([]);
     } finally {
       if (previous === undefined) delete process.env.LINE_CHANNEL_ACCESS_TOKEN;
       else process.env.LINE_CHANNEL_ACCESS_TOKEN = previous;
@@ -566,7 +566,7 @@ describe("LINE send-only path: can it finish?", () => {
     const config = guide().normalize(draftOf(SEND_ONLY_VALUES));
 
     expect(config).toMatchObject({ inboundAccessMode: "allowlist" });
-    expect((await verdictOf(config, ["attachments"])).eligibility.allowed).toBe(true);
+    expect((await verdictOf(config)).eligibility.allowed).toBe(true);
   });
 });
 
@@ -576,24 +576,22 @@ describe("LINE receiving path: can it finish?", () => {
     expect(guide().validate(draftOf(RECEIVING_VALUES))).toEqual([]);
   });
 
-  it("is cleared by the setup test with the channel secret and an allowed sender, but for the same one warning", async () => {
+  it("is cleared by the setup test with the channel secret and an allowed sender", async () => {
     const config = guide().normalize(draftOf(RECEIVING_VALUES));
-    const held = await verdictOf(config);
-    const cleared = await verdictOf(config, ["attachments"]);
+    const { issues, eligibility } = await verdictOf(config);
 
     expect(config).toMatchObject({
       channelSecret: "secret-reference",
       allowedSenders: [USER_ID.toLowerCase()],
       inboundAccessMode: "allowlist",
     });
-    expect(held.eligibility.blockingReasons).toEqual([NO_ATTACHMENT_SOURCE_WARNING]);
-    expect(cleared.issues).toEqual([]);
-    expect(cleared.eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
+    expect(issues).toEqual([]);
+    expect(eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
   });
 
   it("is still cleared before any sender is allowed: the person adds their ID after finishing", async () => {
     const { allowedSenders: _senders, ...withoutSenders } = RECEIVING_VALUES;
-    const { eligibility } = await verdictOf(guide().normalize(draftOf(withoutSenders)), ["attachments"]);
+    const { eligibility } = await verdictOf(guide().normalize(draftOf(withoutSenders)));
 
     expect(eligibility.allowed).toBe(true);
   });

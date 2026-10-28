@@ -179,13 +179,16 @@ export function buildIntegrationConnectionChecks(
       status: "pass",
       message: `Supported delivery actions: ${(channelFeatures?.supportedDeliveryActions ?? ["channel.send"]).join(", ")}.`,
     });
+    // A channel with no attachment source simply sends text. That is a fact about the channel, not a setup problem the
+    // operator can fix, so it is a plain statement (like the outbound-only inbound mode) and never blocks Finalize.
+    const attachmentSources = channelFeatures?.supportedAttachmentSources ?? [];
     checks.push({
       key: "attachments",
-      status: (channelFeatures?.supportedAttachmentSources.length ?? 0) > 0 ? "pass" : "warn",
+      status: "pass",
       message:
-        (channelFeatures?.supportedAttachmentSources.length ?? 0) > 0
-          ? `Supported attachment sources: ${channelFeatures?.supportedAttachmentSources.join(", ")}.`
-          : "No rich attachment source is advertised for this connector.",
+        attachmentSources.length > 0
+          ? `Supported attachment sources: ${attachmentSources.join(", ")}.`
+          : "This channel sends text. Attachments aren't supported.",
     });
     if (channelCapabilities) {
       checks.push(...buildChannelCapabilityDiagnosticChecks(channelCapabilities));
