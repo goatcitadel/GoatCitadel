@@ -480,6 +480,8 @@ import {
 import { WebSearchCredentialService } from "./web-search-credential-service.js";
 import { composeCapabilityConnectors } from "./capability-connectors-composition.js";
 import { composeCapabilityTools, composeCapabilityToolUsage } from "./capability-tools-composition.js";
+import { composeCapabilitySkills } from "./capability-skills-composition.js";
+import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
 import { applyRuntimeBrowserBackendDefaults } from "./runtime-browser-backend-defaults.js";
 import { submitEvolutionWebSearchCredential } from "./web-search-credential-change.js";
@@ -3555,8 +3557,10 @@ export class GatewayService {
       isEnabled: async () => await this.isFeatureEnabled("evolutionControlPlaneV1Enabled"),
       // The operator's opt-in never applies to a remote_hardened install.
       allowsOperatorApprovalSkip: async () =>
-        this.config.assistant.deploymentProfile !== "remote_hardened" &&
-        (await this.isFeatureEnabled("settingsApprovalSkipEnabled")),
+        allowsOperatorApprovalSkip(
+          this.config.assistant.deploymentProfile,
+          await this.isFeatureEnabled("settingsApprovalSkipEnabled"),
+        ),
       appendAudit: async (event, payload) => {
         await this.storage.audit.append("approvals", { event, ...payload });
       },
@@ -3938,6 +3942,9 @@ export class GatewayService {
         deploymentProfile: () => this.config.assistant.deploymentProfile,
         safeWriteFallbackDir: () =>
           path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out"),
+      }),
+      capabilitySkills: composeCapabilitySkills({
+        chatTurnCapabilityProfiles: this.storage.chatTurnCapabilityProfiles,
       }),
     };
   }

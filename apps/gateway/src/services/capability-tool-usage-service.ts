@@ -9,70 +9,41 @@ import {
   type ToolGroupId,
 } from "@goatcitadel/contracts";
 import type { ChatToolCallCount } from "@goatcitadel/storage";
+import { createUsageCache, USAGE_CACHE_MS, type UsageCache } from "./capability-usage-cache.js";
 
 /** How long a read of the counts is served again. The read scans every finished tool run in the window. */
-export const TOOL_USAGE_CACHE_MS = 600_000;
+export const TOOL_USAGE_CACHE_MS = USAGE_CACHE_MS;
 
 const DAY_MS = 86_400_000;
 /** How many groups "Most used" shows once enough groups have been used. */
 const MOST_USED_GROUP_COUNT = 4;
-
-interface Read {
-  /** Set once the read starts; the read itself may finish before the caller stores it. */
-  promise?: Promise<CapabilityToolUsageResponse>;
-}
 
 /**
  * Tool call counts for the Capabilities Tools tab: how often each tool, and each group's own tools, ran from chats in
  * the last year. The counts come from one storage query that is cached, so opening the tab never rescans the history.
  */
 export class CapabilityToolUsageService {
-  private cached: { response: CapabilityToolUsageResponse; readAtMs: number } | undefined;
-  /** The newest read that has not settled. Only the newest read may fill the cache or clear this. */
-  private latest: Read | undefined;
+  private readonly cache: UsageCache<CapabilityToolUsageResponse>;
 
   public constructor(
     private readonly readCounts: (sinceIso: string) => Promise<readonly ChatToolCallCount[]>,
     private readonly now: () => Date = () => new Date(),
-  ) {}
+  ) {
+    this.cache = createUsageCache(() => this.load(), { cacheMs: TOOL_USAGE_CACHE_MS, now });
+  }
 
   /**
    * Concurrent reads share one query. `refresh` skips the cache and reads afresh; a failed read is never cached.
    * A read that fails rejects with the real error, and the caller decides what to show.
    */
-  public async read(options: { refresh: boolean }): Promise<CapabilityToolUsageResponse> {
-    if (!options.refresh) {
-      if (this.cached && this.now().getTime() - this.cached.readAtMs < TOOL_USAGE_CACHE_MS) {
-        return this.cached.response;
-      }
-      if (this.latest?.promise) {
-        return this.latest.promise;
-      }
-    }
-    return this.startRead();
+  public read(options: { refresh: boolean }): Promise<CapabilityToolUsageResponse> {
+    return this.cache.read(options);
   }
 
-  private startRead(): Promise<CapabilityToolUsageResponse> {
-    const read: Read = {};
-    this.latest = read;
-    read.promise = this.load(read);
-    return read.promise;
-  }
-
-  private async load(read: Read): Promise<CapabilityToolUsageResponse> {
+  private async load(): Promise<CapabilityToolUsageResponse> {
     const readAt = this.now();
-    try {
-      const since = new Date(readAt.getTime() - TOOL_USAGE_WINDOW_DAYS * DAY_MS).toISOString();
-      const response = buildUsageResponse(await this.readCounts(since), since, readAt.toISOString());
-      if (this.latest === read) {
-        this.cached = { response, readAtMs: readAt.getTime() };
-      }
-      return response;
-    } finally {
-      if (this.latest === read) {
-        this.latest = undefined;
-      }
-    }
+    const since = new Date(readAt.getTime() - TOOL_USAGE_WINDOW_DAYS * DAY_MS).toISOString();
+    return buildUsageResponse(await this.readCounts(since), since, readAt.toISOString());
   }
 }
 
