@@ -34,10 +34,14 @@ import {
 import { AssistantStreamingTailContext, HighlightedCode } from "./HighlightedCode";
 import { LazyOpenUiStructuredBlock } from "./LazyOpenUiStructuredBlock";
 import { isGoatOpenUiRendererEnabled } from "./openui-flag";
+import { rehypeFadeNewWords } from "./rehype-fade-new-words";
+import { useSteadyStreamText } from "./use-steady-stream-text";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 
 export type AssistantStreamPresentationMode = "smooth" | "instant";
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm];
+const FADE_NEW_WORDS_PLUGINS = [rehypeFadeNewWords];
 const WORKSPACE_FILE_DOWNLOAD_PATH = "/api/v1/files/download";
 const WORKSPACE_FILE_OBJECT_URL_REVOKE_DELAY_MS = 5 * 60 * 1000;
 
@@ -83,6 +87,13 @@ export function AssistantMessageBody({
   // normalizes once and the memo holds.
   const normalizeStateRef = useRef<IncrementalDisplayTextState | undefined>(undefined);
   const normalizeTurnRef = useRef<string | undefined>(undefined);
+  // Smooth mode reveals a streaming reply at a steady pace; the paced text is always a prefix of `content`.
+  // Timed reveal is motion too, so a reduced-motion preference shows text as it arrives.
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const pacedContent = useSteadyStreamText(
+    content,
+    role === "assistant" && running && streamPresentationMode === "smooth" && !reducedMotion,
+  );
   const displayContent = useMemo(() => {
     if (role !== "assistant") {
       return content;
@@ -94,8 +105,8 @@ export function AssistantMessageBody({
       normalizeStateRef.current = createIncrementalDisplayTextState();
       normalizeTurnRef.current = streamTurnId;
     }
-    return normalizeAssistantDisplayTextIncremental(normalizeStateRef.current, content);
-  }, [role, content, running, streamTurnId]);
+    return normalizeAssistantDisplayTextIncremental(normalizeStateRef.current, pacedContent);
+  }, [role, content, pacedContent, running, streamTurnId]);
 
   return role === "assistant" && running ? (
     <StreamingMarkdown
@@ -436,11 +447,14 @@ const MemoizedMarkdownBlock = memo(function MemoizedMarkdownBlock({
   role,
   components,
   tree,
+  fadeNewWords = false,
 }: {
   content: string;
   role: "user" | "assistant";
   components: Components;
   tree?: Root;
+  /** The streaming tail in Smooth mode: new words fade in. */
+  fadeNewWords?: boolean;
 }) {
   const plugins = useMemo(
     () =>
@@ -463,7 +477,11 @@ const MemoizedMarkdownBlock = memo(function MemoizedMarkdownBlock({
         role === "user" ? "mc-assistant-markdown-user" : "mc-assistant-markdown-assistant",
       )}
     >
-      <ReactMarkdown remarkPlugins={plugins} components={components}>
+      <ReactMarkdown
+        remarkPlugins={plugins}
+        rehypePlugins={fadeNewWords ? FADE_NEW_WORDS_PLUGINS : undefined}
+        components={components}
+      >
         {content}
       </ReactMarkdown>
     </div>
@@ -548,6 +566,7 @@ function StreamingMarkdown({
               tree={tailTree}
               role="assistant"
               components={assistantMarkdownComponents}
+              fadeNewWords={streamPresentationMode === "smooth"}
             />
           </AssistantStreamingTailContext.Provider>
         </div>

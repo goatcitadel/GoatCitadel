@@ -11,6 +11,9 @@ import { ChatTurnActions } from "./ChatTurnActions";
 import { ChatToolRunSummary } from "./ChatToolRunSummary";
 import { ChatToolApprovalLine } from "./ChatToolApprovalLine";
 import { useAutoOpenDisclosure } from "./use-auto-open-disclosure";
+import { groupToolRunRetries } from "./chat-tool-run-groups";
+import { summarizeTurnToolRuns, toolRunTarget } from "./chat-tool-run-summary";
+import { toolRunDuration, toolRunLineChanges } from "./chat-tool-run-change-stats";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { presentErrorText } from "../../lib/present-error";
@@ -48,6 +51,50 @@ function readDesignAdvisories(tool: ChatToolRunRecord): DesignAdvisory[] {
       ? [{ ruleId, line, summary, ...(scope === "patch" ? { scope: "patch" as const } : {}) }]
       : [];
   });
+}
+
+function toolRunSummaryText(tool: ChatToolRunRecord): string {
+  return (
+    tool.failureGuidance ??
+    getChatToolRunDiagnostics(tool).summary ??
+    (tool.error ? presentErrorText(tool.error).summary : "")
+  );
+}
+
+/** The failed tries before a tool's latest one: folded under its row, never dropped. */
+function EarlierTries({ tries }: { tries: ChatToolRunRecord[] }) {
+  return (
+    <details className="w-full">
+      <summary className="cursor-pointer text-fg-muted">{plural(tries.length, "earlier try", "earlier tries")}</summary>
+      <ol className="mt-1 space-y-2">
+        {tries.map((tool, index) => {
+          const summary = toolRunSummaryText(tool);
+          const target = toolRunTarget(tool);
+          // A failed try can still have had an outside effect; its effect note and approval stay visible here.
+          const effect = projectChatToolEffectTruth(tool);
+          return (
+            <li key={tool.toolRunId} data-tool-run-id={tool.toolRunId}>
+              <p className="text-fg-secondary">
+                Try {index + 1} · {activityLabel(tool)}
+                {target ? (
+                  <span
+                    title={target.full}
+                    className={`ml-2 text-fg-muted wrap-anywhere ${target.kind === "command" ? "font-mono" : ""}`}
+                  >
+                    {target.label}
+                  </span>
+                ) : null}
+              </p>
+              {tool.approvalId ? <ChatToolApprovalLine tool={tool} /> : null}
+              {summary ? <ChatToolRunSummary text={summary} /> : null}
+              {tool.error ? <RecordedErrorDetails error={tool.error} /> : null}
+              {effect ? <p>{effect.plainSummary}</p> : null}
+            </li>
+          );
+        })}
+      </ol>
+    </details>
+  );
 }
 
 function safeSourceHref(value: string): string | null {
@@ -100,9 +147,11 @@ export function ChatTurnDetails({
     }
   };
   // CH-39: opens while streaming or when a tool needs attention, and stays open once the operator opened it.
+  // A list that only opened for streaming folds shut when the turn settles cleanly.
   const toolDisclosure = useAutoOpenDisclosure(
     streaming ||
       turn.toolRuns.some((tool) => tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal),
+    { closeWhenSettled: true },
   );
   const counts = new Map<string, number>();
   for (const tool of turn.toolRuns) {
@@ -142,31 +191,54 @@ export function ChatTurnDetails({
       {turn.toolRuns.length ? (
         <details {...toolDisclosure} aria-label="Tool activity for this turn">
           <summary className="cursor-pointer text-accent">
-            {plural(turn.toolRuns.length, "tool call")} · {activitySummary}
+            {summarizeTurnToolRuns(turn.toolRuns, streaming)}
+            <span className="text-fg-muted">
+              {" · "}
+              {plural(turn.toolRuns.length, "tool call")} · {activitySummary}
+            </span>
           </summary>
           <ul className="mt-1 divide-y divide-line-subtle">
-            {turn.toolRuns.map((tool) => {
+            {groupToolRunRetries(turn.toolRuns).map(({ key, run: tool, earlier }) => {
               const diagnostics = getChatToolRunDiagnostics(tool);
               const effect = projectChatToolEffectTruth(tool);
               const advisories = readDesignAdvisories(tool);
+              const target = toolRunTarget(tool);
+              const changes = toolRunLineChanges(tool);
+              const duration = toolRunDuration(tool);
               return (
-                <li
-                  key={tool.toolRunId}
-                  data-tool-run-id={tool.toolRunId}
-                  className="flex flex-wrap justify-between gap-2 py-2"
-                >
-                  <span className="text-fg-secondary">{chatToolDisplayName(tool)}</span>
-                  <span>{activityLabel(tool)}</span>
+                <li key={key} data-tool-run-id={tool.toolRunId} className="flex flex-wrap justify-between gap-2 py-2">
+                  <span className="min-w-0 text-fg-secondary">
+                    {chatToolDisplayName(tool)}
+                    {target ? (
+                      <span
+                        title={target.full}
+                        className={`ml-2 text-fg-muted wrap-anywhere ${target.kind === "command" ? "font-mono" : ""}`}
+                      >
+                        {target.label}
+                      </span>
+                    ) : null}
+                    {earlier.length ? <span className="ml-2 text-fg-muted">{earlier.length + 1} tries</span> : null}
+                  </span>
+                  <span className="inline-flex items-center gap-2">
+                    {changes ? (
+                      <span className="font-mono">
+                        <span aria-hidden="true">
+                          <span className="text-status-done">+{changes.added}</span>{" "}
+                          <span className="text-status-failed">−{changes.removed}</span>
+                        </span>
+                        <span className="sr-only">
+                          {plural(changes.added, "line")} added, {plural(changes.removed, "line")} removed
+                        </span>
+                      </span>
+                    ) : null}
+                    {duration ? <span>{duration}</span> : null}
+                    <span>{activityLabel(tool)}</span>
+                  </span>
                   {tool.approvalId ? <ChatToolApprovalLine tool={tool} /> : null}
                   {diagnostics.summary || tool.error || tool.failureGuidance ? (
-                    <ChatToolRunSummary
-                      text={
-                        tool.failureGuidance ??
-                        diagnostics.summary ??
-                        (tool.error ? presentErrorText(tool.error).summary : "")
-                      }
-                    />
+                    <ChatToolRunSummary text={toolRunSummaryText(tool)} />
                   ) : null}
+                  {earlier.length ? <EarlierTries tries={earlier} /> : null}
                   {/* The row shows the summary; the recorded failure stays reachable for technical review. */}
                   {tool.error ? (
                     <div className="w-full">

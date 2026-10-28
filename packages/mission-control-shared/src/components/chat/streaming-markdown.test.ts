@@ -4,6 +4,7 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import { createIncrementalSplitState, splitIncremental, splitStreamingMarkdown } from "./streaming-markdown";
+import { healStreamingMarkdownTail } from "./streaming-markdown-heal";
 
 const parser = unified().use(remarkParse).use(remarkGfm);
 export const SEMANTIC_STREAM_FIXTURES = [
@@ -42,7 +43,9 @@ describe("SF6 parser-derived boundaries", () => {
             ...state.tailTree.children,
           ],
         };
-        expect(semantic(tree), source).toEqual(semantic(parser.parse(source)));
+        // A half-written marker in the tail is shown healed (closed or hidden), unless the tail is inside code.
+        const healed = split.stable + healStreamingMarkdownTail(split.tail);
+        expect([semantic(parser.parse(source)), semantic(parser.parse(healed))], source).toContainEqual(semantic(tree));
       }
     }
   });

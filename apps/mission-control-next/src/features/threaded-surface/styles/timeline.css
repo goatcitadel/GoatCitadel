@@ -1191,6 +1191,22 @@
   animation: mcAssistantStreamingTailFade 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.mc-assistant-streaming-word {
+  animation: mcAssistantStreamingWordIn 600ms cubic-bezier(0.2, 0.6, 0.2, 1) both;
+}
+
+@keyframes mcAssistantStreamingWordIn {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+  }
+
+  to {
+    opacity: 1;
+    filter: none;
+  }
+}
+
 @keyframes mcAssistantStreamingTailFade {
   from {
     opacity: 0;
@@ -1257,6 +1273,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .mc-assistant-streaming-tail-smooth,
+  .mc-assistant-streaming-word,
   .mc-next-assistant-streaming-skeleton > span {
     animation: none;
     opacity: 1;
