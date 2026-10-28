@@ -116,6 +116,13 @@ export interface FilesRoutePortDependencies {
 }
 
 export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRoutePort {
+  // The upload paths resolve and jail-check through these, so each reads the workspace roots in one place.
+  const resolveWorkspacePath = (relativePath: string): string =>
+    path.resolve(deps.rootDir, deps.workspaceDir, relativePath);
+  const assertWorkspaceWritable = (fullPath: string): void => {
+    assertWritePathInJail(fullPath, deps.writeJailRoots);
+  };
+
   const uploadWorkspaceFile = async (
     relativePath: string,
     content: string,
@@ -131,8 +138,8 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
       });
     }
 
-    const fullPath = path.resolve(deps.rootDir, deps.workspaceDir, normalized);
-    assertWritePathInJail(fullPath, deps.writeJailRoots);
+    const fullPath = resolveWorkspacePath(normalized);
+    assertWorkspaceWritable(fullPath);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
     try {
       // "wx" creates atomically, so a reviewed "new file" upload never replaces a file that appeared after the review.
@@ -157,10 +164,10 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     options: FileUploadStreamOptions,
   ): Promise<FileUploadResult> => {
     const normalized = normalizeUploadTarget(relativePath);
-    const fullPath = path.resolve(deps.rootDir, deps.workspaceDir, normalized);
-    assertWritePathInJail(fullPath, deps.writeJailRoots);
-    const stagingDir = path.resolve(deps.rootDir, deps.workspaceDir, UPLOAD_STAGING_DIR_NAME);
-    assertWritePathInJail(stagingDir, deps.writeJailRoots);
+    const fullPath = resolveWorkspacePath(normalized);
+    assertWorkspaceWritable(fullPath);
+    const stagingDir = resolveWorkspacePath(UPLOAD_STAGING_DIR_NAME);
+    assertWorkspaceWritable(stagingDir);
     const decoder = new TextDecoder("utf-8", { fatal: true });
     const staged = await receiveUpload(body, {
       stagingDir,
@@ -178,7 +185,7 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     const committed = await commitStagedUpload(staged.stagingPath, fullPath, {
       ...(options.expectAbsent ? { expectAbsent: true } : {}),
       // Re-checked at the move: the folder may have changed while the body streamed in.
-      assertTarget: () => assertWritePathInJail(fullPath, deps.writeJailRoots),
+      assertTarget: () => assertWorkspaceWritable(fullPath),
     });
     if (committed === "exists") {
       throw uploadTargetExists(normalized);
