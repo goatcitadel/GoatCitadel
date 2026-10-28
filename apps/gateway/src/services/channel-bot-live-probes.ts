@@ -8,7 +8,6 @@ import {
   asRecord,
 } from "./channel-probe-result.js";
 /* eslint-disable max-lines -- Live probe coverage stays in one file so probe heuristics and result shaping remain traceable together. */
-import { randomUUID } from "node:crypto";
 import {
   type ChannelProbeReport,
   type ConnectorDiagnosticReport,
@@ -16,7 +15,6 @@ import {
   type DiscordRuntimeStatus,
 } from "@goatcitadel/contracts";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
-import { normalizeBlueBubblesBaseUrl } from "./channel-typing-adapters.js";
 
 type BotProbeChecks = { checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport };
 
@@ -87,24 +85,6 @@ interface LineProbeInput {
   checkedAt?: string;
 }
 
-interface IMessageProbeInput {
-  bridgeUrl: string;
-  password: string;
-  defaultHandle?: string;
-  includeSandboxSend: boolean;
-  fetcher: (url: string, init?: RequestInit) => Promise<Response>;
-  checkedAt?: string;
-}
-
-interface SignalProbeInput {
-  baseUrl: string;
-  accountId?: string;
-  defaultTarget?: string;
-  includeSandboxSend: boolean;
-  fetcher: (url: string, init?: RequestInit) => Promise<Response>;
-  checkedAt?: string;
-}
-
 interface ZaloProbeInput {
   accessToken: string;
   defaultTarget?: string;
@@ -169,7 +149,7 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
   if (!input.channel) {
     probe.steps.push({
       key: "slack_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "fail",
       message: "Default channel is missing.",
       failureCategory: "missing_input",
@@ -195,7 +175,7 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
     if (send.status < 200 || send.status >= 300 || send.payload.ok === false) {
       probe.steps.push({
         key: "slack_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: send.status >= 500 ? "warn" : "fail",
         message: formatSlackProbeDetail(send.detail) ?? `Slack returned HTTP ${send.status}.`,
         failureCategory: inferFailureCategory(send.status),
@@ -204,17 +184,17 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
     }
     probe.steps.push({
       key: "slack_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
       providerMessageId: asString(send.payload.ts),
-      message: "Sandbox message post succeeded.",
+      message: "Sent the test message.",
     });
     const messageTs = asString(send.payload.ts);
     const channelId = asString(send.payload.channel) ?? input.channel;
     if (!messageTs) {
       probe.steps.push({
         key: "slack_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: "warn",
         message: "Message posted, but Slack did not return a message timestamp for cleanup.",
         failureCategory: "unknown",
@@ -238,26 +218,26 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
     if (cleanup.status < 200 || cleanup.status >= 300 || cleanup.payload.ok === false) {
       probe.steps.push({
         key: "slack_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: cleanup.status === 403 ? "warn" : cleanup.status >= 500 ? "warn" : "fail",
         message:
           formatSlackProbeDetail(cleanup.detail) ??
-          `Slack returned HTTP ${cleanup.status} while deleting the sandbox message.`,
+          `Slack returned HTTP ${cleanup.status} while deleting the test message.`,
         failureCategory: inferFailureCategory(cleanup.status),
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
     probe.steps.push({
       key: "slack_sandbox_cleanup",
-      label: "Sandbox cleanup",
+      label: "Test cleanup",
       status: "pass",
-      message: "Sandbox cleanup delete succeeded.",
+      message: "Deleted the test message.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "slack_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       message: `Probe failed before Slack responded: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",
@@ -310,7 +290,7 @@ export async function runTelegramBotLiveChecks(input: TelegramProbeInput): Promi
   if (!input.chatId) {
     probe.steps.push({
       key: "telegram_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "fail",
       message: "Default chat target is missing.",
       failureCategory: "missing_input",
@@ -332,7 +312,7 @@ export async function runTelegramBotLiveChecks(input: TelegramProbeInput): Promi
     if (send.status < 200 || send.status >= 300 || send.payload.ok === false) {
       probe.steps.push({
         key: "telegram_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: send.status >= 500 ? "warn" : "fail",
         message: send.detail ?? `Telegram returned HTTP ${send.status}.`,
         failureCategory: inferFailureCategory(send.status),
@@ -341,16 +321,16 @@ export async function runTelegramBotLiveChecks(input: TelegramProbeInput): Promi
     }
     probe.steps.push({
       key: "telegram_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
       providerMessageId: asNumber(asRecord(send.payload.result).message_id)?.toString(),
-      message: "Sandbox message post succeeded.",
+      message: "Sent the test message.",
     });
     const messageId = asNumber(send.payload.result && asRecord(send.payload.result).message_id);
     if (!messageId) {
       probe.steps.push({
         key: "telegram_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: "warn",
         message: "Message posted, but Telegram did not return a message id for cleanup.",
         failureCategory: "unknown",
@@ -370,24 +350,24 @@ export async function runTelegramBotLiveChecks(input: TelegramProbeInput): Promi
     if (cleanup.status < 200 || cleanup.status >= 300 || cleanup.payload.ok === false) {
       probe.steps.push({
         key: "telegram_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: cleanup.status === 403 ? "warn" : cleanup.status >= 500 ? "warn" : "fail",
-        message: cleanup.detail ?? `Telegram returned HTTP ${cleanup.status} while deleting the sandbox message.`,
+        message: cleanup.detail ?? `Telegram returned HTTP ${cleanup.status} while deleting the test message.`,
         failureCategory: inferFailureCategory(cleanup.status),
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
     probe.steps.push({
       key: "telegram_sandbox_cleanup",
-      label: "Sandbox cleanup",
+      label: "Test cleanup",
       status: "pass",
-      message: "Sandbox cleanup delete succeeded.",
+      message: "Deleted the test message.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "telegram_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       message: `Probe failed before Telegram responded: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",
@@ -412,7 +392,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
       status: input.webhookUrl ? "skipped" : "fail",
       message: input.webhookUrl
         ? "Webhook-only bridge path configured, so bot-token auth probe was skipped."
-        : "Discord bot token is missing, so auth and channel probes could not run.",
+        : "Discord bot token not found. If you used an environment variable, check its name starts with DISCORD_ and restart GoatCitadel.",
       failureCategory: input.webhookUrl ? undefined : "credential_rejected",
     });
     probe.steps.push({
@@ -424,9 +404,9 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
     if (input.includeSandboxSend) {
       probe.steps.push({
         key: "discord_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "skipped",
-        message: "Sandbox send probe requires a Discord bot token.",
+        message: "The test message needs a Discord bot token.",
       });
     }
     if (input.runtimeMode === "gateway") {
@@ -500,7 +480,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
     if (input.includeSandboxSend) {
       probe.steps.push({
         key: "discord_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "fail",
         message: "Default channel ID is missing.",
         failureCategory: "destination_mismatch",
@@ -548,9 +528,9 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
         if (input.includeSandboxSend) {
           probe.steps.push({
             key: "discord_sandbox_send",
-            label: "Sandbox send",
+            label: "Test send",
             status: "skipped",
-            message: "Sandbox send was skipped because the channel does not belong to the configured server.",
+            message: "The test message was not sent because the channel does not belong to the configured server.",
           });
         }
         if (input.runtimeMode === "gateway") {
@@ -594,7 +574,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
         }),
       );
       if (send.status < 200 || send.status >= 300) {
-        probe.steps.push(buildDiscordProbeFailure("discord_sandbox_send", "Sandbox send", send.status));
+        probe.steps.push(buildDiscordProbeFailure("discord_sandbox_send", "Test send", send.status));
         if (input.runtimeMode === "gateway") {
           probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
         }
@@ -603,17 +583,17 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
 
       probe.steps.push({
         key: "discord_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "pass",
         providerMessageId: asString(send.payload.id),
-        message: "Sandbox message post succeeded.",
+        message: "Sent the test message.",
       });
 
       const messageId = asString(send.payload.id);
       if (!messageId) {
         probe.steps.push({
           key: "discord_sandbox_cleanup",
-          label: "Sandbox cleanup",
+          label: "Test cleanup",
           status: "warn",
           message: "Message was posted, but Discord did not return a message id for automatic cleanup.",
           failureCategory: "unknown",
@@ -638,9 +618,9 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
       if (cleanup.status < 200 || cleanup.status >= 300) {
         probe.steps.push({
           key: "discord_sandbox_cleanup",
-          label: "Sandbox cleanup",
+          label: "Test cleanup",
           status: cleanup.status === 403 ? "warn" : cleanup.status >= 500 ? "warn" : "fail",
-          message: `Sandbox message posted successfully, but cleanup delete failed with HTTP ${cleanup.status}.`,
+          message: `Sent the test message, but deleting it failed with HTTP ${cleanup.status}.`,
           failureCategory: cleanup.status === 403 ? "permission_mismatch" : inferFailureCategory(cleanup.status),
         });
         if (input.runtimeMode === "gateway") {
@@ -650,14 +630,14 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
       }
       probe.steps.push({
         key: "discord_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: "pass",
-        message: "Sandbox cleanup delete succeeded.",
+        message: "Deleted the test message.",
       });
     } catch (error) {
       probe.steps.push({
         key: "discord_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "warn",
         message: `Probe failed before Discord responded: ${(error as Error).message}`,
         failureCategory: "platform_unavailable",
@@ -732,7 +712,7 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
     if (input.includeSandboxSend) {
       probe.steps.push({
         key: "mattermost_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: "fail",
         message: "Default channel is missing.",
         failureCategory: "destination_mismatch",
@@ -789,7 +769,7 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
     if (send.status < 200 || send.status >= 300) {
       probe.steps.push({
         key: "mattermost_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: send.status >= 500 ? "warn" : "fail",
         message: send.detail ?? `Mattermost returned HTTP ${send.status}.`,
         failureCategory: inferFailureCategory(send.status),
@@ -798,16 +778,16 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
     }
     probe.steps.push({
       key: "mattermost_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
       providerMessageId: asString(send.payload.id),
-      message: "Sandbox post succeeded.",
+      message: "Sent the test message.",
     });
     const postId = asString(send.payload.id);
     if (!postId) {
       probe.steps.push({
         key: "mattermost_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: "warn",
         message: "Post was created, but Mattermost did not return a post id for cleanup.",
         failureCategory: "unknown",
@@ -827,24 +807,24 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
     if (cleanup.status < 200 || cleanup.status >= 300) {
       probe.steps.push({
         key: "mattermost_sandbox_cleanup",
-        label: "Sandbox cleanup",
+        label: "Test cleanup",
         status: cleanup.status === 403 ? "warn" : cleanup.status >= 500 ? "warn" : "fail",
-        message: `Sandbox post succeeded, but cleanup delete failed with HTTP ${cleanup.status}.`,
+        message: `Sent the test message, but deleting it failed with HTTP ${cleanup.status}.`,
         failureCategory: cleanup.status === 403 ? "permission_mismatch" : inferFailureCategory(cleanup.status),
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
     probe.steps.push({
       key: "mattermost_sandbox_cleanup",
-      label: "Sandbox cleanup",
+      label: "Test cleanup",
       status: "pass",
-      message: "Sandbox cleanup delete succeeded.",
+      message: "Deleted the test message.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "mattermost_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       message: `Probe failed before Mattermost responded: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",
@@ -908,7 +888,7 @@ export async function runWhatsAppCloudLiveChecks(input: WhatsAppProbeInput): Pro
   if (!recipient) {
     probe.steps.push({
       key: "whatsapp_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "fail",
       message: "Default recipient is missing or not a direct-recipient target.",
       failureCategory: "destination_mismatch",
@@ -938,7 +918,7 @@ export async function runWhatsAppCloudLiveChecks(input: WhatsAppProbeInput): Pro
     if (send.status < 200 || send.status >= 300) {
       probe.steps.push({
         key: "whatsapp_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: send.status >= 500 ? "warn" : "fail",
         message: send.detail ?? `WhatsApp returned HTTP ${send.status}.`,
         failureCategory: inferFailureCategory(send.status),
@@ -947,16 +927,16 @@ export async function runWhatsAppCloudLiveChecks(input: WhatsAppProbeInput): Pro
     }
     probe.steps.push({
       key: "whatsapp_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
       providerMessageId: asString(asRecord(asRecordArray(send.payload.messages)[0]).id),
-      message: "Sandbox message post succeeded.",
+      message: "Sent the test message.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "whatsapp_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       message: `Probe failed before WhatsApp responded: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",
@@ -1017,7 +997,7 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
   if (!target) {
     probe.steps.push({
       key: "line_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "fail",
       message: "Default target is missing.",
       failureCategory: "destination_mismatch",
@@ -1046,7 +1026,7 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
       const failure = await readJsonResponse(send);
       probe.steps.push({
         key: "line_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: send.status >= 500 ? "warn" : "fail",
         message: failure.detail ?? `LINE returned HTTP ${send.status}.`,
         failureCategory: inferFailureCategory(send.status),
@@ -1055,15 +1035,15 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
     }
     probe.steps.push({
       key: "line_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
-      message: "Sandbox push request succeeded.",
+      message: "Sent the test message.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "line_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       message: `Probe failed before LINE responded: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",
@@ -1072,252 +1052,14 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
   }
 }
 
-export async function runIMessageBridgeLiveChecks(input: IMessageProbeInput): Promise<BotProbeChecks> {
-  const checkedAt = input.checkedAt ?? new Date().toISOString();
-  // BlueBubbles authenticates via ?password=, so schemeless remote hosts default to https.
-  const baseUrl = normalizeBlueBubblesBaseUrl(requireBridgeProbeUrl(input.bridgeUrl));
-  const probe: ChannelProbeReport = {
-    kind: "imessage_bridge",
-    mode: "bluebubbles",
-    checkedAt,
-    steps: [],
-  };
-
-  try {
-    const auth = await input.fetcher(buildBlueBubblesProbeApiUrl(baseUrl, "/api/v1/chat/query", input.password), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        limit: 1,
-        offset: 0,
-        with: ["participants"],
-      }),
-    });
-    if (auth.status < 200 || auth.status >= 300) {
-      const failure = await readJsonResponse(auth);
-      probe.steps.push({
-        key: "imessage_bridge_auth",
-        label: "Bridge auth",
-        status: auth.status >= 500 ? "warn" : "fail",
-        message: failure.detail ?? `BlueBubbles returned HTTP ${auth.status}.`,
-        failureCategory: inferFailureCategory(auth.status),
-      });
-      return { checks: mapProbeStepsToChecks(probe.steps), probe };
-    }
-    probe.steps.push({
-      key: "imessage_bridge_auth",
-      label: "Bridge auth",
-      status: "pass",
-      message: "Bridge query succeeded.",
-    });
-  } catch (error) {
-    probe.steps.push({
-      key: "imessage_bridge_auth",
-      label: "Bridge auth",
-      status: "warn",
-      message: `Probe failed before BlueBubbles responded: ${(error as Error).message}`,
-      failureCategory: "platform_unavailable",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  if (!input.includeSandboxSend) {
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  if (!input.defaultHandle) {
-    probe.steps.push({
-      key: "imessage_sandbox_send",
-      label: "Sandbox send",
-      status: "fail",
-      message: "Default handle is missing.",
-      failureCategory: "destination_mismatch",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  const target = parseIMessageProbeTarget(input.defaultHandle);
-  const probeText = `[GoatCitadel iMessage probe ${checkedAt}] Channel setup smoke check.`;
-  try {
-    const send = await input.fetcher(
-      buildBlueBubblesProbeApiUrl(
-        baseUrl,
-        target.kind === "chat_guid" ? "/api/v1/message/text" : "/api/v1/chat/new",
-        input.password,
-      ),
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          target.kind === "chat_guid"
-            ? {
-                chatGuid: target.chatGuid,
-                message: probeText,
-              }
-            : {
-                addresses: [target.address],
-                message: probeText,
-              },
-        ),
-      },
-    );
-    if (send.status < 200 || send.status >= 300) {
-      const failure = await readJsonResponse(send);
-      probe.steps.push({
-        key: "imessage_sandbox_send",
-        label: "Sandbox send",
-        status: send.status >= 500 ? "warn" : "fail",
-        message: failure.detail ?? `BlueBubbles returned HTTP ${send.status}.`,
-        failureCategory: inferFailureCategory(send.status),
-      });
-      return { checks: mapProbeStepsToChecks(probe.steps), probe };
-    }
-
-    const sendPayload = await readJsonValueResponse(send);
-    probe.steps.push({
-      key: "imessage_sandbox_send",
-      label: "Sandbox send",
-      status: "pass",
-      providerMessageId: extractBlueBubblesProbeMessageId(sendPayload.payload),
-      message: "Sandbox send succeeded.",
-    });
-    const messageId = extractBlueBubblesProbeMessageId(sendPayload.payload);
-    if (!messageId) {
-      probe.steps.push({
-        key: "imessage_sandbox_cleanup",
-        label: "Sandbox cleanup",
-        status: "warn",
-        message: "Message was sent, but BlueBubbles did not return a message id for cleanup.",
-        failureCategory: "unknown",
-      });
-      return { checks: mapProbeStepsToChecks(probe.steps), probe };
-    }
-
-    const cleanup = await input.fetcher(
-      buildBlueBubblesProbeApiUrl(
-        baseUrl,
-        `/api/v1/message/${encodeBlueBubblesMessageId(messageId)}/unsend`,
-        input.password,
-      ),
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      },
-    );
-    if (cleanup.status < 200 || cleanup.status >= 300) {
-      const failure = await readJsonResponse(cleanup);
-      probe.steps.push({
-        key: "imessage_sandbox_cleanup",
-        label: "Sandbox cleanup",
-        status: cleanup.status === 403 ? "warn" : cleanup.status >= 500 ? "warn" : "fail",
-        message: failure.detail ?? `BlueBubbles returned HTTP ${cleanup.status} while unsending the sandbox message.`,
-        failureCategory: cleanup.status === 403 ? "permission_mismatch" : inferFailureCategory(cleanup.status),
-      });
-      return { checks: mapProbeStepsToChecks(probe.steps), probe };
-    }
-    probe.steps.push({
-      key: "imessage_sandbox_cleanup",
-      label: "Sandbox cleanup",
-      status: "pass",
-      message: "Sandbox cleanup unsend succeeded.",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  } catch (error) {
-    probe.steps.push({
-      key: "imessage_sandbox_send",
-      label: "Sandbox send",
-      status: "warn",
-      message: `Probe failed before BlueBubbles responded: ${(error as Error).message}`,
-      failureCategory: "platform_unavailable",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-}
-
-export async function runSignalBridgeLiveChecks(input: SignalProbeInput): Promise<BotProbeChecks> {
-  const checkedAt = input.checkedAt ?? new Date().toISOString();
-  const baseUrl = normalizeBridgeProbeBaseUrl(input.baseUrl);
-  const probe: ChannelProbeReport = {
-    kind: "signal_bridge",
-    mode: "json_rpc",
-    checkedAt,
-    steps: [],
-  };
-
-  if (!input.includeSandboxSend) {
-    probe.steps.push({
-      key: "signal_sandbox_send",
-      label: "Sandbox send",
-      status: "skipped",
-      message: "Sandbox send skipped for non-destructive probe mode.",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  const target = normalizeSignalProbeTarget(input.defaultTarget);
-  if (!target) {
-    probe.steps.push({
-      key: "signal_sandbox_send",
-      label: "Sandbox send",
-      status: "fail",
-      message: "Default Signal recipient is missing.",
-      failureCategory: "missing_input",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-
-  try {
-    const send = await readJsonResponse(
-      await input.fetcher(`${baseUrl}/api/v1/rpc`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "send",
-          params: buildSignalProbeParams(
-            target,
-            input.accountId,
-            `[GoatCitadel Signal probe ${checkedAt}] Channel setup smoke check.`,
-          ),
-          id: randomUUID(),
-        }),
-      }),
-    );
-    if (send.status < 200 || send.status >= 300 || asRecord(send.payload).error) {
-      probe.steps.push({
-        key: "signal_sandbox_send",
-        label: "Sandbox send",
-        status: send.status >= 500 ? "warn" : "fail",
-        message: send.detail ?? `Signal bridge returned HTTP ${send.status}.`,
-        failureCategory: inferFailureCategory(send.status),
-      });
-      return { checks: mapProbeStepsToChecks(probe.steps), probe };
-    }
-    probe.steps.push({
-      key: "signal_sandbox_send",
-      label: "Sandbox send",
-      status: "pass",
-      providerMessageId: asNumber(asRecord(send.payload.result).timestamp)?.toString(),
-      message: "Sandbox bridge send succeeded.",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  } catch (error) {
-    probe.steps.push({
-      key: "signal_sandbox_send",
-      label: "Sandbox send",
-      status: "warn",
-      message: `Probe failed before Signal bridge responded: ${(error as Error).message}`,
-      failureCategory: "platform_unavailable",
-    });
-    return { checks: mapProbeStepsToChecks(probe.steps), probe };
-  }
-}
+const ZALO_TEST_MESSAGE_LABEL = "Test message";
 
 /**
- * Exercises ntfy's exact publish path once. ntfy has no non-destructive auth
- * endpoint and no portable delete operation, so non-send and dry-run checks
- * stay explicitly skipped instead of being presented as provider proof.
+ * Exercises Zalo's Official Account message call once. Zalo has no non-destructive auth endpoint and the message
+ * cannot be deleted, so a non-send run stays explicitly skipped instead of being presented as provider proof.
+ * The step is keyed `zalo_sandbox_send` for the stored receipts; the person reads it as the test message.
+ * It posts to `v3.0/oa/message/cs`, the same call the real send makes (comms-executor `zaloSend`): Zalo has shut the
+ * V2 message API down (error -240, developers.zalo.me/docs/official-account/phu-luc/ma-loi).
  */
 export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotProbeChecks> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
@@ -1331,9 +1073,9 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
   if (!input.includeSandboxSend) {
     probe.steps.push({
       key: "zalo_sandbox_send",
-      label: "Sandbox send",
+      label: ZALO_TEST_MESSAGE_LABEL,
       status: "skipped",
-      message: "Sandbox send skipped for non-destructive probe mode.",
+      message: "Test message skipped for non-destructive probe mode.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
@@ -1342,9 +1084,9 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
   if (!target) {
     probe.steps.push({
       key: "zalo_sandbox_send",
-      label: "Sandbox send",
+      label: ZALO_TEST_MESSAGE_LABEL,
       status: "fail",
-      message: "Default Zalo recipient is missing.",
+      message: "Default OA user ID is missing.",
       failureCategory: "missing_input",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
@@ -1352,7 +1094,7 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
 
   try {
     const send = await readJsonResponse(
-      await input.fetcher("https://openapi.zalo.me/v2.0/oa/message", {
+      await input.fetcher("https://openapi.zalo.me/v3.0/oa/message/cs", {
         method: "POST",
         headers: { "Content-Type": "application/json", access_token: input.accessToken },
         body: JSON.stringify({
@@ -1362,32 +1104,67 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
       }),
     );
     if (send.status < 200 || send.status >= 300 || isZaloApiErrorPayload(send.payload)) {
+      const refusal = describeZaloRefusal(parseZaloErrorCode(send.payload.error));
       probe.steps.push({
         key: "zalo_sandbox_send",
-        label: "Sandbox send",
+        label: ZALO_TEST_MESSAGE_LABEL,
         status: send.status >= 500 ? "warn" : "fail",
-        message: send.detail ?? `Zalo returned HTTP ${send.status}.`,
-        failureCategory: inferFailureCategory(send.status),
+        message: refusal?.message ?? send.detail ?? `Zalo returned HTTP ${send.status}.`,
+        failureCategory: refusal?.failureCategory ?? inferFailureCategory(send.status),
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
     probe.steps.push({
       key: "zalo_sandbox_send",
-      label: "Sandbox send",
+      label: ZALO_TEST_MESSAGE_LABEL,
       status: "pass",
       providerMessageId: asString(asRecord(send.payload.data).message_id),
-      message: "Sandbox OA send succeeded.",
+      message: "Zalo accepted the test message. Check that it arrived.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   } catch (error) {
     probe.steps.push({
       key: "zalo_sandbox_send",
-      label: "Sandbox send",
+      label: ZALO_TEST_MESSAGE_LABEL,
       status: "warn",
-      message: `Probe failed before Zalo responded: ${(error as Error).message}`,
+      message: `Couldn't reach Zalo: ${(error as Error).message}`,
       failureCategory: "platform_unavailable",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
+  }
+}
+
+/**
+ * What to do about the refusals Zalo reports with its own error code. Zalo answers HTTP 200 and puts the code in the
+ * body (developers.zalo.me › Official Account API › error codes). Any other code is shown in Zalo's own words.
+ */
+function describeZaloRefusal(
+  code: number | undefined,
+):
+  | { message: string; failureCategory: "credential_rejected" | "destination_mismatch" | "permission_mismatch" }
+  | undefined {
+  switch (code) {
+    case -216: // Access token is invalid
+    case -220: // access_token is expired or removed
+      return {
+        message: `Zalo refused the access token (error ${code}). It may have expired. Paste a new access token and run the test again.`,
+        failureCategory: "credential_rejected",
+      };
+    case -213: // User has not followed OA
+    case -230: // User has not interacted with the OA in the past 7 days
+    case -232: // User has not interacted with the OA, or the last interaction has expired
+      return {
+        message: `Zalo won't let your Official Account message that person yet (error ${code}). Zalo only allows messages to people who interacted with it in the last 7 days. Send your Official Account a message from their Zalo, then run the test again.`,
+        failureCategory: "destination_mismatch",
+      };
+    case -212: // App has not registered this API
+    case -223: // Official Account has not authorized this API
+      return {
+        message: `Zalo says your app can't send messages for this Official Account (error ${code}). Check the app's permission to send messages on developers.zalo.me.`,
+        failureCategory: "permission_mismatch",
+      };
+    default:
+      return undefined;
   }
 }
 
@@ -1437,6 +1214,9 @@ function readProbeDetail(payload: unknown): string | undefined {
   return undefined;
 }
 
+/** What to do about a rejected token or a missing scope. The token is pasted, so reconnecting Slack is no help. */
+const SLACK_TOKEN_ADVICE = "Copy the bot token again, or add the missing scope and reinstall the app.";
+
 function formatSlackProbeDetail(detail: string | undefined): string | undefined {
   switch (detail) {
     case "not_in_channel":
@@ -1444,10 +1224,10 @@ function formatSlackProbeDetail(detail: string | undefined): string | undefined 
     case "channel_not_found":
       return "Slack could not find that channel. Use a channel name like #ops or paste the channel ID.";
     case "missing_scope":
-      return "The Slack app is missing a required permission scope. Reconnect Slack so GoatCitadel can request the current scopes.";
+      return `The Slack app is missing a required permission scope. ${SLACK_TOKEN_ADVICE}`;
     case "invalid_auth":
     case "token_revoked":
-      return "Slack rejected the stored bot token. Reconnect Slack to refresh the workspace install.";
+      return `Slack rejected the stored bot token. ${SLACK_TOKEN_ADVICE}`;
     case "is_archived":
       return "That Slack channel is archived. Choose an active channel target.";
     case "no_permission":
@@ -1619,41 +1399,6 @@ function normalizeLineProbeTarget(target: string | undefined): string | undefine
     .trim();
 }
 
-function normalizeSignalProbeTarget(target: string | undefined): string | undefined {
-  const trimmed = asString(target);
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.replace(/^signal:/i, "").trim();
-}
-
-function buildSignalProbeParams(
-  target: string,
-  accountId: string | undefined,
-  message: string,
-): Record<string, unknown> {
-  return {
-    ...buildSignalProbeTargetParams(target),
-    message,
-    ...(asString(accountId) ? { account: asString(accountId) } : {}),
-  };
-}
-
-function buildSignalProbeTargetParams(target: string): Record<string, unknown> {
-  const trimmed = target.trim();
-  const lowered = trimmed.toLowerCase();
-  if (lowered.startsWith("group:")) {
-    return { groupId: trimmed.slice("group:".length).trim() };
-  }
-  if (lowered.startsWith("username:")) {
-    return { username: [trimmed.slice("username:".length).trim()] };
-  }
-  if (lowered.startsWith("u:")) {
-    return { username: [trimmed.slice("u:".length).trim()] };
-  }
-  return { recipient: [trimmed] };
-}
-
 function normalizeZaloProbeTarget(target: string | undefined): string | undefined {
   const trimmed = asString(target);
   if (!trimmed) {
@@ -1664,82 +1409,6 @@ function normalizeZaloProbeTarget(target: string | undefined): string | undefine
     .replace(/^oa:/i, "")
     .replace(/^chat:/i, "")
     .trim();
-}
-
-function requireBridgeProbeUrl(baseUrl: string | undefined): string {
-  const trimmed = asString(baseUrl);
-  if (!trimmed) {
-    throw new Error("Bridge URL is missing.");
-  }
-  return trimmed;
-}
-
-function normalizeBridgeProbeBaseUrl(baseUrl: string | undefined): string {
-  const trimmed = requireBridgeProbeUrl(baseUrl);
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed.replace(/\/+$/, "");
-  }
-  return `http://${trimmed}`.replace(/\/+$/, "");
-}
-
-function buildBlueBubblesProbeApiUrl(baseUrl: string, path: string, password: string): string {
-  const url = new URL(path, `${baseUrl.replace(/\/+$/, "")}/`);
-  url.searchParams.set("password", password);
-  return url.toString();
-}
-
-function parseIMessageProbeTarget(
-  target: string,
-): { kind: "handle"; address: string } | { kind: "chat_guid"; chatGuid: string } {
-  const trimmed = target
-    .trim()
-    .replace(/^bluebubbles:/i, "")
-    .trim();
-  const lowered = trimmed.toLowerCase();
-  if (lowered.startsWith("chat_guid:") || lowered.startsWith("chatguid:") || lowered.startsWith("guid:")) {
-    return {
-      kind: "chat_guid",
-      chatGuid: trimmed.replace(/^(chat_guid:|chatguid:|guid:)/i, "").trim(),
-    };
-  }
-  let candidate = trimmed;
-  for (;;) {
-    const next = candidate.replace(/^(imessage:|sms:|auto:)/i, "").trim();
-    if (next === candidate) {
-      break;
-    }
-    candidate = next;
-  }
-  if (candidate.includes("@")) {
-    return {
-      kind: "handle",
-      address: candidate.toLowerCase(),
-    };
-  }
-  return {
-    kind: "handle",
-    address: candidate.replace(/\s+/g, ""),
-  };
-}
-
-function extractBlueBubblesProbeMessageId(payload: unknown): string | undefined {
-  const root = asRecord(payload);
-  const data = asRecord(root.data);
-  for (const source of [data, root]) {
-    for (const candidate of [source.guid, source.messageGuid, source.message_id, source.messageId, source.id]) {
-      if (typeof candidate === "string" && candidate.trim()) {
-        return candidate.trim();
-      }
-    }
-  }
-  return undefined;
-}
-
-function encodeBlueBubblesMessageId(messageId: string): string {
-  return messageId
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
 }
 
 function parseMattermostProbeTarget(target: string): MattermostProbeTarget {

@@ -12008,7 +12008,7 @@ export class GatewayService {
     //
     // We refuse private/loopback/metadata destinations unless the operator
     // has explicitly added the loopback host to the outbound allowlist that
-    // the policy engine already maintains (e.g., the iMessage bridge on
+    // the policy engine already maintains (e.g., a local ntfy server on
     // 127.0.0.1). Listing the operator allowlist FIRST and the public-host
     // wildcard LAST means `evaluateHostEgress` (in network-guard) matches
     // explicit loopback patterns first and only falls through to "*" for

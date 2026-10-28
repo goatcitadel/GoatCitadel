@@ -1,15 +1,20 @@
 import { useState } from "react";
 import type { ChannelSetupWizardProps } from "../../../features/native-routes/settings/channel-setup/channel-wizard-model";
 import {
+  channelHosts,
   finalizeDisabledReason,
   isStepComplete,
   channelStageLabel,
+  unreadableHostFields,
   wizardValuesWithDefaults,
 } from "../../../features/native-routes/settings/channel-setup/channel-wizard-model";
 import { useChannelWizard } from "../../../features/native-routes/settings/channel-setup/use-channel-wizard";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { ChannelDraftEvidencePanel } from "../../../features/native-routes/settings/channel-setup/ChannelDraftEvidencePanel";
+import { ChannelHostsCheck } from "../../../features/native-routes/settings/channel-setup/ChannelHostsCheck";
+import { ChannelEditingNote, ChannelNeeds } from "../../../features/native-routes/settings/channel-setup/ChannelNeeds";
+import { ChannelFirstMessageWebhook } from "../../../features/native-routes/settings/channel-setup/ChannelWebhookAddress";
 import { ChannelWizardFields, channelInputClass } from "./ChannelWizardFields";
 import { ChannelFeedback, ChannelRichBlocks, ChannelStepHelp } from "./ChannelWizardContent";
 import { ExtensionConfigurationGuidance } from "./ExtensionConfigurationGuidance";
@@ -40,6 +45,13 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
           {props.definition.wizard.difficulty} · about {props.definition.wizard.estimatedMinutes} minutes · draft
           version {props.draft.revision} · {props.dirty ? "Unsaved input" : "Saved draft"}
         </p>
+        <ChannelNeeds className="mt-3" items={props.definition.wizard.prerequisites} />
+        <ChannelEditingNote
+          className="mt-3"
+          definition={props.definition}
+          draft={props.draft}
+          stepsHidden={wizard.stepsHidden}
+        />
       </header>
       <label className="block text-sm">
         Connection label
@@ -165,6 +177,16 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
               onChange={props.onValuesChange}
             />
             <ChannelStepHelp step={step} />
+            {step.stage === "first_message" ? (
+              <ChannelFirstMessageWebhook definition={props.definition} draft={props.draft} values={props.values} />
+            ) : null}
+            {step.kind === "test" ? (
+              <ChannelHostsCheck
+                hosts={channelHosts(props.definition, props.draft, props.values)}
+                unreadable={unreadableHostFields(props.definition, props.draft, props.values)}
+                workspaceId={props.scopeId ?? "default"}
+              />
+            ) : null}
           </article>
         </>
       )}
@@ -223,7 +245,7 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
       <Dialog
         open={reviewTest !== null}
         title="Run a live channel test?"
-        description="This test checks credentials and may send a sandbox message to the configured destination. It does not finalize the connection."
+        description="This test checks credentials and may send a test message to the configured destination. It does not finalize the connection."
         onOpenChange={(open) => {
           if (!open) setReviewTest(null);
         }}

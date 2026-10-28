@@ -118,7 +118,7 @@ describe("comms sends use this connection's saved keys", () => {
     expect(resolveChannelConnectionSecret).toHaveBeenCalledTimes(1);
     expect(resolveChannelConnectionSecret).toHaveBeenCalledWith(ZALO_REF);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("https://openapi.zalo.me/v2.0/oa/message");
+    expect(calls[0]?.url).toBe("https://openapi.zalo.me/v3.0/oa/message/cs");
     expect(calls[0]?.headers.access_token).toBe(REAL_TOKEN);
     expect(JSON.parse(calls[0]?.body ?? "{}")).toMatchObject({ recipient: { user_id: "123" } });
     expect(everythingSent(calls)).not.toContain("keychain:");

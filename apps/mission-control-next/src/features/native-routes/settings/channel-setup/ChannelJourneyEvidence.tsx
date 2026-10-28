@@ -1,6 +1,8 @@
 import type { ChannelSetupJourney, ConnectorDiagnosticReport } from "@goatcitadel/contracts";
 const timestamp = (value?: string, fallback = "Not observed") =>
   value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : fallback;
+/** A check key as plain words. Keys such as `slack_sandbox_send` are stored contracts, so only the display changes. */
+const checkName = (key: string) => key.replaceAll("_sandbox_", "_test_").replaceAll("_", " ");
 const stateLabel = {
   verified: "Verified",
   pending: "Pending",
@@ -176,13 +178,13 @@ export function ChannelJourneyEvidence({
           <ul className="mt-2 space-y-2">
             {diagnostics.checks.map((check) => (
               <li key={check.key}>
-                <strong>{check.key.replaceAll("_", " ")}</strong> · {check.status}
+                <strong>{checkName(check.key)}</strong> · {check.status}
                 <p>{check.message}</p>
               </li>
             ))}
           </ul>
           <p className="text-xs text-fg-muted">
-            Diagnostics do not send sandbox messages. Use the reviewed setup test when delivery proof is needed.
+            Diagnostics do not send test messages. Use the reviewed setup test when delivery proof is needed.
           </p>
         </details>
       ) : null}

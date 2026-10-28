@@ -75,12 +75,19 @@ export class ValidationError extends GoatError {
   readonly code: "FIELD_REQUIRED" | "FIELD_INVALID";
   readonly httpStatus = 400;
 
-  constructor(opts: { code?: "FIELD_REQUIRED" | "FIELD_INVALID"; field?: string; message?: string }) {
+  /** `details` adds structured context a client acts on (which host was refused, say); `field` always wins. */
+  constructor(opts: {
+    code?: "FIELD_REQUIRED" | "FIELD_INVALID";
+    field?: string;
+    message?: string;
+    details?: Record<string, unknown>;
+  }) {
     const code = opts.code ?? "FIELD_INVALID";
     const msg =
       opts.message ??
       (opts.field ? `${opts.field} is ${code === "FIELD_REQUIRED" ? "required" : "invalid"}` : "Validation failed");
-    super(msg, opts.field ? { field: opts.field } : undefined);
+    const details = { ...opts.details, ...(opts.field ? { field: opts.field } : {}) };
+    super(msg, Object.keys(details).length > 0 ? details : undefined);
     this.code = code;
   }
 }

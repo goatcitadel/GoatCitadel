@@ -26,18 +26,18 @@ describe("integration-catalog", () => {
     expect(getIntegrationFormSchema("automation.imap-smtp")?.description).toContain("not available yet");
   });
 
-  it("leaves out the retired Zalo Personal channel and separates Talk server from Gateway callbacks", () => {
-    expect(INTEGRATION_CATALOG.some((entry) => entry.key === "zalouser")).toBe(false);
-    expect(getIntegrationFormSchema("channel.zalouser")).toBeUndefined();
+  it("leaves out the retired Zalo Personal, Signal and iMessage channels and separates Talk server from Gateway callbacks", () => {
+    for (const key of ["zalouser", "signal", "imessage"]) {
+      expect(INTEGRATION_CATALOG.some((entry) => entry.key === key)).toBe(false);
+      expect(getIntegrationFormSchema(`channel.${key}`)).toBeUndefined();
+    }
     const nextcloud = getIntegrationFormSchema("channel.nextcloud-talk");
     expect(nextcloud?.fields.find((field) => field.key === "baseUrl")?.description).toContain("different host");
   });
   it("includes OpenClaw-style channel entries with guided setup forms", () => {
     const catalogIds = [
       "channel.line",
-      "channel.signal",
       "channel.whatsapp",
-      "channel.imessage",
       "channel.mattermost",
       "channel.nextcloud-talk",
       "channel.zalo",
@@ -69,17 +69,6 @@ describe("integration-catalog", () => {
     expect(resolveIntegrationCatalogRuntimeAvailability(plannedPluginChannel, new Set(["custombridge"]))).toBe(
       "blocked",
     );
-  });
-
-  it("exposes the required Signal bridge URL in the guided setup form", () => {
-    const signalForm = getIntegrationFormSchema("channel.signal");
-    const baseUrlField = signalForm?.fields.find((field) => field.key === "baseUrl");
-
-    expect(baseUrlField).toMatchObject({
-      key: "baseUrl",
-      type: "url",
-      required: true,
-    });
   });
 
   it("exposes an explicit local-bridge action route instead of probing after side effects", () => {
@@ -154,40 +143,6 @@ describe("integration-catalog", () => {
     expect(channelSecretField).toMatchObject({
       key: "channelSecretEnv",
       secretRef: true,
-      advanced: true,
-    });
-  });
-
-  it("requires BlueBubbles bridge credentials in the iMessage guided setup form", () => {
-    const imessageForm = getIntegrationFormSchema("channel.imessage");
-    const providerField = imessageForm?.fields.find((field) => field.key === "bridgeProvider");
-    const bridgeUrlField = imessageForm?.fields.find((field) => field.key === "bridgeUrl");
-    const passwordEnvField = imessageForm?.fields.find((field) => field.key === "passwordEnv");
-    const photonSidecarField = imessageForm?.fields.find((field) => field.key === "photonSidecarUrl");
-
-    expect(providerField).toMatchObject({
-      key: "bridgeProvider",
-      type: "select",
-      defaultValue: "bluebubbles",
-      options: expect.arrayContaining([
-        expect.objectContaining({ value: "bluebubbles" }),
-        expect.objectContaining({ value: "photon" }),
-      ]),
-    });
-
-    expect(bridgeUrlField).toMatchObject({
-      key: "bridgeUrl",
-      type: "url",
-      required: true,
-    });
-    expect(passwordEnvField).toMatchObject({
-      key: "passwordEnv",
-      required: true,
-      secretRef: true,
-    });
-    expect(photonSidecarField).toMatchObject({
-      key: "photonSidecarUrl",
-      type: "url",
       advanced: true,
     });
   });
@@ -290,12 +245,10 @@ describe("integration-catalog", () => {
 
   it("keeps built-in channel runtimes truthful while still marking them runnable", () => {
     const betaBuiltInChannels = [
-      "channel.signal",
       "channel.zalo",
       "channel.whatsapp",
       "channel.mattermost",
       "channel.matrix",
-      "channel.imessage",
       "channel.line",
     ];
 
@@ -308,9 +261,6 @@ describe("integration-catalog", () => {
     const nextcloudTalk = requireCatalogEntry("channel.nextcloud-talk");
     expect(resolveIntegrationCatalogMaturity(nextcloudTalk, new Set())).toBe("native");
     expect(resolveIntegrationCatalogRuntimeAvailability(nextcloudTalk, new Set())).toBe("runnable");
-
-    const imessage = requireCatalogEntry("channel.imessage");
-    expect(imessage.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
 
     const slack = requireCatalogEntry("channel.slack");
     expect(slack.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
@@ -334,7 +284,9 @@ describe("integration-catalog", () => {
     expect(mattermost.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
 
     const teams = requireCatalogEntry("channel.teams");
-    expect(teams.capabilities).toEqual(expect.arrayContaining(["attachments", "threads"]));
+    // A Workflows webhook posts cards into a channel; it cannot start or reply in a thread.
+    expect(teams.capabilities).toEqual(expect.arrayContaining(["attachments"]));
+    expect(teams.capabilities).not.toContain("threads");
 
     const whatsapp = requireCatalogEntry("channel.whatsapp");
     expect(whatsapp.capabilities).toEqual(expect.arrayContaining(["attachments", "direct", "reactions"]));
@@ -402,7 +354,6 @@ describe("integration-catalog", () => {
     expect(byChannelKey("whatsapp").authMethods).toEqual(["token"]);
     expect(byChannelKey("google-chat").authMethods).toEqual(["webhook", "service-account"]);
     expect(byChannelKey("teams").authMethods).toEqual(["webhook"]);
-    expect(byChannelKey("signal").authMethods).toEqual(["bridge"]);
     expect(byChannelKey("slack").authMethods).toEqual(["oauth"]);
   });
 

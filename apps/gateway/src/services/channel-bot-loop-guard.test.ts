@@ -73,9 +73,8 @@ describe("ChannelBotLoopGuard", () => {
 
   it("keeps pairs distinct when participant ids contain spaces", () => {
     // Ids with spaces are reachable: Nextcloud Talk forwards actor.id
-    // unvalidated and Nextcloud user ids may contain spaces; Signal actor ids
-    // are unvalidated bridge pass-throughs. With a plain-space separator both
-    // pairs below canonicalize to "s c a b x", so capping pair one would
+    // unvalidated and Nextcloud user ids may contain spaces. With a plain-space
+    // separator both pairs below canonicalize to "s c a b x", so capping pair one would
     // wrongly suppress pair two.
     let now = 1_000_000;
     const guard = new ChannelBotLoopGuard(CONFIG, () => now);

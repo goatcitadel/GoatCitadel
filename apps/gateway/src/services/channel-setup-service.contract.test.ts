@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChannelSetupDraft, ChannelSetupEvidenceCreateInput, IntegrationConnection } from "@goatcitadel/contracts";
+import type { ChannelSetupEvidenceCreateInput, IntegrationConnection } from "@goatcitadel/contracts";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-diagnostic-checks.js";
+import { mapProbeStepsToChecks } from "./channel-probe-result.js";
 import {
   createChannelSetupDraft,
   discardChannelSetupDraft,
@@ -13,174 +14,8 @@ import {
   validateChannelSetupDraft,
   type ChannelSetupHost,
 } from "./channel-setup-service.js";
-import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
+import { createChannelSetupTestHost as createHost } from "./channel-setup-service.test-support.js";
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
-
-type DraftStore = {
-  create: (input: Partial<ChannelSetupDraft> & Pick<ChannelSetupDraft, "catalogId">) => ChannelSetupDraft;
-  get: (draftId: string) => ChannelSetupDraft;
-  update: (draftId: string, patch: Partial<ChannelSetupDraft> & { expectedRevision: number }) => ChannelSetupDraft;
-  delete: (draftId: string, expectedRevision?: number) => boolean;
-  listByCatalog: (catalogId: string, limit: number) => ChannelSetupDraft[];
-  listByConnection: (connectionId: string, limit: number) => ChannelSetupDraft[];
-};
-
-function createDraftStore(): DraftStore {
-  const drafts = new Map<string, ChannelSetupDraft>();
-  let sequence = 0;
-  return {
-    create(input) {
-      const now = new Date().toISOString();
-      const draftId = input.draftId ?? `draft-${++sequence}`;
-      const draft: ChannelSetupDraft = {
-        draftId,
-        revision: 1,
-        catalogId: input.catalogId,
-        connectionId: input.connectionId,
-        connectionRevision: input.connectionRevision,
-        lifecycleMode: input.lifecycleMode ?? "create",
-        label: input.label ?? "Draft",
-        enabled: input.enabled ?? true,
-        draft: input.draft ?? {},
-        secretState: input.secretState ?? {},
-        hydration: input.hydration,
-        contentVersion: input.contentVersion ?? "test-content",
-        adapterVersion: input.adapterVersion ?? "test-adapter",
-        validationVersion: input.validationVersion ?? "test-validation",
-        testVersion: input.testVersion ?? "test-version",
-        createdAt: now,
-        updatedAt: now,
-        lastFailureCategory: input.lastFailureCategory,
-        lastValidatedAt: input.lastValidatedAt,
-        lastTestedAt: input.lastTestedAt,
-      };
-      drafts.set(draftId, draft);
-      return draft;
-    },
-    get(draftId) {
-      const draft = drafts.get(draftId);
-      if (!draft) {
-        throw new Error(`Missing draft ${draftId}`);
-      }
-      return draft;
-    },
-    update(draftId, patch) {
-      const current = this.get(draftId);
-      if (patch.expectedRevision !== current.revision) throw new Error("stale draft");
-      const updated = {
-        ...current,
-        ...patch,
-        revision: current.revision + 1,
-        draft: patch.draft ? { ...patch.draft } : current.draft,
-        secretState: patch.secretState ? { ...patch.secretState } : current.secretState,
-        updatedAt: new Date().toISOString(),
-      };
-      drafts.set(draftId, updated);
-      return updated;
-    },
-    delete(draftId, expectedRevision) {
-      if (expectedRevision !== this.get(draftId).revision) throw new Error("stale draft");
-      return drafts.delete(draftId);
-    },
-    listByCatalog(catalogId, limit) {
-      return [...drafts.values()].filter((item) => item.catalogId === catalogId).slice(0, limit);
-    },
-    listByConnection(connectionId, limit) {
-      return [...drafts.values()].filter((item) => item.connectionId === connectionId).slice(0, limit);
-    },
-  };
-}
-
-function createHost(): ChannelSetupHost & {
-  createConnectionMock: ReturnType<typeof vi.fn>;
-  updateConnectionMock: ReturnType<typeof vi.fn>;
-  diagnostics: ReturnType<typeof vi.fn>;
-} {
-  const draftStore = createDraftStore();
-  const connections = new Map<string, IntegrationConnection>();
-  const diagnostics = vi.fn();
-  const secretValues = new Map<string, string>();
-  const channelSecrets = new ChannelSecretCustodyService({
-    setSecret: (account, value) => void secretValues.set(account, value),
-    getSecret: (account) => secretValues.get(account),
-    deleteSecret: (account) => void secretValues.delete(account),
-  } as never);
-
-  const createConnectionMock = vi.fn(
-    (input: {
-      connectionId?: string;
-      catalogId: string;
-      label: string;
-      enabled: boolean;
-      status: "connected";
-      config: Record<string, unknown>;
-    }) => {
-      const connectionId = input.connectionId ?? `connection-${connections.size + 1}`;
-      const connection: IntegrationConnection = {
-        connectionId,
-        revision: "a".repeat(64),
-        catalogId: input.catalogId,
-        kind: "channel",
-        key: input.catalogId.replace("channel.", ""),
-        label: input.label,
-        enabled: input.enabled,
-        status: input.status,
-        config: input.config,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      connections.set(connectionId, connection);
-      return connection;
-    },
-  );
-
-  const updateConnectionMock = vi.fn((connectionId: string, patch: Partial<IntegrationConnection>) => {
-    const current = connections.get(connectionId);
-    if (!current) {
-      throw new Error(`Unknown connection ${connectionId}`);
-    }
-    const updated: IntegrationConnection = {
-      ...current,
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    };
-    connections.set(connectionId, updated);
-    return updated;
-  });
-
-  return {
-    storage: {
-      channelSetupDrafts: draftStore as ChannelSetupHost["storage"]["channelSetupDrafts"],
-    },
-    recentChannelSetupTests: new Map(),
-    async commitChannelSetupConnection(draftId, expectedRevision, input, onCommitted) {
-      const draft = draftStore.get(draftId);
-      if (draft.revision !== expectedRevision) throw new Error("stale draft");
-      const connection = draft.connectionId
-        ? updateConnectionMock(draft.connectionId, input)
-        : createConnectionMock(input);
-      draftStore.delete(draftId, expectedRevision);
-      await onCommitted?.();
-      return connection;
-    },
-    channelSecrets,
-    getIntegrationConnection(connectionId: string) {
-      const connection = connections.get(connectionId);
-      if (!connection) {
-        throw new Error(`Unknown connection ${connectionId}`);
-      }
-      return connection;
-    },
-    buildIntegrationConnectionChecks: vi.fn(() => []),
-    runIntegrationConnectionLiveChecks: vi.fn(async () => ({ checks: [] })),
-    createIntegrationConnection: createConnectionMock,
-    updateIntegrationConnection: updateConnectionMock,
-    recordDevDiagnostic: diagnostics,
-    createConnectionMock,
-    updateConnectionMock,
-    diagnostics,
-  };
-}
 
 describe("channel-setup-service contract behavior", () => {
   it("rejects stale draft deletion, then removes temporary custody after exact deletion", async () => {
@@ -741,6 +576,64 @@ describe("channel-setup-service contract behavior", () => {
         dryRun: true,
       },
     });
+  });
+
+  it.each([
+    {
+      when: "a message was sent and is still there",
+      steps: [{ key: "ntfy_sandbox_send", status: "pass" }],
+      status: "ok",
+      nextAction: "Check that the test message arrived, then finalize.",
+    },
+    {
+      when: "the message was sent and then deleted",
+      steps: [
+        { key: "ntfy_sandbox_send", status: "pass" },
+        { key: "ntfy_sandbox_cleanup", status: "pass" },
+      ],
+      status: "ok",
+      nextAction:
+        "The test message was sent and then deleted, so there's nothing to look for. Finalize when you're ready.",
+    },
+    {
+      when: "the message was sent but not deleted",
+      steps: [
+        { key: "ntfy_sandbox_send", status: "pass" },
+        { key: "ntfy_sandbox_cleanup", status: "warn" },
+      ],
+      status: "warn",
+      nextAction: "Check that the test message arrived, then finalize.",
+    },
+    {
+      when: "a dry run sent nothing",
+      steps: [{ key: "ntfy_sandbox_send", status: "skipped" }],
+      status: "ok",
+      nextAction: "No test message was sent. Finalize when you're ready.",
+    },
+    {
+      when: "the send failed",
+      steps: [{ key: "ntfy_sandbox_send", status: "fail" }],
+      status: "error",
+      nextAction: "Review the failing checks, correct the draft, then run the test again.",
+    },
+  ] as const)("words the next step after a live test where $when", async ({ steps, status, nextAction }) => {
+    const host = createHost();
+    host.buildIntegrationConnectionChecks = vi.fn(() => []);
+    const probeSteps = steps.map((step) => ({ ...step, label: step.key, message: "Sandbox notification result." }));
+    host.runIntegrationConnectionLiveChecks = vi.fn(async () => ({
+      checks: mapProbeStepsToChecks(probeSteps),
+      probe: { kind: "ntfy", checkedAt: "2026-10-28T00:00:00.000Z", steps: probeSteps },
+    }));
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.ntfy", lifecycleMode: "create" });
+    const configured = await host.storage.channelSetupDrafts.update(created.draftId, {
+      expectedRevision: created.revision,
+      draft: { baseUrl: "https://ntfy.sh", topic: "goatcitadel-preqa", dryRun: true },
+    });
+
+    const result = await testChannelSetupDraft(host, configured.draftId, configured.revision);
+
+    expect(result.status).toBe(status);
+    expect(result.recommendedNextAction).toBe(nextAction);
   });
 
   it("protects server-adopted OAuth metadata on the actual public update path", async () => {

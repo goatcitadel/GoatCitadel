@@ -2,12 +2,14 @@ import type {
   ChannelSetupDefinition,
   ChannelSetupDraft,
   ChannelSetupFailureMapEntry,
+  ChannelSetupFieldDefinition,
   ChannelSetupHydrationResult,
   ChannelSetupIssue,
   ChannelSetupNoticeTone,
   IntegrationCatalogEntry,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
+import { isConnectionUrlRemoteSafe } from "../connection-url-helpers.js";
 import { INTEGRATION_CATALOG } from "../integration-catalog.js";
 
 export interface ChannelSetupRuntimeDefinition {
@@ -16,6 +18,11 @@ export interface ChannelSetupRuntimeDefinition {
     draft: Record<string, unknown>;
     hydration: ChannelSetupHydrationResult;
   };
+  /**
+   * The config this draft saves. A key left out (or undefined) keeps the saved connection's value; a key set to `null`
+   * is cleared, so the saved value is dropped when the config is merged over the saved one. Only a guide whose
+   * saved connection holds either of two sets of keys (such as Google Chat's app or webhook) needs `null`.
+   */
   normalize(draft: ChannelSetupDraft): Record<string, unknown>;
   validate(draft: ChannelSetupDraft): ChannelSetupIssue[];
 }
@@ -144,8 +151,8 @@ export function normalizeSlackTargets(config: Record<string, unknown>): SlackSet
   const explicit = normalizeTargetArray(config.targets, "channel", "slack");
   const targets =
     explicit.length > 0 ? explicit : legacyTarget(readString(config, "defaultChannel"), "Slack default", "channel");
-  const channelTargets = targets.filter(
-    (target): target is NormalizedTargetRecord & { channel: string } => Boolean(target.channel),
+  const channelTargets = targets.filter((target): target is NormalizedTargetRecord & { channel: string } =>
+    Boolean(target.channel),
   );
   // Only fall back to "first target is default" when the user did not explicitly mark one,
   // otherwise a non-first explicit default ends up co-flagged with target[0] and consumers
@@ -165,8 +172,8 @@ export function normalizeTelegramTargets(config: Record<string, unknown>): Teleg
   const explicit = normalizeTargetArray(config.targets, "chatId", "telegram");
   const targets =
     explicit.length > 0 ? explicit : legacyTarget(readString(config, "defaultChatId"), "Telegram default", "chatId");
-  const chatTargets = targets.filter(
-    (target): target is NormalizedTargetRecord & { chatId: string } => Boolean(target.chatId),
+  const chatTargets = targets.filter((target): target is NormalizedTargetRecord & { chatId: string } =>
+    Boolean(target.chatId),
   );
   const hasExplicitDefault = chatTargets.some((target) => target.default === true);
   return chatTargets.map((target, index) => ({
@@ -326,5 +333,100 @@ export function malformedFieldIssue(fieldKey: string, message: string): ChannelS
     message,
     fieldKey,
     failureCategory: "malformed_value",
+  };
+}
+
+/** What the live test says about an address it will not send to, so setup says the same thing first. */
+const SECURE_URL_MESSAGE = "Use https://. Plain http:// works only for this computer (127.0.0.1 or localhost).";
+
+/**
+ * Applies the rule the live test applies (`isConnectionUrlRemoteSafe`): https anywhere, plain http only for this
+ * computer. A blank value gives no issue, because the caller's required-field check owns that case.
+ */
+export function requireSecureUrl(
+  value: string | undefined,
+  fieldKey: string,
+  label: string,
+): ChannelSetupIssue | undefined {
+  const address = value?.trim();
+  if (!address || isConnectionUrlRemoteSafe(address)) {
+    return undefined;
+  }
+  return { ...malformedFieldIssue(fieldKey, SECURE_URL_MESSAGE), detail: `Check ${label}.` };
+}
+
+/** The pasted-secret field's help. The key goes to the OS keychain; the connection keeps only a reference. */
+export const PASTED_SECRET_EXPLANATION = "Paste it here. GoatCitadel keeps it in this computer's secure storage.";
+
+/**
+ * Environment-variable fields that an inbound webhook reads. The Gateway checks these names against a
+ * suffix list as well as the channel prefix (`channel-secret-resolution.ts`), so their help says so.
+ */
+const INBOUND_WEBHOOK_SECRET_ENV_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  telegram: ["webhookSecretEnv"],
+  whatsapp: ["appSecretEnv", "webhookVerifyTokenEnv"],
+  line: ["channelSecretEnv"],
+  "nextcloud-talk": ["tokenEnv"],
+  qqbot: ["appSecretEnv"],
+  wecom: ["callbackTokenEnv", "encodingAesKeyEnv"],
+};
+
+/** Inbound secrets whose variable name must end differently from the usual _TOKEN or _SECRET. */
+const INBOUND_SECRET_ENV_SUFFIXES: Readonly<Record<string, string>> = {
+  encodingAesKeyEnv: "_AES_KEY",
+};
+
+function upperSnake(camel: string): string {
+  return camel.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toUpperCase();
+}
+
+/**
+ * Tells the operator how to name the variable and what to do after setting it. The prefix is the channel key,
+ * the example is the prefix and the field's name, and both come from the rule in
+ * `integration-secret-envvar-guard.ts`. Inbound webhook secrets also name the suffix the Gateway needs.
+ */
+export function secretEnvVariableRule(channelKey: string, envFieldKey: string): string {
+  const prefix = channelKey.toUpperCase().replaceAll("-", "_");
+  const example = `${prefix}_${upperSnake(envFieldKey.replace(/Env$/u, ""))}`;
+  const rule = `The variable's name must start with ${prefix}_ (for example ${example}). Set it where GoatCitadel starts, then restart GoatCitadel.`;
+  if (!INBOUND_WEBHOOK_SECRET_ENV_FIELDS[channelKey]?.includes(envFieldKey)) {
+    return rule;
+  }
+  // "It" would read as GoatCitadel (the subject of the sentence before), so the sentence names the variable's name.
+  return `${rule} The name must also end in ${INBOUND_SECRET_ENV_SUFFIXES[envFieldKey] ?? "_TOKEN or _SECRET"}.`;
+}
+
+/** The pasted field's label without the old "(manual fallback)" tag. */
+export function plainSecretLabel(label: string): string {
+  return label.replace(/\s*\(manual fallback\)\s*$/iu, "").trim();
+}
+
+/**
+ * What a secret is called, for the field that takes the name of a variable holding it. The pasted field's label can end
+ * in a hint on how to paste ("(paste the JSON)"), but the variable holds a name, not the secret, so the hint goes. Only
+ * a trailing hint goes: other parentheses and a hint in the middle of the label stay.
+ */
+export function secretNameForVariable(label: string): string {
+  return label.replace(/\s*\((?:manual fallback|paste\b[^)]*)\)\s*$/iu, "").trim();
+}
+
+/**
+ * Label, help and expert-option flag for an environment-variable field. The label names the secret the way the
+ * pasted twin does, minus any hint on pasting; a field with no twin keeps its own words minus "env var".
+ */
+export function secretEnvFieldCopy(
+  channelKey: string,
+  field: ChannelSetupFieldDefinition,
+  pastedTwin?: ChannelSetupFieldDefinition,
+): Pick<ChannelSetupFieldDefinition, "label" | "explanation" | "advanced"> {
+  const name = pastedTwin
+    ? secretNameForVariable(pastedTwin.label)
+    : field.label.replace(/\s+env(?:ironment)?\s+var(?:iable)?\b/giu, "").trim();
+  const help = field.explanation.replace(/^Preferred path\.\s*/iu, "").trim();
+  const sentence = help === "" || /[.!?]$/u.test(help) ? help : `${help}.`;
+  return {
+    label: `${name} from an environment variable (advanced)`,
+    explanation: [sentence, secretEnvVariableRule(channelKey, field.key)].filter(Boolean).join(" "),
+    advanced: true,
   };
 }

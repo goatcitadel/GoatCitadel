@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type SetStateAction } from "react";
+import { describeRetiredChannel } from "@goatcitadel/contracts";
 import type {
   IntegrationConnection,
   NotificationDeliveryRecord,
@@ -136,8 +137,13 @@ export function useNotificationRoutingState(
     workspaceId,
     installation,
     key,
+    // A retired channel's saved connection cannot send, so it is never offered as a place to route notifications.
     channels: channels.filter(
-      (item) => item.kind === "channel" && item.enabled && (!item.workspaceId || item.workspaceId === workspaceId),
+      (item) =>
+        item.kind === "channel" &&
+        item.enabled &&
+        !describeRetiredChannel(item.key) &&
+        (!item.workspaceId || item.workspaceId === workspaceId),
     ),
     targets,
     rules,

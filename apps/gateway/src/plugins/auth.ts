@@ -15,6 +15,7 @@ import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.j
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
 import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
 import { isWhatsAppWebhookPath } from "../services/whatsapp-webhook.js";
+import { isStreamedRequestBody } from "../services/streamed-upload.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 
@@ -216,10 +217,14 @@ export const authPlugin = fp(async (fastify) => {
       return;
     }
 
-    // SSE bridge token for EventSource, regardless of auth mode.
+    // SSE bridge token, regardless of auth mode. Browsers' EventSource can only
+    // send it as `?sse_token=`; clients that can set headers (the Windows
+    // desktop) send it as a bearer token so it stays out of URLs and request
+    // logs. A bearer that is not a live bridge token falls through to the
+    // normal operator, device and companion checks below.
     const sseScope = getSseTokenScopeForPath(request.url);
     if (sseScope) {
-      const sseToken = readQueryToken(request.query, "sse_token");
+      const sseToken = readQueryToken(request.query, "sse_token") ?? readBearerToken(request.headers.authorization);
       if (sseToken && validateSseToken(sseToken, sseScope, sseTokens)) {
         setAuthActor(request, `sse:${tokenFingerprint(sseToken)}`, "sse");
         return;
@@ -353,6 +358,13 @@ export const authPlugin = fp(async (fastify) => {
     if (!request.authCompanionSessionId) {
       return reply.code(401).send({
         error: "Unauthorized",
+        authMode: "companion",
+      });
+    }
+    // The device-key signature covers a parsed JSON body; an unread upload stream cannot be signed.
+    if (isStreamedRequestBody(request.body)) {
+      return reply.code(401).send({
+        error: "Companion requests cannot stream an upload; send the file as JSON.",
         authMode: "companion",
       });
     }

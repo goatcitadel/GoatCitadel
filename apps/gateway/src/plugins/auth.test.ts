@@ -583,6 +583,62 @@ describe("auth plugin", () => {
     expect(secondUse.statusCode).toBe(401);
   });
 
+  it("accepts a one-time SSE bridge token sent as a bearer header", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "sse-bearer", queryParam: "access_token" },
+    });
+
+    const issued = app.issueSseToken("events:stream", 30_000);
+    const headers = { Authorization: `Bearer ${issued.token}` };
+
+    const firstUse = await app.inject({ method: "GET", url: "/api/v1/events/stream?replay=0", headers });
+    expect(firstUse.statusCode).toBe(200);
+    expect(firstUse.json()).toMatchObject({ actorSource: "sse" });
+
+    const secondUse = await app.inject({ method: "GET", url: "/api/v1/events/stream?replay=0", headers });
+    expect(secondUse.statusCode).toBe(401);
+  });
+
+  it("still authenticates the operator bearer on SSE paths and refuses bridge tokens elsewhere", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "sse-bearer", queryParam: "access_token" },
+    });
+
+    const operator = await app.inject({
+      method: "GET",
+      url: "/api/v1/events/stream",
+      headers: { Authorization: "Bearer sse-bearer" },
+    });
+    expect(operator.statusCode).toBe(200);
+    expect(operator.json()).toMatchObject({ actorSource: "token" });
+
+    const issued = app.issueSseToken("events:stream", 30_000);
+    const offStream = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: { Authorization: `Bearer ${issued.token}` },
+    });
+    expect(offStream.statusCode).toBe(401);
+  });
+
+  it("consumes SSE bridge bearer tokens on wrong-scope attempts", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "sse-bearer", queryParam: "access_token" },
+    });
+
+    const issued = app.issueSseToken("dev:diagnostics:stream", 30_000);
+    const headers = { Authorization: `Bearer ${issued.token}` };
+
+    const wrongScope = await app.inject({ method: "GET", url: "/api/v1/events/stream", headers });
+    expect(wrongScope.statusCode).toBe(401);
+
+    const retryOnCorrectScope = await app.inject({ method: "GET", url: "/api/v1/dev/diagnostics/stream", headers });
+    expect(retryOnCorrectScope.statusCode).toBe(401);
+  });
+
   it("rejects expired SSE bridge token", async () => {
     vi.useFakeTimers();
     const now = new Date("2026-03-05T01:00:00.000Z");
@@ -875,6 +931,33 @@ describe("auth plugin", () => {
       actorSource: "companion",
       actorId: "companion:test-session",
     });
+  });
+
+  it("refuses a companion streamed upload before signature verification", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+    const verifySignature = vi.fn(() => undefined);
+    (app.gatewayAuth as unknown as { verifyCompanionRequestSignature: unknown }).verifyCompanionRequestSignature =
+      verifySignature;
+    app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
+    app.post("/upload-stream", async () => ({ ok: true }));
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/upload-stream",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+        "content-type": "application/octet-stream",
+        ...COMPANION_SIGNATURE_HEADERS,
+      },
+      payload: Buffer.from("bytes"),
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ authMode: "companion" });
+    expect(verifySignature).not.toHaveBeenCalled();
   });
 
   it("rejects unsigned companion read requests", async () => {

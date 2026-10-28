@@ -214,7 +214,7 @@ describe("chat messaging service", () => {
     const fixture = createFixture();
     try {
       const withoutOwners = fixture.addConnection();
-      const withOwners = fixture.addConnection({ key: "signal", label: "Signal", config: { ownerActorIds: [" 42 "] } });
+      const withOwners = fixture.addConnection({ key: "matrix", label: "Matrix", config: { ownerActorIds: [" 42 "] } });
       const noOwnerDirect = await fixture.addConversation(withoutOwners, {
         peer: "42",
         conversation: { kind: "direct", counterpartActorId: "42" },
@@ -402,6 +402,36 @@ describe("chat messaging service", () => {
       expect(conversation?.lastReadAt).toBeUndefined();
       expect(conversation).not.toHaveProperty("newMessageCount");
       expect(conversation).not.toHaveProperty("lastReadAt");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it.each([
+    ["signal", "Signal"],
+    ["imessage", "iMessage"],
+    ["zalouser", "Zalo personal"],
+  ])("shows a saved %s connection as removed even when it is enabled and connected", async (key, label) => {
+    const fixture = createFixture();
+    try {
+      const retired = fixture.addConnection({ key, label, enabled: true, status: "connected" });
+      const session = await fixture.addConversation(retired, {
+        peer: "42",
+        conversation: { kind: "direct", counterpartActorId: "42", title: "Sam Lee" },
+      });
+
+      const overview = await listChatMessaging(fixture.deps, { workspaceId: "default" });
+
+      // Its conversations stay readable, but the channel never reads as able to send.
+      expect(overview.channels).toEqual([
+        {
+          connectionId: retired.connectionId,
+          channelKey: key,
+          label,
+          status: "removed",
+          conversations: [expect.objectContaining({ sessionId: session, title: "Sam Lee" })],
+        },
+      ]);
     } finally {
       fixture.cleanup();
     }
@@ -608,7 +638,7 @@ describe("chat messaging service", () => {
     try {
       const withConversation = fixture.addConnection({ label: "Telegram" });
       const session = await fixture.addConversation(withConversation, { peer: "42" });
-      const idle = fixture.addConnection({ key: "signal", label: "Signal" });
+      const idle = fixture.addConnection({ key: "nextcloud-talk", label: "Nextcloud Talk" });
       const unbound = fixture.addConnection({ key: "matrix", label: "Matrix", workspaceId: undefined });
       const paused = fixture.addConnection({ key: "line", label: "Line", status: "paused" });
       const broken = fixture.addConnection({ key: "discord", label: "Discord", status: "error" });
@@ -634,7 +664,13 @@ describe("chat messaging service", () => {
           conversations: [],
         },
         { connectionId: unbound.connectionId, channelKey: "matrix", label: "Matrix", status: "on", conversations: [] },
-        { connectionId: idle.connectionId, channelKey: "signal", label: "Signal", status: "on", conversations: [] },
+        {
+          connectionId: idle.connectionId,
+          channelKey: "nextcloud-talk",
+          label: "Nextcloud Talk",
+          status: "on",
+          conversations: [],
+        },
         {
           connectionId: withConversation.connectionId,
           channelKey: "telegram",

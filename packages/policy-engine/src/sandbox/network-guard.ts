@@ -131,11 +131,40 @@ export function evaluateHostEgress(hostOrUrl: string, allowlist: string[]): Egre
   };
 }
 
+/**
+ * A public host the network allowlist doesn't cover yet. It carries the host (lower-cased, with any port, never a path,
+ * query or userinfo), so a caller that names it never reads it back out of the message, whose wording is unchanged.
+ */
+export class HostNotAllowlistedError extends Error {
+  public constructor(
+    message: string,
+    public readonly host: string,
+  ) {
+    super(message);
+    this.name = "HostNotAllowlistedError";
+  }
+}
+
 export function assertHostAllowed(hostOrUrl: string, allowlist: string[]): void {
   const decision = evaluateHostEgress(hostOrUrl, allowlist);
-  if (!decision.allowed) {
-    throw new Error(decision.reason);
-  }
+  if (decision.allowed) return;
+  // Only a host the operator could allow is named; a private or reserved one is blocked outright.
+  const host = decision.approvalState === "approval_required" ? namedHost(hostOrUrl) : undefined;
+  throw host ? new HostNotAllowlistedError(decision.reason, host) : new Error(decision.reason);
+}
+
+/** A bare host with an optional port: a name, or a bracketed IPv6 address. */
+const BARE_HOST = /^(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::\d{1,5})?$/u;
+
+/**
+ * The host a refusal names, taken from its redacted form (so userinfo, path, query and fragment are already gone),
+ * without the scheme. Anything that still isn't a bare host names nothing.
+ */
+function namedHost(hostOrUrl: string): string | undefined {
+  const host = redactUrlForError(hostOrUrl)
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//iu, "")
+    .toLowerCase();
+  return BARE_HOST.test(host) ? host : undefined;
 }
 
 // SECURITY (codex finding #11, #12): For features like Firecrawl ingestion

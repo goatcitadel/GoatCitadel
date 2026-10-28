@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { channelAddressHost, isChannelAddressHost } from "@goatcitadel/contracts";
 import type {
   ChannelProbeReport,
   ChannelSetupDefinition,
@@ -59,6 +60,14 @@ export function isStepVisible(step: ChannelSetupStepDefinition, values: Record<s
   return !condition || values[condition.fieldKey] === condition.value;
 }
 
+/** Setup-only steps are shown while a channel is being set up, not when a saved channel is changed. */
+export function isStepForLifecycle(
+  step: ChannelSetupStepDefinition,
+  lifecycleMode: ChannelSetupDraft["lifecycleMode"],
+): boolean {
+  return lifecycleMode === "create" || !step.createOnly;
+}
+
 export function isStepComplete(
   step: ChannelSetupStepDefinition,
   definition: ChannelSetupDefinition,
@@ -74,8 +83,8 @@ export function isStepComplete(
   if (step.kind === "confirm" || step.stage === "first_message") {
     return false;
   }
-  const checklistComplete = !step.checklist?.length ||
-    step.checklist.every((item) => checkedItems[`${draft.draftId}:${step.id}:${item.id}`]);
+  const checklistComplete =
+    !step.checklist?.length || step.checklist.every((item) => checkedItems[`${draft.draftId}:${step.id}:${item.id}`]);
   if (!checklistComplete) return false;
   if (step.fields?.length || step.requiredAnyOf?.length) {
     return findMissingFieldLabels(definition, draft, step, values).length === 0;
@@ -98,15 +107,19 @@ export function findMissingFieldLabels(
   for (const group of step.requiredAnyOf ?? []) {
     if (!group.some((key) => hasFieldValue(draft, effectiveValues, key))) {
       const allFields = definition.wizard.steps.flatMap((item) => item.fields ?? []);
-      missing.push(group.map((key) => allFields.find((field) => field.key === key)?.label ?? key).join(" or "));
+      // A key with no field is one the operator cannot see or fill in, so the message does not name it.
+      const labels = new Set(group.flatMap((key) => allFields.find((field) => field.key === key)?.label ?? []));
+      if (labels.size) missing.push([...labels].join(" or "));
     }
   }
   for (const field of fields) {
     if (field.type === "target-list" && hasFieldValue(draft, effectiveValues, field.key)) {
       const addressKey = field.targetAddressKey ?? "chatId";
       const rows = readChannelTargetRows(effectiveValues[field.key], addressKey);
-      if (!rows.length || rows.some((row) => !String(row[addressKey] ?? "").trim())) missing.push(field.label + ": add a destination to every row");
-      if (rows.length && rows.filter((row) => row.default === true).length !== 1) missing.push(field.label + ": choose one default");
+      if (!rows.length || rows.some((row) => !String(row[addressKey] ?? "").trim()))
+        missing.push(field.label + ": add a destination to every row");
+      if (rows.length && rows.filter((row) => row.default === true).length !== 1)
+        missing.push(field.label + ": choose one default");
       const identities = rows.map((row) => channelTargetIdentity(row));
       if (new Set(identities).size !== identities.length) missing.push(field.label + ": remove duplicate destinations");
     }
@@ -147,7 +160,9 @@ export function updateFieldValue(
     field.sensitive &&
     typeof next === "string" &&
     next.length === 0 &&
-    (current === SECRET_REDACTION_MARKER || draft.hydration?.fieldState[field.key] === "configured" || draft.secretState[field.key]?.configured === true)
+    (current === SECRET_REDACTION_MARKER ||
+      draft.hydration?.fieldState[field.key] === "configured" ||
+      draft.secretState[field.key]?.configured === true)
   ) {
     return { ...values, [field.key]: SECRET_REDACTION_MARKER };
   }
@@ -174,7 +189,8 @@ export function finalizeDisabledReason(
   if (feedback.finalizationEligibility) {
     return feedback.finalizationEligibility.allowed
       ? undefined
-      : feedback.finalizationEligibility.blockingReasons.join(" ") || "The Gateway has not cleared this test for activation.";
+      : feedback.finalizationEligibility.blockingReasons.join(" ") ||
+          "The Gateway has not cleared this test for activation.";
   }
   if (feedback.status !== "ok") {
     return "Resolve the live test results and rerun the test before finalizing.";
@@ -183,7 +199,9 @@ export function finalizeDisabledReason(
 }
 
 /** The Gateway supplies the deadline; the client never invents or extends a TTL. */
-export function channelProofExpired(feedback?: Pick<ChannelSetupWizardFeedback, "kind" | "proofExpiresAt" | "restored"> | null): boolean {
+export function channelProofExpired(
+  feedback?: Pick<ChannelSetupWizardFeedback, "kind" | "proofExpiresAt" | "restored"> | null,
+): boolean {
   if (feedback?.kind !== "test") return false;
   if (!feedback.proofExpiresAt) return feedback.restored === true;
   const deadline = Date.parse(feedback.proofExpiresAt);
@@ -198,10 +216,17 @@ export function formatJson(value: Record<string, unknown>): string {
   }
 }
 
-export function wizardValuesWithDefaults(definition: ChannelSetupDefinition, values: Record<string, unknown>): Record<string, unknown> {
+export function wizardValuesWithDefaults(
+  definition: ChannelSetupDefinition,
+  values: Record<string, unknown>,
+): Record<string, unknown> {
   return {
-    ...Object.fromEntries(definition.wizard.steps.flatMap((step) => step.fields ?? [])
-      .filter((field) => field.defaultValue !== undefined).map((field) => [field.key, field.defaultValue])),
+    ...Object.fromEntries(
+      definition.wizard.steps
+        .flatMap((step) => step.fields ?? [])
+        .filter((field) => field.defaultValue !== undefined)
+        .map((field) => [field.key, field.defaultValue]),
+    ),
     ...values,
   };
 }
@@ -209,6 +234,124 @@ export function wizardValuesWithDefaults(definition: ChannelSetupDefinition, val
 export function isFieldVisible(field: ChannelSetupFieldDefinition, values: Record<string, unknown>): boolean {
   const condition = field.visibleWhenFieldEquals;
   return !condition || values[condition.fieldKey] === condition.value;
+}
+
+/**
+ * The hosts the channel must be allowed to reach, first occurrence kept: the fixed hosts, then the
+ * hosts of conditions that hold, then the hosts of the addresses entered. An address that isn't an
+ * http or https URL names no host. A saved secret address names the host the Gateway recorded for it.
+ */
+export function channelHosts(
+  definition: ChannelSetupDefinition,
+  draft: ChannelSetupDraft,
+  values: Record<string, unknown>,
+): string[] {
+  const wizard = definition.wizard;
+  const effectiveValues = wizardValuesWithDefaults(definition, values);
+  const hosts = [
+    ...(wizard.requiredHosts ?? []),
+    ...(wizard.conditionalHosts ?? [])
+      .filter((rule) =>
+        rule.whenAnyFieldSet.some(
+          (key) =>
+            hasFieldValue(draft, effectiveValues, key) &&
+            (rule.equals === undefined || effectiveValues[key] === rule.equals),
+        ),
+      )
+      .map((rule) => rule.host),
+    ...(wizard.hostFields ?? []).flatMap((key) => hostOfField(draft, effectiveValues, key) ?? []),
+  ];
+  return [...new Set(hosts)];
+}
+
+/** Whether the editor holds an address the operator typed, rather than nothing or the marker of a saved secret. */
+function isTypedAddress(value: unknown): boolean {
+  if (typeof value === "string") return value.trim().length > 0 && value !== SECRET_REDACTION_MARKER;
+  return value !== undefined && value !== null;
+}
+
+/**
+ * The host an address field names. A typed address is read where it is (`channelAddressHost`). A saved secret address
+ * is only a marker, so it names the host the Gateway read when it was saved: from the address saved in this draft
+ * when there is one, else from the saved connection. A recorded value that is not a host is never offered.
+ */
+function hostOfField(draft: ChannelSetupDraft, values: Record<string, unknown>, key: string): string | undefined {
+  if (isTypedAddress(values[key])) return channelAddressHost(values[key]);
+  const state = draft.secretState[key];
+  const recorded = state?.configured ? state.host : draft.hydration?.addressHosts?.[key];
+  return isChannelAddressHost(recorded) ? recorded : undefined;
+}
+
+/**
+ * An address field that is set but names no host the page can offer: a saved secret address with no recorded host
+ * (`saved`), or a typed value that is not an http or https address of one host, such as a wildcard (`typed`).
+ */
+export interface UnreadableHostField {
+  label: string;
+  kind: "saved" | "typed";
+}
+
+/**
+ * The address fields that are set but name no host. The page can't check these, so it says so rather than leave the
+ * operator to think no host is needed. A field with no label is one the operator can't see, so it is not named; a
+ * label is named once.
+ */
+export function unreadableHostFields(
+  definition: ChannelSetupDefinition,
+  draft: ChannelSetupDraft,
+  values: Record<string, unknown>,
+): UnreadableHostField[] {
+  const effectiveValues = wizardValuesWithDefaults(definition, values);
+  const fields = definition.wizard.steps.flatMap((step) => step.fields ?? []);
+  const unreadable = (definition.wizard.hostFields ?? [])
+    .filter((key) => hasFieldValue(draft, effectiveValues, key) && !hostOfField(draft, effectiveValues, key))
+    .flatMap((key): UnreadableHostField[] => {
+      const label = fields.find((field) => field.key === key)?.label;
+      return label ? [{ label, kind: isTypedAddress(effectiveValues[key]) ? "typed" : "saved" }] : [];
+    });
+  return unreadable.filter((item, index) => unreadable.findIndex((other) => other.label === item.label) === index);
+}
+
+/** A value that counts as set for a webhook condition: some text, or a checked box. */
+function isSetValue(value: unknown): boolean {
+  return value === true || (typeof value === "string" && value.trim().length > 0);
+}
+
+/**
+ * The Gateway path a vendor posts to, for a saved connection whose webhook conditions hold: the field it must equal,
+ * and, when the channel names fields, at least one of them set.
+ */
+export function inboundWebhookPath(
+  definition: ChannelSetupDefinition,
+  values: Record<string, unknown>,
+  connectionId: string | undefined,
+): string | undefined {
+  const inbound = definition.wizard.inboundWebhook;
+  if (!connectionId || !inbound) return undefined;
+  const effectiveValues = wizardValuesWithDefaults(definition, values);
+  const condition = inbound.whenFieldEquals;
+  if (condition && effectiveValues[condition.fieldKey] !== condition.value) return undefined;
+  const alternatives = inbound.whenAnyFieldSet;
+  if (alternatives?.length && !alternatives.some((key) => isSetValue(effectiveValues[key]))) return undefined;
+  const encodedId = encodePathSegment(connectionId);
+  return encodedId === undefined ? undefined : inbound.pathTemplate.replaceAll("{connectionId}", () => encodedId);
+}
+
+/**
+ * Whether a connection set up with these values will receive on a webhook, before it has an id to name the path.
+ * It asks `inboundWebhookPath` with a stand-in id, so the condition lives there and nowhere else.
+ */
+export function receivesOnWebhook(definition: ChannelSetupDefinition, values: Record<string, unknown>): boolean {
+  return inboundWebhookPath(definition, values, "connection") !== undefined;
+}
+
+/** `encodeURIComponent` throws on a lone surrogate; an id that can't be encoded names no path. */
+function encodePathSegment(value: string): string | undefined {
+  try {
+    return encodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ChannelTargetRow extends Record<string, unknown> {
@@ -223,10 +366,17 @@ export interface ChannelTargetRow extends Record<string, unknown> {
 export function readChannelTargetRows(value: unknown, addressKey: "channel" | "chatId"): ChannelTargetRow[] {
   let raw = value;
   if (typeof raw === "string") {
-    try { raw = JSON.parse(raw); } catch { return []; }
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return [];
+    }
   }
   if (!Array.isArray(raw)) return [];
-  return raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+  return raw
+    .filter(
+      (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
+    )
     .map((item, index) => ({
       ...item,
       id: typeof item.id === "string" && item.id ? item.id : `target-${index + 1}`,
@@ -237,26 +387,41 @@ export function readChannelTargetRows(value: unknown, addressKey: "channel" | "c
 }
 
 export function channelTargetIdentity(row: ChannelTargetRow): string {
-  return JSON.stringify([String(row.chatId ?? row.channel ?? "").trim().toLowerCase(), String(row.chatId !== undefined ? row.threadId ?? "" : row.threadTs ?? "").trim()]);
+  return JSON.stringify([
+    String(row.chatId ?? row.channel ?? "")
+      .trim()
+      .toLowerCase(),
+    String(row.chatId !== undefined ? (row.threadId ?? "") : (row.threadTs ?? "")).trim(),
+  ]);
 }
 
-export function mergeDiscoveredChannelTargets(current: ChannelTargetRow[], selected: ChannelTargetRow[]): ChannelTargetRow[] {
+export function mergeDiscoveredChannelTargets(
+  current: ChannelTargetRow[],
+  selected: ChannelTargetRow[],
+): ChannelTargetRow[] {
   const known = new Set(current.map(channelTargetIdentity));
-  const added = selected.filter((item) => {
-    const address = String(item.chatId ?? item.channel ?? "").trim().toLowerCase();
-    const identity = channelTargetIdentity(item);
-    if (!address || known.has(identity)) return false;
-    known.add(identity);
-    return true;
-  }).map((item) => ({ ...item, default: false }));
+  const added = selected
+    .filter((item) => {
+      const address = String(item.chatId ?? item.channel ?? "")
+        .trim()
+        .toLowerCase();
+      const identity = channelTargetIdentity(item);
+      if (!address || known.has(identity)) return false;
+      known.add(identity);
+      return true;
+    })
+    .map((item) => ({ ...item, default: false }));
   return [...current, ...added];
 }
 
 export function channelStageLabel(step: ChannelSetupStepDefinition): string {
   const labels = {
-    prerequisites: "Before you start", identity: "Connect account",
-    destinations_access: "Destinations and access", checks: "Check connection",
-    activation: "Activate connection", first_message: "First message",
+    prerequisites: "Before you start",
+    identity: "Connect account",
+    destinations_access: "Destinations and access",
+    checks: "Check connection",
+    activation: "Activate connection",
+    first_message: "First message",
   };
   return step.stage ? labels[step.stage] : humanizeStepKind(step.kind);
 }

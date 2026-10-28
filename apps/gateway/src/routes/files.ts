@@ -2,13 +2,16 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { queryBoolean } from "./query-boolean.js";
 import {
+  MAX_FILE_PAGE_CURSOR_LENGTH,
   MAX_FILE_UPLOAD_BYTES,
   MAX_HTML_PREVIEW_BYTES,
   MAX_INLINE_FILE_DOWNLOAD_BYTES,
 } from "../services/files-route-service.js";
+import { isStreamedRequestBody } from "../services/streamed-upload.js";
 import { sendRouteError } from "./_error-handler.js";
 
-const MAX_UPLOAD_BODY_BYTES = Math.ceil(MAX_FILE_UPLOAD_BYTES * 1.05) + 4096;
+/** JSON uploads stay for small pastes; anything larger streams as `application/octet-stream`. */
+const MAX_JSON_UPLOAD_BODY_BYTES = 1024 * 1024;
 const FILE_CONTENT_SECURITY_POLICY =
   "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'none'; style-src 'self'; img-src data: blob:; font-src 'none'; connect-src 'none'";
 const BROWSER_ACTIVE_CONTENT_TYPES = new Set([
@@ -27,6 +30,20 @@ const uploadSchema = z.object({
   expectAbsent: z.boolean().optional(),
 });
 
+const streamedUploadQuerySchema = z.object({
+  relativePath: z.string().min(1).max(2048),
+  expectAbsent: queryBoolean.default(false),
+});
+
+const streamedUploadHeadersSchema = z.object({
+  "content-length": z.string().regex(/^\d{1,15}$/u, "Content-Length is required for a streamed upload."),
+  "x-content-sha256": z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/u)
+    .transform((value) => value.toLowerCase())
+    .optional(),
+});
+
 const downloadQuerySchema = z.object({
   relativePath: z.string().min(1),
   raw: queryBoolean.default(false),
@@ -41,7 +58,7 @@ const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(5000).default(1000),
   // Optional and additive: any of these returns one page ({ items, folders, nextCursor?, complete }).
   query: z.string().max(200).optional(),
-  cursor: z.string().max(12).optional(),
+  cursor: z.string().max(MAX_FILE_PAGE_CURSOR_LENGTH).optional(),
   paged: z.enum(["1", "true"]).optional(),
 });
 
@@ -117,20 +134,61 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/files/upload", { bodyLimit: MAX_UPLOAD_BODY_BYTES }, async (request, reply) => {
-    const parsed = uploadSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
+  // Its own scope, so the raw-stream parser applies to this route alone.
+  await fastify.register(async (scope) => {
+    // Hand the body over unread; the service streams it to disk, counting bytes itself
+    // (Fastify's bodyLimit only applies to parsers that buffer).
+    scope.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
 
-    try {
-      const uploaded = await fastify.services.files.uploadWorkspaceFile(parsed.data.relativePath, parsed.data.content, {
-        expectAbsent: parsed.data.expectAbsent,
-      });
-      return reply.code(201).send(uploaded);
-    } catch (error) {
-      return sendRouteError(reply, error, request.log);
-    }
+    scope.post("/api/v1/files/upload", { bodyLimit: MAX_JSON_UPLOAD_BODY_BYTES }, async (request, reply) => {
+      if (isStreamedRequestBody(request.body)) {
+        const query = streamedUploadQuerySchema.safeParse(request.query);
+        const headers = streamedUploadHeadersSchema.safeParse(request.headers);
+        if (!headers.success && !request.headers["content-length"]) {
+          return reply.code(411).send({ error: "Content-Length is required for a streamed upload." });
+        }
+        if (!query.success || !headers.success) {
+          return reply.code(400).send({
+            error: {
+              query: query.success ? undefined : query.error.flatten(),
+              headers: headers.success ? undefined : headers.error.flatten(),
+            },
+          });
+        }
+        try {
+          const uploaded = await fastify.services.files.uploadWorkspaceFileStream(
+            query.data.relativePath,
+            request.body,
+            {
+              declaredBytes: Number(headers.data["content-length"]),
+              expectAbsent: query.data.expectAbsent,
+              ...(headers.data["x-content-sha256"] ? { contentSha256: headers.data["x-content-sha256"] } : {}),
+            },
+          );
+          return reply.code(201).send(uploaded);
+        } catch (error) {
+          return sendRouteError(reply, error, request.log);
+        }
+      }
+
+      const parsed = uploadSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
+
+      try {
+        const uploaded = await fastify.services.files.uploadWorkspaceFile(
+          parsed.data.relativePath,
+          parsed.data.content,
+          {
+            expectAbsent: parsed.data.expectAbsent,
+          },
+        );
+        return reply.code(201).send(uploaded);
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    });
   });
 
   fastify.get("/api/v1/files/download", async (request, reply) => {

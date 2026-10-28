@@ -901,7 +901,10 @@ describe("channel conversation composer", () => {
     const reason = container.querySelector("#cockpit-chat-send-reason");
     expect(reason?.textContent).toBe("This channel was removed. Its conversations stay readable.");
     expect(container.querySelector("textarea")?.getAttribute("aria-describedby")).toBe("cockpit-chat-send-reason");
-    expect((buttonNamed("Post to Maya") as HTMLButtonElement).disabled).toBe(true);
+    // The button no longer promises where the message would go, and it cannot send.
+    expect(buttonNamed("Post to Maya")).toBeUndefined();
+    expect(container.querySelector('button[aria-label="Post to Maya"]')).toBeNull();
+    expect(sendButton().disabled).toBe(true);
     // Nothing invites typing a message that cannot go anywhere: the box is off and says why instead of "Posts to".
     const draft = container.querySelector("textarea")!;
     expect(draft.disabled).toBe(true);

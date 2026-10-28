@@ -141,6 +141,8 @@ export interface ChannelSetupStepDefinition {
     fieldKey: string;
     value: string | boolean;
   };
+  /** Shown only while setting a channel up; hidden when a saved channel is changed. */
+  createOnly?: boolean;
 }
 
 export type ChannelPickerGroup = "quickest" | "team_chat" | "phone_apps";
@@ -153,6 +155,21 @@ export interface ChannelSetupPickerHint {
   minutes?: number;
   /** One short line on what the channel needs. */
   note?: string;
+}
+
+export interface ChannelSetupHostRule {
+  host: string;
+  /** Needed only while one of these fields is set (and equals `equals`, when given). */
+  whenAnyFieldSet: string[];
+  equals?: string | boolean;
+}
+
+export interface ChannelSetupInboundWebhook {
+  /** The Gateway path the vendor posts to; `{connectionId}` stands for the saved connection's id. */
+  pathTemplate: string;
+  whenFieldEquals?: { fieldKey: string; value: string | boolean };
+  /** Receives on the webhook only while one of these fields is set; the listed fields are alternatives. */
+  whenAnyFieldSet?: string[];
 }
 
 export interface ChannelSetupWizardContent {
@@ -168,6 +185,12 @@ export interface ChannelSetupWizardContent {
   picker?: ChannelSetupPickerHint;
   /** Provider hosts the channel must be allowed to reach. */
   requiredHosts?: string[];
+  /** Fields holding a URL whose host the channel must be allowed to reach. */
+  hostFields?: string[];
+  /** Hosts needed only while certain fields are set. */
+  conditionalHosts?: ChannelSetupHostRule[];
+  /** Where the vendor posts inbound events, when the channel receives them on a Gateway webhook. */
+  inboundWebhook?: ChannelSetupInboundWebhook;
 }
 
 export interface ChannelSetupValidationStrategy {
@@ -251,6 +274,11 @@ export interface ChannelSetupHydrationResult {
   fieldState: Record<string, "configured" | "missing" | "needs_replacement" | "unknown">;
   warnings: string[];
   rawLegacyConfig?: Record<string, unknown>;
+  /**
+   * The hosts of the saved connection's secret addresses, by field key, as the connection recorded them when each
+   * address was saved (`channelAddressHost`). A saved address with no recorded host has no entry.
+   */
+  addressHosts?: Record<string, string>;
 }
 
 export interface ChannelSetupSecretState {
@@ -260,6 +288,11 @@ export interface ChannelSetupSecretState {
   source?: "inherited" | "operator";
   /** Internal opaque locator. Public Gateway projections omit this field. */
   secretRef?: string;
+  /**
+   * For a secret address field: the host the address names (`channelAddressHost`), read when the address was saved.
+   * Never the credentials, path, query or fragment; absent when the address names no host.
+   */
+  host?: string;
 }
 
 export interface ChannelSetupDraft {

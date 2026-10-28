@@ -153,14 +153,17 @@ export function buildGatewayHeaders(
   method: string,
   correlationId: string,
   extraHeaders?: HeadersInit,
-  options?: { hasBody?: boolean; attemptKey?: string },
+  options?: { hasBody?: boolean; attemptKey?: string; streamedBody?: boolean },
 ): HeadersInit {
   return {
     // Only claim a JSON body when one is actually sent: Fastify rejects
     // `Content-Type: application/json` with an empty body as 400
     // FST_ERR_CTP_EMPTY_JSON_BODY before the route handler runs, which breaks
-    // body-less POSTs such as POST /api/v1/mason/sessions.
-    ...(options?.hasBody === false ? {} : { "Content-Type": "application/json" }),
+    // body-less POSTs such as POST /api/v1/mason/sessions. A Blob body is raw
+    // bytes the Gateway streams to disk (a file upload), never JSON.
+    ...(options?.hasBody === false
+      ? {}
+      : { "Content-Type": options?.streamedBody ? "application/octet-stream" : "application/json" }),
     ...(method !== "GET" ? { "Idempotency-Key": options?.attemptKey ?? crypto.randomUUID() } : {}),
     ...(MUTATING_METHODS.has(method) ? { [BROWSER_MUTATION_INTENT_HEADER]: BROWSER_MUTATION_INTENT_VALUE } : {}),
     ...readGatewayAuthHeaders(path),
@@ -277,6 +280,7 @@ async function requestUncoalesced<T>(
   const correlationId = createCorrelationId();
   const headers = buildGatewayHeaders(path, method, correlationId, filterGatewayExtraHeaders(init?.headers), {
     hasBody: init?.body != null,
+    streamedBody: typeof Blob !== "undefined" && init?.body instanceof Blob,
     ...(attemptKey ? { attemptKey } : {}),
   });
   recordClientDiagnostic({

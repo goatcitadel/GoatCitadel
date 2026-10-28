@@ -388,7 +388,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
     fields: [
       text("label", "Connection Label", { defaultValue: "Teams" }),
       url("webhookUrl", "Webhook URL", {
-        placeholder: "https://outlook.office.com/webhook/...",
+        placeholder: "https://<environment>.environment.api.powerplatform.com/...",
         required: true,
       }),
       text("cardTitle", "Card Title", {
@@ -432,35 +432,6 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       bool("enabled", "Enabled", true),
     ],
   },
-  "channel.signal": {
-    catalogId: "channel.signal",
-    title: "Signal Connection",
-    description:
-      "Configure a Signal JSON-RPC bridge, account, and default recipient. Optional inbound subscribes to the signal-cli daemon (--http) event stream; signal-cli does not replay events, so messages that arrive while the stream is disconnected are lost.",
-    allowAdvancedJson: true,
-    fields: [
-      text("label", "Connection Label", { defaultValue: "Signal" }),
-      url("baseUrl", "Bridge URL", {
-        placeholder: "http://127.0.0.1:8080",
-        required: true,
-      }),
-      text("accountId", "Account ID", {
-        placeholder: "+15551234567",
-        advanced: true,
-      }),
-      text("defaultRecipient", "Default Recipient", {
-        placeholder: "+15551234567 or group identifier",
-        required: true,
-      }),
-      inboundOptInField(
-        "receiveEvents",
-        "Receive Inbound Messages",
-        "Opt in to the signal-cli daemon event stream (signal-cli daemon --http). A silent connection is reconnected after 90 seconds without its SSE keepalive.",
-      ),
-      ...forcedAllowlistInboundFields("Add the sender phone numbers or Signal UUIDs that may start turns."),
-      bool("enabled", "Enabled", true),
-    ],
-  },
   "channel.mattermost": {
     catalogId: "channel.mattermost",
     title: "Mattermost Connection",
@@ -492,55 +463,6 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         "Opt in to the bot WebSocket for posted events in channels the bot belongs to.",
       ),
       ...forcedAllowlistInboundFields("Add the Mattermost user ids that may start turns."),
-      bool("enabled", "Enabled", true),
-    ],
-  },
-  "channel.imessage": {
-    catalogId: "channel.imessage",
-    title: "iMessage Connection",
-    description:
-      "Configure an iMessage bridge provider. BlueBubbles is the callable local-first path; Photon/Spectrum is tracked as third-party sidecar metadata until an adapter is installed.",
-    allowAdvancedJson: true,
-    fields: [
-      text("label", "Connection Label", { defaultValue: "iMessage" }),
-      {
-        key: "bridgeProvider",
-        label: "Bridge Provider",
-        type: "select",
-        defaultValue: "bluebubbles",
-        options: [
-          { value: "bluebubbles", label: "BlueBubbles", hint: "Default local-first callable bridge." },
-          {
-            value: "photon",
-            label: "Photon/Spectrum",
-            hint: "Third-party sidecar posture. Runtime sends require a future adapter.",
-          },
-        ],
-        description: "Select the provider posture for diagnostics and runtime routing.",
-      },
-      url("bridgeUrl", "Bridge URL", {
-        placeholder: "http://127.0.0.1:3001",
-        required: true,
-      }),
-      text("passwordEnv", "Bridge Password ENV Var", {
-        placeholder: "IMESSAGE_PASSWORD",
-        required: true,
-        secretRef: true,
-      }),
-      text("defaultHandle", "Default Handle", {
-        placeholder: "imessage:+15551234567 or chat_guid:iMessage;-;+15551234567",
-        required: true,
-      }),
-      url("photonSidecarUrl", "Photon Sidecar URL", {
-        placeholder: "http://127.0.0.1:4317",
-        advanced: true,
-        description: "Optional Photon/Spectrum sidecar origin for adapter-backed builds.",
-      }),
-      text("photonAuthEnv", "Photon Auth ENV Var", {
-        placeholder: "PHOTON_AUTH_TOKEN",
-        advanced: true,
-        secretRef: true,
-      }),
       bool("enabled", "Enabled", true),
     ],
   },
@@ -1002,15 +924,6 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   ),
   entry(
     "channel",
-    "signal",
-    "Signal",
-    "Signal messenger bridge with optional inbound from the signal-cli daemon event stream.",
-    "beta",
-    ["bridge"],
-    ["chat", "groups", "inbound"],
-  ),
-  entry(
-    "channel",
     "whatsapp",
     "WhatsApp",
     "WhatsApp business bridge.",
@@ -1093,21 +1006,12 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   ),
   entry(
     "channel",
-    "imessage",
-    "iMessage",
-    "iMessage bridge. BlueBubbles is the default callable local path; Photon/Spectrum is explicit third-party sidecar metadata.",
-    "beta",
-    ["local-agent"],
-    ["chat", "attachments", "reactions", "unsend", "replies", "bluebubbles", "photon-diagnostics"],
-  ),
-  entry(
-    "channel",
     "teams",
     "Microsoft Teams",
-    "Teams bot/webhook integration.",
+    "Send Adaptive Card notifications to a Teams channel through a Workflows webhook. Sends only.",
     "beta",
     ["webhook"],
-    ["chat", "threads", "attachments"],
+    ["chat", "attachments"],
     { pluginId: "msteams" },
   ),
   entry(

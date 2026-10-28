@@ -1,14 +1,11 @@
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  emitBlueBubblesTyping,
   emitDiscordRestTyping,
   emitMatrixTyping,
   emitMattermostTyping,
   emitProviderTyping,
-  emitSignalTyping,
   emitWhatsAppTyping,
-  normalizeBlueBubblesBaseUrl,
   resetMatrixTypingUserCache,
   resetMattermostTypingUserCache,
   type ChannelTypingAdapterArgs,
@@ -172,41 +169,6 @@ describe("Matrix typing", () => {
   });
 });
 
-describe("Signal typing", () => {
-  const conn = connection("signal", { baseUrl: "http://127.0.0.1:8080/", account: "+15550001" });
-
-  it("sends a sendTyping RPC to a recipient", async () => {
-    const a = args(conn, { target: "signal:+15551234" });
-    a.fetch.mockResolvedValueOnce(json({ jsonrpc: "2.0", result: {}, id: "1" }));
-    const result = await emitSignalTyping(a);
-    expect(result).toMatchObject({ status: "sent", supported: true, channelKey: "signal" });
-    const [url, init] = a.fetch.mock.calls[0];
-    expect(url).toBe("http://127.0.0.1:8080/api/v1/rpc");
-    const body = JSON.parse(init.body);
-    expect(body).toMatchObject({ jsonrpc: "2.0", method: "sendTyping" });
-    expect(body.params).toEqual({ account: "+15550001", recipient: ["+15551234"] });
-  });
-
-  it("uses groupId for group: targets", async () => {
-    const a = args(conn, { target: "group:abc==" });
-    a.fetch.mockResolvedValueOnce(new Response(null, { status: 201 }));
-    const result = await emitSignalTyping(a);
-    expect(result.status).toBe("sent");
-    expect(JSON.parse(a.fetch.mock.calls[0][1].body).params).toEqual({ account: "+15550001", groupId: "abc==" });
-  });
-
-  it("denies on allowlist, 4xx and RPC errors", async () => {
-    const denied = await emitSignalTyping(args(conn, { target: "+1" }, { isAllowlisted: () => false }));
-    expect(denied.status).toBe("unsupported");
-    const four = args(conn, { target: "+1" });
-    four.fetch.mockResolvedValueOnce(json({}, 404));
-    expect((await emitSignalTyping(four)).reason).toContain("404");
-    const rpc = args(conn, { target: "+1" });
-    rpc.fetch.mockResolvedValueOnce(json({ error: { message: "nope" } }));
-    expect((await emitSignalTyping(rpc)).status).toBe("unsupported");
-  });
-});
-
 describe("WhatsApp typing", () => {
   const conn = connection("whatsapp", { phoneNumberId: "555", accessToken: "wtok" });
 
@@ -253,11 +215,25 @@ describe("WhatsApp typing", () => {
 
 describe("emitProviderTyping dispatch", () => {
   it("routes by channel key and rejects others", async () => {
-    const a = args(connection("signal", { baseUrl: "http://127.0.0.1:1" }), { target: "+1" });
-    a.fetch.mockResolvedValueOnce(json({ result: {} }));
-    expect((await emitProviderTyping(a)).channelKey).toBe("signal");
+    const a = args(connection("whatsapp", { phoneNumberId: "555", accessToken: "wtok" }), {
+      target: "15551234",
+      messageId: "wamid.X",
+    });
+    a.fetch.mockResolvedValueOnce(json({ success: true }));
+    expect(await emitProviderTyping(a)).toMatchObject({ status: "sent", channelKey: "whatsapp" });
     const other = await emitProviderTyping(args(connection("slack", {}), {}));
     expect(other.status).toBe("unsupported");
+  });
+
+  it.each([
+    ["signal", { baseUrl: "http://127.0.0.1:1" }, "+1"],
+    ["imessage", { bridgeUrl: "http://127.0.0.1:1234", password: "bb-secret" }, "chat_guid:iMessage;-;+1"],
+  ])("has no typing adapter for the retired %s channel and sends nothing", async (key, config, target) => {
+    const a = args(connection(key, config), { target });
+    const result = await emitProviderTyping(a);
+    expect(result).toMatchObject({ status: "unsupported", supported: false, channelKey: key });
+    expect(result.reason).toContain("has not wired a typing adapter yet");
+    expect(a.fetch).not.toHaveBeenCalled();
   });
 });
 
@@ -312,84 +288,5 @@ describe("Discord REST typing (bridge mode)", () => {
     const forbidden = args(conn, { target: "123456789012345678" });
     forbidden.fetch.mockResolvedValueOnce(json({ message: "Missing Access" }, 403));
     expect((await emitDiscordRestTyping(forbidden)).reason).toBe("Discord typing failed (403): Missing Access");
-  });
-});
-
-describe("BlueBubbles iMessage typing", () => {
-  const conn = connection("imessage", { bridgeUrl: "127.0.0.1:1234", password: "bb-secret" });
-
-  it("posts the chat typing endpoint with the password query", async () => {
-    const a = args(conn, { target: "chat_guid:iMessage;-;+15551234567" });
-    a.fetch.mockResolvedValueOnce(json({ status: 200, message: "Successfully started typing!" }));
-    const result = await emitBlueBubblesTyping(a);
-    expect(result).toMatchObject({ status: "sent", supported: true, channelKey: "imessage" });
-    const [url, init] = a.fetch.mock.calls[0];
-    expect(url).toBe("http://127.0.0.1:1234/api/v1/chat/iMessage%3B-%3B%2B15551234567/typing?password=bb-secret");
-    expect(init.method).toBe("POST");
-  });
-
-  it("defaults a schemeless remote bridge to https and keeps explicit http as configured", async () => {
-    const remote = args(connection("imessage", { bridgeUrl: "bluebubbles.example:1234", password: "bb-secret" }), {
-      target: "chat_guid:iMessage;-;+15551234567",
-    });
-    remote.fetch.mockResolvedValueOnce(json({}));
-    expect((await emitBlueBubblesTyping(remote)).status).toBe("sent");
-    expect(remote.fetch.mock.calls[0][0]).toMatch(/^https:\/\/bluebubbles\.example:1234\/api\/v1\/chat\//);
-
-    const explicitHttp = args(connection("imessage", { bridgeUrl: "http://bluebubbles.lan:1234", password: "p" }), {
-      target: "chat_guid:iMessage;-;+1",
-    });
-    explicitHttp.fetch.mockResolvedValueOnce(json({}));
-    await emitBlueBubblesTyping(explicitHttp);
-    expect(explicitHttp.fetch.mock.calls[0][0]).toMatch(/^http:\/\/bluebubbles\.lan:1234\//);
-
-    expect(normalizeBlueBubblesBaseUrl("[::1]:1234")).toBe("http://[::1]:1234");
-    expect(normalizeBlueBubblesBaseUrl("localhost:1234/")).toBe("http://localhost:1234");
-    expect(normalizeBlueBubblesBaseUrl("10.0.0.5:1234")).toBe("https://10.0.0.5:1234");
-  });
-
-  it("redacts the password from a thrown fetch error or an echoed response body", async () => {
-    const thrown = args(conn, { target: "chat_guid:iMessage;-;+1555" });
-    thrown.fetch.mockRejectedValueOnce(new Error("connect failed for /typing?password=bb-secret"));
-    const thrownResult = await emitBlueBubblesTyping(thrown);
-    expect(thrownResult.status).toBe("unsupported");
-    expect(thrownResult.reason).not.toContain("bb-secret");
-    const echoed = args(conn, { target: "chat_guid:iMessage;-;+1555" });
-    echoed.fetch.mockResolvedValueOnce(json({ message: "bad request ?password=bb-secret" }, 400));
-    expect((await emitBlueBubblesTyping(echoed)).reason).not.toContain("bb-secret");
-  });
-
-  it("accepts a raw group chat GUID", async () => {
-    const a = args(conn, { target: "iMessage;+;chat123456" });
-    a.fetch.mockResolvedValueOnce(json({}));
-    expect((await emitBlueBubblesTyping(a)).status).toBe("sent");
-  });
-
-  it("requires a chat GUID target and never leaks the password in reasons", async () => {
-    const handle = args(conn, { target: "imessage:+15551234567" });
-    expect((await emitBlueBubblesTyping(handle)).reason).toMatch(/needs a chat GUID target/);
-    expect(handle.fetch).not.toHaveBeenCalled();
-    const denied = args(conn, { target: "chat_guid:iMessage;-;+1555" }, { isAllowlisted: () => false });
-    const deniedResult = await emitBlueBubblesTyping(denied);
-    expect(deniedResult.reason).toMatch(/not in the current outbound allowlist: http:\/\/127\.0\.0\.1:1234$/);
-    expect(deniedResult.reason).not.toContain("bb-secret");
-    const privateApiOff = args(conn, { target: "chat_guid:iMessage;-;+1555" });
-    privateApiOff.fetch.mockResolvedValueOnce(json({ message: "iMessage Private API Helper is not connected!" }, 500));
-    const failed = await emitBlueBubblesTyping(privateApiOff);
-    expect(failed.reason).toMatch(/BlueBubbles typing failed \(500\).*Private API/);
-    expect(failed.reason).not.toContain("bb-secret");
-  });
-
-  it("refuses non-BlueBubbles providers and missing passwords", async () => {
-    const photon = await emitBlueBubblesTyping(
-      args(connection("imessage", { bridgeUrl: "http://h", password: "p", bridgeProvider: "photon" }), {
-        target: "chat_guid:iMessage;-;+1",
-      }),
-    );
-    expect(photon.reason).toMatch(/needs the BlueBubbles provider/);
-    const noPassword = await emitBlueBubblesTyping(
-      args(connection("imessage", { bridgeUrl: "http://h" }), { target: "chat_guid:iMessage;-;+1" }),
-    );
-    expect(noPassword.reason).toMatch(/missing a BlueBubbles password/);
   });
 });

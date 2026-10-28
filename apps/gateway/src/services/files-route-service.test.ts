@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type CreateFilesRoutePort = typeof import("./files-route-service.js").createFilesRoutePort;
@@ -234,7 +235,12 @@ describe("paged workspace file listing (LB-08)", () => {
       "readme-3.md",
       "docs/deep/readme-2.md",
     ]);
-    expect(first).toMatchObject({ folders: ["docs"], nextCursor: "2", complete: true });
+    expect(first).toMatchObject({ folders: ["docs"], nextCursor: expect.any(String), complete: true });
+    // A file written between pages sorts ahead of the cursor; it must not shift later pages.
+    const newer = path.join(workspace, "readme-new.md");
+    await fs.writeFile(newer, "new", "utf8");
+    const newerTime = new Date(Date.UTC(2026, 0, 10));
+    await fs.utimes(newer, newerTime, newerTime);
     const second = await port.pageWorkspaceFiles(".", 2, { query: "readme", cursor: first.nextCursor });
     expect(second.items.map((item: { relativePath: string }) => item.relativePath)).toEqual(["docs/readme-1.md"]);
     expect(second.nextCursor).toBeUndefined();
@@ -246,9 +252,130 @@ describe("paged workspace file listing (LB-08)", () => {
       "readme-1.md",
     ]);
     expect(folder.folders).toEqual(["deep"]);
-    await expect(port.pageWorkspaceFiles(".", 2, { cursor: "-1" })).rejects.toMatchObject({ code: "FIELD_INVALID" });
+    for (const cursor of ["-1", "2", "not base64!", Buffer.from('{"m":"x","p":""}').toString("base64url")]) {
+      await expect(port.pageWorkspaceFiles(".", 2, { cursor })).rejects.toMatchObject({ code: "FIELD_INVALID" });
+    }
     await expect(port.pageWorkspaceFiles("../outside", 2)).rejects.toThrow();
+
+    // Paths that compare equal under locale collation still page one at a time without loss.
+    await fs.mkdir(path.join(workspace, "accents"));
+    const accentNames = [`${String.fromCodePoint(0xe9)}.txt`, `e${String.fromCodePoint(0x301)}.txt`]; // composed vs decomposed e-acute
+    const tieTime = new Date(Date.UTC(2026, 1, 1));
+    for (const name of accentNames) {
+      const full = path.join(workspace, "accents", name);
+      await fs.writeFile(full, name, "utf8");
+      await fs.utimes(full, tieTime, tieTime);
+    }
+    const accentSeen: string[] = [];
+    let accentCursor: string | undefined;
+    do {
+      const page = await port.pageWorkspaceFiles("accents", 1, { cursor: accentCursor });
+      accentSeen.push(...page.items.map((item: { relativePath: string }) => item.relativePath));
+      accentCursor = page.nextCursor;
+    } while (accentCursor && accentSeen.length < 5);
+    expect(new Set(accentSeen)).toEqual(new Set(await fs.readdir(path.join(workspace, "accents"))));
+    expect(accentSeen).toHaveLength(new Set(accentSeen).size);
   }, 30_000);
+});
+
+describe("streamed workspace file upload", () => {
+  const tempRoots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(tempRoots.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  });
+
+  const body = (...chunks: Buffer[]) => Readable.from(chunks);
+  const length = (...chunks: Buffer[]) => chunks.reduce((total, chunk) => total + chunk.length, 0);
+
+  it("writes UTF-8 text split mid-character across chunks, publishes the receipt and leaves no staging file", async () => {
+    const { createFilesRoutePort } = await import("./files-route-service.js");
+    const rootDir = await createTempWorkspace(tempRoots);
+    const workspace = path.join(rootDir, "workspace");
+    const port = createPort(createFilesRoutePort, rootDir);
+    const text = Buffer.from(`caf${String.fromCodePoint(0xe9)} ${String.fromCodePoint(0x2603)} notes`, "utf8");
+    const chunks = [text.subarray(0, 4), text.subarray(4, 7), text.subarray(7)];
+
+    const uploaded = await port.uploadWorkspaceFileStream("notes/today.md", body(...chunks), {
+      declaredBytes: length(...chunks),
+    });
+
+    expect(uploaded).toMatchObject({ relativePath: "notes/today.md", bytes: text.length });
+    await expect(fs.readFile(path.join(workspace, "notes", "today.md"))).resolves.toEqual(text);
+    await expect(fs.readdir(path.join(workspace, ".goatcitadel-uploads"))).resolves.toEqual([]);
+    const listed = await port.pageWorkspaceFiles(".", 10);
+    expect(listed.folders).toEqual(["notes"]);
+  });
+
+  it("refuses invalid UTF-8 and a file that appeared since the review, writing nothing", async () => {
+    const { createFilesRoutePort } = await import("./files-route-service.js");
+    const rootDir = await createTempWorkspace(tempRoots);
+    const workspace = path.join(rootDir, "workspace");
+    const port = createPort(createFilesRoutePort, rootDir);
+    const binary = Buffer.from([0x68, 0x69, 0xff, 0xfe]);
+    const truncated = Buffer.from(`caf${String.fromCodePoint(0xe9)}`, "utf8").subarray(0, 4);
+
+    await expect(
+      port.uploadWorkspaceFileStream("bin.dat", body(binary), { declaredBytes: binary.length }),
+    ).rejects.toMatchObject({ code: "FIELD_INVALID", message: "File upload must be UTF-8 text." });
+    await expect(
+      port.uploadWorkspaceFileStream("cut.md", body(truncated), { declaredBytes: truncated.length }),
+    ).rejects.toMatchObject({ code: "FIELD_INVALID" });
+    await fs.writeFile(path.join(workspace, "taken.md"), "kept", "utf8");
+    await expect(
+      port.uploadWorkspaceFileStream("taken.md", body(Buffer.from("new")), { declaredBytes: 3, expectAbsent: true }),
+    ).rejects.toMatchObject({ code: "ALREADY_EXISTS" });
+
+    await expect(fs.readFile(path.join(workspace, "taken.md"), "utf8")).resolves.toBe("kept");
+    const names = await fs.readdir(workspace);
+    expect(names).not.toContain("bin.dat");
+    expect(names).not.toContain("cut.md");
+    await expect(fs.readdir(path.join(workspace, ".goatcitadel-uploads"))).resolves.toEqual([]);
+  });
+
+  it("re-checks the write jail at the move, so a folder swapped for a link mid-upload cannot redirect the file", async () => {
+    const { createFilesRoutePort } = await import("./files-route-service.js");
+    const rootDir = await createTempWorkspace(tempRoots);
+    const workspace = path.join(rootDir, "workspace");
+    const outside = path.join(rootDir, "outside");
+    await fs.mkdir(outside);
+    await fs.mkdir(path.join(workspace, "docs"));
+    const port = createPort(createFilesRoutePort, rootDir);
+    async function* swappingBody() {
+      yield Buffer.from("first ");
+      await fs.rm(path.join(workspace, "docs"), { recursive: true });
+      await fs.symlink(outside, path.join(workspace, "docs"), "junction");
+      yield Buffer.from("second");
+    }
+
+    await expect(
+      port.uploadWorkspaceFileStream("docs/escape.md", Readable.from(swappingBody()), { declaredBytes: 12 }),
+    ).rejects.toThrow(/write jail/u);
+    await expect(fs.readdir(outside)).resolves.toEqual([]);
+    await expect(fs.readdir(path.join(workspace, ".goatcitadel-uploads"))).resolves.toEqual([]);
+  });
+
+  it("refuses an upload over the size limit by its declared length, and any target inside the staging folder", async () => {
+    process.env.GOATCITADEL_MAX_FILE_UPLOAD_BYTES = "8";
+    vi.resetModules();
+    try {
+      const { createFilesRoutePort } = await import("./files-route-service.js");
+      const rootDir = await createTempWorkspace(tempRoots);
+      const port = createPort(createFilesRoutePort, rootDir);
+
+      await expect(
+        port.uploadWorkspaceFileStream("big.md", body(Buffer.from("123456789")), { declaredBytes: 9 }),
+      ).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE", details: { limitBytes: 8, relativePath: "big.md" } });
+      await expect(
+        port.uploadWorkspaceFileStream(".GoatCitadel-Uploads/x.md", body(Buffer.from("x")), { declaredBytes: 1 }),
+      ).rejects.toMatchObject({ code: "FIELD_INVALID" });
+      await expect(port.uploadWorkspaceFile(".goatcitadel-uploads/x.md", "x")).rejects.toMatchObject({
+        code: "FIELD_INVALID",
+      });
+    } finally {
+      delete process.env.GOATCITADEL_MAX_FILE_UPLOAD_BYTES;
+      vi.resetModules();
+    }
+  });
 });
 
 async function createTempWorkspace(tempRoots: string[]): Promise<string> {

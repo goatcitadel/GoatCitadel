@@ -26,7 +26,9 @@ import {
   technicalText,
   updateInstallFlow,
   WORKING,
+  type FailureNext,
 } from "./connector-install-store";
+import { MCP_SETTINGS_LINK, NETWORK_ALLOWLIST_LINK } from "./connector-links";
 import { CONNECTOR_CONFLICT_MESSAGE } from "./use-connector-enabled";
 
 // The steps that run on a saved server: sign in, switch on, connect. Each goes through the Settings wrapper for that
@@ -57,19 +59,36 @@ const WHAT_NEXT: Readonly<Record<"cancelled" | "conflict" | "unavailable" | "loc
   locked: "Another change to it is still running. Try again in a moment.",
   uncertain: "Its last change couldn't be confirmed. Reload, then try again.",
 };
-/** Sign-in refusals the Gateway names before it changes anything (I1), in place of "Changed elsewhere." */
-const SIGN_IN_REFUSED: Readonly<Record<McpOAuthRefusal, (host: string | undefined) => string>> = {
-  not_allowed: (host) =>
-    `Its sign-in site ${host ? `${host} ` : ""}isn't on your network allowlist. Add it in Settings, then sign in again.`,
-  sign_in_site: () => "Its sign-in site couldn't be read. Try again in a moment, or set up its sign-in in Settings.",
-  registration: () => "It wouldn't register GoatCitadel for sign-in. Set up its sign-in in Settings instead.",
-  expired: () => "This sign-in request expired. Sign in again to get a new one.",
+/**
+ * Sign-in refusals the Gateway names before it changes anything (I1), in place of "Changed elsewhere.", with the link
+ * to the Settings page their words send the operator to. A vendor that won't register GoatCitadel refuses every new
+ * sign-in the same way, so that one blocks signing in again.
+ */
+const SIGN_IN_REFUSED: Readonly<
+  Record<McpOAuthRefusal, { readonly words: (host: string | undefined) => string } & FailureNext>
+> = {
+  not_allowed: {
+    words: (host) =>
+      `Its sign-in site ${host ? `${host} ` : ""}isn't on your network allowlist. Add it under Change installation ` +
+      "defaults in Settings, then sign in again.",
+    link: NETWORK_ALLOWLIST_LINK,
+  },
+  sign_in_site: {
+    words: () => "Its sign-in site couldn't be read. Try again in a moment, or set up its sign-in in Settings.",
+    link: MCP_SETTINGS_LINK,
+  },
+  registration: {
+    words: () => "It wouldn't register GoatCitadel for sign-in. Set up its sign-in in Settings instead.",
+    link: MCP_SETTINGS_LINK,
+    signInBlocked: true,
+  },
+  expired: { words: () => "This sign-in request expired. Sign in again to get a new one." },
 };
 /** After a connect that failed once it was sent: what to check, by where the app runs. */
-const CONNECT_NEXT = {
-  device: "Check that it can run on this computer, then try again.",
-  remote: "Try again in a moment, or check its setup in Settings.",
-} as const;
+const CONNECT_NEXT: Readonly<Record<"device" | "remote", { readonly words: string } & FailureNext>> = {
+  device: { words: "Check that it can run on this computer, then try again." },
+  remote: { words: "Try again in a moment, or check its setup in Settings.", link: MCP_SETTINGS_LINK },
+};
 /** After a settled sign-in step that didn't finish: a new sign-in replaces the old request. */
 const SIGN_IN_AGAIN = "Sign in again.";
 
@@ -88,8 +107,9 @@ function signInHostOf(authorizeUrl: string) {
 }
 
 function failStep(id: number, step: ServerStep, result: WrapperRefusal) {
-  const next = result.refused ? SIGN_IN_REFUSED[result.refused](result.refusedHost) : WHAT_NEXT[result.status];
-  failInstallFlow(id, step, `${STEP_FAILED[step](runName(id))} ${next}`, result.message);
+  const refused = result.refused ? SIGN_IN_REFUSED[result.refused] : undefined;
+  const next = refused ? refused.words(result.refusedHost) : WHAT_NEXT[result.status];
+  failInstallFlow(id, step, `${STEP_FAILED[step](runName(id))} ${next}`, result.message, refused);
 }
 
 async function readServer(id: number, token: number, serverId: string, step: ServerStep) {
@@ -295,5 +315,5 @@ async function connectSettled(id: number, token: number, serverId: string, wrapp
   if (record.status === "connected") return settleInstallFlow(id, { phase: "done", serverId });
   const lastError = record.lastError?.trim() ? redactSecretText(record.lastError).value : undefined;
   const next = record.transport === "stdio" ? CONNECT_NEXT.device : CONNECT_NEXT.remote;
-  failInstallFlow(id, "connect", `${STEP_FAILED.connect(runName(id))} ${next}`, lastError ?? wrapperText);
+  failInstallFlow(id, "connect", `${STEP_FAILED.connect(runName(id))} ${next.words}`, lastError ?? wrapperText, next);
 }

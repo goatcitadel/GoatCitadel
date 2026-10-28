@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
+import { HOSTS_UNKNOWN, useMissingHosts } from "../../../../features/native-routes/settings/channel-hosts";
 import { useCredentialInput } from "../../../../features/native-routes/settings/credential-input-owner";
 import { channelPageHref } from "../../../app/routes";
 import { queryKeys } from "../../../data/query-keys";
@@ -11,16 +12,8 @@ import { BotKeyField, keyWorks, OTHER_APP_NOTE } from "./BotKeyField";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
 import { botChangeNote, whatIsInTheWay, type InTheWay } from "./telegram-key-change-model";
-import {
-  hostChange,
-  HOSTS_UNKNOWN,
-  TEST_MESSAGE_CHANGE,
-  TurnOnStep,
-  turnOnStatus,
-  type TurnOnWording,
-} from "./TurnOnStep";
+import { hostChange, TEST_MESSAGE_CHANGE, TurnOnStep, turnOnStatus, type TurnOnWording } from "./TurnOnStep";
 import { useChannelRequiredHosts } from "./use-channel-picker-groups";
-import { useMissingHosts } from "./use-missing-hosts";
 import { useTelegramKeyChange, type TelegramKeyChangeState } from "./use-telegram-key-change";
 import { TELEGRAM_CATALOG_ID } from "./use-telegram-setup";
 import { useTurnOn, type TurnOnState } from "./use-turn-on";

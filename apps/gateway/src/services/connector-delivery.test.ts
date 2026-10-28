@@ -513,11 +513,11 @@ describe("dispatchConnectorDelivery", () => {
     );
 
     const result = await dispatchConnectorDelivery(
-      createConnector("integration_connection", "integration:imessage-1", "imessage-1", ["interactive_actions"], {
-        key: "imessage",
+      createConnector("integration_connection", "integration:mattermost-1", "mattermost-1", ["interactive_actions"], {
+        key: "mattermost",
       }),
       createPayload("channel.react", {
-        target: "imessage:+15551234567",
+        target: "town-square",
         messageId: "msg-123",
         reaction: "love",
         partIndex: 1,
@@ -535,8 +535,8 @@ describe("dispatchConnectorDelivery", () => {
 
     expect(commsReact).toHaveBeenCalledWith(
       expect.objectContaining({
-        connectionId: "imessage-1",
-        target: "imessage:+15551234567",
+        connectionId: "mattermost-1",
+        target: "town-square",
         messageId: "msg-123",
         reaction: "love",
         partIndex: 1,
@@ -560,8 +560,8 @@ describe("dispatchConnectorDelivery", () => {
     );
 
     const result = await dispatchConnectorDelivery(
-      createConnector("integration_connection", "integration:imessage-1", "imessage-1", ["interactive_actions"], {
-        key: "imessage",
+      createConnector("integration_connection", "integration:mattermost-1", "mattermost-1", ["interactive_actions"], {
+        key: "mattermost",
       }),
       createPayload("channel.unsend", {
         messageId: "msg-456",
@@ -580,7 +580,7 @@ describe("dispatchConnectorDelivery", () => {
 
     expect(commsUnsend).toHaveBeenCalledWith(
       expect.objectContaining({
-        connectionId: "imessage-1",
+        connectionId: "mattermost-1",
         messageId: "msg-456",
         partIndex: 0,
       }),

@@ -22,6 +22,8 @@ export interface MemoryItemEnumerationContinuation {
   generation: string;
   snapshotAt: string;
   validUntil: string;
+  /** Matching-item count from the first page; fixed while the generation and snapshot hold. */
+  total: number;
   after: { updatedAt: string; itemId: string };
 }
 
@@ -98,14 +100,9 @@ export class MemoryItemEnumerationRepository {
         params.query = `%${escapeLikePattern(input.query)}%`;
       }
       const where = clauses.length ? clauses.join(" AND ") : "1 = 1";
-      const counts = this.db
-        .prepare(`SELECT COUNT(*) AS total, MIN(expires_at) AS next_expiry FROM memory_items WHERE ${where}`)
-        .get<{ total: number | string; next_expiry: string | null }>(params)!;
-      const total = Number(counts.total);
-      if (!Number.isSafeInteger(total) || total < 0) throw new Error("Memory enumeration count is invalid");
-      let validUntil = previous?.validUntil ?? new Date(Date.parse(now) + snapshotTtlMs).toISOString();
-      if (input.status === "active" && counts.next_expiry && counts.next_expiry < validUntil)
-        validUntil = counts.next_expiry;
+      // An unchanged generation and the fixed snapshot pin the matching set, and the
+      // first page already capped validUntil at the next expiry, so only it counts.
+      const { total, validUntil } = previous ?? this.countMatches(where, params, now, input.status);
       const after = previous?.after;
       const position = after ? " AND (updated_at < @updatedAt OR (updated_at = @updatedAt AND item_id < @itemId))" : "";
       const rows = this.db
@@ -131,12 +128,32 @@ export class MemoryItemEnumerationRepository {
                 generation,
                 snapshotAt,
                 validUntil,
+                total,
                 after: { updatedAt: last.updated_at, itemId: last.item_id },
               },
             }
           : {}),
       };
     });
+  }
+
+  private countMatches(
+    where: string,
+    params: Record<string, string | number>,
+    now: string,
+    status: MemoryItemEnumerationInput["status"],
+  ): { total: number; validUntil: string } {
+    const counts = this.db
+      .prepare(`SELECT COUNT(*) AS total, MIN(expires_at) AS next_expiry FROM memory_items WHERE ${where}`)
+      .get<{ total: number | string; next_expiry: string | null }>(params)!;
+    const total = Number(counts.total);
+    if (!Number.isSafeInteger(total) || total < 0) throw new Error("Memory enumeration count is invalid");
+    const validUntil = new Date(Date.parse(now) + snapshotTtlMs).toISOString();
+    return {
+      total,
+      validUntil:
+        status === "active" && counts.next_expiry && counts.next_expiry < validUntil ? counts.next_expiry : validUntil,
+    };
   }
 }
 
@@ -161,6 +178,8 @@ function validateInput(input: MemoryItemEnumerationInput): void {
     !isIso(cursor.validUntil) ||
     cursor.validUntil <= cursor.snapshotAt ||
     Date.parse(cursor.validUntil) - Date.parse(cursor.snapshotAt) > snapshotTtlMs ||
+    !Number.isSafeInteger(cursor.total) ||
+    cursor.total < 0 ||
     typeof cursor.after?.updatedAt !== "string" ||
     !cursor.after.updatedAt ||
     cursor.after.updatedAt.length > 64 ||

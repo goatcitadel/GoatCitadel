@@ -142,8 +142,6 @@ describe("connector registry loop28 coverage", () => {
   it("reports channel-specific target setup hints for every supported approval delivery channel", () => {
     const channels = [
       ["whatsapp", "Set config.defaultTarget or config.defaultRecipient to enable approval delivery."],
-      ["signal", "Set config.defaultRecipient or config.defaultTarget to enable approval delivery."],
-      ["imessage", "Set config.defaultHandle or config.defaultTarget to enable approval delivery."],
       ["mattermost", "Set config.defaultChannel or config.defaultTarget to enable approval delivery."],
       ["matrix", "Set config.defaultRoomId or config.defaultTarget to enable approval delivery."],
       ["qqbot", "Set config.defaultTarget to enable approval delivery."],
@@ -181,37 +179,45 @@ describe("connector registry loop28 coverage", () => {
     }
   });
 
-  it("keeps a saved Zalo Personal connection listed but unable to send, receive or deliver approvals", () => {
-    const records = buildGatewayConnectorRecords({
-      mcpServers: [],
-      mcpTools: [],
-      integrationConnections: [
-        channelConnection({
-          connectionId: "conn-zalouser",
-          key: "zalouser",
-          enabled: true,
-          status: "connected",
-          config: { defaultTarget: "group:ops" },
-        }),
-      ],
-    });
-    const record = records.find((item) => item.connectorId === "integration:conn-zalouser");
+  it.each([
+    ["Zalo Personal", "zalouser", { defaultTarget: "group:ops" }],
+    ["Signal", "signal", { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15551234567", receiveEvents: true }],
+    ["iMessage", "imessage", { bridgeUrl: "http://127.0.0.1:1234", password: "p", defaultHandle: "imessage:+1555" }],
+  ] as const)(
+    "keeps a saved %s connection listed but unable to send, receive or deliver approvals",
+    (label, key, config) => {
+      const records = buildGatewayConnectorRecords({
+        mcpServers: [],
+        mcpTools: [],
+        integrationConnections: [
+          channelConnection({
+            connectionId: `conn-${key}`,
+            key,
+            enabled: true,
+            status: "connected",
+            config,
+          }),
+        ],
+      });
+      const record = records.find((item) => item.connectorId === `integration:conn-${key}`);
 
-    expect(record).toMatchObject({
-      status: "active",
-      metadata: {
-        approvalDeliveryReady: false,
-        approvalDeliveryReason: expect.stringMatching(/^Zalo Personal is not supported anymore/),
-        supportedDeliveryActions: [],
-        setupReady: false,
-      },
-    });
-    const enabled = (id: string) => record?.capabilities.find((capability) => capability.id === id)?.enabled;
-    expect(enabled("outbound_messages")).toBe(false);
-    expect(enabled("inbound_messages")).toBe(false);
-    expect(enabled("interactive_actions")).toBe(false);
-    expect(enabled("approvals")).toBe(false);
-  });
+      // Out of service for good, so never "active" even though the saved row is enabled and connected.
+      expect(record).toMatchObject({
+        status: "disabled",
+        metadata: {
+          approvalDeliveryReady: false,
+          approvalDeliveryReason: expect.stringMatching(new RegExp(`^${label} is not supported anymore`)),
+          supportedDeliveryActions: [],
+          setupReady: false,
+        },
+      });
+      const enabled = (id: string) => record?.capabilities.find((capability) => capability.id === id)?.enabled;
+      expect(enabled("outbound_messages")).toBe(false);
+      expect(enabled("inbound_messages")).toBe(false);
+      expect(enabled("interactive_actions")).toBe(false);
+      expect(enabled("approvals")).toBe(false);
+    },
+  );
 });
 
 function channelConnection(input: {

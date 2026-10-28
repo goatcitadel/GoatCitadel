@@ -1,3 +1,8 @@
+import {
+  HOSTS_UNKNOWN,
+  inboxApprovalHref,
+  inboxPlanHref,
+} from "../../../../features/native-routes/settings/channel-hosts";
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
@@ -10,8 +15,6 @@ export const TEST_MESSAGE_CHANGE = "GoatCitadel sends a test message to your cha
 
 /** The line for a host that is not yet allowed and will be added when the change is made. */
 export const hostChange = (host: string) => `${host} is added to the hosts GoatCitadel may reach`;
-/** Said when the allowlist couldn't be read: until it is, the step can't list every change, so it can't go ahead. */
-export const HOSTS_UNKNOWN = "GoatCitadel couldn't check which hosts it may reach. Try again.";
 /** Where a change that waits on a form or a secret is finished: its review in Chat. */
 const FINISH_IN_CHAT = "Finish it in Chat";
 
@@ -75,16 +78,6 @@ export function turnOnStatus(turnOn: TurnOnState, wording: TurnOnWording = TURN_
     default:
       return undefined;
   }
-}
-
-/** The Inbox page for one approval, in the workspace the change was made in. */
-function inboxApprovalHref(approvalId: string, workspaceId: string): string {
-  return `/inbox?approvalId=${encodeURIComponent(approvalId)}&workspaceId=${encodeURIComponent(workspaceId)}`;
-}
-
-/** The Inbox item for one change, in the workspace the change was made in. */
-function inboxPlanHref(planId: string, workspaceId: string): string {
-  return `/inbox?${new URLSearchParams({ item: `change_plan:${planId}`, workspaceId })}`;
 }
 
 /** Where the last click left things, when it did not finish: the reasons, the failure, or where to go next. */

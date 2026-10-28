@@ -1,5 +1,5 @@
 // Test-only fixtures: build DurableInboundChannelAcceptInput values from the REAL
-// ntfy / Mattermost / Signal / Matrix adapter output and the real Google Chat normalizer,
+// ntfy / Mattermost / Matrix adapter output and the real Google Chat normalizer,
 // mirroring exactly what the stream runtime and the Google Chat route hand to the
 // durable acceptance boundary (acceptance input is secret-free).
 import type { IntegrationConnection } from "@goatcitadel/contracts";
@@ -11,7 +11,6 @@ import {
 } from "./channel-stream-adapters/mattermost-stream-adapter.js";
 import { createMatrixStreamAdapter } from "./channel-stream-adapters/matrix-stream-adapter.js";
 import { createNtfyStreamAdapter } from "./channel-stream-adapters/ntfy-stream-adapter.js";
-import { createSignalStreamAdapter } from "./channel-stream-adapters/signal-stream-adapter.js";
 import { normalizeGoogleChatEvent } from "./google-chat-webhook.js";
 import { normalizeQqbotWebhookPayload } from "./qqbot-webhook.js";
 import { normalizeWecomMessage } from "./wecom-webhook.js";
@@ -177,42 +176,6 @@ async function buildMattermost(): Promise<NewAdapterCase> {
   return { name: "mattermost", input: toAcceptInput(conn, emitted[0]!), expectedKey: "mattermost:conn-mm:post1" };
 }
 
-async function buildSignal(): Promise<NewAdapterCase> {
-  const conn = connection("signal", "conn-signal", {
-    baseUrl: "http://127.0.0.1:8080",
-    accountId: "+15550000000",
-    defaultRecipient: "+15557654321",
-    receiveEvents: true,
-  });
-  const notification = {
-    jsonrpc: "2.0",
-    method: "receive",
-    params: {
-      account: "+15550000000",
-      envelope: {
-        source: "+15551112222",
-        sourceNumber: "+15551112222",
-        sourceUuid: "a1b2c3d4-0000-4000-8000-000000000001",
-        sourceName: "Alice",
-        timestamp: 1760000000000,
-        dataMessage: { timestamp: 1760000000001, message: "hello goat" },
-      },
-    },
-  };
-  const adapter = createSignalStreamAdapter({
-    fetch: (async () =>
-      streamBody([`event: receive\ndata: ${JSON.stringify(notification)}\n\n`])) as unknown as typeof fetch,
-    isUrlAllowlisted: () => true,
-  });
-  const emitted: ChannelStreamEvent[] = [];
-  await adapter.run(recordingCtx(conn, emitted));
-  return {
-    name: "signal",
-    input: toAcceptInput(conn, emitted[0]!),
-    expectedKey: "signal:conn-signal:a1b2c3d4-0000-4000-8000-000000000001:1760000000001",
-  };
-}
-
 async function buildMatrix(): Promise<NewAdapterCase> {
   const conn = connection("matrix", "conn-matrix", {
     homeserverUrl: "https://matrix.example.test",
@@ -376,7 +339,6 @@ export async function buildNewAdapterCases(): Promise<NewAdapterCase[]> {
   return [
     await buildNtfy(),
     await buildMattermost(),
-    await buildSignal(),
     await buildMatrix(),
     buildGoogleChat(),
     buildQqbot(),

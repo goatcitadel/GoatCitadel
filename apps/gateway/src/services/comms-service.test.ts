@@ -1211,28 +1211,45 @@ describe("comms typing platform limits", () => {
     expect(result.reason).toMatch(/^Platform does not support this: Slack has no typing indicator for bot messages/);
   });
 
-  it.each(["telegram", "mattermost", "signal", "whatsapp", "imessage"])(
-    "routes %s typing to the provider host method",
+  it.each(["signal", "imessage"])(
+    "refuses typing for a saved retired %s connection without calling the provider host",
     async (key) => {
       const host = createHost();
       host.getIntegrationConnection = vi.fn(
         () =>
-          ({ connectionId: "p-1", kind: "channel", key, label: key, config: {} }) as unknown as IntegrationConnection,
+          ({
+            connectionId: "r-1",
+            kind: "channel",
+            key,
+            label: key,
+            config: { baseUrl: "http://127.0.0.1:8080", bridgeUrl: "http://127.0.0.1:1234", password: "p" },
+          }) as unknown as IntegrationConnection,
       );
-      host.emitProviderTyping = vi.fn(async () => ({
-        channelKey: key,
-        connectionId: "p-1",
-        target: "t",
-        supported: true,
-        status: "sent" as const,
-      }));
-      const input = { connectionId: "p-1", target: "t", messageId: "m-1" } as never;
-      const result = await commsTyping(host, input);
-      expect(result.status).toBe("sent");
-      expect(host.emitProviderTyping).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(host.emitProviderTyping).mock.calls[0][1]).toMatchObject({ messageId: "m-1" });
+      host.emitProviderTyping = vi.fn();
+      const result = await commsTyping(host, { connectionId: "r-1", target: "t" } as never);
+      expect(result).toMatchObject({ status: "unsupported", supported: false });
+      expect(host.emitProviderTyping).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["telegram", "mattermost", "whatsapp"])("routes %s typing to the provider host method", async (key) => {
+    const host = createHost();
+    host.getIntegrationConnection = vi.fn(
+      () => ({ connectionId: "p-1", kind: "channel", key, label: key, config: {} }) as unknown as IntegrationConnection,
+    );
+    host.emitProviderTyping = vi.fn(async () => ({
+      channelKey: key,
+      connectionId: "p-1",
+      target: "t",
+      supported: true,
+      status: "sent" as const,
+    }));
+    const input = { connectionId: "p-1", target: "t", messageId: "m-1" } as never;
+    const result = await commsTyping(host, input);
+    expect(result.status).toBe("sent");
+    expect(host.emitProviderTyping).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(host.emitProviderTyping).mock.calls[0][1]).toMatchObject({ messageId: "m-1" });
+  });
 
   it("routes Discord typing by runtime mode and declares the webhook limit", async () => {
     const host = createHost();

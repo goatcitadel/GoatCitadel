@@ -3,10 +3,13 @@ import { isExplicitTrue as isTruthyFlag } from "@goatcitadel/gateway-core";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
+  PASTED_SECRET_EXPLANATION,
   requireCatalog,
   baseCatalogMeta,
   paragraph,
   note,
+  linkBlock,
+  troubleshoot,
   readString,
   hasAnyConfiguredSecret,
   compactRecord,
@@ -24,32 +27,43 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
     wizard: {
       archetype: "webhook_destination",
       contentVersion: "2026.10.qqbot.webhook.v1",
-      estimatedMinutes: 12,
-      difficulty: "intermediate",
+      estimatedMinutes: 25,
+      difficulty: "advanced",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect a QQ Bot Open Platform app using its AppID and AppSecret, with a signed webhook for inbound messages.",
+        "Send and receive QQ messages through a QQ Bot Open Platform app. Receiving needs a public HTTPS address on port 443, 8443, 80 or 8080.",
       prerequisites: [
-        "A QQ Bot Open Platform app with its AppID and AppSecret.",
-        "A public HTTPS Gateway URL that the QQ console can reach for event callbacks.",
-        "The QQ sandbox members and group or user openids you will test with.",
+        "The QQ Bot app's AppID and AppSecret.",
+        "A public HTTPS address for this Gateway (a reverse proxy or tunnel); GoatCitadel doesn't provide one.",
       ],
       steps: [
         {
           id: "overview",
           kind: "intro",
+          createOnly: true,
           title: "What this connection does",
           body: [
             paragraph(
-              "GoatCitadel mints an app access token from the AppID and AppSecret and sends text to group, C2C (user), guild channel and guild direct-message targets. Inbound events arrive on a webhook whose ed25519 signature is verified with the AppSecret before anything is accepted.",
+              "GoatCitadel gets an access token from your QQ app's AppID and AppSecret and sends text to QQ groups, one-to-one chats, guild channels and guild direct messages. QQ sends messages back to a webhook address, and GoatCitadel checks QQ's signature on each one before it accepts it.",
             ),
             paragraph(
-              "Inbound is default-deny: only the QQ openids you allow (the id QQ assigns to the sender, not a QQ number) can start turns. Replies to an inbound message are passive replies that carry its message id. QQ allows active (unprompted) group and C2C messages only within platform quotas.",
+              "QQ delivers messages only to a public HTTPS address on port 443, 8443, 80 or 8080 that you provide (a reverse proxy or tunnel to this Gateway, which listens on port 8787 by default). GoatCitadel runs no relay. Without one this connection can only send, and QQ limits unprompted messages.",
             ),
+            paragraph(
+              "GoatCitadel hears four kinds of message: group @-mentions (GROUP_AT_MESSAGE_CREATE), one-to-one messages (C2C_MESSAGE_CREATE), guild channel @-mentions (AT_MESSAGE_CREATE) and guild direct messages (DIRECT_MESSAGE_CREATE). In a group it hears only messages that @-mention the bot.",
+            ),
+            paragraph(
+              "Receiving is default-deny: only the openids you allow can start conversations. An openid is the id QQ gives each sender for your app, not a QQ number. A group member's openid and a one-to-one user's openid are different, so allow each one you need.",
+            ),
+            paragraph(
+              "GoatCitadel can't show your openid yet. Until it can, use this connection for sending unless you already know your openid.",
+            ),
+            paragraph("This channel sends text. Attachments aren't supported."),
             note(
-              "warning",
-              "QQBot is a guided beta lane. Outbound is text-only (attachments are rejected), reactions and unsend are not supported, and the QQ hosts (bots.qq.com, api.bot.qq.com, and sandbox.api.sgroup.qq.com for the sandbox) must be in the network allowlist.",
+              "info",
+              "GoatCitadel can reach QQ only once these hosts are in the hosts GoatCitadel may reach: bots.qq.com and api.bot.qq.com, plus sandbox.api.sgroup.qq.com in Test mode. The setup test has an Allow these hosts button for that.",
             ),
+            note("warning", "QQ Bot is a beta channel. Reactions and unsend aren't supported."),
           ],
         },
         {
@@ -62,8 +76,35 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
               label: "App ID",
               type: "text",
               required: true,
-              explanation: "The AppID of the QQ Bot Open Platform application.",
+              explanation: "The AppID of your QQ Bot Open Platform app.",
+              whereToFind: [
+                paragraph(
+                  "QQ issues the AppID and AppSecret when you create the bot on the QQ Open Platform (q.qq.com). Sign in there and open your bot's management page.",
+                ),
+                linkBlock("QQ Bot docs: getting started", "https://bot.q.qq.com/wiki/develop/api-v2/"),
+              ],
               looksLike: "102000000",
+              canChangeLater: true,
+            },
+            {
+              key: "sandbox",
+              label: "Test mode (sandbox)",
+              type: "boolean",
+              required: false,
+              defaultValue: false,
+              explanation:
+                "Send through QQ's sandbox host, sandbox.api.sgroup.qq.com, instead of the live one. QQ's FAQ says features that aren't published yet can be tried in the sandbox.",
+              whereToFind: [linkBlock("QQ FAQ: the sandbox", "https://q.qq.com/wiki/FAQ/robot/")],
+              canChangeLater: true,
+            },
+            {
+              key: "appSecret",
+              label: "App secret",
+              type: "secret",
+              required: false,
+              explanation: PASTED_SECRET_EXPLANATION,
+              whereToFind: [paragraph("QQ issues it with the AppID when you create the bot.")],
+              sensitive: true,
               canChangeLater: true,
             },
             {
@@ -71,20 +112,10 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
               label: "App secret env var",
               type: "text",
               required: false,
-              explanation: "Preferred path. Name of the env var that stores the bot's AppSecret.",
+              explanation: "Name of the env var that stores the bot's AppSecret.",
               looksLike: "QQBOT_APP_SECRET",
               canChangeLater: true,
               placeholder: "QQBOT_APP_SECRET",
-            },
-            {
-              key: "appSecret",
-              label: "App secret (manual fallback)",
-              type: "secret",
-              required: false,
-              explanation: "Optional direct secret entry if env-backed storage is not ready yet.",
-              sensitive: true,
-              canChangeLater: true,
-              placeholder: "Paste only if you cannot use an env var",
             },
             {
               key: "defaultTarget",
@@ -92,33 +123,10 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
               type: "text",
               required: false,
               explanation:
-                "Optional destination for the guided sandbox test and as a fallback. Use group:<openid>, user:<openid>, channel:<id> or dm:<guild id>. Replies to inbound messages use the sender's own target.",
+                "Leave empty on first setup. QQ often refuses a message the user didn't ask for, and that stops you finishing. Add one later, after you've messaged the bot. Format: group:<openid>, user:<openid>, channel:<id> or dm:<guild id>. Replies go to whoever messaged the bot.",
               looksLike: "user:<openid>",
               canChangeLater: true,
             },
-            {
-              key: "sandbox",
-              label: "Use the sandbox API",
-              type: "boolean",
-              required: false,
-              defaultValue: false,
-              explanation:
-                "Send through sandbox.api.sgroup.qq.com. Apps that are not yet published can only use the sandbox.",
-              canChangeLater: true,
-            },
-          ],
-        },
-        {
-          id: "webhook",
-          kind: "instruction",
-          title: "Register the callback URL",
-          body: [
-            paragraph(
-              "After you finalize the connection, open the QQ Bot console, choose Development > Callback configuration, and set the request URL to your public Gateway origin followed by /api/v1/integrations/connections/<connectionId>/qqbot/webhook (the connection id is created when you finalize, and the callback only works once the connection is enabled and connected). Subscribe to the group, C2C, guild-channel and direct-message events you need.",
-            ),
-            paragraph(
-              "QQ then sends a validation request (op 13); GoatCitadel answers it with an AppSecret signature, and verifies the request signature whenever QQ includes one. Every other event must carry a valid signature, and unsigned or wrongly signed events are rejected.",
-            ),
           ],
         },
         {
@@ -127,7 +135,42 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "Guided test requests an access token with the AppID and AppSecret, reads the bot identity, and sends one active sandbox message to the default target when one is configured. QQ limits active messages, so a rejection there can be a quota, not a credential problem.",
+              "The test asks QQ for an access token with your AppID and AppSecret and reads the bot's name. If you set a default target, it also sends one message there: \"GoatCitadel channel setup verification.\" The test doesn't delete it, so check that it arrived. With no default target, nothing is sent.",
+            ),
+            paragraph(
+              "QQ limits messages a bot sends unprompted, so a refusal of that message can be a limit, not a problem with your credentials.",
+            ),
+          ],
+          troubleshooting: [
+            troubleshoot(
+              "credentials-rejected",
+              "It says QQ refused the app id and secret",
+              "Check that the AppID and the AppSecret come from the same bot, and paste the AppSecret again in case a space came with it. If you used a variable, check its name below.",
+            ),
+            troubleshoot(
+              "host-not-allowed",
+              "It says a QQ host is outside the network allowlist",
+              "GoatCitadel only reaches hosts you allow. Use Allow these hosts on this step to add bots.qq.com and api.bot.qq.com (and sandbox.api.sgroup.qq.com when Test mode is on), then run the test again.",
+            ),
+            troubleshoot(
+              "message-refused",
+              "It says QQ rejected the test message",
+              "QQ limits the messages a bot sends unprompted, and a person can turn them off in QQ. Leave Default target empty, run the test again and finish. Add a target later with Edit setup, after you've messaged the bot. If you keep one, check its format: group:<openid>, user:<openid>, channel:<id> or dm:<guild id>.",
+            ),
+            troubleshoot(
+              "ip-whitelist",
+              "You turned on QQ's server IP whitelist",
+              "With a server IP whitelist, only the addresses on it can call the bot's API. Add this computer's public IP (search 'what is my IP'), or remove the whitelist in QQ.",
+            ),
+            troubleshoot(
+              "variable-not-found",
+              "It says the app secret is missing, and you used an environment variable",
+              "A variable's name must start with QQBOT_ (for example QQBOT_APP_SECRET) and end in _TOKEN or _SECRET, and you must restart GoatCitadel after you set it. Or paste the AppSecret instead.",
+            ),
+            troubleshoot(
+              "no-reply",
+              "You message the bot and nothing comes back",
+              "Check these in order. Finish setup first, then save the callback address in QQ: QQ checks it when you save, and the address only answers once the connection is finished and on. Subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. Allow your openid under Who may message this bot; a group member and a one-to-one user have different openids. In a group, @-mention the bot. Your public address must reach this Gateway, and GoatCitadel must be running.",
             ),
           ],
         },
@@ -137,12 +180,13 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finalize saves the connection for runtime sends and the signed inbound webhook. After finalizing, register the callback URL in the QQ console and confirm it passes QQ's validation request. Then allow your QQ openid (group member_openid and C2C user_openid are different ids, so allow each scope's id), message the bot, and confirm it replies before relying on this connection.",
+              "Finish saves the connection so GoatCitadel can send from it and, once QQ is pointed at its webhook address, hear messages. The last step shows what to set in QQ.",
             ),
+            paragraph("A group member's openid and a one-to-one user's openid are different: allow each one you need."),
           ],
           successCriteria: [
             "QQ issued an access token for the AppID and AppSecret.",
-            "The sandbox message arrived, or you confirmed delivery manually.",
+            "If you set a default target, the test message arrived.",
           ],
         },
       ],
@@ -245,8 +289,9 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
       if (!hasConfiguredSecret) {
         issues.push({
           key: "qqbot_auth_missing",
+          fieldKey: "appSecret",
           level: "error",
-          message: "Provide either a QQBot app secret or an env-backed app-secret reference.",
+          message: "Paste the QQ Bot app secret.",
           failureCategory: "missing_input",
         });
       }

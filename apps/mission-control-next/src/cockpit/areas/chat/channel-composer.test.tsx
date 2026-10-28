@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ChatMessagingOverview } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelConversationContext } from "./channel-conversation";
+import { describeChannelConversation, type ChannelConversationContext } from "./channel-conversation";
 import {
   channelCheckBlock,
   channelFilesBlock,
@@ -75,10 +75,46 @@ describe("channel reply copy", () => {
       "This channel was removed. Its conversations stay readable.",
     );
     expect(channelReplyPlaceholder({ ...ask, status: "off" })).toBe("Turn Telegram back on to reply.");
+    expect(channelReplySubmitLabel({ ...post, status: "removed" })).toBe("Send");
+    expect(channelReplySubmitLabel({ ...post, status: "off" })).toBe("Send");
     // A channel that needs a look can still be tried: the Gateway says so if it cannot deliver.
     expect(channelReplyPlaceholder({ ...post, status: "needs_attention" })).toBe(
       "Posts to Maya on Telegram as your bot",
     );
+    expect(channelReplySubmitLabel({ ...post, status: "needs_attention" })).toBe("Post to Maya");
+  });
+
+  it.each([
+    ["signal", "Signal"],
+    ["imessage", "iMessage"],
+    ["zalouser", "Zalo personal"],
+  ])("offers no way to post through a saved %s connection, which the Gateway reports as removed", (key, label) => {
+    // How the Messaging overview lists a retired channel's enabled, connected connection.
+    const overview: ChatMessagingOverview = {
+      workspaceId: "default",
+      channels: [
+        {
+          connectionId: `conn-${key}`,
+          channelKey: key,
+          label,
+          status: "removed",
+          conversations: [
+            {
+              sessionId: "retired-1",
+              title: "Sam",
+              kind: "direct",
+              own: false,
+              lastActivityAt: "2026-10-28T10:00:00Z",
+            },
+          ],
+        },
+      ],
+    };
+    const reply = describeChannelReply(describeChannelConversation("retired-1", overview));
+    expect(reply).toMatchObject({ mode: "post", status: "removed" });
+    expect(channelReplyBlock(reply)?.kind).toBe("channel-removed");
+    expect(channelReplyPlaceholder(reply)).toBe("This channel was removed. Its conversations stay readable.");
+    expect(channelReplySubmitLabel(reply)).toBe("Send");
   });
 
   it("falls back to the ordinary composer copy outside a channel conversation", () => {

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetupDefinition, ChannelSetupDraft, ChannelSetupFieldDefinition } from "@goatcitadel/contracts";
 // This dynamic boundary loads current Gateway definitions for tests without expanding the production app graph.
@@ -27,6 +28,11 @@ vi.mock("../../../../cockpit/ui/Dialog", () => ({
         {children}
       </div>
     ) : null,
+}));
+// The hosts check on a test step reads the outbound allowlist; no test here may reach a real Gateway for it.
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
+  fetchSettings: vi.fn(async () => ({ revision: 1, networkAllowlist: [] })),
 }));
 beforeEach(() => __resetSessionViewStateForTests());
 const definitions = (await Object.values(runtimeDefinitions)[0]!()).listChannelSetupDefinitions();
@@ -477,8 +483,8 @@ describe("structured field interaction", () => {
   });
 });
 
-describe("current all16 guided definitions in both shells", () => {
-  it("shows immutable history, severity, deferred checks, cleanup, and acknowledgements for all16 without treating them as current proof", async () => {
+describe("current all14 guided definitions in both shells", () => {
+  it("shows immutable history, severity, deferred checks, cleanup, and acknowledgements for all14 without treating them as current proof", async () => {
     for (const definition of definitions)
       for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
         const draft = makeDraft(definition),
@@ -526,10 +532,10 @@ describe("current all16 guided definitions in both shells", () => {
                   steps: [
                     {
                       key: "cleanup",
-                      label: "Sandbox cleanup",
+                      label: "Test cleanup",
                       status: "warn" as const,
                       disposition: "advisory" as const,
-                      message: "Clean up the sandbox message.",
+                      message: "Clean up the test message.",
                       cleanupStatus: "manual_required" as const,
                       providerMessageId: "all14-provider-receipt",
                     },
@@ -555,7 +561,7 @@ describe("current all16 guided definitions in both shells", () => {
       }
   });
   it("renders every visible adapter step through shared fields with string destinations", async () => {
-    expect(definitions).toHaveLength(16);
+    expect(definitions).toHaveLength(14);
     expect(definitions.map((definition) => definition.catalog.catalogId)).toEqual(
       expect.arrayContaining(["channel.matrix", "channel.qqbot", "channel.wecom"]),
     );
@@ -590,7 +596,12 @@ describe("current all16 guided definitions in both shells", () => {
         onFinalize: vi.fn(async () => undefined),
       };
       for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
-        const r = await render(<Component {...props} />);
+        // The Cockpit has the query client the hosts check reads through; Classic brings its own.
+        const r = await render(
+          <QueryClientProvider client={new QueryClient()}>
+            <Component {...props} />
+          </QueryClientProvider>,
+        );
         const nav = r.root.findByProps({ "aria-label": "Setup steps" });
         const count = nav.findAllByType("button").length;
         expect(count).toBeGreaterThanOrEqual(5);
@@ -604,6 +615,133 @@ describe("current all16 guided definitions in both shells", () => {
         }
         r.unmount();
       }
+    }
+  });
+});
+
+describe("what a channel needs and the editing note, in both shells", () => {
+  const slack = definitions.find((item) => item.catalog.catalogId === "channel.slack")!;
+  const propsFor = (definition: ChannelSetupDefinition, draft: ChannelSetupDraft) => ({
+    definition,
+    draft,
+    values: {},
+    label: draft.label ?? "",
+    enabled: true,
+    dirty: false,
+    onValuesChange: vi.fn(),
+    onLabelChange: vi.fn(),
+    onEnabledChange: vi.fn(),
+    onDirty: vi.fn(),
+    onSave: vi.fn(async () => true),
+    onValidate: vi.fn(async () => undefined),
+    onTest: vi.fn(async () => undefined),
+    onFinalize: vi.fn(async () => undefined),
+  });
+  const stepButtons = (root: ReactTestInstance) =>
+    root.findByProps({ "aria-label": "Setup steps" }).findAllByType("button");
+  const editingNotes = (root: ReactTestInstance) =>
+    root.findAll((node) => node.type === "p" && text(node).trim().startsWith("You're changing"));
+  const slackTitle = (id: string) => slack.wizard.steps.find((step) => step.id === id)!.title;
+
+  it("lists the prerequisites under 'What you need', one item each", async () => {
+    expect(slack.wizard.prerequisites.length).toBeGreaterThan(0);
+    for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+      const r = await render(<Component {...propsFor(slack, makeDraft(slack))} />);
+      const needs = r.root.findByProps({ "aria-label": "What you need" });
+      expect(text(needs.findByType("h4")).trim()).toBe("What you need");
+      expect(needs.findAllByType("li").map((item) => text(item).trim())).toEqual(slack.wizard.prerequisites);
+      r.unmount();
+    }
+  });
+  it("shows no 'What you need' list when the channel has no prerequisites", async () => {
+    // A definition without the list at all must also render, because it comes from the Gateway.
+    const noList = { ...slack.wizard, prerequisites: undefined } as unknown as ChannelSetupDefinition["wizard"];
+    for (const bare of [
+      { ...slack, wizard: { ...slack.wizard, prerequisites: [] } },
+      { ...slack, wizard: noList },
+    ] satisfies ChannelSetupDefinition[])
+      for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+        const r = await render(<Component {...propsFor(bare, makeDraft(bare))} />);
+        expect(r.root.findAllByProps({ "aria-label": "What you need" })).toHaveLength(0);
+        expect(text(r.root)).not.toContain("What you need");
+        r.unmount();
+      }
+  });
+  it("starts a new connection at its overview and says nothing about editing", async () => {
+    for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+      const r = await render(<Component {...propsFor(slack, makeDraft(slack))} />);
+      const buttons = stepButtons(r.root);
+      expect(buttons).toHaveLength(slack.wizard.steps.length);
+      expect(text(buttons[0]!)).toContain(slackTitle("overview"));
+      expect(buttons[0]!.props["aria-current"]).toBe("step");
+      expect(text(buttons[1]!)).toContain(slackTitle("prerequisites"));
+      expect(editingNotes(r.root)).toHaveLength(0);
+      expect(text(r.root)).not.toContain("You're changing");
+      r.unmount();
+    }
+  });
+  it("hides the overview and prerequisites when a saved connection is changed, and says so", async () => {
+    for (const lifecycleMode of ["edit", "repair", "rotate_secret", "retest"] as const)
+      for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+        const draft: ChannelSetupDraft = { ...makeDraft(slack), lifecycleMode, label: "" };
+        const r = await render(<Component {...propsFor(slack, draft)} />);
+        const titles = stepButtons(r.root).map((item) => text(item));
+        // Slack's overview, prerequisites and "create your Slack app" steps are setup-only.
+        expect(titles).toHaveLength(slack.wizard.steps.length - 3);
+        expect(titles.some((title) => title.includes(slackTitle("overview")))).toBe(false);
+        expect(titles.some((title) => title.includes(slackTitle("prerequisites")))).toBe(false);
+        expect(titles.some((title) => title.includes(slackTitle("create-app")))).toBe(false);
+        const notes = editingNotes(r.root);
+        expect(notes).toHaveLength(1);
+        expect(text(notes[0]!).trim()).toBe("You're changing Slack. The steps for setting it up are hidden.");
+        r.unmount();
+      }
+  });
+  it("says nothing about hidden steps when editing a channel that has none to hide", async () => {
+    const telegram = definitions.find((item) => item.catalog.catalogId === "channel.telegram")!;
+    expect(telegram.wizard.steps.some((step) => step.createOnly)).toBe(false);
+    // When every step is setup-only the guide keeps them all, so nothing is hidden there either.
+    const everyStepSetupOnly: ChannelSetupDefinition = {
+      ...slack,
+      wizard: { ...slack.wizard, steps: slack.wizard.steps.map((step) => ({ ...step, createOnly: true })) },
+    };
+    for (const definition of [telegram, everyStepSetupOnly])
+      for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+        const draft: ChannelSetupDraft = { ...makeDraft(definition), lifecycleMode: "edit", label: "" };
+        const r = await render(<Component {...propsFor(definition, draft)} />);
+        expect(stepButtons(r.root)).toHaveLength(definition.wizard.steps.length);
+        expect(editingNotes(r.root)).toHaveLength(0);
+        expect(text(r.root)).not.toContain("The steps for setting it up are hidden");
+        r.unmount();
+      }
+  });
+  it("names the connection by its label, and falls back to the channel when the label is blank", async () => {
+    for (const [label, name] of [
+      ["Ops workspace", "Ops workspace"],
+      ["  Ops workspace  ", "Ops workspace"],
+      ["   ", "Slack"],
+      [undefined, "Slack"],
+    ] as const)
+      for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+        const draft: ChannelSetupDraft = { ...makeDraft(slack), lifecycleMode: "edit", label };
+        const r = await render(<Component {...propsFor(slack, draft)} />);
+        expect(text(editingNotes(r.root)[0]!).trim()).toBe(
+          `You're changing ${name}. The steps for setting it up are hidden.`,
+        );
+        r.unmount();
+      }
+  });
+  it("adds no live region for the list or the editing note", async () => {
+    for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+      const draft: ChannelSetupDraft = { ...makeDraft(slack), lifecycleMode: "edit" };
+      const r = await render(<Component {...propsFor(slack, draft)} />);
+      const needs = r.root.findByProps({ "aria-label": "What you need" });
+      const [note] = editingNotes(r.root);
+      for (const node of [needs, note!, ...needs.findAll(() => true)]) {
+        expect(node.props.role).toBeUndefined();
+        expect(node.props["aria-live"]).toBeUndefined();
+      }
+      r.unmount();
     }
   });
 });

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { HOSTS_UNKNOWN, useMissingHosts } from "../../../../features/native-routes/settings/channel-hosts";
 import { useCredentialInput } from "../../../../features/native-routes/settings/credential-input-owner";
 import { channelPickerHref } from "../../../app/routes";
 import { Button } from "../../../ui/Button";
@@ -10,9 +11,8 @@ import { QrCode } from "./QrCode";
 import { CODE_EXPIRED, SayHiStep, WAITING_FOR_HI } from "./SayHiStep";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
-import { HOSTS_UNKNOWN, TurnOnStep, turnOnChanges, turnOnStatus } from "./TurnOnStep";
+import { TurnOnStep, turnOnChanges, turnOnStatus } from "./TurnOnStep";
 import { useChannelRequiredHosts } from "./use-channel-picker-groups";
-import { useMissingHosts } from "./use-missing-hosts";
 import { useConnectedTelegramBot, useNewTelegramHref } from "./use-new-connection-href";
 import { TELEGRAM_CATALOG_ID, useTelegramSetup, type TelegramSetupState } from "./use-telegram-setup";
 import { useTurnOn, type TurnOnState } from "./use-turn-on";

@@ -228,7 +228,8 @@ surfaces or turn historical protocol receipts into live outcome proof.
 | C1 | M5/M7 | First useful Chat response, progressive model setup, fresh onboarding state | `in_progress` | Canonical completed-turn evidence, stale-state regression, browser first-run proof |
 | C2 | M6/M7 | Explicit workflow capture, inactive skill candidate, exact artifact review and separate activation | `in_progress` | Persisted capture/revision/replay tests, canonical activation, subsequent skill reuse |
 | C3 | M6/M7 | Versioned capability pack bindings and owner-backed execution, Browser QA first | `in_progress` | Migration preservation, approval/recovery tests, MCP discovery and browser task proof |
-| C4 | M5/M7 | Telegram, Discord, and Slack end-to-end journeys; Signal inbound opt-in via `receiveEvents` | `in_progress` | Authenticated ingress, progress, approval resume, artifact and scheduled delivery, reconnect/deduplication |
+| C4 | M5/M7 | Telegram, Discord, and Slack end-to-end journeys | `in_progress` | Authenticated ingress, progress, approval resume, artifact and scheduled delivery, reconnect/deduplication |
+| C4 (Signal) | M5/M7 | Signal inbound opt-in via `receiveEvents` | `superseded` | Signal was retired and removed on 2026-10-28, so there is nothing left to accept |
 | C5 | M2/M3/M4/M7 | Native Windows-to-Windows workers with bounded execution and retained container support | `in_progress` | Governed live inference and settlement; native boundary tests; two-machine acceptance |
 | C6 | M1/M10 | Comparable task-outcome benchmark for GoatCitadel, OpenClaw, and Hermes | `in_progress` | Pinned revisions, equivalent models/tools/budgets, repeated outcomes and separate unsupported cases |
 

@@ -20,6 +20,7 @@ import type {
   EvolutionControlPlaneOwnerInputReceipt,
 } from "./evolution-control-plane-adapter.js";
 import { CHANNEL_SLACK_OAUTH_METADATA_KEYS } from "./channel-oauth-draft-metadata.js";
+import { FORCED_ALLOWLIST_INBOUND_CHANNELS } from "./channel-setup-inbound-access.js";
 import { normalizeSlackTargets, normalizeTelegramTargets } from "./channel-setup-definitions/common.js";
 
 export interface ChannelConnectionChangePlanAdapterDependencies {
@@ -63,15 +64,15 @@ export class ChannelConnectionChangePlanAdapter implements EvolutionControlPlane
     const fields = publicFields(definition, draft);
     const secure = missingSecureFields(definition, draft);
     const settingsReview = context.origin.surface === "settings" && Boolean(request.draftId);
-    const requiredAction =
-      settingsReview
-        ? draft.lastValidatedAt && draft.lastTestedAt
-          ? context.actions.confirmation({
-              title: `Confirm ${definition.catalog.label} connection`,
-              confirmationText: "Review the saved destinations, sender access and latest checks in Channels. Confirm this exact draft for governed validation, live checks and activation.",
-            })
-          : undefined
-        : fields.length > 0
+    const requiredAction = settingsReview
+      ? draft.lastValidatedAt && draft.lastTestedAt
+        ? context.actions.confirmation({
+            title: `Confirm ${definition.catalog.label} connection`,
+            confirmationText:
+              "Review the saved destinations, sender access and latest checks in Channels. Confirm this exact draft for governed validation, live checks and activation.",
+          })
+        : undefined
+      : fields.length > 0
         ? context.actions.publicForm({
             title: `Configure ${definition.catalog.label}`,
             fields,
@@ -86,13 +87,26 @@ export class ChannelConnectionChangePlanAdapter implements EvolutionControlPlane
     return {
       target: targetForDraft(draft),
       title: `Connect ${definition.catalog.label}`,
-      summary: settingsReview ? settingsReviewSummary(definition, draft) : `Review the ${definition.catalog.label} setup draft, validate it, and run its registered live checks before finalization.`,
+      summary: settingsReview
+        ? settingsReviewSummary(definition, draft)
+        : `Review the ${definition.catalog.label} setup draft, validate it, and run its registered live checks before finalization.`,
       impact:
         "The live test may contact the channel provider. Credentials remain in OS-keychain custody and a canonical approval is required before finalization.",
       risk: "caution" as const,
-      status: !requiredAction ? ("manual_required" as const) : requiredAction.kind === "confirmation" ? ("awaiting_confirmation" as const) : ("awaiting_input" as const),
+      status: !requiredAction
+        ? ("manual_required" as const)
+        : requiredAction.kind === "confirmation"
+          ? ("awaiting_confirmation" as const)
+          : ("awaiting_input" as const),
       requiredAction,
-      ...(!requiredAction ? { result: { summary: "Complete and review this exact draft's checks in Channels before preparing its activation plan." } } : {}),
+      ...(!requiredAction
+        ? {
+            result: {
+              summary:
+                "Complete and review this exact draft's checks in Channels before preparing its activation plan.",
+            },
+          }
+        : {}),
       expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
     };
   }
@@ -216,9 +230,15 @@ export class ChannelConnectionChangePlanAdapter implements EvolutionControlPlane
 
   public async discard(_context: EvolutionControlPlaneAdapterContext, plan: ChangePlanRecord): Promise<void> {
     const request = requireRequest(plan);
-    if (plan.target.ownerId !== "channel_setup_draft" || !Number.isSafeInteger(plan.target.expectedRevision) ||
-        (plan.target.expectedRevision ?? 0) < 1) {
-      throw new ConflictError({ code: "WRITE_CONFLICT", message: "Cancellation requires the exact reviewed channel draft owner and revision." });
+    if (
+      plan.target.ownerId !== "channel_setup_draft" ||
+      !Number.isSafeInteger(plan.target.expectedRevision) ||
+      (plan.target.expectedRevision ?? 0) < 1
+    ) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: "Cancellation requires the exact reviewed channel draft owner and revision.",
+      });
     }
     let draft: ChannelSetupDraft;
     try {
@@ -229,8 +249,15 @@ export class ChannelConnectionChangePlanAdapter implements EvolutionControlPlane
       if (cause instanceof NotFoundError) return;
       throw cause;
     }
-    if (draft.revision !== plan.target.expectedRevision || draft.catalogId !== normalizeCatalogId(request.channelKind)) {
-      throw new ConflictError({ code: "WRITE_CONFLICT", message: "This draft changed after the plan was reviewed. The newer draft was retained; return to Channels and review it before discarding." });
+    if (
+      draft.revision !== plan.target.expectedRevision ||
+      draft.catalogId !== normalizeCatalogId(request.channelKind)
+    ) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message:
+          "This draft changed after the plan was reviewed. The newer draft was retained; return to Channels and review it before discarding.",
+      });
     }
     await this.deps.discardDraft(draft.draftId, plan.target.expectedRevision);
   }
@@ -247,12 +274,26 @@ export class ChannelConnectionChangePlanAdapter implements EvolutionControlPlane
       (issue) => issue.level === "error" && !isCredentialIssue(issue.fieldKey, definition.adapter.secretFieldKeys),
     );
     if (publicErrors.length > 0) {
-      const structuredKeys = new Set(definition.wizard.steps.flatMap((step) => step.fields ?? [])
-        .filter((field) => field.type === "target-list" || field.type === "sender-list" || Array.isArray(validatedDraft.draft[field.key]))
-        .map((field) => field.key));
+      const structuredKeys = new Set(
+        definition.wizard.steps
+          .flatMap((step) => step.fields ?? [])
+          .filter(
+            (field) =>
+              field.type === "target-list" ||
+              field.type === "sender-list" ||
+              Array.isArray(validatedDraft.draft[field.key]),
+          )
+          .map((field) => field.key),
+      );
       if (publicErrors.some((issue) => issue.fieldKey && structuredKeys.has(issue.fieldKey))) {
-        return { status: "manual_required", target: targetForDraft(validatedDraft),
-          result: { summary: "Correct the structured destinations or sender access in Channels, then prepare a new review of the saved draft." } };
+        return {
+          status: "manual_required",
+          target: targetForDraft(validatedDraft),
+          result: {
+            summary:
+              "Correct the structured destinations or sender access in Channels, then prepare a new review of the saved draft.",
+          },
+        };
       }
       return {
         status: "awaiting_input",
@@ -317,44 +358,116 @@ export class ChannelConnectionChangePlanAdapter implements EvolutionControlPlane
 
 /** Only registered public identity/routing values belong in the review receipt. */
 function settingsReviewSummary(definition: ChannelSetupDefinition, draft: ChannelSetupDraft): string {
-  const clean = (value: unknown): string => typeof value === "string"
-    ? // eslint-disable-next-line no-control-regex -- review receipts must replace control characters in operator-supplied text.
-      redactSecretText(value.replace(/[\u0000-\u001f\u007f]/gu, " ").replace(/(?:https?:\/\/|keychain:)[^\s]+/giu, "[private endpoint]")).value.slice(0, 96)
-    : "";
-  const parts = [`${clean(draft.label) || definition.catalog.label}; ${draft.enabled ? "enabled after approval" : "saved disabled"}; draft revision ${draft.revision}.`];
+  const clean = (value: unknown): string =>
+    typeof value === "string"
+      ? redactSecretText(
+          value
+            // eslint-disable-next-line no-control-regex -- review receipts must replace control characters in operator-supplied text.
+            .replace(/[\u0000-\u001f\u007f]/gu, " ")
+            .replace(/(?:https?:\/\/|keychain:)[^\s]+/giu, "[private endpoint]"),
+        ).value.slice(0, 96)
+      : "";
+  const parts = [
+    `${clean(draft.label) || definition.catalog.label}; ${draft.enabled ? "enabled after approval" : "saved disabled"}; draft revision ${draft.revision}.`,
+  ];
   const key = definition.catalog.catalogId;
-  const targets = key === "channel.slack" ? normalizeSlackTargets(draft.draft)
-    : key === "channel.telegram" ? normalizeTelegramTargets(draft.draft) : [];
+  const targets =
+    key === "channel.slack"
+      ? normalizeSlackTargets(draft.draft)
+      : key === "channel.telegram"
+        ? normalizeTelegramTargets(draft.draft)
+        : [];
   if (targets.length) {
-    parts.push("Destinations: " + targets.slice(0, 3).map((target) => {
-      const address = "channel" in target ? target.channel : target.chatId;
-      const thread = "threadTs" in target ? target.threadTs : "threadId" in target ? target.threadId : undefined;
-      return `${clean(target.label)} (${clean(address)})${thread ? `, thread ${clean(thread)}` : ""}${target.default ? ", default" : ""}`;
-    }).join("; ") + (targets.length > 3 ? `; ${targets.length - 3} more in Channels` : "") + ".");
+    parts.push(
+      "Destinations: " +
+        targets
+          .slice(0, 3)
+          .map((target) => {
+            const address = "channel" in target ? target.channel : target.chatId;
+            const thread = "threadTs" in target ? target.threadTs : "threadId" in target ? target.threadId : undefined;
+            return `${clean(target.label)} (${clean(address)})${thread ? `, thread ${clean(thread)}` : ""}${target.default ? ", default" : ""}`;
+          })
+          .join("; ") +
+        (targets.length > 3 ? `; ${targets.length - 3} more in Channels` : "") +
+        ".",
+    );
   } else {
     const fields = definition.wizard.steps.flatMap((step) => step.fields ?? []);
-    const destinationKeys = new Set(["channelId", "defaultChannel", "defaultChannelId", "defaultGuildId", "defaultChatId", "defaultRoomId", "defaultTarget", "defaultRecipient", "defaultRecipientId", "defaultHandle", "roomToken", "recipientId", "recipient", "topic", "spaceName", "phoneNumberId"]);
-    const destinations = fields.filter((field) => destinationKeys.has(field.key) && !field.sensitive && field.type !== "secret")
-      .map((field) => `${field.label}: ${clean(draft.draft[field.key])}`).filter((entry) => !entry.endsWith(": "));
+    const destinationKeys = new Set([
+      "channelId",
+      "defaultChannel",
+      "defaultChannelId",
+      "defaultGuildId",
+      "defaultChatId",
+      "defaultRoomId",
+      "defaultTarget",
+      "defaultRecipient",
+      "defaultRecipientId",
+      "defaultHandle",
+      "roomToken",
+      "recipientId",
+      "recipient",
+      "topic",
+      "spaceName",
+      "phoneNumberId",
+    ]);
+    const destinations = fields
+      .filter((field) => destinationKeys.has(field.key) && !field.sensitive && field.type !== "secret")
+      .map((field) => `${field.label}: ${clean(draft.draft[field.key])}`)
+      .filter((entry) => !entry.endsWith(": "));
     if (destinations.length) parts.push(destinations.slice(0, 4).join("; ") + ".");
   }
-  if (typeof draft.draft.inboundAccessMode === "string") {
+  // A channel whose allowlist is always enforced has no access-mode field, so its draft carries no mode; the normalizer
+  // applies the allowlist, and the review says so.
+  const inboundMode =
+    typeof draft.draft.inboundAccessMode === "string"
+      ? draft.draft.inboundAccessMode
+      : FORCED_ALLOWLIST_INBOUND_CHANNELS.has(definition.catalog.key)
+        ? "allowlist"
+        : undefined;
+  if (inboundMode) {
     const count = resolveAllowedSenders(draft.draft).length;
-    parts.push(`Inbound access: ${draft.draft.inboundAccessMode === "allowlist" ? `allowlist, ${count} allowed sender${count === 1 ? "" : "s"}` : "open legacy access"}.`);
+    parts.push(
+      `Inbound access: ${inboundMode === "allowlist" ? `allowlist, ${count} allowed sender${count === 1 ? "" : "s"}` : "open legacy access"}.`,
+    );
   }
   if (key === "channel.discord") {
-    const guilds = draft.draft.guilds && typeof draft.draft.guilds === "object" && !Array.isArray(draft.draft.guilds) ? Object.keys(draft.draft.guilds).length : 0;
-    parts.push(`Discord: ${draft.draft.guildPolicy === "off" ? "DM only" : `guild policy ${clean(draft.draft.guildPolicy) || "not selected"}, ${guilds} configured guild rule${guilds === 1 ? "" : "s"}`}; DM policy ${clean(draft.draft.inboundDmPolicy) || "not selected"}.`);
+    const guilds =
+      draft.draft.guilds && typeof draft.draft.guilds === "object" && !Array.isArray(draft.draft.guilds)
+        ? Object.keys(draft.draft.guilds).length
+        : 0;
+    parts.push(
+      `Discord: ${draft.draft.guildPolicy === "off" ? "DM only" : `guild policy ${clean(draft.draft.guildPolicy) || "not selected"}, ${guilds} configured guild rule${guilds === 1 ? "" : "s"}`}; DM policy ${clean(draft.draft.inboundDmPolicy) || "not selected"}.`,
+    );
   }
   if (key === "channel.slack" && draft.draft.slackTeamId) {
-    parts.push(`Slack workspace: ${clean(draft.draft.slackTeamName)} (${clean(draft.draft.slackTeamId)}); app ${clean(draft.draft.slackAppId)}; bot ${clean(draft.draft.slackBotUserId)}.`);
-    const scopes = Array.isArray(draft.draft.slackScopes) ? draft.draft.slackScopes : typeof draft.draft.slackScopes === "string" ? draft.draft.slackScopes.split(",").map((scope) => scope.trim()).filter(Boolean) : [];
-    if (scopes.length) parts.push(`Scopes: ${scopes.slice(0, 8).map(clean).join(", ")}${scopes.length > 8 ? "; additional scopes in Channels" : ""}.`);
+    parts.push(
+      `Slack workspace: ${clean(draft.draft.slackTeamName)} (${clean(draft.draft.slackTeamId)}); app ${clean(draft.draft.slackAppId)}; bot ${clean(draft.draft.slackBotUserId)}.`,
+    );
+    const scopes = Array.isArray(draft.draft.slackScopes)
+      ? draft.draft.slackScopes
+      : typeof draft.draft.slackScopes === "string"
+        ? draft.draft.slackScopes
+            .split(",")
+            .map((scope) => scope.trim())
+            .filter(Boolean)
+        : [];
+    if (scopes.length)
+      parts.push(
+        `Scopes: ${scopes.slice(0, 8).map(clean).join(", ")}${scopes.length > 8 ? "; additional scopes in Channels" : ""}.`,
+      );
   }
-  for (const [label, timestamp] of [["Validation recorded", draft.lastValidatedAt], ["Live check recorded", draft.lastTestedAt]] as const) {
-    if (timestamp && Number.isFinite(Date.parse(timestamp))) parts.push(`${label}: ${new Date(timestamp).toISOString()}.`);
+  for (const [label, timestamp] of [
+    ["Validation recorded", draft.lastValidatedAt],
+    ["Live check recorded", draft.lastTestedAt],
+  ] as const) {
+    if (timestamp && Number.isFinite(Date.parse(timestamp)))
+      parts.push(`${label}: ${new Date(timestamp).toISOString()}.`);
   }
-  if (draft.lastFailureCategory) parts.push(`Latest recorded failure: ${clean(draft.lastFailureCategory)}. Activation requires eligible current evidence.`);
+  if (draft.lastFailureCategory)
+    parts.push(
+      `Latest recorded failure: ${clean(draft.lastFailureCategory)}. Activation requires eligible current evidence.`,
+    );
   return parts.join(" ").slice(0, 2_000);
 }
 
@@ -364,9 +477,19 @@ function publicFields(definition: ChannelSetupDefinition, draft: ChannelSetupDra
   const fields: ChangePlanPublicFormField[] = [];
   for (const step of definition.wizard.steps) {
     for (const field of step.fields ?? []) {
-      if (seen.has(field.key) || secretKeys.has(field.key) || field.type === "secret" || field.sensitive ||
-          field.type === "target-list" || field.type === "sender-list" || field.key === "targets" || Array.isArray(draft.draft[field.key]) ||
-          (definition.catalog.catalogId === "channel.slack" && (CHANNEL_SLACK_OAUTH_METADATA_KEYS as readonly string[]).includes(field.key))) continue;
+      if (
+        seen.has(field.key) ||
+        secretKeys.has(field.key) ||
+        field.type === "secret" ||
+        field.sensitive ||
+        field.type === "target-list" ||
+        field.type === "sender-list" ||
+        field.key === "targets" ||
+        Array.isArray(draft.draft[field.key]) ||
+        (definition.catalog.catalogId === "channel.slack" &&
+          (CHANNEL_SLACK_OAUTH_METADATA_KEYS as readonly string[]).includes(field.key))
+      )
+        continue;
       seen.add(field.key);
       const initial = draft.draft[field.key] ?? field.defaultValue;
       fields.push({

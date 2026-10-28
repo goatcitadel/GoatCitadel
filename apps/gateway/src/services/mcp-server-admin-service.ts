@@ -12,7 +12,7 @@ import type {
   McpServerRecord,
   McpServerUpdateInput,
 } from "@goatcitadel/contracts";
-import { resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
+import { redactSecretText, resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
 import { ValidationError, NotFoundError } from "@goatcitadel/contracts";
 import { assertMcpServerReview, mcpServerRevision, type McpServerWriteReview } from "./mcp-server-revision.js";
 import {
@@ -328,9 +328,7 @@ export async function connectMcpServer(
         serverId,
         {
           status: "error",
-          lastError: expected
-            ? "Reviewed MCP connection did not complete. Inspect the current server before retrying."
-            : (cause as Error).message,
+          lastError: expected ? reviewedConnectFailure(cause) : (cause as Error).message,
         },
         connecting!,
       );
@@ -348,6 +346,23 @@ export async function connectMcpServer(
     Object.assign(error, { mutationCommitted: true });
     throw error;
   }
+}
+
+/** Code points of a reviewed connect's own cause kept in the server's last error. */
+const REVIEWED_FAILURE_MAX = 500;
+
+/**
+ * Why a reviewed connect stopped, as the server's last error: the cause's own words (with the start of a local
+ * server's stderr, when it exited) on one line, secret-redacted and bounded, so the operator can see what to fix.
+ */
+function reviewedConnectFailure(cause: unknown): string {
+  // Redacted line by line first, so a secret's header can't take the rest of the stderr with it.
+  const redacted = cause instanceof Error ? redactSecretText(cause.message).value : "";
+  const reason = redacted.replace(/[\s\p{Cc}]+/gu, " ").trim();
+  const kept = Array.from(reason).slice(0, REVIEWED_FAILURE_MAX).join("").trim();
+  return kept
+    ? `Reviewed MCP connection did not complete: ${kept}`
+    : "Reviewed MCP connection did not complete. Inspect the current server before retrying.";
 }
 
 export async function disconnectMcpServer(

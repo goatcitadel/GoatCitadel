@@ -65,36 +65,26 @@ function discoveryRejection(error: unknown): string | undefined {
   return undefined;
 }
 /**
- * The network guard's own reason for a host that isn't on the allowlist, as sign-in discovery passes it on. The guard
- * names it as a scheme and host only, or a bare host.
+ * A host as the Gateway names one the network allowlist refused: lower-case, a name or a bracketed IPv6 address, with
+ * any port, nothing else.
  */
-const NOT_ALLOWLISTED = /\bnot yet allowlisted:\s*(\S+)/iu;
-const BARE_HOST = /^[a-z0-9.-]+(?::\d{1,5})?$/iu;
-function blockedHost(reason: string): string | undefined {
-  const named = NOT_ALLOWLISTED.exec(reason)?.[1]?.replace(/[.,;)]+$/u, "");
-  if (!named) return undefined;
-  try {
-    const host = named.includes("://") ? new URL(named).host : named;
-    return BARE_HOST.test(host) ? host.toLowerCase() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-/** Which refusal `discoveryRejection` worded, by the field the Gateway named and the step it refused. */
+const BARE_HOST = /^(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::\d{1,5})?$/u;
+/**
+ * Which refusal `discoveryRejection` worded, by the field the Gateway named and the step it refused. A sign-in host
+ * off the network allowlist comes as data (`reason` and `host`), so the wording is never read for it.
+ */
 function refusalOf(
   error: unknown,
   action: McpOAuthAction,
 ): { refused: McpOAuthRefusal; refusedHost?: string } | undefined {
   if (!isApiRequestError(error) || !error.body || typeof error.body !== "object") return undefined;
-  const body = error.body as Record<string, unknown>,
-    field = (body.details as Record<string, unknown> | undefined)?.field;
-  if (field === "oauthRegistration") return { refused: "registration" };
-  if (field !== "oauth") return undefined;
+  const details = (error.body as Record<string, unknown>).details as Record<string, unknown> | undefined;
+  if (details?.field === "oauthRegistration") return { refused: "registration" };
+  if (details?.field !== "oauth") return undefined;
   // Completion's only pre-admission refusal is a PKCE verifier that is gone: the request expired.
   if (action === "complete") return { refused: "expired" };
-  const reason = typeof body.error === "string" ? body.error : "";
-  if (!NOT_ALLOWLISTED.test(reason)) return { refused: "sign_in_site" };
-  const host = blockedHost(reason);
+  if (details.reason !== "host_not_allowlisted") return { refused: "sign_in_site" };
+  const host = typeof details.host === "string" && BARE_HOST.test(details.host) ? details.host : undefined;
   return { refused: "not_allowed", ...(host ? { refusedHost: host } : {}) };
 }
 export async function commitMcpOAuth({

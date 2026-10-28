@@ -297,6 +297,8 @@ A1 to A4 are the decided Part A PR. A5 onward are other problems that reach seve
   Classic :205).
 - Fix: GJ: title "Where should messages go?" when `!GUIDED_INBOUND_CHANNELS.has(key)`. Classic nav: show
   `channelStageLabel(step)` instead of the kind.
+- Built differently (Ruling R42): Discord keeps "Choose destinations and access". Its step holds the DM and server
+  policies. The new title is only for outbound-only channels.
 
 ### A17. Classic wizard shows why Finalize is off only as a tooltip
 
@@ -523,6 +525,8 @@ Shared: A3 (`graph.facebook.com`; C7), A5, A15, C1.
 
 ### Signal (`defs/signal.ts`) — gated: Signal/iMessage decision (N1)
 
+Retired 2026-10-28 (N1); not applied.
+
 1. [blocks] The bridge guidance names software the code can't talk to. Field `baseUrl` where-to-find "signal-cli REST
    or JSON-RPC proxy" (`signal.ts:65-67`), `officialDocsUrl` bbernhard/signal-cli-rest-api (`:162`); code calls
    `POST /api/v1/rpc` (`PROBES:1272`, `CE` signal send) and `GET /api/v1/events`
@@ -557,6 +561,8 @@ Shared: A3 (`graph.facebook.com`; C7), A5, A15, C1.
 Shared: A10 (LAN http fails), C1 (no secrets for Signal; not affected).
 
 ### iMessage (`defs/imessage.ts`) — gated: Signal/iMessage decision (N1)
+
+Retired 2026-10-28 (N1); not applied.
 
 1. [blocks] Bridge URL example uses the wrong port and assumes the same Mac. `looksLike http://127.0.0.1:3001`
    (`imessage.ts:82`); BlueBubbles' default is 1234 (https://docs.bluebubbles.app/server/); plain LAN http fails
@@ -682,10 +688,14 @@ Shared: A5 (`MATTERMOST_`), A8, A10, A15, C1 (`CE:2132`).
    test, finish. Receiving (optional), after you finish: copy this connection's webhook address, uninstall the bot and
    install it again with that address and the same secret, then turn it on for the room again. A Talk bot's address
    can't be changed." Source https://nextcloud-talk.readthedocs.io/en/latest/occ/.
+   Superseded (Ruling R53): no address is claimed to work. Send-only uses `occ talk:bot:create`, which needs no webhook
+   address. Receiving uninstalls the bot and installs it again with the real address.
 2. [blocks] No bot setup steps. Add a `createOnly` instruction step: "You need shell access to your Nextcloud server.
    1. `occ talk:bot:install` with a name, a secret of 40 to 128 characters, the webhook address, and the features
    webhook and response. 2. `occ talk:bot:setup <bot-id> <room-token>` for the conversation." Without the response feature
    the bot can't post. Source https://nextcloud-talk.readthedocs.io/en/latest/bots/ (confirm exact flag syntax there).
+   Superseded (Ruling R53): the send-only step uses `occ talk:bot:create`. The `occ talk:bot:install` step with the real
+   address is only for receiving.
 3. [blocks] "Default room ID" is the conversation's room token, and "Token" means two things here. Relabel `tokenEnv`
    "Bot secret from an environment variable (advanced)", `token` "Bot secret", `defaultRoomId` "Room token" with
    explanation "The code at the end of the conversation's web address (…/call/<token>)" (location unverified).
@@ -834,6 +844,8 @@ Shared: A11, A15, C1 (`CE:2437`; inbound `resolveWecomCallbackSecrets`).
    with it recently. Send your Official Account a message from the recipient's Zalo first."
 4. [misleads] `openapi.zalo.me` isn't allowlisted, the test bypasses the allowlist, and sends then fail. See A3 and C7.
 5. [misleads] Send endpoint `v2.0` (`PROBES:1355`, `CE:2975`) may be stale (unverified).
+   Verified and fixed (Ruling R57): Zalo shut down the v2 message API (error -240). The send endpoint moved to
+   `v3.0/oa/message/cs`.
 6. [polish] Overview note jargon (`zalo.ts:39`) → "This channel only sends. It can't receive replies." Finish body
    "manual confirmation closes the loop" (`:95`) → "Check the test message arrived." `validate()` message "Default
    recipient ID is required." (`:206`) → "Default OA user ID is required." Step title: A16.

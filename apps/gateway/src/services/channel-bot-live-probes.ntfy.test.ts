@@ -35,7 +35,13 @@ describe("ntfy channel live probes", () => {
       mode: "http_publish",
       steps: [
         { key: "ntfy_sandbox_send", status: "pass" },
-        { key: "ntfy_sandbox_cleanup", status: "skipped", disposition: "deferred", cleanupStatus: "unsupported" },
+        {
+          key: "ntfy_sandbox_cleanup",
+          status: "skipped",
+          disposition: "deferred",
+          cleanupStatus: "unsupported",
+          message: "The test message stays on the topic.",
+        },
       ],
     });
     expect(result.checks).toEqual([expect.objectContaining({ key: "ntfy_sandbox_send", status: "pass" })]);
@@ -149,6 +155,45 @@ describe("ntfy channel live probes", () => {
         failureCategory: "malformed_value",
       }),
     ]);
+  });
+
+  it("takes the topics ntfy takes: letters, numbers, underscores and dashes, up to 64 characters", async () => {
+    for (const topic of ["goatcitadel_ops-9", "a".repeat(64)]) {
+      const fetcher = vi.fn(async () => new Response(JSON.stringify({ id: "m1" }), { status: 200 }));
+      const result = await runNtfyLiveChecks({
+        baseUrl: "https://ntfy.example.com",
+        topic,
+        includeSandboxSend: true,
+        fetcher,
+        checkedAt: "2026-07-13T20:00:00.000Z",
+      });
+
+      expect(fetcher, topic).toHaveBeenCalledTimes(1);
+      expect(result.probe.steps[0], topic).toMatchObject({ key: "ntfy_sandbox_send", status: "pass" });
+    }
+  });
+
+  it("refuses a dot or more than 64 characters before any request, and says the rule", async () => {
+    for (const topic of ["ops.alerts", "a".repeat(65)]) {
+      const fetcher = vi.fn();
+      const result = await runNtfyLiveChecks({
+        baseUrl: "https://ntfy.example.com",
+        topic,
+        includeSandboxSend: true,
+        fetcher,
+        checkedAt: "2026-07-13T20:00:00.000Z",
+      });
+
+      expect(fetcher, topic).not.toHaveBeenCalled();
+      expect(result.probe.steps, topic).toEqual([
+        expect.objectContaining({
+          key: "ntfy_sandbox_send",
+          status: "fail",
+          message: expect.stringContaining("Topics use letters, numbers, _ and -, up to 64 characters."),
+          failureCategory: "malformed_value",
+        }),
+      ]);
+    }
   });
 
   it("fails before network mutation when the base URL embeds credentials", async () => {

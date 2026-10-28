@@ -7,7 +7,7 @@ import {
   type McpServerRecord,
   type McpServerConnectionReview,
 } from "@goatcitadel/contracts";
-import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
+import { HostNotAllowlistedError, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 import type { McpAuthStateRecord, McpAuthStateUpdate } from "./mcp-server-admin-service.js";
 import type { McpConnectionFence } from "./mcp-static-environment-service.js";
 import { assertMcpConnectionReview, mcpServerRevision } from "./mcp-server-revision.js";
@@ -101,14 +101,33 @@ async function discoverMcpOAuth(
         field: "oauthRegistration",
         message: `Sign-in for ${server.label} stopped at client registration: ${reason} GoatCitadel's saved configuration did not change, and the attempt is recorded in the side-effect ledger.`,
       });
-    throw new ValidationError({ field: "oauth", message: `Sign-in discovery for ${server.label} failed: ${reason}` });
+    // A host off the allowlist is named as data, so a client never reads it back out of the wording.
+    const blocked = blockedHostOf(cause);
+    throw new ValidationError({
+      field: "oauth",
+      message: `Sign-in discovery for ${server.label} failed: ${reason}`,
+      ...(blocked ? { details: { reason: "host_not_allowlisted", host: blocked } } : {}),
+    });
   }
 }
 
-export async function startMcpOAuth(host: McpOAuthHandshakeHost, serverId: string,
-  review?: { server: McpServerRecord; reviewed: McpServerConnectionReview; prepared?: PreparedMcpOAuthDiscovery }): Promise<McpOAuthStartResponse> {
+/** The host the network allowlist refused during discovery, from the refusal itself or an error that wraps it. */
+function blockedHostOf(error: unknown): string | undefined {
+  let current: unknown = error;
+  for (let depth = 0; current instanceof Error && depth < 5; depth += 1) {
+    if (current instanceof HostNotAllowlistedError) return current.host;
+    current = current.cause;
+  }
+  return undefined;
+}
+
+export async function startMcpOAuth(
+  host: McpOAuthHandshakeHost,
+  serverId: string,
+  review?: { server: McpServerRecord; reviewed: McpServerConnectionReview; prepared?: PreparedMcpOAuthDiscovery },
+): Promise<McpOAuthStartResponse> {
   const admitted = review ? structuredClone(review) : undefined;
-  let server = admitted?.server ?? await serverOf(host, serverId);
+  let server = admitted?.server ?? (await serverOf(host, serverId));
   const fence = admitted ? Object.freeze({ expectedConnectionRevision: server.connectionRevision! }) : undefined;
   if (admitted && !server.connectionRevision) throw new Error("Reviewed OAuth admission has no connection generation.");
   if (server.authType !== "oauth2") {
@@ -119,7 +138,8 @@ export async function startMcpOAuth(host: McpOAuthHandshakeHost, serverId: strin
   }
   const prepare = host.prepareMcpStaticEnvironment;
   if (prepare) server = fence ? await prepare.call(host, server, fence) : await prepare.call(host, server);
-  if (fence && server.connectionRevision !== fence.expectedConnectionRevision) throw new Error("Reviewed OAuth admission was superseded.");
+  if (fence && server.connectionRevision !== fence.expectedConnectionRevision)
+    throw new Error("Reviewed OAuth admission was superseded.");
   const state = randomUUID();
   const oauth = server.oauth;
   if (server.authType !== "oauth2" || !oauth || !hasMcpOAuthEndpointSource(oauth)) {
@@ -183,11 +203,21 @@ export async function startMcpOAuth(host: McpOAuthHandshakeHost, serverId: strin
   if (admitted) {
     const current = await serverOf(host, serverId);
     const auth = (await authStateOf(host))[serverId];
-    assertMcpConnectionReview(current, { expectedRevision: mcpServerRevision(current), expectedConnectionRevision: fence!.expectedConnectionRevision });
-    if (!sameConfiguration(current, server) || !isDeepStrictEqual(auth, JSON.parse(JSON.stringify(next)))
-      || !isDeepStrictEqual(current.authState, buildPublicMcpAuthState(current, auth)))
+    assertMcpConnectionReview(current, {
+      expectedRevision: mcpServerRevision(current),
+      expectedConnectionRevision: fence!.expectedConnectionRevision,
+    });
+    if (
+      !sameConfiguration(current, server) ||
+      !isDeepStrictEqual(auth, JSON.parse(JSON.stringify(next))) ||
+      !isDeepStrictEqual(current.authState, buildPublicMcpAuthState(current, auth))
+    )
       throw new Error("Reviewed OAuth initialization changed before acknowledgement.");
-    return { authorizeUrl: authorizeUrl.toString(), state, review: { version: 1, reviewed: admitted.reviewed, server: current } };
+    return {
+      authorizeUrl: authorizeUrl.toString(),
+      state,
+      review: { version: 1, reviewed: admitted.reviewed, server: current },
+    };
   }
   return { authorizeUrl: authorizeUrl.toString(), state };
 }

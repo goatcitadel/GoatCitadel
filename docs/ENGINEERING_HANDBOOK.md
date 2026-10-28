@@ -651,7 +651,7 @@ Operator-facing mutating JSON endpoints require `Idempotency-Key` and block dupl
 - `GET /api/v1/files/templates`
 - `POST /api/v1/files/templates/:templateId/create`
 - `GET /api/v1/files/list`
-- `POST /api/v1/files/upload`
+- `POST /api/v1/files/upload`: UTF-8 text only. Send the bytes as `application/octet-stream` with `?relativePath=…[&expectAbsent=true]`, a `Content-Length` and an optional `X-Content-SHA256`; the Gateway streams them to disk, up to 50 MB. A JSON body `{ relativePath, content, expectAbsent? }` is still accepted up to 1 MiB.
 - `GET /api/v1/files/download`
 - `GET /api/v1/files/preview`
 

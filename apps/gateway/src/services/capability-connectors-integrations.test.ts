@@ -53,7 +53,6 @@ describe("connector integration allowlist", () => {
     "automation.webhooks",
     "channel.discord",
     "channel.teams",
-    "channel.signal",
     "channel.line",
     "channel.nextcloud-talk",
     "channel.google-chat",

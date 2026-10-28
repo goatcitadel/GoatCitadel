@@ -150,6 +150,42 @@ afterEach(async () => {
   await act(async () => root?.unmount());
   vi.unstubAllGlobals();
 });
+describe("retired channels as notification destinations", () => {
+  const retired = (["signal", "imessage", "zalouser"] as const).map(
+    (key): IntegrationConnection => ({ ...channel, connectionId: `retired-${key}`, key, label: key }),
+  );
+  function RetiredHarness() {
+    s = useNotificationRouting("one", [channel, ...retired]);
+    return null;
+  }
+
+  it("never offers an enabled, connected Signal, iMessage or Zalo personal connection as a routing target", async () => {
+    await act(async () => {
+      root = create(<RetiredHarness />);
+    });
+    expect(s.channels.map((item) => item.connectionId)).toEqual([channel.connectionId]);
+
+    for (const connection of retired) {
+      await act(async () => {
+        s.setEditor("target");
+        s.setTargetForm({
+          label: "Retired destination",
+          kind: "channel_connection",
+          channelConnectionId: connection.connectionId,
+          webhookUrlSecretRef: "",
+          credentialSecretRef: "",
+        });
+      });
+      let created = true;
+      await act(async () => {
+        created = await s.handleCreateTarget();
+      });
+      expect(created, connection.key).toBe(false);
+    }
+    expect(api.createNotificationTarget).not.toHaveBeenCalled();
+  });
+});
+
 describe("shared notification routing owner", () => {
   it("withholds a second pre-reviewed test in another mounted owner after the first is queued", async () => {
     let first!: ReturnType<typeof useNotificationRouting>, second!: ReturnType<typeof useNotificationRouting>;

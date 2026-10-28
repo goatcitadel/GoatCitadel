@@ -23,12 +23,15 @@ describe("channel setup definition loop28 tails", () => {
         defaultTarget: "configured",
       },
     });
+    // An open connection also carries the draft-only marker that keeps the open-access choice on screen.
     expect(hydrated.draft).toEqual({
       inboundAccessMode: "open_legacy",
+      inboundAccessWasOpen: true,
       channelAccessTokenEnv: undefined,
       channelSecretEnv: "LINE_CHANNEL_SECRET",
       defaultTarget: "Utarget",
     });
+    // The saved config does not get the marker back.
     expect(
       definition.normalize({
         ...draft("channel.line", hydrated.draft, "edit"),
@@ -46,7 +49,7 @@ describe("channel setup definition loop28 tails", () => {
     ]);
   });
 
-  it("normalizes secret alias families for WhatsApp, iMessage, Mattermost, and Nextcloud Talk", () => {
+  it("normalizes secret alias families for WhatsApp, Mattermost, and Nextcloud Talk", () => {
     const cases = [
       {
         catalogId: "channel.whatsapp",
@@ -64,21 +67,6 @@ describe("channel setup definition loop28 tails", () => {
           webhookVerifyTokenEnv: "WHATSAPP_VERIFY_TOKEN",
           phoneNumberId: "123456789",
           defaultTarget: "+15555550123",
-        },
-      },
-      {
-        catalogId: "channel.imessage",
-        key: "imessage",
-        config: {
-          serverUrl: "http://mac-mini.local:1234",
-          apiPasswordEnv: "BLUBBLES_PASSWORD",
-          defaultHandle: "+15555550123",
-        },
-        expected: {
-          bridgeProvider: "bluebubbles",
-          bridgeUrl: "http://mac-mini.local:1234",
-          passwordEnv: "BLUBBLES_PASSWORD",
-          defaultHandle: "+15555550123",
         },
       },
       {
@@ -143,11 +131,6 @@ describe("channel setup definition loop28 tails", () => {
         catalogId: "channel.whatsapp",
         draft: { accessTokenEnv: "WHATSAPP_TOKEN", phoneNumberId: "abc", defaultTarget: "" },
         keys: ["phoneNumberId_malformed", "defaultTarget_required"],
-      },
-      {
-        catalogId: "channel.imessage",
-        draft: { bridgeUrl: "mac-mini.local", passwordEnv: "IMESSAGE_PASSWORD" },
-        keys: ["bridgeUrl_malformed", "defaultHandle_required"],
       },
       {
         catalogId: "channel.mattermost",

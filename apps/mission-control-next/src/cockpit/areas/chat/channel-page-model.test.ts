@@ -108,7 +108,7 @@ describe("postingTargets", () => {
 
   it("has nothing to list for a channel with no places to post", () => {
     expect(postingTargets(connection("telegram"))).toEqual([]);
-    expect(postingTargets(connection("signal", { defaultTarget: "+4477" }))).toEqual([]);
+    expect(postingTargets(connection("line", { defaultTarget: "U4477" }))).toEqual([]);
   });
 });
 

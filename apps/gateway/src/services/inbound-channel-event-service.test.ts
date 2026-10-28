@@ -917,7 +917,7 @@ describe("InboundChannelEventService", () => {
     });
   });
 
-  it.each(["ntfy", "mattermost", "signal", "matrix", "google-chat", "qqbot", "wecom"] as const)(
+  it.each(["ntfy", "mattermost", "matrix", "google-chat", "qqbot", "wecom"] as const)(
     "accepts a %s adapter event exactly once across reconnect replay and restart",
     async (name) => {
       const { input, expectedKey } = (await buildNewAdapterCases()).find((entry) => entry.name === name)!;

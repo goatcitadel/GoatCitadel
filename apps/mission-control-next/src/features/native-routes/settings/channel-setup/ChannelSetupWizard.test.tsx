@@ -531,6 +531,15 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   return button;
 }
 
+/** Why Finalize is off is printed as text beside the button; a disabled button shows no tooltip. */
+function expectFinalizeBlocked(root: ReactTestInstance, reason: string): void {
+  const finalize = findButton(root, "Finalize connection");
+  expect(finalize.props.disabled).toBe(true);
+  expect(finalize.props).not.toHaveProperty("title");
+  const notes = root.findAll((node) => node.type === "p" && node.props.className === "mc-next-settings-field-note");
+  expect(notes.map(textOf)).toContain(reason);
+}
+
 function findDraftButton(root: ReactTestInstance, label: string): ReactTestInstance {
   const button = root.findAllByType("button").find((node) => textOf(node).startsWith(label + " "));
   if (!button) throw new Error("Draft row not found: " + label);
@@ -747,10 +756,7 @@ describe("ChannelSetupWizard", () => {
     const renderer = await renderWizard(props);
     await click(findStepButton(renderer.root, "Finish setup"));
 
-    expect(findButton(renderer.root, "Finalize connection").props).toMatchObject({
-      disabled: true,
-      title: "Run the live test before finalizing this connection.",
-    });
+    expectFinalizeBlocked(renderer.root, "Run the live test before finalizing this connection.");
 
     props = {
       ...props,
@@ -761,10 +767,7 @@ describe("ChannelSetupWizard", () => {
       },
     };
     await act(async () => renderer.update(<ChannelSetupWizard {...props} />));
-    expect(findButton(renderer.root, "Finalize connection").props).toMatchObject({
-      disabled: true,
-      title: "Resolve the live test results and rerun the test before finalizing.",
-    });
+    expectFinalizeBlocked(renderer.root, "Resolve the live test results and rerun the test before finalizing.");
 
     props = { ...props, feedback: passingTestFeedback, dirty: false };
     await act(async () => renderer.update(<ChannelSetupWizard {...props} />));
@@ -779,10 +782,7 @@ describe("ChannelSetupWizard", () => {
 
     props = { ...props, dirty: true };
     await act(async () => renderer.update(<ChannelSetupWizard {...props} />));
-    expect(findButton(renderer.root, "Finalize connection").props).toMatchObject({
-      disabled: true,
-      title: "Save these changes and run the live test again before finalizing.",
-    });
+    expectFinalizeBlocked(renderer.root, "Save these changes and run the live test again before finalizing.");
 
     renderer.unmount();
   });
@@ -821,10 +821,7 @@ describe("ChannelSetupWizard", () => {
       "987654321098765432",
     );
     await click(findStepButton(renderer.root, "Finish setup"));
-    expect(findButton(renderer.root, "Finalize connection").props).toMatchObject({
-      disabled: true,
-      title: "Save these changes and run the live test again before finalizing.",
-    });
+    expectFinalizeBlocked(renderer.root, "Save these changes and run the live test again before finalizing.");
 
     renderer.unmount();
   });
@@ -1138,10 +1135,7 @@ describe("ChannelsSection Discord setup lifecycle", () => {
     expect(connectionLabel).toBeDefined();
     await changeValue(connectionLabel!, "Discord production");
 
-    expect(findButton(renderer.root, "Finalize connection").props).toMatchObject({
-      disabled: true,
-      title: "Save these changes and run the live test again before finalizing.",
-    });
+    expectFinalizeBlocked(renderer.root, "Save these changes and run the live test again before finalizing.");
     expect(renderer.root.findAllByProps({ "aria-label": "Live connection probe" })).toHaveLength(0);
 
     await click(findButton(renderer.root, "Save draft"));
@@ -1151,10 +1145,7 @@ describe("ChannelsSection Discord setup lifecycle", () => {
       expect.objectContaining({ label: "Discord production" }),
     );
     await click(findStepButton(renderer.root, "Finish setup"));
-    expect(findButton(renderer.root, "Finalize connection").props).toMatchObject({
-      disabled: true,
-      title: "Run the live test before finalizing this connection.",
-    });
+    expectFinalizeBlocked(renderer.root, "Run the live test before finalizing this connection.");
 
     await click(findStepButton(renderer.root, "Validate and test the connection"));
     await click(findButton(renderer.root, "Run live test"));
@@ -1281,7 +1272,7 @@ describe("shared channel setup safety and native controls", () => {
     expect(renderer.root.findByType(ChannelDraftEditor)).toBeDefined();
     await click(findStepButton(renderer.root, "Validate and test the connection"));
     await click(findButton(renderer.root, "Review live test"));
-    expect(textOf(renderer.root)).toContain("may send a sandbox message");
+    expect(textOf(renderer.root)).toContain("may send a test message");
     await click(findButton(renderer.root, "Cancel test"));
     expect(channelApiMocks.validateChannelSetupDraft).not.toHaveBeenCalled();
     expect(channelApiMocks.testChannelSetupDraft).not.toHaveBeenCalled();
@@ -1501,10 +1492,7 @@ describe("bound channel setup operations", () => {
     await click(findButton(renderer.root, "Review test message cleanup"));
     await click(findButton(renderer.root, "Acknowledge reviewed cleanup warning"));
     await click(findStepButton(renderer.root, "Finish setup"));
-    expect(findButton(renderer.root, "Finalize connection").props).toMatchObject({
-      disabled: true,
-      title: "Unverified transport",
-    });
+    expectFinalizeBlocked(renderer.root, "Unverified transport");
     expect(channelApiMocks.createChangePlan).not.toHaveBeenCalled();
     renderer.unmount();
   });

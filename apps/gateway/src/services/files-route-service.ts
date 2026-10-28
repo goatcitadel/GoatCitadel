@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { ConflictError, NotFoundError, PayloadTooLargeError, ValidationError } from "@goatcitadel/contracts";
 import { assertExistingPathRealpathAllowed, assertWritePathInJail } from "@goatcitadel/policy-engine";
+import type { Readable } from "node:stream";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
+import { UPLOAD_STAGING_DIR_NAME, commitStagedUpload, receiveUpload } from "./streamed-upload.js";
 
 export const MAX_FILE_UPLOAD_BYTES = resolvePositiveIntEnv("GOATCITADEL_MAX_FILE_UPLOAD_BYTES", 50_000_000);
 export const MAX_INLINE_FILE_DOWNLOAD_BYTES = resolvePositiveIntEnv(
@@ -25,12 +27,20 @@ export const DEFAULT_WORKSPACE_FILE_LIST_IGNORES = new Set([
   "node_modules",
   "playwright-report",
   "test-results",
+  UPLOAD_STAGING_DIR_NAME,
 ]);
 
 export interface FileUploadResult {
   relativePath: string;
   fullPath: string;
   bytes: number;
+}
+
+/** A streamed upload: the body's exact length (its Content-Length) and, optionally, its SHA-256. */
+export interface FileUploadStreamOptions {
+  declaredBytes: number;
+  expectAbsent?: boolean;
+  contentSha256?: string;
 }
 
 export interface FileDownloadResult {
@@ -65,7 +75,7 @@ export interface MemoryFileEntry {
 export interface WorkspaceFilePageOptions {
   /** Case-insensitive substring matched against each path relative to the listed folder. */
   query?: string;
-  /** Opaque continuation from a previous page with the same folder and query. */
+  /** Opaque continuation from a previous page with the same folder and query; it marks the last item returned. */
   cursor?: string;
 }
 
@@ -89,6 +99,7 @@ export const filesRouteMethods = [
   "listWorkspacePathSuggestions",
   "pageWorkspaceFiles",
   "uploadWorkspaceFile",
+  "uploadWorkspaceFileStream",
 ] as const;
 
 export type FilesRouteMethod = (typeof filesRouteMethods)[number];
@@ -110,7 +121,7 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     content: string,
     options: { expectAbsent?: boolean } = {},
   ): Promise<FileUploadResult> => {
-    const normalized = normalizeRelativePath(relativePath);
+    const normalized = normalizeUploadTarget(relativePath);
     const bytes = Buffer.byteLength(content, "utf8");
     if (bytes > MAX_FILE_UPLOAD_BYTES) {
       throw new PayloadTooLargeError("File upload exceeds the configured workspace upload limit", {
@@ -128,18 +139,56 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
       await fs.writeFile(fullPath, content, { encoding: "utf8", flag: options.expectAbsent ? "wx" : "w" });
     } catch (error) {
       if (options.expectAbsent && (error as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new ConflictError({
-          code: "ALREADY_EXISTS",
-          message:
-            "A file already exists at this path, so nothing was written. Review the replacement before uploading.",
-          details: { relativePath: normalized },
-        });
+        throw uploadTargetExists(normalized);
       }
       throw error;
     }
 
+    return publishUpload(normalized, fullPath, bytes);
+  };
+
+  /**
+   * Streams an upload to a staging file and then moves it into place, so a large upload is never held in memory.
+   * The body must be UTF-8 text, as the JSON upload's `content` is; anything else is refused and nothing is written.
+   */
+  const uploadWorkspaceFileStream = async (
+    relativePath: string,
+    body: Readable,
+    options: FileUploadStreamOptions,
+  ): Promise<FileUploadResult> => {
+    const normalized = normalizeUploadTarget(relativePath);
+    const fullPath = path.resolve(deps.rootDir, deps.workspaceDir, normalized);
+    assertWritePathInJail(fullPath, deps.writeJailRoots);
+    const stagingDir = path.resolve(deps.rootDir, deps.workspaceDir, UPLOAD_STAGING_DIR_NAME);
+    assertWritePathInJail(stagingDir, deps.writeJailRoots);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const staged = await receiveUpload(body, {
+      stagingDir,
+      maxBytes: MAX_FILE_UPLOAD_BYTES,
+      declaredBytes: options.declaredBytes,
+      ...(options.contentSha256 ? { expectedSha256: options.contentSha256 } : {}),
+      inspect: (chunk) => decodeUploadText(decoder, chunk),
+      finish: () => decodeUploadText(decoder),
+    }).catch((error: unknown) => {
+      if (error instanceof PayloadTooLargeError) {
+        throw new PayloadTooLargeError(error.message, { ...error.details, relativePath: normalized });
+      }
+      throw error;
+    });
+    const committed = await commitStagedUpload(staged.stagingPath, fullPath, {
+      ...(options.expectAbsent ? { expectAbsent: true } : {}),
+      // Re-checked at the move: the folder may have changed while the body streamed in.
+      assertTarget: () => assertWritePathInJail(fullPath, deps.writeJailRoots),
+    });
+    if (committed === "exists") {
+      throw uploadTargetExists(normalized);
+    }
+    return publishUpload(normalized, fullPath, staged.bytes);
+  };
+
+  const publishUpload = async (relativePath: string, fullPath: string, bytes: number): Promise<FileUploadResult> => {
     const result = {
-      relativePath: normalized,
+      relativePath,
       fullPath: deps.serializeRootPath(fullPath),
       bytes,
     };
@@ -185,20 +234,24 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     limit = 100,
     options: WorkspaceFilePageOptions = {},
   ): Promise<WorkspaceFilePage> => {
-    const offset = parseFilePageCursor(options.cursor);
+    const after = parseFilePageCursor(options.cursor);
     const baseDir = resolveListDir(relativeDir);
     const needle = options.query?.trim().toLowerCase() ?? "";
     const scanned: MemoryFileEntry[] = [];
     const state: WorkspaceFileWalkState = { statCalls: 0, truncated: false };
     await walkFiles(baseDir, baseDir, scanned, MAX_WORKSPACE_FILE_PAGE_SCAN, state, 0);
-    const matches = (
-      needle ? scanned.filter((item) => item.relativePath.toLowerCase().includes(needle)) : scanned
-    ).sort(
-      (left, right) =>
-        Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt) ||
-        left.relativePath.localeCompare(right.relativePath),
-    );
-    const end = offset + limit;
+    // Keyset paging: a page resumes after the last item it returned, so files written,
+    // touched or deleted between pages cannot shift later pages into repeats or gaps.
+    const matches = scanned
+      .map((item) => ({ item, position: { modifiedMs: Date.parse(item.modifiedAt), relativePath: item.relativePath } }))
+      .filter(
+        ({ item, position }) =>
+          (!needle || item.relativePath.toLowerCase().includes(needle)) &&
+          (!after || compareFilePagePositions(position, after) > 0),
+      )
+      .sort((left, right) => compareFilePagePositions(left.position, right.position));
+    const page = matches.slice(0, limit);
+    const last = page.at(-1);
     const folders = await fs
       .readdir(baseDir, { withFileTypes: true, encoding: "utf8" })
       .then((entries) =>
@@ -209,9 +262,9 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
       )
       .catch((): string[] => []);
     return {
-      items: matches.slice(offset, end),
+      items: page.map(({ item }) => item),
       folders,
-      ...(end < matches.length ? { nextCursor: String(end) } : {}),
+      ...(last && matches.length > limit ? { nextCursor: writeFilePageCursor(last.position) } : {}),
       complete: !state.truncated,
     };
   };
@@ -276,6 +329,7 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     },
     listWorkspaceFiles,
     pageWorkspaceFiles,
+    uploadWorkspaceFileStream,
     listWorkspacePathSuggestions: async (root = ".", limit = 150): Promise<string[]> => {
       const maxItems = Math.max(limit * 3, 200);
       const files = await listWorkspaceFiles(root, maxItems);
@@ -329,6 +383,36 @@ function normalizeRelativePath(inputPath: string): string {
     throw new Error(`Absolute paths are not allowed: ${inputPath}`);
   }
   return normalized;
+}
+
+/** An upload target, which may not sit inside the Gateway's own staging folder. */
+function normalizeUploadTarget(inputPath: string): string {
+  const normalized = normalizeRelativePath(inputPath);
+  if (normalized.split("/", 1)[0]!.toLowerCase() === UPLOAD_STAGING_DIR_NAME) {
+    throw new ValidationError({
+      field: "relativePath",
+      message: `${UPLOAD_STAGING_DIR_NAME} is reserved for uploads in progress.`,
+    });
+  }
+  return normalized;
+}
+
+function uploadTargetExists(relativePath: string): ConflictError {
+  return new ConflictError({
+    code: "ALREADY_EXISTS",
+    message: "A file already exists at this path, so nothing was written. Review the replacement before uploading.",
+    details: { relativePath },
+  });
+}
+
+/** Validates a chunk of a text upload as UTF-8; called once more with no chunk to flush a trailing partial character. */
+function decodeUploadText(decoder: TextDecoder, chunk?: Buffer): void {
+  try {
+    if (chunk) decoder.decode(chunk, { stream: true });
+    else decoder.decode();
+  } catch {
+    throw new ValidationError({ message: "File upload must be UTF-8 text." });
+  }
 }
 
 function detectMimeType(filePath: string): string {
@@ -491,12 +575,40 @@ interface WorkspaceFileWalkState {
   truncated?: boolean;
 }
 
-function parseFilePageCursor(cursor: string | undefined): number {
-  if (cursor === undefined) return 0;
-  if (!/^\d{1,9}$/u.test(cursor)) {
-    throw new ValidationError({ message: "File list cursor is not valid. Start the listing again." });
+/** Where a paged listing stopped, in its newest-first, then path, order. */
+interface FilePagePosition {
+  modifiedMs: number;
+  relativePath: string;
+}
+
+export const MAX_FILE_PAGE_CURSOR_LENGTH = 4_096;
+
+function compareFilePagePositions(left: FilePagePosition, right: FilePagePosition): number {
+  // The exact comparison breaks locale ties (e.g. composed vs decomposed accents), so
+  // distinct paths always get distinct positions and a cursor never skips one.
+  return (
+    right.modifiedMs - left.modifiedMs ||
+    left.relativePath.localeCompare(right.relativePath) ||
+    (left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0)
+  );
+}
+
+function writeFilePageCursor(position: FilePagePosition): string {
+  return Buffer.from(JSON.stringify({ m: position.modifiedMs, p: position.relativePath })).toString("base64url");
+}
+
+function parseFilePageCursor(cursor: string | undefined): FilePagePosition | undefined {
+  if (cursor === undefined) return undefined;
+  const invalid = () => new ValidationError({ message: "File list cursor is not valid. Start the listing again." });
+  if (!/^[A-Za-z0-9_-]+$/u.test(cursor) || cursor.length > MAX_FILE_PAGE_CURSOR_LENGTH) throw invalid();
+  let value: { m?: unknown; p?: unknown } | null;
+  try {
+    value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as { m?: unknown; p?: unknown } | null;
+  } catch {
+    throw invalid();
   }
-  return Number(cursor);
+  if (!value || !Number.isSafeInteger(value.m) || typeof value.p !== "string" || !value.p) throw invalid();
+  return { modifiedMs: value.m as number, relativePath: value.p };
 }
 
 async function walkFiles(

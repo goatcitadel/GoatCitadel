@@ -11,6 +11,7 @@ import { isSlackWebhookPath } from "../services/slack-webhook.js";
 import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
 import { isWhatsAppWebhookPath } from "../services/whatsapp-webhook.js";
 import type { MutationIdempotencyStore } from "../services/mutation-idempotency-store.js";
+import { isStreamedRequestBody } from "../services/streamed-upload.js";
 
 interface MutationIdempotencyState {
   method: string;
@@ -64,7 +65,11 @@ const SECURE_CONFIGURATION_ROUTE =
 const REMOTE_WORKER_BOOTSTRAP_ROUTE = "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap";
 const REMOTE_WORKER_MESH_JOIN_AUTHORITY_ROUTE =
   "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities";
-const CANONICAL_REPLAY_ROUTES = new Set([SECURE_CONFIGURATION_ROUTE]);
+/** A connector install answers a retry from the Change Plan its key made, so the retry gets the same receipt (M8). */
+const CONNECTOR_INSTALL_ROUTE = "/api/v1/capabilities/connectors/install";
+/** Query fields that describe a streamed upload; nothing else from the query reaches its fingerprint. */
+const STREAMED_UPLOAD_QUERY_FIELDS = ["relativePath", "expectAbsent"] as const;
+const CANONICAL_REPLAY_ROUTES = new Set([SECURE_CONFIGURATION_ROUTE, CONNECTOR_INSTALL_ROUTE]);
 const CANONICAL_IDEMPOTENCY_OWNER_ROUTES = new Set([
   REMOTE_WORKER_BOOTSTRAP_ROUTE,
   REMOTE_WORKER_MESH_JOIN_AUTHORITY_ROUTE,
@@ -136,11 +141,11 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     }
 
     if (claim.outcome === "duplicate" && CANONICAL_REPLAY_ROUTES.has(routePath)) {
-      // The secure-configuration handler owns a secret-independent replay path
-      // backed by its canonical repository. Let an exact transport retry
-      // recover a secret-free receipt after a lost response; newly supplied
-      // bytes are ignored. In-progress and payload-mismatch claims remain
-      // blocked.
+      // These handlers own a secret-independent replay path backed by their
+      // canonical repository (the secure-configuration prompt, the connector
+      // install's Change Plan). Let an exact transport retry recover a
+      // secret-free receipt after a lost response; newly supplied bytes are
+      // ignored. In-progress and payload-mismatch claims remain blocked.
       request.mutationIdempotencyOutcome = "committed";
       return;
     }
@@ -502,6 +507,26 @@ function hashMutationPayload(request: FastifyRequest): string {
       path: request.url.split("?", 1)[0] || request.url,
       provider,
       enabled,
+    });
+  }
+  if (isStreamedRequestBody((request as { body?: unknown }).body)) {
+    // A streamed upload's body is still unread here and may be tens of megabytes. Fingerprint
+    // what describes the attempt; the optional client SHA-256 is verified once the bytes arrive.
+    const header = (name: string) => {
+      const value = request.headers[name];
+      return typeof value === "string" ? value.trim().toLowerCase() : null;
+    };
+    // Only the upload's own fields: the query may also carry an auth token query parameter.
+    const query = (request.query ?? {}) as Record<string, unknown>;
+    const uploadQuery = Object.fromEntries(
+      STREAMED_UPLOAD_QUERY_FIELDS.map((field) => [field, typeof query[field] === "string" ? query[field] : null]),
+    );
+    return hashCanonicalPayload({
+      kind: "streamed_upload_v1",
+      path: request.url.split("?", 1)[0] || request.url,
+      query: uploadQuery,
+      contentLength: header("content-length"),
+      contentSha256: header("x-content-sha256"),
     });
   }
   return hashCanonicalPayload(redactSecretFields((request as { body?: unknown }).body ?? null));

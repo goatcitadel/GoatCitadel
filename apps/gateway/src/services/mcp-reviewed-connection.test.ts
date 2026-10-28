@@ -188,6 +188,30 @@ it("does not close a replacement session installed while disconnect publication 
   expect((await f.store.requireServer("reviewed")).status).toBe("connecting");
 });
 
+it("keeps a failed reviewed connect's own cause as the server's last error, redacted and bounded", async () => {
+  const f = await fixture();
+  const stderr = `Error: Cannot find module 'fixture.mjs'\n    at load (node:internal)\n${"x".repeat(2_000)}`;
+  f.transport.mockRejectedValueOnce(
+    new Error(
+      `MCP server Reviewed fixture exited before responding (code=1, signal=null).\nAuthorization: Bearer abc123def456ghi789jkl0123\n${stderr}`,
+    ),
+  );
+
+  await expect(connectMcpServer(f.host, "reviewed", review(f.original))).rejects.toMatchObject({
+    mutationCommitted: true,
+  });
+
+  const saved = await f.store.requireServer("reviewed");
+  expect(saved.status).toBe("error");
+  expect(saved.lastError).toMatch(
+    /^Reviewed MCP connection did not complete: MCP server Reviewed fixture exited before responding \(code=1, signal=null\)\./u,
+  );
+  expect(saved.lastError).toContain("Cannot find module 'fixture.mjs' at load (node:internal)");
+  expect(saved.lastError).not.toContain("abc123def456ghi789jkl0123");
+  expect(saved.lastError).not.toMatch(/[\n\r]/u);
+  expect(saved.lastError!.length).toBeLessThanOrEqual(600);
+});
+
 it("retains canonical admission when marking the response claim fails without preparing credentials", async () => {
   const f = await fixture();
   await expect(

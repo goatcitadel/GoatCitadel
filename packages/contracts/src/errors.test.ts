@@ -19,7 +19,11 @@ describe("GoatError hierarchy", () => {
     const error = new FeatureDisabledError("memoryLifecycleAdminV1Enabled");
     expect(error).toBeInstanceOf(GoatError);
     expect(error.httpStatus).toBe(409);
-    expect(error.toJSON()).toEqual({ error: "Feature flag memoryLifecycleAdminV1Enabled is disabled.", code: "FEATURE_DISABLED", details: { flag: "memoryLifecycleAdminV1Enabled" } });
+    expect(error.toJSON()).toEqual({
+      error: "Feature flag memoryLifecycleAdminV1Enabled is disabled.",
+      code: "FEATURE_DISABLED",
+      details: { flag: "memoryLifecycleAdminV1Enabled" },
+    });
     expect(new ConflictError({ message: "Stale" }).code).toBe("STATE_CONFLICT");
   });
   it("NotFoundError with entity+id", () => {
@@ -61,6 +65,22 @@ describe("GoatError hierarchy", () => {
     const err = new ValidationError({ code: "FIELD_REQUIRED", field: "workspaceId" });
     expect(err.code).toBe("FIELD_REQUIRED");
     expect(err.message).toBe("workspaceId is required");
+  });
+
+  it("ValidationError carries extra details beside its field, and the field wins", () => {
+    const err = new ValidationError({
+      field: "oauth",
+      message: "Sign-in discovery failed.",
+      details: { reason: "host_not_allowlisted", host: "auth.example.com", field: "other" },
+    });
+    expect(err.details).toEqual({ reason: "host_not_allowlisted", host: "auth.example.com", field: "oauth" });
+    expect(err.toJSON()).toEqual({
+      error: "Sign-in discovery failed.",
+      code: "FIELD_INVALID",
+      details: { reason: "host_not_allowlisted", host: "auth.example.com", field: "oauth" },
+    });
+    expect(new ValidationError({ field: "email" }).details).toEqual({ field: "email" });
+    expect(new ValidationError({ message: "bad" }).details).toBeUndefined();
   });
 
   it("ValidationError with custom message", () => {

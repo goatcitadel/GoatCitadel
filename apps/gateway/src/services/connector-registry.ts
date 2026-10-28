@@ -65,15 +65,17 @@ function createMissionControlBrowserConnectorRecord(): ConnectorRecord {
 function toIntegrationConnectorRecord(connection: IntegrationConnection): ConnectorRecord {
   const isChannel = connection.kind === "channel";
   const channelFeatures = isChannel ? describeChannelFeatureMetadata(connection.key, connection.config) : undefined;
-  const status = !connection.enabled
-    ? "disabled"
-    : connection.lastError
-      ? "degraded"
-      : connection.status === "connected"
-        ? "active"
-        : "degraded";
-  // A retired channel's connection stays listed so the operator can delete it, but it sends and receives nothing.
+  // A retired channel's connection stays listed so the operator can delete it, but it sends and receives nothing. It is
+  // "disabled" (out of service for good) rather than "degraded" (a fault that may clear), whatever its saved state.
   const retiredReason = isChannel ? describeRetiredChannel(connection.key) : undefined;
+  const status =
+    retiredReason || !connection.enabled
+      ? "disabled"
+      : connection.lastError
+        ? "degraded"
+        : connection.status === "connected"
+          ? "active"
+          : "degraded";
   const approvalDeliveryTarget = resolveIntegrationApprovalDeliveryTarget(connection);
   const approvalDeliveryReady = !retiredReason && status === "active" && Boolean(approvalDeliveryTarget);
   const approvalInlineActionsReady =
@@ -191,10 +193,6 @@ function describeIntegrationApprovalDelivery(
       return "Set config.defaultThreadKey (webhook mode) or config.defaultSpace (Chat app mode) to enable approval delivery.";
     case "whatsapp":
       return "Set config.defaultTarget or config.defaultRecipient to enable approval delivery.";
-    case "signal":
-      return "Set config.defaultRecipient or config.defaultTarget to enable approval delivery.";
-    case "imessage":
-      return "Set config.defaultHandle or config.defaultTarget to enable approval delivery.";
     case "mattermost":
       return "Set config.defaultChannel or config.defaultTarget to enable approval delivery.";
     case "matrix":

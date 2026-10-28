@@ -1,7 +1,13 @@
-import type { ChannelSetupPickerHint } from "@goatcitadel/contracts";
+import type { ChannelSetupHostRule, ChannelSetupInboundWebhook, ChannelSetupPickerHint } from "@goatcitadel/contracts";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 
 type ChannelPickerHintEntry = Omit<ChannelSetupPickerHint, "order">;
+type FrozenHostRule = Readonly<Omit<ChannelSetupHostRule, "whenAnyFieldSet">> & {
+  readonly whenAnyFieldSet: readonly string[];
+};
+type FrozenInboundWebhook = Readonly<Omit<ChannelSetupInboundWebhook, "whenAnyFieldSet">> & {
+  readonly whenAnyFieldSet?: readonly string[];
+};
 
 /**
  * How each channel appears in the channel picker, keyed by catalog key.
@@ -25,20 +31,101 @@ export const CHANNEL_PICKER_HINTS: Readonly<Record<string, ChannelPickerHintEntr
   teams: { group: "team_chat", note: "Sends only" },
   "google-chat": { group: "team_chat", note: "Receiving needs a public web address" },
 
-  signal: { group: "phone_apps", note: "Needs signal-cli" },
   whatsapp: { group: "phone_apps", note: "Business account + public web address" },
   line: { group: "phone_apps", note: "Receiving needs a public web address" },
-  imessage: { group: "phone_apps", note: "Sends only, through BlueBubbles on a Mac" },
   wecom: { group: "phone_apps", note: "Receiving needs a public web address" },
   qqbot: { group: "phone_apps", note: "Needs a public web address" },
   zalo: { group: "phone_apps", note: "Sends only, from a Zalo Official Account" },
   "nextcloud-talk": { group: "phone_apps", note: "Receiving needs a public web address" },
 });
 
-/** Provider hosts a channel must be allowed to reach, keyed by catalog key. */
+/**
+ * Provider hosts a channel must be allowed to reach, keyed by catalog key.
+ *
+ * Each list comes from the code the channel sends through: `comms-executor.ts`, `qqbot-client.ts`,
+ * `wecom-client.ts`, `google-chat-service-account.ts` and the live probes. A channel whose host the
+ * operator chooses has no fixed host here; its URL field is in `CHANNEL_HOST_FIELDS` instead.
+ */
 export const CHANNEL_REQUIRED_HOSTS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   telegram: Object.freeze(["api.telegram.org"]),
+  discord: Object.freeze(["discord.com"]),
+  slack: Object.freeze(["slack.com"]),
+  whatsapp: Object.freeze(["graph.facebook.com"]),
+  line: Object.freeze(["api.line.me"]),
+  zalo: Object.freeze(["openapi.zalo.me"]),
+  qqbot: Object.freeze(["bots.qq.com", "api.bot.qq.com"]),
+  wecom: Object.freeze(["qyapi.weixin.qq.com"]),
+  "google-chat": Object.freeze(["chat.googleapis.com"]),
 });
+
+/** Fields holding a URL whose host the channel must be allowed to reach, keyed by catalog key. */
+export const CHANNEL_HOST_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  discord: Object.freeze(["webhookUrl"]),
+  slack: Object.freeze(["webhookUrl"]),
+  "google-chat": Object.freeze(["webhookUrl"]),
+  teams: Object.freeze(["webhookUrl"]),
+  ntfy: Object.freeze(["baseUrl"]),
+  matrix: Object.freeze(["homeserverUrl"]),
+  mattermost: Object.freeze(["serverUrl"]),
+  "nextcloud-talk": Object.freeze(["baseUrl"]),
+});
+
+/**
+ * A saved Google Chat connection is a Chat app when it holds a service-account key, named by an environment variable
+ * or stored as a saved key (which a connection's public config shows as redacted); the channel reads either. The
+ * connection keeps no mode of its own, so a saved connection's webhook address follows these keys. The audience is
+ * listed too: a Chat app always has one, and unlike a pasted key it is also in the setup wizard's own values.
+ */
+const GOOGLE_CHAT_APP_FIELDS: readonly string[] = Object.freeze([
+  "serviceAccountKeyEnv",
+  "serviceAccountKey",
+  "audience",
+]);
+
+/**
+ * Hosts a channel needs only while certain fields are set, keyed by catalog key. Google's token host follows the
+ * guide's "Connect with" choice, which the setup wizard always holds (an edit draft derives it from the saved keys), so
+ * a key left behind after switching back to an incoming webhook does not ask for it.
+ */
+export const CHANNEL_CONDITIONAL_HOSTS: Readonly<Record<string, readonly FrozenHostRule[]>> = Object.freeze({
+  qqbot: Object.freeze([
+    Object.freeze({ host: "sandbox.api.sgroup.qq.com", whenAnyFieldSet: Object.freeze(["sandbox"]), equals: true }),
+  ]),
+  "google-chat": Object.freeze([
+    Object.freeze({ host: "oauth2.googleapis.com", whenAnyFieldSet: Object.freeze(["mode"]), equals: "app" }),
+  ]),
+});
+
+function inboundWebhookRoute(key: string): string {
+  return `/api/v1/integrations/connections/{connectionId}/${key}/webhook`;
+}
+
+/**
+ * Channels that receive on a Gateway webhook route (`routes/integration-webhooks-<key>-routes.ts`),
+ * keyed by catalog key. Telegram receives on a webhook only when its receive mode is `webhook`.
+ * Google Chat receives only in Chat app mode, which is when a service-account key is given; its
+ * webhook mode only sends. A saved connection has no mode, only its keys, so this rule reads the keys.
+ */
+export const CHANNEL_INBOUND_WEBHOOKS: Readonly<Record<string, FrozenInboundWebhook>> = Object.freeze({
+  telegram: Object.freeze({
+    pathTemplate: inboundWebhookRoute("telegram"),
+    whenFieldEquals: Object.freeze({ fieldKey: "receiveMode", value: "webhook" }),
+  }),
+  slack: Object.freeze({ pathTemplate: inboundWebhookRoute("slack") }),
+  whatsapp: Object.freeze({ pathTemplate: inboundWebhookRoute("whatsapp") }),
+  line: Object.freeze({ pathTemplate: inboundWebhookRoute("line") }),
+  qqbot: Object.freeze({ pathTemplate: inboundWebhookRoute("qqbot") }),
+  wecom: Object.freeze({ pathTemplate: inboundWebhookRoute("wecom") }),
+  "google-chat": Object.freeze({
+    pathTemplate: inboundWebhookRoute("google-chat"),
+    whenAnyFieldSet: GOOGLE_CHAT_APP_FIELDS,
+  }),
+  "nextcloud-talk": Object.freeze({ pathTemplate: inboundWebhookRoute("nextcloud-talk") }),
+});
+
+function ownEntry<Value>(table: Readonly<Record<string, Value>>, key: string): Value | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
 
 /** The channel's picker hint, with `order` set to its position among the earlier channels of the same group. */
 function pickerHintFor(key: string): ChannelSetupPickerHint | undefined {
@@ -53,12 +140,31 @@ function pickerHintFor(key: string): ChannelSetupPickerHint | undefined {
   return { ...hint, order };
 }
 
-/** Returns a copy of the runtime whose definition carries the channel's picker hint and required hosts. */
+function copyHostRule(rule: FrozenHostRule): ChannelSetupHostRule {
+  return { ...rule, whenAnyFieldSet: [...rule.whenAnyFieldSet] };
+}
+
+function copyInboundWebhook(webhook: FrozenInboundWebhook): ChannelSetupInboundWebhook {
+  const { whenAnyFieldSet, ...rest } = webhook;
+  return {
+    ...rest,
+    ...(webhook.whenFieldEquals ? { whenFieldEquals: { ...webhook.whenFieldEquals } } : {}),
+    ...(whenAnyFieldSet ? { whenAnyFieldSet: [...whenAnyFieldSet] } : {}),
+  };
+}
+
+/**
+ * Returns a copy of the runtime whose definition carries the channel's picker hint, the hosts it
+ * reaches and, when it receives on a Gateway route, its inbound webhook path.
+ */
 export function withPickerHints(runtime: ChannelSetupRuntimeDefinition): ChannelSetupRuntimeDefinition {
   const key = runtime.definition.catalog.key;
   const picker = pickerHintFor(key);
-  const requiredHosts = Object.hasOwn(CHANNEL_REQUIRED_HOSTS, key) ? CHANNEL_REQUIRED_HOSTS[key] : undefined;
-  if (!picker && !requiredHosts) {
+  const requiredHosts = ownEntry(CHANNEL_REQUIRED_HOSTS, key);
+  const hostFields = ownEntry(CHANNEL_HOST_FIELDS, key);
+  const conditionalHosts = ownEntry(CHANNEL_CONDITIONAL_HOSTS, key);
+  const inboundWebhook = ownEntry(CHANNEL_INBOUND_WEBHOOKS, key);
+  if (!picker && !requiredHosts && !hostFields && !conditionalHosts && !inboundWebhook) {
     return runtime;
   }
   return {
@@ -69,6 +175,9 @@ export function withPickerHints(runtime: ChannelSetupRuntimeDefinition): Channel
         ...runtime.definition.wizard,
         ...(picker ? { picker } : {}),
         ...(requiredHosts ? { requiredHosts: [...requiredHosts] } : {}),
+        ...(hostFields ? { hostFields: [...hostFields] } : {}),
+        ...(conditionalHosts ? { conditionalHosts: conditionalHosts.map(copyHostRule) } : {}),
+        ...(inboundWebhook ? { inboundWebhook: copyInboundWebhook(inboundWebhook) } : {}),
       },
     },
   };

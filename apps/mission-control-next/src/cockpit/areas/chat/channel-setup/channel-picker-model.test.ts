@@ -32,7 +32,7 @@ describe("channel picker model", () => {
       definition("slack", "Slack", 10, hint("quickest", 3)),
       definition("matrix", "Matrix", 15, hint("team_chat", 1)),
       definition("telegram", "Telegram", 8, hint("quickest", 0, { minutes: 3 })),
-      definition("signal", "Signal", 25, hint("phone_apps", 0)),
+      definition("line", "LINE", 15, hint("phone_apps", 0)),
       definition("discord", "Discord", 9, hint("quickest", 1)),
       definition("mattermost", "Mattermost", 12, hint("team_chat", 0)),
       definition("ntfy", "ntfy", 5, hint("quickest", 2)),
@@ -45,13 +45,13 @@ describe("channel picker model", () => {
     expect(groups.map((group) => group.tiles.map((tile) => tile.channelKey))).toEqual([
       ["telegram", "discord", "ntfy", "slack"],
       ["mattermost", "matrix"],
-      ["signal", "whatsapp"],
+      ["line", "whatsapp"],
     ]);
   });
 
   it("puts groups in order even when the definitions arrive with the last group first", () => {
     const groups = buildChannelPickerGroups([
-      definition("signal", "Signal", 25, hint("phone_apps", 0)),
+      definition("line", "LINE", 15, hint("phone_apps", 0)),
       definition("matrix", "Matrix", 15, hint("team_chat", 0)),
       definition("slack", "Slack", 10, hint("quickest", 0)),
     ]);

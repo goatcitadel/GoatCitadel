@@ -121,20 +121,20 @@ export async function runMatrixLiveChecks(input: {
   if (!input.includeSandboxSend) {
     probe.steps.push({
       key: "matrix_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "skipped",
       disposition: "deferred",
-      message: "Run the explicit guided test to send a sandbox notice.",
+      message: "Run the explicit guided test to send a test message.",
     });
     return finish(probe);
   }
   if (!input.roomId) {
     probe.steps.push({
       key: "matrix_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "skipped",
       disposition: "deferred",
-      message: "Sandbox send skipped because no default room is configured.",
+      message: "Test message skipped because no default room is configured.",
     });
     return finish(probe);
   }
@@ -212,10 +212,10 @@ async function sandboxSend(
     if (!response.ok) {
       probe.steps.push({
         key: "matrix_sandbox_send",
-        label: "Sandbox send",
+        label: "Test send",
         status: response.status >= 500 ? "warn" : "fail",
         disposition: "blocking",
-        message: `Matrix rejected the sandbox send (HTTP ${response.status}). Verify the bot is joined and may post.`,
+        message: `Matrix rejected the test message (HTTP ${response.status}). Verify the bot is joined and may post.`,
         failureCategory:
           response.status === 401 || response.status === 403 ? "permission_mismatch" : "destination_mismatch",
       });
@@ -224,16 +224,16 @@ async function sandboxSend(
     const body = record(await readBoundedResponseJson(response, { ...READ_LIMITS, label: "Matrix send probe" }));
     probe.steps.push({
       key: "matrix_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "pass",
       disposition: "blocking",
       ...(typeof body.event_id === "string" ? { providerMessageId: body.event_id } : {}),
-      message: "The sandbox notice was accepted by the room. Confirm receipt manually.",
+      message: "The room accepted the test message. Check that it arrived.",
     });
   } catch {
     probe.steps.push({
       key: "matrix_sandbox_send",
-      label: "Sandbox send",
+      label: "Test send",
       status: "warn",
       disposition: "blocking",
       message: "Matrix send outcome is uncertain. Inspect the room before running another send.",
