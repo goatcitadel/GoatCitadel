@@ -40,14 +40,25 @@ const APP_ONLY_KEYS = [
 const WEBHOOK_ONLY_KEYS = ["webhookUrl", "defaultThreadKey"] as const;
 
 /**
+ * Whether the saved connection this draft changes already holds a key. A change to a saved connection never carries
+ * the saved key (it stays in secure storage under the connection's reference); it only records that the key is there,
+ * and Finalize keeps it unless a new one is pasted. Without this, changing a setting would ask for the key again.
+ */
+function savedConnectionHoldsKey(draft: ChannelSetupDraft, fieldKey: "webhookUrl" | "serviceAccountKey"): boolean {
+  return draft.hydration?.fieldState[fieldKey] === "configured";
+}
+
+/**
  * An inline service-account key is a credential: it lives only in secure draft custody
  * (secretState) or as a custody-hydrated value during validation/test, never in plain draft JSON.
+ * A saved connection's own key counts too (see `savedConnectionHoldsKey`).
  */
 function hasServiceAccountKey(draft: ChannelSetupDraft): boolean {
   return Boolean(
     readString(draft.draft, "serviceAccountKeyEnv") ||
     readString(draft.draft, "serviceAccountKey") ||
-    draft.secretState?.serviceAccountKey?.configured,
+    draft.secretState?.serviceAccountKey?.configured ||
+    savedConnectionHoldsKey(draft, "serviceAccountKey"),
   );
 }
 
@@ -464,7 +475,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
         });
       }
       const webhookUrl = readString(draft.draft, "webhookUrl");
-      if (!webhookUrl && !draft.secretState?.webhookUrl?.configured) {
+      if (!webhookUrl && !draft.secretState?.webhookUrl?.configured && !savedConnectionHoldsKey(draft, "webhookUrl")) {
         issues.push(requiredFieldIssue("webhookUrl", "Paste the incoming webhook URL."));
       } else if (webhookUrl && !/^https:\/\/chat\.googleapis\.com\/v1\/spaces\//.test(webhookUrl)) {
         issues.push(

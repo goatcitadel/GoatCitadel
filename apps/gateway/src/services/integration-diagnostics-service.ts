@@ -30,7 +30,7 @@ import {
   runZaloBotLiveChecks,
 } from "./channel-bot-live-probes.js";
 import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-diagnostic-checks.js";
-import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
+import { isSecureStorageReference, type ChannelSecretOwner } from "./channel-secret-resolution.js";
 import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
 import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel-config.js";
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
@@ -138,6 +138,15 @@ export function buildIntegrationConnectionChecks(
       message: value ? `${label} is set.` : `${label} is missing.`,
     });
   };
+  // A pasted webhook address is a secret: it is kept in secure storage and the config holds a reference to it. The
+  // address checks read the address the reference points to, for this connection only. A reference that gives none is
+  // a missing address, never an insecure one. Only the checks see the address; nothing here reports it.
+  const readAddress = (key: string) => {
+    const value = deps.readConnectionConfigValue(config, key);
+    return value !== undefined && isSecureStorageReference(value)
+      ? deps.resolveConnectionSecret(config, key, `${key}Env`, connection.catalogId, connection)
+      : value;
+  };
   // The hosts of the addresses `checkUrl` has reported on, so the provider hosts check doesn't report them twice.
   const addressHosts = new Set<string>();
   const checkUrl = (key: string, label: string, urlValue: string | undefined, required = false) => {
@@ -232,7 +241,7 @@ export function buildIntegrationConnectionChecks(
             ? "Slack bot token or webhook is configured."
             : "Slack bot token or webhook is missing.",
         });
-        checkUrl("url", "Slack webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), false);
+        checkUrl("url", "Slack webhook URL", readAddress("webhookUrl"), false);
         // An incoming webhook posts to the one channel it was made for, so only a bot token needs a default channel.
         if (slackBotToken) {
           requireText("target", "Default Slack channel", resolveChannelConfigTarget(connection.key, config), "warn");
@@ -255,7 +264,7 @@ export function buildIntegrationConnectionChecks(
               ? "Discord bot token or webhook is configured."
               : "Discord bot token or webhook is missing.",
         });
-        checkUrl("url", "Discord webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), false);
+        checkUrl("url", "Discord webhook URL", readAddress("webhookUrl"), false);
         requireText("target", "Default Discord channel", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
       case "telegram":
@@ -307,10 +316,10 @@ export function buildIntegrationConnectionChecks(
           break;
         }
         // An incoming webhook is already bound to its space, and its thread key is optional, so nothing asks for one.
-        checkUrl("url", "Google Chat webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), true);
+        checkUrl("url", "Google Chat webhook URL", readAddress("webhookUrl"), true);
         break;
       case "teams":
-        checkUrl("url", "Teams webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), true);
+        checkUrl("url", "Teams webhook URL", readAddress("webhookUrl"), true);
         break;
       case "whatsapp":
         requireSecretRef("auth", "WhatsApp access token", "accessToken", "accessTokenEnv");
