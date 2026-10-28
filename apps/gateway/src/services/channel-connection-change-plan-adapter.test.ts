@@ -468,6 +468,59 @@ describe("Settings-origin exact channel review", () => {
   });
 });
 
+describe("Chat form field visibility", () => {
+  const OPEN_ACCESS_CHANNELS = ["slack", "telegram", "whatsapp", "line", "nextcloud-talk"] as const;
+
+  async function formFor(key: string, overrides: Partial<ChannelSetupDraft>) {
+    const f = reviewedSettingsFixture({ catalogId: `channel.${key}`, draft: {}, secretState: {}, ...overrides });
+    const prepared = await f.adapter.prepare(context(), {
+      kind: "channel_connection",
+      channelKind: key,
+      draftId: f.draft.draftId,
+    });
+    if (prepared.requiredAction?.kind !== "public_form") throw new Error("Expected public form");
+    return { ...f, fields: prepared.requiredAction.fields };
+  }
+
+  it.each(OPEN_ACCESS_CHANNELS)("does not offer open legacy access on a new %s draft", async (key) => {
+    const { fields, adapter, ctx } = await formFor(key, { lifecycleMode: "create" });
+
+    expect(fields.map((field) => field.fieldId)).not.toContain("inboundAccessMode");
+    expect(JSON.stringify(fields)).not.toContain("open_legacy");
+    await expect(
+      adapter.respond(
+        ctx,
+        { ...slackRecord(), request: { kind: "channel_connection", channelKind: key, draftId: "draft-1" } },
+        { inboundAccessMode: "open_legacy" },
+      ),
+    ).rejects.toThrow("not registered");
+  });
+
+  it.each(OPEN_ACCESS_CHANNELS)(
+    "offers open legacy access when editing an %s connection that was open",
+    async (key) => {
+      const { fields } = await formFor(key, {
+        lifecycleMode: "edit",
+        draft: { inboundAccessMode: "open_legacy", inboundAccessWasOpen: true },
+      });
+
+      const mode = fields.find((field) => field.fieldId === "inboundAccessMode");
+      expect(mode?.options?.map((option) => option.value)).toEqual(["allowlist", "open_legacy"]);
+      expect(mode?.initialValue).toBe("open_legacy");
+    },
+  );
+
+  it("hides a field whose controlling choice is not the one made, and shows it once it is", async () => {
+    const polling = await formFor("telegram", { draft: { receiveMode: "poll" } });
+    const webhook = await formFor("telegram", { draft: { receiveMode: "webhook" } });
+    const unchosen = await formFor("telegram", { draft: {} });
+
+    expect(polling.fields.map((field) => field.fieldId)).not.toContain("webhookSecretEnv");
+    expect(unchosen.fields.map((field) => field.fieldId)).not.toContain("webhookSecretEnv");
+    expect(webhook.fields.map((field) => field.fieldId)).toContain("webhookSecretEnv");
+  });
+});
+
 describe("Settings review summary", () => {
   it("shows exact public routing, defaults, normalized sender count and check times without secrets or endpoints", async () => {
     const f = reviewedSettingsFixture({ label: "Work Slack", enabled: false });

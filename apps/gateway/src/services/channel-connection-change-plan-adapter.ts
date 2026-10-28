@@ -471,14 +471,37 @@ function settingsReviewSummary(definition: ChannelSetupDefinition, draft: Channe
   return parts.join(" ").slice(0, 2_000);
 }
 
+/**
+ * Whether a step or field's `visibleWhenFieldEquals` holds. Like the Settings guide, a condition holds only when the
+ * controlling value is the one named, so a choice nobody has made hides what depends on it.
+ */
+function isShownWhen(
+  condition: { fieldKey: string; value: string | boolean } | undefined,
+  values: Record<string, unknown>,
+) {
+  return !condition || values[condition.fieldKey] === condition.value;
+}
+
+/** The draft's values over the fields' defaults: what the guide reads visibility from. */
+function valuesWithDefaults(definition: ChannelSetupDefinition, draft: ChannelSetupDraft): Record<string, unknown> {
+  const defaults = definition.wizard.steps
+    .flatMap((step) => step.fields ?? [])
+    .filter((field) => field.defaultValue !== undefined)
+    .map((field) => [field.key, field.defaultValue] as const);
+  return { ...Object.fromEntries(defaults), ...draft.draft };
+}
+
 function publicFields(definition: ChannelSetupDefinition, draft: ChannelSetupDraft): ChangePlanPublicFormField[] {
   const secretKeys = new Set(definition.adapter.secretFieldKeys);
+  const values = valuesWithDefaults(definition, draft);
   const seen = new Set<string>();
   const fields: ChangePlanPublicFormField[] = [];
   for (const step of definition.wizard.steps) {
+    if (!isShownWhen(step.visibleWhenFieldEquals, values)) continue;
     for (const field of step.fields ?? []) {
       if (
         seen.has(field.key) ||
+        !isShownWhen(field.visibleWhenFieldEquals, values) ||
         secretKeys.has(field.key) ||
         field.type === "secret" ||
         field.sensitive ||
