@@ -562,6 +562,96 @@ describe("Chat form: required on this path (R81)", () => {
   });
 });
 
+describe("Chat form: a field a choice in the same form reveals (R82)", () => {
+  const OPEN_ACCESS_CHANNELS = ["slack", "telegram", "whatsapp", "line", "nextcloud-talk"] as const;
+
+  function respondTo(key: string, overrides: Partial<ChannelSetupDraft>, values: Record<string, string | boolean>) {
+    const f = reviewedSettingsFixture({ catalogId: `channel.${key}`, draft: {}, secretState: {}, ...overrides });
+    const plan = {
+      ...slackRecord(),
+      request: { kind: "channel_connection" as const, channelKind: key, draftId: "draft-1" },
+    };
+    return { f, result: f.adapter.respond(f.ctx, plan, values) };
+  }
+
+  it("accepts a Google Chat app's audience submitted together with the mode that reveals it", async () => {
+    const { f, result } = respondTo("google-chat", {}, { mode: "app", audience: "123456789012" });
+
+    await expect(result).resolves.toBeDefined();
+    expect(f.deps.updateDraft).toHaveBeenCalledWith(
+      "draft-1",
+      expect.objectContaining({ draft: expect.objectContaining({ mode: "app", audience: "123456789012" }) }),
+    );
+  });
+
+  it("accepts Telegram's webhook secret variable submitted together with web-address delivery", async () => {
+    const { f, result } = respondTo(
+      "telegram",
+      {},
+      { receiveMode: "webhook", webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET" },
+    );
+
+    await expect(result).resolves.toBeDefined();
+    expect(f.deps.updateDraft).toHaveBeenCalledWith(
+      "draft-1",
+      expect.objectContaining({
+        draft: expect.objectContaining({ receiveMode: "webhook", webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET" }),
+      }),
+    );
+  });
+
+  it("still rejects a field its controlling choice does not reveal", async () => {
+    const hidden = respondTo("google-chat", {}, { audience: "123456789012" });
+    const wrongChoice = respondTo("google-chat", {}, { mode: "webhook", audience: "123456789012" });
+    const secretAlone = respondTo("telegram", {}, { webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET" });
+
+    await expect(hidden.result).rejects.toThrow("not registered");
+    await expect(wrongChoice.result).rejects.toThrow("not registered");
+    await expect(secretAlone.result).rejects.toThrow("not registered");
+    expect(hidden.f.deps.updateDraft).not.toHaveBeenCalled();
+  });
+
+  it.each(OPEN_ACCESS_CHANNELS)("still rejects open legacy access on a new %s draft", async (key) => {
+    const { f, result } = respondTo(key, { lifecycleMode: "create" }, { inboundAccessMode: "open_legacy" });
+
+    await expect(result).rejects.toThrow("not registered");
+    expect(f.deps.updateDraft).not.toHaveBeenCalled();
+  });
+
+  it.each(OPEN_ACCESS_CHANNELS)("rejects a submission that carries the already-open marker on %s", async (key) => {
+    const withMode = respondTo(
+      key,
+      { lifecycleMode: "create" },
+      { inboundAccessWasOpen: true, inboundAccessMode: "open_legacy" },
+    );
+    const markerOnly = respondTo(key, { lifecycleMode: "create" }, { inboundAccessWasOpen: true });
+
+    await expect(withMode.result).rejects.toThrow("not registered");
+    await expect(markerOnly.result).rejects.toThrow("not registered");
+    expect(withMode.f.deps.updateDraft).not.toHaveBeenCalled();
+    expect(markerOnly.f.deps.updateDraft).not.toHaveBeenCalled();
+  });
+
+  it.each(OPEN_ACCESS_CHANNELS)(
+    "accepts open legacy access when editing a %s connection that was open",
+    async (key) => {
+      const { f, result } = respondTo(
+        key,
+        { lifecycleMode: "edit", draft: { inboundAccessMode: "allowlist", inboundAccessWasOpen: true } },
+        { inboundAccessMode: "open_legacy" },
+      );
+
+      await expect(result).resolves.toBeDefined();
+      expect(f.deps.updateDraft).toHaveBeenCalledWith(
+        "draft-1",
+        expect.objectContaining({
+          draft: expect.objectContaining({ inboundAccessMode: "open_legacy", inboundAccessWasOpen: true }),
+        }),
+      );
+    },
+  );
+});
+
 describe("Settings review summary", () => {
   it("shows exact public routing, defaults, normalized sender count and check times without secrets or endpoints", async () => {
     const f = reviewedSettingsFixture({ label: "Work Slack", enabled: false });
