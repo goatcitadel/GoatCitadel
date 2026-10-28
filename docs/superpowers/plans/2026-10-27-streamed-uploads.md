@@ -1,8 +1,12 @@
 # Streamed Uploads Plan
 
-> **Status:** PR 1 (workspace files) is built. PR 2 (chat attachments) is not started.
+> **Status:** PR 1 (workspace files) is merged as #619; #622 then brought `files-route-service.ts` back under its architecture-metrics cap. PR 2 (chat attachments) is built.
 >
-> **Operator rulings (2026-10-27):** D1 text-only; D2 keep JSON up to 1 MiB; D3 metadata in the query string.
+> **Operator rulings (2026-10-27/28):** D1 text-only; D2 keep JSON up to 1 MiB; D3 metadata in the query string; a streamed upload's idempotency stays one key per attempt, with no content binding beyond the optional `X-Content-SHA256`.
+>
+> **Where PR 2 differs from this plan:**
+> - The composer still starts every picked file's upload at once. Streaming already keeps the Gateway's memory per upload flat and removes the browser's base64 copies, and any edit to `useChatComposerInteractions.ts` would reformat 56 lines of it that are not prettier-clean.
+> - The service takes `{ bytesBase64 } | { bytes } | { stream }` rather than a `source` object, so existing callers and tests keep their shape.
 >
 > **Where PR 1 differs from this plan:**
 > - Stale staging files are swept at the start of each upload, not at Gateway start, so no startup wiring is needed.

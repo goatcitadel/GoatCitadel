@@ -67,8 +67,11 @@ const REMOTE_WORKER_MESH_JOIN_AUTHORITY_ROUTE =
   "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities";
 /** A connector install answers a retry from the Change Plan its key made, so the retry gets the same receipt (M8). */
 const CONNECTOR_INSTALL_ROUTE = "/api/v1/capabilities/connectors/install";
-/** Query fields that describe a streamed upload; nothing else from the query reaches its fingerprint. */
-const STREAMED_UPLOAD_QUERY_FIELDS = ["relativePath", "expectAbsent"] as const;
+/** Per upload route, the query fields that describe a streamed upload; nothing else from the query reaches its fingerprint. */
+const STREAMED_UPLOAD_QUERY_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  "/api/v1/files/upload": ["relativePath", "expectAbsent"],
+  "/api/v1/chat/attachments": ["sessionId", "projectId", "fileName", "mimeType"],
+};
 const CANONICAL_REPLAY_ROUTES = new Set([SECURE_CONFIGURATION_ROUTE, CONNECTOR_INSTALL_ROUTE]);
 const CANONICAL_IDEMPOTENCY_OWNER_ROUTES = new Set([
   REMOTE_WORKER_BOOTSTRAP_ROUTE,
@@ -519,7 +522,10 @@ function hashMutationPayload(request: FastifyRequest): string {
     // Only the upload's own fields: the query may also carry an auth token query parameter.
     const query = (request.query ?? {}) as Record<string, unknown>;
     const uploadQuery = Object.fromEntries(
-      STREAMED_UPLOAD_QUERY_FIELDS.map((field) => [field, typeof query[field] === "string" ? query[field] : null]),
+      (STREAMED_UPLOAD_QUERY_FIELDS[routePath] ?? []).map((field) => [
+        field,
+        typeof query[field] === "string" ? query[field] : null,
+      ]),
     );
     return hashCanonicalPayload({
       kind: "streamed_upload_v1",

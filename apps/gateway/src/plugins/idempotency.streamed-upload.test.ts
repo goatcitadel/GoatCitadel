@@ -49,4 +49,35 @@ describe("idempotency fingerprint for a streamed upload", () => {
     expect(hashes[3]).not.toBe(hashes[0]);
     expect(JSON.stringify(claim.mock.calls)).not.toMatch(/first|other|longer body|secret-/u);
   });
+
+  it("fingerprints a streamed chat attachment by its own query fields only", async () => {
+    const claim = vi.fn(async () => ({ outcome: "claimed" as const, record: { claimToken: "claim" } }));
+    const store = { claim, markCompleted: vi.fn(async () => true), markFailed: vi.fn(async () => true) };
+    app = Fastify();
+    app.decorateRequest("authActorId", "operator:test");
+    await app.register(idempotencyHeaderPlugin, { mutationStore: store as never });
+    app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
+    app.post("/api/v1/chat/attachments", async (request) => {
+      for await (const chunk of request.body as AsyncIterable<Buffer>) void chunk;
+      return { ok: true };
+    });
+    const upload = (key: string, query: string) =>
+      app!.inject({
+        method: "POST",
+        url: `/api/v1/chat/attachments?${query}`,
+        headers: { "Idempotency-Key": key, "content-type": "application/octet-stream" },
+        payload: "bytes",
+      });
+
+    await upload("att-1", "sessionId=s1&fileName=a.png&mimeType=image%2Fpng&access_token=secret-a");
+    await upload("att-2", "sessionId=s1&fileName=a.png&mimeType=image%2Fpng&access_token=secret-b");
+    await upload("att-3", "sessionId=s1&fileName=b.png&mimeType=image%2Fpng");
+    await upload("att-4", "sessionId=s2&fileName=a.png&mimeType=image%2Fpng");
+
+    const hashes = claim.mock.calls.map((call) => (call as unknown as [{ payloadHash: string }])[0].payloadHash);
+    expect(hashes[1]).toBe(hashes[0]);
+    expect(hashes[2]).not.toBe(hashes[0]);
+    expect(hashes[3]).not.toBe(hashes[0]);
+    expect(JSON.stringify(claim.mock.calls)).not.toMatch(/secret-/u);
+  });
 });

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { Storage } from "@goatcitadel/storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -381,5 +382,86 @@ describe("chat-attachment-service", () => {
     expect(uploaded.mediaType).toBe("image");
     expect(host.createMediaJob).not.toHaveBeenCalled();
     expect((await getChatAttachment(host, uploaded.attachmentId)).analysisStatus).toBe("skipped");
+  });
+
+  describe("streamed and Buffer uploads", () => {
+    const stream = (bytes: Buffer, chunkSize = 7) => ({
+      body: Readable.from(
+        Array.from({ length: Math.ceil(bytes.length / chunkSize) }, (_, index) =>
+          bytes.subarray(index * chunkSize, (index + 1) * chunkSize),
+        ),
+      ),
+      declaredBytes: bytes.length,
+    });
+    const attachmentsDir = (rootDir: string) =>
+      path.join(rootDir, "workspace", "chat", "default", "attachments", "2026", "04");
+    const stagingDir = (rootDir: string) => path.join(rootDir, "workspace", ".goatcitadel-uploads");
+
+    it("stores a streamed upload with the same record a base64 upload gets, and leaves no staging file", async () => {
+      const { host, rootDir, storage } = await createHost();
+      roots.push(rootDir);
+      storages.push(storage);
+      const bytes = Buffer.from("Hello streamed attachment\n");
+      const base = { sessionId: "sess-1", fileName: "notes.md", mimeType: "text/markdown" };
+
+      const streamed = await uploadChatAttachment(host, { ...base, stream: stream(bytes) });
+      const fromBase64 = await uploadChatAttachment(host, { ...base, bytesBase64: bytes.toString("base64") });
+      const fromBuffer = await uploadChatAttachment(host, { ...base, bytes });
+
+      const comparable = (record: typeof streamed) => ({
+        sizeBytes: record.sizeBytes,
+        sha256: record.sha256,
+        extractStatus: record.extractStatus,
+        extractPreview: record.extractPreview,
+        mediaType: record.mediaType,
+        analysisStatus: record.analysisStatus,
+      });
+      expect(comparable(streamed)).toEqual(comparable(fromBase64));
+      expect(comparable(fromBuffer)).toEqual(comparable(fromBase64));
+      expect(streamed.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      expect((await readChatAttachmentContent(host, streamed.attachmentId)).bytes.equals(bytes)).toBe(true);
+      await expect(fs.readdir(stagingDir(rootDir))).resolves.toEqual([]);
+      expect(host.publishRealtime).toHaveBeenCalledWith(
+        "chat_message",
+        "chat",
+        expect.objectContaining({ attachmentId: streamed.attachmentId, sizeBytes: bytes.length }),
+      );
+    });
+
+    it("refuses a stream whose first bytes contradict its type, and writes nothing", async () => {
+      const { host, rootDir, storage } = await createHost();
+      roots.push(rootDir);
+      storages.push(storage);
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+
+      await expect(
+        uploadChatAttachment(host, {
+          sessionId: "sess-1",
+          fileName: "song.mp3",
+          mimeType: "audio/mpeg",
+          stream: stream(png),
+        }),
+      ).rejects.toThrow(/do not match the declared MIME hint/u);
+      await expect(fs.readdir(attachmentsDir(rootDir))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readdir(stagingDir(rootDir))).resolves.toEqual([]);
+      expect(host.publishRealtime).not.toHaveBeenCalled();
+    });
+
+    it("refuses an empty or over-limit stream by its declared length, before reading it", async () => {
+      const { host, rootDir, storage } = await createHost();
+      roots.push(rootDir);
+      storages.push(storage);
+      const base = { sessionId: "sess-1", fileName: "big.bin", mimeType: "application/octet-stream" };
+      const unread = Readable.from([Buffer.from("x")]);
+
+      await expect(
+        uploadChatAttachment(host, { ...base, stream: { body: unread, declaredBytes: 20 * 1024 * 1024 + 1 } }),
+      ).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE", details: { limitBytes: 20 * 1024 * 1024 } });
+      await expect(
+        uploadChatAttachment(host, { ...base, stream: { body: Readable.from([]), declaredBytes: 0 } }),
+      ).rejects.toThrow("Attachment payload is empty");
+      expect(unread.readableEnded).toBe(false);
+      await expect(fs.readdir(attachmentsDir(rootDir))).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 });
