@@ -100,8 +100,10 @@ describe("Matrix setup guide: what it says up front (item 6, R48)", () => {
       "The bot invited to and joined in a room with encryption off. GoatCitadel can't read encrypted rooms and doesn't accept invites.",
       "Your homeserver in the hosts GoatCitadel may reach.",
     ]);
+    // Ruling R49: the test posts a notice only when a Default room ID is set, so the audit's unconditional
+    // "Check the test notice arrived" is made conditional.
     expect(paragraphs("first-message")).toEqual([
-      "Check the test notice arrived. To receive: turn on Receive messages, allow your Matrix ID (for example @alice:example.com), post in the room, and check the reply.",
+      "If you set a Default room ID, check the test notice arrived in that room. To receive: turn on Receive messages, allow your Matrix ID (for example @alice:example.com), post in the room, and check the reply.",
     ]);
   });
 
@@ -155,6 +157,7 @@ describe("Matrix setup guide: making the bot account and its room (items 1, 2 an
     });
     expect(paragraphs("create-bot")).toEqual([
       "GoatCitadel signs in as a bot account, so make one first. The menus here are Element's; other Matrix apps differ.",
+      "Steps 3 and 4 are only for a room. You can skip them and leave Default room ID empty, but the bot can post only in rooms it has joined.",
     ]);
   });
 
@@ -166,12 +169,11 @@ describe("Matrix setup guide: making the bot account and its room (items 1, 2 an
     expect(text).toContain("https://github.com/element-hq/element-web/blob/develop/docs/e2ee.md");
   });
 
-  it("asks only for what a person can do before continuing", () => {
+  it("asks only for what every setup needs: the room steps are plain list items, not boxes that block Continue (R50)", () => {
     expect((step("create-bot").checklist ?? []).map((item) => item.label)).toEqual([
       "Create the bot's Matrix account and copy its access token",
-      "Create a room with encryption off and invite the bot",
-      "Sign in as the bot and accept the invite",
     ]);
+    expect(JSON.stringify(step("create-bot").checklist)).not.toMatch(/room|invite/iu);
   });
 
   it("does not claim a direct message is always encrypted: Element only does that when the other side has keys (R46)", () => {
@@ -343,9 +345,9 @@ describe("Matrix setup guide: receiving (items 5 and 6, A7, A8)", () => {
 });
 
 describe("Matrix setup guide: the test and finishing", () => {
-  it("says what the test does, then asks the person to check the notice arrived", () => {
+  it("says what the test does, asks for the notice only when there is a room, and says it sends nothing without one (R49)", () => {
     expect(paragraphs("test")).toEqual([
-      "The test checks the access token with your homeserver. If you set a Default room ID, it also checks that the bot has joined that room and posts a test notice there. Check that the notice arrived in the room.",
+      "The test checks the access token with your homeserver. If you set a Default room ID, it also checks that the bot has joined that room and posts a test notice there: check that the notice arrived in that room. If you left Default room ID empty, the test sends nothing.",
     ]);
   });
 
@@ -468,6 +470,17 @@ describe("Matrix send-only path: can it finish?", () => {
       ["matrix_sandbox_send", "skipped"],
     ]);
     expect(eligibility).toMatchObject({ allowed: true, blockingReasons: [] });
+  });
+
+  it("asks this path to tick nothing about a room: the setup step's only box is the account and token (R50)", () => {
+    // The shared helper doesn't model checklists, so assert the step's boxes directly. Continue is blocked until each
+    // box is ticked, and a send-only setup with no room is a supported path.
+    const boxes = (step("create-bot").checklist ?? []).map((item) => item.label);
+
+    expect(continueBlockers(SEND_ONLY_VALUES)).toEqual([]);
+    expect(boxes).toEqual(["Create the bot's Matrix account and copy its access token"]);
+    expect(boxes.join("\n")).not.toMatch(/room|invite/iu);
+    expect(SEND_ONLY_VALUES).not.toHaveProperty("defaultRoomId");
   });
 
   it("is cleared by the setup test with a room the bot has joined: it checks the token and the room, then posts a notice", async () => {

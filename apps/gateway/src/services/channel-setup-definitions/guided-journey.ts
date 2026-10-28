@@ -102,7 +102,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Your Mattermost server in the hosts GoatCitadel may reach.",
     ],
     firstMessage:
-      "Check the test post arrived. To receive: turn on Receive posts, allow your user ID, post in a channel the bot is in, and check the reply.",
+      "Check the test passed. To receive: turn on Receive posts, allow your user ID, post in a channel the bot is in, and check the reply.",
   },
   matrix: {
     summary:
@@ -113,7 +113,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Your homeserver in the hosts GoatCitadel may reach.",
     ],
     firstMessage:
-      "Check the test notice arrived. To receive: turn on Receive messages, allow your Matrix ID (for example @alice:example.com), post in the room, and check the reply.",
+      "If you set a Default room ID, check the test notice arrived in that room. To receive: turn on Receive messages, allow your Matrix ID (for example @alice:example.com), post in the room, and check the reply.",
   },
   qqbot: {
     summary:

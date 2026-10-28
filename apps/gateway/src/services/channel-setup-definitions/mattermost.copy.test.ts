@@ -121,9 +121,17 @@ describe("Mattermost setup guide: what it says up front (items 1 and 6)", () => 
       "Your Mattermost server in the hosts GoatCitadel may reach.",
     ]);
     // Ruling R46: the audit's "(or message the bot directly)" is a Mattermost claim its docs do not make, so it is not shipped.
+    // Ruling R49: the probe deletes its test post right away, so the audit's "Check the test post arrived" is not asked.
     expect(paragraphs("first-message")).toEqual([
-      "Check the test post arrived. To receive: turn on Receive posts, allow your user ID, post in a channel the bot is in, and check the reply.",
+      "Check the test passed. To receive: turn on Receive posts, allow your user ID, post in a channel the bot is in, and check the reply.",
     ]);
+  });
+
+  it("never asks the person to look for the test post: the probe deletes it right away (R49)", () => {
+    const wizard = JSON.stringify(guide().definition.wizard);
+
+    expect(wizard).not.toMatch(/check (that )?the test post arrived/iu);
+    expect(paragraphs("first-message").join("\n")).not.toMatch(/arrived/iu);
   });
 
   it("keeps the server host field from the picker data, and no inbound webhook", () => {
@@ -192,7 +200,7 @@ describe("Mattermost setup guide: making the bot (item 2)", () => {
     expect((step("create-bot").checklist ?? []).map((item) => item.label)).toEqual([
       "Turn on bot account creation",
       "Add the bot account and copy its token",
-      "Add the bot to its team and to each channel",
+      "Add the bot to its team and to each channel it should use (not needed for a direct message)",
     ]);
   });
 });
@@ -297,6 +305,10 @@ describe("Mattermost setup guide: where the test post goes (item 3)", () => {
       "The channel name from its web address (for example town-square), or @your-username to have the bot message you. The bot must already be a member.",
     );
     expect(channel.looksLike).toBe("town-square");
+    // A direct message to you is the same probe, so its post is deleted right away too (R49).
+    expect(channel.whyNeeded).toBe(
+      "GoatCitadel posts one test post here and deletes it again right away when the bot may, so you may not see it, even in a direct message. A send that names no channel goes here too.",
+    );
     expect(channel.commonMistakes).toEqual([
       "Using the channel's display name (for example Town Square) instead of the name in its web address.",
     ]);
@@ -396,6 +408,8 @@ describe("Mattermost setup guide: when the test fails (A13)", () => {
   it("sends a channel that isn't found to its web-address name and to the bot's membership", () => {
     expect(body("channel-not-found")).toContain("name from its web address (for example town-square)");
     expect(body("channel-not-found")).toContain("not its display name");
+    expect(body("channel-not-found")).toContain("@your-username to send the test post to you in a direct message");
+    expect(body("channel-not-found")).not.toContain("message you");
     expect(body("channel-not-found")).toContain("add it to the team and the channel first");
   });
 

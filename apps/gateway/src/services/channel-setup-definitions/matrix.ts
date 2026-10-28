@@ -67,6 +67,9 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "GoatCitadel signs in as a bot account, so make one first. The menus here are Element's; other Matrix apps differ.",
             ),
+            paragraph(
+              "Steps 3 and 4 are only for a room. You can skip them and leave Default room ID empty, but the bot can post only in rooms it has joined.",
+            ),
             {
               kind: "list",
               ordered: true,
@@ -84,11 +87,9 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
               "https://github.com/element-hq/element-web/blob/develop/docs/e2ee.md",
             ),
           ],
-          checklist: [
-            check("account", "Create the bot's Matrix account and copy its access token"),
-            check("room", "Create a room with encryption off and invite the bot"),
-            check("accept", "Sign in as the bot and accept the invite"),
-          ],
+          // Only what every setup needs. The room steps are list items above: a send-only setup with no room is supported,
+          // and each box here blocks Continue.
+          checklist: [check("account", "Create the bot's Matrix account and copy its access token")],
         },
         {
           id: "collect-values",
@@ -177,7 +178,7 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "The test checks the access token with your homeserver. If you set a Default room ID, it also checks that the bot has joined that room and posts a test notice there. Check that the notice arrived in the room.",
+              "The test checks the access token with your homeserver. If you set a Default room ID, it also checks that the bot has joined that room and posts a test notice there: check that the notice arrived in that room. If you left Default room ID empty, the test sends nothing.",
             ),
           ],
           troubleshooting: [

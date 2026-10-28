@@ -82,7 +82,10 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           checklist: [
             check("enable", "Turn on bot account creation"),
             check("add-bot", "Add the bot account and copy its token"),
-            check("membership", "Add the bot to its team and to each channel"),
+            check(
+              "membership",
+              "Add the bot to its team and to each channel it should use (not needed for a direct message)",
+            ),
           ],
         },
         {
@@ -138,7 +141,8 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
               required: true,
               explanation:
                 "The channel name from its web address (for example town-square), or @your-username to have the bot message you. The bot must already be a member.",
-              whyNeeded: "GoatCitadel posts one test post here. A send that names no channel goes here too.",
+              whyNeeded:
+                "GoatCitadel posts one test post here and deletes it again right away when the bot may, so you may not see it, even in a direct message. A send that names no channel goes here too.",
               looksLike: "town-square",
               commonMistakes: [
                 "Using the channel's display name (for example Town Square) instead of the name in its web address.",
@@ -187,7 +191,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
             troubleshoot(
               "channel-not-found",
               "It can't find the channel for the test post",
-              "Use the channel name from its web address (for example town-square), not its display name, or @your-username to have the bot message you. The bot must already be a member of the team and the channel, so add it to the team and the channel first.",
+              "Use the channel name from its web address (for example town-square), not its display name, or @your-username to send the test post to you in a direct message. For a channel, the bot must already be a member of the team and the channel, so add it to the team and the channel first.",
             ),
             troubleshoot(
               "post-refused",
