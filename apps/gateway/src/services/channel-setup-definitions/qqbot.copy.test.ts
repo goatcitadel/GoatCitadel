@@ -317,10 +317,7 @@ describe("QQ Bot setup guide: connecting the app (items 4, 5, 8, A5)", () => {
   });
 
   it("asks for an App ID and either form of the secret, nothing else (Continue)", () => {
-    expect(continueBlockers({})).toEqual([
-      "App ID",
-      "App secret or App secret from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({})).toEqual(["App ID", "App secret"]);
   });
 
   it("says to leave Default target empty at first, why, and the format when you add one (item 4)", () => {
@@ -699,9 +696,6 @@ describe("QQ Bot receiving path: can it finish?", () => {
 
   it("does not make an edit replay the setup-only steps", () => {
     expect(continueBlockers(RECEIVING_VALUES, "edit")).toEqual([]);
-    expect(continueBlockers({}, "edit")).toEqual([
-      "App ID",
-      "App secret or App secret from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({}, "edit")).toEqual(["App ID", "App secret"]);
   });
 });

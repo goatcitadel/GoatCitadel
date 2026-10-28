@@ -499,11 +499,7 @@ describe("Mattermost send-only path: can it finish?", () => {
   });
 
   it("asks for those three and nothing about receiving", () => {
-    expect(continueBlockers({})).toEqual([
-      "Server URL",
-      "Bot token or Bot token from an environment variable (advanced)",
-      "Where should the test post go?",
-    ]);
+    expect(continueBlockers({})).toEqual(["Server URL", "Bot token", "Where should the test post go?"]);
   });
 
   it("is cleared by the setup test end to end: token, channel, a test post and its cleanup", async () => {

@@ -688,11 +688,7 @@ describe("Nextcloud Talk send-only path: can it finish?", () => {
   });
 
   it("asks for those three and nothing about receiving", () => {
-    expect(continueBlockers({})).toEqual([
-      "Base URL",
-      "Bot secret or Bot secret from an environment variable (advanced)",
-      "Room token",
-    ]);
+    expect(continueBlockers({})).toEqual(["Base URL", "Bot secret", "Room token"]);
   });
 
   it("is cleared by the setup test once the bot is created and turned on for the room", async () => {
@@ -835,10 +831,6 @@ describe("Nextcloud Talk receiving path: can it finish?", () => {
   it("does not make an edit replay the setup-only steps", () => {
     expect(step("install-bot").createOnly).toBe(true);
     expect(continueBlockers(RECEIVING_VALUES, "edit")).toEqual([]);
-    expect(continueBlockers({}, "edit")).toEqual([
-      "Base URL",
-      "Bot secret or Bot secret from an environment variable (advanced)",
-      "Room token",
-    ]);
+    expect(continueBlockers({}, "edit")).toEqual(["Base URL", "Bot secret", "Room token"]);
   });
 });

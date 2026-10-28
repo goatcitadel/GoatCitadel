@@ -367,11 +367,7 @@ describe("WhatsApp send-only path: can it finish?", () => {
   });
 
   it("asks for those three and nothing about receiving", () => {
-    expect(continueBlockers({})).toEqual([
-      "Phone number ID",
-      "Access token or Access token from an environment variable (advanced)",
-      "Default recipient",
-    ]);
+    expect(continueBlockers({})).toEqual(["Phone number ID", "Access token", "Default recipient"]);
   });
 
   it("is cleared by the setup test: the token check and the test message both pass", async () => {

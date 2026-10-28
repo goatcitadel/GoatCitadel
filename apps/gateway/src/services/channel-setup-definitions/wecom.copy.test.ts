@@ -314,11 +314,7 @@ describe("WeCom setup guide: where each value comes from (items 3, 5, 8, A5)", (
   });
 
   it("asks for a Corp ID, an Agent ID and either form of the secret, nothing about receiving (Continue)", () => {
-    expect(continueBlockers({})).toEqual([
-      "Corp ID",
-      "Agent ID",
-      "Application secret or Application secret from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({})).toEqual(["Corp ID", "Agent ID", "Application secret"]);
   });
 });
 
@@ -775,11 +771,7 @@ describe("WeCom receiving path: can it finish?", () => {
 
   it("does not make an edit replay the setup-only steps, but still shows the receiving step", () => {
     expect(continueBlockers(RECEIVING_VALUES, "edit")).toEqual([]);
-    expect(continueBlockers({}, "edit")).toEqual([
-      "Corp ID",
-      "Agent ID",
-      "Application secret or Application secret from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({}, "edit")).toEqual(["Corp ID", "Agent ID", "Application secret"]);
     expect(step("receive-messages").createOnly).toBeUndefined();
   });
 });

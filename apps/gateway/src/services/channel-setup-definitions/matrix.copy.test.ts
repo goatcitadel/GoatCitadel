@@ -456,10 +456,7 @@ describe("Matrix send-only path: can it finish?", () => {
   });
 
   it("asks for those two and nothing about receiving or a room", () => {
-    expect(continueBlockers({})).toEqual([
-      "Homeserver URL",
-      "Access token or Access token from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({})).toEqual(["Homeserver URL", "Access token"]);
   });
 
   it("is cleared by the setup test with no room: the token is checked and no notice is sent", async () => {
@@ -578,9 +575,6 @@ describe("Matrix receiving path: can it finish?", () => {
 
   it("does not make an edit replay the setup-only steps", () => {
     expect(continueBlockers(RECEIVING_VALUES, "edit")).toEqual([]);
-    expect(continueBlockers({ inboundStreamEnabled: true }, "edit")).toEqual([
-      "Homeserver URL",
-      "Access token or Access token from an environment variable (advanced)",
-    ]);
+    expect(continueBlockers({ inboundStreamEnabled: true }, "edit")).toEqual(["Homeserver URL", "Access token"]);
   });
 });

@@ -383,10 +383,7 @@ describe("LINE send-only path: can it finish?", () => {
   });
 
   it("asks for those two and nothing about receiving", () => {
-    expect(continueBlockers({})).toEqual([
-      "Channel access token or Channel access token from an environment variable (advanced)",
-      "Default target",
-    ]);
+    expect(continueBlockers({})).toEqual(["Channel access token", "Default target"]);
   });
 
   it("passes the setup test's own checks: the token check and the test message", async () => {

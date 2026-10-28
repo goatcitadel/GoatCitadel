@@ -402,18 +402,13 @@ describe("Google Chat setup guide: the service-account key (item 7, A5)", () => 
   });
 
   it("names each way in once when Continue is blocked, without repeating the paste hint", () => {
-    const step1 = step("collect-values-identity");
-    // How the wizard words it: the labels of the alternatives that have a field, joined with " or ".
-    const shown = (step1.requiredAnyOf?.[0] ?? []).flatMap((key) => {
-      const found = guide()
-        .definition.wizard.steps.flatMap((candidate) => candidate.fields ?? [])
-        .find((candidate) => candidate.key === key);
-      return found ? [found.label] : [];
-    });
+    // How the wizard words it: the fields shown for the chosen mode, and the pasted field alone for a paste-or-variable pair.
+    const webhook = continueBlockers({ mode: "webhook" });
+    const app = continueBlockers({ mode: "app" });
 
-    expect(shown.join(" or ")).toBe(
-      "Incoming webhook URL or Service-account key (paste the JSON) or Service-account key from an environment variable (advanced)",
-    );
+    expect(webhook).toContain("Incoming webhook URL");
+    expect(app).toContain("Service-account key (paste the JSON)");
+    for (const message of [...webhook, ...app]) expect(message).not.toMatch(/environment variable|(advanced)/u);
   });
 
   it("accepts a Chat app whose key is pasted and kept in secure storage", () => {

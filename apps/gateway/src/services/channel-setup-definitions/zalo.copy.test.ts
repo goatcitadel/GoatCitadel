@@ -337,10 +337,7 @@ describe("Zalo OA setup guide: where each value comes from (items 1, 2, 6, A5)",
   });
 
   it("asks for an access token (either form) and the recipient, nothing else (Continue)", () => {
-    expect(continueBlockers({})).toEqual([
-      "Access token or Access token from an environment variable (advanced)",
-      "Default OA user ID",
-    ]);
+    expect(continueBlockers({})).toEqual(["Access token", "Default OA user ID"]);
   });
 });
 
@@ -709,9 +706,6 @@ describe("Zalo OA: can it finish?", () => {
 
   it("does not make an edit replay the setup-only intro, and still asks for both values", () => {
     expect(continueBlockers(VALUES, "edit")).toEqual([]);
-    expect(continueBlockers({}, "edit")).toEqual([
-      "Access token or Access token from an environment variable (advanced)",
-      "Default OA user ID",
-    ]);
+    expect(continueBlockers({}, "edit")).toEqual(["Access token", "Default OA user ID"]);
   });
 });

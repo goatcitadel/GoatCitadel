@@ -97,7 +97,8 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
   /**
    * What Continue would still ask for, as the labels the person sees, step by step: the visible required fields (one
    * that is required only with another field is asked for only while that field is filled), then
-   * each "any of" group by the labels of its fields. A key with no field is not named, and a label is named once.
+   * each "any of" group by the labels of its visible fields, the pasted field alone for a paste-or-variable pair (the
+   * message operators see). A key with no field is not named, and a label is named once.
    * Setup-only steps are skipped when a saved connection is changed.
    */
   function continueBlockers(
@@ -115,6 +116,17 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
     const filled = (key: string) => isFilled(effective[key]);
     const holds = (condition: { fieldKey: string; value: unknown } | undefined) =>
       !condition || effective[condition.fieldKey] === condition.value;
+    // Mission Control's rule (alternativeLabels): only visible fields are named, and a variable field is left out when
+    // its pasted twin is offered too. A key with no field is not named, and a label is named once.
+    const alternativeLabels = (group: readonly string[]): string[] => {
+      const offered = group.flatMap((key) => {
+        const field = allFields.find((candidate) => candidate.key === key);
+        return field && holds(field.visibleWhenFieldEquals) ? [field] : [];
+      });
+      const offeredKeys = new Set(offered.map((field) => field.key));
+      const named = offered.filter((field) => !(field.key.endsWith("Env") && offeredKeys.has(field.key.slice(0, -3))));
+      return [...new Set(named.map((field) => field.label))];
+    };
     return steps.flatMap((step) => {
       if (!holds(step.visibleWhenFieldEquals)) return [];
       if (lifecycleMode !== "create" && step.createOnly) return [];
@@ -129,7 +141,7 @@ export function guideFinish(catalogId: string, options: GuideFinishOptions = {})
         .map((field) => field.label);
       const missingGroups = (step.requiredAnyOf ?? [])
         .filter((group) => !group.some(filled))
-        .map((group) => [...new Set(group.flatMap((key) => allFields.find((field) => field.key === key)?.label ?? []))])
+        .map((group) => alternativeLabels(group))
         .filter((labels) => labels.length > 0)
         .map((labels) => labels.join(" or "));
       return [...missingFields, ...missingGroups];
