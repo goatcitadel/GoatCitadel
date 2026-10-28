@@ -95,9 +95,17 @@ describe("LINE setup guide: what it says up front (items 4 and 6)", () => {
   it("says in the intro that receiving needs public HTTPS, and that every message counts toward the limit", () => {
     expect(paragraphs("overview")).toEqual([
       "GoatCitadel sends messages from your LINE Official Account through the Messaging API. LINE can send you messages only if it can reach your Gateway over public HTTPS. GoatCitadel doesn't provide that; without it this connection is send-only.",
+      "This channel sends text. Attachments aren't supported.",
       "Every message GoatCitadel sends is a push message. Push messages count toward your plan's monthly limit, and the free plan's limit depends on your country.",
     ]);
     expect(textOf(step("overview").body)).toContain("https://developers.line.biz/en/docs/messaging-api/pricing/");
+  });
+
+  it("says once, in the overview, that this channel sends text and does not support attachments (R48)", () => {
+    const sentence = "This channel sends text. Attachments aren't supported.";
+
+    expect(paragraphs("overview")).toContain(sentence);
+    expect(JSON.stringify(guide().definition.wizard).split(sentence).length - 1).toBe(1);
   });
 
   it("describes the beta note by what the test will do, not a 'sandbox push message'", () => {

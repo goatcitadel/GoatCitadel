@@ -44,6 +44,7 @@ export function createLineDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "GoatCitadel sends messages from your LINE Official Account through the Messaging API. LINE can send you messages only if it can reach your Gateway over public HTTPS. GoatCitadel doesn't provide that; without it this connection is send-only.",
             ),
+            paragraph("This channel sends text. Attachments aren't supported."),
             paragraph(
               "Every message GoatCitadel sends is a push message. Push messages count toward your plan's monthly limit, and the free plan's limit depends on your country.",
             ),
