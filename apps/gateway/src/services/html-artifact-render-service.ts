@@ -35,7 +35,7 @@ export interface HtmlArtifactRenderDependencies {
     projectId?: string;
     fileName: string;
     mimeType: string;
-    bytesBase64: string;
+    bytes: Buffer;
     analysis?: "skip";
   }): Promise<ChatAttachmentRecord>;
   /** Injectable for tests; defaults to the policy-engine renderer. */
@@ -97,7 +97,7 @@ async function renderOrReuse(
         projectId: artifact.projectId,
         fileName: renderFileName(contentHash, snapshot.viewport),
         mimeType: "image/png",
-        bytesBase64: bytes.toString("base64"),
+        bytes,
         analysis: "skip",
       });
       uploaded.push(
