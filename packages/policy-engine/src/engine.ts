@@ -36,6 +36,7 @@ import {
   isOutsideRootWriteTool,
   resolveWebSearchEngineCandidates,
   splitUtf8HeadTail,
+  toolNamesSwitchedOff,
   type OutsideRootWriteApprovalDetails,
   type OutsideRootWriteGrantDuration,
 } from "@goatcitadel/contracts";
@@ -388,6 +389,14 @@ export class ToolPolicyEngine {
 
   public listCatalog() {
     return this.registry.toCatalog();
+  }
+
+  /**
+   * Names of built-in tools in a group the operator switched off. Read from the live config on every
+   * call, so a Settings save shows on the next call. Never lists Core, MCP or mesh tools.
+   */
+  public listSwitchedOffToolNames(): ReadonlySet<string> {
+    return new Set(toolNamesSwitchedOff(this.config.tools.disabledGroups).keys());
   }
 
   public listGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): Promise<ToolGrantRecord[]> {
@@ -1216,6 +1225,22 @@ export class ToolPolicyEngine {
     });
     if (toolNames.some((name) => matchesAnyToolPattern(policy.denySet, name))) {
       return withPolicy(deny(riskLevel, "policy_deny", "tool denied by policy"));
+    }
+
+    // A switched-off group is deny-wins like tools.deny: tools.allow, allow grants and a local operator
+    // override cannot lift it. It sits after the deny gate so a tool that is also denied reports policy_deny,
+    // the remedy switching the group on would not fix. Core, MCP and mesh names are never in the map.
+    for (const name of toolNames) {
+      const groupId = policy.switchedOffTools?.get(name);
+      if (groupId) {
+        return withPolicy(
+          deny(
+            riskLevel,
+            "tool_group_off",
+            `tool ${request.toolName} is in a tool group switched off by the operator (${groupId})`,
+          ),
+        );
+      }
     }
 
     if (!toolDef) {
