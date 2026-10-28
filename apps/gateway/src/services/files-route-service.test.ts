@@ -255,6 +255,25 @@ describe("paged workspace file listing (LB-08)", () => {
       await expect(port.pageWorkspaceFiles(".", 2, { cursor })).rejects.toMatchObject({ code: "FIELD_INVALID" });
     }
     await expect(port.pageWorkspaceFiles("../outside", 2)).rejects.toThrow();
+
+    // Paths that compare equal under locale collation still page one at a time without loss.
+    await fs.mkdir(path.join(workspace, "accents"));
+    const accentNames = ["é.txt", "é.txt"];
+    const tieTime = new Date(Date.UTC(2026, 1, 1));
+    for (const name of accentNames) {
+      const full = path.join(workspace, "accents", name);
+      await fs.writeFile(full, name, "utf8");
+      await fs.utimes(full, tieTime, tieTime);
+    }
+    const accentSeen: string[] = [];
+    let accentCursor: string | undefined;
+    do {
+      const page = await port.pageWorkspaceFiles("accents", 1, { cursor: accentCursor });
+      accentSeen.push(...page.items.map((item: { relativePath: string }) => item.relativePath));
+      accentCursor = page.nextCursor;
+    } while (accentCursor && accentSeen.length < 5);
+    expect(new Set(accentSeen)).toEqual(new Set(await fs.readdir(path.join(workspace, "accents"))));
+    expect(accentSeen).toHaveLength(new Set(accentSeen).size);
   }, 30_000);
 });
 

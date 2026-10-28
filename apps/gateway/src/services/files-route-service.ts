@@ -504,7 +504,13 @@ interface FilePagePosition {
 export const MAX_FILE_PAGE_CURSOR_LENGTH = 4_096;
 
 function compareFilePagePositions(left: FilePagePosition, right: FilePagePosition): number {
-  return right.modifiedMs - left.modifiedMs || left.relativePath.localeCompare(right.relativePath);
+  // The exact comparison breaks locale ties (e.g. composed vs decomposed accents), so
+  // distinct paths always get distinct positions and a cursor never skips one.
+  return (
+    right.modifiedMs - left.modifiedMs ||
+    left.relativePath.localeCompare(right.relativePath) ||
+    (left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0)
+  );
 }
 
 function writeFilePageCursor(position: FilePagePosition): string {
