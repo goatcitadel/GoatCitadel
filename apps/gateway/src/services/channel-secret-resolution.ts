@@ -56,6 +56,14 @@ export function isSecureStorageReference(value: string): boolean {
   return value.trim().startsWith(SECRET_REFERENCE_PREFIX);
 }
 
+/**
+ * Whether a config value is a reference the channel setup saved. This is the only kind of reference a channel read
+ * resolves: every other secure-storage reference (a provider key, an approval token) is nobody's to read here.
+ */
+export function isChannelSecretReference(value: string): boolean {
+  return value.trim().startsWith(CHANNEL_SECRET_REFERENCE_PREFIX);
+}
+
 /** The owner a setup draft reads as: the connection it will have (or already has), and itself. */
 export function channelSecretOwnerForDraft(
   draft: Pick<ChannelSetupDraft, "draftId" | "connectionId">,
@@ -142,7 +150,9 @@ function readTrimmedConfigString(config: Record<string, unknown>, key: string): 
 
 /**
  * Reads a saved channel reference for its owner: the stored key when the reference was saved for this owner, nothing
- * otherwise. A refusal is logged by kind only, never with the reference, a key or an owner's id.
+ * otherwise. A refusal is logged by kind only, never with the reference or a key. The log names the connection that was
+ * reading (`owner.connectionId`), so an operator can find the one that holds a planted reference; the id the reference
+ * names, which belongs to someone else, is never logged.
  */
 function readOwnedChannelSecretReference(
   secrets: { getSecret(account: string): string | undefined },
@@ -150,16 +160,17 @@ function readOwnedChannelSecretReference(
   owner: ChannelSecretOwner,
   logContext: { directKey: string; catalogId: string | undefined },
 ): string | undefined {
+  const readerContext = { ...logContext, connectionId: owner?.connectionId };
   let parsed: ReturnType<typeof parseChannelSecretRef>;
   try {
     parsed = parseChannelSecretRef(reference);
   } catch {
-    log.warn("Refusing to resolve an invalid channel credential reference.", logContext);
+    log.warn("Refusing to resolve an invalid channel credential reference.", readerContext);
     return undefined;
   }
   if (!parsedReferenceBelongsTo(parsed, owner)) {
     log.warn("Refusing to resolve a channel credential reference that belongs to another connection or draft.", {
-      ...logContext,
+      ...readerContext,
       referenceKind: parsed.custody === "temporary" ? "draft" : "connection",
     });
     return undefined;
@@ -168,7 +179,7 @@ function readOwnedChannelSecretReference(
     return secrets.getSecret(parsed.account)?.trim() || undefined;
   } catch {
     // The store's error text is dropped: it could name the account or hold part of the key.
-    log.warn("Could not read a saved channel credential from secure storage.", logContext);
+    log.warn("Could not read a saved channel credential from secure storage.", readerContext);
     return undefined;
   }
 }
@@ -177,8 +188,9 @@ function readOwnedChannelSecretReference(
  * The one read of a connection's secret from its config: the direct value, else the variable the config names.
  *
  * A direct value that is a channel secure-storage reference is replaced by the key it points to, but only when that
- * reference was saved for `owner` (the connection or setup draft this config belongs to). Anything else gives no key
- * and no fallback, and the reference text is never returned. With no owner, no reference is read.
+ * reference was saved for `owner` (the connection or setup draft this config belongs to). Any other secure-storage
+ * reference (a provider key, an approval token) gives no key either. Neither falls back to the variable the config
+ * names, and the reference text is never returned. With no owner, no reference is read.
  *
  * SECURITY (codex finding #13, #23): the `envKey` field on integration connections used to accept arbitrary env-var
  * names. Lower-privileged authenticated principals could create a productivity.apple-notes or Matrix connection with
@@ -197,8 +209,18 @@ export function resolveConnectionConfigSecret(
 ): string | undefined {
   const direct = readTrimmedConfigString(config, directKey);
   if (direct) {
-    if (direct.startsWith(CHANNEL_SECRET_REFERENCE_PREFIX)) {
+    if (isChannelSecretReference(direct)) {
       return readOwnedChannelSecretReference(secrets, direct, owner, { directKey, catalogId });
+    }
+    if (isSecureStorageReference(direct)) {
+      // A pointer is never a credential: its text would go out as a bearer token, and nobody owns it here.
+      log.warn("Refusing to resolve a secure-storage reference that is not a channel credential reference.", {
+        directKey,
+        catalogId,
+        connectionId: owner?.connectionId,
+        referenceKind: "other",
+      });
+      return undefined;
     }
     return direct;
   }

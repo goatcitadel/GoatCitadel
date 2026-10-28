@@ -381,13 +381,42 @@ describe("resolveConnectionConfigSecret: a saved key is read only for the connec
     expect(read({ token: ownReference }, { connectionId })).toBeUndefined();
   });
 
-  it("never reads the store for an approval token reference", () => {
-    read(
-      { token: "keychain:goatcitadel:approval-remote-action:00000000-0000-4000-8000-000000000008" },
-      { connectionId },
-    );
+  it.each([
+    ["an approval token reference", "keychain:goatcitadel:approval-remote-action:00000000-0000-4000-8000-000000000008"],
+    ["a provider key reference", "keychain:goatcitadel:provider:openai:00000000-0000-4000-8000-000000000009"],
+    ["a reference with no kind at all", "keychain:goatcitadel:"],
+    ["a reference with spaces around it", "  keychain:goatcitadel:provider:openai  "],
+  ])("gives nothing for %s, never its text, and never reads the store", (_label, reference) => {
+    secrets.set(accountOf(reference.trim()), OTHER_SECRET);
 
+    expect(read({ token: reference }, { connectionId })).toBeUndefined();
+    expect(read({ token: reference, tokenEnv: "MATTERMOST_BOT_TOKEN" }, { connectionId })).toBeUndefined();
     expect(store.getSecret).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to the variable the config names for a reference that is not a channel reference", () => {
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", OTHER_SECRET);
+
+    expect(
+      read(
+        {
+          token: "keychain:goatcitadel:provider:openai:00000000-0000-4000-8000-000000000009",
+          tokenEnv: "MATTERMOST_BOT_TOKEN",
+        },
+        { connectionId },
+      ),
+    ).toBeUndefined();
+  });
+
+  it("logs a refused reference that is not a channel reference by its kind only", () => {
+    const providerReference = "keychain:goatcitadel:provider:openai:00000000-0000-4000-8000-000000000009";
+    const logged = capturedLog(() => {
+      read({ token: providerReference }, { connectionId });
+    });
+
+    expect(logged).toContain("Refusing to resolve");
+    expect(logged).not.toContain(providerReference);
+    expect(logged).not.toContain("openai");
   });
 
   it("returns a pasted key and reads a permitted variable as it did, whoever the owner is", () => {
@@ -399,7 +428,7 @@ describe("resolveConnectionConfigSecret: a saved key is read only for the connec
     expect(read({ tokenEnv: "OPENAI_API_KEY" }, { connectionId })).toBeUndefined();
   });
 
-  it("logs a refusal without the reference, the key, or either owner's id", () => {
+  it("logs a refusal without the reference, the key, or the other owner's id, and names the connection that was reading", () => {
     const logged = capturedLog(() => {
       read({ token: otherReference }, { connectionId });
       read({ token: otherDraftReference }, { connectionId, draftId: "draft-1" });
@@ -407,6 +436,8 @@ describe("resolveConnectionConfigSecret: a saved key is read only for the connec
     });
 
     expect(logged).toContain("Refusing to resolve");
+    // The reading connection's own id says which connection holds the planted reference.
+    expect(logged).toContain(`"connectionId":"${connectionId}"`);
     for (const text of [
       otherReference,
       otherDraftReference,
