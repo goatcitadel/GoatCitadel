@@ -280,13 +280,13 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finish saves the connection. The test already posted a message; check that it arrived in the channel.",
+              "Finish saves the connection. With a bot token, the test posts a message and deletes it, so check that the test passed. With only an incoming webhook, the test post stays in the channel, so check that it arrived there.",
             ),
           ],
           successCriteria: [
             "A bot token or an incoming webhook URL is set.",
             "A channel target is set when you use a bot token.",
-            "The test message arrived in Slack.",
+            "The test passed. With only an incoming webhook, the test post arrived in Slack.",
           ],
         },
       ],

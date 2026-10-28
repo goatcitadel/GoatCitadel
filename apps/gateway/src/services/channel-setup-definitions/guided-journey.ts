@@ -36,7 +36,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "To receive messages: an OAuth install from here with message history scopes, and a public HTTPS address for this Gateway.",
     ],
     firstMessage:
-      "Check the test message arrived. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot.",
+      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot.",
   },
   telegram: {
     summary:

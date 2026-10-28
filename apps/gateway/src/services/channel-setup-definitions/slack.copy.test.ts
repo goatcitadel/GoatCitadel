@@ -133,7 +133,7 @@ describe("Slack setup guide: what it says up front (items 4 and 5)", () => {
       "To receive messages: an OAuth install from here with message history scopes, and a public HTTPS address for this Gateway.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "Check the test message arrived. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot.",
+      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot.",
     ]);
   });
 
@@ -320,13 +320,35 @@ describe("Slack setup guide: the test and finishing (item 7)", () => {
     expect(await message("invalid_auth")).not.toContain("Reconnect Slack");
   });
 
-  it("finishes on the test message that already arrived", () => {
+  it("finishes on a passed test, and on an arrived post only for a webhook-only setup (R49)", () => {
     expect(JSON.stringify(step("finish"))).not.toMatch(/sandbox message/iu);
+    expect(paragraphs("finish")).toEqual([
+      "Finish saves the connection. With a bot token, the test posts a message and deletes it, so check that the test passed. With only an incoming webhook, the test post stays in the channel, so check that it arrived there.",
+    ]);
     expect(step("finish").successCriteria).toEqual([
       "A bot token or an incoming webhook URL is set.",
       "A channel target is set when you use a bot token.",
-      "The test message arrived in Slack.",
+      "The test passed. With only an incoming webhook, the test post arrived in Slack.",
     ]);
+  });
+
+  it("never asks a bot-token setup to look for a test message, because the bot-token test deletes it (R49)", () => {
+    // The bot-token test posts a message and deletes it (channel-bot-live-probes.ts), so nothing is left to find.
+    // Only a sentence about the incoming webhook alone may ask for an arrived post.
+    const sentences = [
+      ...paragraphs("first-message"),
+      ...paragraphs("finish"),
+      ...(step("finish").successCriteria ?? []),
+    ].flatMap((text) => text.split(/(?<=\.)\s+/u));
+    const webhookOnly = /^With only an incoming webhook/u;
+
+    expect(sentences.filter((sentence) => /arriv/iu.test(sentence)).length).toBeGreaterThan(0);
+    for (const sentence of sentences.filter((candidate) => !webhookOnly.test(candidate))) {
+      expect(sentence, sentence).not.toMatch(/arriv/iu);
+    }
+    for (const sentence of sentences.filter((candidate) => /^With a bot token/u.test(candidate))) {
+      expect(sentence, sentence).toMatch(/test passed/iu);
+    }
   });
 });
 
