@@ -563,7 +563,7 @@ async function executeCommsProviderTool(
   }
   if (toolName === "smtp.send") {
     return smtpSend(connectionConfig, args, allowlist, grantAllowlist, {
-      resolveSecret: smtpSecretFrom,
+      resolveSecret: secretFrom,
       markMutationRequestStarted: markCommsMutationRequestStarted,
     });
   }
@@ -3835,19 +3835,6 @@ function bindChannelEnvSecretReader(
   if (!store || !resolve) return;
   store.readChannelEnvSecret = (field, envName) =>
     resolve({ catalogId: connection.catalogId, channelKey: connection.key, field, envName });
-}
-
-/**
- * `smtp.send` only, and the one reader here that still takes a variable name as given. The IMAP/SMTP catalog entry
- * suggests `SMTP_PASSWORD`, which the name rule channel connections follow would refuse, and nothing else reads this
- * variable. It is a known gap, not a fallback for the readers above: do not call it from anywhere else.
- */
-function smtpSecretFrom(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined {
-  const direct = asString(readOwn(config, directKey));
-  if (direct) return direct;
-  const envName = asString(readOwn(config, envKey));
-  if (!envName) return undefined;
-  return process.env[envName]?.trim() || undefined;
 }
 
 function chunkText(text: string, targetChars: number, overlap: number, maxChunks: number): string[] {

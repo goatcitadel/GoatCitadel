@@ -40,6 +40,48 @@ describe("a variable name is shown or logged only when it has the shape of one",
   });
 });
 
+describe("the names the IMAP/SMTP mail connection may read", () => {
+  const MAIL = "automation.imap-smtp";
+
+  it.each(["SMTP_PASSWORD", "IMAP_PASSWORD", "IMAP_SMTP_PASSWORD", "INTEGRATION_IMAP_SMTP_PASSWORD"])(
+    "accepts %s",
+    (name) => {
+      expect(isPermittedIntegrationSecretEnvVarName(name, MAIL)).toBe(true);
+    },
+  );
+
+  it.each([
+    "OPENAI_API_KEY",
+    "GOATCITADEL_AUTH_TOKEN",
+    "POSTGRES_PASSWORD",
+    "AWS_SECRET_ACCESS_KEY",
+    "SLACK_BOT_TOKEN",
+    "MAIL_PASSWORD",
+    "smtp_password",
+    "SMTP",
+  ])("still refuses %s", (name) => {
+    expect(isPermittedIntegrationSecretEnvVarName(name, MAIL)).toBe(false);
+  });
+
+  it.each(["channel.mattermost", "channel.slack", "automation.webhooks", "automation.gif-search", "channel.qqbot"])(
+    "does not extend SMTP_ and IMAP_ to %s",
+    (catalogId) => {
+      expect(isPermittedIntegrationSecretEnvVarName("SMTP_PASSWORD", catalogId)).toBe(false);
+      expect(isPermittedIntegrationSecretEnvVarName("IMAP_PASSWORD", catalogId)).toBe(false);
+    },
+  );
+
+  it("accepts neither without a catalog entry", () => {
+    expect(isPermittedIntegrationSecretEnvVarName("SMTP_PASSWORD")).toBe(false);
+  });
+
+  it("tells the person the prefixes the mail connection takes", () => {
+    expect(refusedEnvVarNameMessage(MAIL)).toBe(
+      "The variable name must start with SMTP_ or IMAP_. Rename it and restart GoatCitadel.",
+    );
+  });
+});
+
 describe("the sentence a refused variable name gets", () => {
   it("names the prefix the catalog entry needs and holds no name", () => {
     expect(refusedEnvVarNameMessage("channel.mattermost")).toBe(
@@ -59,13 +101,16 @@ describe("the sentence a refused variable name gets", () => {
     }
   });
 
-  it("states a prefix the rule really accepts, for every catalog entry", () => {
+  it("states only prefixes the rule really accepts, for every catalog entry", () => {
     for (const entry of INTEGRATION_CATALOG) {
-      const prefix = /must start with (\w+_)\./u.exec(refusedEnvVarNameMessage(entry.catalogId))?.[1];
-      expect(prefix, entry.catalogId).toBeDefined();
-      expect(isPermittedIntegrationSecretEnvVarName(`${prefix}EXAMPLE_TOKEN`, entry.catalogId), entry.catalogId).toBe(
-        true,
-      );
+      const stated = /must start with (\w+_(?: or \w+_)*)\./u.exec(refusedEnvVarNameMessage(entry.catalogId))?.[1];
+      expect(stated, entry.catalogId).toBeDefined();
+      for (const prefix of (stated ?? "").split(" or ")) {
+        expect(
+          isPermittedIntegrationSecretEnvVarName(`${prefix}EXAMPLE_TOKEN`, entry.catalogId),
+          `${entry.catalogId} ${prefix}`,
+        ).toBe(true);
+      }
     }
   });
 });

@@ -182,6 +182,26 @@ describe("resolveChannelSendEnvSecret", () => {
     expect(JSON.stringify(resolution)).not.toContain(envName);
   });
 
+  it("reads the SMTP password variable the mail form suggests, and refuses an LLM key for it", () => {
+    vi.stubEnv("SMTP_PASSWORD", SECRET);
+    vi.stubEnv("OPENAI_API_KEY", "other-synthetic-value");
+    const mail = { catalogId: "automation.imap-smtp", channelKey: "imap-smtp", field: "smtpPasswordEnv" };
+
+    expect(resolveChannelSendEnvSecret({ ...mail, envName: "SMTP_PASSWORD" })).toEqual({ value: SECRET });
+    expect(resolveChannelSendEnvSecret({ ...mail, envName: "OPENAI_API_KEY" })).toEqual({
+      refusal: "The variable name must start with SMTP_ or IMAP_. Rename it and restart GoatCitadel.",
+    });
+    // The mail prefixes belong to the mail connection only.
+    expect(
+      resolveChannelSendEnvSecret({
+        catalogId: "channel.mattermost",
+        channelKey: "mattermost",
+        field: "botTokenEnv",
+        envName: "SMTP_PASSWORD",
+      }),
+    ).toMatchObject({ refusal: expect.any(String) });
+  });
+
   it("refuses every name when the connection has no catalog entry, and says so plainly", () => {
     vi.stubEnv("MATTERMOST_BOT_TOKEN", SECRET);
 

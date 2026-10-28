@@ -37,6 +37,7 @@ const FORBIDDEN_INTEGRATION_ENV_PREFIXES = ["GOATCITADEL_", "POSTGRES_", "AWS_"]
 
 const CATALOG_ENV_PREFIX_ALIASES: Readonly<Record<string, readonly string[]>> = {
   "automation.gif-search": ["GIPHY_", "TENOR_"],
+  "automation.imap-smtp": ["SMTP_", "IMAP_"],
   "channel.qqbot": ["QQBOT_"],
 };
 
@@ -66,20 +67,23 @@ export function envNameForLog(value: string): string {
 }
 
 /**
- * The sentence a refused variable name gets. The prefix is the one `isPermittedIntegrationSecretEnvVarName` requires
- * (the catalog entry's own key in capitals), so the sentence cannot drift from the rule. It holds no name and no value.
+ * The sentence a refused variable name gets. The prefixes are ones `isPermittedIntegrationSecretEnvVarName` accepts: the
+ * catalog entry's own aliases when it has any (the mail connection takes SMTP_ and IMAP_), otherwise its key in capitals.
+ * So the sentence cannot drift from the rule. It holds no name and no value.
  */
 export function refusedEnvVarNameMessage(catalogId: string | undefined): string {
-  const catalogKey = catalogId
-    ?.trim()
-    .toLowerCase()
-    .split(".")
+  const normalizedCatalogId = catalogId?.trim().toLowerCase();
+  const catalogKey = normalizedCatalogId
+    ?.split(".")
     .at(-1)
     ?.replace(/[^a-z0-9]+/gu, "_")
     .toUpperCase();
-  return catalogKey
-    ? `The variable name must start with ${catalogKey}_. Rename it and restart GoatCitadel.`
-    : "That variable name is not allowed for this connection. Rename it and restart GoatCitadel.";
+  if (!normalizedCatalogId || !catalogKey) {
+    return "That variable name is not allowed for this connection. Rename it and restart GoatCitadel.";
+  }
+  const aliases = CATALOG_ENV_PREFIX_ALIASES[normalizedCatalogId] ?? [];
+  const prefixes = aliases.length > 0 ? aliases : [`${catalogKey}_`];
+  return `The variable name must start with ${prefixes.join(" or ")}. Rename it and restart GoatCitadel.`;
 }
 
 export function isPermittedIntegrationSecretEnvVarName(envName: string, catalogId?: string): boolean {
