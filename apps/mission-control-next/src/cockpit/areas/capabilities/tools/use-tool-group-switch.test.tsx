@@ -349,6 +349,34 @@ describe("useToolGroupSwitch", () => {
     });
   });
 
+  it("says settings changed while it waited, and to switch it on again", async () => {
+    fakePolls();
+    server = listOf({ browser: "off" });
+    client.setQueryData(KEY, server);
+    await render();
+    // How the Gateway ends it: any other save moves the settings revision before the approval, and the apply refuses
+    // with a conflict. That lands as a generic adapter failure whose summary is the conflict's message.
+    await waitThenEnd("git", {
+      status: "failed",
+      result: {
+        summary: "Runtime settings changed after this Change Plan was prepared.",
+        failureCode: "adapter_failed",
+      },
+    });
+    // The same by its code, whatever the summary says.
+    await waitThenEnd("browser", {
+      status: "failed",
+      result: { summary: "Something else entirely.", failureCode: "WRITE_CONFLICT" },
+    });
+
+    const message = "Not switched on. Settings changed while this waited in Inbox. Switch it on again.";
+    expect(sw("git")).toMatchObject({ checked: false, pending: false, waiting: false, failure: { message } });
+    expect(sw("git").failure?.conflict).toBe(false);
+    expect(sw("browser").failure).toEqual({ message, conflict: false });
+    // The list is read again, so the row shows what the Gateway holds.
+    expect(cachedState("git")).toBe("off");
+  });
+
   it("says plainly why any other ended plan didn't switch on", async () => {
     fakePolls();
     server = listOf({ browser: "off" });

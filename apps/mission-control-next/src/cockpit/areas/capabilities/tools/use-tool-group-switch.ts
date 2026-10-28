@@ -40,6 +40,9 @@ const NOT_SWITCHED_OFF = "Not switched off.";
 const DECLINED = "The change was declined in Inbox.";
 const EXPIRED = "The request expired.";
 const CANCELLED = "The request was cancelled.";
+const SETTINGS_CHANGED = "Settings changed while this waited in Inbox.";
+/** What the Gateway's runtime settings owner says when the settings moved on after a plan was prepared. */
+const SETTINGS_CHANGED_SUMMARY = "Runtime settings changed after this Change Plan was prepared.";
 
 export interface ToolGroupSwitch {
   /** What the switch shows: the group's state in the list. Off shows at once; On only once the list says so. */
@@ -130,6 +133,16 @@ async function confirm(groupId: ToolGroupId) {
   if (readToolGroupSwitch(groupId) === CONFIRMING) setToolGroupSwitch(groupId, undefined);
 }
 
+/**
+ * Whether the plan ended because another save moved the Settings revision before the approval. The apply refuses with
+ * a `WRITE_CONFLICT` conflict, which the control plane records as a generic adapter failure whose summary is the
+ * conflict's message, so the code and that message both count.
+ */
+function endedByChangedSettings(plan: ChangePlanRecord | undefined) {
+  const result = plan?.result;
+  return result?.failureCode === "WRITE_CONFLICT" || result?.summary === SETTINGS_CHANGED_SUMMARY;
+}
+
 /** Why the plan ended without switching, in plain words. The control plane's text for a denial or expiry isn't shown. */
 function planEnded(groupId: ToolGroupId, enabled: boolean, plan: ChangePlanRecord | undefined) {
   const code = plan?.result?.failureCode;
@@ -140,7 +153,9 @@ function planEnded(groupId: ToolGroupId, enabled: boolean, plan: ChangePlanRecor
         ? EXPIRED
         : plan?.status === "cancelled"
           ? CANCELLED
-          : describeApiError(plan?.result?.summary).summary;
+          : endedByChangedSettings(plan)
+            ? `${SETTINGS_CHANGED} Switch it ${enabled ? "on" : "off"} again.`
+            : describeApiError(plan?.result?.summary).summary;
   fail(groupId, `${enabled ? NOT_SWITCHED_ON : NOT_SWITCHED_OFF} ${reason}`);
 }
 
