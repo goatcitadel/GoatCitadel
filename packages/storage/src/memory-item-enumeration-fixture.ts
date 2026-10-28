@@ -87,10 +87,28 @@ export async function verifyMemoryItemEnumeration(db: DatabaseClient) {
   // first page's count instead of rescanning every match.
   const firstContinuation = first.continuation;
   assert.equal(firstContinuation.total, expected.length);
+  const preparedSql: string[] = [];
+  const countingRepository = new MemoryItemEnumerationRepository({
+    ...db,
+    dialect: db.dialect,
+    transaction: db.transaction.bind(db),
+    prepare: (sql: string) => {
+      preparedSql.push(sql);
+      return db.prepare(sql);
+    },
+  } as DatabaseClient);
   assert.equal(
-    repository.listPage({ ...input, continuation: { ...firstContinuation, total: 7 } }).total,
+    countingRepository.listPage({ ...input, continuation: { ...firstContinuation, total: 7 } }).total,
     7,
-    "continuation pages must not recount",
+    "continuation pages must report the cursor's count",
+  );
+  assert.ok(preparedSql.length > 0);
+  assert.ok(!preparedSql.some((sql) => /COUNT\(/iu.test(sql)), "continuation pages must not run COUNT");
+  preparedSql.length = 0;
+  countingRepository.listPage(input);
+  assert.ok(
+    preparedSql.some((sql) => /COUNT\(/iu.test(sql)),
+    "first pages must count",
   );
   assert.throws(
     () => repository.listPage({ ...input, continuation: { ...firstContinuation, total: -1 } }),
