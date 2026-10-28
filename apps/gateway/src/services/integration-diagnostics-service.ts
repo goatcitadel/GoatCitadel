@@ -261,7 +261,7 @@ export function buildIntegrationConnectionChecks(
           key: "delivery_posture",
           status: "pass",
           message:
-            "The ntfy test message is published at most once, and you confirm that it arrived yourself. Inbound is a separate opt-in topic subscription (inboundStreamEnabled with a token); anyone able to publish to the subscribed topic can start turns.",
+            "The guided test publishes the ntfy test message at most once; you confirm yourself that it arrived. Inbound is a separate opt-in topic subscription (inboundStreamEnabled with a token); anyone able to publish to the subscribed topic can start turns.",
         });
         break;
       case "google-chat":

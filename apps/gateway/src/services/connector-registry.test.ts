@@ -168,7 +168,7 @@ describe("buildGatewayConnectorRecords", () => {
     expect(slack?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
     expect(slack?.metadata?.channelSupportNotes).toEqual(
       expect.arrayContaining([
-        "Guided setup can run a sandbox send/delete probe on the bot-token path before finalize.",
+        "With a bot token, guided setup can send a test message and delete it again before finalize.",
         "Slack inbound routing remains disabled until a signing secret is configured.",
       ]),
     );
@@ -195,7 +195,7 @@ describe("buildGatewayConnectorRecords", () => {
     expect(googleChat?.metadata?.supportedAttachmentSources).toEqual(["url"]);
     expect(googleChat?.metadata?.channelSupportNotes).toEqual(
       expect.arrayContaining([
-        "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+        "Guided setup can send a test message through the webhook before finalize. You confirm yourself that it arrived.",
         "Google Chat webhook mode is outbound; inbound requires Chat app (service-account) mode.",
       ]),
     );
@@ -204,7 +204,7 @@ describe("buildGatewayConnectorRecords", () => {
     expect(teams?.metadata?.supportedAttachmentSources).toEqual(["url"]);
     expect(teams?.metadata?.channelSupportNotes).toEqual(
       expect.arrayContaining([
-        "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+        "Guided setup can send a test message through the webhook before finalize. You confirm yourself that it arrived.",
         "Teams webhook mode is outbound only and does not provide inbound routing.",
       ]),
     );
@@ -219,7 +219,7 @@ describe("buildGatewayConnectorRecords", () => {
     ).toBe(true);
     expect(telegram?.metadata?.channelSupportNotes).toEqual(
       expect.arrayContaining([
-        "Guided setup can run a sandbox send/delete probe before finalize.",
+        "Guided setup can send a test message and delete it again before finalize.",
         "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path.",
       ]),
     );

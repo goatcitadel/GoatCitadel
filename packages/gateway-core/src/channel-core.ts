@@ -216,7 +216,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
                   "When inbound channel voice is enabled, Slack audio file shares are transcribed: the gateway downloads the file from files.slack.com with the bot token (needs the files:read scope, 8 MB cap) and routes the transcript as an untrusted voice turn. files.slack.com must be in the network allowlist (toolPolicy.sandbox.networkAllowlist); otherwise the download is refused and the turn runs on the [voice message] fallback.",
                 ]
               : []),
-            "Guided setup can run a sandbox send/delete probe on the bot-token path before finalize.",
+            "With a bot token, guided setup can send a test message and delete it again before finalize.",
           ]
         : [
             "Webhook-only Slack connections support send only plus URL-backed attachment previews. Reactions, unsend, replies, and inline file uploads require a bot token.",
@@ -301,13 +301,13 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
             "Gateway-mode Discord connections keep a persistent Discord gateway session, so the bot can appear online and route inbound DMs or allowlisted guild messages.",
             "When inbound channel voice is enabled, Discord voice messages and audio attachments that pass the same pairing and guild allowlist gates as text are downloaded from the Discord CDN (8 MB cap) and transcribed into an untrusted voice turn. Voice messages cannot mention the bot, so in mention-gated guild channels they are not routed. cdn.discordapp.com and media.discordapp.net must be in the network allowlist (toolPolicy.sandbox.networkAllowlist; discord.com does not cover them); otherwise the download is refused and the turn runs on the [voice message] fallback.",
             "Outbound replies still use the shared Discord send bridge, so reactions and unsend follow the same REST constraints as bridge mode.",
-            "Guided setup can run token, channel, sandbox send/delete, and runtime-readiness probes before finalize.",
+            "Guided setup can check the token, channel and runtime, and send a test message and delete it again, before finalize.",
           ]
         : hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
           ? [
               "Bridge-mode Discord connections are outbound REST bridges. They support reactions, deleting messages in channels the bot can manage, and typing indicators through the REST typing endpoint, but they do not create a persistent online presence.",
               "Discord rich sends support uploaded inline files and URL-backed embeds.",
-              "Guided setup can run token, channel, and sandbox send/delete probes before finalize.",
+              "Guided setup can check the token and channel, and send a test message and delete it again, before finalize.",
             ]
           : hasAnyConfigured(config, ["webhookUrl", "url"])
             ? [
@@ -375,7 +375,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       "Telegram rich sends use photo/document delivery and apply the message body as the first caption when it fits provider limits.",
       "Telegram rich-message preflight blocks metadata-only attachments, caps rich batches at 10 attachments, and records provider delivery evidence before send.",
       resolveTelegramInboundNote(config),
-      "Guided setup can run a sandbox send/delete probe before finalize.",
+      "Guided setup can send a test message and delete it again before finalize.",
     ],
     requiredAnyOf: [["botTokenEnv", "botToken", "tokenEnv", "token"]],
   },
@@ -483,7 +483,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
         : [
             "Google Chat webhook sends support URL-backed rich cards for image and link attachments.",
             "Google Chat webhook mode is outbound; inbound requires Chat app (service-account) mode.",
-            "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+            "Guided setup can send a test message through the webhook before finalize. You confirm yourself that it arrived.",
           ],
     requiredAnyOf: [["webhookUrl", "url", "serviceAccountKeyEnv", "serviceAccountKey"]],
   },
@@ -508,7 +508,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     supportNotes: [
       "Teams webhook sends support URL-backed adaptive card attachments for images and links.",
       "Teams webhook mode is outbound only and does not provide inbound routing.",
-      "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+      "Guided setup can send a test message through the webhook before finalize. You confirm yourself that it arrived.",
     ],
     requiredAnyOf: [["webhookUrl", "url"]],
   },

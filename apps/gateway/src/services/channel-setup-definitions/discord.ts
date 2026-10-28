@@ -38,7 +38,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
       prerequisites: [
         "A Discord account with access to the target server.",
         "Permission to install bots or create an incoming webhook if you want the legacy bridge-only fallback.",
-        "A sandbox channel you can safely test in.",
+        "A test channel you can safely post in.",
       ],
       steps: [
         {
@@ -64,7 +64,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           checklist: [
             check("discord-account", "Discord account signed in"),
             check("server-access", "Access to the target server"),
-            check("sandbox-channel", "A sandbox channel selected for testing"),
+            check("sandbox-channel", "A test channel selected"),
           ],
           troubleshooting: [
             troubleshoot(
@@ -224,7 +224,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               type: "id",
               required: true,
               explanation:
-                "The sandbox channel GoatCitadel should probe and use when no explicit target is provided. For server inbound, it must belong to the default server below.",
+                "The test channel GoatCitadel should probe and use when no explicit target is provided. For server inbound, it must belong to the default server below.",
               whyNeeded:
                 "Needed for diagnostics, default sends, and as the channel half of the default gateway allowlist route.",
               whereToFind: [
@@ -294,7 +294,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               "Finish saves the connection and starts the normal bot-token gateway runtime. After the pre-save probes pass, confirm that the saved connection reaches ready state; any login failure remains visible in connection diagnostics for repair.",
             ),
             paragraph(
-              "Then mention the bot in the sandbox channel and confirm it replies. If DM policy is pairing, the first DM creates a pending code that must be approved before that sender's next message is accepted.",
+              "Then mention the bot in the test channel and confirm it replies. If DM policy is pairing, the first DM creates a pending code that must be approved before that sender's next message is accepted.",
             ),
             paragraph(
               "Approve DM pairing requests in Settings › Channels › this connection › Connection operations. No public web address is needed.",
@@ -304,7 +304,7 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
             "Token auth succeeds or the advanced webhook-only bridge path is intentionally configured.",
             "The default channel is reachable and belongs to the configured default server when a server id is set.",
             "New gateway setups defer runtime readiness until the durable connection is created; existing gateway connections must pass their current runtime check.",
-            "A manual @mention in the allowlisted sandbox channel reaches GoatCitadel; paired DMs are approved before use.",
+            "A manual @mention in the allowlisted test channel reaches GoatCitadel; paired DMs are approved before use.",
           ],
         },
       ],

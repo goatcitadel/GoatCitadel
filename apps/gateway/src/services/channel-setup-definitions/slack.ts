@@ -35,7 +35,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       prerequisites: [
         "A Slack workspace where you can approve your Slack app.",
         "Permission to install apps or ask an admin to approve the install.",
-        "At least one sandbox channel for the first test post.",
+        "At least one test channel for the first test post.",
       ],
       steps: [
         {
@@ -64,7 +64,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           title: "Before you start",
           checklist: [
             check("workspace", "Choose the Slack workspace"),
-            check("sandbox", "Pick at least one sandbox channel for the first target"),
+            check("sandbox", "Pick at least one test channel for the first target"),
             check("permissions", "Confirm you can approve or request your Slack app"),
           ],
         },
@@ -174,7 +174,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
                   "Add a target for each Slack channel. Use #channel-name for public channels or C/G ids for private channels.",
                 ),
               ],
-              looksLike: "Default: #ops-sandbox",
+              looksLike: "Default: #ops-test",
               commonMistakes: [
                 "Adding a private channel before inviting the app into that channel.",
                 "Creating separate full connections instead of adding targets here.",
@@ -189,11 +189,9 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
               explanation: "Compatibility fallback for older single-channel Slack connections.",
               whyNeeded: "Used only when no target rows are configured.",
               whereToFind: [
-                paragraph(
-                  "Use the channel name like #ops-sandbox or copy the channel id for private channels if needed.",
-                ),
+                paragraph("Use the channel name like #ops-test or copy the channel id for private channels if needed."),
               ],
-              looksLike: "#ops-sandbox or C0123456789",
+              looksLike: "#ops-test or C0123456789",
               commonMistakes: ["Using a display title instead of the actual channel reference."],
               canChangeLater: true,
             },

@@ -328,7 +328,7 @@ async function sandboxSend(
         label: "Test send",
         status: "fail",
         disposition: "blocking",
-        message: `WeCom reported the test message's recipient invalid (${invalid}). Verify the user, department or tag can see the application.`,
+        message: `WeCom reported an invalid recipient for the test message (${invalid}). Verify the user, department or tag can see the application.`,
         failureCategory: "destination_mismatch",
       });
       return;
