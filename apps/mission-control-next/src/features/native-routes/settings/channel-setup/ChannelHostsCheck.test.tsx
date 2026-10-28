@@ -29,11 +29,15 @@ async function settle() {
   });
 }
 
-async function show(props: { hosts: readonly string[]; workspaceId?: string }) {
+async function show(props: { hosts: readonly string[]; unreadable?: readonly string[]; workspaceId?: string }) {
   await act(async () => {
     root.render(
       <QueryClientProvider client={client}>
-        <ChannelHostsCheck hosts={props.hosts} workspaceId={props.workspaceId ?? "default"} />
+        <ChannelHostsCheck
+          hosts={props.hosts}
+          {...(props.unreadable ? { unreadable: props.unreadable } : {})}
+          workspaceId={props.workspaceId ?? "default"}
+        />
       </QueryClientProvider>,
     );
   });
@@ -78,6 +82,35 @@ describe("ChannelHostsCheck", () => {
     await show({ hosts: [] });
     expect(container.innerHTML).toBe("");
     expect(api.fetchSettings).not.toHaveBeenCalled();
+  });
+
+  it("says, for each address it can't read, that it can't check that host, with no button and nothing to read", async () => {
+    await show({ hosts: [], unreadable: ["Webhook URL", "Server"] });
+    expect([...container.querySelectorAll("p")].map((item) => item.textContent)).toEqual([
+      "GoatCitadel can't read the address in Webhook URL after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.",
+      "GoatCitadel can't read the address in Server after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.",
+    ]);
+    expect(buttons()).toHaveLength(0);
+    expect(api.fetchSettings).not.toHaveBeenCalled();
+    expectNoLiveRegion();
+  });
+
+  it("shows the hosts it could read and the addresses it couldn't, side by side", async () => {
+    api.fetchSettings.mockResolvedValue(settings(["api.line.me"]));
+    await show({ hosts: LINE, unreadable: ["Webhook URL"] });
+    expect(text()).toContain("GoatCitadel may reach api.line.me.");
+    expect(text()).toContain("GoatCitadel can't read the address in Webhook URL after it's saved");
+    expectNoLiveRegion();
+  });
+
+  it("still shows what it couldn't read while the allowlist is being read, and still offers no button", async () => {
+    api.fetchSettings.mockReturnValue(new Promise(() => undefined));
+    await show({ hosts: LINE, unreadable: ["Webhook URL"] });
+    expect(text()).toBe(
+      "GoatCitadel can't read the address in Webhook URL after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.",
+    );
+    expect(button("Allow these hosts")).toBeUndefined();
+    expectNoLiveRegion();
   });
 
   it("says nothing, and offers no button, while the allowlist is being read", async () => {

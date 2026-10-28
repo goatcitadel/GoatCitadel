@@ -20,19 +20,34 @@ const IDLE: Answer = { state: "idle" };
 /**
  * Whether GoatCitadel may reach the hosts a channel needs, on the step that tests it. The list is checked, never
  * changed, by itself. Only a click on Allow these hosts adds a host, and it adds exactly the hosts listed beside it:
- * `ensureHostsAllowed` is given that list both as what to allow and as what the page showed. It adds no live region.
+ * `ensureHostsAllowed` is given that list both as what to allow and as what the page showed. An address that is set but
+ * names no host, because a saved secret address is only a marker once it is saved, can't be checked, so each gets a
+ * line saying so (`unreadable` holds the field labels). Those lines have no button and nothing to read. It adds no live
+ * region.
  */
 export function ChannelHostsCheck({
   hosts,
+  unreadable = [],
   workspaceId,
   inboxLink = NativeOwnerLink,
 }: {
   hosts: readonly string[];
+  /** Labels of the address fields that are set but name no host. */
+  unreadable?: readonly string[];
   workspaceId: string;
   inboxLink?: InboxLink;
 }) {
-  if (hosts.length === 0) return null;
-  return <HostsCheck hosts={hosts} workspaceId={workspaceId} InboxLink={inboxLink} />;
+  if (hosts.length === 0 && unreadable.length === 0) return null;
+  return (
+    <>
+      {hosts.length > 0 ? <HostsCheck hosts={hosts} workspaceId={workspaceId} InboxLink={inboxLink} /> : null}
+      {unreadable.map((label) => (
+        <p key={label} className="text-sm text-fg-secondary">
+          {`GoatCitadel can't read the address in ${label} after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.`}
+        </p>
+      ))}
+    </>
+  );
 }
 
 function HostsCheck({

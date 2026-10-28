@@ -12,7 +12,7 @@ const CockpitInboxLink: InboxLink = ({ href, scope, children }) => (
   <CockpitOwnerLink href={cockpitShellHref(href)} scope={scope} label={children} />
 );
 
-type HostsCheckProps = { hosts: readonly string[]; workspaceId: string };
+type HostsCheckProps = { hosts: readonly string[]; unreadable?: readonly string[]; workspaceId: string };
 
 /**
  * The hosts check for the Classic guide. Only the Cockpit has a query client, and the check reads the allowlist
@@ -24,11 +24,16 @@ export function ClassicChannelHostsCheck(props: HostsCheckProps) {
   return <HostsCheckWithClient key={accessRevision} {...props} />;
 }
 
-function HostsCheckWithClient({ hosts, workspaceId }: HostsCheckProps) {
+function HostsCheckWithClient({ hosts, unreadable, workspaceId }: HostsCheckProps) {
   const [client] = useState(() => new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false } } }));
   return (
     <QueryClientProvider client={client}>
-      <ChannelHostsCheck hosts={hosts} workspaceId={workspaceId} inboxLink={CockpitInboxLink} />
+      <ChannelHostsCheck
+        hosts={hosts}
+        {...(unreadable ? { unreadable } : {})}
+        workspaceId={workspaceId}
+        inboxLink={CockpitInboxLink}
+      />
     </QueryClientProvider>
   );
 }

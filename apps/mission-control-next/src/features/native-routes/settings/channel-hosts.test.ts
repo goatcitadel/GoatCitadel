@@ -223,6 +223,29 @@ describe("ensureHostsAllowed", () => {
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
 
+  it("never adds a wildcard, even one the page listed, and reads and changes nothing", async () => {
+    api.fetchSettings.mockResolvedValue(settings([]));
+
+    expect(await ensureHostsAllowed(["*"], "w-1", ["*"])).toEqual({
+      kind: "blocked",
+      reasons: [`"*" is not a single host, so GoatCitadel won't add it.`],
+    });
+    expect(await ensureHostsAllowed(["*.x"], "w-1", ["*.x"])).toEqual({
+      kind: "blocked",
+      reasons: [`"*.x" is not a single host, so GoatCitadel won't add it.`],
+    });
+    expect(await ensureHostsAllowed(["api.telegram.org", "*", "*.example.com"], "w-1", ["api.telegram.org"])).toEqual({
+      kind: "blocked",
+      reasons: [
+        `"*" is not a single host, so GoatCitadel won't add it.`,
+        `"*.example.com" is not a single host, so GoatCitadel won't add it.`,
+      ],
+    });
+    expect(api.fetchSettings).not.toHaveBeenCalled();
+    expect(api.createChangePlan).not.toHaveBeenCalled();
+    expect(api.patchSettings).not.toHaveBeenCalled();
+  });
+
   it("still adds a missing host the page listed", async () => {
     api.fetchSettings.mockResolvedValue(settings([]));
     api.createChangePlan.mockResolvedValue(plan({ planId: "s-1", kind: "runtime_configuration" }));

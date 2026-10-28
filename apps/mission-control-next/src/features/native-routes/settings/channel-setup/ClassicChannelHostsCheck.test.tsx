@@ -45,6 +45,18 @@ describe("ClassicChannelHostsCheck", () => {
     expect(container.textContent).toBe("GoatCitadel may reach api.line.me.");
   });
 
+  it("passes on the addresses it can't read, with nothing to read for them", async () => {
+    await act(async () =>
+      root.render(<ClassicChannelHostsCheck hosts={[]} unreadable={["Webhook URL"]} workspaceId="default" />),
+    );
+    await settle();
+
+    expect(container.textContent).toBe(
+      "GoatCitadel can't read the address in Webhook URL after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.",
+    );
+    expect(api.fetchSettings).not.toHaveBeenCalled();
+  });
+
   it("sends the operator to the Cockpit Inbox, since Classic has no Inbox page", async () => {
     api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: [] });
     hosts.ensureHostsAllowed.mockResolvedValue({ kind: "elsewhere", plan: { planId: "p-1" }, approvalId: "a-1" });

@@ -15,6 +15,8 @@ export const HOSTS_UNKNOWN = "GoatCitadel couldn't check which hosts it may reac
 const unlistedHost = (host: string) =>
   `GoatCitadel needs to reach ${host}. Reload this page to see the change before turning it on.`;
 
+const notASingleHost = (entry: string) => `"${entry}" is not a single host, so GoatCitadel won't add it.`;
+
 /** The Inbox page for one approval, in the workspace the change was made in. */
 export function inboxApprovalHref(approvalId: string, workspaceId: string): string {
   return `/inbox?approvalId=${encodeURIComponent(approvalId)}&workspaceId=${encodeURIComponent(workspaceId)}`;
@@ -67,7 +69,9 @@ export function useMissingHosts(requiredHosts: readonly string[] | undefined, en
  * the Settings save: that route plans in the default workspace and applies with the operator's approval skip, and
  * Turn on never takes the skip. A finished allowlist change is "allowed", never "completed": that word is for the
  * channel's own change. A host missing now that is not in `shownHosts`, the ones the page listed, is never added:
- * the click is blocked so the operator can see the change first.
+ * the click is blocked so the operator can see the change first. An entry with a wildcard is not a host and is never
+ * added, whatever the page showed, since the allowlist reads `*` as every host: the click is blocked before anything
+ * is read.
  */
 export async function ensureHostsAllowed(
   hosts: readonly string[],
@@ -75,6 +79,8 @@ export async function ensureHostsAllowed(
   shownHosts: readonly string[],
 ): Promise<{ kind: "allowed" } | InPlaceOutcome | { kind: "blocked"; reasons: string[] }> {
   if (hosts.length === 0) return { kind: "allowed" };
+  const wildcards = [...new Set(hosts)].filter((host) => host.includes("*"));
+  if (wildcards.length > 0) return { kind: "blocked", reasons: wildcards.map(notASingleHost) };
   try {
     const settings = await fetchSettings();
     const missing = missingHosts(hosts, settings.networkAllowlist);

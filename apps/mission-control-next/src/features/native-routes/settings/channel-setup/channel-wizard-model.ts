@@ -263,14 +263,46 @@ export function channelHosts(
   return [...new Set(hosts)];
 }
 
+/** Labels of letters, digits and hyphens joined by dots: a DNS name, or the dotted digits of an IPv4 address. */
+const DNS_NAME = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/;
+/** An IPv6 address as the URL parser gives it back, in brackets. */
+const IPV6_LITERAL = /^\[[0-9a-f:.]+\]$/;
+
+/**
+ * The one host an http or https address names. A wildcard such as `*` or `*.example.com` is not a host (the URL
+ * parser takes one as a hostname, written plainly or percent-encoded, and the allowlist reads `*` as every host), and
+ * neither is anything else that is not a DNS name or an IP address, so none of them is ever returned for the page to
+ * offer.
+ */
 function hostOfAddress(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   try {
     const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.hostname.toLowerCase() || undefined : undefined;
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    const host = url.hostname.toLowerCase();
+    return DNS_NAME.test(host) || IPV6_LITERAL.test(host) ? host : undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The labels of the address fields that are set but name no host: a saved secret address that the editor holds only as
+ * a marker, a value that is not an http or https address, or a wildcard. The page can't check these, so it says so
+ * rather than leave the operator to think no host is needed. A field with no label is one the operator can't see, so it
+ * is not named.
+ */
+export function unreadableHostFields(
+  definition: ChannelSetupDefinition,
+  draft: ChannelSetupDraft,
+  values: Record<string, unknown>,
+): string[] {
+  const effectiveValues = wizardValuesWithDefaults(definition, values);
+  const fields = definition.wizard.steps.flatMap((step) => step.fields ?? []);
+  const labels = (definition.wizard.hostFields ?? [])
+    .filter((key) => hasFieldValue(draft, effectiveValues, key) && hostOfAddress(effectiveValues[key]) === undefined)
+    .flatMap((key) => fields.find((field) => field.key === key)?.label ?? []);
+  return [...new Set(labels)];
 }
 
 /** The Gateway path a vendor posts to, for a saved connection whose webhook condition holds. */

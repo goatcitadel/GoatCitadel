@@ -27,6 +27,10 @@ vi.mock("../channel-hosts", async (importOriginal) => ({
 const definitions = (await Object.values(runtimeDefinitions)[0]!()).listChannelSetupDefinitions();
 const line = definitions.find((item) => item.catalog.catalogId === "channel.line")!;
 const testStep = line.wizard.steps.find((step) => step.kind === "test")!;
+const teams = definitions.find((item) => item.catalog.catalogId === "channel.teams")!;
+const teamsTestStep = teams.wizard.steps.find((step) => step.kind === "test")!;
+const unreadableLine = (label: string) =>
+  `GoatCitadel can't read the address in ${label} after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.`;
 
 const makeDraft = (definition: ChannelSetupDefinition): ChannelSetupDraft => ({
   draftId: "fixture-draft",
@@ -45,11 +49,11 @@ const makeDraft = (definition: ChannelSetupDefinition): ChannelSetupDraft => ({
   updatedAt: "2026-10-08T10:00:00.000Z",
 });
 
-const propsFor = (definition: ChannelSetupDefinition, scopeId?: string) => ({
+const propsFor = (definition: ChannelSetupDefinition, scopeId?: string, values: Record<string, unknown> = {}) => ({
   ...(scopeId ? { scopeId } : {}),
   definition,
   draft: makeDraft(definition),
-  values: {},
+  values,
   label: "Sandbox",
   enabled: true,
   dirty: false,
@@ -153,6 +157,46 @@ describe.each([
     await act(async () => buttonNamed("Allow these hosts")!.click());
 
     expect(hosts.ensureHostsAllowed).toHaveBeenCalledExactlyOnceWith(["api.line.me"], "default", ["api.line.me"]);
+  });
+
+  it("says Teams' saved webhook address can't be read, since a saved secret is only a marker and Teams has no other host", async () => {
+    expect(teams.wizard.requiredHosts).toBeUndefined();
+    expect(teams.wizard.hostFields).toEqual(["webhookUrl"]);
+    api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: [] });
+    await show(Component, propsFor(teams, undefined, { webhookUrl: "[REDACTED]" }));
+
+    await openStep(teamsTestStep.title);
+
+    expect(container.textContent).toContain(unreadableLine("Webhook URL"));
+    expect(container.textContent).not.toContain("can't reach these yet");
+    const lines = [...container.querySelectorAll("p")].map((item) => item.textContent ?? "");
+    expect(lines.some((item) => item.startsWith("GoatCitadel may reach"))).toBe(false);
+    expect(buttonNamed("Allow these hosts")).toBeUndefined();
+    expect(hosts.ensureHostsAllowed).not.toHaveBeenCalled();
+    expect(container.querySelectorAll('[role="status"], [role="alert"], [aria-live="polite"]')).toHaveLength(0);
+  });
+
+  it("reads Teams' webhook address while it is still typed, and says nothing about an unset one", async () => {
+    api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: ["prod-1.westus.logic.azure.com"] });
+    await show(Component, propsFor(teams, undefined, { webhookUrl: "https://prod-1.westus.logic.azure.com/x?sig=1" }));
+    await openStep(teamsTestStep.title);
+    expect(container.textContent).toContain("GoatCitadel may reach prod-1.westus.logic.azure.com.");
+    expect(container.textContent).not.toContain("can't read the address");
+
+    await show(Component, propsFor(teams, undefined, {}));
+    await openStep(teamsTestStep.title);
+    expect(container.textContent).not.toContain("can't read the address");
+  });
+
+  it("never offers to allow a wildcard typed into an address; it says it can't read it", async () => {
+    api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: [] });
+    await show(Component, propsFor(teams, undefined, { webhookUrl: "https://*/" }));
+
+    await openStep(teamsTestStep.title);
+
+    expect(container.textContent).toContain(unreadableLine("Webhook URL"));
+    expect(container.textContent).not.toContain("*");
+    expect(buttonNamed("Allow these hosts")).toBeUndefined();
   });
 
   it("checks nothing before the test step, and nothing for a channel that needs no host", async () => {

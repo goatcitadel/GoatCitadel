@@ -16,6 +16,7 @@ import {
   channelHosts,
   isStepComplete,
   channelStageLabel,
+  unreadableHostFields,
   wizardValuesWithDefaults,
   finalizeDisabledReason,
   formatJson,
@@ -263,6 +264,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
             {activeStep.kind === "test" ? (
               <ClassicChannelHostsCheck
                 hosts={channelHosts(definition, draft, values)}
+                unreadable={unreadableHostFields(definition, draft, values)}
                 workspaceId={props.scopeId ?? "default"}
               />
             ) : null}

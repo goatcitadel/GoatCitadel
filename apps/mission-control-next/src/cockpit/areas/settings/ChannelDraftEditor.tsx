@@ -5,6 +5,7 @@ import {
   finalizeDisabledReason,
   isStepComplete,
   channelStageLabel,
+  unreadableHostFields,
   wizardValuesWithDefaults,
 } from "../../../features/native-routes/settings/channel-setup/channel-wizard-model";
 import { useChannelWizard } from "../../../features/native-routes/settings/channel-setup/use-channel-wizard";
@@ -182,6 +183,7 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
             {step.kind === "test" ? (
               <ChannelHostsCheck
                 hosts={channelHosts(props.definition, props.draft, props.values)}
+                unreadable={unreadableHostFields(props.definition, props.draft, props.values)}
                 workspaceId={props.scopeId ?? "default"}
               />
             ) : null}
