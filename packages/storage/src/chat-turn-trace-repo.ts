@@ -190,7 +190,7 @@ export class ChatTurnTraceRepository {
         capability_profile_hash = @capabilityProfileHash,
         capability_upgrade_suggestions_json = @capabilityUpgradeSuggestionsJson,
         specialist_candidate_suggestions_json = @specialistCandidateSuggestionsJson,
-        reasoning_text = @reasoningText,
+        reasoning_text = COALESCE(@reasoningText, reasoning_text),
         finished_at = @finishedAt
       WHERE turn_id = @turnId
     `);
@@ -221,7 +221,7 @@ export class ChatTurnTraceRepository {
         capability_profile_hash = @capabilityProfileHash,
         capability_upgrade_suggestions_json = @capabilityUpgradeSuggestionsJson,
         specialist_candidate_suggestions_json = @specialistCandidateSuggestionsJson,
-        reasoning_text = @reasoningText,
+        reasoning_text = COALESCE(@reasoningText, reasoning_text),
         finished_at = @finishedAt
       WHERE turn_id = @turnId AND status = @expectedStatus
     `);
@@ -396,7 +396,7 @@ export class ChatTurnTraceRepository {
       specialistCandidateSuggestionsJson: JSON.stringify(
         input.specialistCandidateSuggestions ?? current.specialistCandidateSuggestions ?? [],
       ),
-      reasoningText: input.reasoning ?? current.reasoning ?? null,
+      reasoningText: input.reasoning ?? null,
       finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
     };
   }

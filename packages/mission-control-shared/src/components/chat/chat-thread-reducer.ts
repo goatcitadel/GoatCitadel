@@ -418,8 +418,9 @@ function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThre
  * Keeps streamed reasoning when a fresh copy of the thread replaces the one in memory. The Gateway saves a turn's
  * reasoning only when the turn commits, waits for approval or waits for input, so a copy fetched mid-turn, or from a
  * Gateway that predates the saved copy, has none; without this the reasoning the operator just watched would vanish.
- * A turn the new copy already carries reasoning for keeps the saved text. Only the same conversation's turns that the
- * new copy leaves without reasoning get the remembered text, and an unchanged thread is returned as is.
+ * A turn the new copy already carries reasoning for keeps the saved text, unless the remembered text extends it: a
+ * resumed pass streams after what the earlier pass saved, so the saved copy lags until this pass commits or waits.
+ * Only the same conversation's turns get the remembered text, and an unchanged thread is returned as is.
  */
 export function carryOverStreamedThinking(
   previous: ChatThreadResponse | null,
@@ -438,7 +439,8 @@ export function carryOverStreamedThinking(
   let changed = false;
   const turns = next.turns.map((turn) => {
     const thinking = remembered.get(turn.turnId);
-    if (!thinking || turn.thinking) return turn;
+    if (!thinking) return turn;
+    if (turn.thinking && !(thinking.length > turn.thinking.length && thinking.startsWith(turn.thinking))) return turn;
     changed = true;
     return { ...turn, thinking };
   });

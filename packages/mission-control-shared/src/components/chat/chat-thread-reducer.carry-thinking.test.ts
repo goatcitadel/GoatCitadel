@@ -19,6 +19,14 @@ describe("carryOverStreamedThinking", () => {
     expect(merged!.turns[0]!.thinking).toBe("newer");
   });
 
+  it("keeps a resumed pass's newer reasoning over the copy the earlier pass saved", () => {
+    const merged = carryOverStreamedThinking(
+      thread("s1", [turn("t1", "Plan the command.Approved, so I run it.")]),
+      thread("s1", [turn("t1", "Plan the command.")]),
+    );
+    expect(merged!.turns[0]!.thinking).toBe("Plan the command.Approved, so I run it.");
+  });
+
   it("returns the new copy untouched when nothing is carried, or when the conversation changed", () => {
     const next = thread("s1", [turn("t1")]);
     expect(carryOverStreamedThinking(thread("s1", [turn("t1")]), next)).toBe(next);
