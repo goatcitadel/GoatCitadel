@@ -1,6 +1,12 @@
 import type { FastifyBaseLogger, FastifyInstance, FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { ConflictError, redactStructuredSecrets, ServiceUnavailableError } from "@goatcitadel/contracts";
+import {
+  ConflictError,
+  NotFoundError,
+  redactStructuredSecrets,
+  ServiceUnavailableError,
+  type CapabilitySkillStateRefusal,
+} from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
@@ -22,7 +28,13 @@ const stateBodySchema = z
 const UNREADABLE_MESSAGE = "Skill use counts can't be read right now.";
 const UNAVAILABLE_LIST_MESSAGE = "Skills can't be read right now.";
 const UNAVAILABLE_SWITCH_MESSAGE = "Skills can't be switched right now.";
-const PINNED_MESSAGE = "This skill is pinned. Change it through a proposal in Library.";
+const NOT_SWITCHABLE_MESSAGE = "This skill can't be switched from here.";
+/** The owner's refusals, in plain copy with no skill id, each with its own code (contract: CapabilitySkillStateRefusal). */
+const REFUSALS = {
+  pinned: { code: "STATE_CONFLICT", message: "This skill is pinned. Change it through a proposal in Library." },
+  stale: { code: "WRITE_CONFLICT", message: "This skill changed since you opened it. Reload and try again." },
+  duplicate: { code: "ALREADY_EXISTS", message: "This exact change was already asked for elsewhere. Check the Inbox." },
+} as const satisfies Record<CapabilitySkillStateRefusal, { code: ConflictError["code"]; message: string }>;
 // Each read lists the workspace's skills, its choices, the inspectable catalog and the waiting approvals.
 const LIST_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;
 
@@ -92,8 +104,9 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
   /**
    * Switches one skill, install-wide. It always asks the skill state owner, which creates the skill's usual approval;
    * when the operator's skip applies, the switch approves that approval at once as the operator, and the approval's
-   * own effect applies the change. 202 with `approved` or `waiting`; 200 with `unchanged`, or `declined` when this
-   * same request was already turned down. A pinned skill or a stale revision is a 409.
+   * own effect applies the change. 202 with `approved` or `waiting`; 200 with `unchanged`, or `declined` when the
+   * request was turned down. A pinned skill, a stale revision or someone else's identical request is a 409 with its
+   * own code; a skill the switch can't reach is a 404. Neither names the skill.
    */
   fastify.post("/api/v1/capabilities/skills/state", operatorSwitch, async (request, reply) => {
     const body = stateBodySchema.safeParse(request.body);
@@ -106,7 +119,7 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
       });
       return reply.code(outcome.status === "approved" || outcome.status === "waiting" ? 202 : 200).send(outcome);
     } catch (error) {
-      return sendRouteError(reply, plainPinnedRefusal(error), request.log);
+      return sendRouteError(reply, plainRefusal(error), request.log);
     }
   });
 };
@@ -138,13 +151,29 @@ function requireActions(fastify: FastifyInstance) {
 }
 
 /**
- * The skill state owner refuses a pinned skill with a conflict that names the skill and its proposal flow. The
- * operator sees where to go instead; any other conflict, such as a stale revision, passes through as the owner wrote it.
+ * The owners' refusals name the skill (and the stale one its revisions), so each known one becomes plain copy with its
+ * own code, and the real error stays in the request log. Anything else passes through as its owner wrote it.
  */
-function plainPinnedRefusal(error: unknown): unknown {
-  return error instanceof ConflictError && error.code === "STATE_CONFLICT" && error.message.startsWith("Pinned skill ")
-    ? new ConflictError({ message: PINNED_MESSAGE })
-    : error;
+function plainRefusal(error: unknown): unknown {
+  // The skill state owner looks the skill up among the loaded skills; a workspace's self-authored skill isn't there.
+  if (error instanceof NotFoundError && error.details?.entity === "skill")
+    return new NotFoundError(NOT_SWITCHABLE_MESSAGE);
+  const reason = error instanceof ConflictError ? refusalReason(error) : undefined;
+  return reason ? new ConflictError({ ...REFUSALS[reason], details: { reason } }) : error;
+}
+
+/** Which of the skill state owner's own 409s this is. Their messages are pinned by the owners' tests. */
+function refusalReason(error: ConflictError): CapabilitySkillStateRefusal | undefined {
+  if (error.code === "STATE_CONFLICT" && error.message.startsWith("Pinned skill ")) return "pinned";
+  if (error.code === "WRITE_CONFLICT" && error.details?.resourceKind === "runtime_skill") return "stale";
+  // The approval id follows from the change and the state it starts from; its payload also names who asked.
+  if (
+    error.code === "STATE_CONFLICT" &&
+    error.message.includes("already exists with different immutable request bytes")
+  ) {
+    return "duplicate";
+  }
+  return undefined;
 }
 
 function markNoStore(reply: { header(name: string, value: string): unknown }): void {

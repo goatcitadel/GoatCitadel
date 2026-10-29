@@ -75,11 +75,15 @@ export function countWaitingCandidates(catalog: readonly CapabilityCatalogEntry[
   return waiting.size;
 }
 
-/** One row per loaded skill, ordered by name and then id in plain code-unit order, so no locale changes it. */
+/**
+ * One row per loaded skill, ordered by name and then id in plain code-unit order, so no locale changes it. A skill is
+ * switchable only when the skill state owner's own lookup holds it.
+ */
 export function buildCapabilitySkillItems(input: {
   skills: readonly SkillListItem[];
   hiddenSkillIds: ReadonlySet<string>;
   pendingApprovalIds: ReadonlyMap<string, string>;
+  switchableSkillIds: ReadonlySet<string>;
 }): CapabilitySkillItem[] {
   return input.skills
     .map((skill): CapabilitySkillItem => {
@@ -94,6 +98,7 @@ export function buildCapabilitySkillItems(input: {
         // As the skill list reports it; a missing value never claims the AI can use the skill.
         callable: skill.callable === true,
         revision: skill.revision,
+        switchable: input.switchableSkillIds.has(skill.skillId),
         pinned: skill.pinned === true,
         ...(skill.lifecycleState ? { lifecycleState: skill.lifecycleState } : {}),
         tags: [...(skill.tags ?? [])],

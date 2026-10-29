@@ -41,6 +41,11 @@ export interface CapabilitySkillsOwners {
       authority: SkillStateMutationAuthorityInput,
     ): Promise<SkillStateMutationOutcome>;
   };
+  /**
+   * The install's loaded skills: the list the skill state owner looks a skill up in before it asks for a change, so
+   * the switch can reach exactly these. A workspace's self-authored skills are not in it.
+   */
+  loadedSkills(): readonly Pick<SkillListItem, "skillId">[];
   /** The workspace skill choices, as the skill list and catalog routes resolve them. */
   capabilityScope: { resolveEffectiveSkills(workspaceId: string): Promise<EffectiveCapabilitySet> };
   /** The catalog route's owner. */
@@ -75,6 +80,7 @@ export interface CapabilitySkills {
 export function composeCapabilitySkills({
   chatTurnCapabilityProfiles,
   skills,
+  loadedSkills,
   capabilityScope,
   capabilities,
   approvals,
@@ -92,6 +98,7 @@ export function composeCapabilitySkills({
         resolveEffectiveSkills: (workspaceId) => capabilityScope.resolveEffectiveSkills(workspaceId),
         listInspectableCatalog: (workspaceId) => capabilities.listCapabilityCatalog("inspectable", "ALL", workspaceId),
         listPendingApprovals: () => readAllPendingApprovals((input) => approvals.listApprovalsPage(input)),
+        listSwitchableSkillIds: async () => loadedSkills().map((skill) => skill.skillId),
         deploymentProfile,
         readApprovalSkipSetting,
       },

@@ -44,6 +44,12 @@ export interface CapabilitySkillItem {
   callable: boolean;
   /** Sent back as `expectedRevision` when the switch changes. */
   revision: number;
+  /**
+   * Whether the switch can reach this skill. The skill state owner looks a skill up among the install's loaded skills,
+   * without any workspace's self-authored ones, so those are `false`: the switch would refuse them. A pinned skill is
+   * `true` but still refused (see `pinned`).
+   */
+  switchable: boolean;
   pinned: boolean;
   lifecycleState?: SkillLifecycleState;
   tags: string[];
@@ -116,6 +122,17 @@ export type CapabilitySkillActionOutcome =
   | { status: "waiting"; approvalId: string }
   | { status: "declined"; approvalId: string; expired: boolean }
   | { status: "unchanged" };
+
+/**
+ * Why the switch refused a skill with a `409`, in the error body's `details.reason`; each also has its own `code`.
+ * Every refusal comes before any approval exists, and its `error` is plain copy with no skill id.
+ * - `pinned` (`STATE_CONFLICT`): the skill is pinned; change it through a proposal in Library.
+ * - `stale` (`WRITE_CONFLICT`): the skill changed since the list was read; read it again and retry.
+ * - `duplicate` (`ALREADY_EXISTS`): someone else already asked for this exact change from this exact state.
+ *
+ * A skill the switch can't reach (`switchable: false`) is a `404` (`ENTITY_NOT_FOUND`) instead.
+ */
+export type CapabilitySkillStateRefusal = "pinned" | "stale" | "duplicate";
 
 /** The switch's request. There is no field that chooses the skip; the Gateway decides it. */
 export interface CapabilitySkillStateRequest {

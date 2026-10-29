@@ -29,13 +29,18 @@ export interface CapabilitySkillsSources {
   listInspectableCatalog(workspaceId: string): Promise<readonly CapabilityCatalogEntry[]>;
   /** Every approval still waiting, of any kind and in any workspace. Skill approvals have no workspace. */
   listPendingApprovals(): Promise<readonly ApprovalRequest[]>;
+  /**
+   * The skills the switch can reach: the ones the skill state owner looks a skill up in before it asks for a change.
+   * A workspace's self-authored skills are not among them.
+   */
+  listSwitchableSkillIds(): Promise<readonly string[]>;
   /** The install's deployment profile, read on every list. */
   deploymentProfile(): DeploymentProfile;
   /** The operator's "skip approvals" setting (`settingsApprovalSkipEnabled`). */
   readApprovalSkipSetting(): Promise<boolean>;
 }
 
-export type CapabilitySkillsSource = "skills" | "workspace" | "catalog" | "approvals" | "approval_skip";
+export type CapabilitySkillsSource = "skills" | "workspace" | "catalog" | "approvals" | "switchable" | "approval_skip";
 
 /** Called with the real error of a failed read, so the response can carry plain wording only. */
 export type CapabilitySkillsFailureReporter = (source: CapabilitySkillsSource, error: unknown) => void;
@@ -44,6 +49,7 @@ const UNREADABLE_SKILLS = "Skills can't be read right now.";
 const ISSUE_MESSAGES = {
   workspace: "Workspace skill choices couldn't be read right now.",
   approvals: "Waiting approvals couldn't be read right now.",
+  switchable: "Which skills can be switched couldn't be read right now.",
 } as const;
 
 /**
@@ -57,11 +63,12 @@ export class CapabilitySkillsService {
   ) {}
 
   public async list(workspaceId: string): Promise<CapabilitySkillsResponse> {
-    const [skills, effective, catalog, approvals, operatorApprovalSkip] = await Promise.all([
+    const [skills, effective, catalog, approvals, switchable, operatorApprovalSkip] = await Promise.all([
       this.readSkills(workspaceId),
       this.attempt("workspace", () => this.sources.resolveEffectiveSkills(workspaceId)),
       this.attempt("catalog", () => this.sources.listInspectableCatalog(workspaceId)),
       this.attempt("approvals", () => this.sources.listPendingApprovals()),
+      this.attempt("switchable", () => this.sources.listSwitchableSkillIds()),
       this.readOperatorApprovalSkip(),
     ]);
 
@@ -69,6 +76,7 @@ export class CapabilitySkillsService {
     const issues = [
       ...(effective.ok ? [] : [ISSUE_MESSAGES.workspace]),
       ...(approvals.ok ? [] : [ISSUE_MESSAGES.approvals]),
+      ...(switchable.ok ? [] : [ISSUE_MESSAGES.switchable]),
     ];
     return {
       workspaceId,
@@ -79,6 +87,8 @@ export class CapabilitySkillsService {
           effective.ok ? effective.value : undefined,
         ),
         pendingApprovalIds: approvals.ok ? pendingSkillApprovalIds(approvals.value) : new Map(),
+        // A lookup that can't be read offers no switch, rather than one the owner might refuse.
+        switchableSkillIds: new Set(switchable.ok ? switchable.value : []),
       }),
       ...(catalog.ok ? { candidatesWaiting: countWaitingCandidates(catalog.value) } : {}),
       operatorApprovalSkip,

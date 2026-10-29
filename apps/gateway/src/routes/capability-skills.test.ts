@@ -128,6 +128,7 @@ const LIST: CapabilitySkillsResponse = {
       state: "on",
       callable: true,
       revision: 2,
+      switchable: true,
       pinned: false,
       lifecycleState: "trusted",
       tags: [],
@@ -376,28 +377,96 @@ describe("capability skill state route", () => {
     const response = await server.inject({ method: "POST", url: STATE_URL, payload: STATE_BODY });
 
     expect(response.statusCode).toBe(409);
-    expect(response.json().error).toBe("This skill is pinned. Change it through a proposal in Library.");
+    expect(response.json()).toEqual({
+      error: "This skill is pinned. Change it through a proposal in Library.",
+      code: "STATE_CONFLICT",
+      details: { reason: "pinned" },
+    });
     expect(response.body).not.toContain("bundled:research");
     expect(resolveApproval).not.toHaveBeenCalled();
     expect(appendApprovalAudit).not.toHaveBeenCalled();
   });
 
-  it("passes a stale revision's 409 through as the owner wrote it", async () => {
-    const setState = vi.fn(async () => {
-      throw new ConflictError({
+  // The skill state owner's own refusals, as it writes them: each names the skill, so each becomes plain copy with its
+  // own code (CapabilitySkillStateRefusal).
+  it.each([
+    [
+      "a stale revision",
+      new ConflictError({
         code: "WRITE_CONFLICT",
         message: "runtime_skill bundled:research changed since revision 3",
-      });
+        details: {
+          resourceKind: "runtime_skill",
+          resourceId: "bundled:research",
+          expectedRevision: 3,
+          currentRevision: 4,
+        },
+      }),
+      {
+        error: "This skill changed since you opened it. Reload and try again.",
+        code: "WRITE_CONFLICT",
+        details: { reason: "stale" },
+      },
+    ],
+    [
+      "someone else's identical request",
+      new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Approval 7f0c2a59-3a52-5d0e-9b8e-0c6c7b8d9e01 already exists with different immutable request bytes.",
+      }),
+      {
+        error: "This exact change was already asked for elsewhere. Check the Inbox.",
+        code: "ALREADY_EXISTS",
+        details: { reason: "duplicate" },
+      },
+    ],
+  ])("answers %s with its own 409 and no skill id", async (_label, refusal, body) => {
+    const { server } = await build({
+      setState: vi.fn(async () => {
+        throw refusal;
+      }),
     });
-    const { server } = await build({ setState });
 
     const response = await server.inject({ method: "POST", url: STATE_URL, payload: STATE_BODY });
 
     expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({
-      code: "WRITE_CONFLICT",
-      error: "runtime_skill bundled:research changed since revision 3",
+    expect(response.json()).toEqual(body);
+    expect(response.body).not.toContain("bundled:research");
+    expect(response.body).not.toContain("revision");
+    expect(response.body).not.toContain("7f0c2a59");
+  });
+
+  it("answers a skill the switch can't reach with a plain 404", async () => {
+    // A workspace's self-authored skill: the skill state owner looks skills up without a workspace.
+    const { server } = await build({
+      setState: vi.fn(async () => {
+        throw new NotFoundError({ entity: "skill", id: "extra:reviewed-0123456789ab" });
+      }),
     });
+
+    const response = await server.inject({ method: "POST", url: STATE_URL, payload: STATE_BODY });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "This skill can't be switched from here.", code: "ENTITY_NOT_FOUND" });
+    expect(response.body).not.toContain("reviewed-0123456789ab");
+  });
+
+  it("passes any other conflict through as its owner wrote it", async () => {
+    const refusal = new ConflictError({
+      code: "WRITE_CONFLICT",
+      message: "skill_activation_policy global changed since revision 1",
+      details: { resourceKind: "activation_policy" },
+    });
+    const { server } = await build({
+      setState: vi.fn(async () => {
+        throw refusal;
+      }),
+    });
+
+    const response = await server.inject({ method: "POST", url: STATE_URL, payload: STATE_BODY });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual(refusal.toJSON());
   });
 
   it("sets the 30 a minute limit", async () => {

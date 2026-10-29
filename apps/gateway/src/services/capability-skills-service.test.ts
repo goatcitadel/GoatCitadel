@@ -84,6 +84,8 @@ function sources(overrides: Partial<CapabilitySkillsSources> = {}): CapabilitySk
     resolveEffectiveSkills: vi.fn(async () => "ALL" as const),
     listInspectableCatalog: vi.fn(async () => []),
     listPendingApprovals: vi.fn(async () => []),
+    // The skill state owner's lookup: the loaded skills, without the workspace's self-authored one.
+    listSwitchableSkillIds: vi.fn(async () => ["bundled:research", "extra:pdf-tools"]),
     deploymentProfile: vi.fn(() => "trusted_local" as const),
     readApprovalSkipSetting: vi.fn(async () => false),
     ...overrides,
@@ -183,9 +185,37 @@ describe("CapabilitySkillsService.list", () => {
     expect(response.issues).toEqual(["Waiting approvals couldn't be read right now."]);
   });
 
+  it("offers the switch only on skills the skill state owner can find", async () => {
+    const reads = sources();
+
+    const response = await new CapabilitySkillsService(reads).list(WORKSPACE_ID);
+
+    expect(response.items.map((item) => [item.skillId, item.switchable])).toEqual([
+      // The workspace's self-authored skill: the owner looks skills up without a workspace, so it would refuse.
+      ["extra:reviewed-0123456789ab", false],
+      ["extra:pdf-tools", true],
+      ["bundled:research", true],
+    ]);
+    expect(reads.listSwitchableSkillIds).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no switch, and says so, when that lookup can't be read", async () => {
+    const reportFailure = vi.fn();
+    const response = await new CapabilitySkillsService(
+      sources({ listSwitchableSkillIds: failing("skills not loaded") }),
+      reportFailure,
+    ).list(WORKSPACE_ID);
+
+    expect(response.items.some((item) => item.switchable)).toBe(false);
+    expect(response.items).toHaveLength(3);
+    expect(response.issues).toEqual(["Which skills can be switched couldn't be read right now."]);
+    expect(reportFailure).toHaveBeenCalledWith("switchable", expect.objectContaining({ message: "skills not loaded" }));
+  });
+
   it("lists the issues in a fixed order", async () => {
     const response = await new CapabilitySkillsService(
       sources({
+        listSwitchableSkillIds: failing("skills not loaded"),
         listPendingApprovals: failing("approvals unreadable"),
         resolveEffectiveSkills: failing("scope unreadable"),
       }),
@@ -194,6 +224,7 @@ describe("CapabilitySkillsService.list", () => {
     expect(response.issues).toEqual([
       "Workspace skill choices couldn't be read right now.",
       "Waiting approvals couldn't be read right now.",
+      "Which skills can be switched couldn't be read right now.",
     ]);
   });
 

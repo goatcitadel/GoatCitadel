@@ -76,7 +76,11 @@ function candidateEntry(
   };
 }
 
-const ITEMS_INPUT = { hiddenSkillIds: new Set<string>(), pendingApprovalIds: new Map<string, string>() };
+const ITEMS_INPUT = {
+  hiddenSkillIds: new Set<string>(),
+  pendingApprovalIds: new Map<string, string>(),
+  switchableSkillIds: new Set<string>(),
+};
 
 describe("skillOriginFor", () => {
   it.each([
@@ -134,6 +138,7 @@ describe("buildCapabilitySkillItems", () => {
     const items = buildCapabilitySkillItems({
       hiddenSkillIds: new Set(["extra:pdf-tools"]),
       pendingApprovalIds: new Map([["bundled:research", "approval-1"]]),
+      switchableSkillIds: new Set(["bundled:research", "extra:pdf-tools"]),
       skills: [
         skill({
           skillId: "extra:pdf-tools",
@@ -161,17 +166,25 @@ describe("buildCapabilitySkillItems", () => {
       state: "on",
       callable: true,
       revision: 1,
+      switchable: true,
       pinned: false,
       tags: [],
       hiddenInWorkspace: false,
       pendingApprovalId: "approval-1",
     });
-    expect(items[1]).toMatchObject({ category: "email", origin: "workspace", hiddenInWorkspace: false });
+    // Not in the skill state owner's lookup, so the switch would refuse it.
+    expect(items[1]).toMatchObject({
+      category: "email",
+      origin: "workspace",
+      hiddenInWorkspace: false,
+      switchable: false,
+    });
     expect(items[1]).not.toHaveProperty("pendingApprovalId");
     expect(items[2]).toMatchObject({
       description: "",
       category: "writing",
       origin: "imported",
+      switchable: true,
       pinned: true,
       revision: 4,
       lifecycleState: "approved",

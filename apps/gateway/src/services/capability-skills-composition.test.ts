@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { ApprovalListResponse, ApprovalRequest, SkillListItem } from "@goatcitadel/contracts";
 import type { SkillUseCount } from "@goatcitadel/storage";
@@ -70,6 +71,7 @@ function owners(overrides: Partial<CapabilitySkillsOwners> = {}): CapabilitySkil
       listSkills: vi.fn(async () => [RESEARCH]),
       setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => WAITING),
     },
+    loadedSkills: vi.fn(() => [{ skillId: "bundled:research" }]),
     capabilityScope: { resolveEffectiveSkills: vi.fn(async () => "ALL" as const) },
     capabilities: { listCapabilityCatalog: vi.fn(async () => []) },
     approvals: {
@@ -133,6 +135,38 @@ describe("composeCapabilitySkills", () => {
     expect(parts.capabilities.listCapabilityCatalog).toHaveBeenCalledWith("inspectable", "ALL", "workspace-a");
     expect(parts.features.isFeatureEnabled).toHaveBeenCalledWith("settingsApprovalSkipEnabled");
     expect(response.items.map((item) => item.skillId)).toEqual(["bundled:research"]);
+  });
+
+  it("offers the switch only on the loaded skills, the list the skill state owner looks a skill up in", async () => {
+    const selfAuthored: SkillListItem = {
+      ...RESEARCH,
+      skillId: "extra:reviewed-0123456789ab",
+      name: "inspect-work-item",
+      source: "extra",
+      capabilityCategory: "self_generated",
+    };
+    const parts = owners({
+      skills: {
+        listSkills: vi.fn(async () => [RESEARCH, selfAuthored]),
+        setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => WAITING),
+      },
+    });
+
+    const response = await composeCapabilitySkills(parts).skills.list("workspace-a");
+
+    expect(response.items.map((item) => [item.skillId, item.switchable])).toEqual([
+      ["extra:reviewed-0123456789ab", false],
+      ["bundled:research", true],
+    ]);
+    expect(parts.loadedSkills).toHaveBeenCalledTimes(1);
+  });
+
+  it("is wired to the same skill lookup GatewayService gives the skill state owner", () => {
+    const source = readFileSync(new URL("./gateway-service.ts", import.meta.url), "utf8");
+
+    // The state owner's host looks skills up here, and so does the Skills tab's switchable flag.
+    expect(source).toContain("listSkills: async () => this.skillsService.list(),");
+    expect(source).toContain("loadedSkills: () => this.skillsService.list(),");
   });
 
   it("reads every page of waiting approvals, so no skill's wait is cut off", async () => {

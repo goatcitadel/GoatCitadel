@@ -225,14 +225,25 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
     await approveCandidate(captured, workspaceId);
 
     const listed = await readSkills(workspaceId);
-    expect(listed.items.find((item) => item.skillId === skillId)).toMatchObject({
+    const item = listed.items.find((entry) => entry.skillId === skillId);
+    expect(item).toMatchObject({
       skillId,
       origin: "self_authored",
       state: "on",
       callable: true,
       lifecycleState: "approved",
       hiddenInWorkspace: false,
+      // The skill state owner looks skills up without a workspace, so the switch can't reach this one.
+      switchable: false,
     });
+    const refused = await inject("POST", `${SKILLS_URL}/state`, {
+      workspaceId,
+      skillId,
+      state: "disabled",
+      expectedRevision: item!.revision,
+    });
+    expect(refused.statusCode, refused.body).toBe(404);
+    expect(refused.json()).toEqual({ error: "This skill can't be switched from here.", code: "ENTITY_NOT_FOUND" });
     expect(listed).toMatchObject({ workspaceId, candidatesWaiting: 0, operatorApprovalSkip: false, issues: [] });
     // Self-authored skills belong to their workspace.
     expect((await readSkills("default")).items.some((item) => item.skillId === skillId)).toBe(false);
@@ -264,11 +275,27 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
       operatorApprovalSkip: false,
       issues: [],
     });
-    expect(listed.items.find((item) => item.skillId === "bundled:research")).toMatchObject({
+    const research = listed.items.find((item) => item.skillId === "bundled:research");
+    expect(research).toMatchObject({
       origin: "built_in",
       category: "research",
       state: "on",
       hiddenInWorkspace: false,
+      switchable: true,
+    });
+    expect(listed.items.every((item) => item.switchable)).toBe(true);
+    // A revision that moved on is refused before any approval exists, in plain words with its own code.
+    const stale = await inject("POST", `${SKILLS_URL}/state`, {
+      workspaceId: "default",
+      skillId: "bundled:research",
+      state: "disabled",
+      expectedRevision: research!.revision + 5,
+    });
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(stale.json()).toEqual({
+      error: "This skill changed since you opened it. Reload and try again.",
+      code: "WRITE_CONFLICT",
+      details: { reason: "stale" },
     });
     expect(listed.items.every((item) => item.origin === "built_in")).toBe(true);
     const names = listed.items.map((item) => item.name);

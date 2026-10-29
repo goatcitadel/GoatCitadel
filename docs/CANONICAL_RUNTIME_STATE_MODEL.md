@@ -237,7 +237,7 @@ Authority:
 
 Notes:
 - Only the Capabilities switch follows the operator's `settingsApprovalSkipEnabled` opt-in, and it still creates the approval: when the skip applies it resolves that approval at once as the requesting operator, with a recorded note and an `operator_approval_skipped` approvals-audit event. Switching on, or pausing a skill that is off, skips only with the opt-in on; turning a skill off, or pausing one that is on, skips even with it off (the starting state is the one recorded on the approval); a `remote_hardened` install always asks. See [docs/EVOLUTION_CONTROL_PLANE.md](./EVOLUTION_CONTROL_PLANE.md).
-- Pinned skills and stale revisions are refused with a `409` before any approval exists.
+- The Capabilities switch refuses before any approval exists, in plain words that name no skill: a pinned skill, a stale revision or another requester's identical request is a `409` whose `details.reason` is `pinned`, `stale` or `duplicate` (`CapabilitySkillStateRefusal`), and a skill the state owner can't find is a `404`. The owner looks skills up among the install's loaded skills, so a workspace's self-authored skills are listed with `switchable: false`.
 - Use counts come from the immutable chat turn capability profiles. `SkillListItem.usageCount` moves only on the resolve-activation route, so the Skills tab never shows it as uses.
 - `hiddenInWorkspace` reports the workspace's skill choices; it does not by itself stop Chat from using the skill.
 
