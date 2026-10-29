@@ -1,6 +1,8 @@
 import type {
   ChannelSetupDiscoveryInput,
   ChannelSetupDiscoveryResult,
+  DiscordSetupCheckInput,
+  DiscordSetupCheckResult,
   TelegramChannelPairingList,
   TelegramChannelPairingApproveInput,
   TelegramChannelPairingRevokeInput,
@@ -13,6 +15,9 @@ import { request } from "./client-core.js";
 const connectionPath = (id: string) => `/api/v1/channels/connections/${encodeURIComponent(id)}`;
 export function discoverTelegramSetupTargets(input: ChannelSetupDiscoveryInput): Promise<ChannelSetupDiscoveryResult> {
   return request("/api/v1/channels/telegram/discover-targets", { method: "POST", body: JSON.stringify(input) });
+}
+export function checkDiscordSetup(input: DiscordSetupCheckInput): Promise<DiscordSetupCheckResult> {
+  return request("/api/v1/channels/discord/setup-check", { method: "POST", body: JSON.stringify(input) });
 }
 export function fetchTelegramChannelPairings(connectionId: string): Promise<TelegramChannelPairingList> {
   return request(`${connectionPath(connectionId)}/telegram/pairings`, { cache: "no-store" });

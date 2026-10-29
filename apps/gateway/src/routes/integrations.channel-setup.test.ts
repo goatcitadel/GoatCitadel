@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ValidationError } from "@goatcitadel/contracts";
 import {
   cleanupIntegrationTestApp,
   decorateIntegrationServices,
@@ -403,5 +404,105 @@ describe("channel setup routes", () => {
     });
     expect(retestResponse.statusCode).toBe(200);
     expect(retestChannelConnection).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111");
+  });
+
+  describe("Discord setup check", () => {
+    const url = "/api/v1/channels/discord/setup-check";
+    const draftId = "11111111-1111-1111-1111-111111111111";
+    const result = {
+      bot: { id: "111", name: "Goat Bot" },
+      applicationId: "222",
+      messageContentIntent: true,
+      makers: [{ id: "333", name: "Sam" }],
+      servers: [{ id: "1000000001", name: "Home" }],
+    };
+
+    async function appWith(checkDiscordSetup: ReturnType<typeof vi.fn>) {
+      app = Fastify();
+      decorateIntegrationServices(app, { checkDiscordSetup });
+      await app.register(integrationsRoutes);
+      return app;
+    }
+
+    it("passes a draft check through, and is never cached", async () => {
+      const checkDiscordSetup = vi.fn(async () => result);
+      const server = await appWith(checkDiscordSetup);
+      const payload = { draftId, expectedRevision: 3, guildId: "1000000001", directMessageWith: "3333333333" };
+      const response = await server.inject({ method: "POST", url, payload });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual(result);
+      expect(checkDiscordSetup).toHaveBeenCalledExactlyOnceWith(payload);
+      const bare = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+      expect(bare.statusCode).toBe(200);
+      expect(checkDiscordSetup).toHaveBeenLastCalledWith({ draftId, expectedRevision: 3 });
+    });
+
+    it("takes a strict body", async () => {
+      const checkDiscordSetup = vi.fn(async () => result);
+      const server = await appWith(checkDiscordSetup);
+      for (const payload of [
+        { draftId, expectedRevision: 3, token: "abc.def" },
+        { draftId, expectedRevision: 3, source: "draft" },
+        { draftId: "not-a-guid", expectedRevision: 3 },
+        { draftId, expectedRevision: 0 },
+        { draftId, expectedRevision: 1.5 },
+        { draftId },
+        { expectedRevision: 3 },
+        {},
+      ]) {
+        const response = await server.inject({ method: "POST", url, payload });
+        expect(response.statusCode).toBe(400);
+        expect(response.headers["cache-control"]).toBe("no-store");
+      }
+      expect(checkDiscordSetup).not.toHaveBeenCalled();
+    });
+
+    it("takes a server and a person only as Discord ids", async () => {
+      const checkDiscordSetup = vi.fn(async () => result);
+      const server = await appWith(checkDiscordSetup);
+      const bad = ["123456789", "1".repeat(26), "12345678901x", "../guilds", " 1234567890", "1234567890\n", ""];
+      for (const field of ["guildId", "directMessageWith"]) {
+        for (const value of [...bad, 1234567890]) {
+          const response = await server.inject({
+            method: "POST",
+            url,
+            payload: { draftId, expectedRevision: 3, [field]: value },
+          });
+          expect(response.statusCode).toBe(400);
+        }
+        for (const value of ["1234567890", "1".repeat(25)]) {
+          const response = await server.inject({
+            method: "POST",
+            url,
+            payload: { draftId, expectedRevision: 3, [field]: value },
+          });
+          expect(response.statusCode).toBe(200);
+        }
+      }
+      expect(checkDiscordSetup).toHaveBeenCalledTimes(4);
+    });
+
+    it("answers a refusal with 400 and its fixed sentence", async () => {
+      const refusal = "GoatCitadel opens a direct message only with someone who made the bot.";
+      const checkDiscordSetup = vi.fn().mockRejectedValue(new ValidationError({ message: refusal }));
+      const server = await appWith(checkDiscordSetup);
+      const response = await server.inject({
+        method: "POST",
+        url,
+        payload: { draftId, expectedRevision: 3, directMessageWith: "9999999999" },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toMatchObject({ error: refusal });
+    });
+
+    it("answers anything unexpected with a generic 500 that quotes nothing", async () => {
+      const checkDiscordSetup = vi.fn().mockRejectedValue(new Error("Authorization: Bot abc.def"));
+      const server = await appWith(checkDiscordSetup);
+      const response = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+      expect(response.statusCode).toBe(500);
+      expect(response.body).not.toContain("abc.def");
+    });
   });
 });

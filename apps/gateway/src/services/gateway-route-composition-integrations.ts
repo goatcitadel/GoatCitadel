@@ -136,6 +136,7 @@ export function composeIntegrationChannelRouteDependencies(
       channelSetupService.validateChannelSetupDraft(channelSetupDeps, draftId, expectedRevision),
     discoverChannelSetupTelegramTargets: (input) =>
       channelSetupService.discoverChannelSetupTelegramTargets(channelSetupDeps, input),
+    checkDiscordSetup: (input) => channelSetupService.checkDiscordSetup(channelSetupDeps, input),
     acknowledgeChannelSetupTest: (draftId, input, actorId) =>
       channelSetupService.acknowledgeChannelSetupTest(channelSetupDeps, draftId, input, actorId),
     getChannelSetupJourney: (connectionId) =>

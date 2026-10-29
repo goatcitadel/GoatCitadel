@@ -20,6 +20,17 @@ import {
 } from "./integrations-shared.js";
 import { sendRouteError } from "./_error-handler.js";
 
+/** A Discord snowflake: only digits, so an id from the page can never become a path or a query of its own. */
+const discordIdSchema = z.string().regex(/^\d{10,25}$/);
+const discordSetupCheckSchema = z
+  .object({
+    draftId: z.guid(),
+    expectedRevision: z.number().int().positive(),
+    guildId: discordIdSchema.optional(),
+    directMessageWith: discordIdSchema.optional(),
+  })
+  .strict();
+
 export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance): void {
   fastify.addHook("preHandler", async (request, reply) => {
     if (request.url.split("?", 1)[0]?.startsWith("/api/v1/channels/drafts")) {
@@ -57,6 +68,24 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
         return reply.code(400).send({ error: "Choose a reviewed Telegram draft or connection for discovery." });
       try {
         return reply.send(await fastify.services.channelSetup.discoverChannelSetupTelegramTargets(parsed.data));
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+  // Reads Discord with a draft's saved bot token and answers with names only. Never logged, never cached.
+  fastify.post(
+    "/api/v1/channels/discord/setup-check",
+    { logLevel: "silent", config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsed = discordSetupCheckSchema.safeParse(request.body);
+      reply.header("cache-control", "no-store");
+      if (!parsed.success)
+        return reply
+          .code(400)
+          .send({ error: "A Discord setup check needs a draft and its current revision, and takes only Discord ids." });
+      try {
+        return reply.send(await fastify.services.channelSetup.checkDiscordSetup(parsed.data));
       } catch (error) {
         return sendRouteError(reply, error, request.log);
       }

@@ -244,5 +244,6 @@ export * from "./opencode.js";
 export * from "./channel-oauth.js";
 
 export * from "./channel-setup-operations.js";
+export * from "./channel-setup-checks.js";
 export * from "./chat-feature-references.js";
 export * from "./design-advisory.js";
