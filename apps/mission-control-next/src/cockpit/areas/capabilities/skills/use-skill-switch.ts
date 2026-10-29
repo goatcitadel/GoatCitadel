@@ -347,7 +347,8 @@ async function send(
 
 /**
  * Follows the approval the list marks as waiting, unless this tab already took on how it ended. Says whether it did.
- * Nobody here asked for it, so it is a picked-up wait: not read out, and it opens nothing by itself.
+ * Nobody here asked for it, so it is a picked-up wait: not read out, and the row opens no panel for it. A panel
+ * already open for the skill still shows its approval in place.
  */
 function pickUpWait(item: CapabilitySkillItem, context: ListContext): boolean {
   const { skillId, pendingApprovalId: approvalId } = item;

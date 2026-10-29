@@ -33,7 +33,8 @@ export type SkillSwitchEntry =
   /**
    * Why the last change didn't happen. `change` is set only when the checks ran out while the change was still being
    * applied, so the line goes once the list shows it. `revision` is the skill's version in the list when it failed:
-   * a line without `change` goes once the skill moves past it some other way.
+   * a line without `change` goes once the skill moves past it some other way, except a conflict, whose line stays until
+   * Reload or the next click.
    */
   | {
       readonly phase: "failed";
