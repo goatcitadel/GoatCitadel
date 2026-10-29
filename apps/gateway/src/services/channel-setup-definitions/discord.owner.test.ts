@@ -97,6 +97,72 @@ describe("Discord setup keeps who made the bot", () => {
     expect(hydrated.hydration.fieldState.applicationId).toBe("unknown");
   });
 
+  it("keeps who may message the bot and the access mode the page chose", () => {
+    const config = discord.normalize(
+      draftOf({
+        runtimeMode: "gateway",
+        inboundAccessMode: "allowlist",
+        allowedSenders: [" 333 ", "333", ""],
+        ownerActorIds: ["333"],
+      }),
+    );
+
+    expect(config.inboundAccessMode).toBe("allowlist");
+    expect(config.allowedSenders).toEqual(["333"]);
+
+    const hydrated = discord.hydrate(
+      connection({
+        runtimeMode: "gateway",
+        inboundAccessMode: "allowlist",
+        allowedSenders: ["333"],
+        ownerActorIds: ["333"],
+      }),
+    );
+    expect(hydrated.draft.inboundAccessMode).toBe("allowlist");
+    expect(hydrated.draft.allowedSenders).toEqual(["333"]);
+    expect(hydrated.hydration.fieldState.inboundAccessMode).toBe("configured");
+    expect(hydrated.hydration.fieldState.allowedSenders).toBe("configured");
+
+    // Editing a saved connection carries both back into the config.
+    const edited = discord.normalize(draftOf({ ...hydrated.draft, defaultChannelId: "444444444444444444" }));
+    expect(edited.inboundAccessMode).toBe("allowlist");
+    expect(edited.allowedSenders).toEqual(["333"]);
+    expect(edited.ownerActorIds).toEqual(["333"]);
+  });
+
+  it("leaves the sender list and access mode out when the draft has none", () => {
+    for (const values of [
+      { runtimeMode: "gateway" },
+      { runtimeMode: "gateway", allowedSenders: [], inboundAccessMode: "  " },
+      // A mode Discord does not know is not saved, and the test says so.
+      { runtimeMode: "gateway", inboundAccessMode: "carrier-pigeon" },
+    ]) {
+      const config = discord.normalize(draftOf(values));
+
+      // A key left out keeps the saved connection's own value on edit.
+      expect(config).not.toHaveProperty("allowedSenders");
+      expect(config).not.toHaveProperty("inboundAccessMode");
+    }
+
+    const hydrated = discord.hydrate(connection({ runtimeMode: "gateway", ownerActorIds: ["333"] }));
+    expect(hydrated.draft).not.toHaveProperty("allowedSenders");
+    expect(hydrated.draft).not.toHaveProperty("inboundAccessMode");
+    expect(hydrated.hydration.fieldState.allowedSenders).toBe("unknown");
+    expect(hydrated.hydration.fieldState.inboundAccessMode).toBe("unknown");
+  });
+
+  it("flags an access mode or sender list it cannot save", () => {
+    const base = { runtimeMode: "gateway", botToken: "test-token", guildPolicy: "off" };
+
+    expect(discord.validate(draftOf({ ...base, inboundAccessMode: "allowlist", allowedSenders: ["333"] }))).toEqual([]);
+    expect(discord.validate(draftOf({ ...base, inboundAccessMode: "carrier-pigeon" }))).toEqual([
+      expect.objectContaining({ fieldKey: "inboundAccessMode", level: "error" }),
+    ]);
+    expect(discord.validate(draftOf({ ...base, allowedSenders: "333" }))).toEqual([
+      expect.objectContaining({ fieldKey: "allowedSenders", level: "error" }),
+    ]);
+  });
+
   it("passes the setup test with a DM channel as the default", async () => {
     const draft = draftOf({
       runtimeMode: "gateway",

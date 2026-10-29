@@ -12,7 +12,6 @@ import {
   type RESTPostAPIApplicationCommandsJSONBody,
   type User,
 } from "discord.js";
-import { resolveChannelOwnerActorIds } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import {
   SharedHostAdmissionClosedError,
@@ -34,6 +33,7 @@ import {
   normalizeChannelApprovalToken,
 } from "./channel-command-contract.js";
 import { buildChannelConversation } from "./channel-conversation.js";
+import { isAllowlistedChannelOwner, resolveAllowlistedOwnerActorIds } from "./channel-owner-access.js";
 import {
   createConnectionSecretReferenceResolver,
   isSecureStorageReference,
@@ -973,8 +973,9 @@ export class DiscordRuntimeService {
     }
     const voiceAttachment = readDiscordVoiceAttachment(message);
     const conversation = buildDiscordDirectConversation(message.author);
-    // The person who made the bot is let in the way an approved pairing is, but with no pairing to find or touch.
-    const botMaker = isDiscordBotMaker(connection.config, message.author.id);
+    // The person who made the bot (an owner who is also on the allowlist) is let in the way an approved pairing is,
+    // but with no pairing to find or touch.
+    const botMaker = isAllowlistedChannelOwner(connection.config, message.author.id);
     const approved = botMaker
       ? undefined
       : await this.callbacks.findApprovedPairing(connection.connectionId, message.author.id);
@@ -1049,7 +1050,7 @@ export class DiscordRuntimeService {
       return false;
     }
     // A DM slash command is let in the same way as a DM message, so the person who made the bot is not asked to pair.
-    const botMaker = isDiscordBotMaker(connection.config, interaction.user.id);
+    const botMaker = isAllowlistedChannelOwner(connection.config, interaction.user.id);
     const approved = botMaker
       ? undefined
       : await this.callbacks.findApprovedPairing(connection.connectionId, interaction.user.id);
@@ -1308,20 +1309,16 @@ function resolveDiscordGuildRule(
   const defaultGuildId = readConfigString(config, "defaultGuildId");
   if (defaultGuildId && defaultGuildId === guildId) {
     const defaultChannelId = readConfigString(config, "defaultChannelId");
-    // When the connection names who made the bot, only they are answered in the default channel.
-    const ownerActorIds = resolveChannelOwnerActorIds(config);
+    // When the connection names who made the bot (owners who are also on the allowlist), only they are answered in the
+    // default channel. An owner mark with no allowlist entry leaves the rule as it was.
+    const botMakerIds = resolveAllowlistedOwnerActorIds(config);
     return {
       requireMention: true,
-      ...(ownerActorIds.length > 0 ? { users: ownerActorIds } : {}),
+      ...(botMakerIds.length > 0 ? { users: botMakerIds } : {}),
       channels: defaultChannelId ? [defaultChannelId] : undefined,
     };
   }
   return undefined;
-}
-
-/** Whether this Discord user is one of the people the connection says made the bot (`ownerActorIds`). */
-function isDiscordBotMaker(config: Record<string, unknown>, userId: string): boolean {
-  return resolveChannelOwnerActorIds(config).includes(userId.trim().toLowerCase());
 }
 
 function readGuildRuleMap(config: Record<string, unknown>): Record<string, DiscordGuildAccessRule> {

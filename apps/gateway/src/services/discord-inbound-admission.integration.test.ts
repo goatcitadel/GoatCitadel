@@ -220,8 +220,8 @@ describe("Discord durable inbound turn admission", { timeout: 120_000 }, () => {
     gateway = new GatewayService(await loadGatewayConfig(root));
     await gateway.initCritical();
 
-    // The connection a setup page saves: the default pairing policy, a default channel, and who made the bot. It sets
-    // no inboundAccessMode, so the gateway gives it the default allowlist with nobody on it.
+    // The connection a setup page saves: the default pairing policy, a default channel, and who made the bot, who is
+    // both an owner and on the sender allowlist of an allowlist-mode connection.
     const connection = await gateway.routeServices.integrations.createIntegrationConnection({
       catalogId: "channel.discord",
       label: "Discord bot maker integration test",
@@ -233,10 +233,16 @@ describe("Discord durable inbound turn admission", { timeout: 120_000 }, () => {
         defaultChannelId: "discord-dm-1",
         guildPolicy: "off",
         inboundDmPolicy: "pairing",
+        inboundAccessMode: "allowlist",
+        allowedSenders: ["discord-maker-1"],
         ownerActorIds: ["discord-maker-1"],
       },
     });
-    expect(connection.config.inboundAccessMode).toBe("allowlist");
+    expect(connection.config).toMatchObject({
+      inboundAccessMode: "allowlist",
+      allowedSenders: ["discord-maker-1"],
+      ownerActorIds: ["discord-maker-1"],
+    });
 
     const pairingReplies: string[] = [];
     const reactions: string[] = [];

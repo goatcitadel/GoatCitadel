@@ -766,8 +766,10 @@ describe("DiscordRuntimeService", () => {
     );
   });
 
-  describe("the person who made the bot (ownerActorIds)", () => {
+  describe("the person who made the bot (ownerActorIds on the allowlist)", () => {
     const BOT_ID = "1234567890";
+    // What the setup page saves: the maker is an owner and on the sender allowlist, on an allowlist-mode connection.
+    const MAKER = { inboundAccessMode: "allowlist", allowedSenders: ["333"], ownerActorIds: ["333"] };
     const dmFrom = (authorId: string, id = "msg_dm_owner") =>
       ({
         channel: { isDMBased: () => true, sendTyping: vi.fn().mockResolvedValue(undefined), send: vi.fn() },
@@ -794,7 +796,7 @@ describe("DiscordRuntimeService", () => {
       createConnection({ guilds: undefined, defaultGuildId: "guild_1", defaultChannelId: "channel_1", ...config });
     const runtime = { connectedBotId: BOT_ID } as any;
 
-    it("accepts a DM from someone in ownerActorIds without pairing", async () => {
+    it("accepts a DM from someone in ownerActorIds and on the allowlist without pairing", async () => {
       const onInboundMessage = vi.fn(async () => undefined);
       const findApprovedPairing = vi.fn(() => undefined);
       const ensurePendingPairing = vi.fn();
@@ -804,7 +806,7 @@ describe("DiscordRuntimeService", () => {
 
       const handled = await (service as any).handleDirectMessage(
         {} as any,
-        createConnection({ inboundDmPolicy: "pairing", ownerActorIds: ["333"] }),
+        createConnection({ inboundDmPolicy: "pairing", ...MAKER }),
         message,
       );
 
@@ -835,7 +837,7 @@ describe("DiscordRuntimeService", () => {
 
       const handled = await (service as any).handleDirectMessage(
         {} as any,
-        createConnection({ inboundDmPolicy: "pairing", ownerActorIds: ["333"] }),
+        createConnection({ inboundDmPolicy: "pairing", ...MAKER }),
         message,
       );
 
@@ -854,7 +856,7 @@ describe("DiscordRuntimeService", () => {
 
       const handled = await (service as any).handleDirectMessage(
         {} as any,
-        createConnection({ ownerActorIds: [" 333 "] }),
+        createConnection({ ...MAKER, ownerActorIds: [" 333 "], allowedSenders: [" 333 "] }),
         dmFrom("333"),
       );
 
@@ -871,7 +873,7 @@ describe("DiscordRuntimeService", () => {
 
       const handled = await (service as any).handleDirectMessage(
         {} as any,
-        createConnection({ inboundDmPolicy: "disabled", ownerActorIds: ["333"] }),
+        createConnection({ inboundDmPolicy: "disabled", ...MAKER }),
         message,
       );
 
@@ -886,15 +888,92 @@ describe("DiscordRuntimeService", () => {
       const onInboundMessage = vi.fn(async () => undefined);
       const service = createService({ ensurePendingPairing, onInboundMessage });
 
-      for (const config of [{}, { ownerActorIds: [] }, { ownerActorIds: "333" }]) {
+      // Being on the allowlist alone does not skip pairing: the connection has to name them as an owner too.
+      const configs = [
+        {},
+        { inboundAccessMode: "allowlist", allowedSenders: ["333"] },
+        { ...MAKER, ownerActorIds: [] },
+        { ...MAKER, ownerActorIds: "333" },
+      ];
+      for (const config of configs) {
         await (service as any).handleDirectMessage({} as any, createConnection(config), dmFrom("333"));
       }
 
-      expect(ensurePendingPairing).toHaveBeenCalledTimes(3);
+      expect(ensurePendingPairing).toHaveBeenCalledTimes(configs.length);
       expect(onInboundMessage).not.toHaveBeenCalled();
     });
 
-    it("accepts a DM slash command from someone in ownerActorIds without pairing", async () => {
+    it("still asks someone marked as an owner, but not on the allowlist, to pair", async () => {
+      const onInboundMessage = vi.fn(async () => undefined);
+      const ensurePendingPairing = vi.fn(() => createPairingRecord({ userId: "333" }));
+      const touchPairing = vi.fn();
+      const service = createService({ ensurePendingPairing, touchPairing, onInboundMessage });
+      // The "This is you" mark on its own saves ownerActorIds and nothing else.
+      const marked = createConnection({ ownerActorIds: ["333"] });
+      const markedOnAllowlistOfOthers = createConnection({
+        inboundAccessMode: "allowlist",
+        allowedSenders: ["555"],
+        ownerActorIds: ["333"],
+      });
+
+      for (const connection of [marked, markedOnAllowlistOfOthers]) {
+        const message = dmFrom("333");
+        await expect((service as any).handleDirectMessage({} as any, connection, message)).resolves.toBe(true);
+        expect(message.channel.send).toHaveBeenCalledWith(
+          "GoatCitadel pairing required. Ask the operator to approve code `ABC123` for Discord Primary.",
+        );
+      }
+
+      expect(ensurePendingPairing).toHaveBeenCalledTimes(2);
+      expect(onInboundMessage).not.toHaveBeenCalled();
+      expect(touchPairing).not.toHaveBeenCalled();
+    });
+
+    it("asks the person who made the bot to pair again once they are taken off the allowlist", async () => {
+      const onInboundMessage = vi.fn(async () => undefined);
+      const ensurePendingPairing = vi.fn(() => createPairingRecord({ userId: "333" }));
+      const service = createService({ ensurePendingPairing, onInboundMessage });
+
+      await (service as any).handleDirectMessage({} as any, createConnection({ ...MAKER }), dmFrom("333", "msg_in"));
+      expect(onInboundMessage).toHaveBeenCalledTimes(1);
+      expect(ensurePendingPairing).not.toHaveBeenCalled();
+
+      // Still an owner, no longer allowed: the next DM asks for pairing.
+      for (const allowedSenders of [["555"], []]) {
+        const message = dmFrom("333", "msg_out");
+        await (service as any).handleDirectMessage({} as any, createConnection({ ...MAKER, allowedSenders }), message);
+        expect(message.channel.send).toHaveBeenCalledWith(expect.stringContaining("GoatCitadel pairing required"));
+      }
+      expect(onInboundMessage).toHaveBeenCalledTimes(1);
+      expect(ensurePendingPairing).toHaveBeenCalledTimes(2);
+    });
+
+    it("treats the person who made the bot as today when the connection is not in allowlist mode", async () => {
+      const onInboundMessage = vi.fn(async () => undefined);
+      const ensurePendingPairing = vi.fn(() => createPairingRecord({ userId: "333" }));
+      const service = createService({ ensurePendingPairing, onInboundMessage });
+
+      const modes: Array<string | undefined> = [undefined, "open_legacy", "carrier-pigeon"];
+      for (const inboundAccessMode of modes) {
+        const connection = defaultChannelConnection({ ...MAKER, inboundAccessMode });
+        const message = dmFrom("333");
+        await (service as any).handleDirectMessage({} as any, connection, message);
+        expect(message.channel.send).toHaveBeenCalledWith(expect.stringContaining("GoatCitadel pairing required"));
+        // The default channel is not narrowed either: someone else who mentions the bot is still answered.
+        await expect(
+          (service as any).tryHandleMessageForConnection(
+            runtime,
+            connection,
+            channelMessageFrom("444", true, `msg_${inboundAccessMode}`),
+          ),
+        ).resolves.toBe(true);
+      }
+
+      expect(ensurePendingPairing).toHaveBeenCalledTimes(modes.length);
+      expect(onInboundMessage).toHaveBeenCalledTimes(modes.length);
+    });
+
+    it("accepts a DM slash command from someone in ownerActorIds and on the allowlist without pairing", async () => {
       const acceptSlashCommand = vi.fn().mockResolvedValue({ inboundEventId: "inbound-dm-owner" });
       const ensurePendingPairing = vi.fn();
       const touchPairing = vi.fn();
@@ -918,7 +997,7 @@ describe("DiscordRuntimeService", () => {
           deferred: false,
           replied: false,
         }) as any;
-      const connection = createConnection({ ownerActorIds: ["333"] });
+      const connection = createConnection({ ...MAKER });
       ensurePendingPairing.mockReturnValue(createPairingRecord({ userId: "444" }));
 
       await expect((service as any).handleDirectCommand({} as any, connection, buildInteraction("333"))).resolves.toBe(
@@ -934,12 +1013,27 @@ describe("DiscordRuntimeService", () => {
       );
       expect(acceptSlashCommand).not.toHaveBeenCalled();
       expect(ensurePendingPairing).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", "444", "Goat User");
+
+      // Someone marked as an owner but not allowed, or allowed in a connection that is not in allowlist mode, still pairs.
+      ensurePendingPairing.mockClear();
+      for (const config of [
+        { ownerActorIds: ["333"] },
+        { ...MAKER, allowedSenders: ["555"] },
+        { ...MAKER, inboundAccessMode: "open_legacy" },
+      ]) {
+        acceptSlashCommand.mockClear();
+        await expect(
+          (service as any).handleDirectCommand({} as any, createConnection(config), buildInteraction("333")),
+        ).resolves.toBe(true);
+        expect(acceptSlashCommand).not.toHaveBeenCalled();
+      }
+      expect(ensurePendingPairing).toHaveBeenCalledTimes(3);
     });
 
-    it("answers only ownerActorIds in the default channel when they mention the bot", async () => {
+    it("answers only ownerActorIds on the allowlist in the default channel when they mention the bot", async () => {
       const onInboundMessage = vi.fn(async () => undefined);
       const service = createService({ onInboundMessage });
-      const connection = defaultChannelConnection({ ownerActorIds: ["333"] });
+      const connection = defaultChannelConnection({ ...MAKER });
 
       await expect(
         (service as any).tryHandleMessageForConnection(runtime, connection, channelMessageFrom("333", true, "msg_a")),
@@ -978,7 +1072,7 @@ describe("DiscordRuntimeService", () => {
           deferred: false,
           replied: false,
         }) as any;
-      const connection = defaultChannelConnection({ ownerActorIds: ["333"] });
+      const connection = defaultChannelConnection({ ...MAKER });
 
       await expect(
         (service as any).tryHandleInteractionForConnection(runtime, connection, buildInteraction("444")),
@@ -1022,12 +1116,52 @@ describe("DiscordRuntimeService", () => {
       expect(rule).not.toHaveProperty("users");
     });
 
+    it("does not narrow the default channel for someone marked as an owner who is not on the allowlist", async () => {
+      const onInboundMessage = vi.fn(async () => undefined);
+      const service = createService({ onInboundMessage });
+      const connections = [
+        // The "This is you" mark alone.
+        defaultChannelConnection({ ownerActorIds: ["333"] }),
+        defaultChannelConnection({ inboundAccessMode: "allowlist", allowedSenders: ["555"], ownerActorIds: ["333"] }),
+      ];
+
+      for (const connection of connections) {
+        for (const authorId of ["333", "444"]) {
+          await expect(
+            (service as any).tryHandleMessageForConnection(
+              runtime,
+              connection,
+              channelMessageFrom(authorId, true, `msg_${authorId}`),
+            ),
+          ).resolves.toBe(true);
+        }
+        const rule = __discordRuntimeServiceInternals.resolveDiscordGuildRule(connection.config, "guild_1");
+        expect(rule).toEqual({ requireMention: true, channels: ["channel_1"] });
+        expect(rule).not.toHaveProperty("users");
+      }
+      expect(onInboundMessage).toHaveBeenCalledTimes(4);
+    });
+
+    it("narrows the default channel to the owners who are also on the allowlist", () => {
+      const connection = defaultChannelConnection({
+        inboundAccessMode: "allowlist",
+        allowedSenders: ["444", "555"],
+        ownerActorIds: ["333", "444"],
+      });
+
+      expect(__discordRuntimeServiceInternals.resolveDiscordGuildRule(connection.config, "guild_1")).toEqual({
+        requireMention: true,
+        users: ["444"],
+        channels: ["channel_1"],
+      });
+    });
+
     it("leaves a saved server rule as it is", async () => {
       const onInboundMessage = vi.fn(async () => undefined);
       const service = createService({ onInboundMessage });
       // The default server also has its own rule: that rule decides, and ownerActorIds adds nothing to it.
       const connection = defaultChannelConnection({
-        ownerActorIds: ["333"],
+        ...MAKER,
         guilds: { guild_1: { requireMention: true, channels: ["channel_1"] } },
       });
 
