@@ -1207,6 +1207,23 @@ describe("ApprovalRepository.listPage install-wide", () => {
     assert.deepEqual(pendingPage(repo, "workspace-b", true), [legacy]);
   });
 
+  it("treats a row with legacy preview linkage as linked, not install-wide", () => {
+    created = 0;
+    const { db, repo } = createInMemoryHarness();
+    const legacy = linkedApproval(repo, db, { workspaceId: "workspace-b" });
+    db.prepare(
+      "UPDATE approvals SET linkage_json = NULL, payload_json = ?, preview_json = ? WHERE approval_id = ?",
+    ).run(
+      JSON.stringify({ command: "dir" }),
+      JSON.stringify({ command: "dir", __gcApprovalLinkage: { workspaceId: "workspace-b" } }),
+      legacy,
+    );
+    assert.deepEqual(repo.get(legacy).linkage, { workspaceId: "workspace-b" });
+
+    assert.deepEqual(pendingPage(repo, "workspace-a", true), []);
+    assert.deepEqual(pendingPage(repo, "workspace-b", true), [legacy]);
+  });
+
   it("pages install-wide and linked approvals with the cursor without loss or repeats", () => {
     created = 0;
     const { db, repo } = createInMemoryHarness();
