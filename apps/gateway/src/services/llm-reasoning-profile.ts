@@ -54,7 +54,7 @@ export function resolveLlmReasoningProfile(input: {
     }
   }
 
-  const capability = resolveCapability(
+  const capability = resolveReasoningCapability(
     input.catalogReasoningEfforts,
     input.modelMetadata,
     input.providerCapabilities,
@@ -123,7 +123,8 @@ export function resolveLlmReasoningProfile(input: {
   };
 }
 
-function resolveCapability(
+/** Dispatch's effort order: live catalog, then exact model metadata, then provider capabilities. */
+export function resolveReasoningCapability(
   catalogReasoningEfforts: ChatCompletionReasoningEffort[] | undefined,
   modelMetadata: LlmModelMetadataEntry | undefined,
   providerCapabilities: LlmProviderCapabilities,

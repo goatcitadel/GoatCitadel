@@ -1709,6 +1709,8 @@ describe("LlmService", () => {
         try {
           // The fixture metadata really is loaded, so the listing must ignore it.
           expect(service.getModelReasoningMetadata("bedrock", bedrockModel)?.supportedEfforts).toContain("high");
+          // Change Plans read the same resolution dispatch uses, so they offer none only.
+          expect(service.getDispatchReasoningEfforts("bedrock", bedrockModel)).toEqual(["none"]);
           const provider = service.listProviders().find((entry) => entry.providerId === "bedrock");
           expect(provider?.capabilities?.reasoning).toBe(false);
           expect(provider?.capabilities?.reasoningEfforts).toBeUndefined();
@@ -3647,6 +3649,8 @@ describe("LlmService", () => {
         }),
         expect.objectContaining({ id: "gpt-6-oauth-only", fastModeAvailable: false }),
       ]);
+      // The live catalog list outranks the provider's declared efforts, as it does at dispatch.
+      expect(service.getDispatchReasoningEfforts("openai-codex", "gpt-6-astra")).toEqual(["low", "max"]);
       await expect(
         service.chatCompletions({
           providerId: "openai-codex",

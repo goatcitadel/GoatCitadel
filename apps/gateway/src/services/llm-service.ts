@@ -84,7 +84,7 @@ import {
   type GoogleCloudCredentialSource,
   type GoogleCloudCredentialType,
 } from "./google-cloud-auth-service.js";
-import { resolveLlmReasoningProfile } from "./llm-reasoning-profile.js";
+import { resolveLlmReasoningProfile, resolveReasoningCapability } from "./llm-reasoning-profile.js";
 import { anthropicProviderAdapter } from "./llm-provider-anthropic.js";
 import { bedrockProviderAdapter } from "./llm-provider-bedrock.js";
 import {
@@ -1284,19 +1284,38 @@ export class LlmService {
     model: string,
     attribution: ModelUsageAttributionContext,
   ): ReturnType<typeof resolveLlmReasoningProfile> {
-    // An adapter that never sends a reasoning field must not inherit efforts
-    // from the catalog or model metadata, or the receipt would claim "honored".
-    const omitsReasoning = providerOmitsReasoningEffort(provider, model);
     return resolveLlmReasoningProfile({
       request,
       providerId: provider.providerId,
+      ...this.dispatchReasoningSources(provider, model),
+      attribution,
+    });
+  }
+
+  /** The efforts dispatch would honor for this exact model, resolved in dispatch's own order. */
+  public getDispatchReasoningEfforts(providerId: string, model: string): ChatCompletionReasoningEffort[] | undefined {
+    const provider = this.providers.get(providerId);
+    if (!provider) return undefined;
+    const sources = this.dispatchReasoningSources(provider, model);
+    const capability = resolveReasoningCapability(
+      sources.catalogReasoningEfforts,
+      sources.modelMetadata,
+      sources.providerCapabilities,
+    );
+    return [...capability.supportedEfforts];
+  }
+
+  private dispatchReasoningSources(provider: LlmProviderConfig, model: string) {
+    // An adapter that never sends a reasoning field must not inherit efforts
+    // from the catalog or model metadata, or the receipt would claim "honored".
+    const omitsReasoning = providerOmitsReasoningEffort(provider, model);
+    return {
       providerCapabilities: inferProviderCapabilities(provider, this.claudeCodeCli),
       modelMetadata: omitsReasoning
         ? undefined
         : lookupExactModelMetadata(this.modelMetadata, provider.providerId, model),
       catalogReasoningEfforts: omitsReasoning ? undefined : this.getCatalogReasoningEfforts(provider, model),
-      attribution,
-    });
+    };
   }
 
   public getCachedModelAvailability(
