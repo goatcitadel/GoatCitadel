@@ -293,6 +293,33 @@ describe("composeCapabilitySkills", () => {
     }
   });
 
+  it("reads the state a pause starts from on the approval, through the Inbox's owner", async () => {
+    const fromOff: ApprovalRequest = {
+      ...stateApproval("approval-research", "bundled:research"),
+      preview: { title: "Approve skill state change", currentState: "disabled" },
+    };
+    const parts = owners({
+      approvals: {
+        listApprovalsPage: vi.fn(async (): Promise<ApprovalListResponse> => ({ items: [] })),
+        getApproval: vi.fn(async () => fromOff),
+        resolveApproval: vi.fn(),
+      },
+    });
+
+    const outcome = await composeCapabilitySkills(parts).actions.setState({
+      workspaceId: "workspace-a",
+      skillId: "bundled:research",
+      state: "sleep",
+      expectedRevision: 4,
+      actorId: "operator-1",
+    });
+
+    // Pausing an off skill gives power back, so with the setting off it waits.
+    expect(outcome).toEqual({ status: "waiting", approvalId: "approval-research" });
+    expect(parts.approvals.getApproval).toHaveBeenCalledExactlyOnceWith("approval-research");
+    expect(parts.approvals.resolveApproval).not.toHaveBeenCalled();
+  });
+
   it("tells who turned an earlier request down by reading the approval through the Inbox's owner", async () => {
     const rejected: ApprovalRequest = {
       ...stateApproval("approval-research", "bundled:research"),

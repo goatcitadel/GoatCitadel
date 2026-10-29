@@ -62,7 +62,12 @@ export interface CapabilitySkillsResponse {
   items: CapabilitySkillItem[];
   /** Candidate skills waiting for review, once per candidate. Absent when it couldn't be read. */
   candidatesWaiting?: number;
-  /** Whether the operator's own clicks here apply without asking. Never on a `remote_hardened` install. */
+  /**
+   * Whether the operator's setting to skip approvals for their own changes applies here, which is what decides
+   * switching a skill on (or pausing one that is off). Turning a skill off, or pausing one that is on, applies without
+   * asking whatever this says, because it only takes power away. Never on a `remote_hardened` install, where every
+   * switch asks.
+   */
   operatorApprovalSkip: boolean;
   /** Plain lines about the parts of the list that couldn't be read. */
   issues: string[];

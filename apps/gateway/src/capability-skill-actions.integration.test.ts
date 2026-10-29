@@ -16,10 +16,10 @@ import { buildApp } from "./app.js";
 import { OPERATOR_SKILL_SKIP_NOTES } from "./services/capability-skill-actions-service.js";
 
 /**
- * The Capabilities skill switch over the real Gateway, with the operator's "skip approvals" setting on. The unit tests
- * fake every owner; these prove the switch reaches the real skill state owner, the Inbox's resolve and the recovered
- * approval effect: a skipped approval is still created, approved by the operator with its note, and applied only by
- * its effect. Each test switches its own shipped skill, so a wait left in the Inbox can't touch the next one.
+ * The Capabilities skill switch over the real Gateway, with the operator's "skip approvals" setting on, then off. The
+ * unit tests fake every owner; these prove the switch reaches the real skill state owner, the Inbox's resolve and the
+ * recovered approval effect: a skipped approval is still created, approved by the operator with its note, and applied
+ * only by its effect. Each test switches its own shipped skill, so a wait left in the Inbox can't touch the next one.
  */
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -44,7 +44,7 @@ const ENV: Record<string, string> = {
   GOATCITADEL_NPU_AUTOSTART: "false",
   GOATCITADEL_NPU_ENABLED: "false",
   GOATCITADEL_RATE_LIMIT_ENABLED: "false",
-  // The operator's "apply my changes without an Inbox approval" setting, on for every test here.
+  // The operator's "apply my changes without an Inbox approval" setting, on unless a test group turns it off.
   GOATCITADEL_FEATURE_SETTINGS_APPROVAL_SKIP_ENABLED: "true",
 };
 
@@ -209,6 +209,59 @@ describe("the Capabilities skill switch over the real Gateway, with the skip set
     expect(gateway.readApprovalAudit()).not.toContainEqual(
       expect.objectContaining({ approvalId: pendingApproval.approvalId }),
     );
+  });
+});
+
+describe("the Capabilities skill switch over the real Gateway, with the skip setting off", { timeout: 300_000 }, () => {
+  const gateway = useGateway({ GOATCITADEL_FEATURE_SETTINGS_APPROVAL_SKIP_ENABLED: "false" });
+
+  it("pauses a skill that is on at once, since that only takes power away", async () => {
+    const skillId = "bundled:operations";
+
+    const paused = await gateway.switchSkill(skillId, "sleep", (await gateway.readSkill(skillId)).revision);
+
+    expect(paused.statusCode, paused.body).toBe(202);
+    const outcome = paused.json<CapabilitySkillActionOutcome>();
+    expect(outcome).toMatchObject({ status: "approved", approvalId: expect.any(String) });
+    const approvalId = (outcome as { approvalId: string }).approvalId;
+    await vi.waitFor(async () => expect(await gateway.readRuntimeState(skillId)).toBe("sleep"), {
+      timeout: 20_000,
+      interval: 100,
+    });
+    expect(await gateway.readApproval(approvalId)).toMatchObject({
+      status: "approved",
+      resolutionNote: OPERATOR_SKILL_SKIP_NOTES.tightening,
+      preview: { currentState: "enabled", state: "sleep" },
+    });
+    expect(gateway.readApprovalAudit()).toContainEqual(
+      expect.objectContaining({ event: "operator_approval_skipped", approvalId, reason: "tightening" }),
+    );
+  });
+
+  it("keeps asking to pause a skill that is off, since a paused skill can be used again", async () => {
+    const skillId = "bundled:documentation";
+    // Off first: turning a skill off only takes power away, so that applies at once.
+    const off = await gateway.switchSkill(skillId, "disabled", (await gateway.readSkill(skillId)).revision);
+    expect(off.statusCode, off.body).toBe(202);
+    expect(off.json<CapabilitySkillActionOutcome>()).toMatchObject({ status: "approved" });
+    await vi.waitFor(async () => expect(await gateway.readRuntimeState(skillId)).toBe("disabled"), {
+      timeout: 20_000,
+      interval: 100,
+    });
+
+    const paused = await gateway.switchSkill(skillId, "sleep", (await gateway.readSkill(skillId)).revision);
+
+    expect(paused.statusCode, paused.body).toBe(202);
+    const outcome = paused.json<CapabilitySkillActionOutcome>();
+    expect(outcome).toMatchObject({ status: "waiting", approvalId: expect.any(String) });
+    const approvalId = (outcome as { approvalId: string }).approvalId;
+    expect(await gateway.readApproval(approvalId)).toMatchObject({
+      status: "pending",
+      preview: { currentState: "disabled", state: "sleep" },
+    });
+    expect(await gateway.readRuntimeState(skillId)).toBe("disabled");
+    expect(await gateway.readSkill(skillId)).toMatchObject({ state: "off", pendingApprovalId: approvalId });
+    expect(gateway.readApprovalAudit()).not.toContainEqual(expect.objectContaining({ approvalId }));
   });
 });
 

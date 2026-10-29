@@ -35,13 +35,20 @@ function pending(status: SkillLifecyclePendingApproval["status"] = "pending"): S
   };
 }
 
+type ApprovalRead = Pick<ApprovalRequest, "status" | "resolvedBy" | "preview">;
+
+/** The approval as the Inbox reads it. By default it waits, made while the skill was on. */
+const approvalRead = (overrides: Partial<ApprovalRead> = {}): ApprovalRead => ({
+  status: "pending",
+  preview: { title: "Approve skill state change", skillId: SKILL, currentState: "enabled" },
+  ...overrides,
+});
+
 function sources(overrides: Partial<CapabilitySkillActionSources> = {}) {
   return {
     setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => pending()),
     resolveApproval: vi.fn(async () => ({})),
-    readApproval: vi.fn(
-      async (): Promise<Pick<ApprovalRequest, "status" | "resolvedBy">> => ({ status: "rejected", resolvedBy: ACTOR }),
-    ),
+    readApproval: vi.fn(async (): Promise<ApprovalRead> => approvalRead()),
     appendApprovalAudit: vi.fn(async () => undefined),
     deploymentProfile: vi.fn((): DeploymentProfile => "trusted_local"),
     readApprovalSkipSetting: vi.fn(async () => false),
@@ -96,6 +103,87 @@ describe("CapabilitySkillActionsService", () => {
       expect(parts.readApprovalSkipSetting).toHaveBeenCalledTimes(profile === "remote_hardened" ? 0 : 1);
     },
   );
+
+  // Pausing gives power back when the skill is off, since a paused skill can still be used when it is named or matched
+  // confidently. The state it is in comes from the approval the owner just made (Ruling R10).
+  describe("pausing with the setting off", () => {
+    it.each([
+      ["on", "approved", "enabled"],
+      ["off", "waiting", "disabled"],
+    ] as const)("pausing a skill that is %s is %s", async (_label, status, currentState) => {
+      const parts = sources({ readApproval: vi.fn(async () => approvalRead({ preview: { currentState } })) });
+
+      const outcome = await new CapabilitySkillActionsService(parts).setState(request("sleep"));
+
+      expect(outcome).toEqual({ status, approvalId: "approval-1" });
+      expect(parts.readApproval).toHaveBeenCalledExactlyOnceWith("approval-1");
+      if (status === "approved") {
+        expect(parts.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-1", {
+          decision: "approve",
+          resolvedBy: ACTOR,
+          resolutionNote: OPERATOR_SKILL_SKIP_NOTES.tightening,
+        });
+      } else {
+        expect(parts.resolveApproval).not.toHaveBeenCalled();
+        expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
+      }
+    });
+
+    it("waits when the approval doesn't say what state the skill was in", async () => {
+      const parts = sources({ readApproval: vi.fn(async () => approvalRead({ preview: {} })) });
+
+      const outcome = await new CapabilitySkillActionsService(parts).setState(request("sleep"));
+
+      expect(outcome).toEqual({ status: "waiting", approvalId: "approval-1" });
+      expect(parts.resolveApproval).not.toHaveBeenCalled();
+    });
+
+    it("waits, and logs why, when the approval can't be read", async () => {
+      const failure = new Error("approval store locked");
+      const reportFailure = vi.fn();
+      const parts = sources({
+        readApproval: vi.fn(async (): Promise<ApprovalRead> => {
+          throw failure;
+        }),
+      });
+
+      const outcome = await new CapabilitySkillActionsService(parts, reportFailure).setState(request("sleep"));
+
+      expect(outcome).toEqual({ status: "waiting", approvalId: "approval-1" });
+      expect(reportFailure).toHaveBeenCalledExactlyOnceWith("current_state", failure);
+      expect(parts.resolveApproval).not.toHaveBeenCalled();
+      expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
+    });
+
+    it("never needs the state to turn a skill off", async () => {
+      const parts = sources({ readApproval: vi.fn(async () => approvalRead({ preview: { currentState: "sleep" } })) });
+
+      const outcome = await new CapabilitySkillActionsService(parts).setState(request("disabled"));
+
+      expect(outcome).toEqual({ status: "approved", approvalId: "approval-1" });
+      expect(parts.readApproval).not.toHaveBeenCalled();
+    });
+
+    it("never reads it with the setting on, or on a remote_hardened install", async () => {
+      const withSetting = sources({
+        readApprovalSkipSetting: vi.fn(async () => true),
+        readApproval: vi.fn(async () => approvalRead({ preview: { currentState: "disabled" } })),
+      });
+      const hardened = sources({ deploymentProfile: vi.fn((): DeploymentProfile => "remote_hardened") });
+
+      // The setting covers pausing an off skill too: with it on, every switch from here applies without asking.
+      expect(await new CapabilitySkillActionsService(withSetting).setState(request("sleep"))).toEqual({
+        status: "approved",
+        approvalId: "approval-1",
+      });
+      expect(await new CapabilitySkillActionsService(hardened).setState(request("sleep"))).toEqual({
+        status: "waiting",
+        approvalId: "approval-1",
+      });
+      expect(withSetting.readApproval).not.toHaveBeenCalled();
+      expect(hardened.readApproval).not.toHaveBeenCalled();
+    });
+  });
 
   it("returns unchanged when the skill is already in that state", async () => {
     const parts = sources({
@@ -205,6 +293,7 @@ describe("CapabilitySkillActionsService", () => {
     it("answers declined for a replayed rejected approval", async () => {
       const parts = sources({
         setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => pending("rejected")),
+        readApproval: vi.fn(async () => approvalRead({ status: "rejected", resolvedBy: ACTOR })),
         readApprovalSkipSetting: vi.fn(async () => true),
       });
 
@@ -220,12 +309,7 @@ describe("CapabilitySkillActionsService", () => {
     it("answers declined and expired for a replayed approval the expiry check rejected", async () => {
       const parts = sources({
         setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => pending("rejected")),
-        readApproval: vi.fn(
-          async (): Promise<Pick<ApprovalRequest, "status" | "resolvedBy">> => ({
-            status: "rejected",
-            resolvedBy: APPROVAL_EXPIRY_ACTOR_ID,
-          }),
-        ),
+        readApproval: vi.fn(async () => approvalRead({ status: "rejected", resolvedBy: APPROVAL_EXPIRY_ACTOR_ID })),
       });
 
       const outcome = await new CapabilitySkillActionsService(parts).setState(request("disabled"));
@@ -268,7 +352,7 @@ describe("CapabilitySkillActionsService", () => {
       const failure = new Error("approval store locked");
       const parts = sources({
         setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => pending("rejected")),
-        readApproval: vi.fn(async (): Promise<Pick<ApprovalRequest, "status" | "resolvedBy">> => {
+        readApproval: vi.fn(async (): Promise<ApprovalRead> => {
           throw failure;
         }),
       });

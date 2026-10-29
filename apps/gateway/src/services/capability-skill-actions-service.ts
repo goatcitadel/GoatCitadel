@@ -17,16 +17,13 @@ import type { SkillLifecyclePendingApproval, SkillStateMutationOutcome } from ".
  */
 export const OPERATOR_SKILL_SKIP_NOTES = {
   setting: "Applied without asking: your setting to skip approvals for your own changes is on.",
-  tightening: "Applied without asking: switching a skill off or pausing it only takes power away.",
+  tightening: "Applied without asking: turning a skill off, or pausing one that is on, only takes power away.",
 } as const;
 
 export type OperatorSkillSkipReason = keyof typeof OPERATOR_SKILL_SKIP_NOTES;
 
 /** The approvals audit event, the one the Change Plan skip records too. */
 const SKIP_AUDIT_EVENT = "operator_approval_skipped";
-
-/** Off and paused only take power away: an off skill is never used, a paused one only when it is named (Q1: A). */
-const TIGHTENING_STATES: ReadonlySet<SkillRuntimeState> = new Set(["disabled", "sleep"]);
 
 /** One reader per owner the switch goes through. None of them applies a change itself. */
 export interface CapabilitySkillActionSources {
@@ -42,8 +39,11 @@ export interface CapabilitySkillActionSources {
   ): Promise<SkillStateMutationOutcome>;
   /** The Inbox's own resolve, which records the decision and runs the approval's effect. */
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<unknown>;
-  /** One approval as the Inbox reads it, to tell who turned an earlier request down. */
-  readApproval(approvalId: string): Promise<Pick<ApprovalRequest, "status" | "resolvedBy">>;
+  /**
+   * One approval as the Inbox reads it: who turned an earlier request down, and the state the skill was in when the
+   * owner made this one (`preview.currentState`, written in the same commit as the change it binds).
+   */
+  readApproval(approvalId: string): Promise<Pick<ApprovalRequest, "status" | "resolvedBy" | "preview">>;
   /** One event on the approvals audit stream. */
   appendApprovalAudit(event: string, payload: Record<string, unknown>): Promise<void>;
   /** The install's deployment profile, read on every switch. */
@@ -52,7 +52,7 @@ export interface CapabilitySkillActionSources {
   readApprovalSkipSetting(): Promise<boolean>;
 }
 
-export type CapabilitySkillActionStep = "approval_skip" | "resolve" | "audit";
+export type CapabilitySkillActionStep = "approval_skip" | "current_state" | "resolve" | "audit";
 
 /** Called with the real error of a failed step, so the answer can stay plain. */
 export type CapabilitySkillActionFailureReporter = (step: CapabilitySkillActionStep, error: unknown) => void;
@@ -80,7 +80,7 @@ export class CapabilitySkillActionsService {
     const { approvalId, status } = outcome.pendingApproval;
     // The owner's approval ids follow from the request, so the same request can hand back an approval already decided.
     if (status !== "pending") return await this.alreadyDecided(approvalId, status);
-    const reason = await this.skipReason(input.state);
+    const reason = await this.skipReason(approvalId, input.state);
     if (!reason) return { status: "waiting", approvalId };
     try {
       await this.sources.resolveApproval(approvalId, {
@@ -122,13 +122,33 @@ export class CapabilitySkillActionsService {
 
   /**
    * Why the skip applies, or undefined when the approval waits. `remote_hardened` always asks, and its setting is
-   * never read (Ruling R3). Otherwise the setting covers every switch, and off or paused applies even without it.
+   * never read (Ruling R3). Otherwise the setting covers every switch, and a switch that only takes power away applies
+   * even without it.
    */
-  private async skipReason(state: SkillRuntimeState): Promise<OperatorSkillSkipReason | undefined> {
+  private async skipReason(approvalId: string, state: SkillRuntimeState): Promise<OperatorSkillSkipReason | undefined> {
     const deploymentProfile = this.sources.deploymentProfile();
     if (await allowsOperatorApprovalSkip(deploymentProfile, () => this.readSkipSetting())) return "setting";
     if (deploymentProfile === "remote_hardened") return undefined;
-    return TIGHTENING_STATES.has(state) ? "tightening" : undefined;
+    return (await this.onlyTakesPowerAway(approvalId, state)) ? "tightening" : undefined;
+  }
+
+  /**
+   * Whether the switch only takes power away (Q1: A, Ruling R10). Turning a skill off always does: an off skill is
+   * never used. Pausing does only when the skill is on: a paused skill can still be used when it is named or matched
+   * confidently, so pausing an off skill gives power back. "On" is the state the owner recorded on this very approval,
+   * in the same commit as the change it binds, so it is the state the change applies to. When that can't be read, the
+   * approval waits.
+   */
+  private async onlyTakesPowerAway(approvalId: string, state: SkillRuntimeState): Promise<boolean> {
+    if (state === "disabled") return true;
+    if (state !== "sleep") return false;
+    try {
+      const approval = await this.sources.readApproval(approvalId);
+      return approval.preview.currentState === "enabled";
+    } catch (error) {
+      this.reportFailure?.("current_state", error);
+      return false;
+    }
   }
 
   /** A setting that can't be read counts as off. */

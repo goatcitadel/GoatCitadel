@@ -16,7 +16,7 @@ const FLAG = "settingsApprovalSkipEnabled";
 /** What the switch does and does not change, as the Gateway enforces it. */
 const SKIP_FACTS = [
   "Covers saves through the Settings forms, such as the network allowlist, Firecrawl, approval mode and runtime switches, connectors you install from Capabilities, and skills you switch on from Capabilities. GoatCitadel sign-in, API keys and other credentials still ask for approval.",
-  "Switching a skill off or pausing it from Capabilities applies right away even when this is off, because it only takes power away; a remote-hardened install still asks. Skill changes made anywhere else, such as Chat's skill commands, still ask.",
+  "Turning a skill off, or pausing one that is on, from Capabilities applies right away even when this is off, because it only takes power away; a remote-hardened install still asks. Skill changes made anywhere else, such as Chat's skill commands, still ask.",
   "Change requests a model makes in Chat still need your approval. Anything that can call the Settings or Capabilities API as you, such as a script on this computer while GoatCitadel sign-in is off, can also make these changes without one.",
   "Each Settings change and connector install is still recorded as a change plan, with its audit trail and any undo it supports. A skill switch keeps its approval, marked as approved by you, with the reason.",
   "Turning this on needs one last approval. A remote-hardened install ignores it.",
