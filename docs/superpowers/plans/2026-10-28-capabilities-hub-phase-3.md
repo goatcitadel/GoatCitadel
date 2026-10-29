@@ -22,7 +22,7 @@
 
 ## Questions the operator answered
 
-On 2026-10-28 the operator approved the plan with the recommended answer to all three questions: Q1 A, Q2 "Candidates and mesh", Q3 not in Phase 3. The tasks below implement those answers.
+On 2026-10-28 the operator approved the plan with the recommended answer to all three questions: Q1 A, Q2 "Candidates and mesh", Q3 not in Phase 3. The tasks below implement those answers. Q1 A as built: turning a skill off, or pausing one that is on, goes straight through; pausing a skill that is off asks, because a paused skill can still be used (Task 5).
 
 **Q1. With your skip setting off, does switching a skill off or pausing it still ask?**
 Today every skill state change is a danger approval in Inbox, in both directions.
@@ -392,14 +392,16 @@ export class CapabilitySkillActionsService {
 |---|---|---|---|
 | remote_hardened | any | any | waiting |
 | other | on | any | approved, reason `setting` |
-| other | off | `disabled` or `sleep` (Q1: A) | approved, reason `tightening` |
-| other | off | `enabled` | waiting |
+| other | off | `disabled`, or `sleep` from `enabled` (Q1: A) | approved, reason `tightening` |
+| other | off | `enabled`, or `sleep` from `disabled` | waiting |
+
+As built (final review, Ruling R10): a paused skill can still be used and loads itself, so pausing an off skill gives power back and asks. The start state is the approval's own `preview.currentState`; if it is missing or can't be read, the switch waits.
 
 **Rules:**
 - The service always asks the existing owner first, with the operator as requester. `noMutationRequired` gives `unchanged`.
 - **When the skip applies,** it resolves the new approval with `decision: "approve"`, `resolvedBy` set to the operator, and one of two `resolutionNote`s, exported for the guard:
   - `setting`: "Applied without asking: your setting to skip approvals for your own changes is on."
-  - `tightening`: "Applied without asking: switching a skill off or pausing it only takes power away."
+  - `tightening`: "Applied without asking: turning a skill off, or pausing one that is on, only takes power away."
 
   It then appends the audit event `operator_approval_skipped` with `{ approvalId, kind: "skill.lifecycle", reason, actorId }`.
 - **If resolving throws,** the outcome is `waiting` and the error goes to the redacted server log. The approval is still in Inbox.

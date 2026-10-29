@@ -152,7 +152,7 @@ function requireActions(fastify: FastifyInstance) {
 
 /**
  * The owners' refusals name the skill (and the stale one its revisions), so each known one becomes plain copy with its
- * own code, and the real error stays in the request log. Anything else passes through as its owner wrote it.
+ * own code; only that plain refusal reaches the request log. Anything else passes through as its owner wrote it.
  */
 function plainRefusal(error: unknown): unknown {
   // The skill state owner looks the skill up among the loaded skills; a workspace's self-authored skill isn't there.
