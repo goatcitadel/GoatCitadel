@@ -32,11 +32,8 @@ export function ApprovalReviewSummary({
     (installWide
       ? "Every workspace on this install."
       : `${workspaceLabel}${sessionId ? " · one linked conversation" : ""}.`);
-  const scopeIdentifiers = [
-    installWide ? undefined : `Workspace ${scopeWorkspaceId}`,
-    sessionId ? `Conversation ${sessionId}` : undefined,
-    approval.expiresAt ? `Expires ${approval.expiresAt}` : undefined,
-  ].filter((part): part is string => part !== undefined);
+  // An install-wide approval names no workspace, so with nothing else recorded there are no identifiers to show.
+  const hasScopeIdentifiers = !installWide || Boolean(sessionId) || Boolean(approval.expiresAt);
   const { owner: ownerExplanation, model: modelExplanation } = splitApprovalExplanation(approval);
   return (
     <section
@@ -118,9 +115,17 @@ export function ApprovalReviewSummary({
           <span className="text-fg-muted">Written by a model after the request; advisory only.</span>
         </p>
       ) : null}
-      {scopeIdentifiers.length ? (
+      {hasScopeIdentifiers ? (
         <TechnicalDetails label="Scope identifiers">
-          <p className="break-all font-mono text-xs">{scopeIdentifiers.join(" · ")}</p>
+          <p className="break-all font-mono text-xs">
+            {[
+              installWide ? undefined : `Workspace ${scopeWorkspaceId}`,
+              sessionId ? `Conversation ${sessionId}` : undefined,
+              approval.expiresAt ? `Expires ${approval.expiresAt}` : undefined,
+            ]
+              .filter((part): part is string => part !== undefined)
+              .join(" · ")}
+          </p>
         </TechnicalDetails>
       ) : null}
       {approval.rollbackNote ? (
