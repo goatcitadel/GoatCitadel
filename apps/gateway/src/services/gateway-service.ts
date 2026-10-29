@@ -3397,7 +3397,8 @@ export class GatewayService {
         getSettings: () => this.getSettings(),
         updateSettings: (input) => this.updateSettings(input),
         listModels: (providerId) => this.llmService.listModels(providerId),
-        getModelReasoningMetadata: (providerId, model) => this.llmService.getModelReasoningMetadata(providerId, model),
+        getDispatchReasoningEfforts: (providerId, model) =>
+          this.llmService.getDispatchReasoningEfforts(providerId, model),
       }),
       new RuntimeConfigurationChangePlanAdapter({
         getSettings: () => this.getSettings(),

@@ -146,6 +146,20 @@ describe("claude-code-cli capability truth", () => {
     ).toBe(true);
   });
 
+  it("offers Change Plans only none, even when a configured override claims reasoning efforts", () => {
+    const config = buildConfig();
+    const claiming: LlmConfigFile = {
+      ...config,
+      providers: config.providers.map((provider) => ({
+        ...provider,
+        capabilities: { reasoning: true, reasoningEfforts: ["low", "medium", "high"] },
+      })),
+    };
+    expect(createService(claiming).getDispatchReasoningEfforts("claude-code-cli", "claude-sonnet-5-5")).toEqual([
+      "none",
+    ]);
+  });
+
   it("close() kills a parked warm session", async () => {
     // A temp CLAUDE_CONFIG_DIR keeps the reap's spill check out of the operator's real Claude profile.
     const configDir = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-claude-config-"));
