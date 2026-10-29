@@ -116,8 +116,9 @@ const withDefault = (rows: readonly ChannelTargetRow[], home: ChannelTargetRow):
 
 /**
  * The draft's values once someone has said hi: they alone may message the bot and they are its owner, and their direct
- * messages are where it posts by default. Places already on the draft stay, but are no longer the default. The values
- * given are not changed.
+ * messages are where it posts by default. The direct messages of anyone who said hi before are dropped, so only the
+ * newest sender's stay; other places already on the draft stay, but are no longer the default. The values given are not
+ * changed.
  */
 export function slackDraftWithSender(
   values: Record<string, unknown>,
@@ -131,7 +132,8 @@ export function slackDraftWithSender(
     source: "recent_update",
     setupCodeMatched: true,
   };
-  const targets = withDefault(mergeDiscoveredChannelTargets(targetsOf(values), [directMessages]), directMessages);
+  const others = targetsOf(values).filter((row) => row.setupCodeMatched !== true);
+  const targets = withDefault(mergeDiscoveredChannelTargets(others, [directMessages]), directMessages);
   return {
     ...values,
     allowedSenders: [sender.actorId],
@@ -147,9 +149,9 @@ const isChosenChannel = (row: ChannelTargetRow): boolean =>
 
 /**
  * The draft's values once where it posts is chosen. A channel becomes the default place; the direct messages stay as a
- * place that is not. Choosing direct messages again makes them the default and takes back the channel this page added
- * (a place anyone else added stays). A channel the list doesn't have, or direct messages with nobody who said hi, change
- * nothing. The values given are not changed.
+ * place that is not. Choosing direct messages again makes the saved sender's direct messages the default and takes back
+ * the channel this page added (a place anyone else added stays). A channel the list doesn't have, or direct messages
+ * with nobody who said hi, change nothing. The values given are not changed.
  */
 export function slackDraftWithPosting(
   values: Record<string, unknown>,
@@ -158,7 +160,10 @@ export function slackDraftWithPosting(
 ): Record<string, unknown> {
   const rows = targetsOf(values).filter((row) => !isChosenChannel(row));
   if (posting.kind === "direct") {
-    const home = rows.find((row) => row.setupCodeMatched === true && (row.channel ?? "").trim() !== "");
+    const directChannelId = savedSlackSender(values)?.directChannelId.toLowerCase();
+    const home = directChannelId
+      ? rows.find((row) => row.setupCodeMatched === true && row.channel?.trim().toLowerCase() === directChannelId)
+      : undefined;
     return home ? { ...values, targets: withDefault(rows, home) } : { ...values };
   }
   const channel = channels.find((candidate) => candidate.id === posting.channelId);

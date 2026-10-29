@@ -186,6 +186,48 @@ describe("slackDraftWithPosting", () => {
   });
 });
 
+describe("when a second person says hi", () => {
+  const BO: SlackSetupCodeSender = { actorId: "U888", directChannelId: "D888", displayName: "Bo" };
+  const someoneElses = { id: "mine", label: "Mine", channel: "C900", kind: "channel", source: "recent_update" };
+
+  it("keeps only their direct messages from a hi, and leaves places anyone else added", () => {
+    const afterAda = slackDraftWithSender({ targets: [someoneElses] }, ADA);
+    const before = frozen(slackDraftWithPosting(afterAda, { kind: "channel", channelId: "C100" }, CHANNELS));
+    const copy = structuredClone(before);
+
+    const afterBo = slackDraftWithSender(before, BO);
+
+    expect(before).toEqual(copy);
+    const targets = afterBo.targets as { channel: string; default: boolean; setupCodeMatched?: boolean }[];
+    expect(targets.filter((target) => target.setupCodeMatched === true).map((target) => target.channel)).toEqual([
+      "D888",
+    ]);
+    expect(targets.map((target) => [target.channel, target.default])).toEqual([
+      ["C900", false],
+      ["C100", false],
+      ["D888", true],
+    ]);
+    expect(savedSlackSender(afterBo)).toEqual(BO);
+    expect(afterBo).toMatchObject({ allowedSenders: ["U888"], ownerActorIds: ["U888"] });
+  });
+
+  it("makes the newest sender's direct messages the default when direct messages are chosen", () => {
+    const afterAda = slackDraftWithSender({}, ADA);
+    const afterBo = slackDraftWithSender(afterAda, BO);
+    const inChannel = slackDraftWithPosting(afterBo, { kind: "channel", channelId: "C100" }, CHANNELS);
+    const before = frozen(inChannel);
+    const copy = structuredClone(before);
+
+    const direct = slackDraftWithPosting(before, { kind: "direct" }, CHANNELS);
+
+    expect(before).toEqual(copy);
+    const targets = direct.targets as { channel: string; default: boolean }[];
+    expect(targets.map((target) => [target.channel, target.default])).toEqual([["D888", true]]);
+    expect(savedSlackPosting(direct, savedSlackSender(direct))).toEqual({ kind: "direct" });
+    expect(savedSlackSender(direct)).toEqual(BO);
+  });
+});
+
 describe("savedSlackSender and savedSlackPosting", () => {
   it("give back who slackDraftWithSender saved, from the owner and the direct messages the code came from", () => {
     expect(savedSlackSender(slackDraftWithSender({}, ADA))).toEqual(ADA);
