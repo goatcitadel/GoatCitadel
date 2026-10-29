@@ -211,6 +211,116 @@ describe("Discord durable inbound turn admission", { timeout: 120_000 }, () => {
     expect(countProviderCompletions(fakeProvider)).toBe(completionDispatchCount);
     expect(fakeDiscord.requests).toHaveLength(1);
   });
+
+  it("takes a direct message from the person who made the bot to a finished turn, and still asks anyone else to pair", async () => {
+    fakeProvider = await startFakeOpenAiCompatibleServer(successfulProviderResponse);
+    fakeDiscord = await startFakeDiscordWebhookServer();
+    const root = createIsolatedConfigRoot(fakeProvider.baseUrl);
+    configureGateway(root);
+    gateway = new GatewayService(await loadGatewayConfig(root));
+    await gateway.initCritical();
+
+    // The connection a setup page saves: the default pairing policy, a default channel, and who made the bot. It sets
+    // no inboundAccessMode, so the gateway gives it the default allowlist with nobody on it.
+    const connection = await gateway.routeServices.integrations.createIntegrationConnection({
+      catalogId: "channel.discord",
+      label: "Discord bot maker integration test",
+      enabled: true,
+      status: "connected",
+      config: {
+        runtimeMode: "gateway",
+        webhookUrl: fakeDiscord.webhookUrl,
+        defaultChannelId: "discord-dm-1",
+        guildPolicy: "off",
+        inboundDmPolicy: "pairing",
+        ownerActorIds: ["discord-maker-1"],
+      },
+    });
+    expect(connection.config.inboundAccessMode).toBe("allowlist");
+
+    const pairingReplies: string[] = [];
+    const reactions: string[] = [];
+    const directMessage = (authorId: string, sourceMessageId: string) => ({
+      channel: {
+        isDMBased: () => true,
+        send: async (text: string) => {
+          pairingReplies.push(text);
+        },
+      },
+      channelId: "discord-dm-1",
+      author: { id: authorId, username: authorId, displayName: authorId, globalName: authorId },
+      content: "Reply with exactly: DISCORD_OK",
+      id: sourceMessageId,
+      react: async (emoji: string) => {
+        reactions.push(`${sourceMessageId}:${emoji}`);
+      },
+    });
+    const runtime = gateway.discordRuntimeService as unknown as {
+      handleDirectMessage: (
+        runtimeRecord: unknown,
+        connection: unknown,
+        message: ReturnType<typeof directMessage>,
+      ) => Promise<boolean>;
+    };
+    const eventFor = async (sourceMessageId: string) =>
+      await gateway!.storage.inboundChannelEvents.getByIdentity({
+        channelKey: "discord",
+        connectionId: connection.connectionId,
+        idempotencyKey: `discord:${connection.connectionId}:${sourceMessageId}`,
+      });
+
+    // Someone else is asked to pair: a pending code is made, and no turn starts.
+    await expect(
+      runtime.handleDirectMessage({}, connection, directMessage("discord-stranger-1", "src-stranger")),
+    ).resolves.toBe(true);
+    expect(pairingReplies).toHaveLength(1);
+    expect(pairingReplies[0]).toContain("GoatCitadel pairing required");
+    expect(await eventFor("src-stranger")).toBeUndefined();
+    expect(
+      (await gateway.readDiscordPairings()).filter((record) => record.connectionId === connection.connectionId),
+    ).toEqual([expect.objectContaining({ userId: "discord-stranger-1", status: "pending" })]);
+
+    // The person who made the bot is let in with no pairing, and their message runs a durable turn.
+    await expect(
+      runtime.handleDirectMessage({}, connection, directMessage("discord-maker-1", "src-maker")),
+    ).resolves.toBe(true);
+    expect(pairingReplies).toHaveLength(1);
+    expect(reactions).toContain("src-maker:👀");
+    const event = await pollFor(
+      async () => await eventFor("src-maker"),
+      (candidate) =>
+        candidate?.status === "completed" ||
+        candidate?.status === "failed" ||
+        candidate?.status === "manual_reconciliation_required" ||
+        candidate?.status === "suppressed",
+      "the bot maker's direct message to finish its turn",
+    );
+    expect(event?.status, event?.lastError ?? JSON.stringify(event)).toBe("completed");
+    const completed = requireCompletedEvent(event);
+    expect(completed).toMatchObject({
+      channelKey: "discord",
+      connectionId: connection.connectionId,
+      dispatchKind: "agent_turn",
+      providerSourceId: "src-maker",
+    });
+    expect(completed.durableRunId).toEqual(expect.any(String));
+    expect(
+      (await gateway.readDiscordPairings()).filter((record) => record.connectionId === connection.connectionId),
+    ).toHaveLength(1);
+
+    const delivery = await pollFor(
+      async () =>
+        (await gateway!.storage.commsDeliveries.list(connection.connectionId, 20)).find(
+          (candidate) => candidate.deliveryId === completed.deliveryId,
+        ),
+      (candidate) =>
+        candidate?.status === "sent" ||
+        candidate?.status === "failed" ||
+        candidate?.status === "manual_reconciliation_required",
+      "the reply to the bot maker to settle",
+    );
+    expect(delivery?.status, delivery?.error).toBe("sent");
+  });
 });
 
 function successfulProviderResponse(request: FakeOpenAiRequest): FakeOpenAiResponse {

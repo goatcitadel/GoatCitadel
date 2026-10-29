@@ -1,4 +1,8 @@
-import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
+import {
+  resolveChannelOwnerActorIds,
+  type ChannelSetupDefinition,
+  type ChannelSetupIssue,
+} from "@goatcitadel/contracts";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
@@ -362,6 +366,8 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
         ["botToken", "botTokenEnv", "token", "tokenEnv"],
         ["webhookUrl", "webhookUrlEnv"],
       ]);
+      const ownerActorIds = resolveChannelOwnerActorIds(config);
+      const applicationId = readString(config, "applicationId");
       return {
         draft: {
           runtimeMode: hydratedRuntimeMode,
@@ -370,6 +376,9 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           defaultGuildId: readString(config, "defaultGuildId"),
           inboundDmPolicy: readString(config, "inboundDmPolicy") ?? "pairing",
           guildPolicy: readString(config, "guildPolicy") ?? "allowlist",
+          // Left out when the connection has none, as normalize leaves them out of the saved config.
+          ...(ownerActorIds.length > 0 ? { ownerActorIds } : {}),
+          ...(applicationId ? { applicationId } : {}),
         },
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
@@ -384,6 +393,8 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               readString(config, "defaultGuildId") || hasConfiguredGuildRules(config.guilds) ? "configured" : "unknown",
             inboundDmPolicy: "configured",
             guildPolicy: "configured",
+            ownerActorIds: ownerActorIds.length > 0 ? "configured" : "unknown",
+            applicationId: applicationId ? "configured" : "unknown",
           },
           warnings: hasConfiguredSecret
             ? [
@@ -396,6 +407,9 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
     },
     normalize(draft) {
       const runtimeMode = resolveDiscordRuntimeMode(draft);
+      const ownerActorIds = resolveChannelOwnerActorIds(draft.draft);
+      // ownerActorIds and applicationId are left out when the draft has none, so finalize keeps the saved
+      // connection's own values instead of overwriting them with nothing.
       return compactRecord({
         runtimeMode,
         botTokenEnv: readString(draft.draft, "botTokenEnv") ?? readLegacyString(draft, "botTokenEnv", "tokenEnv"),
@@ -404,6 +418,8 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
         inboundDmPolicy:
           runtimeMode === "gateway" ? (readString(draft.draft, "inboundDmPolicy") ?? "pairing") : undefined,
         guildPolicy: runtimeMode === "gateway" ? (readString(draft.draft, "guildPolicy") ?? "allowlist") : undefined,
+        ownerActorIds: ownerActorIds.length > 0 ? ownerActorIds : undefined,
+        applicationId: readString(draft.draft, "applicationId"),
         botToken: readString(draft.draft, "botToken") ?? readLegacyString(draft, "botToken", "token"),
         // Do NOT fall back to webhookUrlEnv for webhookUrl — that leaks the env-var NAME into the
         // literal URL field. Preserve webhookUrlEnv as its own field so env-backed bridge

@@ -108,6 +108,13 @@ describe("channel setup picker hints", () => {
     expect(telegram.wizard.estimatedMinutes).toBe(8);
   });
 
+  it("Discord takes about five minutes and needs discord.com", () => {
+    const discord = definitionByKey("discord");
+
+    expect(discord.wizard.picker?.minutes).toBe(5);
+    expect(discord.wizard.requiredHosts).toEqual(["discord.com"]);
+  });
+
   it("says what each channel needs", () => {
     for (const definition of listChannelSetupDefinitions()) {
       const key = definition.catalog.key;

@@ -20,14 +20,14 @@ type FrozenInboundWebhook = Readonly<Omit<ChannelSetupInboundWebhook, "whenAnyFi
  * Property order is the agreed picker order: groups run quickest, team chat, then phone apps, and
  * each group lists its channels in order. `withPickerHints` turns a channel's position within its
  * group into the hint's `order`, so the order is written once, here. It is not the order of the
- * setup-definitions list, which keeps its own ranking. Only Telegram sets `minutes`; the rest show
- * their wizard's `estimatedMinutes`.
+ * setup-definitions list, which keeps its own ranking. A tile sets `minutes` when its Chat page takes a
+ * different time than the wizard's `estimatedMinutes`; the rest show their wizard's `estimatedMinutes`.
  *
  * Each note must stay within what the channel's `prerequisites` say (see `guided-journey.ts`).
  */
 export const CHANNEL_PICKER_HINTS: Readonly<Record<string, ChannelPickerHintEntry>> = Object.freeze({
   telegram: { group: "quickest", minutes: 3 },
-  discord: { group: "quickest" },
+  discord: { group: "quickest", minutes: 5 },
   ntfy: { group: "quickest", note: "Needs an ntfy topic you control" },
   slack: { group: "quickest", note: "Receiving needs a public web address" },
 

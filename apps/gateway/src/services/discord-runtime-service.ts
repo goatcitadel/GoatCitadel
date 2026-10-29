@@ -12,6 +12,7 @@ import {
   type RESTPostAPIApplicationCommandsJSONBody,
   type User,
 } from "discord.js";
+import { resolveChannelOwnerActorIds } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import {
   SharedHostAdmissionClosedError,
@@ -972,9 +973,15 @@ export class DiscordRuntimeService {
     }
     const voiceAttachment = readDiscordVoiceAttachment(message);
     const conversation = buildDiscordDirectConversation(message.author);
-    const approved = await this.callbacks.findApprovedPairing(connection.connectionId, message.author.id);
-    if (approved) {
-      await this.callbacks.touchPairing(approved.pairingId);
+    // The person who made the bot is let in the way an approved pairing is, but with no pairing to find or touch.
+    const botMaker = isDiscordBotMaker(connection.config, message.author.id);
+    const approved = botMaker
+      ? undefined
+      : await this.callbacks.findApprovedPairing(connection.connectionId, message.author.id);
+    if (botMaker || approved) {
+      if (approved) {
+        await this.callbacks.touchPairing(approved.pairingId);
+      }
       await this.handleAcceptedMessage(message, async () => {
         return await this.callbacks.onInboundMessage({
           connectionId: connection.connectionId,
@@ -1041,11 +1048,17 @@ export class DiscordRuntimeService {
     if (dmPolicy === "disabled") {
       return false;
     }
-    const approved = await this.callbacks.findApprovedPairing(connection.connectionId, interaction.user.id);
+    // A DM slash command is let in the same way as a DM message, so the person who made the bot is not asked to pair.
+    const botMaker = isDiscordBotMaker(connection.config, interaction.user.id);
+    const approved = botMaker
+      ? undefined
+      : await this.callbacks.findApprovedPairing(connection.connectionId, interaction.user.id);
     const commandText = buildCommandTextFromInteraction(interaction);
     const conversation = buildDiscordDirectConversation(interaction.user);
-    if (approved) {
-      await this.callbacks.touchPairing(approved.pairingId);
+    if (botMaker || approved) {
+      if (approved) {
+        await this.callbacks.touchPairing(approved.pairingId);
+      }
       await this.handleAcceptedCommand(interaction, {
         connectionId: connection.connectionId,
         acceptedConnectionRevision: connection.revision,
@@ -1295,12 +1308,20 @@ function resolveDiscordGuildRule(
   const defaultGuildId = readConfigString(config, "defaultGuildId");
   if (defaultGuildId && defaultGuildId === guildId) {
     const defaultChannelId = readConfigString(config, "defaultChannelId");
+    // When the connection names who made the bot, only they are answered in the default channel.
+    const ownerActorIds = resolveChannelOwnerActorIds(config);
     return {
       requireMention: true,
+      ...(ownerActorIds.length > 0 ? { users: ownerActorIds } : {}),
       channels: defaultChannelId ? [defaultChannelId] : undefined,
     };
   }
   return undefined;
+}
+
+/** Whether this Discord user is one of the people the connection says made the bot (`ownerActorIds`). */
+function isDiscordBotMaker(config: Record<string, unknown>, userId: string): boolean {
+  return resolveChannelOwnerActorIds(config).includes(userId.trim().toLowerCase());
 }
 
 function readGuildRuleMap(config: Record<string, unknown>): Record<string, DiscordGuildAccessRule> {
