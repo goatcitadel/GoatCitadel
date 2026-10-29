@@ -1,6 +1,7 @@
 import type { WhatsAppSetupCodeSender } from "@goatcitadel/contracts";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { createSetupCode } from "./setup-code";
+import { hostChange, type TurnOnWording } from "./TurnOnStep";
 
 /** The words of WhatsApp's setup page, and the pure helpers that build what it saves, that need no state. */
 
@@ -120,6 +121,80 @@ export function savedWhatsAppSender(values: Record<string, unknown>): WhatsAppSe
 /** When the page noted on the draft that Meta checked the address, so coming back goes on past that step. */
 export function savedAddressCheckedAt(values: Record<string, unknown>): string | undefined {
   return textOf(values.webhookCheckedAt) || undefined;
+}
+
+/** Where the operator makes the Meta app: their list of apps, opened in a new tab. */
+export const WHATSAPP_META_APPS_HREF = "https://developers.facebook.com/apps";
+
+export const WHATSAPP_PUBLIC_ADDRESS_TEXT =
+  "Meta delivers WhatsApp messages only to a public https:// address. Use your own domain, reverse proxy or tunnel; GoatCitadel doesn't provide one.";
+
+/** Where each of the five details is found in Meta's dashboard, in the order the operator finds them. */
+export const WHATSAPP_META_APP_STEPS = [
+  'Open developers.facebook.com/apps and create an app for WhatsApp ("Connect with customers through WhatsApp").',
+  "In API Setup, note the Phone number ID and the WhatsApp Business Account ID (Meta's test number is fine).",
+  "In App settings › Basic, note the App ID and App secret.",
+  "In Business Settings › System users, make a token for this app with whatsapp_business_messaging and whatsapp_business_management.",
+] as const;
+
+/** What the details that checked out say, naming the number and the name Meta verified for it. */
+export const whatsAppWorks = (number: { displayNumber: string; verifiedName: string }) =>
+  `Works. Your number is ${number.displayNumber} (${number.verifiedName}).`;
+
+/** The note on a token that stops working: this, the time it stops, then the advice. */
+export const WHATSAPP_TOKEN_ENDS = "This token stops working";
+export const WHATSAPP_TOKEN_ENDS_ADVICE =
+  "Make a system user's token in Business Settings so WhatsApp keeps working, then paste it here.";
+
+export const WHATSAPP_POINT_META_TEXT =
+  "In your Meta app, open WhatsApp › Configuration. Paste these into Callback URL and Verify token, choose Verify and save, then subscribe to messages.";
+
+/** Said where the verify token would be, when the page no longer holds the one it made. */
+export const WHATSAPP_VERIFY_TOKEN_HIDDEN =
+  "GoatCitadel doesn't show the verify token again after you leave this page. Make a new one to copy into Meta.";
+
+/** Said beside the button that subscribes the app, when Meta says the app isn't. */
+export const WHATSAPP_NOT_SUBSCRIBED = "Meta isn't set to send this number's messages to your app yet.";
+
+export const WHATSAPP_SAY_HI_TEXT =
+  "Open the link on your phone and send the message as it is. With Meta's test number, your phone may first need to be added under API Setup › To.";
+
+/** The path Meta posts to: the draft's id stands for the connection's, because a new setup's connection keeps it. */
+export const whatsAppCallbackPath = (draftId: string) => `/api/v1/integrations/connections/${draftId}/whatsapp/webhook`;
+
+/** A sender by their name, else by their number. WhatsApp gives the number as digits, which are shown as a number. */
+export function whatsAppSenderName(sender: WhatsAppSetupCodeSender): string {
+  const named = sender.displayName?.trim();
+  if (named) return named;
+  const actor = sender.actorId.trim();
+  return /^\d+$/.test(actor) ? `+${actor}` : actor;
+}
+
+export const whatsAppSaidHi = (name: string) => `${name} can message your bot.`;
+
+/** The words of Turn on for WhatsApp. Its test message can't be taken back, so the cleanup sentence says where to delete it. */
+export const WHATSAPP_TURN_ON_WORDING: TurnOnWording = {
+  button: "Turn on WhatsApp",
+  working: "Turning on WhatsApp…",
+  done: "WhatsApp is on.",
+  doneLink: "Open WhatsApp's page",
+  cleanup: "GoatCitadel couldn't remove its test message. Delete it in WhatsApp if you like.",
+};
+
+/** What turning on will do, as plain lines. A host appears only when it is not yet allowed. */
+export function whatsAppTurnOnChanges({
+  name,
+  missingHosts,
+}: {
+  name: string;
+  missingHosts: readonly string[];
+}): string[] {
+  return [
+    `Only ${name} can message your WhatsApp bot.`,
+    `Replies go to ${name} on WhatsApp.`,
+    `GoatCitadel sends ${name} a test message. WhatsApp can't remove it afterwards.`,
+    ...missingHosts.map(hostChange),
+  ];
 }
 
 /** The longest sentence of GoatCitadel's own that is passed on. Anything longer is not one of its fixed sentences. */

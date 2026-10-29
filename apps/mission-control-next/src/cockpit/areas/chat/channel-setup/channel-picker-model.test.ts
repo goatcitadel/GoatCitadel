@@ -109,6 +109,22 @@ describe("channel picker model", () => {
     expect(slack).toMatchObject({ channelKey: "slack", minutes: 5, href: "/chat/messaging/add/slack" });
   });
 
+  it("opens WhatsApp's own page from the picker, keeping its note", () => {
+    const [phoneApps] = buildChannelPickerGroups([
+      definition("whatsapp", "WhatsApp", 25, hint("phone_apps", 0, { note: "Business account + public web address" })),
+    ]);
+    expect(phoneApps!.tiles).toEqual([
+      {
+        channelKey: "whatsapp",
+        catalogId: "channel.whatsapp",
+        label: "WhatsApp",
+        minutes: 25,
+        note: "Business account + public web address",
+        href: "/chat/messaging/add/whatsapp",
+      },
+    ]);
+  });
+
   it("leaves out definitions without a picker hint", () => {
     const groups = buildChannelPickerGroups([
       definition("zalouser", "Zalo personal", 10),
@@ -138,10 +154,11 @@ describe("where a channel is set up", () => {
   const discord = definition("discord", "Discord", 9);
   const slack = definition("slack", "Slack", 10);
   const mattermost = definition("mattermost", "Mattermost", 12);
-  const definitions = [telegram, discord, slack, mattermost];
+  const whatsapp = definition("whatsapp", "WhatsApp", 25);
+  const definitions = [telegram, discord, slack, mattermost, whatsapp];
 
   it("lists the channels with a Chat page, the ones Settings hands over, and the ones with a key page", () => {
-    expect([...CONVERTED_SETUP_CHANNELS].sort()).toEqual(["discord", "slack", "telegram"]);
+    expect([...CONVERTED_SETUP_CHANNELS].sort()).toEqual(["discord", "slack", "telegram", "whatsapp"]);
     expect([...CHAT_ONLY_SETUP_CHANNELS]).toEqual(["telegram"]);
     expect([...KEY_CHANGE_CHANNELS]).toEqual(["telegram", "discord", "slack"]);
   });
@@ -150,6 +167,7 @@ describe("where a channel is set up", () => {
     expect(chatPageHref(telegram)).toBe("/chat/messaging/add/telegram");
     expect(chatPageHref(discord)).toBe("/chat/messaging/add/discord");
     expect(chatPageHref(slack)).toBe("/chat/messaging/add/slack");
+    expect(chatPageHref(whatsapp)).toBe("/chat/messaging/add/whatsapp");
     expect(chatPageHref(mattermost)).toBeUndefined();
   });
 
@@ -158,12 +176,28 @@ describe("where a channel is set up", () => {
     // Discord and Slack have a Chat page, but Settings still starts their other ways (webhook-only, OAuth).
     expect(chatSetupHref(discord)).toBeUndefined();
     expect(chatSetupHref(slack)).toBeUndefined();
+    // Nor does it hand WhatsApp over: only a setup made on WhatsApp's Chat page goes on there.
+    expect(chatSetupHref(whatsapp)).toBeUndefined();
     expect(chatSetupHref(mattermost)).toBeUndefined();
   });
 
   it("continues an unfinished new setup on its Chat page, naming that setup", () => {
     const draft = { draftId: "draft-1", catalogId: "channel.telegram", lifecycleMode: "create" as const, draft: {} };
     expect(chatSetupHrefForDraft(draft, definitions)).toBe("/chat/messaging/add/telegram?draft=draft-1");
+  });
+
+  it("continues a WhatsApp setup that was made on the Chat page, and no other", () => {
+    const marked = {
+      draftId: "draft-3",
+      catalogId: "channel.whatsapp",
+      lifecycleMode: "create" as const,
+      draft: { setupPage: "messaging" },
+    };
+    expect(chatSetupHrefForDraft(marked, definitions)).toBe("/chat/messaging/add/whatsapp?draft=draft-3");
+    // The same channel set up in Settings carries no mark and goes on in Settings.
+    expect(chatSetupHrefForDraft({ ...marked, draft: {} }, definitions)).toBeUndefined();
+    expect(chatSetupHrefForDraft({ ...marked, connectionId: "c" }, definitions)).toBeUndefined();
+    expect(chatSetupHrefForDraft({ ...marked, lifecycleMode: "edit" as const }, definitions)).toBeUndefined();
   });
 
   it("continues a Discord or Slack setup that was made on the Chat page, and no other", () => {

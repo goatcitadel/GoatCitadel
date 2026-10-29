@@ -8,12 +8,12 @@ import { channelSetupHref } from "../../../app/routes";
 import { isChatSetupDraft } from "./setup-draft-session";
 
 /** Channels with a setup page of their own in Chat. The picker opens it; the rest are set up in Settings. */
-export const CONVERTED_SETUP_CHANNELS: ReadonlySet<string> = new Set(["telegram", "discord", "slack"]);
+export const CONVERTED_SETUP_CHANNELS: ReadonlySet<string> = new Set(["telegram", "discord", "slack", "whatsapp"]);
 
 /**
- * Channels Settings hands every new setup to Chat. Discord and Slack also have a page in Chat, but Settings still
- * starts their other ways (Discord webhook-only, Slack webhook-only and OAuth), so only a draft made on the Chat page
- * goes on there.
+ * Channels Settings hands every new setup to Chat. Discord, Slack and WhatsApp also have a page in Chat, but Settings
+ * still starts their other ways (Discord webhook-only, Slack webhook-only and OAuth, WhatsApp's own steps), so only a
+ * draft made on the Chat page goes on there.
  */
 export const CHAT_ONLY_SETUP_CHANNELS: ReadonlySet<string> = new Set(["telegram"]);
 

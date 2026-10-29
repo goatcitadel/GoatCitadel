@@ -9,14 +9,25 @@ import {
   WHATSAPP_CHECK_FAILED,
   WHATSAPP_CODE_EXPIRED,
   WHATSAPP_LISTEN_POLL_MS,
+  WHATSAPP_META_APPS_HREF,
+  WHATSAPP_META_APP_STEPS,
+  WHATSAPP_POINT_META_TEXT,
+  WHATSAPP_PUBLIC_ADDRESS_TEXT,
+  WHATSAPP_SAY_HI_TEXT,
+  WHATSAPP_TURN_ON_WORDING,
   WHATSAPP_WAITING_FOR_HI,
   createVerifyToken,
   savedAddressCheckedAt,
   savedWhatsAppSender,
   waMeLink,
+  whatsAppCallbackPath,
   whatsAppDetailsProblem,
   whatsAppDraftWithSender,
   whatsAppFailure,
+  whatsAppSaidHi,
+  whatsAppSenderName,
+  whatsAppTurnOnChanges,
+  whatsAppWorks,
   type WhatsAppDetails,
 } from "./whatsapp-setup-model";
 
@@ -226,5 +237,71 @@ describe("whatsAppFailure", () => {
     expect(whatsAppFailure(new Error("Authorization: Bearer EAAB-SECRET-TOKEN"))).toBe(WHATSAPP_CHECK_FAILED);
     expect(whatsAppFailure("Bearer EAAB-SECRET-TOKEN")).toBe(WHATSAPP_CHECK_FAILED);
     expect(whatsAppFailure(undefined)).toBe(WHATSAPP_CHECK_FAILED);
+  });
+});
+
+describe("the words of the page's steps", () => {
+  it("says each sentence of the first four steps exactly", () => {
+    expect(WHATSAPP_PUBLIC_ADDRESS_TEXT).toBe(
+      "Meta delivers WhatsApp messages only to a public https:// address. Use your own domain, reverse proxy or tunnel; GoatCitadel doesn't provide one.",
+    );
+    expect(WHATSAPP_META_APPS_HREF).toBe("https://developers.facebook.com/apps");
+    expect(WHATSAPP_META_APP_STEPS).toEqual([
+      'Open developers.facebook.com/apps and create an app for WhatsApp ("Connect with customers through WhatsApp").',
+      "In API Setup, note the Phone number ID and the WhatsApp Business Account ID (Meta's test number is fine).",
+      "In App settings › Basic, note the App ID and App secret.",
+      "In Business Settings › System users, make a token for this app with whatsapp_business_messaging and whatsapp_business_management.",
+    ]);
+    expect(WHATSAPP_POINT_META_TEXT).toBe(
+      "In your Meta app, open WhatsApp › Configuration. Paste these into Callback URL and Verify token, choose Verify and save, then subscribe to messages.",
+    );
+    expect(WHATSAPP_SAY_HI_TEXT).toBe(
+      "Open the link on your phone and send the message as it is. With Meta's test number, your phone may first need to be added under API Setup › To.",
+    );
+  });
+
+  it("says what the check found, naming the number and the name Meta verified", () => {
+    expect(whatsAppWorks({ displayNumber: "+1 555-078-3881", verifiedName: "Goat Shop" })).toBe(
+      "Works. Your number is +1 555-078-3881 (Goat Shop).",
+    );
+  });
+
+  it("builds the path Meta is given from the draft, which the connection keeps as its id", () => {
+    expect(whatsAppCallbackPath("draft-1")).toBe("/api/v1/integrations/connections/draft-1/whatsapp/webhook");
+  });
+
+  it("names a sender by their name, else by their number", () => {
+    expect(whatsAppSenderName({ actorId: "16505551234", displayName: "Sheena" })).toBe("Sheena");
+    expect(whatsAppSenderName({ actorId: "16505551234", displayName: "  " })).toBe("+16505551234");
+    expect(whatsAppSenderName({ actorId: "16505551234" })).toBe("+16505551234");
+    // Not a number: it is said as it is, never made into one.
+    expect(whatsAppSenderName({ actorId: "group-7" })).toBe("group-7");
+    expect(whatsAppSaidHi("Sheena")).toBe("Sheena can message your bot.");
+  });
+});
+
+describe("what Turn on says", () => {
+  it("has WhatsApp's own button, working line, ending, link and cleanup sentence", () => {
+    expect(WHATSAPP_TURN_ON_WORDING).toEqual({
+      button: "Turn on WhatsApp",
+      working: "Turning on WhatsApp…",
+      done: "WhatsApp is on.",
+      doneLink: "Open WhatsApp's page",
+      cleanup: "GoatCitadel couldn't remove its test message. Delete it in WhatsApp if you like.",
+    });
+  });
+
+  it("lists who may message the bot, where replies go and the test message that can't be removed", () => {
+    expect(whatsAppTurnOnChanges({ name: "Sheena", missingHosts: [] })).toEqual([
+      "Only Sheena can message your WhatsApp bot.",
+      "Replies go to Sheena on WhatsApp.",
+      "GoatCitadel sends Sheena a test message. WhatsApp can't remove it afterwards.",
+    ]);
+  });
+
+  it("adds a line for each host that is not yet allowed", () => {
+    expect(whatsAppTurnOnChanges({ name: "Sheena", missingHosts: ["graph.facebook.com"] }).at(-1)).toBe(
+      "graph.facebook.com is added to the hosts GoatCitadel may reach",
+    );
   });
 });
