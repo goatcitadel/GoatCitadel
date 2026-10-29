@@ -54,7 +54,7 @@ Each PR is cut from a freshly fetched `origin/main` in its own worktree (superpo
 | PR | Tasks | Ships |
 |---|---|---|
 | 3a | 1–5 | Gateway: categories, use counts, the installed list and details, and the skill switch with the operator skip. No new UI: Task 5 only updates the skip setting's explanation in Settings (`SettingsApprovalSkipControl.tsx`) so it matches the switch. |
-| 3b | 6–11 | The Skills tab's Installed view: data layer, tab wiring, redirects and command palette, a slimmer Library, the switch, rows, the skill panel, public truth and browser proof. |
+| 3b | 6a, 6b, 6–11 | Two Gateway fixes (a fresh approval after a decline, and the left-out mark), then the Skills tab's Installed view: data layer, tab wiring, redirects and command palette, a slimmer Library, the switch, rows, the skill panel, public truth and browser proof. |
 | 3c | 12–16 | Discover and one-step install: the source check and install routes, the Discover list, the Discover view, the install panel with Import from Git, and proof. |
 
 ## Global Constraints
@@ -442,6 +442,61 @@ As built (final review, Ruling R10): a paused skill can still be used and loads 
 
 # PR 3b: The Installed view
 
+On 2026-10-29, before PR 3b, the operator answered three more questions with the recommended options:
+1. **"Fresh approval":** asking again after a decline or expiry makes a fresh approval, linked to the declined one (Task 6a).
+2. **R13 confirmed:** "Built in" applies only to skills that came from GoatCitadel itself. Everything else reads "Imported".
+3. **"Mark the row":** #640 made Chat follow a workspace's skill choices, so a row for a skill those choices leave out says so (Task 6b).
+
+### Task 6a: Ask again after a decline or expiry (Gateway)
+
+Today the `skill.lifecycle` approval id comes only from the request and the skill's state. A declined or expired request therefore replays the same decided approval until the skill changes some other way. That holds for every caller: the Capabilities switch, Library's state routes and Chat's `/skill` commands.
+
+**Files:**
+- Modify: `apps/gateway/src/services/skill-governance-journey-producer.ts`
+  - `SkillLifecycleApprovalBindingV1` gains `supersedesApprovalId?: string`.
+  - `parseSkillLifecycleApprovalBinding` allows it and checks it is a canonical id.
+  - `deriveSkillLifecycleApprovalId` hashes it only when present. An approval made before this change keeps its id.
+- Modify: `apps/gateway/src/services/skill-state-service.ts`: in `commitSkillLifecycleApproval`, inside the same transaction, walk the chain.
+  - A request whose approval was rejected (by a person or by expiry) or edited gets a new binding with `supersedesApprovalId` set to that approval. Edited counts because an edited skill approval never applies (R9a).
+  - Bound the walk. Stopping on a run of declines is an error, not a loop.
+  - A pending or approved approval still replays as today.
+- Modify: `capability-skill-actions-service.ts` only where the new owner answer changes its replay branch. `declined` stays for the expiry race (`ApprovalExpiredAfterCommitError`).
+- Modify the docs: the contract's `CapabilitySkillActionOutcome` doc ("Asking again makes a fresh approval, linked to this one"), and the approval identity note in `docs/CANONICAL_RUNTIME_STATE_MODEL.md`.
+- Test: `skill-state-service` tests, the journey producer tests, and the real-Gateway `capability-skill-actions.integration.test.ts`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `it("makes a fresh approval, linked to the rejected one, when the same change is asked again")`
+  - `it("makes a fresh approval after the first one expires")`
+  - `it("makes a fresh approval after an edited one")`
+  - `it("still replays a pending approval and an approved one")`
+  - `it("keeps the id of an approval made before the change")` (no `supersedesApprovalId` → same id as before)
+  - `it("applies the fresh approval through its own effect")` (real Gateway: decline, ask again, approve, the skill changes)
+  - `it("refuses a binding whose supersedesApprovalId is not a canonical id")`
+- [ ] **Step 2: Run them and confirm they fail.** **Step 3: Implement it.** **Step 4: Run them, the old skill route tests, `pnpm verify:journey:producers` and the Gateway typecheck (PASS).**
+- [ ] **Step 5: Commit:** `fix(gateway): asking again after a declined skill change makes a fresh approval`.
+
+### Task 6b: Left out of this workspace (Gateway)
+
+**Files:**
+- Modify: `packages/contracts/src/capability-skills.ts`. `CapabilitySkillItem` gains `leftOutOfWorkspace?: boolean`.
+  - It is true when the skill is not among those the workspace's turns may load, which is exactly the list `WorkspaceTurnSkills.listSkills(workspaceId)` returns (the resolver Chat uses).
+  - It is false for every skill when the workspace and its Citadel choose nothing (`"ALL"`).
+  - A workspace's own self-authored skills are never left out.
+  - It is absent when that list can't be read, and an issue line says so.
+- Modify: `capability-skills-composition.ts`, `capability-skills-service.ts` and `capability-skills-projection.ts`: one reader, `listWorkspaceTurnSkills: (workspaceId) => Promise<SkillListItem[]>`.
+- Modify: `gateway-service.ts`: one registration line, `this.workspaceTurnSkills.listSkills(workspaceId)`. GatewayService stays at or under 13132 counted lines. Run `verify:architecture:metrics`, and stop for a C0 allowance if any count rises.
+- Modify: `docs/CANONICAL_RUNTIME_STATE_MODEL.md:242`. The Skills tab marks the skills a workspace's choices leave out.
+- Test: the service, projection and composition tests, and `capability-skills.integration.test.ts`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `it("marks a skill the workspace's choices leave out")`
+  - `it("marks nothing when the workspace chooses all skills")`
+  - `it("never marks the workspace's own self-authored skills")`
+  - `it("leaves the mark out, with an issue line, when the workspace's skills can't be read")`
+  - real Gateway: choose one skill for a workspace, and every other row is marked.
+- [ ] **Step 2: Run them and confirm they fail.** **Step 3: Implement it, then rebuild contracts.** **Step 4: Run them, the Gateway typecheck, `verify:architecture:metrics` and `docs:check` (PASS).**
+- [ ] **Step 5: Commit:** `feat(gateway): mark the skills a workspace's choices leave out`.
+
 ### Task 6: Shared client and cockpit data
 
 **Files:**
@@ -562,6 +617,13 @@ export function useSkillSwitch(item: CapabilitySkillItem): SkillSwitch;
     - rejected → "Not changed. The change was declined."
     - expired → "Not changed. The request expired."
   - `unchanged`: refetch.
+  - `declined` (the expiry race): "Not changed. The request expired." when `expired`, otherwise "Not changed. The change was declined."
+  - A declined or expired line stays until the next click. That click sends the request again, and the Gateway makes a fresh approval (Task 6a).
+- **Polling.**
+  - It stops when `skill_state_mutation_applied` arrives for the skill.
+  - It backs off.
+  - Every switch shares one list refetch: the list route allows 60 requests a minute, and each one is heavy.
+- **Never send the current state.** A click that asks for the state the skill already has sends nothing, because the switch's request carries no note and would clear one.
 - **A waiting item survives a reload.** The list's `pendingApprovalId` is the truth: when it is set and the store is empty, the hook shows waiting for it.
 - **Errors:**
   - a 409 for a stale revision gives "Changed elsewhere. Reload to see the latest.", with `conflict: true`, and `reload()` refetches
@@ -610,6 +672,7 @@ export function skillSearchSuggestion(items: readonly CapabilitySkillItem[]): st
 |---|---|---|
 | waiting | Waiting on you in Inbox | "Open in Inbox" link (`inboxApprovalLink`) |
 | off | Off | The AI can't use it |
+| `leftOutOfWorkspace` (Task 6b) | Left out of this workspace | This workspace's skill choices leave it out, so the AI can't use it here. Links to the workspace's capability settings. The switch still works for the whole install. |
 | paused | Paused | Used only when you name it |
 | on, not callable | Not usable yet | It hasn't been reviewed, so the AI can't use it |
 | on, callable | On | the uses line |
@@ -619,6 +682,8 @@ export function skillSearchSuggestion(items: readonly CapabilitySkillItem[]): st
   - `Not used yet` when n is 0
   - `Uses unknown` when usage is missing or failed
 - **Pinned:** the switch is disabled with "Pinned. Change it through a proposal in Library."
+- **Not switchable** (`switchable: false`, a workspace's self-authored skill): no switch, and a plain line, "Can't be switched from here", with no skill id. Link to the place that can turn it off only if the implementer finds one in the code.
+- **Candidates:** the count is install-wide. The copy never implies it counts this workspace only.
 - **Candidates:** when `candidatesWaiting > 0`, one `NoticeLine` reads "`${plural(n, "candidate")}` waiting in Library", linking to `/library?type=candidate_skill`.
 - **Count trouble:** "Use counts can't be read right now." with "Try again". "Refresh counts" calls `fetchCapabilitySkillUsage({ refresh: true })` and writes the answer into the usage cache (P2 Task 8 note).
 
