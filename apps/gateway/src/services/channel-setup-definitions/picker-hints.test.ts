@@ -139,6 +139,18 @@ describe("channel setup picker hints", () => {
     expect(slack.wizard.picker).toEqual({ group: "quickest", minutes: 5, order: 3 });
   });
 
+  it("WhatsApp takes about fifteen minutes, as it needs a Meta app and a public web address", () => {
+    const whatsapp = definitionByKey("whatsapp");
+
+    expect(whatsapp.wizard.picker).toEqual({
+      group: "phone_apps",
+      note: "Business account + public web address",
+      minutes: 15,
+      order: 0,
+    });
+    expect(whatsapp.wizard.requiredHosts).toEqual(["graph.facebook.com"]);
+  });
+
   it("says what each channel needs", () => {
     for (const definition of listChannelSetupDefinitions()) {
       const key = definition.catalog.key;
