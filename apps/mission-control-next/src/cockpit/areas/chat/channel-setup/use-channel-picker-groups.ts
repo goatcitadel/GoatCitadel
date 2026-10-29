@@ -1,6 +1,8 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { ChannelSetupDefinition } from "@goatcitadel/contracts";
+import type { ChannelSetupDefinition, ChannelSetupDraft } from "@goatcitadel/contracts";
 import { fetchChannelSetupDefinitions } from "@goatcitadel/mission-control-shared/api/client";
+import { channelHosts } from "../../../../features/native-routes/settings/channel-setup/channel-wizard-model";
 import { queryKeys } from "../../../data/query-keys";
 import { buildChannelPickerGroups } from "./channel-picker-model";
 
@@ -33,4 +35,24 @@ export function useChannelRequiredHosts(catalogId: string): readonly string[] | 
     select: (data) =>
       definitionsIn(data).find((definition) => definition.catalog.catalogId === catalogId)?.wizard.requiredHosts ?? [],
   }).data;
+}
+
+/**
+ * The hosts a channel's setup must be able to reach, for the setup as it stands: the channel's fixed hosts, the hosts of
+ * the conditions its values meet, and the hosts of the addresses entered (`channelHosts`). Undefined until both the
+ * catalogue and the draft are there, and for a channel the catalogue doesn't have, because a page cannot say which hosts
+ * are missing from what it hasn't seen.
+ */
+export function useChannelSetupHosts(
+  catalogId: string,
+  draft: ChannelSetupDraft | null,
+): readonly string[] | undefined {
+  const definition = useQuery({
+    ...definitionsQuery,
+    select: (data) => definitionsIn(data).find((candidate) => candidate.catalog.catalogId === catalogId),
+  }).data;
+  return useMemo(
+    () => (definition && draft ? channelHosts(definition, draft, draft.draft) : undefined),
+    [definition, draft],
+  );
 }

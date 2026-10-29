@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
@@ -12,14 +13,44 @@ import { useChannelPickerGroups } from "./use-channel-picker-groups";
 /** The views this page shows: a channel's setup, and a channel's key change. */
 export type ChannelSetupViewTarget = Extract<MessagingView, { kind: "setup" | "change_key" }>;
 
+/** What a channel's own setup page is given. */
+interface SetupPageProps {
+  workspaceId: string;
+  /** The unfinished setup to go on with, when the address names one. */
+  resumeDraftId?: string;
+}
+
+/** What a channel's own key-change page is given. */
+interface KeyChangePageProps {
+  connectionId: string;
+  workspaceId: string;
+}
+
 /**
- * Changing a channel's key. Telegram's is changed here, on its own page. Any other channel's key is Settings' still,
- * so this says so and links there: also while the channel cannot be read, because Settings can still change it.
+ * The channels with a setup page of their own, by catalog key. A channel not here has none yet: its setup is Settings'
+ * (`CONVERTED_SETUP_CHANNELS` lists the ones the picker opens in Chat). A map, not an object, so a name like
+ * "constructor" is never taken for a channel.
+ */
+export const SETUP_PAGES: ReadonlyMap<string, ComponentType<SetupPageProps>> = new Map([
+  ["telegram", TelegramSetupPage],
+]);
+
+/**
+ * The channels whose key is changed on a page of their own in Chat, by catalog key. `KEY_CHANGE_CHANNELS` lists the same
+ * keys for the channel page, which links here without loading these pages.
+ */
+export const KEY_CHANGE_PAGES: ReadonlyMap<string, ComponentType<KeyChangePageProps>> = new Map([
+  ["telegram", TelegramKeyChange],
+]);
+
+/**
+ * Changing a channel's key. A channel with a key page of its own is changed there. Any other channel's key is Settings'
+ * still, so this says so and links there: also while the channel cannot be read, because Settings can still change it.
  */
 function KeyChange({ connectionId, workspaceId }: { connectionId: string; workspaceId: string }) {
   const { connection, connections } = useChannelConnection(connectionId);
-  if (connection?.key === "telegram")
-    return <TelegramKeyChange connectionId={connectionId} workspaceId={workspaceId} />;
+  const Page = connection ? KEY_CHANGE_PAGES.get(connection.key) : undefined;
+  if (Page) return <Page connectionId={connectionId} workspaceId={workspaceId} />;
   const back = { href: channelPageHref(connectionId), label: "Back to channel" };
   if (connections.isPending) {
     return (
@@ -43,8 +74,8 @@ function KeyChange({ connectionId, workspaceId }: { connectionId: string; worksp
 }
 
 /**
- * One channel's setup. Telegram has its own page; a channel without one sends the operator to Settings, which has
- * its steps; a channel the picker does not offer is not available here, whatever the address says.
+ * One channel's setup. A channel with a page of its own opens it; a channel without one sends the operator to
+ * Settings, which has its steps; a channel the picker does not offer is not available here, whatever the address says.
  */
 function ChannelSetup({
   channelKey,
@@ -84,7 +115,8 @@ function ChannelSetup({
       </Frame>
     );
   }
-  if (tile.channelKey === "telegram") return <TelegramSetupPage workspaceId={workspaceId} resumeDraftId={draftId} />;
+  const Page = SETUP_PAGES.get(tile.channelKey);
+  if (Page) return <Page workspaceId={workspaceId} resumeDraftId={draftId} />;
   return (
     <Frame
       title={`Add ${tile.label}`}

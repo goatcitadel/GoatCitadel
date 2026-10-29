@@ -298,8 +298,8 @@ describe("ChannelPage", () => {
 
   it("sends a channel without its own key page to Settings to change the key", async () => {
     load({
-      connection: discordConnection(),
-      overview: overviewOf(channel({ channelKey: "discord", label: "Discord" })),
+      connection: connection({ catalogId: "channel.mattermost", key: "mattermost", label: "Mattermost", config: {} }),
+      overview: overviewOf(channel({ channelKey: "mattermost", label: "Mattermost" })),
     });
     await mount();
     expect(keyLinks()).toEqual(["/settings/connections#channels"]);

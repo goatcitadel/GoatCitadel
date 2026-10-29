@@ -23,7 +23,7 @@ vi.mock("./ChannelPage", () => ({
 
 const DEFINITIONS = [
   {
-    catalog: { catalogId: "channel.slack", key: "slack", label: "Slack" },
+    catalog: { catalogId: "channel.mattermost", key: "mattermost", label: "Mattermost" },
     wizard: { estimatedMinutes: 10, picker: { group: "quickest", order: 0 } },
   },
 ] as unknown as ChannelSetupDefinition[];
@@ -94,7 +94,7 @@ beforeEach(() => {
   api.fetchChannelSetupDefinitions.mockReset();
   api.fetchChannelSetupDefinitions.mockResolvedValue({ items: DEFINITIONS });
   api.fetchIntegrationConnections.mockReset();
-  api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf("slack", "Slack")] });
+  api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf("mattermost", "Mattermost")] });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -135,7 +135,7 @@ it("shows the channel picker in place of the conversation", async () => {
 
   await render({ kind: "picker" });
   expect(container.querySelector("h1")?.textContent).toBe("Add a channel");
-  expect(container.textContent).toContain("Slack");
+  expect(container.textContent).toContain("Mattermost");
   expect(container.querySelector('input[aria-label="Draft"]')).toBe(draft);
   expect(draft.value).toBe("Keep this draft");
   expect(conversationHidden()).toBe("none");
@@ -147,13 +147,13 @@ it("shows the channel picker in place of the conversation", async () => {
 });
 
 it("sends a channel without its own setup page to Settings", async () => {
-  await render({ kind: "setup", channelKey: "slack" });
-  expect(container.querySelector("h1")?.textContent).toBe("Add Slack");
-  expect(container.textContent).toContain("Set up Slack in Settings");
-  const target = link("Set up Slack in Settings");
-  const expected = new URL(settingsChannelSetupHref("channel.slack"), "http://cockpit.invalid");
+  await render({ kind: "setup", channelKey: "mattermost" });
+  expect(container.querySelector("h1")?.textContent).toBe("Add Mattermost");
+  expect(container.textContent).toContain("Set up Mattermost in Settings");
+  const target = link("Set up Mattermost in Settings");
+  const expected = new URL(settingsChannelSetupHref("channel.mattermost"), "http://cockpit.invalid");
   expect(target.pathname).toBe(expected.pathname);
-  expect(target.searchParams.get("channel")).toBe("channel.slack");
+  expect(target.searchParams.get("channel")).toBe("channel.mattermost");
   expect(target.hash).toBe("#channels");
   expect(link("Back to channels").pathname).toBe("/chat/messaging/add");
   expect(conversationHidden()).toBe("none");

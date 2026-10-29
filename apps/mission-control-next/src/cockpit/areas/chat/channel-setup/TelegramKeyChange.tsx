@@ -12,7 +12,14 @@ import { BotKeyField, keyWorks, OTHER_APP_NOTE } from "./BotKeyField";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
 import { botChangeNote, whatIsInTheWay, type InTheWay } from "./telegram-key-change-model";
-import { hostChange, TEST_MESSAGE_CHANGE, TurnOnStep, turnOnStatus, type TurnOnWording } from "./TurnOnStep";
+import {
+  CLEANUP_NOTE,
+  hostChange,
+  TEST_MESSAGE_CHANGE,
+  TurnOnStep,
+  turnOnStatus,
+  type TurnOnWording,
+} from "./TurnOnStep";
 import { useChannelRequiredHosts } from "./use-channel-picker-groups";
 import { useTelegramKeyChange, type TelegramKeyChangeState } from "./use-telegram-key-change";
 import { TELEGRAM_CATALOG_ID } from "./use-telegram-setup";
@@ -24,6 +31,7 @@ const SAVE_KEY_WORDING: TurnOnWording = {
   working: "Saving…",
   done: "Saved. Telegram uses the new key now.",
   doneLink: "Back to Telegram's page",
+  cleanup: CLEANUP_NOTE,
 };
 /** This page cannot clear a bot's web address, so it says what to do instead of offering a button. */
 const WEB_ADDRESS_NOTE =

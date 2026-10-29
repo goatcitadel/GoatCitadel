@@ -27,6 +27,8 @@ export interface TurnOnWording {
   done: string;
   /** The link beside it, to the channel's page. */
   doneLink: string;
+  /** What the step says when the test message could not be removed, naming where to delete it. */
+  cleanup: string;
 }
 
 /** Turning a new channel on. */
@@ -35,6 +37,7 @@ export const TURN_ON_WORDING: TurnOnWording = {
   working: "Turning on…",
   done: TURNED_ON,
   doneLink: "Open Telegram's page",
+  cleanup: CLEANUP_NOTE,
 };
 
 /**
@@ -67,7 +70,7 @@ export function turnOnStatus(turnOn: TurnOnState, wording: TurnOnWording = TURN_
     case "done":
       return wording.done;
     case "cleanup":
-      return CLEANUP_NOTE;
+      return wording.cleanup;
     case "failed":
       return turnOn.message;
     case "blocked":
@@ -81,12 +84,20 @@ export function turnOnStatus(turnOn: TurnOnState, wording: TurnOnWording = TURN_
 }
 
 /** Where the last click left things, when it did not finish: the reasons, the failure, or where to go next. */
-function Outcome({ turnOn, workspaceId }: { turnOn: TurnOnState; workspaceId: string }) {
+function Outcome({
+  turnOn,
+  workspaceId,
+  wording,
+}: {
+  turnOn: TurnOnState;
+  workspaceId: string;
+  wording: TurnOnWording;
+}) {
   switch (turnOn.state) {
     case "cleanup":
       return (
         <Callout tone="warning" announce={false}>
-          <p>{CLEANUP_NOTE}</p>
+          <p>{wording.cleanup}</p>
           <div className="mt-2">
             <Button size="sm" onClick={() => void turnOn.acknowledgeCleanup()}>
               Continue
@@ -193,7 +204,7 @@ export function TurnOnStep({
           </div>
         </Callout>
       ) : null}
-      <Outcome turnOn={turnOn} workspaceId={workspaceId} />
+      <Outcome turnOn={turnOn} workspaceId={workspaceId} wording={wording} />
       {turnOn.state === "cleanup" ? null : (
         <Button
           variant="primary"
