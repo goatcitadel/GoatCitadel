@@ -33,6 +33,7 @@ import { ChatRunCard } from "./ChatRunCard";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatTurnDetails } from "./ChatTurnDetails";
+import { ChatTurnThinking } from "./ChatTurnThinking";
 import { TurnReceipt } from "./ChatTurnReceipt";
 
 const ChatChangePlanCard = lazy(async () => ({
@@ -146,7 +147,7 @@ export const Turn = memo(function Turn({
           </ul>
         ) : null}
       </div>
-      {assistantText || streaming ? (
+      {assistantText || streaming || turn.thinking?.trim() ? (
         <div className="max-w-full">
           <h2 className="sr-only">Assistant reply</h2>
           <div className="mb-2 flex items-center gap-2">
@@ -159,6 +160,11 @@ export const Turn = memo(function Turn({
               <StatusBadge status={presentChatTurnStatus(turn.trace.status)} />
             ) : null}
           </div>
+          <ChatTurnThinking
+            thinking={turn.thinking}
+            live={streaming || !isChatTurnTerminalStatus(turn.trace.status)}
+            answerStarted={Boolean(assistantText)}
+          />
           {assistantText ? (
             <AssistantMessageRenderer
               role="assistant"
@@ -166,9 +172,9 @@ export const Turn = memo(function Turn({
               running={streaming}
               streamTurnId={turn.turnId}
             />
-          ) : (
+          ) : streaming && !turn.thinking?.trim() ? (
             <p className="text-sm text-fg-muted">Preparing response…</p>
-          )}
+          ) : null}
           {stopped && assistantText && !streaming ? (
             <p className="mt-1 text-xs text-fg-muted" role="note">
               Stopped — partial answer
