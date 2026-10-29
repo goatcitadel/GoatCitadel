@@ -117,6 +117,10 @@ Best for:
 
 ## Discord Bridge / Gateway
 
+### Quick setup from Messaging
+
+In Chat, open **Messaging**, select **+ Add**, then **Discord**. The page walks you through making the bot in the Developer Portal, pasting its token (GoatCitadel checks it with Discord and stores it as a masked credential, and asks you to switch on Message Content Intent if it is off), inviting the bot to a server with a ready-made link, choosing where it posts, and turning it on. Discord names the person who made the bot, and that person is the only one let in: they skip the pairing code in direct messages, and in the channel you choose the bot answers only them, and only when they mention it. Anyone else who messages the bot privately still gets a pairing code. The page needs no channel id, server id or environment variable. It does not cover a webhook with no bot, which stays in Settings › Channels (the steps below). The real-account checks of this page (a real bot, the invite, a direct message, a mention in the chosen channel) are still owed by the operator. Details are in [CHANNEL_GUIDED_SETUP.md](./CHANNEL_GUIDED_SETUP.md).
+
 Official references:
 
 - Discord Developer Portal: https://discord.com/developers/applications
@@ -200,6 +204,7 @@ The advanced webhook-only Bridge path is outbound-only. The wizard structurally 
 
 ### Discord troubleshooting
 
+- "Discord didn't accept that token, or GoatCitadel couldn't reach Discord.": the token on the Messaging page is wrong or was reset; copy the new one from the Bot page (and check that `discord.com` is in the network allowlist)
 - `401`: token invalid, expired, or copied incorrectly
 - gateway close `4014` or valid token but no ready state: enable `Message Content Intent` on the application's Bot page; verified apps may also need intent approval
 - `404` on channel probe: wrong channel id or wrong target
@@ -220,6 +225,10 @@ The advanced webhook-only Bridge path is outbound-only. The wizard structurally 
 - Bridge mode never creates online presence. It needs a restart only when its process environment changes.
 
 ## Slack
+
+### Quick setup from Messaging
+
+In Chat, open **Messaging**, select **+ Add**, then **Slack**. The page opens Slack with an app named "GoatCitadel" ready to create from a manifest (you can rename it in Slack afterwards), then asks for two tokens: the Bot User OAuth Token (`xoxb-`) after you install the app, and an app-level token (`xapp-`, with the `connections:write` scope) from Basic Information. GoatCitadel checks both with Slack and stores them as masked credentials. It then asks you to send a one-time code to the bot in Slack; the person who sends it becomes the only allowed sender. You choose where the bot posts (direct messages with that person, or a channel the bot has been added to) and turn it on. This path receives over Socket Mode: GoatCitadel opens a connection to Slack, so no public web address or signing secret is needed, and `slack.com` must be in the network allowlist (Turn on adds it after its approval). The app receives direct messages and mentions in channels it has been added to, not every channel message, and its voice messages are not transcribed because the app has no `files:read` scope. The OAuth sign-in, the signed web address and an incoming webhook stay in Settings › Channels (the steps below). The real-account checks of this page (a real Slack app, both tokens, hi, a reply, a mention, and a socket refresh after a few hours) are still owed by the operator. Details are in [CHANNEL_GUIDED_SETUP.md](./CHANNEL_GUIDED_SETUP.md).
 
 Official references:
 
@@ -245,6 +254,11 @@ Official references:
 - `channel_not_found`: use the real channel id or a resolvable default target, not display text
 - `missing_scope`: add the needed bot scopes and reinstall the app
 - webhook-only fallback: expected to remain send-only and manual-confirm oriented
+- "Slack didn't accept the app-level token.": the `xapp-` token is wrong, revoked, or was made without the `connections:write` scope; make a new one under Basic Information › App-Level Tokens and use **Change the key** on the channel's page
+- "Slack turned Socket Mode off for this app.": Socket Mode was switched off for the app in Slack; switch it on again
+- "GoatCitadel isn't allowed to reach slack.com.": add `slack.com` to the network allowlist
+- your hi is never seen: the code may have expired, so get a new one; send it as a direct message to the bot, not in a channel
+- the bot ignores a channel message (app made from the Messaging page): it hears a channel only after it has been added there (`/invite @<bot name>`), and only when it is mentioned
 
 ## Telegram (Pilot)
 

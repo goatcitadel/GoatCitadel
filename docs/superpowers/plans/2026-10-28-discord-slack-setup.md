@@ -1417,3 +1417,18 @@ git commit -m "docs(channels): Discord and Slack set up from Messaging; Slack re
 **Not covered by this plan's proof:** live runs against a real Discord bot and a real Slack app. The operator does those after merge:
 - Discord: token, intent, invite, DM, mention in the chosen channel, Turn on;
 - Slack: manifest create, install, both tokens, hi, DM reply, mention in a channel, Turn on, and a socket refresh after a few hours.
+
+### As built
+
+What changed from the tasks above (rulings made while Tasks 1 to 12 were built and reviewed):
+- **R6:** Discord admission mirrors Telegram's allowlisted-owner rule. The Discord page saves `ownerActorIds`, `allowedSenders` and `inboundAccessMode: "allowlist"` together. The direct-message pairing bypass, the direct-message slash-command bypass and the default channel's `users` restriction need all three, so a "This is you" mark alone changes nothing. A shared `channel-owner-access.ts` serves Discord and Telegram.
+- **R7:** the plan's Slack idempotency key (`slack:<connection>:message:<channel>:<ts>`) changed three expected key strings in the route tests. Every other assertion in those tests stayed.
+- **R8:** `runSlackEvent` reads the voice flag, so with it on an audio direct message over Socket Mode is accepted. The Chat-made app has no `files:read` scope, so the download fails and the turn runs on the fallback text.
+- **R11:** after a check fails following an earlier good one (a reset or revoked token), the page shows the token field again with its failure sentence, so a new token needs no Start over.
+- **R12:** Task 11 modified `slack-setup-model.ts` (Task 10 had created it) and created `slack-setup-model.test.ts`.
+- **R13:** the Slack page writes no installation identity. `slackTeamId`, `slackTeamName` and `slackBotUserId` are reserved for OAuth adoption (`protectChannelOAuthDraftMetadata` refuses them on any Slack draft), so the page writes only `setupPage` and `receiveMode: "socket"` after the token check. Task 10 told the page to write them, which was a plan defect. Consequences: no workspace backstop on events from a Chat-made connection, a channel mention keeps its leading `<@BOT>`, and the key page has no Slack bot-changed warning for such a connection.
+- **R14:** the Chat key-change page applies only to Discord connections that receive through the bot and Slack connections with `receiveMode: "socket"` (`hasChatKeyChangePage`). Discord webhook-only, Slack webhook and Slack OAuth connections keep the Settings link.
+- **R15:** the key-change page's change line reads "GoatCitadel sends a test message where your bot posts and then removes it". The setup pages keep "...there...".
+- **Task 13:** besides the docs and the `slack.bot-socket` parity row, the parity matrix test's row count became 24, and the Slack Socket Mode adapter test joined the `verify:channels:parity` lane.
+
+Not run: the real-account checks listed at the end of Task 13. The operator does them after merge.
