@@ -423,7 +423,7 @@ export class InboxProjectionService {
             createdAt: proposal.createdAt,
             updatedAt: proposal.updatedAt,
             source: { workspaceId, proposalId: proposal.proposalId },
-            href: "/library/capabilities",
+            href: "/library?type=proposal",
           }),
         ),
       };
