@@ -3953,6 +3953,7 @@ export class GatewayService {
         audit: this.storage.audit,
         features: this,
         deploymentProfile: () => this.config.assistant.deploymentProfile,
+        rootDir: this.config.rootDir,
       }),
     };
   }

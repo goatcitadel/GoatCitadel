@@ -12,6 +12,7 @@ import {
   hiddenSkillIds,
   pendingSkillApprovalIds,
   skillOriginFor,
+  type ShippedSkillDirs,
 } from "./capability-skills-projection.js";
 import {
   buildSkillLifecycleApprovalBinding,
@@ -76,30 +77,104 @@ function candidateEntry(
   };
 }
 
+/** GoatCitadel's own folders on an install rooted at /srv/goatcitadel. */
+const SHIPPED: ShippedSkillDirs = {
+  folders: new Set(["/srv/goatcitadel/skills/genie-npu-ir20"]),
+  packs: new Set(["/srv/goatcitadel/skills/import-packs/github-cli", "/srv/goatcitadel/skills/import-packs/himalaya"]),
+};
+
 const ITEMS_INPUT = {
   hiddenSkillIds: new Set<string>(),
   pendingApprovalIds: new Map<string, string>(),
   switchableSkillIds: new Set<string>(),
+  shippedSkillDirs: SHIPPED,
 };
+
+/** A Skill Hub install of `extra:<name>` whose source.json records this source (as the lifecycle row reads it). */
+function installed(name: string, sourceProvider: string, sourceRef: string) {
+  return {
+    skillId: `extra:${name}`,
+    source: "extra" as const,
+    dir: `/srv/goatcitadel/skills/extra/${name}`,
+    lifecycle: {
+      skillId: `extra:${name}`,
+      category: "community_imported" as const,
+      lifecycleState: "approved" as const,
+      trustLabel: "Imported/community",
+      provenance: { source: "extra", sourceProvider, sourceRef },
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-01T00:00:00.000Z",
+    },
+  };
+}
 
 describe("skillOriginFor", () => {
   it.each([
-    ["a bundled skill", { skillId: "bundled:research", source: "bundled" as const }, "built_in"],
-    ["a shipped extra skill", { skillId: "extra:himalaya", source: "extra" as const }, "built_in"],
+    [
+      "a bundled skill",
+      { skillId: "bundled:research", source: "bundled", dir: "/x/skills/bundled/research" },
+      "built_in",
+    ],
+    [
+      "GoatCitadel's own pack, installed through Skill Hub",
+      installed("github-cli", "local", "/srv/goatcitadel/skills/import-packs/github-cli"),
+      "built_in",
+    ],
+    [
+      "a Git import named like a shipped skill",
+      installed("github-cli", "github", "https://github.com/someone/skills/tree/main/github-cli"),
+      "imported",
+    ],
+    [
+      "a remote bundle named like a shipped skill",
+      installed("himalaya", "external", "https://skills.example.com/himalaya.zip"),
+      "imported",
+    ],
+    [
+      "a local folder that only looks like a shipped pack",
+      installed("github-cli", "local", "/home/someone/import-packs/github-cli"),
+      "imported",
+    ],
+    [
+      "GoatCitadel's own pack folder from another install, which can't be told apart",
+      installed("github-cli", "local", "/opt/old-goatcitadel/skills/import-packs/github-cli"),
+      "imported",
+    ],
+    [
+      "a shipped name with no provenance recorded",
+      { skillId: "extra:himalaya", source: "extra", dir: "/srv/goatcitadel/skills/extra/himalaya" },
+      "imported",
+    ],
+    [
+      "a skill that isn't shipped, from a pack folder",
+      installed("pdf-tools", "local", "/srv/goatcitadel/skills/import-packs/github-cli"),
+      "imported",
+    ],
+    [
+      "GoatCitadel's own skill folder",
+      { skillId: "extra:genie-npu-ir20", source: "extra", dir: "/srv/goatcitadel/skills/genie-npu-ir20" },
+      "built_in",
+    ],
+    [
+      "an import named like GoatCitadel's own skill folder",
+      { skillId: "extra:genie-npu-ir20", source: "extra", dir: "/srv/goatcitadel/skills/extra/genie-npu-ir20" },
+      "imported",
+    ],
     [
       "an approved self-authored skill",
       {
         skillId: "extra:reviewed-0123456789ab",
-        source: "extra" as const,
-        capabilityCategory: "self_generated" as const,
+        source: "extra",
+        dir: "/srv/goatcitadel/candidates/reviewed",
+        capabilityCategory: "self_generated",
       },
       "self_authored",
     ],
-    ["a workspace folder skill", { skillId: "workspace:notes", source: "workspace" as const }, "workspace"],
-    ["a managed folder skill", { skillId: "managed:helper", source: "managed" as const }, "imported"],
-    ["a Skill Hub import", { skillId: "extra:pdf-tools", source: "extra" as const }, "imported"],
-  ])("places %s", (_label, input, origin) => {
-    expect(skillOriginFor(input)).toBe(origin);
+    ["a workspace folder skill", { skillId: "workspace:notes", source: "workspace", dir: "/w/notes" }, "workspace"],
+    ["a managed folder skill", { skillId: "managed:helper", source: "managed", dir: "/m/helper" }, "imported"],
+    ["a Skill Hub import", installed("pdf-tools", "github", "https://github.com/someone/pdf-tools"), "imported"],
+  ] as const)("places %s", (_label, input, origin) => {
+    expect(skillOriginFor(input, SHIPPED)).toBe(origin);
   });
 });
 
@@ -139,6 +214,7 @@ describe("buildCapabilitySkillItems", () => {
       hiddenSkillIds: new Set(["extra:pdf-tools"]),
       pendingApprovalIds: new Map([["bundled:research", "approval-1"]]),
       switchableSkillIds: new Set(["bundled:research", "extra:pdf-tools"]),
+      shippedSkillDirs: SHIPPED,
       skills: [
         skill({
           skillId: "extra:pdf-tools",

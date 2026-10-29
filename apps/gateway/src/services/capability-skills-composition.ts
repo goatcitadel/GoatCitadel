@@ -1,5 +1,7 @@
+import path from "node:path";
 import {
   redactStructuredSecrets,
+  SHIPPED_SKILL_PACKS,
   type ApprovalListResponse,
   type ApprovalRequest,
   type ApprovalResolveInput,
@@ -13,6 +15,7 @@ import type { SkillUseCount } from "@goatcitadel/storage";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import { CapabilitySkillActionsService, type CapabilitySkillActionStep } from "./capability-skill-actions-service.js";
 import { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
+import type { ShippedSkillDirs } from "./capability-skills-projection.js";
 import { CapabilitySkillsService, type CapabilitySkillsSource } from "./capability-skills-service.js";
 import type { SkillStateMutationAuthorityInput, SkillStateMutationOutcome } from "./skill-state-service.js";
 
@@ -67,7 +70,15 @@ export interface CapabilitySkillsOwners {
   features: { isFeatureEnabled(flag: "settingsApprovalSkipEnabled"): Promise<boolean> };
   /** The install's deployment profile, read on every list and every switch. */
   deploymentProfile(): DeploymentProfile;
+  /** The install's root, under whose `skills` folder GoatCitadel's own skill folders and packs live. */
+  rootDir: string;
 }
+
+/**
+ * GoatCitadel's own skill folders that load as `extra` skills from outside `skills/extra`, as GatewayService lists them
+ * among its skill sources.
+ */
+export const SHIPPED_EXTRA_SKILL_FOLDERS: readonly string[] = ["genie-npu-ir20"];
 
 /** The services behind the Capabilities Skills routes. */
 export interface CapabilitySkills {
@@ -87,8 +98,10 @@ export function composeCapabilitySkills({
   audit,
   features,
   deploymentProfile,
+  rootDir,
 }: CapabilitySkillsOwners): CapabilitySkills {
   const readApprovalSkipSetting = () => features.isFeatureEnabled("settingsApprovalSkipEnabled");
+  const shipped = shippedSkillDirs(rootDir);
   return {
     usage: new CapabilitySkillUsageService((sinceIso) => chatTurnCapabilityProfiles.countSkillUsesSince(sinceIso)),
     skills: new CapabilitySkillsService(
@@ -99,6 +112,7 @@ export function composeCapabilitySkills({
         listInspectableCatalog: (workspaceId) => capabilities.listCapabilityCatalog("inspectable", "ALL", workspaceId),
         listPendingApprovals: () => readAllPendingApprovals((input) => approvals.listApprovalsPage(input)),
         listSwitchableSkillIds: async () => loadedSkills().map((skill) => skill.skillId),
+        shippedSkillDirs: () => shipped,
         deploymentProfile,
         readApprovalSkipSetting,
       },
@@ -116,6 +130,19 @@ export function composeCapabilitySkills({
       },
       reportFailedStep,
     ),
+  };
+}
+
+/**
+ * The same paths GatewayService gives its skill loader for GoatCitadel's own folders, and the folder Skill Hub's pack
+ * review resolves each shipped pack to (`path.join(path.resolve(packRoot), packId)`), which an install records as its
+ * source.
+ */
+function shippedSkillDirs(rootDir: string): ShippedSkillDirs {
+  const packRoot = path.resolve(path.join(rootDir, "skills", "import-packs"));
+  return {
+    folders: new Set(SHIPPED_EXTRA_SKILL_FOLDERS.map((folder) => path.join(rootDir, "skills", folder))),
+    packs: new Set(SHIPPED_SKILL_PACKS.map((pack) => path.join(packRoot, pack.packId))),
   };
 }
 

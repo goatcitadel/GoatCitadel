@@ -16,6 +16,7 @@ import {
   countWaitingCandidates,
   hiddenSkillIds,
   pendingSkillApprovalIds,
+  type ShippedSkillDirs,
 } from "./capability-skills-projection.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 
@@ -34,6 +35,8 @@ export interface CapabilitySkillsSources {
    * A workspace's self-authored skills are not among them.
    */
   listSwitchableSkillIds(): Promise<readonly string[]>;
+  /** Where GoatCitadel's own skills outside `skills/bundled` come from on this install, to tell them from imports. */
+  shippedSkillDirs(): ShippedSkillDirs;
   /** The install's deployment profile, read on every list. */
   deploymentProfile(): DeploymentProfile;
   /** The operator's "skip approvals" setting (`settingsApprovalSkipEnabled`). */
@@ -89,6 +92,7 @@ export class CapabilitySkillsService {
         pendingApprovalIds: approvals.ok ? pendingSkillApprovalIds(approvals.value) : new Map(),
         // A lookup that can't be read offers no switch, rather than one the owner might refuse.
         switchableSkillIds: new Set(switchable.ok ? switchable.value : []),
+        shippedSkillDirs: this.sources.shippedSkillDirs(),
       }),
       ...(catalog.ok ? { candidatesWaiting: countWaitingCandidates(catalog.value) } : {}),
       operatorApprovalSkip,

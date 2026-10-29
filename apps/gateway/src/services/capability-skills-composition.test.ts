@@ -1,8 +1,13 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ApprovalListResponse, ApprovalRequest, SkillListItem } from "@goatcitadel/contracts";
 import type { SkillUseCount } from "@goatcitadel/storage";
-import { composeCapabilitySkills, type CapabilitySkillsOwners } from "./capability-skills-composition.js";
+import {
+  composeCapabilitySkills,
+  SHIPPED_EXTRA_SKILL_FOLDERS,
+  type CapabilitySkillsOwners,
+} from "./capability-skills-composition.js";
 import {
   buildSkillLifecycleApprovalBinding,
   buildSkillLifecycleApprovalPayload,
@@ -82,7 +87,30 @@ function owners(overrides: Partial<CapabilitySkillsOwners> = {}): CapabilitySkil
     audit: { append: vi.fn(async () => undefined) },
     features: { isFeatureEnabled: vi.fn(async () => false) },
     deploymentProfile: () => "trusted_local",
+    rootDir: ROOT_DIR,
     ...overrides,
+  };
+}
+
+const ROOT_DIR = path.resolve("goatcitadel-root");
+
+/** An `extra` skill whose recorded source is this local folder, as a Skill Hub install's source.json leaves it. */
+function installedFrom(name: string, dir: string, sourceRef: string): SkillListItem {
+  return {
+    ...RESEARCH,
+    skillId: `extra:${name}`,
+    name,
+    source: "extra",
+    dir,
+    lifecycle: {
+      skillId: `extra:${name}`,
+      category: "community_imported",
+      lifecycleState: "approved",
+      trustLabel: "Imported/community",
+      provenance: { source: "extra", sourceProvider: "local", sourceRef },
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-01T00:00:00.000Z",
+    },
   };
 }
 
@@ -167,6 +195,53 @@ describe("composeCapabilitySkills", () => {
     // The state owner's host looks skills up here, and so does the Skills tab's switchable flag.
     expect(source).toContain("listSkills: async () => this.skillsService.list(),");
     expect(source).toContain("loadedSkills: () => this.skillsService.list(),");
+  });
+
+  it("reads a shipped skill as built in only when it came from this install's own folders", async () => {
+    const skills = [
+      // Installed through Skill Hub from GoatCitadel's own pack, which records the pack's folder as its source.
+      installedFrom(
+        "github-cli",
+        path.join(ROOT_DIR, "skills", "extra", "github-cli"),
+        path.join(ROOT_DIR, "skills", "import-packs", "github-cli"),
+      ),
+      // The same name from somewhere else.
+      installedFrom(
+        "himalaya",
+        path.join(ROOT_DIR, "skills", "extra", "himalaya"),
+        path.join(path.resolve("elsewhere"), "import-packs", "himalaya"),
+      ),
+      {
+        ...RESEARCH,
+        skillId: "extra:genie-npu-ir20",
+        name: "genie-npu-ir20",
+        source: "extra" as const,
+        dir: path.join(ROOT_DIR, "skills", "genie-npu-ir20"),
+      },
+    ];
+    const parts = owners({
+      skills: { listSkills: vi.fn(async () => skills), setSkillState: vi.fn() },
+    });
+
+    const response = await composeCapabilitySkills(parts).skills.list("workspace-a");
+
+    expect(Object.fromEntries(response.items.map((item) => [item.skillId, item.origin]))).toEqual({
+      "extra:github-cli": "built_in",
+      "extra:himalaya": "imported",
+      "extra:genie-npu-ir20": "built_in",
+    });
+  });
+
+  it("knows the folders GatewayService loads GoatCitadel's own skills and packs from", () => {
+    const source = readFileSync(new URL("./gateway-service.ts", import.meta.url), "utf8");
+    const extraFolders = [
+      ...source.matchAll(/\{ source: "extra", dir: path\.join\(config\.rootDir, "skills", "([^"]+)"\) \}/gu),
+    ].map((match) => match[1]);
+
+    // Every extra source but skills/extra itself, where imports land, is one of GoatCitadel's own folders.
+    expect(extraFolders.filter((folder) => folder !== "extra")).toEqual([...SHIPPED_EXTRA_SKILL_FOLDERS]);
+    expect(source).toContain('shippedSkillPackRoot: path.join(config.rootDir, "skills", "import-packs"),');
+    expect(source).toContain("rootDir: this.config.rootDir,");
   });
 
   it("reads every page of waiting approvals, so no skill's wait is cut off", async () => {

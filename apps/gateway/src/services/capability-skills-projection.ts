@@ -20,16 +20,47 @@ const STATE_BY_RUNTIME_STATE: Readonly<Record<SkillRuntimeState, CapabilitySkill
   disabled: "off",
 };
 
+/** Where GoatCitadel's own skills outside `skills/bundled` come from on this install. */
+export interface ShippedSkillDirs {
+  /** Folders GoatCitadel ships its own `extra` skills in, such as `skills/genie-npu-ir20`: a skill's `dir` there. */
+  readonly folders: ReadonlySet<string>;
+  /**
+   * The folder Skill Hub reads each of GoatCitadel's own packs from (`skills/import-packs/<packId>`). A skill installed
+   * from one records that folder as its local source.
+   */
+  readonly packs: ReadonlySet<string>;
+}
+
+type OriginFacts = Pick<SkillListItem, "skillId" | "source" | "capabilityCategory" | "dir" | "lifecycle">;
+
 /**
- * Where a skill came from. Shipped skills (bundled, or pinned in `SHIPPED_SKILL_CATEGORIES`) are built in; approved
- * workspace candidates are self-authored; the workspace skills folder is the workspace's. Everything else, including
- * Skill Hub installs and the `.assistant/skills` folder (nothing in GoatCitadel writes it), is imported.
+ * Where a skill came from. Bundled skills are built in, and so is a shipped skill (pinned in `SHIPPED_SKILL_CATEGORIES`)
+ * whose provenance shows it came from GoatCitadel itself. Approved workspace candidates are self-authored; the
+ * workspace skills folder is the workspace's. Everything else, including Skill Hub installs, a Git import that shares
+ * a shipped skill's name and the `.assistant/skills` folder (nothing in GoatCitadel writes it), is imported.
  */
-export function skillOriginFor(skill: Pick<SkillListItem, "skillId" | "source" | "capabilityCategory">): SkillOrigin {
-  if (skill.source === "bundled" || Object.hasOwn(SHIPPED_SKILL_CATEGORIES, skill.skillId)) return "built_in";
+export function skillOriginFor(skill: OriginFacts, shipped: ShippedSkillDirs): SkillOrigin {
+  if (skill.source === "bundled" || cameFromGoatCitadel(skill, shipped)) return "built_in";
   if (skill.capabilityCategory === "self_generated") return "self_authored";
   if (skill.source === "workspace") return "workspace";
   return "imported";
+}
+
+/**
+ * A shipped id alone proves nothing: anyone can name a skill `github-cli` (Ruling R13). It counts as GoatCitadel's own
+ * only when it loaded from one of GoatCitadel's own folders, or its recorded source is one of GoatCitadel's own pack
+ * folders on this install, a local path no Git or remote-bundle source can be. Provenance that can't tell (none
+ * recorded, or a pack folder from another install) reads as imported, which errs toward less trust.
+ */
+function cameFromGoatCitadel(skill: OriginFacts, shipped: ShippedSkillDirs): boolean {
+  if (!Object.hasOwn(SHIPPED_SKILL_CATEGORIES, skill.skillId)) return false;
+  if (shipped.folders.has(skill.dir)) return true;
+  const provenance = skill.lifecycle?.provenance;
+  return (
+    provenance?.sourceProvider === "local" &&
+    provenance.sourceRef !== undefined &&
+    shipped.packs.has(provenance.sourceRef)
+  );
 }
 
 /**
@@ -84,6 +115,7 @@ export function buildCapabilitySkillItems(input: {
   hiddenSkillIds: ReadonlySet<string>;
   pendingApprovalIds: ReadonlyMap<string, string>;
   switchableSkillIds: ReadonlySet<string>;
+  shippedSkillDirs: ShippedSkillDirs;
 }): CapabilitySkillItem[] {
   return input.skills
     .map((skill): CapabilitySkillItem => {
@@ -93,7 +125,7 @@ export function buildCapabilitySkillItems(input: {
         name: skill.name,
         description: skill.description ?? "",
         category: skillCategoryFor({ skillId: skill.skillId, tags: skill.tags, keywords: skill.keywords }),
-        origin: skillOriginFor(skill),
+        origin: skillOriginFor(skill, input.shippedSkillDirs),
         state: STATE_BY_RUNTIME_STATE[skill.state],
         // As the skill list reports it; a missing value never claims the AI can use the skill.
         callable: skill.callable === true,

@@ -86,6 +86,7 @@ function sources(overrides: Partial<CapabilitySkillsSources> = {}): CapabilitySk
     listPendingApprovals: vi.fn(async () => []),
     // The skill state owner's lookup: the loaded skills, without the workspace's self-authored one.
     listSwitchableSkillIds: vi.fn(async () => ["bundled:research", "extra:pdf-tools"]),
+    shippedSkillDirs: vi.fn(() => ({ folders: new Set<string>(), packs: new Set<string>() })),
     deploymentProfile: vi.fn(() => "trusted_local" as const),
     readApprovalSkipSetting: vi.fn(async () => false),
     ...overrides,

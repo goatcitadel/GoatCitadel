@@ -38,6 +38,11 @@ export interface CapabilitySkillItem {
   name: string;
   description: string;
   category: SkillCategoryId;
+  /**
+   * `built_in` only for GoatCitadel's own skills: bundled ones, and shipped ones whose provenance shows they came from
+   * GoatCitadel (its own skill folder, or its own pack installed through Skill Hub). A Git or remote import that shares
+   * a shipped skill's name, or whose source can't be told, is `imported`.
+   */
   origin: SkillOrigin;
   state: CapabilitySkillState;
   /** Whether the AI can use it, exactly as the skill list reports it. */
