@@ -123,7 +123,12 @@ export function presentSkillState(
     return { ...notUsable, kind: "not_usable" };
   }
   if (item.state === "paused") {
-    return { label: "Paused", tone: "neutral", reason: "Used only when you name it", kind: "paused" };
+    return {
+      label: "Paused",
+      tone: "neutral",
+      reason: "Used when you name it, or on a close match if you allow it",
+      kind: "paused",
+    };
   }
   return { label: "On", tone: "done", reason: uses, kind: "on" };
 }

@@ -267,7 +267,7 @@ describe("Skills tab", () => {
 
       expect(wordOf("Notes")).toBe("Paused");
       expect(switchNamed("Notes")?.getAttribute("aria-checked")).toBe("true");
-      expect(rowOf("Notes").textContent).toContain("Used only when you name it");
+      expect(rowOf("Notes").textContent).toContain("Used when you name it, or on a close match if you allow it");
       expect(rowOf("Notes").textContent).not.toMatch(/\bOn\b/);
 
       expect(wordOf("Mailer")).toBe("Left out of this workspace");

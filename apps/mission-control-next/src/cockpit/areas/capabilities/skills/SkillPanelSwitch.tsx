@@ -7,7 +7,10 @@ import { CANT_SWITCH_NOTE, PINNED_NOTE, presentSkillChange, type SkillStatePrese
 import type { SkillSwitch } from "./use-skill-switch";
 
 const ON_NOTE = "Takes effect in new chats.";
-const PAUSED_NOTE = "Paused skills are used only when you name them in Chat.";
+// Chat always loads a paused skill it's asked for by name. It picks one for a close match on its own only when the
+// activation policy doesn't ask before a paused skill's first use (`chat-skill-selection-runtime.ts`).
+const PAUSED_NOTE =
+  "Paused skills are used when you name them in Chat. Chat picks one on its own for a close match only if you've turned off first use confirmation.";
 
 /**
  * The approval the change waits on, decided here: it opens on its own once, and "Review the change" opens it again.
