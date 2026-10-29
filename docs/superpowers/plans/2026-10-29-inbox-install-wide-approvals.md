@@ -39,13 +39,15 @@ From an audit of every production approval creation site (2026-10-29):
 |---|---|---|
 | `skill.lifecycle` (`skill-state-service.ts`) | never any (direct detached create, no Gateway enrichment) | always |
 | `capability.lifecycle` (`capability-system-service.ts`) | `{ workspaceId }`, or none for a legacy candidate with no recorded workspace | sometimes |
-| `auth.device_access` (`settings-auth-service.ts`) | none in the input; the Gateway helper may add `correlationId`/`traceId`/`durableRunId` | only when nothing was added |
-| any kind from `POST /api/v1/approvals` without a `linkage` body | none | yes |
-| `verification.approval.wait` (dev verification routes only) | none | yes (dev only) |
+| `auth.device_access` (`settings-auth-service.ts`) | none in the input; the Gateway's `createApproval` adds `durableRunId` (wait-run link, durable kernel always on) and may add `correlationId`/`traceId` | no |
+| any kind from `POST /api/v1/approvals` without a `linkage` body | none in the input; `durableRunId` added as above | no |
+| `verification.approval.wait` (dev verification routes only) | none in the input; `durableRunId` added as above | no |
 
-Linkage without a workspace (NOT install-wide, still in no Inbox; a follow-up): `local_ai.serve`, `local_ai.serve_stop`, `local_ai.download`, `citadel_ward.a2a_outbound`, and sometimes tool approvals, `citadel_ward.integration_action`, `integration.dry_run_commit`.
+Approvals made through the Gateway's general approval creation (`createApproval` in `approval-lifecycle-service.ts`) get a wait-run link from `reserveApprovalWaitRun` while the durable kernel is on, so they are never install-wide; they join the "linkage without a workspace" group below.
 
-One-click approve (`reviewedInPlace`) in the Inbox applies only to install-wide `skill.lifecycle` approvals: the operator asked for that change themselves, and the Skills tab already approves it in one click. Other install-wide kinds (a device asking for access is an outside request) keep the danger-level review step.
+Linkage without a workspace (NOT install-wide, still in no Inbox; a follow-up): `local_ai.serve`, `local_ai.serve_stop`, `local_ai.download`, `citadel_ward.a2a_outbound`, `auth.device_access`, `verification.approval.wait`, approvals from `POST /api/v1/approvals` without a `linkage`, and sometimes tool approvals, `citadel_ward.integration_action`, `integration.dry_run_commit`.
+
+One-click approve (`reviewedInPlace`) in the Inbox applies only to install-wide `skill.lifecycle` approvals: the operator asked for that change themselves, and the Skills tab already approves it in one click. Other install-wide approvals (a legacy `capability.lifecycle` candidate) keep the danger-level review step.
 
 ---
 
