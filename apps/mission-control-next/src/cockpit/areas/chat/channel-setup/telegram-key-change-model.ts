@@ -1,4 +1,18 @@
+import { CLEANUP_NOTE, type TurnOnWording } from "./TurnOnStep";
+
 /** What a key change has to know about the channel it changes: how it reads messages, and which bot it was. */
+
+/**
+ * The same step as turning a channel on, with the words of changing a key. The button and its working label are every
+ * channel's; the ending and the cleanup sentence name the channel, so another channel's key change overrides those.
+ */
+export const SAVE_KEY_WORDING: TurnOnWording = {
+  button: "Save key",
+  working: "Saving…",
+  done: "Saved. Telegram uses the new key now.",
+  doneLink: "Back to Telegram's page",
+  cleanup: CLEANUP_NOTE,
+};
 
 /**
  * Whether the channel reads its messages by asking Telegram for them. This is the gateway's own rule

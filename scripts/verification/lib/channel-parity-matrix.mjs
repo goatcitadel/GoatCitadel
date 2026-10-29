@@ -134,6 +134,30 @@ export const ADVERTISED_CHANNEL_PARITY_MATRIX = Object.freeze([
       diagnostics: "apps/gateway/src/services/integration-diagnostics-service.live-checks.test.ts",
     },
   }),
+  // Socket Mode events are acknowledged to Slack only after they are handled, so the row keeps the derived
+  // commit-before-ack durability; Slack sends an unacknowledged event again and the idempotency key dedupes it.
+  adapterRow({
+    id: "slack.bot-socket",
+    family: "slack",
+    catalogId: "channel.slack",
+    channelKey: "slack",
+    variant: "bot token plus Socket Mode inbound (app-level token)",
+    callability: "callable",
+    config: {
+      botTokenEnv: "SLACK_BOT_TOKEN",
+      appTokenEnv: "SLACK_APP_TOKEN",
+      receiveMode: "socket",
+      defaultChannel: "#ops",
+    },
+    inboundMode: "stream",
+    expected: { outboundTransport: "api", lifecycle: "persistent", attachmentSources: ["url", "inline"] },
+    proof: {
+      outboundAdapter: "packages/policy-engine/src/tool-executor.test.ts",
+      inboundAdapter: "apps/gateway/src/services/channel-stream-adapters/slack-socket-stream-adapter.test.ts",
+      reconnect: "apps/gateway/src/services/channel-stream-runtime-service.test.ts",
+      diagnostics: "apps/gateway/src/services/channel-bot-live-probes.test.ts",
+    },
+  }),
   adapterRow({
     id: "discord.gateway",
     family: "discord",

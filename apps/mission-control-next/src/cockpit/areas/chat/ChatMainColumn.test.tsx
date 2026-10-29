@@ -23,12 +23,12 @@ vi.mock("./ChannelPage", () => ({
 
 const DEFINITIONS = [
   {
-    catalog: { catalogId: "channel.slack", key: "slack", label: "Slack" },
+    catalog: { catalogId: "channel.mattermost", key: "mattermost", label: "Mattermost" },
     wizard: { estimatedMinutes: 10, picker: { group: "quickest", order: 0 } },
   },
 ] as unknown as ChannelSetupDefinition[];
 
-function connectionOf(key: string, label: string): IntegrationConnection {
+function connectionOf(key: string, label: string, config?: Record<string, unknown>): IntegrationConnection {
   return {
     connectionId: "conn-1",
     revision: "a".repeat(64),
@@ -38,7 +38,7 @@ function connectionOf(key: string, label: string): IntegrationConnection {
     label,
     enabled: true,
     status: "connected",
-    config: key === "telegram" ? { botUsername: "@MyGoatBot", receiveMode: "poll" } : {},
+    config: config ?? (key === "telegram" ? { botUsername: "@MyGoatBot", receiveMode: "poll" } : {}),
     createdAt: "2026-10-01T09:00:00.000Z",
     updatedAt: "2026-10-01T09:00:00.000Z",
   } as IntegrationConnection;
@@ -94,7 +94,7 @@ beforeEach(() => {
   api.fetchChannelSetupDefinitions.mockReset();
   api.fetchChannelSetupDefinitions.mockResolvedValue({ items: DEFINITIONS });
   api.fetchIntegrationConnections.mockReset();
-  api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf("slack", "Slack")] });
+  api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf("mattermost", "Mattermost")] });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -135,7 +135,7 @@ it("shows the channel picker in place of the conversation", async () => {
 
   await render({ kind: "picker" });
   expect(container.querySelector("h1")?.textContent).toBe("Add a channel");
-  expect(container.textContent).toContain("Slack");
+  expect(container.textContent).toContain("Mattermost");
   expect(container.querySelector('input[aria-label="Draft"]')).toBe(draft);
   expect(draft.value).toBe("Keep this draft");
   expect(conversationHidden()).toBe("none");
@@ -147,13 +147,13 @@ it("shows the channel picker in place of the conversation", async () => {
 });
 
 it("sends a channel without its own setup page to Settings", async () => {
-  await render({ kind: "setup", channelKey: "slack" });
-  expect(container.querySelector("h1")?.textContent).toBe("Add Slack");
-  expect(container.textContent).toContain("Set up Slack in Settings");
-  const target = link("Set up Slack in Settings");
-  const expected = new URL(settingsChannelSetupHref("channel.slack"), "http://cockpit.invalid");
+  await render({ kind: "setup", channelKey: "mattermost" });
+  expect(container.querySelector("h1")?.textContent).toBe("Add Mattermost");
+  expect(container.textContent).toContain("Set up Mattermost in Settings");
+  const target = link("Set up Mattermost in Settings");
+  const expected = new URL(settingsChannelSetupHref("channel.mattermost"), "http://cockpit.invalid");
   expect(target.pathname).toBe(expected.pathname);
-  expect(target.searchParams.get("channel")).toBe("channel.slack");
+  expect(target.searchParams.get("channel")).toBe("channel.mattermost");
   expect(target.hash).toBe("#channels");
   expect(link("Back to channels").pathname).toBe("/chat/messaging/add");
   expect(conversationHidden()).toBe("none");
@@ -175,6 +175,44 @@ it("shows Telegram's own key page for a Telegram channel's key change, with a wa
   expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
   expect(conversationHidden()).toBe("none");
   expect(live.effects).toBe(0);
+});
+
+it.each([
+  ["discord", "Discord", { runtimeMode: "gateway" }, "Change Discord's token", "Paste the new token"],
+  ["slack", "Slack", { receiveMode: "socket" }, "Change Slack's tokens", "Paste the new tokens"],
+])(
+  "shows %s's own token page for the key change of a connection that uses a bot, with a way back to the channel page",
+  async (key, label, config, title, step) => {
+    api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf(key, label, config)] });
+    await render({ kind: "change_key", connectionId: "conn-1" });
+    expect(container.querySelector("h1")?.textContent).toBe(title);
+    expect(container.textContent).toContain(step);
+    expect(container.textContent).not.toContain("Change the key in Settings");
+    expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
+    expect(conversationHidden()).toBe("none");
+    expect(live.effects).toBe(0);
+  },
+);
+
+it.each([
+  [
+    "a Discord webhook-only (bridge) connection",
+    "discord",
+    "Discord",
+    { runtimeMode: "bridge", webhookUrl: "[REDACTED]" },
+  ],
+  ["a Discord connection with only a webhook", "discord", "Discord", { webhookUrl: "[REDACTED]" }],
+  ["a Slack webhook connection", "slack", "Slack", { receiveMode: "webhook", webhookUrl: "[REDACTED]" }],
+  ["a Slack OAuth connection", "slack", "Slack", { authMode: "oauth", receiveMode: "webhook", slackTeamId: "T1" }],
+])("points the key change of %s at Settings, with no token page", async (_name, key, label, config) => {
+  api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf(key, label, config)] });
+  await render({ kind: "change_key", connectionId: "conn-1" });
+  expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");
+  expect(container.textContent).toContain("You can't change a key from Chat yet. Settings has it.");
+  expect(link("Change the key in Settings").pathname).toBe("/settings/connections");
+  expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
+  expect(container.textContent).not.toContain("Paste the new token");
+  expect(container.querySelector('input[type="password"]')).toBeNull();
 });
 
 it("points a key change for any other channel at Settings, with a way back to the channel page", async () => {

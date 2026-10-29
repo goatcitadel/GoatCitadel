@@ -5,7 +5,7 @@ import { runConfiguredMatrixChecks } from "./matrix-live-probes.js";
 import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.js";
 import { appendQqbotStructuralChecks, runConfiguredQqbotChecks } from "./qqbot-live-probes.js";
 import { appendWecomStructuralChecks, runConfiguredWecomChecks } from "./wecom-live-probes.js";
-import { describeChannelCapabilities, logger } from "@goatcitadel/gateway-core";
+import { describeChannelCapabilities, isSlackSocketInboundEnabled, logger } from "@goatcitadel/gateway-core";
 import {
   GOOGLE_WORKSPACE_CATALOG_ID,
   channelAddressHost,
@@ -687,8 +687,12 @@ export async function runIntegrationConnectionLiveChecks(
           ],
         };
       }
+      // Only a Socket Mode connection uses an app-level token; one left behind on a webhook connection is not tried.
+      const socketMode = isSlackSocketInboundEnabled(config);
       return runSlackBotLiveChecks({
         token,
+        appToken: socketMode ? resolveSecret("appToken", "appTokenEnv") : undefined,
+        requireAppToken: socketMode,
         channel: resolveChannelConfigTarget(connection.key, config),
         threadTs:
           readTargetString(resolveDefaultNamedTarget(config), "threadTs") ??

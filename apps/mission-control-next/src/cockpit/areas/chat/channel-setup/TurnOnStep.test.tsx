@@ -2,7 +2,14 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TurnOnStep, turnOnChanges } from "./TurnOnStep";
+import {
+  CLEANUP_NOTE,
+  TURN_ON_WORDING,
+  TurnOnStep,
+  turnOnChanges,
+  turnOnStatus,
+  type TurnOnWording,
+} from "./TurnOnStep";
 import type { useTurnOn } from "./use-turn-on";
 
 type TurnOn = ReturnType<typeof useTurnOn>;
@@ -154,6 +161,34 @@ describe("TurnOnStep", () => {
       button("Continue")!.click();
     });
     expect(turnOn.acknowledgeCleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the cleanup in the page's own words when the wording has them, and Telegram's by default", async () => {
+    const slack: TurnOnWording = {
+      ...TURN_ON_WORDING,
+      done: "Slack is on.",
+      cleanup: "GoatCitadel couldn't remove its test message. Delete it in Slack if you like.",
+    };
+    const turnOn = turnOnState({ state: "cleanup" });
+    await act(async () => {
+      root.render(
+        <TurnOnStep
+          changes={["Where it posts: your direct messages with the app"]}
+          turnOn={turnOn}
+          onTurnOn={() => undefined}
+          workspaceId="default"
+          wording={slack}
+        />,
+      );
+    });
+    expect(container.textContent).toContain("Delete it in Slack if you like.");
+    expect(container.textContent).not.toContain("Telegram");
+    expect(turnOnStatus(turnOn, slack)).toBe(slack.cleanup);
+
+    await show(turnOn);
+    expect(container.textContent).toContain(CLEANUP_NOTE);
+    expect(TURN_ON_WORDING.cleanup).toBe(CLEANUP_NOTE);
+    expect(turnOnStatus(turnOn)).toBe(CLEANUP_NOTE);
   });
 
   it("lists the reasons it could not turn on, one to a line", async () => {

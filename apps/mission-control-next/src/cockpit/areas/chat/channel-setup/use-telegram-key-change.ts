@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChannelSetupDraft, IntegrationConnection } from "@goatcitadel/contracts";
-import {
-  createChannelRotateSecretDraft,
-  fetchChannelSetupDrafts,
-  updateChannelSetupDraft,
-} from "@goatcitadel/mission-control-shared/api/client";
+import { updateChannelSetupDraft } from "@goatcitadel/mission-control-shared/api/client";
+import { draftForKeyChange } from "./key-change-draft";
 import { checkTelegramKey } from "./telegram-key-check";
 import { latestDraft, TELEGRAM_CATALOG_ID, TELEGRAM_KEY_FAILED } from "./use-telegram-setup";
 
@@ -25,26 +22,6 @@ export interface TelegramKeyChangeState {
 type Core = Omit<TelegramKeyChangeState, "checkKey">;
 
 const EMPTY: Core = { draft: null, bot: null, webhookActive: false, conflict: false, busy: false, error: undefined };
-
-/**
- * The newest draft for changing this channel's key that still matches the channel, or a new one. A draft made
- * against an older version of the channel is no use: the gateway refuses to check it. A draft for editing or
- * repairing the channel is not this change and could carry other unsaved edits, so it is never taken.
- */
-async function draftForKeyChange(connection: Pick<IntegrationConnection, "connectionId" | "revision">) {
-  const { items } = await fetchChannelSetupDrafts({ connectionId: connection.connectionId });
-  const updated = (draft: ChannelSetupDraft) => Date.parse(draft.updatedAt) || 0;
-  const newest = items
-    .filter(
-      (draft) =>
-        draft.catalogId === TELEGRAM_CATALOG_ID &&
-        draft.connectionId === connection.connectionId &&
-        draft.lifecycleMode === "rotate_secret" &&
-        draft.connectionRevision === connection.revision,
-    )
-    .reduce<ChannelSetupDraft | null>((best, draft) => (!best || updated(draft) > updated(best) ? draft : best), null);
-  return newest ?? createChannelRotateSecretDraft(connection.connectionId);
-}
 
 /**
  * Changing a Telegram channel's key. The draft is made, or found, on the first check, never by visiting the page. A
@@ -85,7 +62,7 @@ export function useTelegramKeyChange(
       set({ busy: true, error: undefined });
       let draft = core.current.draft;
       try {
-        draft ??= await draftForKeyChange({ connectionId, revision });
+        draft ??= await draftForKeyChange({ connectionId, revision }, TELEGRAM_CATALOG_ID);
         // Kept at once, so a try after a failure goes on with this draft instead of making another.
         set({ draft });
         const check = await checkTelegramKey({ draftId: draft.draftId, expectedRevision: draft.revision, token: key });

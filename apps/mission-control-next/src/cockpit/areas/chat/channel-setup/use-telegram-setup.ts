@@ -4,15 +4,18 @@ import {
   createChannelSetupDraft,
   discardChannelSetupDraft,
   discoverTelegramSetupTargets,
-  fetchChannelSetupDraft,
   fetchChannelSetupDrafts,
   updateChannelSetupDraft,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { draftWithSender, savedSender } from "./code-sender";
 import { listenForHi } from "./listen-for-hi";
+import { latestDraft } from "./setup-draft-session";
 import { createSetupCode } from "./setup-code";
 import { checkTelegramKey, readTelegramBot } from "./telegram-key-check";
+
+// The pages that read the draft again after a failed write find it here, as they did before it moved.
+export { latestDraft };
 
 export const TELEGRAM_CATALOG_ID = "channel.telegram";
 
@@ -83,15 +86,6 @@ function setupToResume(drafts: readonly ChannelSetupDraft[], draftId?: string): 
     (newest, draft) => (!newest || updated(draft) > updated(newest) ? draft : newest),
     null,
   );
-}
-
-/** The draft as the gateway has it now, or null when it cannot be read. */
-export async function latestDraft(draftId: string): Promise<ChannelSetupDraft | null> {
-  try {
-    return await fetchChannelSetupDraft(draftId);
-  } catch {
-    return null;
-  }
 }
 
 /**

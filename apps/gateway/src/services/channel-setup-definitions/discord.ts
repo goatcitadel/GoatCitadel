@@ -1,4 +1,9 @@
-import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
+import {
+  resolveAllowedSenders,
+  resolveChannelOwnerActorIds,
+  type ChannelSetupDefinition,
+  type ChannelSetupIssue,
+} from "@goatcitadel/contracts";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
@@ -362,6 +367,10 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
         ["botToken", "botTokenEnv", "token", "tokenEnv"],
         ["webhookUrl", "webhookUrlEnv"],
       ]);
+      const ownerActorIds = resolveChannelOwnerActorIds(config);
+      const allowedSenders = [...resolveAllowedSenders(config)];
+      const inboundAccessMode = readInboundAccessMode(config);
+      const applicationId = readString(config, "applicationId");
       return {
         draft: {
           runtimeMode: hydratedRuntimeMode,
@@ -370,6 +379,11 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           defaultGuildId: readString(config, "defaultGuildId"),
           inboundDmPolicy: readString(config, "inboundDmPolicy") ?? "pairing",
           guildPolicy: readString(config, "guildPolicy") ?? "allowlist",
+          // Left out when the connection has none, as normalize leaves them out of the saved config.
+          ...(ownerActorIds.length > 0 ? { ownerActorIds } : {}),
+          ...(allowedSenders.length > 0 ? { allowedSenders } : {}),
+          ...(inboundAccessMode ? { inboundAccessMode } : {}),
+          ...(applicationId ? { applicationId } : {}),
         },
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
@@ -384,6 +398,10 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               readString(config, "defaultGuildId") || hasConfiguredGuildRules(config.guilds) ? "configured" : "unknown",
             inboundDmPolicy: "configured",
             guildPolicy: "configured",
+            ownerActorIds: ownerActorIds.length > 0 ? "configured" : "unknown",
+            allowedSenders: allowedSenders.length > 0 ? "configured" : "unknown",
+            inboundAccessMode: inboundAccessMode ? "configured" : "unknown",
+            applicationId: applicationId ? "configured" : "unknown",
           },
           warnings: hasConfiguredSecret
             ? [
@@ -396,6 +414,11 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
     },
     normalize(draft) {
       const runtimeMode = resolveDiscordRuntimeMode(draft);
+      const ownerActorIds = resolveChannelOwnerActorIds(draft.draft);
+      const allowedSenders = [...resolveAllowedSenders(draft.draft)];
+      // ownerActorIds, allowedSenders, inboundAccessMode and applicationId are left out when the draft has none, so
+      // finalize keeps the saved connection's own values instead of overwriting them with nothing. The service gives a
+      // new connection its default access mode, so a guide only writes the mode when it chooses one.
       return compactRecord({
         runtimeMode,
         botTokenEnv: readString(draft.draft, "botTokenEnv") ?? readLegacyString(draft, "botTokenEnv", "tokenEnv"),
@@ -404,6 +427,10 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
         inboundDmPolicy:
           runtimeMode === "gateway" ? (readString(draft.draft, "inboundDmPolicy") ?? "pairing") : undefined,
         guildPolicy: runtimeMode === "gateway" ? (readString(draft.draft, "guildPolicy") ?? "allowlist") : undefined,
+        ownerActorIds: ownerActorIds.length > 0 ? ownerActorIds : undefined,
+        allowedSenders: allowedSenders.length > 0 ? allowedSenders : undefined,
+        inboundAccessMode: readInboundAccessMode(draft.draft),
+        applicationId: readString(draft.draft, "applicationId"),
         botToken: readString(draft.draft, "botToken") ?? readLegacyString(draft, "botToken", "token"),
         // Do NOT fall back to webhookUrlEnv for webhookUrl — that leaks the env-var NAME into the
         // literal URL field. Preserve webhookUrlEnv as its own field so env-backed bridge
@@ -480,9 +507,23 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           issues.push(malformedFieldIssue("webhookUrl", "Webhook URL should look like a Discord webhook URL."));
         }
       }
+      const rawAccessMode = readString(draft.draft, "inboundAccessMode");
+      if (rawAccessMode && !readInboundAccessMode(draft.draft)) {
+        issues.push(malformedFieldIssue("inboundAccessMode", "Choose a valid inbound access mode."));
+      }
+      const rawSenders = draft.draft.allowedSenders;
+      if (rawSenders !== undefined && (!Array.isArray(rawSenders) || rawSenders.some((id) => typeof id !== "string"))) {
+        issues.push(malformedFieldIssue("allowedSenders", "Choose a valid sender list."));
+      }
       return issues;
     },
   };
+}
+
+/** The sender-access mode a guide may save: only the two modes the Gateway knows, anything else is left out. */
+function readInboundAccessMode(values: Record<string, unknown>): "allowlist" | "open_legacy" | undefined {
+  const mode = readString(values, "inboundAccessMode");
+  return mode === "allowlist" || mode === "open_legacy" ? mode : undefined;
 }
 
 function hasConfiguredGuildRules(value: unknown): boolean {

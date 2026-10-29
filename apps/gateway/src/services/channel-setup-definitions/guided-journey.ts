@@ -36,14 +36,14 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
   },
   slack: {
     summary:
-      "Send messages from your own Slack app into the channels you choose. Receiving messages needs an app installed with OAuth and a public HTTPS address.",
+      "Send messages from your own Slack app into the channels you choose. To receive messages, use Socket Mode, which needs no public web address and is quickest to set up from Messaging in Chat, or an app installed with OAuth and a public HTTPS address.",
     prerequisites: [
       "Your own Slack app with the chat:write scope, installed to your workspace.",
       "The bot invited to each private channel (/invite @your-app).",
-      "To receive messages: an OAuth install from here with message history scopes, and a public HTTPS address for this Gateway.",
+      "To receive messages: Socket Mode with an app-level token (no public web address needed), or an OAuth install from here with message history scopes and a public HTTPS address for this Gateway.",
     ],
     firstMessage:
-      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot.",
+      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. With Socket Mode, send your bot a direct message and check the reply. To receive on a web address instead (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot.",
   },
   telegram: {
     summary:
@@ -213,7 +213,7 @@ const ADVANCED_KEYS = new Set([
  * operator saw. Change it whenever the text of any guide, or the text the guides share, changes. Changing it also makes
  * older setup test results out of date, so those tests run again.
  */
-const GUIDED_CONTENT_VERSION_SUFFIX = ".guided-2026-10-28";
+export const GUIDED_CONTENT_VERSION_SUFFIX = ".guided-2026-10-29";
 /** A draft value `hydrate` sets when the saved connection was open access. It is never part of the saved config. */
 const OPEN_ACCESS_MARKER = "inboundAccessWasOpen";
 /** Webhook inbound that is always default-deny: the runtime ignores a stored open_legacy mode for these. */
@@ -289,8 +289,10 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
         ...normalizeGuidedChannelInboundAccess(key, draft, draft.hydration?.rawLegacyConfig ?? {}),
       };
       // Stream and Google Chat app inbound are new for a connection, so a hydrated open_legacy mode must not carry over.
+      // Slack's Socket Mode is a stream too: a legacy Slack connection switched to it is saved as allowlist-only.
       return normalized.inboundStreamEnabled === true ||
         normalized.receiveEvents === true ||
+        (key === "slack" && normalized.receiveMode === "socket") ||
         FORCED_WEBHOOK_INBOUND_KEYS.has(key) ||
         (key === "google-chat" && Boolean(normalized.serviceAccountKeyEnv ?? normalized.serviceAccountKey))
         ? { ...normalized, inboundAccessMode: "allowlist" }

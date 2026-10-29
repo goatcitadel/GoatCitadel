@@ -130,6 +130,67 @@ describe("integration diagnostics live-check routing", () => {
     );
   });
 
+  it("hands a Socket Mode Slack connection's app-level token to the Slack probe, read the way the bot token is", async () => {
+    const port = createPort();
+    const connection = createConnection("slack", {
+      botToken: "slack-token",
+      receiveMode: "socket",
+      appTokenEnv: "SLACK_APP_TOKEN",
+      defaultChannel: "C123",
+    });
+    vi.mocked(port.resolveConnectionSecret).mockImplementation((_config, directKey, envKey) =>
+      directKey === "appToken" && envKey === "appTokenEnv"
+        ? "xapp-1-A0-1-resolved"
+        : directKey === "botToken"
+          ? "slack-token"
+          : undefined,
+    );
+
+    await runIntegrationConnectionLiveChecks(port, connection, { includeSandboxSend: false });
+
+    expect(port.resolveConnectionSecret).toHaveBeenCalledWith(
+      connection.config,
+      "appToken",
+      "appTokenEnv",
+      "channel.slack",
+      connection,
+    );
+    expect(liveProbeMocks.slack).toHaveBeenCalledWith(
+      expect.objectContaining({ token: "slack-token", appToken: "xapp-1-A0-1-resolved", requireAppToken: true }),
+    );
+  });
+
+  it("still asks the Slack probe for an app-level token when a Socket Mode connection cannot read one", async () => {
+    const port = createPort();
+    const connection = createConnection("slack", {
+      botToken: "slack-token",
+      receiveMode: "socket",
+      appTokenEnv: "SLACK_APP_TOKEN",
+    });
+
+    await runIntegrationConnectionLiveChecks(port, connection, { includeSandboxSend: false });
+
+    const input = liveProbeMocks.slack.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(input.requireAppToken).toBe(true);
+    expect(input.appToken).toBeUndefined();
+  });
+
+  it("does not hand a webhook Slack connection an app-level token it left behind", async () => {
+    const port = createPort();
+
+    for (const config of [
+      { botToken: "slack-token", appToken: "xapp-1-A0-1-left", receiveMode: "webhook" },
+      { botToken: "slack-token", appToken: "xapp-1-A0-1-left" },
+    ]) {
+      liveProbeMocks.slack.mockClear();
+      await runIntegrationConnectionLiveChecks(port, createConnection("slack", config), { includeSandboxSend: false });
+
+      const input = liveProbeMocks.slack.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(input.appToken, JSON.stringify(config)).toBeUndefined();
+      expect(input.requireAppToken, JSON.stringify(config)).toBeFalsy();
+    }
+  });
+
   it("routes Matrix live checks with the access token and gates on the network allowlist", async () => {
     const port = createPort();
     const fetchMock = vi.mocked(port.fetchWithDiagnosticsTimeout);

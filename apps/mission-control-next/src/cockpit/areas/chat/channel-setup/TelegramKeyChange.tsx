@@ -11,20 +11,13 @@ import { CONNECTIONS_QUERY_KEY, useChannelConnection } from "../use-channel-conn
 import { BotKeyField, keyWorks, OTHER_APP_NOTE } from "./BotKeyField";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
-import { botChangeNote, whatIsInTheWay, type InTheWay } from "./telegram-key-change-model";
-import { hostChange, TEST_MESSAGE_CHANGE, TurnOnStep, turnOnStatus, type TurnOnWording } from "./TurnOnStep";
+import { botChangeNote, SAVE_KEY_WORDING, whatIsInTheWay, type InTheWay } from "./telegram-key-change-model";
+import { hostChange, TEST_MESSAGE_CHANGE, TurnOnStep, turnOnStatus } from "./TurnOnStep";
 import { useChannelRequiredHosts } from "./use-channel-picker-groups";
 import { useTelegramKeyChange, type TelegramKeyChangeState } from "./use-telegram-key-change";
 import { TELEGRAM_CATALOG_ID } from "./use-telegram-setup";
 import { useTurnOn, type TurnOnState } from "./use-turn-on";
 
-/** The same step as turning a channel on, with the words of changing a key. */
-const SAVE_KEY_WORDING: TurnOnWording = {
-  button: "Save key",
-  working: "Saving…",
-  done: "Saved. Telegram uses the new key now.",
-  doneLink: "Back to Telegram's page",
-};
 /** This page cannot clear a bot's web address, so it says what to do instead of offering a button. */
 const WEB_ADDRESS_NOTE =
   "This bot sends its messages to a web address, so GoatCitadel can't read them here. Stop that in the app that set it up, or use a different key.";

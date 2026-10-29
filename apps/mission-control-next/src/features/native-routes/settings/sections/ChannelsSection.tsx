@@ -147,7 +147,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                   notice={{
                     tone: "info",
                     message:
-                      "Choose a channel, start its guided setup, then save, validate, test, and finalize before runtime use. Slack uses OAuth. Telegram is set up on its own page in Chat.",
+                      "Choose a channel, start its guided setup, then save, validate, test, and finalize before runtime use. Telegram is set up on its own page in Chat. Discord and Slack have a quicker page there too.",
                   }}
                 />
                 <SettingsButtonRow>
