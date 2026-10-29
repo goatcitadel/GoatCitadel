@@ -16,7 +16,7 @@ export const CHAT_ONLY_SETUP_CHANNELS: ReadonlySet<string> = new Set(["telegram"
  * Channels whose key is changed on its own page in Chat. Settings changes every other channel's key. A page in
  * `ChannelSetupView` backs each one; this list is here so the channel page can link to it without loading the pages.
  */
-export const KEY_CHANGE_CHANNELS: ReadonlySet<string> = new Set(["telegram"]);
+export const KEY_CHANGE_CHANNELS: ReadonlySet<string> = new Set(["telegram", "discord", "slack"]);
 
 export interface ChannelPickerTile {
   /** The channel's catalog key, as it appears in the add-channel address. */

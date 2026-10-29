@@ -8,9 +8,9 @@ import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { settingsChannelSetupHref } from "./channel-picker-model";
 import { DiscordInviteStep } from "./DiscordInviteStep";
 import { DiscordPostingStep } from "./DiscordPostingStep";
+import { BotToken, PortalLink } from "./DiscordTokenStep";
 import {
   DISCORD_CATALOG_ID,
-  DISCORD_DEVELOPER_PORTAL,
   DISCORD_INTENT_OFF,
   DISCORD_NO_MAKERS,
   DISCORD_STILL_WAITING,
@@ -25,7 +25,6 @@ import {
 } from "./discord-setup-model";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
-import { TokenField } from "./TokenField";
 import { TurnOnStep, turnOnStatus } from "./TurnOnStep";
 import { useChannelSetupHosts } from "./use-channel-picker-groups";
 import { useDiscordSetup, type DiscordSetupState } from "./use-discord-setup";
@@ -33,19 +32,6 @@ import { useTurnOn, type TurnOnState } from "./use-turn-on";
 
 /** Where each step is done. */
 const ON_THIS_PAGE = "On this page";
-
-function PortalLink() {
-  return (
-    <a
-      href={DISCORD_DEVELOPER_PORTAL}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-block text-accent underline-offset-2 hover:underline"
-    >
-      Open the Developer Portal
-    </a>
-  );
-}
 
 function MakeBot() {
   return (
@@ -56,67 +42,6 @@ function MakeBot() {
       </p>
       <PortalLink />
     </div>
-  );
-}
-
-/**
- * Where the token is pasted, and what stands in the way of using the bot once it checks out. The field is masked, kept
- * only in the volatile credential store, and cleared once the token has been checked. A token that works but whose bot
- * cannot read messages yet (Message Content Intent is off) is already stored, so only a new check is left to ask for.
- */
-function BotToken({
-  setup,
-  value,
-  onChange,
-  checking,
-  onCheck,
-  onRecheck,
-}: {
-  setup: DiscordSetupState;
-  value: string;
-  onChange: (value: string) => void;
-  checking: boolean;
-  onCheck: () => void;
-  onRecheck: () => void;
-}) {
-  const { check, busy, error } = setup;
-  return (
-    <>
-      {error ? (
-        <Callout tone="error" announce={false}>
-          <p>{error}</p>
-        </Callout>
-      ) : null}
-      {check && !check.messageContentIntent ? (
-        <>
-          <Callout tone="warning" announce={false}>
-            <p>{DISCORD_INTENT_OFF}</p>
-            <div className="mt-2">
-              <PortalLink />
-            </div>
-          </Callout>
-          <div>
-            <Button
-              variant="primary"
-              loading={checking}
-              loadingLabel="Checking…"
-              disabled={busy && !checking}
-              onClick={onRecheck}
-            >
-              Check again
-            </Button>
-          </div>
-        </>
-      ) : (
-        <TokenField
-          label="Bot token"
-          value={value}
-          onChange={onChange}
-          busy={busy}
-          button={{ label: "Check token", checking, onCheck }}
-        />
-      )}
-    </>
   );
 }
 
@@ -253,7 +178,9 @@ export function DiscordSetupPage({
       result: check ? discordTokenWorks(check.bot.name) : undefined,
       children: (
         <BotToken
-          setup={setup}
+          intentOff={check !== null && !check.messageContentIntent}
+          busy={busy}
+          error={setup.error}
           value={token.value}
           onChange={token.setValue}
           checking={checking}

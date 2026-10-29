@@ -1,7 +1,7 @@
 import type { ChannelSetupPerson, DiscordSetupCheckResult } from "@goatcitadel/contracts";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { PostingOption } from "./PostingChoice";
-import { hostChange, type TurnOnWording } from "./TurnOnStep";
+import { hostChange, TEST_MESSAGE_THERE_CHANGE, type TurnOnWording } from "./TurnOnStep";
 
 /** The words and links of Discord's setup page that need no state. */
 
@@ -201,7 +201,7 @@ export function discordTurnOnChanges({
     `Who can message your bot: ${makerName}, who made it`,
     `Where it posts: ${where}`,
     "How it gets messages: GoatCitadel stays connected to Discord, so no public web address is needed",
-    "GoatCitadel sends a test message there and then removes it",
+    TEST_MESSAGE_THERE_CHANGE,
     ...missingHosts.map(hostChange),
   ];
 }

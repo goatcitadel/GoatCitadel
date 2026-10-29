@@ -177,6 +177,23 @@ it("shows Telegram's own key page for a Telegram channel's key change, with a wa
   expect(live.effects).toBe(0);
 });
 
+it.each([
+  ["discord", "Discord", "Change Discord's token", "Paste the new token"],
+  ["slack", "Slack", "Change Slack's tokens", "Paste the new tokens"],
+])(
+  "shows %s's own token page for its key change, with a way back to the channel page",
+  async (key, label, title, step) => {
+    api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf(key, label)] });
+    await render({ kind: "change_key", connectionId: "conn-1" });
+    expect(container.querySelector("h1")?.textContent).toBe(title);
+    expect(container.textContent).toContain(step);
+    expect(container.textContent).not.toContain("Change the key in Settings");
+    expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
+    expect(conversationHidden()).toBe("none");
+    expect(live.effects).toBe(0);
+  },
+);
+
 it("points a key change for any other channel at Settings, with a way back to the channel page", async () => {
   await render({ kind: "change_key", connectionId: "conn-1" });
   expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");

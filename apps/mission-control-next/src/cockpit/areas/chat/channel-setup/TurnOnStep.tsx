@@ -12,6 +12,8 @@ export const TURNED_ON = "Telegram is on. Send your bot a message to try it.";
 export const CLEANUP_NOTE = "GoatCitadel couldn't remove its test message. Delete it in Telegram if you like.";
 /** The one thing every turn-on does that the operator can see in their chat. */
 export const TEST_MESSAGE_CHANGE = "GoatCitadel sends a test message to your chat and then removes it";
+/** The same for a channel that has just said where it posts: Discord and Slack. */
+export const TEST_MESSAGE_THERE_CHANGE = "GoatCitadel sends a test message there and then removes it";
 
 /** The line for a host that is not yet allowed and will be added when the change is made. */
 export const hostChange = (host: string) => `${host} is added to the hosts GoatCitadel may reach`;

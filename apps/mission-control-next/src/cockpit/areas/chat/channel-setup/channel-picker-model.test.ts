@@ -142,7 +142,7 @@ describe("where a channel is set up", () => {
   it("lists the channels with a Chat page, the ones Settings hands over, and the ones with a key page", () => {
     expect([...CONVERTED_SETUP_CHANNELS].sort()).toEqual(["discord", "slack", "telegram"]);
     expect([...CHAT_ONLY_SETUP_CHANNELS]).toEqual(["telegram"]);
-    expect([...KEY_CHANGE_CHANNELS]).toEqual(["telegram"]);
+    expect([...KEY_CHANGE_CHANNELS]).toEqual(["telegram", "discord", "slack"]);
   });
 
   it("names a converted channel's Chat page for the picker, and nothing for the rest", () => {

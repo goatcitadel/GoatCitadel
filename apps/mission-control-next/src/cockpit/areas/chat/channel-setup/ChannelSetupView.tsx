@@ -1,10 +1,12 @@
 import type { ComponentType } from "react";
+import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { channelPageHref, channelPickerHref, type MessagingView } from "../../../app/routes";
 import { settingsChannelSetupHref } from "./channel-picker-model";
 import { useChannelConnection } from "../use-channel-connections";
+import { ChannelTokenChange } from "./ChannelTokenChange";
 import { DiscordSetupPage } from "./DiscordSetupPage";
 import { SetupFrame as Frame } from "./SetupFrame";
 import { SlackSetupPage } from "./SlackSetupPage";
@@ -22,9 +24,10 @@ interface SetupPageProps {
   resumeDraftId?: string;
 }
 
-/** What a channel's own key-change page is given. */
+/** What a channel's own key-change page is given: the channel to change, which the view has read already. */
 interface KeyChangePageProps {
   connectionId: string;
+  connection: IntegrationConnection;
   workspaceId: string;
 }
 
@@ -43,8 +46,13 @@ export const SETUP_PAGES: ReadonlyMap<string, ComponentType<SetupPageProps>> = n
  * The channels whose key is changed on a page of their own in Chat, by catalog key. `KEY_CHANGE_CHANNELS` lists the same
  * keys for the channel page, which links here without loading these pages.
  */
-export const KEY_CHANGE_PAGES: ReadonlyMap<string, ComponentType<KeyChangePageProps>> = new Map([
+export const KEY_CHANGE_PAGES: ReadonlyMap<string, ComponentType<KeyChangePageProps>> = new Map<
+  string,
+  ComponentType<KeyChangePageProps>
+>([
   ["telegram", TelegramKeyChange],
+  ["discord", ChannelTokenChange],
+  ["slack", ChannelTokenChange],
 ]);
 
 /**
@@ -54,7 +62,7 @@ export const KEY_CHANGE_PAGES: ReadonlyMap<string, ComponentType<KeyChangePagePr
 function KeyChange({ connectionId, workspaceId }: { connectionId: string; workspaceId: string }) {
   const { connection, connections } = useChannelConnection(connectionId);
   const Page = connection ? KEY_CHANGE_PAGES.get(connection.key) : undefined;
-  if (Page) return <Page connectionId={connectionId} workspaceId={workspaceId} />;
+  if (connection && Page) return <Page connectionId={connectionId} connection={connection} workspaceId={workspaceId} />;
   const back = { href: channelPageHref(connectionId), label: "Back to channel" };
   if (connections.isPending) {
     return (

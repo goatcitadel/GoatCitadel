@@ -6,7 +6,7 @@ import {
   type ChannelTargetRow,
 } from "../../../../features/native-routes/settings/channel-setup/channel-wizard-model";
 import type { PostingOption } from "./PostingChoice";
-import { hostChange, type TurnOnWording } from "./TurnOnStep";
+import { hostChange, TEST_MESSAGE_THERE_CHANGE, type TurnOnWording } from "./TurnOnStep";
 
 /** The words of Slack's setup page, and the pure helpers that build what it saves, that need no state. */
 
@@ -237,7 +237,7 @@ export function slackTurnOnChanges({
     `Who can message your bot: ${senderName}`,
     `Where it posts: ${where}`,
     "How it gets messages: GoatCitadel keeps a connection open to Slack, so no public web address is needed",
-    "GoatCitadel sends a test message there and then removes it",
+    TEST_MESSAGE_THERE_CHANGE,
     ...missingHosts.map(hostChange),
   ];
 }
