@@ -17,7 +17,9 @@ export function assertPolicyEvaluationOwnerAgreement({ expected, submitted, owne
 }
 
 export async function runCockpitLibraryPolicyProof({ context, browser, stack, citadelId, viewports, deps }) {
-  const { presentCapabilityTitle } = await import("../../../../packages/mission-control-shared/dist/content/capability-rows.js");
+  // The policy inspector lives in the Tools group panel's Technical details, so the proof opens the panel of the group
+  // that holds the tool it checks.
+  const { toolGroupForTool } = await import("../../../../packages/contracts/dist/index.js");
   const { humanizeToken, presentRiskLevel } = await import("../../../../packages/mission-control-shared/dist/content/status-vocabulary.js");
   const { assertOk, auditPageAccessibility, axeSourcePath, buildVerificationUiUrl, emptyArtifacts,
     installMissionControlNextBrowserState, path, relativeToRun, requestJson, runScenario } = deps;
@@ -39,6 +41,8 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
       const example = tool?.examples?.[0];
       const agent = agents.body?.items?.find((entry) => entry.lifecycleStatus === "active");
       assert.ok(item && example && agent, "Policy proof needs fs.read, its catalog example, and an actual active agent");
+      const group = toolGroupForTool(item.toolName);
+      assert.ok(group, "Policy proof needs the Tools group that holds fs.read");
       const theme = variant === "mobile" ? "light" : "dark";
       const browserContext = await browser.newContext({ viewport, colorScheme: theme });
       let page;
@@ -46,6 +50,8 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
         await browserContext.addInitScript((value) => {
           window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
           window.localStorage.setItem("goatcitadel.ui.theme.v1", value);
+          // The policy check sits in the panel's Technical details, which render only with this preference on.
+          window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "true");
         }, theme);
         await installMissionControlNextBrowserState(browserContext, workspaceId, citadelId);
         page = await browserContext.newPage();
@@ -56,14 +62,17 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
           if (pathname === "/api/v1/tools/access/evaluate") policyRequests.push(request);
           if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) && pathname.startsWith("/api/v1/")) mutations.push(pathname);
         });
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, `/library/tool/${encodeURIComponent(item.capabilityId)}?shell=cockpit&type=tool`), { waitUntil: "domcontentloaded" });
-        const detail = variant === "mobile" ? page.getByRole("dialog", { name: presentCapabilityTitle(item), exact: true })
-          : page.getByRole("complementary", { name: "Capability details", exact: true });
-        await detail.getByRole("tab", { name: "Policy", exact: true }).click({ timeout: 30_000 });
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, `/capabilities/tools?shell=cockpit&item=${encodeURIComponent(`group:${group.id}`)}`), { waitUntil: "domcontentloaded" });
+        // The inspector's body is a region named "Inspector: <group>", on a wide screen and inside the phone sheet alike.
+        const detail = page.getByRole("region", { name: /^Inspector: /u });
+        const technical = detail.locator("details").filter({ has: detail.locator("summary", { hasText: "Technical details" }) });
+        await technical.locator("summary").click({ timeout: 30_000 });
+        // The check starts on the group's first tool; pick the tool this proof evaluates.
+        await detail.getByRole("combobox", { name: /^Check a tool's policy(?:\s|$)/u }).selectOption(item.toolName);
         const inspector = detail.getByRole("region", { name: "Tool policy inspector", exact: true });
-        await inspector.getByRole("button", { name: "Inspect tool policy", exact: true }).waitFor();
+        await inspector.getByRole("button", { name: "Inspect access rules", exact: true }).waitFor();
         assert.equal(policyRequests.length, 0);
-        await inspector.getByRole("button", { name: "Inspect tool policy", exact: true }).click();
+        await inspector.getByRole("button", { name: "Inspect access rules", exact: true }).click();
         await inspector.getByRole("combobox", { name: /^Agent(?:\s|$)/u }).selectOption(agent.agentId);
         await inspector.getByRole("combobox", { name: /^Conversation(?:\s|$)/u }).selectOption(sessionId);
         await inspector.getByRole("combobox", { name: /^Arguments to evaluate(?:\s|$)/u }).selectOption("0");
@@ -100,11 +109,13 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
         const screenshotDir = path.join(context.artifactRoot, "screenshots"); await mkdir(screenshotDir, { recursive: true });
         const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-library-policy-${variant}.png`);
         await result.scrollIntoViewIfNeeded(); await page.screenshot({ path: screenshot, fullPage: false });
+        // Input trust sits in the form's collapsed "Advanced policy context".
+        await inspector.locator("summary", { hasText: "Advanced policy context" }).click();
         await inspector.getByRole("combobox", { name: /^Input trust(?:\s|$)/u }).selectOption("untrusted_external");
         assert.equal(await result.count(), 0, "Context edits must hide the old result");
         assert.equal(policyRequests.length, 1, "Context edits must not record another advisory decision");
-        await inspector.getByRole("button", { name: "Close policy inspector", exact: true }).click();
-        await inspector.getByRole("button", { name: "Inspect tool policy", exact: true }).click();
+        await inspector.getByRole("button", { name: "Close access rules", exact: true }).click();
+        await inspector.getByRole("button", { name: "Inspect access rules", exact: true }).click();
         await inspector.getByRole("combobox", { name: /^Agent(?:\s|$)/u }).waitFor();
         assert.equal(await inspector.getByRole("combobox", { name: /^Agent(?:\s|$)/u }).inputValue(), "");
         assert.equal(await inspector.getByRole("combobox", { name: /^Conversation(?:\s|$)/u }).inputValue(), "");

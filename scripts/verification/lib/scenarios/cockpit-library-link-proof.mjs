@@ -1,9 +1,11 @@
 import { proveCatalogDraftNavigation } from "./cockpit-navigation-draft-proof.mjs";
 import { mkdir } from "node:fs/promises";
 
+// The kinds the Library catalog still lists. Skills and tools are listed in Capabilities, so a Library skill record
+// lands there and the Library's Type filter offers only these (see library-catalog-kinds.ts).
+const LIBRARY_KINDS = ["code_mode", "proposal", "candidate_skill", "mesh_tool", "mesh_mcp_server", "mesh_skill"];
+
 export async function runCockpitLibraryLinkProof({ context, browser, stack, citadelId, viewports, deps }) {
-  // Load the built formatter after the lane has built the UI and its shared dependencies.
-  const { presentCapabilityTitle, presentCapabilityDescription } = await import("../../../../packages/mission-control-shared/dist/content/capability-rows.js");
   const { assertOk, auditPageAccessibility, axeSourcePath, buildVerificationUiUrl, emptyArtifacts,
     installMissionControlNextBrowserState, path, relativeToRun, requestJson, runScenario } = deps;
   for (const { variant, viewport } of viewports) {
@@ -17,8 +19,11 @@ export async function runCockpitLibraryLinkProof({ context, browser, stack, cita
       assertOk(owner, "read Library owner catalog");
       const item = owner.body?.items?.filter((entry) => entry.kind === "skill" && entry.title && entry.summary).at(-1);
       if (!item || !seeded.body?.workspaceId) throw new Error("Library proof needs a named skill and scoped workspace.");
-      const title = presentCapabilityTitle(item);
-      const description = presentCapabilityDescription(item);
+      // A Library skill record is `skill:<skillId>`, which is also the value of the Skills tab's `?item=`.
+      const panelItem = `skill:${item.capabilityId.replace(/^skill:/u, "")}`;
+      // The Type filter offers a kind only when the catalog holds one. Use a kind the seed provides; with none, the
+      // Library shows its empty state, which is asserted instead.
+      const libraryKind = owner.body.items.find((entry) => LIBRARY_KINDS.includes(entry.kind))?.kind;
       const browserContext = await browser.newContext({ viewport });
       try {
         await browserContext.addInitScript((theme) => {
@@ -29,14 +34,16 @@ export async function runCockpitLibraryLinkProof({ context, browser, stack, cita
         const page = await browserContext.newPage();
         const href = `/library/${encodeURIComponent(item.kind)}/${encodeURIComponent(item.capabilityId)}?shell=cockpit&type=skill`;
         await page.goto(buildVerificationUiUrl(stack.uiUrl, href), { waitUntil: "domcontentloaded" });
-        const detail = variant === "mobile" ? page.getByRole("dialog", { name: title, exact: true }) : page.getByRole("complementary", { name: "Capability details" });
-        await detail.getByRole("tab", { name: "Overview", exact: true }).waitFor({ timeout: 30_000 });
-        await detail.getByRole("heading", { name: title, exact: true }).waitFor();
-        if (!(await detail.textContent()).includes(description)) throw new Error("Library deep link selected different owner content.");
+        // The old Library address lands on the skill's panel in Capabilities; the Library's catalog filter stays behind.
+        const atSkillPanel = (url) => url.pathname === "/capabilities/skills" && url.searchParams.get("item") === panelItem
+          && url.searchParams.get("shell") === "cockpit" && !url.searchParams.has("type");
+        await page.waitForURL(atSkillPanel, { timeout: 30_000 });
+        // The inspector's body is a region named "Inspector: <skill>", docked on a wide screen and in the phone sheet.
+        const detail = page.getByRole("region", { name: /^Inspector: /u });
+        await detail.getByRole("heading", { name: "Uses", exact: true }).waitFor({ timeout: 30_000 });
         await page.reload({ waitUntil: "domcontentloaded" });
-        await detail.getByRole("tab", { name: "Overview", exact: true }).waitFor({ timeout: 30_000 });
-        await detail.getByRole("heading", { name: title, exact: true }).waitFor();
-        if (!(await detail.textContent()).includes(description)) throw new Error("Library reload lost the selected capability.");
+        await page.waitForURL(atSkillPanel, { timeout: 30_000 });
+        await detail.getByRole("heading", { name: "Uses", exact: true }).waitFor({ timeout: 30_000 });
         await page.addScriptTag({ path: axeSourcePath });
         const axe = await auditPageAccessibility(page);
         const blocking = axe.violations.filter((entry) => ["serious", "critical"].includes(entry.impact));
@@ -46,19 +53,23 @@ export async function runCockpitLibraryLinkProof({ context, browser, stack, cita
         await mkdir(screenshotDir, { recursive: true });
         const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-library-link-${variant}.png`);
         await page.screenshot({ path: screenshot, fullPage: false });
-        if (variant === "mobile") await detail.getByRole("button", { name: "Close sheet", exact: true }).click();
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/library?shell=cockpit"), { waitUntil: "domcontentloaded" });
         const typeFilter = page.getByRole("combobox", { name: /^Type(?:\s|$)/u });
-        await typeFilter.selectOption("tool");
-        await typeFilter.selectOption("skill");
-        if (new URL(page.url()).searchParams.get("type") !== "skill") throw new Error("Library query-only navigation did not preserve the filter.");
+        await typeFilter.waitFor({ timeout: 30_000 });
+        if (libraryKind) {
+          await typeFilter.selectOption(libraryKind);
+          await page.waitForURL((url) => url.pathname === "/library" && url.searchParams.get("type") === libraryKind);
+        } else {
+          await page.getByText("Nothing to review yet", { exact: true }).waitFor({ timeout: 30_000 });
+        }
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/safety?shell=cockpit#approval-mode"), { waitUntil: "domcontentloaded" });
+        // Leaving Safety for the tools link ends on the Tools tab in Capabilities, which the draft proof waits for.
         const draftNavigation = await proveCatalogDraftNavigation({ page, readGrants: async () => {
           const response = await requestJson(stack.gatewayUrl, "/api/v1/tools/grants?limit=400");
           assertOk(response, "navigation tool-grant owner"); return response.body;
         } });
-        await typeFilter.waitFor();
-        if (await typeFilter.inputValue() !== "tool") throw new Error("Safety did not open the filtered tool catalog.");
-        return { status: "passed", metrics: { capabilityId: item.capabilityId, blockingAxe: 0, overflow, draftNavigation },
+        await page.getByRole("heading", { name: "All tools", exact: true }).waitFor({ timeout: 30_000 });
+        return { status: "passed", metrics: { capabilityId: item.capabilityId, libraryKind: libraryKind ?? "none", blockingAxe: 0, overflow, draftNavigation },
           artifacts: emptyArtifacts({ screenshots: [relativeToRun(context, screenshot)] }) };
       } finally { await browserContext.close(); }
     });

@@ -316,7 +316,7 @@ export async function runCockpitCitadelOverviewProof({ context, browser, stack, 
             .click();
           await page
             .getByRole("navigation", { name: "Library sections", exact: true })
-            .getByRole("link", { name: "Skills and tools", exact: true })
+            .getByRole("link", { name: "Candidates and mesh", exact: true })
             .click();
           await page.evaluate(() => {
             window.history.pushState(null, "", "/library/citadel-overview?shell=cockpit");
