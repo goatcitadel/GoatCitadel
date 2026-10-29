@@ -27,7 +27,7 @@ const CONTROL_TERMS: Record<string, string> = {
   personalities: "tone style overlay create edit delete work default personality",
   onboarding: "first run setup choose model test message safety network allowlist safe demo",
   providers:
-    "provider api key credential secret endpoint base url oauth login model catalog routing default llm guided expert diagnostics connection ollama openai compatible claude code cli let it use goatcitadel tools tool bridge",
+    "provider api key credential secret endpoint base url oauth login model catalog routing default llm guided expert diagnostics connection ollama openai compatible claude code cli let it use goatcitadel tools tool bridge model reasoning thinking thought process",
   "local-ai":
     "hardware memory model fit download serve endpoint jobs local inference llama.cpp llamacpp gguf gpu cpu npu",
   channels:

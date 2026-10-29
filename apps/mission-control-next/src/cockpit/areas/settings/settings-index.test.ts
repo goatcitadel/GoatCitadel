@@ -19,6 +19,15 @@ describe("cockpit settings index", () => {
       "/settings/citadel#citadel-wards",
     );
   });
+  it("finds the model reasoning switch on Models by reasoning or thinking", () => {
+    for (const query of ["reasoning", "thinking"]) {
+      const found = searchSettingsPages(buildSettingsIndex(), query).flatMap((page) => page.entries);
+      expect(
+        found.map((entry) => entry.section),
+        query,
+      ).toContain("providers");
+    }
+  });
   it("keeps the seven route groups and every grouped setting reachable", () => {
     const pages = buildSettingsIndex({ discovery: true });
     expect(pages.map((page) => page.label)).toEqual([
