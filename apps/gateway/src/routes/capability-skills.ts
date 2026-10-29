@@ -92,8 +92,8 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
   /**
    * Switches one skill, install-wide. It always asks the skill state owner, which creates the skill's usual approval;
    * when the operator's skip applies, the switch approves that approval at once as the operator, and the approval's
-   * own effect applies the change. 202 with `approved` or `waiting`, or 200 with `unchanged`. A pinned skill or a
-   * stale revision is a 409.
+   * own effect applies the change. 202 with `approved` or `waiting`; 200 with `unchanged`, or `declined` when this
+   * same request was already turned down. A pinned skill or a stale revision is a 409.
    */
   fastify.post("/api/v1/capabilities/skills/state", operatorSwitch, async (request, reply) => {
     const body = stateBodySchema.safeParse(request.body);
@@ -104,7 +104,7 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
         ...body.data,
         actorId: request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`,
       });
-      return reply.code(outcome.status === "unchanged" ? 200 : 202).send(outcome);
+      return reply.code(outcome.status === "approved" || outcome.status === "waiting" ? 202 : 200).send(outcome);
     } catch (error) {
       return sendRouteError(reply, plainPinnedRefusal(error), request.log);
     }

@@ -96,14 +96,20 @@ export interface CapabilitySkillDetail {
 // ---------------------------------------------------------------------------
 
 /**
- * What switching a skill did. Every change creates the skill's approval; the operator's skip only resolves it.
- * - `approved`: the skip approved it as the operator, and its own effect applies the change in a moment.
+ * What switching a skill did. Every change creates the skill's approval; the operator's skip only resolves it. The
+ * approval's id follows from the request, so asking again for the same change, before the skill changes, hands back the
+ * approval it already made, decided or not.
+ * - `approved`: approved, by the skip now or earlier, and its own effect applies the change (or already has).
  * - `waiting`: it waits in the Inbox for the operator.
+ * - `declined`: this same request was already turned down, so nothing changes. `expired` when no one answered in time
+ *   and the expiry check rejected it; otherwise the operator rejected or edited it. Asking again gives the same answer
+ *   until the skill changes.
  * - `unchanged`: the skill is already in that state, so nothing was asked.
  */
 export type CapabilitySkillActionOutcome =
   | { status: "approved"; approvalId: string }
   | { status: "waiting"; approvalId: string }
+  | { status: "declined"; approvalId: string; expired: boolean }
   | { status: "unchanged" };
 
 /** The switch's request. There is no field that chooses the skip; the Gateway decides it. */

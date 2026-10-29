@@ -74,6 +74,7 @@ function owners(overrides: Partial<CapabilitySkillsOwners> = {}): CapabilitySkil
     capabilities: { listCapabilityCatalog: vi.fn(async () => []) },
     approvals: {
       listApprovalsPage: vi.fn(async (): Promise<ApprovalListResponse> => ({ items: [] })),
+      getApproval: vi.fn(async () => stateApproval("approval-research", "bundled:research")),
       resolveApproval: vi.fn(async () => ({})),
     },
     audit: { append: vi.fn(async () => undefined) },
@@ -143,7 +144,7 @@ describe("composeCapabilitySkills", () => {
     );
 
     const response = await composeCapabilitySkills(
-      owners({ approvals: { listApprovalsPage, resolveApproval: vi.fn() } }),
+      owners({ approvals: { listApprovalsPage, getApproval: vi.fn(), resolveApproval: vi.fn() } }),
     ).skills.list("workspace-a");
 
     expect(listApprovalsPage.mock.calls.map(([input]) => input)).toEqual([
@@ -160,7 +161,7 @@ describe("composeCapabilitySkills", () => {
       const listApprovalsPage = vi.fn(async (): Promise<ApprovalListResponse> => ({ items: [], nextCursor: "more" }));
 
       const response = await composeCapabilitySkills(
-        owners({ approvals: { listApprovalsPage, resolveApproval: vi.fn() } }),
+        owners({ approvals: { listApprovalsPage, getApproval: vi.fn(), resolveApproval: vi.fn() } }),
       ).skills.list("workspace-a");
 
       expect(listApprovalsPage).toHaveBeenCalledTimes(25);
@@ -266,6 +267,7 @@ describe("composeCapabilitySkills", () => {
       const parts = owners({
         approvals: {
           listApprovalsPage: vi.fn(async (): Promise<ApprovalListResponse> => ({ items: [] })),
+          getApproval: vi.fn(),
           resolveApproval,
         },
       });
@@ -289,5 +291,41 @@ describe("composeCapabilitySkills", () => {
     } finally {
       stderr.mockRestore();
     }
+  });
+
+  it("tells who turned an earlier request down by reading the approval through the Inbox's owner", async () => {
+    const rejected: ApprovalRequest = {
+      ...stateApproval("approval-research", "bundled:research"),
+      status: "rejected",
+      resolvedBy: "system:approval-expiry",
+    };
+    const parts = owners({
+      skills: {
+        listSkills: vi.fn(async () => [RESEARCH]),
+        setSkillState: vi.fn(
+          async (): Promise<SkillStateMutationOutcome> => ({
+            pendingApproval: { ...WAITING.pendingApproval!, status: "rejected", replayed: true },
+          }),
+        ),
+      },
+      approvals: {
+        listApprovalsPage: vi.fn(async (): Promise<ApprovalListResponse> => ({ items: [] })),
+        getApproval: vi.fn(async () => rejected),
+        resolveApproval: vi.fn(),
+      },
+    });
+
+    const outcome = await composeCapabilitySkills(parts).actions.setState({
+      workspaceId: "workspace-a",
+      skillId: "bundled:research",
+      state: "enabled",
+      expectedRevision: 4,
+      actorId: "operator-1",
+    });
+
+    expect(outcome).toEqual({ status: "declined", approvalId: "approval-research", expired: true });
+    expect(parts.approvals.getApproval).toHaveBeenCalledExactlyOnceWith("approval-research");
+    expect(parts.approvals.resolveApproval).not.toHaveBeenCalled();
+    expect(parts.audit.append).not.toHaveBeenCalled();
   });
 });

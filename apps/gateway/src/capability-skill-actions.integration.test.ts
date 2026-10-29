@@ -232,6 +232,15 @@ describe("the Capabilities skill switch over a real remote_hardened Gateway", { 
     expect(await gateway.readRuntimeState(skillId)).toBe("enabled");
     expect(await gateway.readSkill(skillId)).toMatchObject({ state: "on", pendingApprovalId: approvalId });
     expect(gateway.readApprovalAudit()).not.toContainEqual(expect.objectContaining({ approvalId }));
+
+    // The operator turns it down in the Inbox. The same click again hands back that decided approval: it says so.
+    const rejected = await gateway.inject("POST", `/api/v1/approvals/${approvalId}/resolve`, { decision: "reject" });
+    expect(rejected.statusCode, rejected.body).toBe(200);
+    const again = await gateway.switchSkill(skillId, "disabled", before.revision);
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json()).toEqual({ status: "declined", approvalId, expired: false });
+    expect(await gateway.readRuntimeState(skillId)).toBe("enabled");
+    expect((await gateway.readSkill(skillId)).pendingApprovalId).toBeUndefined();
   });
 });
 

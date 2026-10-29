@@ -51,9 +51,10 @@ export interface CapabilitySkillsOwners {
       workspaceId: string,
     ): Promise<readonly CapabilityCatalogEntry[]>;
   };
-  /** The Inbox's owner: its list, and the resolve its Approve button uses. */
+  /** The Inbox's owner: its list, one approval, and the resolve its Approve button uses. */
   approvals: {
     listApprovalsPage(input: { status: "pending"; limit: number; cursor?: string }): Promise<ApprovalListResponse>;
+    getApproval(approvalId: string): Promise<ApprovalRequest>;
     resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<unknown>;
   };
   /** The audit log; the switch's skip goes to its approvals stream, as the Change Plan skip does. */
@@ -101,6 +102,7 @@ export function composeCapabilitySkills({
         // The switch carries no note; the approval's own preview shows the state change.
         setSkillState: (skillId, state, authority) => skills.setSkillState(skillId, state, undefined, authority),
         resolveApproval: (approvalId, input) => approvals.resolveApproval(approvalId, input),
+        readApproval: (approvalId) => approvals.getApproval(approvalId),
         appendApprovalAudit: (event, payload) => audit.append("approvals", { event, ...payload }),
         deploymentProfile,
         readApprovalSkipSetting,

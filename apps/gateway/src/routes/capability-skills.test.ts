@@ -286,6 +286,8 @@ describe("capability skill state route", () => {
     [{ status: "approved", approvalId: "approval-1" }, 202],
     [{ status: "waiting", approvalId: "approval-1" }, 202],
     [{ status: "unchanged" }, 200],
+    // The same request was already turned down: nothing changes, so it is not an accepted request.
+    [{ status: "declined", approvalId: "approval-1", expired: true }, 200],
   ] as const)("answers %o with %i", async (outcome, statusCode) => {
     const setState = vi.fn(async () => outcome);
     const { server, requireOperatorAuth } = await build({ setState });
@@ -364,6 +366,7 @@ describe("capability skill state route", () => {
         });
       }),
       resolveApproval,
+      readApproval: vi.fn(),
       appendApprovalAudit,
       deploymentProfile: () => "trusted_local",
       readApprovalSkipSetting: async () => true,
