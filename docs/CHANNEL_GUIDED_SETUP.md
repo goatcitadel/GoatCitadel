@@ -163,11 +163,14 @@ min".
   there, and the chosen channel still answers only the allowlist. Taking the
   maker off the allowlist ends both the bypass and their answers in the channel.
 - **Starting and resuming.** A setup made on this page is marked
-  (`setupPage: "messaging"`) and goes on there. Opening the page again goes on
-  with the newest unfinished one, or the one the address names; the stored token
-  is checked with Discord again, so a change in the Developer Portal shows. Where
-  it posts comes back from the draft. **Start over** discards the draft and its
-  stored token.
+  (`setupPage: "messaging"`) as soon as its draft is made, before the token is
+  stored, so even a draft whose first check failed goes on there. Opening the
+  page again goes on with the newest unfinished one, or the one the address
+  names; the stored token is checked with Discord again, so a change in the
+  Developer Portal shows. Where it posts comes back from the draft. A new token
+  for a different bot (another `applicationId`) drops the old bot's choices, and
+  who may message it and where it posts are chosen again. **Start over**
+  discards the draft and its stored token.
 - **Allowed hosts.** Discord's REST calls need `discord.com` in the network
   allowlist. When it is missing, the Turn on step lists it as a change, and Turn
   on adds it through its own approved Change Plan. Turn on approves only the plan
@@ -262,14 +265,17 @@ lists Slack at "About 5 min".
   it with "Slack turned Socket Mode off for this app." and the runtime backs off
   before trying again. A new connection, the first or one opened for a refresh,
   that sends no `hello` within 30 seconds is closed with "The connection to Slack
-  closed.", and the runtime backs off too. An event is acknowledged only after GoatCitadel has
-  handled it, so one that failed stays unacknowledged for Slack to send again;
-  GoatCitadel does not fetch Slack's history, so messages sent while it is
-  disconnected are not read later.
-  The setup page is marked (`setupPage: "messaging"`) and goes on where it was
-  left: the page checks both stored tokens with Slack again, and who said hi and
-  where it posts come back from the draft, so no new code is asked for.
-  **Start over** discards the draft and its stored tokens.
+  closed.", and the runtime backs off too. An event is acknowledged only after
+  GoatCitadel has handled it, so one that failed stays unacknowledged for Slack
+  to send again; GoatCitadel does not fetch Slack's history, so messages sent
+  while it is disconnected are not read later.
+  The setup page is marked (`setupPage: "messaging"`) as soon as its draft is
+  made, before the tokens are stored, so even a draft whose first check failed
+  goes on where it was left: the page checks both stored tokens with Slack
+  again, and who said hi and where it posts come back from the draft, so no new
+  code is asked for. When someone else says hi with a new code, they replace the
+  earlier sender, whose direct messages are dropped from the draft. **Start
+  over** discards the draft and its stored tokens.
 - **Allowed hosts.** Slack needs `slack.com` in the network allowlist, for the Web
   API and for `apps.connections.open`. When it is missing, the Turn on step lists
   it as a change, and Turn on adds it through its own approved Change Plan. Slack
