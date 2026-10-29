@@ -12,6 +12,7 @@ import {
   type CapabilitySkillActionSources,
   type OperatorSkillSkipReason,
 } from "./capability-skill-actions-service.js";
+import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js";
 import type { SkillLifecyclePendingApproval, SkillStateMutationOutcome } from "./skill-state-service.js";
 
 const ACTOR = "operator-1";
@@ -238,6 +239,23 @@ describe("CapabilitySkillActionsService", () => {
     expect(outcome).toEqual({ status: "waiting", approvalId: "approval-1" });
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith("resolve", failure);
     expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
+  });
+
+  it("answers declined and expired when the approval ran out of time as the skip approved it", async () => {
+    const reportFailure = vi.fn();
+    const parts = sources({
+      readApprovalSkipSetting: vi.fn(async () => true),
+      // The approval owner committed the expiry check's rejection, then says so.
+      resolveApproval: vi.fn(async () => {
+        throw new ApprovalExpiredAfterCommitError("approval-1");
+      }),
+    });
+
+    const outcome = await new CapabilitySkillActionsService(parts, reportFailure).setState(request("enabled"));
+
+    expect(outcome).toEqual({ status: "declined", approvalId: "approval-1", expired: true });
+    expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
+    expect(reportFailure).not.toHaveBeenCalled();
   });
 
   it("records operator_approval_skipped with the reason", async () => {

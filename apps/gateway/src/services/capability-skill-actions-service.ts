@@ -8,6 +8,7 @@ import {
   type DeploymentProfile,
   type SkillRuntimeState,
 } from "@goatcitadel/contracts";
+import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import type { SkillLifecyclePendingApproval, SkillStateMutationOutcome } from "./skill-state-service.js";
 
@@ -89,6 +90,8 @@ export class CapabilitySkillActionsService {
         resolutionNote: OPERATOR_SKILL_SKIP_NOTES[reason],
       });
     } catch (error) {
+      // It ran out of time as it was approved: the owner committed the expiry check's rejection, so nothing changes.
+      if (error instanceof ApprovalExpiredAfterCommitError) return { status: "declined", approvalId, expired: true };
       // Nothing was approved, so the approval still waits in the Inbox for the operator.
       this.reportFailure?.("resolve", error);
       return { status: "waiting", approvalId };
