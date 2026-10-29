@@ -1447,6 +1447,83 @@ describe("channel confirmed receipts and OAuth scope", () => {
     expect(findButton(renderer.root, "Save draft").props.disabled).toBe(true);
     renderer.unmount();
   });
+  it("accepts a save whose receipt withholds only the token in a public server address", async () => {
+    const serverUrl = "https://chat.example.com/?token=abc";
+    const withServerUrl: ChannelSetupDefinition = {
+      ...discordDefinition,
+      wizard: {
+        ...discordDefinition.wizard,
+        steps: discordDefinition.wizard.steps.map((step) =>
+          step.id === "collect-values"
+            ? {
+                ...step,
+                fields: [
+                  ...(step.fields ?? []),
+                  {
+                    key: "serverUrl",
+                    label: "Server address",
+                    type: "url" as const,
+                    required: false,
+                    explanation: "The address of your chat server.",
+                  },
+                ],
+              }
+            : step,
+        ),
+      },
+    };
+    channelApiMocks.fetchChannelSetupDefinitions.mockResolvedValue({ items: [withServerUrl] });
+    // The Gateway projects every draft it returns: a credential query value inside a public address is withheld.
+    channelApiMocks.updateChannelSetupDraft.mockImplementationOnce(
+      async (_draftId: string, input: { draft?: Record<string, unknown> }) => {
+        currentApiDraft = {
+          ...currentApiDraft,
+          revision: currentApiDraft.revision + 1,
+          draft: redactStructuredSecrets(input.draft ?? currentApiDraft.draft, { redactEnvAssignmentsAsWhole: true })
+            .value,
+        };
+        return currentApiDraft;
+      },
+    );
+    const renderer = await renderChannelsSection();
+    await click(findStepButton(renderer.root, "Paste your connection values"));
+    await changeValue(findHostControl(renderer.root, "input", "channel-discord-draft-1-serverUrl"), serverUrl);
+    await click(findButton(renderer.root, "Save draft"));
+    await flushWork();
+
+    expect(channelApiMocks.updateChannelSetupDraft.mock.lastCall?.[1].draft).toMatchObject({ serverUrl });
+    expect(currentApiDraft.draft.serverUrl).toBe("https://chat.example.com/?token=[REDACTED]");
+    expect(textOf(renderer.root)).not.toContain("Outcome uncertain");
+    expect(textOf(renderer.root)).toContain("Channel draft saved.");
+    renderer.unmount();
+  });
+  it("says a withheld variable-name value is hidden, and clears it by sending an empty value", async () => {
+    currentApiDraft = { ...discordDraft, draft: { ...discordDraft.draft, botTokenEnv: "[REDACTED]" } };
+    const renderer = await renderChannelsSection();
+    await click(findStepButton(renderer.root, "Paste your connection values"));
+    const withheld = findHostControl(renderer.root, "input", "channel-discord-draft-1-botTokenEnv");
+    expect(withheld.props.value).toBe("");
+    expect(withheld.props.placeholder).toBe("Saved value hidden");
+    expect(textOf(renderer.root)).toContain(
+      "GoatCitadel hides this saved value because it might be a secret. An empty value is hidden too.",
+    );
+    expect(textOf(renderer.root)).not.toContain("[REDACTED]");
+    const clear = findButton(renderer.root, "Clear saved value");
+    expect(clear.props["aria-label"]).toBe("Clear saved value: Bot token env var");
+
+    await click(clear);
+    const cleared = findHostControl(renderer.root, "input", "channel-discord-draft-1-botTokenEnv");
+    expect(cleared.props.value).toBe("");
+    expect(cleared.props.placeholder).toBe("DISCORD_BOT_TOKEN");
+    expect(renderer.root.findAllByType("button").map(textOf)).not.toContain("Clear saved value");
+    await click(findButton(renderer.root, "Save draft"));
+    await flushWork();
+
+    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    expect(channelApiMocks.updateChannelSetupDraft.mock.lastCall?.[1].draft).toMatchObject({ botTokenEnv: "" });
+    expect(textOf(renderer.root)).toContain("Channel draft saved.");
+    renderer.unmount();
+  });
   it("withholds staged Slack OAuth start when the workspace changes during saved-draft preflight", async () => {
     const slack = {
       ...discordDefinition,
