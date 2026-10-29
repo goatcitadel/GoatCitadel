@@ -45,7 +45,10 @@ export interface CapabilitySkillItem {
    */
   origin: SkillOrigin;
   state: CapabilitySkillState;
-  /** Whether the AI can use it, exactly as the skill list reports it. */
+  /**
+   * Whether the AI can use it, exactly as the skill list reports it: from its review state and switch only. It ignores
+   * the workspace's skill choices, which `leftOutOfWorkspace` reports.
+   */
   callable: boolean;
   /** Sent back as `expectedRevision` when the switch changes. */
   revision: number;
@@ -59,8 +62,9 @@ export interface CapabilitySkillItem {
    * `true` when the workspace's skill choices leave this skill out: the workspace's own selection, narrowed by its
    * Citadel's, doesn't include it, so its Chat turns, scheduled turns and remote workers neither load nor call it,
    * whatever its switch says. The row is listed anyway. `false` when they may load it: every skill when nothing is
-   * chosen, and always the workspace's own approved self-authored skills, which no choice can name. Absent when which
-   * skills the workspace's turns may load couldn't be read, with an issue line saying so; it is never guessed.
+   * chosen, and always the workspace's own approved self-authored skills, which no choice can name. When the workspace's
+   * Citadel or choices can't be read, its turns use none of the installed skills, so every installed skill is `true`.
+   * Absent when the list of skills the workspace's turns may load couldn't be read at all, with an issue line saying so.
    */
   leftOutOfWorkspace?: boolean;
   pinned: boolean;
@@ -126,7 +130,7 @@ export interface CapabilitySkillDetail {
  * - `waiting`: it waits in the Inbox for the operator.
  * - `declined`: the switch answers this only for the expiry race: the approval ran out of time just as the skip approved
  *   it, so `expired` is `true` and nothing changes. Asking again makes a fresh approval, linked to this one, as it does
- *   after any decline or expiry. The type keeps `expired` as a flag because other changes reuse this outcome.
+ *   after any decline or expiry. The type keeps `expired` as a flag for the Phase 3 install route, which reuses it.
  * - `unchanged`: the skill is already in that state, so nothing was asked.
  */
 export type CapabilitySkillActionOutcome =
