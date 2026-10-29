@@ -34,6 +34,11 @@ const MAX_ANSWER_BYTES = 256 * 1024;
 const META_ID = /^\d{6,30}$/;
 /** Meta's error code for an object that doesn't exist, or that the token can't see. */
 const GRAPH_NO_SUCH_OBJECT = 100;
+/**
+ * Graph's access-token error: Meta's own answer to a token it won't take (an expired temporary token is the usual
+ * one). It comes with whatever HTTP status Meta chose, so it is read from the body, never from the status.
+ */
+const GRAPH_ACCESS_TOKEN_ERROR = 190;
 
 type Graph = Record<string, unknown>;
 interface GraphRequest {
@@ -42,6 +47,11 @@ interface GraphRequest {
   query?: string;
   /** The bearer: the access token, or the app token (`<app id>|<app secret>`) for `debug_token`. */
   credential: string;
+  /**
+   * The bearer is the app token, not the access token. A code 190 on such a call is about the App ID and secret, which
+   * the caller reads as its own refusal, so it is not taken to mean the access token was refused.
+   */
+  appToken?: true;
   /** The one write: `subscribed_apps`, a POST with no body. */
   post?: true;
 }
@@ -204,6 +214,9 @@ async function askMeta(
   } catch {
     body = undefined;
   }
+  // Every call that sends the access token reads Graph's access-token error (190) as the token being refused, whatever
+  // the call and the status. Only the code is read; nothing Meta wrote is kept.
+  if (!request.appToken && errorCodeOf(body) === GRAPH_ACCESS_TOKEN_ERROR) throw fail(WHATSAPP_TOKEN_REJECTED);
   return { status: response.status, ok: response.ok, body };
 }
 
@@ -243,6 +256,7 @@ async function tokenState(
     path: "debug_token",
     query: `input_token=${encodeURIComponent(accessToken)}`,
     credential: `${appId}|${appSecret}`,
+    appToken: true,
   });
   if (answer.status === 400) throw fail(WHATSAPP_APP_REJECTED);
   const data = recordOf(readable(answer).data);

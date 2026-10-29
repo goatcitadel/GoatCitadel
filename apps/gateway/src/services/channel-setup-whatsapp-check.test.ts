@@ -307,6 +307,37 @@ describe("WhatsApp setup check", () => {
         WHATSAPP_NUMBER_NOT_FOUND,
         1,
       ],
+      [
+        "a 401 with no body on the number",
+        { ...happy(), [`GET ${PHONE_NUMBER_ID}`]: { status: 401 } },
+        WHATSAPP_TOKEN_REJECTED,
+        1,
+      ],
+      [
+        "a 400 with code 190 on the number",
+        { ...happy(), [`GET ${PHONE_NUMBER_ID}`]: leaky(400, 190) },
+        WHATSAPP_TOKEN_REJECTED,
+        1,
+      ],
+      [
+        "a 401 with code 190 on the number",
+        { ...happy(), [`GET ${PHONE_NUMBER_ID}`]: leaky(401, 190) },
+        WHATSAPP_TOKEN_REJECTED,
+        1,
+      ],
+      [
+        "code 190 on the account's numbers",
+        { ...happy(), [`GET ${BUSINESS_ACCOUNT_ID}/phone_numbers`]: leaky(400, 190) },
+        WHATSAPP_TOKEN_REJECTED,
+        3,
+      ],
+      [
+        "code 190 on the account's subscribed apps",
+        { ...happy(), [`GET ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: leaky(400, 190) },
+        WHATSAPP_TOKEN_REJECTED,
+        4,
+      ],
+      // The app token asks `debug_token`, so a refusal there is about the App ID and secret, not about the access token.
       ["a 400 on debug_token", { ...happy(), "GET debug_token": leaky(400, 190) }, WHATSAPP_APP_REJECTED, 2],
       [
         "a token that is not valid",
@@ -341,6 +372,22 @@ describe("WhatsApp setup check", () => {
       expect(fake.calls).toHaveLength(asked);
     });
 
+    it("reads code 190 as the access token being refused, whatever the HTTP status, on every call that uses it", async () => {
+      // 190 is Graph's access-token error: an expired temporary token must not read as "couldn't reach Meta".
+      const tokenCalls: Array<[string, number]> = [
+        [`GET ${PHONE_NUMBER_ID}`, 1],
+        [`GET ${BUSINESS_ACCOUNT_ID}/phone_numbers`, 3],
+        [`GET ${BUSINESS_ACCOUNT_ID}/subscribed_apps`, 4],
+      ];
+      for (const [call, asked] of tokenCalls) {
+        for (const status of [200, 400, 401, 403, 500]) {
+          const fake = fakeHost({ ...happy(), [call]: leaky(status, 190) });
+          expectOnlyThe(await failure(ask(fake)), WHATSAPP_TOKEN_REJECTED);
+          expect(fake.calls, `${call} ${status}`).toHaveLength(asked);
+        }
+      }
+    });
+
     it("says Meta was unreachable when a call rejects, whatever the rejection quotes", async () => {
       for (const failing of [0, 1, 2, 3]) {
         const fake = fakeHost(happy());
@@ -364,7 +411,7 @@ describe("WhatsApp setup check", () => {
         ["a busy Meta", leaky(500)],
         ["a rate limit", leaky(429, 4)],
         ["a missing number", leaky(404)],
-        ["a 400 that is not a missing number", leaky(400, 190)],
+        ["a 400 that is not a missing number", leaky(400, 10)],
         ["a 400 with no reason", { status: 400, body: {} }],
         ["an answer with no number", { body: { id: PHONE_NUMBER_ID } }],
         ["an answer with no name", { body: { display_phone_number: "+1 555-078-3881" } }],
@@ -568,6 +615,18 @@ describe("WhatsApp setup subscribe", () => {
       const fake = fakeHost({ ...happy(), [`POST ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: { body } });
       expectOnlyThe(await failure(subscribe(fake)), WHATSAPP_SUBSCRIBE_REFUSED);
     }
+  });
+
+  it("says the access token was refused, not that the app was, for code 190 whatever the HTTP status", async () => {
+    // 190 is Graph's access-token error, so a bad or expired token is not "Meta didn't let this app receive messages".
+    for (const status of [200, 400, 401, 403, 500]) {
+      const fake = fakeHost({ ...happy(), [`POST ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: leaky(status, 190) });
+      expectOnlyThe(await failure(subscribe(fake)), WHATSAPP_TOKEN_REJECTED);
+      expect(fake.calls, String(status)).toHaveLength(1);
+    }
+    // Other codes keep their meaning: a refusal that is not about the token is still the subscribe sentence.
+    const other = fakeHost({ ...happy(), [`POST ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: leaky(400, 200) });
+    expectOnlyThe(await failure(subscribe(other)), WHATSAPP_SUBSCRIBE_REFUSED);
   });
 
   it("says Meta was unreachable for any other trouble, without quoting anything", async () => {
