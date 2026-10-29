@@ -44,6 +44,12 @@ export interface SlackSetupCheckInput extends ChannelSetupCheckDraftRef {
   listChannels?: true;
 }
 
+/** Who sent the setup code to the WhatsApp business number: their number as WhatsApp gives it, and the name on their profile. */
+export interface WhatsAppSetupCodeSender {
+  actorId: string;
+  displayName?: string;
+}
+
 /** Who sent the setup code to the bot, and the direct-message conversation it arrived in. */
 export interface SlackSetupCodeSender {
   actorId: string;

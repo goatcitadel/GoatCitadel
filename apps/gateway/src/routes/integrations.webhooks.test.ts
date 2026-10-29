@@ -1,11 +1,14 @@
+import { NotFoundError, type ChannelSetupDraft } from "@goatcitadel/contracts";
 import { authPlugin } from "../plugins/auth.js";
 import { idempotencyHeaderPlugin } from "../plugins/idempotency.js";
 import { parseChannelSecretRef } from "../services/channel-secret-custody-service.js";
+import type { ChannelSetupHost } from "../services/channel-setup-service.js";
 import { buildLineWebhookSignature } from "../services/line-webhook.js";
 import { buildNextcloudTalkSignature } from "../services/nextcloud-talk-webhook.js";
 import { buildSlackSignature } from "../services/slack-webhook.js";
 import { createTelegramChannelSessionPatch } from "../services/telegram-channel-sessions.js";
 import { verifyTelegramWebhookSecretToken } from "../services/telegram-webhook.js";
+import { createWhatsAppSetupListener } from "../services/whatsapp-setup-listener.js";
 import { buildWhatsAppWebhookSignature } from "../services/whatsapp-webhook.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -27,6 +30,62 @@ function createDurableAcceptanceMock() {
   }));
 }
 
+const SETUP_DRAFT_ID = "22222222-2222-4222-8222-222222222222";
+const SETUP_URL = `/api/v1/integrations/connections/${SETUP_DRAFT_ID}/whatsapp/webhook`;
+const SETUP_CODE = "Kp4mZ9qRtW";
+const SETUP_APP_SECRET = "setup-app-secret";
+const SETUP_VERIFY_TOKEN = "setup-verify-token";
+const SETUP_PHONE_NUMBER_ID = "106540352242922";
+
+/** A Meta delivery to the setup draft's number: one text message from `from`, with `text` as its whole body. */
+function setupDeliveryBody(text: string, phoneNumberId = SETUP_PHONE_NUMBER_ID): string {
+  return JSON.stringify({
+    object: "whatsapp_business_account",
+    entry: [
+      {
+        changes: [
+          {
+            field: "messages",
+            value: {
+              metadata: { phone_number_id: phoneNumberId, display_phone_number: "15551234567" },
+              contacts: [{ wa_id: "16505551234", profile: { name: "Sheena" } }],
+              messages: [
+                { from: "16505551234", id: "wamid.SETUP", timestamp: "1730203200", type: "text", text: { body: text } },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  });
+}
+
+/** The real setup listener over a host that holds one WhatsApp draft made on the Messaging setup page. */
+function createSetupDraftListener() {
+  const draft = {
+    draftId: SETUP_DRAFT_ID,
+    revision: 2,
+    catalogId: "channel.whatsapp",
+    lifecycleMode: "create",
+    draft: { setupPage: "messaging", phoneNumberId: SETUP_PHONE_NUMBER_ID, setupCode: SETUP_CODE },
+    secretState: {},
+    enabled: true,
+  } as unknown as ChannelSetupDraft;
+  const keys: Record<string, string> = { appSecret: SETUP_APP_SECRET, webhookVerifyToken: SETUP_VERIFY_TOKEN };
+  const host = {
+    storage: {
+      channelSetupDrafts: {
+        get: async (draftId: string) => {
+          if (draftId !== SETUP_DRAFT_ID) throw new NotFoundError({ entity: "Channel setup draft", id: draftId });
+          return draft;
+        },
+      },
+    },
+    resolveConnectionSecret: (_config: unknown, directKey: string) => keys[directKey],
+  } as unknown as ChannelSetupHost;
+  return createWhatsAppSetupListener(host);
+}
+
 describe("integration provider webhook routes", () => {
   let app: FastifyInstance | null = null;
 
@@ -34,6 +93,57 @@ describe("integration provider webhook routes", () => {
     await cleanupIntegrationTestApp(app);
     app = null;
   });
+
+  /**
+   * The webhook routes with no saved connection behind the setup draft's address: the lookup says not found, and the
+   * port hands the setup draft to the real listener. Nothing here can start a conversation without being seen.
+   */
+  async function buildSetupDraftApp(overrides: Record<string, unknown> = {}) {
+    const listener = createSetupDraftListener();
+    const methods = {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn((connectionId: string) => {
+        throw new NotFoundError({ entity: "Integration connection", id: connectionId });
+      }),
+      answerWhatsAppSetupCheck: vi.fn((draftId: string, query: Parameters<typeof listener.answerCheck>[1]) =>
+        listener.answerCheck(draftId, query),
+      ),
+      hearWhatsAppSetupDelivery: vi.fn((draftId: string, rawBody: string, signature: string | undefined) =>
+        listener.hearDelivery(draftId, rawBody, signature),
+      ),
+      acceptInboundChannelEvent: createDurableAcceptanceMock(),
+      acceptInboundChannelEvents: vi.fn(),
+      ingestChannelMessage: vi.fn(),
+      respondToExistingChatMessage: vi.fn(),
+      setChatSessionBinding: vi.fn(),
+      ...overrides,
+    };
+    app = Fastify();
+    decorateIntegrationServices(app, methods);
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+    return { listener, methods };
+  }
+
+  /** Nothing a delivery can do to a conversation was done. */
+  function expectNoConversation(methods: Awaited<ReturnType<typeof buildSetupDraftApp>>["methods"]) {
+    expect(methods.acceptInboundChannelEvent).not.toHaveBeenCalled();
+    expect(methods.acceptInboundChannelEvents).not.toHaveBeenCalled();
+    expect(methods.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(methods.respondToExistingChatMessage).not.toHaveBeenCalled();
+    expect(methods.setChatSessionBinding).not.toHaveBeenCalled();
+  }
 
   it("accepts signed Nextcloud Talk webhooks without standard auth or idempotency headers", async () => {
     const getIntegrationConnection = vi.fn(() => ({
@@ -1962,6 +2072,184 @@ describe("integration provider webhook routes", () => {
       "Rejected inbound webhook because verification failed.",
     );
     warn.mockRestore();
+  });
+
+  it("answers Meta's address check for a WhatsApp setup draft that is not a connection yet", async () => {
+    const { listener, methods } = await buildSetupDraftApp();
+    const check = (query: string) => app!.inject({ method: "GET", url: `${SETUP_URL}?${query}` });
+
+    const answered = await check(`hub.mode=subscribe&hub.verify_token=${SETUP_VERIFY_TOKEN}&hub.challenge=1158201444`);
+    expect(answered.statusCode).toBe(200);
+    expect(answered.headers["content-type"]).toMatch(/^text\/plain/);
+    expect(answered.body).toBe("1158201444");
+    expect(listener.heard(SETUP_DRAFT_ID).addressCheckedAt).toEqual(expect.any(String));
+    expect(methods.answerWhatsAppSetupCheck).toHaveBeenCalledWith(SETUP_DRAFT_ID, {
+      mode: "subscribe",
+      verifyToken: SETUP_VERIFY_TOKEN,
+      challenge: "1158201444",
+    });
+
+    const wrongToken = await check("hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=1158201444");
+    expect(wrongToken.statusCode).toBe(401);
+    expect(wrongToken.json()).toEqual({ error: "Invalid WhatsApp webhook verify token" });
+    const noChallenge = await check(`hub.mode=subscribe&hub.verify_token=${SETUP_VERIFY_TOKEN}`);
+    expect(noChallenge.statusCode).toBe(400);
+    expect(noChallenge.json()).toEqual({ error: "Invalid WhatsApp webhook verification query" });
+  });
+
+  it("hears the setup code in a signed WhatsApp delivery to a setup draft without starting a conversation", async () => {
+    const { listener, methods } = await buildSetupDraftApp();
+    const deliver = (payload: string, signature?: string) =>
+      app!.inject({
+        method: "POST",
+        url: SETUP_URL,
+        headers: { "content-type": "application/json", ...(signature ? { "x-hub-signature-256": signature } : {}) },
+        payload,
+      });
+    const payload = setupDeliveryBody(` ${SETUP_CODE} `);
+
+    // Not signed with the draft's app secret, or for another number: nothing is heard.
+    const wrongSignature = await deliver(payload, buildWhatsAppWebhookSignature(payload, "another-secret"));
+    expect(wrongSignature.statusCode).toBe(401);
+    expect(wrongSignature.json()).toEqual({ error: "Invalid WhatsApp webhook signature" });
+    expect((await deliver(payload)).statusCode).toBe(401);
+    const elsewhere = setupDeliveryBody(SETUP_CODE, "999");
+    const wrongNumber = await deliver(elsewhere, buildWhatsAppWebhookSignature(elsewhere, SETUP_APP_SECRET));
+    expect(wrongNumber.statusCode).toBe(403);
+    expect(wrongNumber.json()).toEqual({ error: "WhatsApp webhook does not match this connection" });
+    expect(listener.heard(SETUP_DRAFT_ID)).toEqual({});
+
+    const heard = await deliver(payload, buildWhatsAppWebhookSignature(payload, SETUP_APP_SECRET));
+    expect(heard.statusCode).toBe(200);
+    expect(heard.json()).toEqual({ accepted: true, ignored: true, reason: "setup_listening" });
+    expect(listener.heard(SETUP_DRAFT_ID)).toEqual({
+      code: SETUP_CODE,
+      codeSender: { actorId: "16505551234", displayName: "Sheena" },
+    });
+    // The raw bytes Meta signed reached the listener, and no message was accepted or answered.
+    expect(methods.hearWhatsAppSetupDelivery).toHaveBeenLastCalledWith(
+      SETUP_DRAFT_ID,
+      payload,
+      buildWhatsAppWebhookSignature(payload, SETUP_APP_SECRET),
+    );
+    expectNoConversation(methods);
+
+    // A message that is not the code is answered the same way, and heard as nothing.
+    const chatter = setupDeliveryBody("hello there");
+    const ignored = await deliver(chatter, buildWhatsAppWebhookSignature(chatter, SETUP_APP_SECRET));
+    expect(ignored.statusCode).toBe(200);
+    expect(ignored.json()).toEqual({ accepted: true, ignored: true, reason: "setup_listening" });
+    expectNoConversation(methods);
+  });
+
+  it("still answers 404 for a WhatsApp address that is neither a connection nor a setup draft", async () => {
+    const { methods } = await buildSetupDraftApp();
+    const unknown = "33333333-3333-4333-8333-333333333333";
+    const url = `/api/v1/integrations/connections/${unknown}/whatsapp/webhook`;
+    const expected = { error: `Integration connection ${unknown} not found` };
+
+    const check = await app!.inject({
+      method: "GET",
+      url: `${url}?hub.mode=subscribe&hub.verify_token=${SETUP_VERIFY_TOKEN}&hub.challenge=1`,
+    });
+    expect(check.statusCode).toBe(404);
+    expect(check.json()).toEqual(expected);
+
+    const payload = setupDeliveryBody(SETUP_CODE);
+    const delivery = await app!.inject({
+      method: "POST",
+      url,
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": buildWhatsAppWebhookSignature(payload, SETUP_APP_SECRET),
+      },
+      payload,
+    });
+    expect(delivery.statusCode).toBe(404);
+    expect(delivery.json()).toEqual(expected);
+    expectNoConversation(methods);
+  });
+
+  it("does not ask the setup listener about a saved connection, or about a lookup that failed for another reason", async () => {
+    const connection = {
+      connectionId: SETUP_DRAFT_ID,
+      key: "whatsapp",
+      config: {
+        appSecret: SETUP_APP_SECRET,
+        webhookVerifyToken: SETUP_VERIFY_TOKEN,
+        phoneNumberId: SETUP_PHONE_NUMBER_ID,
+      },
+    };
+    const lookup = vi.fn((): unknown => connection);
+    const { listener, methods } = await buildSetupDraftApp({ getIntegrationConnection: lookup });
+
+    const check = await app!.inject({
+      method: "GET",
+      url: `${SETUP_URL}?hub.mode=subscribe&hub.verify_token=${SETUP_VERIFY_TOKEN}&hub.challenge=abc`,
+    });
+    expect(check.statusCode).toBe(200);
+    expect(check.body).toBe("abc");
+    const payload = setupDeliveryBody("hello there");
+    const delivery = await app!.inject({
+      method: "POST",
+      url: SETUP_URL,
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": buildWhatsAppWebhookSignature(payload, SETUP_APP_SECRET),
+      },
+      payload,
+    });
+    expect(delivery.statusCode).toBe(200);
+    expect(methods.acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+
+    // The saved connection's own errors stay its own.
+    const wrongToken = await app!.inject({
+      method: "GET",
+      url: `${SETUP_URL}?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=abc`,
+    });
+    expect(wrongToken.statusCode).toBe(401);
+
+    // A lookup that failed for any reason other than "not found" is the 404 it always was.
+    lookup.mockImplementation(() => {
+      throw new Error("connection store unavailable");
+    });
+    const failed = await app!.inject({ method: "GET", url: `${SETUP_URL}?hub.mode=subscribe` });
+    expect(failed.statusCode).toBe(404);
+    expect(failed.json()).toEqual({ error: "connection store unavailable" });
+    const failedDelivery = await app!.inject({
+      method: "POST",
+      url: SETUP_URL,
+      headers: { "content-type": "application/json" },
+      payload,
+    });
+    expect(failedDelivery.statusCode).toBe(404);
+
+    expect(methods.answerWhatsAppSetupCheck).not.toHaveBeenCalled();
+    expect(methods.hearWhatsAppSetupDelivery).not.toHaveBeenCalled();
+    expect(listener.heard(SETUP_DRAFT_ID)).toEqual({});
+  });
+
+  it("keeps the size limit and the Host check on a setup draft's address", async () => {
+    const { methods } = await buildSetupDraftApp();
+    const signature = buildWhatsAppWebhookSignature(setupDeliveryBody(SETUP_CODE), SETUP_APP_SECRET);
+
+    const oversized = await app!.inject({
+      method: "POST",
+      url: SETUP_URL,
+      headers: { "content-type": "application/json", "x-hub-signature-256": signature },
+      payload: JSON.stringify({ padding: "x".repeat(300 * 1024) }),
+    });
+    expect(oversized.statusCode).toBe(413);
+
+    const badHost = await app!.inject({
+      method: "POST",
+      url: SETUP_URL,
+      headers: { "content-type": "application/json", "x-hub-signature-256": signature, host: "bad/host" },
+      payload: setupDeliveryBody(SETUP_CODE),
+    });
+    expect(badHost.statusCode).toBe(400);
+    expect(badHost.json()).toEqual({ error: "Malformed Host header" });
+    expect(methods.hearWhatsAppSetupDelivery).not.toHaveBeenCalled();
   });
 
   it("accepts signed LINE webhooks without standard auth or idempotency headers", async () => {
