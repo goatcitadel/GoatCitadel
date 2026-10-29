@@ -728,6 +728,45 @@ describe("DiscordSetupPage, choosing where it posts", () => {
     expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
   });
 
+  it("keeps a saved channel, says why once, and loads the channels again from a button", async () => {
+    api.fetchChannelSetupDrafts.mockResolvedValue({
+      items: [
+        savedSetup({
+          ownerActorIds: ["333"],
+          allowedSenders: ["333"],
+          inboundAccessMode: "allowlist",
+          guildPolicy: "allowlist",
+          defaultGuildId: "900",
+          defaultChannelId: "702",
+        }),
+      ],
+    });
+    api.checkDiscordSetup.mockImplementation(async (input: { guildId?: string }) => {
+      if (input.guildId) throw new Error(`HTTP 429 Authorization: Bot ${TOKEN}`);
+      return checkResult({ servers: [SERVER] });
+    });
+    await mount();
+
+    // Nothing is named without the list, so Turn on waits; nothing was written, and the sentence is said once.
+    expect(states()).toEqual(["done", "done", "done", "current", "locked"]);
+    expect(errors()).toHaveLength(1);
+    expect(errors()[0]!.textContent).toBe("GoatCitadel couldn't reach Discord. Try again.");
+    expect(status()).toBe("GoatCitadel couldn't reach Discord. Try again.");
+    expect(button("Turn on")).toBeUndefined();
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+    expect(container.innerHTML).not.toContain("SECRET");
+    expect(steps()[3]!.contains(button("Load channels again") ?? null)).toBe(true);
+
+    arrangeServers();
+    await click(button("Load channels again"));
+    expect(button("Load channels again")).toBeUndefined();
+    expect(errors()).toHaveLength(0);
+    expect(radio("#bots, when Ada mentions it")?.checked).toBe(true);
+    expect(states()).toEqual(["done", "done", "done", "current", "current"]);
+    expect(changes()[1]).toBe("Where it posts: #bots in Goat Server, and it answers Ada there when they mention it");
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+  });
+
   it("says one plain sentence, once, when Discord won't open the direct-message channel, and tries again on a click", async () => {
     api.fetchChannelSetupDrafts.mockResolvedValue({ items: [savedSetup()] });
     api.checkDiscordSetup.mockImplementation(async (input: { guildId?: string; directMessageWith?: string }) => {

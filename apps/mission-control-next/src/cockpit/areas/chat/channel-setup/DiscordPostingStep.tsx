@@ -1,3 +1,4 @@
+import { Button } from "../../../ui/Button";
 import {
   DISCORD_POSTING_LEGEND,
   DISCORD_SERVER_LEGEND,
@@ -50,6 +51,14 @@ export function DiscordPostingStep({ setup, disabled }: { setup: DiscordSetupSta
           }}
           disabled={disabled}
         />
+      ) : null}
+      {/* A server whose channels couldn't be read: the page says so, and this asks for the list again. */}
+      {serverId && !channels ? (
+        <div>
+          <Button size="sm" disabled={disabled} onClick={() => void setup.chooseServer(serverId)}>
+            Load channels again
+          </Button>
+        </div>
       ) : null}
     </>
   );

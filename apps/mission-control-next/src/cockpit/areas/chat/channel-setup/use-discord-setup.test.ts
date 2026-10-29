@@ -791,6 +791,83 @@ describe("useDiscordSetup, choosing where the bot posts", () => {
     expect(current.busy).toBe(false);
   });
 
+  /** The gateway when it can name the servers but not list one's channels, as when Discord answers 429. */
+  function arrangeUnreadableChannels() {
+    api.checkDiscordSetup.mockImplementation(async (input: { guildId?: string; directMessageWith?: string }) => {
+      if (input.guildId) throw new Error(`HTTP 429 Authorization: Bot ${TOKEN}`);
+      return checkResult({
+        servers: [SERVER],
+        ...(input.directMessageWith ? { directChannelId: `dm-${input.directMessageWith}` } : {}),
+      });
+    });
+  }
+
+  it("keeps a saved channel, says why, and writes nothing, when its server's channels cannot be read", async () => {
+    resumeAt({ ...WHO, guildPolicy: "allowlist", defaultGuildId: "900", defaultChannelId: "702" });
+    arrangeUnreadableChannels();
+    await mount();
+
+    // An unread list says nothing about the saved channel: it stays, and the draft is left as it was.
+    expect(current).toMatchObject({
+      makerId: "333",
+      serverId: "900",
+      posting: { kind: "channel", guildId: "900", channelId: "702" },
+      channels: null,
+      busy: false,
+    });
+    expect(current.error).toBe(DISCORD_UNREACHABLE);
+    expect(JSON.stringify(current)).not.toContain("SECRET");
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+    expect(directQuestions()).toHaveLength(0);
+    // A channel cannot be chosen from a list that was not read.
+    await run(() => current.choosePosting({ kind: "channel", guildId: "900", channelId: "701" }));
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+
+    // Asking for the list again, for the server the channel is in, brings it back and clears the sentence.
+    arrangeServers();
+    await run(() => current.chooseServer("900"));
+    expect(questions().at(-1)).toEqual({ draftId: "draft-1", expectedRevision: 4, guildId: "900" });
+    expect(current.channels).toEqual(CHANNELS);
+    expect(current.error).toBeUndefined();
+    expect(current.posting).toEqual({ kind: "channel", guildId: "900", channelId: "702" });
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+  });
+
+  it("goes back to direct messages when the list, read on a second try, lacks the saved channel", async () => {
+    resumeAt({ ...WHO, guildPolicy: "allowlist", defaultGuildId: "900", defaultChannelId: "777" });
+    arrangeUnreadableChannels();
+    await mount();
+    expect(current.posting).toEqual({ kind: "channel", guildId: "900", channelId: "777" });
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+
+    arrangeServers();
+    await run(() => current.chooseServer("900"));
+    // Now it is known to be gone.
+    expect(current.posting).toEqual({ kind: "direct" });
+    expect(lastUpdate()[1].draft).toMatchObject({ guildPolicy: "off", defaultChannelId: "dm-333" });
+    expect(lastUpdate()[1].draft).not.toHaveProperty("defaultGuildId");
+    expect(current.error).toBeUndefined();
+  });
+
+  it("says the same sentence beside the saved default when the only server's channels cannot be read", async () => {
+    resumeAt();
+    arrangeUnreadableChannels();
+    await mount();
+
+    // Direct messages are still chosen and saved; saving them does not clear what is wrong with the list.
+    expect(current.posting).toEqual({ kind: "direct" });
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    expect(current).toMatchObject({ serverId: "900", channels: null });
+    expect(current.error).toBe(DISCORD_UNREACHABLE);
+
+    arrangeServers();
+    await run(() => current.chooseServer("900"));
+    expect(current.channels).toEqual(CHANNELS);
+    expect(current.error).toBeUndefined();
+    expect(current.posting).toEqual({ kind: "direct" });
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+  });
+
   it("goes on with what is already saved, and writes nothing", async () => {
     resumeAt({ ...WHO, guildPolicy: "off", defaultChannelId: "dm-333" });
     arrangeServers();

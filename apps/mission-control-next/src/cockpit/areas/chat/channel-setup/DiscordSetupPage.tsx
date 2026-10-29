@@ -205,8 +205,9 @@ export function DiscordSetupPage({
   };
 
   const channelPlace = posting && check ? discordChannelPlace(posting, check.servers, setup.channels) : undefined;
+  // A channel is named by its names, so Turn on waits for the channel list when it could not be read (see the posting step).
   const turnOnStep =
-    posting && maker ? (
+    posting && maker && (posting.kind === "direct" || channelPlace) ? (
       <TurnOnStep
         changes={discordTurnOnChanges({
           makerName: maker.name,

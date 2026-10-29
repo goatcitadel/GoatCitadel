@@ -146,7 +146,9 @@ export function useDiscordSetup(workspaceId: string, resumeDraftId?: string): Di
 
   /**
    * The bot is in a server: go on with what the draft holds, else choose. The channels are listed for the only server,
-   * or for the one a saved channel is in; a saved channel that is gone is no choice. A team is asked, never guessed.
+   * or for the one a saved channel is in. A saved channel missing from a list that was read is gone and is no choice;
+   * a list that could not be read says nothing about it, so the choice stays, the page says so, and the operator can
+   * load the list again (`chooseServer`). A team is asked, never guessed.
    */
   const settleChoices = useCallback(
     async (check: DiscordSetupCheckResult, set: Setter, live: () => boolean) => {
@@ -158,10 +160,12 @@ export function useDiscordSetup(workspaceId: string, resumeDraftId?: string): Di
       const serverId = savedChannel?.guildId ?? (check.servers.length === 1 ? (check.servers[0]?.id ?? null) : null);
       const channels = serverId ? await loadServerChannels(draft, serverId) : null;
       if (!live()) return;
-      const gone = savedChannel !== null && !channels?.some((channel) => channel.id === savedChannel.channelId);
+      const gone = savedChannel !== null && channels !== null && !channels.some((c) => c.id === savedChannel.channelId);
       const posting = gone ? null : saved.posting;
       set({ makerId, serverId, channels, posting });
       if (makerId && !posting) await apply(makerId, { kind: "direct" }, set, live);
+      // Said last, so saving the default does not clear it. A failed save has already said why.
+      if (serverId && !channels && live() && !current().error) set({ error: DISCORD_UNREACHABLE });
     },
     [apply, current],
   );
@@ -356,10 +360,12 @@ export function useDiscordSetup(workspaceId: string, resumeDraftId?: string): Di
           return;
         }
         set({ serverId: guildId, channels });
-        // A channel in another server is no longer among the choices shown, so the draft goes back to the default.
+        // A channel that is not among the choices shown (another server's, or one the list read now lacks) is no
+        // longer a choice, so the draft goes back to the default.
         const { makerId, posting } = current();
-        if (makerId && posting?.kind === "channel" && posting.guildId !== guildId) {
-          await apply(makerId, { kind: "direct" }, set, live);
+        if (makerId && posting?.kind === "channel") {
+          const stays = posting.guildId === guildId && channels.some((channel) => channel.id === posting.channelId);
+          if (!stays) await apply(makerId, { kind: "direct" }, set, live);
         }
       });
     },
