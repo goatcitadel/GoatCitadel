@@ -103,6 +103,36 @@ function suppressPartialAutoLinks(tree: Root, source: string, lastLineStart: num
   });
 }
 
+const TABLE_HEADER_LINE = /^ {0,3}\|/;
+const TABLE_DELIMITER_PREFIX = /^ {0,3}\|?[\s:|-]*$/;
+
+/** A tail paragraph that may still turn into a table: a header row, perhaps followed by part of its delimiter row. */
+function mayBecomeTable(text: string): boolean {
+  const lines = text.replace(/\n$/, "").split("\n");
+  if (lines.length === 1) return TABLE_HEADER_LINE.test(lines[0]!);
+  return lines.length === 2 && TABLE_HEADER_LINE.test(lines[0]!) && TABLE_DELIMITER_PREFIX.test(lines[1]!);
+}
+
+/**
+ * A table at the end of the tail shows only rows that have finished their line, and only once its first body row has:
+ * no raw `| a | b |` header text while the delimiter arrives, no header-only grid, and no empty row at the start of
+ * each new line. Display only, and only while streaming; the finished message renders every row.
+ */
+function holdBackPartialTable(tree: Root, source: string): Root {
+  const last = tree.children.at(-1);
+  if (!last) return tree;
+  const start = last.position?.start.offset ?? 0;
+  const lastLineStart = source.lastIndexOf("\n") + 1;
+  const without = () => ({ ...tree, children: tree.children.slice(0, -1) });
+  if (last.type === "paragraph") return mayBecomeTable(source.slice(start)) ? without() : tree;
+  if (last.type !== "table") return tree;
+  const rows = last.children.filter((row) => (row.position?.start.offset ?? source.length) < lastLineStart);
+  if (rows.length < 2) return without();
+  return rows.length === last.children.length
+    ? tree
+    : { ...tree, children: [...tree.children.slice(0, -1), { ...last, children: rows }] };
+}
+
 function plainTailTree(
   state: IncrementalSplitState,
   pending: string,
@@ -114,7 +144,7 @@ function plainTailTree(
     children: [...definitionsTree(state), ...tailNodes.filter((node) => node.type !== "definition")],
   };
   suppressPartialAutoLinks(tree, pending, lastLineStart);
-  return tree;
+  return holdBackPartialTable(tree, pending);
 }
 
 /** Whether the text still being written sits in a code or raw HTML block, even one nested in a quote or list. */
@@ -153,7 +183,7 @@ function healedTailTree(
     ],
   };
   suppressPartialAutoLinks(tree, healed, source.lastIndexOf("\n") + 1);
-  return tree;
+  return holdBackPartialTable(tree, healed);
 }
 
 export function splitIncremental(state: IncrementalSplitState, content: string): { stable: string; tail: string } {

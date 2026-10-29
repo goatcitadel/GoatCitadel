@@ -27,6 +27,15 @@ function semantic(tree: Root): unknown {
   );
 }
 
+function withoutLastBlock(tree: Root): Root {
+  return { ...tree, children: tree.children.slice(0, -1) };
+}
+
+function heldBackTableForms(source: string): unknown[] {
+  const finishedLines = parser.parse(source.slice(0, source.lastIndexOf("\n") + 1));
+  return [finishedLines, withoutLastBlock(finishedLines), withoutLastBlock(parser.parse(source))].map(semantic);
+}
+
 describe("SF6 parser-derived boundaries", () => {
   it("matches the settled parser structure at every character and reconstructs exact source", () => {
     for (const full of SEMANTIC_STREAM_FIXTURES) {
@@ -45,7 +54,10 @@ describe("SF6 parser-derived boundaries", () => {
         };
         // A half-written marker in the tail is shown healed (closed or hidden), unless the tail is inside code.
         const healed = split.stable + healStreamingMarkdownTail(split.tail);
-        expect([semantic(parser.parse(source)), semantic(parser.parse(healed))], source).toContainEqual(semantic(tree));
+        const forms = [semantic(parser.parse(source)), semantic(parser.parse(healed))];
+        // A table still arriving shows only its finished lines, or nothing until a body row has finished.
+        if (split.tail.includes("|")) forms.push(...heldBackTableForms(source));
+        expect(forms, source).toContainEqual(semantic(tree));
       }
     }
   });
@@ -112,5 +124,50 @@ describe("SF6 parser-derived boundaries", () => {
     expect(split.stable + split.tail).toBe(content);
     splitIncremental(state, "Replacement");
     expect(state.blocks).toHaveLength(0);
+  });
+});
+
+describe("streaming tables", () => {
+  const cellText = (node: { value?: string; children?: unknown[] }): string =>
+    node.value ?? (node.children ?? []).map((child) => cellText(child as typeof node)).join("");
+  const shown = (content: string) =>
+    (() => {
+      const state = createIncrementalSplitState();
+      splitIncremental(state, content);
+      return state.tailTree.children.map((node) =>
+        node.type === "table"
+          ? node.children.map((row) => row.children.map(cellText).join("|"))
+          : `${node.type}:${cellText(node)}`,
+      );
+    })();
+
+  it("shows no raw header pipes and no grid until the first body row has finished its line", () => {
+    for (const content of [
+      "| Name",
+      "| Name | Speed |",
+      "| Name | Speed |\n",
+      "| Name | Speed |\n| --",
+      "| Name | Speed |\n| --- | --- |",
+      "| Name | Speed |\n| --- | --- |\n",
+      "| Name | Speed |\n| --- | --- |\n|",
+      "| Name | Speed |\n| --- | --- |\n| Loop A | sl",
+    ]) {
+      expect(shown(content), JSON.stringify(content)).toEqual([]);
+    }
+  });
+
+  it("adds each row once its line has finished, never an empty or half-written row", () => {
+    const head = "| Name | Speed |\n| --- | --- |\n| Loop **A** | slow |\n";
+    expect(shown(head)).toEqual([["Name|Speed", "Loop A|slow"]]);
+    expect(shown(`${head}|`)).toEqual([["Name|Speed", "Loop A|slow"]]);
+    expect(shown(`${head}| Loop B | fa`)).toEqual([["Name|Speed", "Loop A|slow"]]);
+    expect(shown(`${head}| Loop B | fast |\n`)).toEqual([["Name|Speed", "Loop A|slow", "Loop B|fast"]]);
+  });
+
+  it("leaves text that only mentions a pipe alone", () => {
+    expect(shown("Use a | b in the shell")).toEqual(["paragraph:Use a | b in the shell"]);
+    expect(shown("| pipes start this line\nand this one does not")).toEqual([
+      "paragraph:| pipes start this line\nand this one does not",
+    ]);
   });
 });
