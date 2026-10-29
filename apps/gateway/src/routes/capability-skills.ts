@@ -17,8 +17,9 @@ const LIST_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;
 /** Capabilities › Skills: the installed skills, one skill's details, and how often the AI has used each skill. */
 export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
   /**
-   * Every skill loaded for a workspace, with its category, origin, state, whether the AI can use it, whether the
-   * workspace hides it, and any approval it waits on. It reads local state only and publishes no events.
+   * Every skill loaded for a workspace, with its category, origin, state, whether it is callable, whether the
+   * workspace's skill choices leave it out, and any approval it waits on. It reads local state only and publishes no
+   * events.
    */
   fastify.get("/api/v1/capabilities/skills", { config: { rateLimit: LIST_RATE_LIMIT } }, async (request, reply) => {
     const query = listQuerySchema.safeParse(request.query);
