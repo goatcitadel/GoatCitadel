@@ -178,6 +178,41 @@ describe("approval-first skill state mutations", () => {
     );
   });
 
+  it("adds no Journey row, approval event or realtime notice when a pending approval is replayed", async () => {
+    const harness = createHarness();
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    const first = await requestPending(harness, "skill-alpha", "disabled", "Pause for review");
+    const before = {
+      approvals: countRows(harness, "approvals"),
+      approvalEvents: countRows(harness, "approval_events"),
+      journey: countRows(harness, "governance_journey_events"),
+    };
+    // The first request did write its evidence, so an unchanged count below means the replay wrote none.
+    expect(before).toEqual({
+      approvals: 1,
+      approvalEvents: expect.any(Number),
+      journey: expect.any(Number),
+    });
+    expect(before.approvalEvents).toBeGreaterThan(0);
+    expect(before.journey).toBeGreaterThan(0);
+    harness.publishRealtime.mockClear();
+
+    const replay = await requestPending(harness, "skill-alpha", "disabled", "Pause for review");
+
+    expect(replay.pendingApproval).toMatchObject({
+      approvalId: first.pendingApproval.approvalId,
+      status: "pending",
+      replayed: true,
+    });
+    expect({
+      approvals: countRows(harness, "approvals"),
+      approvalEvents: countRows(harness, "approval_events"),
+      journey: countRows(harness, "governance_journey_events"),
+    }).toEqual(before);
+    expect(harness.publishRealtime).not.toHaveBeenCalled();
+    expect(readSkillRow(harness, "skill-alpha")).toMatchObject({ state: "enabled" });
+  });
+
   it("treats a byte-identical current state as a pure no-op with no approval row", async () => {
     const harness = createHarness();
     await harness.service.ensureSkillStates(["skill-alpha"]);

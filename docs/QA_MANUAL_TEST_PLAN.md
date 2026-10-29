@@ -496,7 +496,7 @@ Viewports:
 
 Steps:
 
-1. Open `/chat`, `/projects`, `/library/capabilities`, `/library/citadel`, `/ops/boards`, `/ops/runtime`, `/settings/providers`, and `/settings/hooks`.
+1. Open `/chat`, `/projects`, `/library` (Library › Candidates and mesh), `/library/citadel`, `/ops/boards`, `/ops/runtime`, `/settings/providers`, and `/settings/hooks`.
 2. Repeat in light and dark theme.
 3. Test primary navigation and secondary nav at each viewport.
 
@@ -1057,7 +1057,7 @@ Result:
 Steps:
 
 1. Open Capabilities › Skills (`/capabilities/skills`).
-2. Read each row's state (On, Paused or Off), then press View on one skill and read where it came from, its category and its instructions.
+2. Read each row's state (On, Paused, Off, Not usable yet or Left out of this workspace), then press View on one skill and read where it came from, its category and its instructions.
 3. Search, and use the Categories and Where it came from buttons.
 4. Press Refresh counts, then reload the page.
 
@@ -1109,7 +1109,7 @@ Result:
 
 Steps:
 
-1. Open `/library/capabilities`.
+1. Open Library › Candidates and mesh (`/library`). `/library/capabilities` now redirects to Capabilities › Skills, which lists installed skills only.
 2. Compare inspectable and callable catalog concepts in the UI.
 3. Inspect degraded, inactive, proposed, and active entries where available.
 

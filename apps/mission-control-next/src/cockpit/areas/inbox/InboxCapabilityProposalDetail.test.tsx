@@ -94,9 +94,10 @@ describe("Inbox capability proposal detail", () => {
     expect(api.fetchCapabilityProposal).toHaveBeenCalledWith("proposal-a");
     expect(container.textContent).toContain("A candidate is linked to this proposal");
     expect(container.textContent).toContain("Decisions for this proposal are unavailable in Inbox");
-    expect(container.textContent).toContain("Use Open candidates to review its current version");
+    expect(container.textContent).toContain("Use Open proposals to review its current version");
     expect(container.textContent).toContain("Candidates are promoted from Library › Candidates and mesh.");
     expect(container.textContent).not.toContain("Open capabilities");
+    expect(container.textContent).not.toContain("Open candidates");
     expect(container.textContent).not.toContain("workspace-a");
   });
 
@@ -133,10 +134,11 @@ describe("Inbox capability proposal detail", () => {
     await render();
     expect(api.fetchCapabilityProposal).not.toHaveBeenCalled();
     expect(container.textContent).toContain("no longer in this workspace's Inbox");
-    expect(container.textContent).toContain("Use Open candidates to check its current status");
-    const candidatesLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Open candidates");
-    // Candidates are listed in Library, not on the Skills tab, which holds installed skills only.
-    expect(candidatesLink?.getAttribute("href")).toBe("/library?type=candidate_skill&shell=cockpit");
+    expect(container.textContent).toContain("Use Open proposals to check its current status");
+    const proposalsLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Open proposals");
+    // Proposals are listed in Library, where the Inbox's own link for the item points (`/library?type=proposal`), not
+    // on the Skills tab, which holds installed skills only.
+    expect(proposalsLink?.getAttribute("href")).toBe("/library?type=proposal&shell=cockpit");
   });
 
   it("hides foreign, resolved, and changed owner records", () => {

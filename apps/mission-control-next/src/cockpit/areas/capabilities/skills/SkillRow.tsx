@@ -105,7 +105,8 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
           </div>
           <div id={noteId} className="mt-1 space-y-1 text-sm text-fg-secondary">
             {state.reason || state.link ? (
-              // A row with a switch prints its state word in plain text, so the line takes the state's colour.
+              // A row with a switch prints its state word in plain text, so a state whose tone warns (waiting or
+              // failed) colours this line; every other line keeps the secondary text colour (SKILL_TONE_TEXT).
               <p className={item.switchable ? SKILL_TONE_TEXT[state.tone] : undefined}>
                 {state.reason}
                 {state.link ? (

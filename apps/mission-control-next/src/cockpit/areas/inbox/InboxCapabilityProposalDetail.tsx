@@ -118,7 +118,7 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {recordAnswered(view) && !proposal && !scopeChanged ? (
         <p className="text-fg-muted">
-          This proposal is no longer in this workspace&apos;s Inbox. Use Open candidates to check its current status.
+          This proposal is no longer in this workspace&apos;s Inbox. Use Open proposals to check its current status.
         </p>
       ) : null}
       {proposal ? (
@@ -129,8 +129,8 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
           </p>
           {proposal.candidateId ? (
             <p>
-              A candidate is linked to this proposal. Use Open candidates to review its current version before
-              requesting promotion.
+              A candidate is linked to this proposal. Use Open proposals to review its current version before requesting
+              promotion.
             </p>
           ) : null}
           <p className="text-xs text-fg-muted">
@@ -142,12 +142,13 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
           </p>
         </div>
       ) : null}
+      {/* The same place the Inbox's own link for this item points to (`/library?type=proposal`). */}
       <NativeOwnerLink
-        href="/library?type=candidate_skill"
+        href="/library?type=proposal"
         scope={[workspaceId, item.id]}
         className="w-fit text-sm font-medium text-accent hover:underline"
       >
-        Open candidates
+        Open proposals
       </NativeOwnerLink>
     </section>
   );
