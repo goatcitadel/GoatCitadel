@@ -597,11 +597,6 @@ function ProjectsWorkspace({
       lead={
         !editor && !routedProject && state.projects.length === 0 ? (
           <ProjectsLeadStack
-            selectedProject={selectedProject}
-            projectHome={projectHome}
-            projectCount={state.projects.length}
-            theme={route.theme}
-            navigate={navigate}
             onCreateProject={handleFocusCreateProject}
             onStartChat={() => handleOpenSurface("chat")}
             onUseSample={handleOpenStartHere}
