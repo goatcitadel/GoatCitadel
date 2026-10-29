@@ -23,6 +23,7 @@ import { formatMoney } from "@goatcitadel/mission-control-shared/content/format"
 import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useCockpitNavigation } from "../../app/cockpit-navigation-context";
+import { isModifiedClick } from "../../lib/modified-click";
 
 const ACCESS_SETTINGS_PATH = "/settings/access#device-access";
 
@@ -85,6 +86,7 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
                 href={ACCESS_SETTINGS_PATH}
                 className="text-accent hover:underline"
                 onClick={(event) => {
+                  if (isModifiedClick(event)) return;
                   event.preventDefault();
                   navigate(ACCESS_SETTINGS_PATH);
                 }}

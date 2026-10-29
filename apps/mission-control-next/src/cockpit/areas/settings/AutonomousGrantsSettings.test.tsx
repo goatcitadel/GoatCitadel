@@ -123,7 +123,7 @@ it("links a refused grant load to Settings › Access in the same alert", async 
   expect(text(alert)).not.toContain("API error 403");
   const link = alert.findByType("a");
   expect(text(link)).toBe("Review access in Settings");
-  link.props.onClick({ preventDefault: () => undefined });
+  link.props.onClick({ button: 0, preventDefault: () => undefined });
   expect(navigate).toHaveBeenCalledWith("/settings/access#device-access");
 });
 
