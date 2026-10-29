@@ -9,7 +9,8 @@ import { OPERATOR_SKILL_SKIP_NOTES } from "./capability-skill-actions-service.js
  * The operator's skip for a skill switch resolves the skill's own `skill.lifecycle` approval as the operator, with a
  * recorded note, and only the Capabilities switch may do that (HX-402: the approval effect stays the only executor).
  * Any other production file that writes one of the skip notes, or that both asks for a skill approval and resolves
- * one, could approve on the operator's behalf, so this guard fails on it. The old skills routes, Chat's skill
+ * one, could approve on the operator's behalf, so this guard fails on it. So does any file but the Capabilities skill
+ * route that calls the switch, and any file but its composition that builds one. The old skills routes, Chat's skill
  * commands, `change.request` and tool calls never skip.
  */
 const SKIP_SERVICE = "apps/gateway/src/services/capability-skill-actions-service.ts";
@@ -35,6 +36,12 @@ const OWNER_FACADES = new Set([
   // Hands the two owners to the Capabilities switch, one reader each.
   "apps/gateway/src/services/capability-skills-composition.ts",
 ]);
+/** The one route that may call the composed switch, and the one composition that may build it. */
+const SWITCH_ROUTE = "apps/gateway/src/routes/capability-skills.ts";
+const SWITCH_COMPOSITION = "apps/gateway/src/services/capability-skills-composition.ts";
+/** A call of the composed switch, or a read of it off the composed services (the route reads it, then calls it). */
+const SWITCH_CALL = /\bactions\??\.setState\(|\bcapabilitySkills\??\.actions\b/u;
+const SWITCH_CONSTRUCTION = /\bnew\s+CapabilitySkillActionsService\b/u;
 const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", "build", "coverage", "out", "artifacts"]);
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 
@@ -70,6 +77,50 @@ describe("Capabilities skill switch skip guard", () => {
       expect(file?.content, path).toMatch(RESOLVE_CALL);
     }
     expect(() => assertOnlySwitchResolvesItsRequest(inventory)).not.toThrow();
+  });
+
+  it("lets only the Capabilities skill route call the switch, and only its composition build it", () => {
+    const inventory = readInventory();
+    // The walk really reached the route and the composition, and each really does its one job.
+    expect(inventory.find((file) => file.relativePath === SWITCH_ROUTE)?.content).toMatch(SWITCH_CALL);
+    expect(inventory.find((file) => file.relativePath === SWITCH_COMPOSITION)?.content).toMatch(SWITCH_CONSTRUCTION);
+    expect(() => assertOnlyRouteCallsSwitch(inventory)).not.toThrow();
+    expect(() => assertOnlyCompositionBuildsSwitch(inventory)).not.toThrow();
+  });
+
+  it("names the offending file when anything else calls the switch", () => {
+    expect(() =>
+      assertOnlyRouteCallsSwitch([
+        { relativePath: SWITCH_ROUTE, content: "const owner = fastify.services.capabilitySkills?.actions;" },
+        // Chat reusing the switch, so its skill commands would skip too.
+        {
+          relativePath: "apps/gateway/src/services/chat-command-service.ts",
+          content: "await this.services.capabilitySkills.actions.setState({ skillId, state, actorId });",
+        },
+        {
+          relativePath: "apps/gateway/src/routes/skills.ts",
+          content: "const { actions } = composed;\nawait actions.setState(body);",
+        },
+        // Something else's own setState is not the switch.
+        { relativePath: "apps/mission-control-next/src/cockpit/store.ts", content: "store.setState({ open: true });" },
+      ]),
+    ).toThrow(
+      "The Capabilities skill switch is called outside its route: apps/gateway/src/services/chat-command-service.ts, apps/gateway/src/routes/skills.ts",
+    );
+  });
+
+  it("names the offending file when anything else builds the switch", () => {
+    expect(() =>
+      assertOnlyCompositionBuildsSwitch([
+        { relativePath: SWITCH_COMPOSITION, content: "actions: new CapabilitySkillActionsService(sources)," },
+        {
+          relativePath: "apps/gateway/src/services/gateway-service.ts",
+          content: "const switcher = new CapabilitySkillActionsService({ ...owners });",
+        },
+      ]),
+    ).toThrow(
+      "The Capabilities skill switch is built outside its composition: apps/gateway/src/services/gateway-service.ts",
+    );
   });
 
   it("names the offending file when anything else writes a skip note", () => {
@@ -122,6 +173,26 @@ function assertSkipNotesOnlyInSwitch(inventory: readonly SourceFile[]): void {
     .map((file) => file.relativePath);
   if (offenders.length > 0) {
     throw new Error(`A skill skip note is used outside the Capabilities skill switch: ${offenders.join(", ")}`);
+  }
+}
+
+/** Anything else calling the switch would let its own requests skip (Chat's skill commands, say). */
+function assertOnlyRouteCallsSwitch(inventory: readonly SourceFile[]): void {
+  const offenders = inventory
+    .filter((file) => file.relativePath !== SWITCH_ROUTE && SWITCH_CALL.test(file.content))
+    .map((file) => file.relativePath);
+  if (offenders.length > 0) {
+    throw new Error(`The Capabilities skill switch is called outside its route: ${offenders.join(", ")}`);
+  }
+}
+
+/** A second instance would be a second switch, with its own owners, outside the one the route reaches. */
+function assertOnlyCompositionBuildsSwitch(inventory: readonly SourceFile[]): void {
+  const offenders = inventory
+    .filter((file) => file.relativePath !== SWITCH_COMPOSITION && SWITCH_CONSTRUCTION.test(file.content))
+    .map((file) => file.relativePath);
+  if (offenders.length > 0) {
+    throw new Error(`The Capabilities skill switch is built outside its composition: ${offenders.join(", ")}`);
   }
 }
 
