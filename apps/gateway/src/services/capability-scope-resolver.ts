@@ -79,26 +79,58 @@ export class CapabilityScopeResolver {
   public constructor(private readonly deps: CapabilityScopeResolverDeps) {}
 
   public async resolve(citadelId: string, workspaceId: string): Promise<ResolvedCapabilities> {
-    try {
-      const disabled = this.deps.isDisabled ? this.deps.isDisabled() : readKillSwitch();
-      if (disabled) {
-        return ALL_CAPABILITIES;
-      }
-      const [citadel, workspace, skillIds, integrationIds, mcpServerIds] = await Promise.all([
-        this.deps.listAssignmentsForScope("citadel", citadelId || DEFAULT_CITADEL_ID),
-        this.deps.listAssignmentsForScope("workspace", workspaceId),
-        this.deps.listAllSkillIds(),
-        this.deps.listAllIntegrationIds(),
-        this.deps.listAllMcpServerIds(),
-      ]);
-      return {
+    return await this.resolveWith(
+      citadelId,
+      workspaceId,
+      { disabled: ALL_CAPABILITIES, fault: NO_CAPABILITIES },
+      () =>
+        Promise.all([this.deps.listAllSkillIds(), this.deps.listAllIntegrationIds(), this.deps.listAllMcpServerIds()]),
+      ([skillIds, integrationIds, mcpServerIds], citadel, workspace) => ({
         skills: this.forType("skill", skillIds, citadel, workspace),
         integrations: this.forType("integration", integrationIds, citadel, workspace),
         mcpServers: this.forType("mcp_server", mcpServerIds, citadel, workspace),
-      };
+      }),
+    );
+  }
+
+  /** Skills only, for the reads every turn makes: a fault reading integrations or MCP servers never hides a
+   *  skill, while a fault reading the skill choices themselves still leaves no skill chosen. */
+  public async resolveSkills(citadelId: string, workspaceId: string): Promise<EffectiveCapabilitySet> {
+    return await this.resolveWith(
+      citadelId,
+      workspaceId,
+      { disabled: ALL_CAPABILITIES.skills, fault: NO_CAPABILITIES.skills },
+      async () => await this.deps.listAllSkillIds(),
+      (skillIds, citadel, workspace) => this.forType("skill", skillIds, citadel, workspace),
+    );
+  }
+
+  /** Reads both scopes' assignments with the registry ids. The kill switch yields `disabled`; any fault yields
+   *  `fault` (fail closed). */
+  private async resolveWith<Ids, Result>(
+    citadelId: string,
+    workspaceId: string,
+    outcomes: { disabled: Result; fault: Result },
+    listIds: () => Promise<Ids>,
+    project: (
+      ids: Ids,
+      citadel: readonly CapabilityScopeAssignment[],
+      workspace: readonly CapabilityScopeAssignment[],
+    ) => Result,
+  ): Promise<Result> {
+    try {
+      if ((this.deps.isDisabled ?? readKillSwitch)()) {
+        return outcomes.disabled;
+      }
+      const [citadel, workspace, ids] = await Promise.all([
+        this.deps.listAssignmentsForScope("citadel", citadelId || DEFAULT_CITADEL_ID),
+        this.deps.listAssignmentsForScope("workspace", workspaceId),
+        listIds(),
+      ]);
+      return project(ids, citadel, workspace);
     } catch (error) {
       this.deps.onError?.(error);
-      return NO_CAPABILITIES;
+      return outcomes.fault;
     }
   }
 

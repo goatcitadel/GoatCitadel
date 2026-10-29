@@ -9,6 +9,7 @@ import type {
 import { DEFAULT_CITADEL_ID } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { CapabilityScopeResolver, EffectiveCapabilitySet } from "./capability-scope-resolver.js";
+import { resolveWorkspaceSkillChoices } from "./workspace-turn-skills.js";
 
 export interface CapabilityRegistryEntry {
   ref: string;
@@ -46,7 +47,11 @@ export class CapabilityScopeRouteService {
     // Resolve one parent for both live projections rather than joining two
     // independently resolved parents across a Workspace move.
     const citadelId = scopeKind === "citadel" ? scopeId : await this.deps.resolveCitadelId(scopeId);
-    const effective = await this.resolveType(citadelId, scopeKind === "workspace" ? scopeId : NO_WORKSPACE, resourceType);
+    const effective = await this.resolveType(
+      citadelId,
+      scopeKind === "workspace" ? scopeId : NO_WORKSPACE,
+      resourceType,
+    );
     const candidates = await this.candidateEntries(scopeKind, citadelId, resourceType);
     const items = candidates.map((entry) => ({
       resourceRef: entry.ref,
@@ -117,11 +122,11 @@ export class CapabilityScopeRouteService {
   /**
    * Resolves the effective skill set for a workspace, for use in skills listing.
    * Returns "ALL" when the workspace (and its citadel) have no skill assignments
-   * configured — preserving the non-breaking default behavior.
+   * configured — preserving the non-breaking default behavior. Workspace turns
+   * resolve through the same owner (`WorkspaceTurnSkills`).
    */
   public async resolveEffectiveSkills(workspaceId: string): Promise<EffectiveCapabilitySet> {
-    const citadelId = await this.deps.resolveCitadelId(workspaceId);
-    return await this.resolveType(citadelId, workspaceId, "skill");
+    return await resolveWorkspaceSkillChoices(this.deps, workspaceId);
   }
 
   /** Candidate set: citadel scope draws from the global registry; workspace scope draws

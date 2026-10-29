@@ -242,6 +242,23 @@ Notes:
 - Additional scope is available only for active `workspace-explorer` or `coder` steps. Chat receives opaque IDs for bounded, server-discovered eligible paths; it cannot submit an arbitrary path. Selected IDs re-enter `submit_work_result` as the existing scope-expansion approval wait.
 - Approval application rechecks the exact step, approval, dispatch generation, and prior scope hash. Approval expands only that step's server-owned approved paths, computes a new scope hash, and resumes through durable execution; rejection, expiry, or stale binding retains the prior scope and fails closed.
 
+### Workspace Skill Choices
+
+Definition:
+Which installed skills a workspace's turns may load or call. A Citadel and each of its workspaces can choose skills. A workspace that has not chosen inherits its Citadel's choice, a workspace's choice only narrows its Citadel's, and with no choice at either level every installed skill counts as chosen (`"ALL"`).
+
+Authority:
+- Selection: `capability_scope` assignments with `resourceType: "skill"` (`packages/storage/src/capability-scope-repo.ts`), changed through `apps/gateway/src/routes/capability-scope-routes.ts`
+- Resolution: `resolveWorkspaceSkillChoices` in `apps/gateway/src/services/workspace-turn-skills.ts`, over `CapabilityScopeResolver.resolveSkills`. `CapabilityScopeRouteService.resolveEffectiveSkills` (the skill list and catalog routes) uses the same function.
+- Turn-time reads: `WorkspaceTurnSkills` in the same file. Chat and scheduled turns read every skill through it: the capability profile freeze, skill selection, activated and admitted skill instructions, feature and mesh admission, `capability.discover` and skill reads, the base prompt's skill index and the runner's live callable check. Remote workers revalidate against it too.
+
+Notes:
+- A skill the choices leave out is never auto-loaded, selected (even by name), readable through skill discovery or callable in that workspace's turns. A turn frozen before the choice changed is checked against the current callable set before dispatch and fails closed.
+- A workspace's own approved self-authored skills (`extra:reviewed-*`, loaded only in the workspace that captured them) always count as chosen: no selection can name them, and approving one was already a choice for that workspace. `CapabilitySystemService.listSkills` adds them after the choice filter, so the scoped catalog route lists them too. Their own switch and lifecycle, including revocation, still apply.
+- The choices narrow what lifecycle, each skill's install-wide switch, deny-wins policy and approvals already allow; they never widen it.
+- Reads without a workspace stay install-wide: the operator's `POST /api/v1/skills/resolve-activation`, Library and the skill management views. The base prompt's skill index lists only the install's chosen skills and, as before, no self-authored ones.
+- A fault reading the choices leaves no installed skill chosen. A fault listing integrations or MCP servers never hides a skill. `GOATCITADEL_CAPABILITY_SCOPING_DISABLED` switches the choices off, so every skill counts as chosen.
+
 ### Chat Trusted Automatic Fan-Out
 
 Definition:
