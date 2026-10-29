@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import rateLimit from "@fastify/rate-limit";
-import type { CapabilitySkillUsageResponse } from "@goatcitadel/contracts";
+import {
+  NotFoundError,
+  ServiceUnavailableError,
+  type CapabilitySkillsResponse,
+  type CapabilitySkillUsageResponse,
+} from "@goatcitadel/contracts";
 import { capabilitySkillsRoutes } from "./capability-skills.js";
 
 const USAGE_URL = "/api/v1/capabilities/skills/usage";
@@ -103,5 +108,140 @@ describe("capability skills usage route", () => {
     const response = await server.inject({ method: "GET", url: USAGE_URL });
 
     expect(response.headers["x-ratelimit-limit"]).toBe("30");
+  });
+});
+
+const LIST_URL = "/api/v1/capabilities/skills";
+const DETAIL_URL = "/api/v1/capabilities/skills/detail";
+
+const LIST: CapabilitySkillsResponse = {
+  workspaceId: "default",
+  items: [
+    {
+      skillId: "bundled:research",
+      name: "research",
+      description: "Research with citations.",
+      category: "research",
+      origin: "built_in",
+      state: "on",
+      callable: true,
+      revision: 2,
+      pinned: false,
+      lifecycleState: "trusted",
+      tags: [],
+      hiddenInWorkspace: false,
+    },
+  ],
+  candidatesWaiting: 1,
+  operatorApprovalSkip: false,
+  issues: [],
+  generatedAt: "2026-10-28T00:00:00.000Z",
+};
+
+describe("capability skills list and detail routes", () => {
+  let app: FastifyInstance | null = null;
+
+  afterEach(async () => {
+    await app?.close();
+    app = null;
+  });
+
+  async function build(skills: Record<string, unknown> | undefined) {
+    app = Fastify();
+    await app.register(rateLimit, { global: false });
+    app.decorate("services", (skills ? { capabilitySkills: { usage: { read: vi.fn() }, skills } } : {}) as never);
+    await app.register(capabilitySkillsRoutes);
+    return app;
+  }
+
+  it("returns the list with no-store", async () => {
+    const list = vi.fn(async () => LIST);
+    const server = await build({ list, detail: vi.fn() });
+
+    const response = await server.inject({ method: "GET", url: `${LIST_URL}?workspaceId=default` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(LIST);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["x-ratelimit-limit"]).toBe("60");
+    expect(list).toHaveBeenCalledWith("default");
+  });
+
+  it("returns one skill's details with no-store", async () => {
+    const detail = vi.fn(async () => ({
+      skillId: "bundled:research",
+      instructionBody: "# Research",
+      keywords: [],
+      declaredTools: [],
+      requires: [],
+    }));
+    const server = await build({ list: vi.fn(), detail });
+
+    const response = await server.inject({
+      method: "GET",
+      url: `${DETAIL_URL}?workspaceId=default&skillId=${encodeURIComponent("bundled:research")}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ skillId: "bundled:research", instructionBody: "# Research" });
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["x-ratelimit-limit"]).toBe("60");
+    expect(detail).toHaveBeenCalledWith("default", "bundled:research");
+  });
+
+  it("returns 404 for an unknown skill's details", async () => {
+    const detail = vi.fn(async () => {
+      throw new NotFoundError({ entity: "Skill", id: "extra:missing" });
+    });
+    const server = await build({ list: vi.fn(), detail });
+
+    const response = await server.inject({
+      method: "GET",
+      url: `${DETAIL_URL}?workspaceId=default&skillId=${encodeURIComponent("extra:missing")}`,
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("rejects unknown query fields", async () => {
+    const list = vi.fn(async () => LIST);
+    const detail = vi.fn();
+    const server = await build({ list, detail });
+
+    for (const url of [
+      `${LIST_URL}?workspaceId=default&kind=skill`,
+      `${LIST_URL}`,
+      `${DETAIL_URL}?workspaceId=default&skillId=bundled%3Aresearch&full=true`,
+      `${DETAIL_URL}?workspaceId=default`,
+      `${DETAIL_URL}?workspaceId=default&skillId=${"x".repeat(301)}`,
+      `${LIST_URL}?workspaceId=${"w".repeat(201)}`,
+    ]) {
+      const response = await server.inject({ method: "GET", url });
+      expect(response.statusCode, url).toBe(400);
+    }
+    expect(list).not.toHaveBeenCalled();
+    expect(detail).not.toHaveBeenCalled();
+  });
+
+  it("answers 503 with plain wording when the skills can't be read", async () => {
+    const list = vi.fn(async () => {
+      throw new ServiceUnavailableError("Skills can't be read right now.");
+    });
+    const server = await build({ list, detail: vi.fn() });
+
+    const response = await server.inject({ method: "GET", url: `${LIST_URL}?workspaceId=default` });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toContain("Skills can't be read right now.");
+  });
+
+  it("answers 503 when the skills list is not composed", async () => {
+    const server = await build(undefined);
+
+    const list = await server.inject({ method: "GET", url: `${LIST_URL}?workspaceId=default` });
+    const detail = await server.inject({ method: "GET", url: `${DETAIL_URL}?workspaceId=default&skillId=a` });
+
+    expect(list.statusCode).toBe(503);
+    expect(detail.statusCode).toBe(503);
   });
 });

@@ -119,6 +119,7 @@ import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
 import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
+import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import { ChatCapabilityDiscoveryService } from "./chat-capability-discovery-service.js";
 import {
   resolveChatFeatureAdmission,
@@ -3945,6 +3946,12 @@ export class GatewayService {
       }),
       capabilitySkills: composeCapabilitySkills({
         chatTurnCapabilityProfiles: this.storage.chatTurnCapabilityProfiles,
+        skills: this,
+        capabilityScope: composed.capabilityScope,
+        capabilities: composed.capabilities,
+        approvals: composed.approvals,
+        features: this,
+        deploymentProfile: () => this.config.assistant.deploymentProfile,
       }),
     };
   }
@@ -10607,9 +10614,9 @@ export class GatewayService {
       : await approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType);
   }
 
-  public async listSkills(): Promise<SkillListItem[]> {
+  public async listSkills(effectiveSkills?: EffectiveCapabilitySet, workspaceId?: string): Promise<SkillListItem[]> {
     await this.skillStateService.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
-    return await this.capabilitySystemService.listSkills();
+    return await this.capabilitySystemService.listSkills(effectiveSkills, workspaceId);
   }
 
   public async createCapabilityProposal(
