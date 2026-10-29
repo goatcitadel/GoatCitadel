@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { APPROVAL_EXPIRY_ACTOR_ID, ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import {
+  SKILL_LIFECYCLE_APPROVAL_CHAIN_LIMIT,
   SkillStateService,
   buildActivationPolicyStateMaterial,
   type SkillStateMutationPendingOutcome,
@@ -100,6 +101,12 @@ async function requestPending(
   });
   if (!outcome.pendingApproval) throw new Error("expected a pending approval");
   return outcome as SkillStateMutationPendingOutcome;
+}
+
+/** The declined approval a stored skill approval names in its binding, if any. */
+function readSupersededApprovalId(harness: Harness, approvalId: string): unknown {
+  const payload = harness.storage.approvals.get(approvalId).payload as { skillLifecycle?: Record<string, unknown> };
+  return payload.skillLifecycle?.supersedesApprovalId;
 }
 
 describe("skill state substrate (reads, defaults, usage metadata)", () => {
@@ -414,6 +421,230 @@ describe("approval-first skill state mutations", () => {
   });
 });
 
+// The approval id follows from the request and the state it starts from. A pending or approved approval replays; after
+// one is rejected (by a person or by expiry) or edited, asking again makes a fresh approval, linked to the declined one.
+describe("asking again after a decline or expiry", () => {
+  it("makes a fresh approval, linked to the rejected one, when the same change is asked again", async () => {
+    const harness = createHarness();
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    const first = await requestPending(harness, "skill-alpha", "disabled");
+    harness.storage.approvals.resolve(first.pendingApproval.approvalId, {
+      decision: "reject",
+      resolvedBy: harness.resolverId,
+    });
+    harness.publishRealtime.mockClear();
+
+    const again = await requestPending(harness, "skill-alpha", "disabled");
+
+    expect(again.pendingApproval.approvalId).not.toBe(first.pendingApproval.approvalId);
+    expect(again.pendingApproval).toMatchObject({
+      status: "pending",
+      replayed: false,
+      requestSha256: first.pendingApproval.requestSha256,
+      expectedStateSha256: first.pendingApproval.expectedStateSha256,
+    });
+    expect(readSupersededApprovalId(harness, again.pendingApproval.approvalId)).toBe(first.pendingApproval.approvalId);
+    expect(harness.storage.approvals.get(first.pendingApproval.approvalId).status).toBe("rejected");
+    // The fresh approval carries its own requester evidence and its own notice.
+    expect(
+      harness.storage.governanceJourneyEvents.findByIdempotencyKey(
+        `skill:lifecycle:request:${again.pendingApproval.approvalId}`,
+      ),
+    ).toMatchObject({ actorId: harness.requesterId, approvalId: again.pendingApproval.approvalId });
+    expect(harness.publishRealtime).toHaveBeenCalledExactlyOnceWith(
+      "skill_mutation_approval_requested",
+      "skills",
+      expect.objectContaining({ approvalId: again.pendingApproval.approvalId }),
+    );
+
+    // While the fresh one waits, asking a third time hands it back.
+    const third = await requestPending(harness, "skill-alpha", "disabled");
+    expect(third.pendingApproval).toMatchObject({ approvalId: again.pendingApproval.approvalId, replayed: true });
+    expect(countRows(harness, "approvals")).toBe(2);
+    expect(readSkillRow(harness, "skill-alpha")).toMatchObject({ state: "enabled" });
+  });
+
+  it("makes a fresh approval after the first one expires", async () => {
+    const harness = createHarness();
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    const first = await requestPending(harness, "skill-alpha", "sleep");
+    harness.storage.approvals.resolve(
+      first.pendingApproval.approvalId,
+      { decision: "reject", resolvedBy: APPROVAL_EXPIRY_ACTOR_ID },
+      { allowExpired: true },
+    );
+
+    const again = await requestPending(harness, "skill-alpha", "sleep");
+
+    expect(again.pendingApproval).toMatchObject({ status: "pending", replayed: false });
+    expect(again.pendingApproval.approvalId).not.toBe(first.pendingApproval.approvalId);
+    expect(readSupersededApprovalId(harness, again.pendingApproval.approvalId)).toBe(first.pendingApproval.approvalId);
+  });
+
+  it("makes a fresh approval after an edited one", async () => {
+    const harness = createHarness();
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    const first = await requestPending(harness, "skill-alpha", "disabled", "Pause for review");
+    // An edited skill approval never applies; an Inbox edit may also rewrite its stored payload.
+    const stored = harness.storage.approvals.get(first.pendingApproval.approvalId);
+    harness.storage.approvals.resolve(first.pendingApproval.approvalId, {
+      decision: "edit",
+      resolvedBy: harness.resolverId,
+      editedPayload: { ...stored.payload, editedByOperator: true },
+    });
+
+    const again = await requestPending(harness, "skill-alpha", "disabled", "Pause for review");
+
+    expect(again.pendingApproval).toMatchObject({ status: "pending", replayed: false });
+    expect(again.pendingApproval.approvalId).not.toBe(first.pendingApproval.approvalId);
+    expect(readSupersededApprovalId(harness, again.pendingApproval.approvalId)).toBe(first.pendingApproval.approvalId);
+  });
+
+  it("still replays a pending approval and an approved one", async () => {
+    const harness = createHarness();
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    const first = await requestPending(harness, "skill-alpha", "disabled");
+
+    const whilePending = await requestPending(harness, "skill-alpha", "disabled");
+    expect(whilePending.pendingApproval).toMatchObject({
+      approvalId: first.pendingApproval.approvalId,
+      status: "pending",
+      replayed: true,
+    });
+
+    // Approved but not yet applied: the skill has not changed, so the same request hands back the approved one.
+    harness.storage.approvals.resolve(first.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    const onceApproved = await requestPending(harness, "skill-alpha", "disabled");
+    expect(onceApproved.pendingApproval).toMatchObject({
+      approvalId: first.pendingApproval.approvalId,
+      status: "approved",
+      replayed: true,
+    });
+    expect(readSupersededApprovalId(harness, first.pendingApproval.approvalId)).toBeUndefined();
+    expect(countRows(harness, "approvals")).toBe(1);
+  });
+
+  it("asks again for another requester after a decline instead of refusing it as a duplicate", async () => {
+    const harness = createHarness();
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    const first = await requestPending(harness, "skill-alpha", "disabled");
+    const revision = harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-alpha").revision;
+    // While it waits, the same change from someone else is someone else's request.
+    await expect(
+      harness.service.requestSkillStateApproval("skill-alpha", "disabled", undefined, {
+        expectedRevision: revision,
+        requesterId: "operator-other",
+      }),
+    ).rejects.toThrow(/already exists with different immutable request bytes/);
+    harness.storage.approvals.resolve(first.pendingApproval.approvalId, {
+      decision: "reject",
+      resolvedBy: harness.resolverId,
+    });
+
+    const outcome = await harness.service.requestSkillStateApproval("skill-alpha", "disabled", undefined, {
+      expectedRevision: revision,
+      requesterId: "operator-other",
+    });
+
+    expect(outcome.pendingApproval).toMatchObject({ status: "pending", replayed: false });
+    expect(
+      harness.storage.governanceJourneyEvents.findByIdempotencyKey(
+        `skill:lifecycle:request:${outcome.pendingApproval!.approvalId}`,
+      ),
+    ).toMatchObject({ actorId: "operator-other" });
+  });
+
+  it("executes the fresh approval through its own effect", async () => {
+    const harness = createHarness();
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    const first = await requestPending(harness, "skill-alpha", "sleep", "Quiet hours");
+    harness.storage.approvals.resolve(first.pendingApproval.approvalId, {
+      decision: "reject",
+      resolvedBy: harness.resolverId,
+    });
+    const again = await requestPending(harness, "skill-alpha", "sleep", "Quiet hours");
+    harness.storage.approvals.resolve(again.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+
+    const applied = await harness.service.executeApprovedSkillLifecycleMutation({
+      approvalId: again.pendingApproval.approvalId,
+    });
+
+    expect(applied).toMatchObject({ disposition: "applied", subjectId: "skill-alpha", changedCount: 1 });
+    expect(readSkillRow(harness, "skill-alpha")).toMatchObject({ state: "sleep", note: "Quiet hours" });
+    expect(readGovernedEvent(harness, `skill-lifecycle:${again.pendingApproval.approvalId}:skill-alpha`)).toMatchObject(
+      { operation: "slept", approvalId: again.pendingApproval.approvalId },
+    );
+    // The declined one stays declined and never applies.
+    await expect(
+      harness.service.executeApprovedSkillLifecycleMutation({ approvalId: first.pendingApproval.approvalId }),
+    ).rejects.toThrow(SkillLifecycleApplyError);
+    expect(countRows(harness, "governed_lifecycle_events")).toBe(1);
+  });
+
+  it("asks again for a bulk change and a policy change too", async () => {
+    const harness = createHarness();
+    await harness.service.ensureSkillStates(["skill-alpha", "skill-beta"]);
+    const revisions = {
+      "skill-alpha": harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-alpha").revision,
+      "skill-beta": harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-beta").revision,
+    };
+    const askBulk = () =>
+      harness.service.requestSkillStateBulkApproval(["skill-alpha", "skill-beta"], "disabled", undefined, {
+        expectedRevisionsBySkillId: revisions,
+        requesterId: harness.requesterId,
+      });
+    const askPolicy = () =>
+      harness.service.requestActivationPolicyApproval(
+        { guardedAutoThreshold: 0.9 },
+        { expectedRevision: 1, requesterId: harness.requesterId },
+      );
+
+    for (const ask of [askBulk, askPolicy]) {
+      const first = (await ask()).pendingApproval!;
+      harness.storage.approvals.resolve(first.approvalId, { decision: "reject", resolvedBy: harness.resolverId });
+      const again = (await ask()).pendingApproval!;
+      expect(again).toMatchObject({ status: "pending", replayed: false });
+      expect(again.approvalId).not.toBe(first.approvalId);
+      expect(readSupersededApprovalId(harness, again.approvalId)).toBe(first.approvalId);
+    }
+  });
+
+  it("stops asking after a run of declines, leaving no half-made approval", async () => {
+    const harness = createHarness();
+    await harness.service.ensureSkillStates(["skill-alpha"]);
+    for (let declined = 0; declined < SKILL_LIFECYCLE_APPROVAL_CHAIN_LIMIT; declined += 1) {
+      const outcome = await requestPending(harness, "skill-alpha", "disabled");
+      expect(outcome.pendingApproval.replayed).toBe(false);
+      harness.storage.approvals.resolve(outcome.pendingApproval.approvalId, {
+        decision: "reject",
+        resolvedBy: harness.resolverId,
+      });
+    }
+    const approvalsBefore = countRows(harness, "approvals");
+    const journeyBefore = countRows(harness, "governance_journey_events");
+    harness.publishRealtime.mockClear();
+
+    const refused = harness.service.requestSkillStateApproval("skill-alpha", "disabled", undefined, {
+      expectedRevision: harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-alpha").revision,
+      requesterId: harness.requesterId,
+    });
+
+    await expect(refused).rejects.toThrow(ConflictError);
+    await expect(refused).rejects.toThrow(/turned down/);
+    expect(approvalsBefore).toBe(SKILL_LIFECYCLE_APPROVAL_CHAIN_LIMIT);
+    expect(countRows(harness, "approvals")).toBe(approvalsBefore);
+    expect(countRows(harness, "governance_journey_events")).toBe(journeyBefore);
+    expect(harness.publishRealtime).not.toHaveBeenCalled();
+    expect(readSkillRow(harness, "skill-alpha")).toMatchObject({ state: "enabled" });
+  });
+});
+
 describe("approval-first activation policy", () => {
   it("keeps selector mode legacy until a revision-bound approval applies and permits governed rollback", async () => {
     const harness = createHarness();
@@ -421,12 +652,14 @@ describe("approval-first activation policy", () => {
     for (const [index, selectionMode] of (["shadow", "ranked", "legacy"] as const).entries()) {
       const before = await harness.service.getActivationPolicy();
       const outcome = await harness.service.requestActivationPolicyApproval(
-        { selectionMode }, { expectedRevision: index + 1, requesterId: harness.requesterId },
+        { selectionMode },
+        { expectedRevision: index + 1, requesterId: harness.requesterId },
       );
       if (!outcome.pendingApproval) throw new Error("expected selector policy approval");
       expect(await harness.service.getActivationPolicy()).toEqual(before);
       harness.storage.approvals.resolve(outcome.pendingApproval.approvalId, {
-        decision: "approve", resolvedBy: harness.resolverId,
+        decision: "approve",
+        resolvedBy: harness.resolverId,
       });
       await harness.service.executeApprovedSkillLifecycleMutation({ approvalId: outcome.pendingApproval.approvalId });
       expect(await harness.service.getActivationPolicy()).toMatchObject({ selectionMode, revision: index + 2 });
@@ -437,15 +670,17 @@ describe("approval-first activation policy", () => {
 
   it("rejects invalid selector modes and keeps old legacy approval hash material unchanged", async () => {
     const harness = createHarness();
-    await expect(harness.service.requestActivationPolicyApproval(
-      { selectionMode: "automatic" as never }, { expectedRevision: 1 },
-    )).rejects.toThrow(/selectionMode/);
+    await expect(
+      harness.service.requestActivationPolicyApproval({ selectionMode: "automatic" as never }, { expectedRevision: 1 }),
+    ).rejects.toThrow(/selectionMode/);
     expect(countRows(harness, "approvals")).toBe(0);
     const oldPolicy = { guardedAutoThreshold: 0.72, requireFirstUseConfirmation: true };
-    expect(buildActivationPolicyStateMaterial({ ...oldPolicy, selectionMode: "legacy" }, 1))
-      .toEqual(buildActivationPolicyStateMaterial(oldPolicy, 1));
-    expect(buildActivationPolicyStateMaterial({ ...oldPolicy, selectionMode: "ranked" }, 1))
-      .not.toEqual(buildActivationPolicyStateMaterial(oldPolicy, 1));
+    expect(buildActivationPolicyStateMaterial({ ...oldPolicy, selectionMode: "legacy" }, 1)).toEqual(
+      buildActivationPolicyStateMaterial(oldPolicy, 1),
+    );
+    expect(buildActivationPolicyStateMaterial({ ...oldPolicy, selectionMode: "ranked" }, 1)).not.toEqual(
+      buildActivationPolicyStateMaterial(oldPolicy, 1),
+    );
   });
 
   it("requests, approves, and applies a policy update with governed evidence; unchanged patches are no-ops", async () => {

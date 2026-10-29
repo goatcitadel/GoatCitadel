@@ -113,12 +113,12 @@ export interface CapabilitySkillDetail {
 /**
  * What switching a skill did. Every change creates the skill's approval; the operator's skip only resolves it. The
  * approval's id follows from the request, so asking again for the same change, before the skill changes, hands back the
- * approval it already made, decided or not.
+ * approval it already made while that one waits or once it is approved.
  * - `approved`: approved, by the skip now or earlier, and its own effect applies the change (or already has).
  * - `waiting`: it waits in the Inbox for the operator.
  * - `declined`: the request was turned down, so nothing changes. `expired` when the expiry check rejected it: no one
  *   answered in time, or it ran out just as the skip approved it. Otherwise the operator rejected or edited it. Asking
- *   again gives the same answer until the skill changes.
+ *   again makes a fresh approval, linked to this one.
  * - `unchanged`: the skill is already in that state, so nothing was asked.
  */
 export type CapabilitySkillActionOutcome =

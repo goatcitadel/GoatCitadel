@@ -232,6 +232,7 @@ The install-wide switch on each loaded skill: on (`enabled`), paused (`sleep`, u
 
 Authority:
 - State owner: `SkillStateService` (`apps/gateway/src/services/skill-state-service.ts`). Every change is a `skill.lifecycle` approval (HX-402); only the recovered `skill_lifecycle_apply` approval effect applies it.
+- A `skill.lifecycle` approval's id is derived from the request and the state it starts from, so asking again hands back the same approval while it waits or once it is approved. After it is rejected (by the operator or by expiry) or edited, asking again makes a fresh approval whose binding names the declined one (`supersedesApprovalId`); an approval made before that field existed keeps its id.
 - Mutation: `PATCH /api/v1/skills/by-id/state`, `/api/v1/skills/:skillId/state` and `/api/v1/skills/bulk-state`, Chat's `/skill` commands, and the Capabilities switch `POST /api/v1/capabilities/skills/state` (`apps/gateway/src/services/capability-skill-actions-service.ts`). Each asks the state owner for the approval.
 - Read models: `GET /api/v1/capabilities/skills` (the Skills tab's list) and `GET /api/v1/capabilities/skills/detail` (one skill's details) from `apps/gateway/src/services/capability-skills-service.ts`; `GET /api/v1/capabilities/skills/usage` (chat turns that loaded each skill in the last 365 days) from `apps/gateway/src/services/capability-skill-usage-service.ts`
 
