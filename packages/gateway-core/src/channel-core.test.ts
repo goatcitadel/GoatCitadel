@@ -3,6 +3,7 @@ import { RETIRED_CHANNEL_REASONS } from "@goatcitadel/contracts";
 import {
   describeChannelCapabilities,
   isMatrixInboundEnabled,
+  isSlackSocketInboundEnabled,
   listChannelRuleKeys,
   planChannelRichMessageDelivery,
   planChannelTextDelivery,
@@ -199,6 +200,79 @@ describe("describeChannelCapabilities", () => {
     expect(capabilities.supportNotes).not.toContain(
       "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path.",
     );
+  });
+
+  it("advertises Slack Socket Mode as a stream GoatCitadel opens, with no public web address", () => {
+    const capabilities = describeChannelCapabilities("slack", {
+      botToken: "xoxb-1",
+      receiveMode: "socket",
+      appTokenEnv: "SLACK_APP_TOKEN",
+      defaultChannel: "#ops",
+    });
+
+    expect(capabilities.inboundModes).toEqual(["stream"]);
+    expect(capabilities.runtimePosture).toMatchObject({
+      outboundTransport: "api",
+      inboundTransport: "stream",
+      lifecycle: "persistent",
+      inboundReadiness: "ready",
+    });
+    expect(capabilities.supportNotes).toContain(
+      "Receives direct messages and mentions over a connection GoatCitadel keeps open to Slack; no public web address is needed.",
+    );
+    expect(capabilities.supportNotes.join(" ")).not.toContain("signing secret");
+    expect(capabilities.supportedActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend"]),
+    );
+  });
+
+  it("lets Slack Socket Mode win over a leftover signing secret, and leaves voice shares out", () => {
+    const capabilities = describeChannelCapabilities("slack", {
+      botToken: "xoxb-1",
+      receiveMode: "socket",
+      appToken: "xapp-1",
+      signingSecret: "secret",
+    });
+
+    expect(capabilities.inboundModes).toEqual(["stream"]);
+    expect(capabilities.runtimePosture.inboundTransport).toBe("stream");
+    expect(capabilities.supportNotes.join(" ")).not.toContain("Events API");
+    expect(capabilities.supportNotes.join(" ")).not.toContain("audio file shares are transcribed");
+  });
+
+  it("does not call a Slack socket connection ready until it has an app-level token", () => {
+    const capabilities = describeChannelCapabilities("slack", { botToken: "xoxb-1", receiveMode: "socket" });
+
+    expect(capabilities.inboundModes).toEqual(["stream"]);
+    expect(capabilities.runtimePosture.inboundReadiness).toBe("unsupported");
+    expect(capabilities.runtimePosture.operatorSummary).toContain("app-level token");
+  });
+
+  it("keeps the signing-secret behavior for Slack webhook and missing receive modes", () => {
+    for (const receiveMode of [undefined, "webhook", "carrier-pigeon", 7]) {
+      const config = receiveMode === undefined ? {} : { receiveMode };
+      const signed = describeChannelCapabilities("slack", { botToken: "xoxb-1", signingSecret: "secret", ...config });
+      const unsigned = describeChannelCapabilities("slack", { botToken: "xoxb-1", ...config });
+
+      expect(signed.inboundModes, String(receiveMode)).toEqual(["webhook"]);
+      expect(signed.runtimePosture.inboundTransport, String(receiveMode)).toBe("webhook");
+      expect(unsigned.inboundModes, String(receiveMode)).toEqual(["none"]);
+      expect(unsigned.supportNotes, String(receiveMode)).toContain(
+        "Slack inbound routing remains disabled until a signing secret is configured.",
+      );
+    }
+    const webhookOnly = describeChannelCapabilities("slack", { webhookUrl: "https://hooks.slack.test/1" });
+    expect(webhookOnly.inboundModes).toEqual(["none"]);
+  });
+
+  it("reads Slack Socket Mode from receiveMode only", () => {
+    expect(isSlackSocketInboundEnabled({ receiveMode: "socket" })).toBe(true);
+    expect(isSlackSocketInboundEnabled({ receiveMode: " socket " })).toBe(true);
+    expect(isSlackSocketInboundEnabled({ receiveMode: "webhook" })).toBe(false);
+    expect(isSlackSocketInboundEnabled({ receiveMode: "Socket" })).toBe(false);
+    expect(isSlackSocketInboundEnabled({ receiveMode: 7 })).toBe(false);
+    expect(isSlackSocketInboundEnabled({ appToken: "xapp-1", signingSecret: "secret" })).toBe(false);
+    expect(isSlackSocketInboundEnabled({})).toBe(false);
   });
 
   it("reads only poll and off as an explicit Telegram receive mode", () => {

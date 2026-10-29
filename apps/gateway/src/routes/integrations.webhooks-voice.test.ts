@@ -162,7 +162,7 @@ describe("inbound voice webhooks (Slack, Nextcloud Talk)", () => {
     expect(input).toEqual(
       expect.objectContaining({
         channel: "slack",
-        idempotencyKey: `slack:${CONNECTION_ID}:EvVoice1`,
+        idempotencyKey: `slack:${CONNECTION_ID}:message:D111:1712109984.300000`,
         dispatchKind: "voice_agent_turn",
         bindingTarget: "D111",
         voiceRequest: {
@@ -306,7 +306,10 @@ describe("inbound voice webhooks (Slack, Nextcloud Talk)", () => {
     const keys = acceptInboundChannelEvent.mock.calls.map(
       (call) => (call[0] as unknown as { idempotencyKey: string }).idempotencyKey,
     );
-    expect(keys).toEqual([`slack:${CONNECTION_ID}:EvVoice1`, `slack:${CONNECTION_ID}:EvVoice1`]);
+    expect(keys).toEqual([
+      `slack:${CONNECTION_ID}:message:D111:1712109984.300000`,
+      `slack:${CONNECTION_ID}:message:D111:1712109984.300000`,
+    ]);
   });
 
   it("Slack: the sender gate runs before voice acceptance", async () => {

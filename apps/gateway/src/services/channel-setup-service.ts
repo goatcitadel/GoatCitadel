@@ -9,6 +9,8 @@ import {
 import { protectChannelOAuthDraftMetadata } from "./channel-oauth-draft-metadata.js";
 import { evaluateChannelSetupEligibility } from "./channel-setup-eligibility.js";
 export { discoverChannelSetupTelegramTargets } from "./channel-setup-telegram-discovery.js";
+export { checkDiscordSetup } from "./channel-setup-discord-check.js";
+export { checkSlackSetup } from "./channel-setup-slack-check.js";
 import {
   assertDraftRevision,
   custodyInitialDraftSecrets,

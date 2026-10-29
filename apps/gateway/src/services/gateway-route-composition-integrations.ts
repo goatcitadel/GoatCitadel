@@ -72,7 +72,7 @@ import {
 import { createCitadelWardRequestVault, type CitadelWardRequestVault } from "./citadel-ward-approval.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { readChatAttachmentContentForGateway } from "./gateway-route-composition-shared.js";
-import { getChannelStreamRuntime, provideTelegramUpdateDeps } from "./channel-stream-runtime-registry.js";
+import { getChannelStreamRuntime, provideChannelUpdateDeps } from "./channel-stream-runtime-registry.js";
 import { verifyIntegrationPluginPackage } from "./integration-plugin-package-integrity.js";
 
 export function composeIntegrationChannelRouteDependencies(
@@ -136,6 +136,8 @@ export function composeIntegrationChannelRouteDependencies(
       channelSetupService.validateChannelSetupDraft(channelSetupDeps, draftId, expectedRevision),
     discoverChannelSetupTelegramTargets: (input) =>
       channelSetupService.discoverChannelSetupTelegramTargets(channelSetupDeps, input),
+    checkDiscordSetup: (input) => channelSetupService.checkDiscordSetup(channelSetupDeps, input),
+    checkSlackSetup: (input) => channelSetupService.checkSlackSetup(channelSetupDeps, input),
     acknowledgeChannelSetupTest: (draftId, input, actorId) =>
       channelSetupService.acknowledgeChannelSetupTest(channelSetupDeps, draftId, input, actorId),
     getChannelSetupJourney: (connectionId) =>
@@ -350,8 +352,8 @@ export function composeIntegrationChannelRouteDependencies(
     updateIntegrationConnection: (connectionId, patch) =>
       integrationChannel.updateIntegrationConnection(connectionId, patch),
   });
-  // Telegram polling handles an update exactly as the webhook route does, through this same port.
-  provideTelegramUpdateDeps(gateway, {
+  // Telegram polling and Slack Socket Mode handle an update exactly as their webhook routes do, through this same port.
+  provideChannelUpdateDeps(gateway, {
     webhooks: integrationWebhooks,
     readPersonalityCatalog: async () => gateway.personalityCatalogService.getCatalog(),
   });

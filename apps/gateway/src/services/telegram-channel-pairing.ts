@@ -1,11 +1,10 @@
 import {
-  evaluateChannelInboundAccess,
   resolveAllowedSenders,
-  resolveChannelOwnerActorIds,
   type TelegramChannelPairingList,
   type IntegrationConnection,
 } from "@goatcitadel/contracts";
 import { randomInt } from "node:crypto";
+import { isAllowlistedChannelOwner } from "./channel-owner-access.js";
 
 export interface TelegramPairingDecision {
   authorized: boolean;
@@ -50,7 +49,9 @@ export function authorizeTelegramChannelActor(input: {
   if (pairing.approved.some((item) => item.actorId === input.actorId)) {
     return { authorized: true };
   }
-  if (isAllowlistedOwner(input.config, input.actorId)) {
+  // The operator's own account, proven on the setup page by sending its one-time code: recognized wherever an approved
+  // pairing would be, until it is taken off the allowlist.
+  if (isAllowlistedChannelOwner(input.config, input.actorId)) {
     return { authorized: true };
   }
 
@@ -129,23 +130,6 @@ export function approveTelegramPairingCode(
       },
     },
   };
-}
-
-/**
- * The operator's own account, proven on the setup page by sending its one-time code: one of the connection's owners
- * and on its sender allowlist, on a connection that lets only allowlisted senders in. It is recognized wherever an
- * approved pairing would be, and stops being recognized once it is taken off the allowlist. Connections that are open
- * or have no access mode set are left to pairing, as before.
- */
-function isAllowlistedOwner(config: Record<string, unknown>, actorId: string): boolean {
-  if (config.inboundAccessMode !== "allowlist") {
-    return false;
-  }
-  const access = evaluateChannelInboundAccess({ config, actorId });
-  if (access.mode !== "allowlist" || !access.allowed) {
-    return false;
-  }
-  return resolveChannelOwnerActorIds(config).includes(actorId.trim().toLowerCase());
 }
 
 function readPairingState(config: Record<string, unknown>): {

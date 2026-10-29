@@ -6,12 +6,16 @@ import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { Section } from "../../ui/Section";
 import { ChannelActionNote } from "./ChannelActionNote";
+import { hasChatKeyChangePage } from "./channel-setup/channel-picker-model";
 import { REMOVE_CONSEQUENCE, removeChannelTitle } from "./channel-remove-copy";
 import { useChannelLifecycle } from "./use-channel-lifecycle";
 
-/** Telegram's key is changed on its own page in Chat; every other channel's is still changed in Settings. */
+/**
+ * A connection with a key page of its own in Chat changes its key there; every other connection's, such as a Discord
+ * webhook or a Slack OAuth install, is still changed in Settings.
+ */
 function keyChangeHref(connection: IntegrationConnection): string {
-  return connection.key === "telegram"
+  return hasChatKeyChangePage(connection)
     ? channelKeyChangeHref(connection.connectionId)
     : "/settings/connections#channels";
 }

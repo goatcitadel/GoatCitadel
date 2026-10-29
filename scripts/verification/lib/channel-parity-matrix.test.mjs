@@ -12,7 +12,7 @@ const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 test("advertised channel parity matrix is complete and internally consistent", () => {
   assert.deepEqual(validateAdvertisedChannelParityMatrix(), []);
-  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 23);
+  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 24);
   assert.deepEqual(
     [...new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.family))].sort(),
     [...REQUIRED_CHANNEL_FAMILIES].sort(),
@@ -25,6 +25,11 @@ test("Slack and Discord variants retain exact inbound and lifecycle posture", ()
   assert.deepEqual(byId.get("slack.bot-outbound")?.expected.inboundModes, ["none"]);
   assert.deepEqual(byId.get("slack.webhook-signed")?.expected.inboundModes, ["webhook"]);
   assert.deepEqual(byId.get("slack.webhook-outbound")?.expected.inboundModes, ["none"]);
+  const slackSocket = byId.get("slack.bot-socket");
+  assert.deepEqual(slackSocket?.expected.inboundModes, ["stream"]);
+  assert.equal(slackSocket?.expected.lifecycle, "persistent");
+  assert.equal(slackSocket?.durability.inboundCommitBeforeAck, true);
+  assert.match(slackSocket?.proof.inboundAdapter ?? "", /slack-socket-stream-adapter\.test\.ts$/);
   assert.equal(byId.get("discord.gateway")?.expected.lifecycle, "persistent");
   assert.deepEqual(byId.get("discord.gateway")?.expected.inboundModes, ["gateway"]);
   assert.equal(byId.get("discord.bridge")?.expected.lifecycle, "stateless");

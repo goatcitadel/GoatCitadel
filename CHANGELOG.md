@@ -10,9 +10,16 @@ All notable changes to GoatCitadel are documented in this file.
 - A new connection's webhook address shows before Finalize.
 - The diagnostic for a dropped message names the sender.
 - Google Chat can finish setup in webhook mode without a thread key, and in Chat app mode with a note that no test message is sent.
+- Discord and Slack are set up from Chat › Messaging, on pages like Telegram's. Each page checks every step with the provider, asks for no ID or environment variable, and ends with Turn on in place. Discord's page lets in only the person Discord names as the bot's maker. Slack's page makes an app named "GoatCitadel" from a manifest and takes the first person who sends it a one-time code. Settings › Channels keeps the other ways: a Discord webhook with no bot, a Slack webhook, and the Slack OAuth sign-in. The real-account checks for both pages are still to be run.
+- Slack can receive over Socket Mode: GoatCitadel opens a connection to Slack, so receiving needs no public web address or signing secret. It takes an app-level token (`appToken`) and `receiveMode: "socket"`. Slack refreshes the connection every few hours and GoatCitadel reopens it without an error. Socket Mode always lets in only allowlisted senders, so an older Slack connection saved as open and switched to it is not open to the whole workspace, and it leaves voice messages out.
+- Slack handles `app_mention` events, so a bot answers when it is mentioned in a channel it has been added to.
+- A Discord bot's or a Slack Socket Mode connection's tokens can be changed from the channel's page in Chat (**Change the key**), with the same in-place approval as Telegram.
 
 ### Changed
 
+- A Slack post that arrives twice, as a message and as an `app_mention`, runs one turn. Slack events now dedupe on the post's channel and timestamp instead of the event id. A retry that straddles the upgrade may run once more.
+- On a Discord connection that lets only allowlisted senders in, an owner who is also on the allowlist skips the pairing code in direct messages, and the default server channel answers only the allowlisted senders. The owner mark affects only that direct-message skip, so clearing it never opens the channel to everyone, and an owner mark without the allowlist entry changes nothing.
+- The Slack tile in the channel picker no longer says receiving needs a public web address.
 - Slack setups that only use an incoming webhook no longer need slack.com.
 - A saved connection whose variable name breaks the channel's rule stops sending until you rename it. The setup check says how.
 - The guides' content version changed, so a setup test run before this update runs again.

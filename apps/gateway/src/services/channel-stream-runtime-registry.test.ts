@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import {
   getChannelStreamRuntime,
-  provideTelegramUpdateDeps,
+  provideChannelUpdateDeps,
   type ChannelStreamRuntimeHost,
 } from "./channel-stream-runtime-registry.js";
 import {
@@ -133,6 +133,97 @@ function telegramFetch(pending: Array<{ update_id: number }>) {
     }
     return new Response(JSON.stringify({ ok: true, result: {} }));
   });
+}
+
+function slackConnection(): IntegrationConnection {
+  return {
+    connectionId: "conn-slack",
+    revision: "r1",
+    catalogId: "channel.slack",
+    kind: "channel",
+    key: "slack",
+    label: "Slack",
+    enabled: true,
+    status: "connected",
+    config: {
+      receiveMode: "socket",
+      appToken: "xapp-1",
+      botToken: "xoxb-1",
+      slackTeamId: "T1",
+      slackAppId: "A1",
+      slackBotUserId: "UBOT",
+      inboundAccessMode: "allowlist",
+      allowedSenders: ["U1"],
+    },
+    createdAt: "2026-10-28T00:00:00.000Z",
+    updatedAt: "2026-10-28T00:00:00.000Z",
+  };
+}
+
+function slackDirectMessage() {
+  return {
+    type: "event_callback",
+    event_id: "Ev-dm",
+    team_id: "T1",
+    api_app_id: "A1",
+    event: {
+      type: "message",
+      user: "U1",
+      text: "please help",
+      channel: "D1",
+      channel_type: "im",
+      ts: "1712109984.200000",
+    },
+  };
+}
+
+function slackHost() {
+  const value = {
+    storage: {
+      integrationConnections: { list: vi.fn(async () => [slackConnection()]) },
+      systemSettings: { get: vi.fn(async () => undefined), set: vi.fn(async () => undefined) },
+    },
+    acceptInboundChannelEvent: vi.fn(),
+    recordDevDiagnostic: vi.fn(),
+    resolveConnectionSecret: vi.fn(() => "xapp-1"),
+    isConnectionUrlAllowlisted: vi.fn(() => true),
+  } as unknown as ChannelStreamRuntimeHost;
+  return { value };
+}
+
+/** Slack's Web API stand-in: apps.connections.open hands out a slack.com socket address. */
+function slackOpenFetch() {
+  return vi.fn(
+    async () => new Response(JSON.stringify({ ok: true, url: "wss://wss-primary.slack.com/link/?ticket=t1" })),
+  );
+}
+
+/** A Socket Mode stand-in: says hello, then delivers one direct message as an events_api envelope. */
+class FakeSlackSocket extends EventTarget {
+  static instances: FakeSlackSocket[] = [];
+  readonly sent: string[] = [];
+  constructor(readonly url: string) {
+    super();
+    FakeSlackSocket.instances.push(this);
+    setTimeout(() => {
+      this.dispatchEvent(new Event("open"));
+      this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "hello" }) }));
+      this.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "events_api",
+            envelope_id: "e1",
+            payload: slackDirectMessage(),
+            accepts_response_payload: false,
+          }),
+        }),
+      );
+    }, 0);
+  }
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  close(): void {}
 }
 
 function fakeWebhooks(
@@ -329,7 +420,7 @@ describe("getChannelStreamRuntime", () => {
       eventType: input.eventType,
       inboundEventId: "e1",
     }));
-    provideTelegramUpdateDeps(h.value, {
+    provideChannelUpdateDeps(h.value, {
       webhooks: fakeWebhooks({ getIntegrationConnection, acceptInboundChannelEvent }),
       readPersonalityCatalog: async () => ({ items: [], defaultPersonalityId: "default" }),
     });
@@ -351,6 +442,67 @@ describe("getChannelStreamRuntime", () => {
       expect(h.value.acceptInboundChannelEvent).not.toHaveBeenCalled();
       expect(runtime.getStatus("conn-tg")).toMatchObject({ ready: true });
       expect(runtime.getStatus("conn-tg")?.lastInboundAt).toBeTruthy();
+    } finally {
+      await runtime.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("has a slack adapter whose events wait until the handler is provided", async () => {
+    const h = slackHost();
+    FakeSlackSocket.instances = [];
+    vi.stubGlobal("fetch", slackOpenFetch());
+    vi.stubGlobal("WebSocket", FakeSlackSocket);
+    const runtime = getChannelStreamRuntime(h.value);
+    try {
+      await runtime.sync();
+      await vi.waitFor(() =>
+        expect(runtime.getStatus("conn-slack")?.lastError).toBe("Slack receiving isn't ready yet."),
+      );
+      expect(runtime.getStatus("conn-slack")?.channelKey).toBe("slack");
+      expect(FakeSlackSocket.instances[0]?.url).toBe("wss://wss-primary.slack.com/link/?ticket=t1");
+      // An event that could not be handled is not acknowledged, so Slack sends it again.
+      expect(FakeSlackSocket.instances[0]?.sent).toEqual([]);
+      expect(h.value.acceptInboundChannelEvent).not.toHaveBeenCalled();
+    } finally {
+      await runtime.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("routes Socket Mode events through the provided handler, then acknowledges them", async () => {
+    const h = slackHost();
+    FakeSlackSocket.instances = [];
+    const getIntegrationConnection = vi.fn(async () => slackConnection());
+    const acceptInboundChannelEvent = vi.fn(async (input: { eventType: string }) => ({
+      accepted: true,
+      durableAccepted: true,
+      deduped: false,
+      replied: false,
+      queued: true,
+      eventType: input.eventType,
+      inboundEventId: "e1",
+    }));
+    provideChannelUpdateDeps(h.value, {
+      webhooks: fakeWebhooks({ getIntegrationConnection, acceptInboundChannelEvent }),
+      readPersonalityCatalog: async () => ({ items: [], defaultPersonalityId: "default" }),
+    });
+    vi.stubGlobal("fetch", slackOpenFetch());
+    vi.stubGlobal("WebSocket", FakeSlackSocket);
+    const runtime = getChannelStreamRuntime(h.value);
+    try {
+      await runtime.sync();
+      await vi.waitFor(() => expect(FakeSlackSocket.instances[0]?.sent).toEqual(['{"envelope_id":"e1"}']));
+      expect(getIntegrationConnection).toHaveBeenCalledWith("conn-slack");
+      expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "slack", connectionId: "conn-slack" }),
+      );
+      expect(h.value.acceptInboundChannelEvent).not.toHaveBeenCalled();
+      expect(runtime.getStatus("conn-slack")).toMatchObject({ ready: true });
+      expect(runtime.getStatus("conn-slack")?.lastError).toBeUndefined();
+      expect(runtime.getStatus("conn-slack")?.lastInboundAt).toBeTruthy();
+      // The app-level token and the socket address never reach the status.
+      expect(JSON.stringify(runtime.getStatus("conn-slack"))).not.toMatch(/xapp-1|ticket=/);
     } finally {
       await runtime.close();
       vi.unstubAllGlobals();

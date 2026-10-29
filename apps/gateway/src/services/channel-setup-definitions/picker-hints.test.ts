@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { ChannelPickerGroup } from "@goatcitadel/contracts";
+import type { ChannelPickerGroup, IntegrationConnection } from "@goatcitadel/contracts";
 import {
   getChannelSetupDefinition,
   listChannelSetupDefinitions,
@@ -13,6 +13,7 @@ import {
   CHANNEL_INBOUND_WEBHOOKS,
   CHANNEL_PICKER_HINTS,
   CHANNEL_REQUIRED_HOSTS,
+  connectionFixedHosts,
   withPickerHints,
 } from "./picker-hints.js";
 
@@ -23,7 +24,6 @@ const GROUPS: Record<ChannelPickerGroup, string[]> = {
 };
 
 const NOTES: Record<string, string> = {
-  slack: "Receiving needs a public web address",
   ntfy: "Needs an ntfy topic you control",
   mattermost: "Needs a Mattermost server",
   matrix: "Needs a Matrix bot account",
@@ -36,6 +36,22 @@ const NOTES: Record<string, string> = {
   zalo: "Sends only, from a Zalo Official Account",
   "nextcloud-talk": "Receiving needs a public web address",
 };
+
+function slackConnection(config: Record<string, unknown>): IntegrationConnection {
+  return {
+    connectionId: "11111111-1111-1111-1111-111111111111",
+    catalogId: "channel.slack",
+    kind: "channel",
+    key: "slack",
+    label: "Slack",
+    revision: "1",
+    enabled: true,
+    status: "connected",
+    config,
+    createdAt: "2026-10-28T00:00:00.000Z",
+    updatedAt: "2026-10-28T00:00:00.000Z",
+  };
+}
 
 function definitionByKey(key: string) {
   const definition = listChannelSetupDefinitions().find((item) => item.catalog.key === key);
@@ -106,6 +122,21 @@ describe("channel setup picker hints", () => {
     expect(telegram.wizard.picker?.minutes).toBe(3);
     expect(telegram.wizard.requiredHosts).toEqual(["api.telegram.org"]);
     expect(telegram.wizard.estimatedMinutes).toBe(8);
+  });
+
+  it("Discord takes about five minutes and needs discord.com", () => {
+    const discord = definitionByKey("discord");
+
+    expect(discord.wizard.picker?.minutes).toBe(5);
+    expect(discord.wizard.requiredHosts).toEqual(["discord.com"]);
+  });
+
+  it("Slack takes about five minutes and has no note, as it needs no public web address", () => {
+    const slack = definitionByKey("slack");
+
+    expect(slack.wizard.picker?.minutes).toBe(5);
+    expect(slack.wizard.picker?.note).toBeUndefined();
+    expect(slack.wizard.picker).toEqual({ group: "quickest", minutes: 5, order: 3 });
   });
 
   it("says what each channel needs", () => {
@@ -300,11 +331,22 @@ describe("channel hosts and inbound webhooks", () => {
     ]);
   });
 
-  it("adds Slack's API host only while a bot token or an OAuth install is set, as a webhook never contacts it", () => {
+  it("adds Slack's API host only while a bot token, an OAuth install or an app-level token is set, as a webhook never contacts it", () => {
     expect(definitionByKey("slack").wizard.requiredHosts).toBeUndefined();
     expect(definitionByKey("slack").wizard.conditionalHosts).toEqual([
-      { host: "slack.com", whenAnyFieldSet: ["botToken", "slackInstallId"] },
+      { host: "slack.com", whenAnyFieldSet: ["botToken", "slackInstallId", "appToken", "appTokenEnv"] },
     ]);
+  });
+
+  it("asks a saved Slack connection to reach slack.com for a bot token, an OAuth install or an app-level token, not for a webhook", () => {
+    const hostsOf = (config: Record<string, unknown>) =>
+      connectionFixedHosts(requireChannelSetupDefinition("channel.slack"), slackConnection(config));
+
+    expect(hostsOf({ webhookUrl: "https://hooks.slack.com/services/T0/B0/XXXX" })).toEqual([]);
+    expect(hostsOf({ botToken: "xoxb-1" })).toEqual(["slack.com"]);
+    expect(hostsOf({ slackInstallId: "slack:T0123456789" })).toEqual(["slack.com"]);
+    expect(hostsOf({ receiveMode: "socket", appToken: "xapp-1-A0-1-abc" })).toEqual(["slack.com"]);
+    expect(hostsOf({ receiveMode: "socket", appTokenEnv: "SLACK_APP_TOKEN" })).toEqual(["slack.com"]);
   });
 
   it("has no conditional hosts on any other channel", () => {
@@ -314,12 +356,16 @@ describe("channel hosts and inbound webhooks", () => {
     }
   });
 
-  it("expects Telegram's webhook only in webhook mode and the others' whenever the channel is on", () => {
+  it("expects Telegram's and Slack's webhook only in webhook mode and the others' whenever the channel is on", () => {
     expect(definitionByKey("telegram").wizard.inboundWebhook).toEqual({
       pathTemplate: "/api/v1/integrations/connections/{connectionId}/telegram/webhook",
       whenFieldEquals: { fieldKey: "receiveMode", value: "webhook" },
     });
-    for (const key of ["slack", "whatsapp", "line", "qqbot", "wecom", "google-chat", "nextcloud-talk"]) {
+    expect(definitionByKey("slack").wizard.inboundWebhook).toEqual({
+      pathTemplate: "/api/v1/integrations/connections/{connectionId}/slack/webhook",
+      whenFieldEquals: { fieldKey: "receiveMode", value: "webhook" },
+    });
+    for (const key of ["whatsapp", "line", "qqbot", "wecom", "google-chat", "nextcloud-talk"]) {
       expect(definitionByKey(key).wizard.inboundWebhook?.whenFieldEquals, key).toBeUndefined();
     }
   });
@@ -357,11 +403,30 @@ describe("channel hosts and inbound webhooks", () => {
     expect(Object.isFrozen(CHANNEL_INBOUND_WEBHOOKS["google-chat"]?.whenAnyFieldSet)).toBe(true);
   });
 
-  it("only names a Telegram receive mode the guide offers", () => {
-    const receiveMode = definitionByKey("telegram")
-      .wizard.steps.flatMap((step) => step.fields ?? [])
+  it("only names a receive mode the guide offers", () => {
+    for (const key of ["telegram", "slack"]) {
+      const receiveMode = definitionByKey(key)
+        .wizard.steps.flatMap((step) => step.fields ?? [])
+        .find((field) => field.key === "receiveMode");
+      expect(
+        receiveMode?.options?.map((option) => option.value),
+        key,
+      ).toContain("webhook");
+    }
+  });
+
+  it("shows Slack's webhook address for a connection made before receive modes existed", () => {
+    const slack = definitionByKey("slack");
+    const legacy = requireChannelSetupDefinition("channel.slack").hydrate(
+      slackConnection({ botToken: "xoxb-1", signingSecret: "s3cret" }),
+    );
+    const condition = slack.wizard.inboundWebhook?.whenFieldEquals;
+    const receiveMode = slack.wizard.steps
+      .flatMap((step) => step.fields ?? [])
       .find((field) => field.key === "receiveMode");
-    expect(receiveMode?.options?.map((option) => option.value)).toContain("webhook");
+
+    expect(legacy.draft[condition?.fieldKey ?? ""]).toBe(condition?.value);
+    expect(receiveMode?.defaultValue).toBe(condition?.value);
   });
 
   it("leaves out channels with no inbound webhook route", () => {

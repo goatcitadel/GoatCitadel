@@ -236,7 +236,7 @@ describe("integration provider webhook routes", () => {
     expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "slack",
-        idempotencyKey: "slack:11111111-1111-1111-1111-111111111111:Ev123Slack",
+        idempotencyKey: "slack:11111111-1111-1111-1111-111111111111:message:C111:1712109984.200000",
         eventType: "message",
         bindingTarget: "C111",
         dispatchKind: "agent_turn",

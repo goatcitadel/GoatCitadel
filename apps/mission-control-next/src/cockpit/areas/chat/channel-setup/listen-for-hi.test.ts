@@ -62,6 +62,18 @@ describe("listenForHi", () => {
     expect(onExpired).toHaveBeenCalledTimes(1);
   });
 
+  it("asks at the interval it is given, for a service that allows fewer questions", async () => {
+    const ask = vi.fn(async () => undefined);
+    const stop = listenForHi(ask, vi.fn(), 6_000);
+    await vi.advanceTimersByTimeAsync(5_999);
+    expect(ask).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ask).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(ask).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
   it("can be stopped twice", () => {
     const stop = listenForHi(async () => undefined, vi.fn());
     stop();
