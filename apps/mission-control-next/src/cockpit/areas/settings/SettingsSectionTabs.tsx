@@ -38,7 +38,9 @@ export function selectedSettingsSection(page: SettingsIndexPage, routeSection: s
       ? "appearance"
       : hash === "approval-mode" || hash === "filesystem-write-roots" || hash === "settings-approval-skip"
         ? "tools"
-        : hash === "claude-cli-tool-bridge" || hash === "claude-cli-warm-continuation"
+        : hash === "claude-cli-tool-bridge" ||
+            hash === "claude-cli-warm-continuation" ||
+            hash === "chat-thinking-stream"
           ? "providers"
           : // A provider sign-in lands here; the MCP section must mount so it can hand the result back.
             isMcpOAuthReturnFragment(hash)

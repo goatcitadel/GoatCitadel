@@ -17,6 +17,11 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS: Partial<
     description:
       "When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one.",
   },
+  chatThinkingStreamV1Enabled: {
+    label: "Model reasoning in Chat",
+    description:
+      "When on, models that report their reasoning stream it into Chat, shown above the answer and kept shut unless you open it.",
+  },
   settingsApprovalSkipEnabled: {
     label: "Apply my Settings and Capabilities changes without an Inbox approval",
     description:

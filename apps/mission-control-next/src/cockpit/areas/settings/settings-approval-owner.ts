@@ -12,6 +12,7 @@ export type SettingsApprovalOwner =
   | "filesystem-write-access"
   | "claude-cli-tool-bridge"
   | "claude-cli-warm-continuation"
+  | "chat-thinking-stream"
   | "settings-approval-skip"
   | "firecrawl"
   | "search-engine-order";
@@ -134,6 +135,7 @@ export function settingsApprovalOwnerBinding(
   } else if (
     owner === "claude-cli-tool-bridge" ||
     owner === "claude-cli-warm-continuation" ||
+    owner === "chat-thinking-stream" ||
     owner === "settings-approval-skip"
   ) {
     // A registered rollout gate: the plan names this one flag, never another.
@@ -142,7 +144,9 @@ export function settingsApprovalOwnerBinding(
         ? "claudeCliToolBridgeEnabled"
         : owner === "claude-cli-warm-continuation"
           ? "claudeCliWarmContinuationEnabled"
-          : "settingsApprovalSkipEnabled";
+          : owner === "chat-thinking-stream"
+            ? "chatThinkingStreamV1Enabled"
+            : "settingsApprovalSkipEnabled";
     expectedWorkspace = "default";
     matches =
       plan.kind === "runtime_configuration" &&

@@ -270,10 +270,10 @@ Record a table of pair, journey, what was announced, and problem. File new findi
 **Step 1, the thinking stream, needs a different method than the plan's.** The plan sets
 `GOATCITADEL_FEATURE_CHAT_THINKING_STREAM_V1_ENABLED` in the shell before it starts the launcher. The launcher removes
 every `GOATCITADEL_*` variable the shell exports before it starts the sandbox (`scripts/testbench-runtime.mjs`), so the
-variable never reaches the sandbox Gateway. The flag is also a runtime setting, and no cockpit control for it exists in
-the source. After the sandbox is up, set it through the Gateway. The body comes from the route's schema and the call
-has not been run; the Gateway may answer with a change-plan receipt to confirm. Mutating requests need an
-`Idempotency-Key` header:
+variable never reaches the sandbox Gateway. The flag is also a runtime setting. After the sandbox is up, turn it on in
+Settings › Models › Model reasoning in Chat, or set it through the Gateway as below. Either way the Gateway answers
+with a change plan that waits for an approval in the Inbox, unless the Settings approval skip is on. Mutating requests
+need an `Idempotency-Key` header:
 
 ```powershell
 $settings = Invoke-RestMethod "<gateway>/api/v1/settings"

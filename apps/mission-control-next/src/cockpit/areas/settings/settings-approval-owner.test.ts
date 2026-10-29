@@ -46,6 +46,16 @@ function fixture(owner: SettingsApprovalOwner): ChangePlanRecord {
       },
       target: { ...base.target, resourceId: "feature:claudeCliWarmContinuationEnabled" },
     };
+  if (owner === "chat-thinking-stream")
+    return {
+      ...base,
+      origin: { surface: "settings", workspaceId: "default" },
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "feature_flag", flag: "chatThinkingStreamV1Enabled", enabled: true },
+      },
+      target: { ...base.target, resourceId: "feature:chatThinkingStreamV1Enabled" },
+    };
   if (owner === "filesystem-write-access")
     return {
       ...base,
@@ -88,6 +98,7 @@ const owners: SettingsApprovalOwner[] = [
   "filesystem-write-access",
   "claude-cli-tool-bridge",
   "claude-cli-warm-continuation",
+  "chat-thinking-stream",
 ];
 
 describe("native Settings exact approval owner binding", () => {
@@ -136,23 +147,28 @@ describe("native Settings exact approval owner binding", () => {
     expect(settingsApprovalOwnerBinding(bridge, "claude-cli-warm-continuation", "workspace-a")).toBeNull();
     expect(settingsApprovalOwnerBinding(warm, "claude-cli-tool-bridge", "workspace-a")).toBeNull();
   });
+  it("keeps the model reasoning flag apart from the other Settings flags", () => {
+    const thinking = fixture("chat-thinking-stream");
+    expect(settingsApprovalOwnerBinding(thinking, "claude-cli-warm-continuation", "workspace-a")).toBeNull();
+    expect(
+      settingsApprovalOwnerBinding(fixture("claude-cli-tool-bridge"), "chat-thinking-stream", "workspace-a"),
+    ).toBeNull();
+  });
   it.each([
     "tool-approval",
     "budget-mode",
     "filesystem-write-access",
     "claude-cli-tool-bridge",
     "claude-cli-warm-continuation",
-  ] as const)(
-    "rejects another runtime operation for %s even with the expected target",
-    (owner) => {
-      const plan = fixture(owner);
-      const foreign: ChangePlanRecord = {
-        ...plan,
-        request: { kind: "runtime_configuration", change: { operation: "network_allowlist", entries: ["127.0.0.1"] } },
-      };
-      expect(settingsApprovalOwnerBinding(foreign, owner, "workspace-a")).toBeNull();
-    },
-  );
+    "chat-thinking-stream",
+  ] as const)("rejects another runtime operation for %s even with the expected target", (owner) => {
+    const plan = fixture(owner);
+    const foreign: ChangePlanRecord = {
+      ...plan,
+      request: { kind: "runtime_configuration", change: { operation: "network_allowlist", entries: ["127.0.0.1"] } },
+    };
+    expect(settingsApprovalOwnerBinding(foreign, owner, "workspace-a")).toBeNull();
+  });
   it("distinguishes installation profile/key custody from explicitly workspace-owned Codex OAuth", () => {
     const base = fixture("provider-management");
     const plan: ChangePlanRecord = {

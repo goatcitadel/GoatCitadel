@@ -31,6 +31,7 @@ import {
   ModelsSettings,
   ClaudeCliToolBridgeControl,
   ClaudeCliWarmContinuationControl,
+  ChatThinkingStreamControl,
   ToolGrantSettings,
   SafetyCatalogSummary,
   PermissionProfileSettings,
@@ -166,6 +167,7 @@ export function SettingsArea() {
         return (
           <>
             <ModelsSettings />
+            <ChatThinkingStreamControl />
             <ClaudeCliToolBridgeControl />
             <ClaudeCliWarmContinuationControl />
             <ClaudeCliBackgroundJobsNotice />
@@ -232,6 +234,7 @@ export function SettingsArea() {
             ![
               "application-updates",
               "approval-mode",
+              "chat-thinking-stream",
               "claude-cli-tool-bridge",
               "claude-cli-warm-continuation",
               "filesystem-write-roots",
