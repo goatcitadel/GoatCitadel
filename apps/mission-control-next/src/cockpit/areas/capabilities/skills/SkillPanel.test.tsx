@@ -477,7 +477,9 @@ describe("Skill panel switch", () => {
 
     await press(buttonIn(document.body, "Close inspector"));
     await openPanel("Notes");
-    expect(panelText()).toContain("Paused skills are used only when you name them in Chat.");
+    expect(panelText()).toContain(
+      "Paused skills are used when you name them in Chat. Chat picks one on its own for a close match only if you've turned off first use confirmation.",
+    );
     expect(buttonIn(body(), "Pause")).toBeUndefined();
     await press(buttonIn(body(), "Resume"));
     expect(api.setCapabilitySkillState).toHaveBeenLastCalledWith({
@@ -506,7 +508,9 @@ describe("Skill panel switch", () => {
     expect(body()!.querySelector('[role="switch"]')).not.toBeNull();
     expect(panelText()).toContain("so the AI can't use it");
     expect(panelText()).not.toContain("Takes effect in new chats.");
-    expect(panelText()).not.toContain("Paused skills are used only when you name them in Chat.");
+    expect(panelText()).not.toContain(
+      "Paused skills are used when you name them in Chat. Chat picks one on its own for a close match only if you've turned off first use confirmation.",
+    );
   });
 
   it.each([

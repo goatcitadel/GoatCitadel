@@ -673,7 +673,7 @@ export function skillSearchSuggestion(items: readonly CapabilitySkillItem[]): st
 | waiting | Waiting for your approval | a "Review" button that opens the panel (R37: the Inbox can't list skill approvals) |
 | off | Off | The AI can't use it |
 | `leftOutOfWorkspace` (Task 6b) | Left out of this workspace | This workspace's skill choices leave it out, so the AI can't use it here. Links to the workspace's capability settings. The switch still works for the whole install. |
-| paused | Paused | Used only when you name it |
+| paused | Paused | Used when you name it, or on a close match if you allow it |
 | on, not callable | Not usable yet | It hasn't been reviewed, so the AI can't use it |
 | on, callable | On | the uses line |
 
@@ -745,7 +745,7 @@ export function skillIdFromSearch(search: string): string | undefined;
    - the waiting or failure line under it
    - "Pause" when on, or "Resume" when paused, through `setPaused`
    - "Takes effect in new chats." when on
-   - "Paused skills are used only when you name them in Chat." when paused
+   - "Paused skills are used when you name them in Chat. Chat picks one on its own for a close match only if you've turned off first use confirmation." when paused
 4. **The approval in place.** When `waitingApprovalId` is set, `SettingsApprovalDialog` opens once for it, and "Review the change" reopens it (R37).
 5. "Uses": the uses line plus "last used `<relative time>`" when known.
 6. "Tags": each tag is a button that puts the tag in the tab's search and closes the panel.

@@ -169,7 +169,7 @@ describe("presentSkillState", () => {
       item: { state: "paused", callable: true },
       label: "Paused",
       tone: "neutral",
-      reason: "Used only when you name it",
+      reason: "Used when you name it, or on a close match if you allow it",
       kind: "paused",
     },
     { name: "on and callable", label: "On", tone: "done", reason: USES, kind: "on" },
