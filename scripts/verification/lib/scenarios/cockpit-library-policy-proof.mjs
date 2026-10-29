@@ -39,7 +39,9 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
       const item = catalog.body?.items?.find((entry) => entry.kind === "tool" && entry.toolName === "fs.read");
       const tool = tools.body?.items?.find((entry) => entry.toolName === item?.toolName);
       const example = tool?.examples?.[0];
-      const agent = agents.body?.items?.find((entry) => entry.lifecycleStatus === "active");
+      // The inspector offers the same list: active agents, up to 50.
+      const activeAgents = agents.body?.items?.filter((entry) => entry.lifecycleStatus === "active") ?? [];
+      const agent = activeAgents[0];
       assert.ok(item && example && agent, "Policy proof needs fs.read, its catalog example, and an actual active agent");
       const group = toolGroupForTool(item.toolName);
       assert.ok(group, "Policy proof needs the Tools group that holds fs.read");
@@ -65,8 +67,7 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
         await page.goto(buildVerificationUiUrl(stack.uiUrl, `/capabilities/tools?shell=cockpit&item=${encodeURIComponent(`group:${group.id}`)}`), { waitUntil: "domcontentloaded" });
         // The inspector's body is a region named "Inspector: <group>", on a wide screen and inside the phone sheet alike.
         const detail = page.getByRole("region", { name: /^Inspector: /u });
-        const technical = detail.locator("details").filter({ has: detail.locator("summary", { hasText: "Technical details" }) });
-        await technical.locator("summary").click({ timeout: 30_000 });
+        await detail.locator("summary", { hasText: "Technical details" }).click({ timeout: 30_000 });
         // The check starts on the group's first tool; pick the tool this proof evaluates.
         await detail.getByRole("combobox", { name: /^Check a tool's policy(?:\s|$)/u }).selectOption(item.toolName);
         const inspector = detail.getByRole("region", { name: "Tool policy inspector", exact: true });
@@ -117,8 +118,10 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
         await inspector.getByRole("button", { name: "Close access rules", exact: true }).click();
         await inspector.getByRole("button", { name: "Inspect access rules", exact: true }).click();
         await inspector.getByRole("combobox", { name: /^Agent(?:\s|$)/u }).waitFor();
-        assert.equal(await inspector.getByRole("combobox", { name: /^Agent(?:\s|$)/u }).inputValue(), "");
-        assert.equal(await inspector.getByRole("combobox", { name: /^Conversation(?:\s|$)/u }).inputValue(), "");
+        // A reopened form starts fresh, but it selects the only choice when there is exactly one: the seed makes one
+        // conversation, and an agent is selected only when the sandbox has exactly one active agent.
+        assert.equal(await inspector.getByRole("combobox", { name: /^Agent(?:\s|$)/u }).inputValue(), activeAgents.length === 1 ? agent.agentId : "");
+        assert.equal(await inspector.getByRole("combobox", { name: /^Conversation(?:\s|$)/u }).inputValue(), sessionId);
         assert.equal(await result.count(), 0);
         return { status: "passed", metrics: { workspaceId, sessionId, agentId: agent.agentId, toolName: tool.toolName,
           advisoryDecisionRecorded: true, actualToolExecuted: false, exactExampleArguments: true,

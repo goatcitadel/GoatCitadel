@@ -20,7 +20,13 @@ export async function runCockpitLibraryLinkProof({ context, browser, stack, cita
       const item = owner.body?.items?.filter((entry) => entry.kind === "skill" && entry.title && entry.summary).at(-1);
       if (!item || !seeded.body?.workspaceId) throw new Error("Library proof needs a named skill and scoped workspace.");
       // A Library skill record is `skill:<skillId>`, which is also the value of the Skills tab's `?item=`.
-      const panelItem = `skill:${item.capabilityId.replace(/^skill:/u, "")}`;
+      const skillId = item.capabilityId.replace(/^skill:/u, "");
+      const panelItem = `skill:${skillId}`;
+      // The panel is titled with the name the Skills tab's owner list gives the skill, so read that name from the owner.
+      const skills = await requestJson(stack.gatewayUrl, `/api/v1/capabilities/skills?${new URLSearchParams({ workspaceId: seeded.body.workspaceId })}`);
+      assertOk(skills, "read Skills tab owner list");
+      const skill = skills.body?.items?.find((entry) => entry.skillId === skillId);
+      if (!skill?.name) throw new Error("Library proof needs the skill in the Skills tab's list.");
       // The Type filter offers a kind only when the catalog holds one. Use a kind the seed provides; with none, the
       // Library shows its empty state, which is asserted instead.
       const libraryKind = owner.body.items.find((entry) => LIBRARY_KINDS.includes(entry.kind))?.kind;
@@ -38,8 +44,9 @@ export async function runCockpitLibraryLinkProof({ context, browser, stack, cita
         const atSkillPanel = (url) => url.pathname === "/capabilities/skills" && url.searchParams.get("item") === panelItem
           && url.searchParams.get("shell") === "cockpit" && !url.searchParams.has("type");
         await page.waitForURL(atSkillPanel, { timeout: 30_000 });
-        // The inspector's body is a region named "Inspector: <skill>", docked on a wide screen and in the phone sheet.
-        const detail = page.getByRole("region", { name: /^Inspector: /u });
+        // The inspector's body is a region named "Inspector: <skill name>", docked on a wide screen and in the phone
+        // sheet. The name proves the address opened this skill, before and after a reload.
+        const detail = page.getByRole("region", { name: `Inspector: ${skill.name}`, exact: true });
         await detail.getByRole("heading", { name: "Uses", exact: true }).waitFor({ timeout: 30_000 });
         await page.reload({ waitUntil: "domcontentloaded" });
         await page.waitForURL(atSkillPanel, { timeout: 30_000 });
