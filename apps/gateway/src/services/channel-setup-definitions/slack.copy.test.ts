@@ -126,7 +126,7 @@ describe("Slack setup guide: what it says up front (items 4 and 5)", () => {
     const wizard = guide().definition.wizard;
 
     expect(wizard.introSummary).toBe(
-      "Send messages from your own Slack app into the channels you choose. To receive messages without a public web address, set Slack up from Messaging in Chat. Here, receiving needs an app installed with OAuth and a public HTTPS address.",
+      "Send messages from your own Slack app into the channels you choose. To receive messages, use Socket Mode, which needs no public web address and is quickest to set up from Messaging in Chat, or an app installed with OAuth and a public HTTPS address.",
     );
     expect(wizard.prerequisites).toEqual([
       "Your own Slack app with the chat:write scope, installed to your workspace.",
