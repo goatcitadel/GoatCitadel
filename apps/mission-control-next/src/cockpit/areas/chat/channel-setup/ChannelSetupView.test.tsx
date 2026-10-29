@@ -45,6 +45,7 @@ beforeEach(() => {
     items: [
       definition("telegram", "Telegram"),
       definition("discord", "Discord"),
+      definition("slack", "Slack"),
       definition("mattermost", "Mattermost"),
     ],
   });
@@ -79,6 +80,14 @@ describe("ChannelSetupView", () => {
     expect(api.fetchChannelSetupDrafts).toHaveBeenCalledWith({ catalogId: "channel.discord" });
   });
 
+  it("opens Slack's own setup page", async () => {
+    await mount("slack");
+    expect(container.querySelector("h1")?.textContent).toBe("Set up Slack");
+    expect(container.textContent).toContain("Install it and copy two tokens");
+    expect(container.textContent).not.toContain("Its steps are in Settings");
+    expect(api.fetchChannelSetupDrafts).toHaveBeenCalledWith({ catalogId: "channel.slack" });
+  });
+
   it("still sends a channel without a page of its own to Settings", async () => {
     await mount("mattermost");
     expect(container.querySelector("h1")?.textContent).toBe("Add Mattermost");
@@ -100,6 +109,7 @@ describe("the pages ChannelSetupView chooses between", () => {
     for (const key of SETUP_PAGES.keys()) expect(CONVERTED_SETUP_CHANNELS.has(key), key).toBe(true);
     expect(SETUP_PAGES.has("telegram")).toBe(true);
     expect(SETUP_PAGES.has("discord")).toBe(true);
+    expect(SETUP_PAGES.has("slack")).toBe(true);
   });
 
   it("has a key page for exactly the channels the channel page sends there", () => {

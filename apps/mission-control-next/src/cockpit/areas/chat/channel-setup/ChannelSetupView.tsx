@@ -7,6 +7,7 @@ import { settingsChannelSetupHref } from "./channel-picker-model";
 import { useChannelConnection } from "../use-channel-connections";
 import { DiscordSetupPage } from "./DiscordSetupPage";
 import { SetupFrame as Frame } from "./SetupFrame";
+import { SlackSetupPage } from "./SlackSetupPage";
 import { TelegramKeyChange } from "./TelegramKeyChange";
 import { TelegramSetupPage } from "./TelegramSetupPage";
 import { useChannelPickerGroups } from "./use-channel-picker-groups";
@@ -35,6 +36,7 @@ interface KeyChangePageProps {
 export const SETUP_PAGES: ReadonlyMap<string, ComponentType<SetupPageProps>> = new Map([
   ["telegram", TelegramSetupPage],
   ["discord", DiscordSetupPage],
+  ["slack", SlackSetupPage],
 ]);
 
 /**
