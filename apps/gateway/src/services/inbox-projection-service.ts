@@ -85,8 +85,26 @@ const SKILL_STATE_VERBS: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
+ * The words for one switch change ("Turn on skill planner") or a bulk one ("Pause 3 skills"), when its preview has
+ * them: a known state, and the skill's id or a positive whole count of skills.
+ */
+function skillChangeTitle(preview: Record<string, unknown>, verb: string | undefined): string | undefined {
+  if (!verb) return undefined;
+  if (preview.action === "skill_state_set") {
+    const skillId = typeof preview.skillId === "string" ? preview.skillId.trim() : "";
+    return skillId ? `${verb} skill ${skillId}` : undefined;
+  }
+  const count = preview.skillCount;
+  if (preview.action !== "skill_state_bulk_set" || typeof count !== "number" || !Number.isInteger(count) || count < 1) {
+    return undefined;
+  }
+  return `${verb} ${count} ${count === 1 ? "skill" : "skills"}`;
+}
+
+/**
  * A skill change reads as the change: "Turn on skill planner", "Pause skill planner" or "Turn off skill planner"
- * from its preview, else the preview's own title. A skill switch applies to the whole install, so it says so.
+ * from its preview, or "Turn on 3 skills" for a bulk change, else the preview's own title. A skill switch applies to
+ * the whole install, so it says so.
  */
 function skillLifecycleApproval(
   kind: string,
@@ -94,10 +112,8 @@ function skillLifecycleApproval(
 ): { title?: string; summary: string } | undefined {
   if (kind !== "skill.lifecycle") return undefined;
   const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
-  const skillId = text(preview.skillId);
   const verb = typeof preview.state === "string" ? SKILL_STATE_VERBS.get(preview.state) : undefined;
-  const title =
-    preview.action === "skill_state_set" && skillId && verb ? `${verb} skill ${skillId}` : text(preview.title);
+  const title = skillChangeTitle(preview, verb) ?? text(preview.title);
   return { ...(title ? { title: bounded(title) } : {}), summary: "Applies to every workspace." };
 }
 

@@ -407,6 +407,8 @@ describe("Gateway inbox projection", () => {
       createdAt: "2026-10-29T12:00:00.000Z",
     });
     const change = { title: "Approve skill state change", action: "skill_state_set", skillId: "planner" };
+    // The preview the skill state owner writes for a bulk change (`skill-state-service.ts`).
+    const bulk = { title: "Approve bulk skill state change", action: "skill_state_bulk_set" };
     vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
       items: [
         skill("on", { ...change, state: "enabled" }),
@@ -414,7 +416,13 @@ describe("Gateway inbox projection", () => {
         skill("off", { ...change, state: "disabled" }),
         skill("unknown-state", { ...change, state: "archived" }),
         skill("no-skill-id", { ...change, skillId: "", state: "enabled" }),
-        skill("bulk", { title: "Approve bulk skill change", action: "skill_state_bulk_set", state: "disabled" }),
+        skill("bulk-on", { ...bulk, state: "enabled", skillCount: 3 }),
+        skill("bulk-pause-one", { ...bulk, state: "sleep", skillCount: 1 }),
+        skill("bulk-off", { ...bulk, state: "disabled", skillCount: 2 }),
+        skill("bulk", { ...bulk, state: "disabled" }),
+        skill("bulk-zero", { ...bulk, state: "enabled", skillCount: 0 }),
+        skill("bulk-fraction", { ...bulk, state: "enabled", skillCount: 1.5 }),
+        skill("bulk-unknown-state", { ...bulk, state: "archived", skillCount: 2 }),
         skill("untitled", { action: "skill_state_bulk_set" }),
         skill("other-kind", { ...change, state: "enabled" }, "demo.first_run"),
       ],
@@ -432,7 +440,13 @@ describe("Gateway inbox projection", () => {
     expect(read("off")).toEqual({ title: "Turn off skill planner", summary: everyWorkspace });
     expect(read("unknown-state")).toEqual({ title: "Approve skill state change", summary: everyWorkspace });
     expect(read("no-skill-id")).toEqual({ title: "Approve skill state change", summary: everyWorkspace });
-    expect(read("bulk")).toEqual({ title: "Approve bulk skill change", summary: everyWorkspace });
+    expect(read("bulk-on")).toEqual({ title: "Turn on 3 skills", summary: everyWorkspace });
+    expect(read("bulk-pause-one")).toEqual({ title: "Pause 1 skill", summary: everyWorkspace });
+    expect(read("bulk-off")).toEqual({ title: "Turn off 2 skills", summary: everyWorkspace });
+    // Without a positive whole count or a known state, a bulk change keeps the preview's own title.
+    for (const approvalId of ["bulk", "bulk-zero", "bulk-fraction", "bulk-unknown-state"]) {
+      expect(read(approvalId)).toEqual({ title: "Approve bulk skill state change", summary: everyWorkspace });
+    }
     expect(read("untitled")).toEqual({ title: "Review skill lifecycle", summary: everyWorkspace });
     expect(read("other-kind")).toEqual({
       title: "Review demo first run",
