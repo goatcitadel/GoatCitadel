@@ -638,7 +638,9 @@ export class ChatMessageRepository {
     for (let offset = 0; offset < ids.length; offset += 400) {
       const batch = ids.slice(offset, offset + 400);
       // One index probe per session (newest visible message) instead of ranking every message.
-      const rows = this.db.prepare(`
+      const rows = this.db
+        .prepare(
+          `
         SELECT wanted.session_id AS session_id, (
           SELECT message.content FROM chat_messages message
           WHERE message.session_id = wanted.session_id
@@ -646,7 +648,9 @@ export class ChatMessageRepository {
           ORDER BY message.seq DESC LIMIT 1
         ) AS content
         FROM (${batch.map(() => "SELECT CAST(? AS TEXT) AS session_id").join(" UNION ALL ")}) wanted
-      `).all(...batch) as Array<{ session_id: string; content: string | null }>;
+      `,
+        )
+        .all(...batch) as Array<{ session_id: string; content: string | null }>;
       for (const row of rows) {
         if (row.content !== null && row.content !== undefined) result.set(row.session_id, row.content);
       }
