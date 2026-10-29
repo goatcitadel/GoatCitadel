@@ -4934,8 +4934,9 @@ export class GatewayService {
       throw error;
     });
     const session = await this.storage.sessions.getBySessionId(sessionId);
+    const lastInboundAt = await this.storage.chatMessages.latestChannelMessageAt(sessionId);
     return await routeOperatorDeskSend(
-      { sessionId, sessionKey: session.sessionKey, binding, connection, ...input },
+      { sessionId, sessionKey: session.sessionKey, binding, connection, ...input, lastInboundAt },
       (acceptance) => this.inboundChannelEventService.acceptOperatorDeskEvent(acceptance),
     );
   }

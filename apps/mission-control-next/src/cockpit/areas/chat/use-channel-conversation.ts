@@ -20,6 +20,7 @@ function sameContext(left: ChannelConversationContext | undefined, right: Channe
   return (
     left.sessionId === right.sessionId &&
     left.connectionId === right.connectionId &&
+    left.channelKey === right.channelKey &&
     left.channelLabel === right.channelLabel &&
     left.title === right.title &&
     left.kind === right.kind &&

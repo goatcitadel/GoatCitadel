@@ -9,7 +9,8 @@
  * - `post`: any other conversation (a group, or someone else's direct conversation). The text is posted into the
  *   conversation as written, which is the existing verbatim path. Anything less certain than "ask" is "post", so a
  *   desk send never starts a turn on another person's behalf.
- * - `blocked`: the channel is removed, switched off, or not connected; nothing is sent.
+ * - `blocked`: the channel is removed, switched off, or not connected, or it is WhatsApp and the person's last message
+ *   is more than 24 hours old; nothing is sent.
  *
  * Everything here is a pure decision or builder. The Gateway reads the binding, connection and session, and commits
  * the event through the inbound worker's own acceptance path.
@@ -18,6 +19,8 @@
 import {
   ConflictError,
   ValidationError,
+  WHATSAPP_REPLY_WINDOW_CLOSED,
+  isChannelReplyWindowClosed,
   resolveChannelOwnerActorIds,
   type ChatChannelConversation,
   type ChatSendMessageResponse,
@@ -351,24 +354,44 @@ export async function acceptOperatorDeskTurn(
 
 /**
  * Decides what one desk send does and, in the operator's own conversation, accepts it. A missing binding, a mission
- * session, or any conversation that is not provably the operator's own keeps the existing verbatim path. A desk
- * question is text only: files, non-text parts, a template or a workspace snapshot are refused, never dropped.
+ * session, or any conversation that is not provably the operator's own keeps the existing verbatim path. A WhatsApp
+ * reply outside the 24-hour window is blocked in either mode, once a removed or switched-off channel has been ruled
+ * out. A desk question is text only: files, non-text parts, a template or a workspace snapshot are refused, never
+ * dropped.
  */
 export async function routeOperatorDeskSend(
   input: Omit<OperatorDeskTurnInput, "binding"> &
     OperatorDeskRequestExtras & {
       binding: ChatSessionBindingRecord | undefined;
       connection: IntegrationConnection | undefined;
+      /** When the person last wrote in this conversation; a WhatsApp reply is refused 24 hours after it. */
+      lastInboundAt?: string;
+      /** The clock the reply window is read against. */
+      now?: () => Date;
     },
   host: ChannelDeskTurnHost,
 ): Promise<OperatorDeskSendResult> {
-  const { binding, connection, attachments, parts, templateInvocation, workspaceSnapshot, ...turn } = input;
+  const {
+    binding,
+    connection,
+    attachments,
+    parts,
+    templateInvocation,
+    workspaceSnapshot,
+    lastInboundAt,
+    now,
+    ...turn
+  } = input;
   if (!binding) {
     return { mode: "post" };
   }
   const mode = resolveDeskConversationMode(binding, connection);
   if (mode === "blocked") {
     return { mode, message: describeBlockedDeskReply(connection) };
+  }
+  // The window is the provider's, so it ends a reply in either mode, and before anything is accepted.
+  if (isChannelReplyWindowClosed(connection?.key, lastInboundAt, now?.() ?? new Date())) {
+    return { mode: "blocked", message: WHATSAPP_REPLY_WINDOW_CLOSED };
   }
   if (mode === "post") {
     return { mode };

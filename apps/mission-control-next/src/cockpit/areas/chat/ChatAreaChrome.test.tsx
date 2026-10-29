@@ -205,6 +205,7 @@ describe("ChatSessionHeader for a channel conversation", () => {
   const channel: ChannelConversationContext = {
     sessionId: "session-1",
     connectionId: "conn-1",
+    channelKey: "telegram",
     channelLabel: "Telegram",
     title: "You",
     kind: "direct",

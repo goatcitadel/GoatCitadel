@@ -55,6 +55,7 @@ function channelTurn(
 const telegram: ChannelConversationContext = {
   sessionId: "session-1",
   connectionId: "conn-1",
+  channelKey: "telegram",
   channelLabel: "Telegram",
   title: "You",
   kind: "direct",

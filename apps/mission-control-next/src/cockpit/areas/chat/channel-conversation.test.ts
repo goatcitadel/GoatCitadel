@@ -5,6 +5,7 @@ import {
   describeChannelMessageSource,
   findNewChannelMessages,
   isNewerThan,
+  latestChannelTurnAt,
   newestMessageTimestamp,
   newMessagesDividerText,
   type ChannelConversationContext,
@@ -53,6 +54,7 @@ function channelOf(overrides: Partial<ChannelConversationContext> = {}): Channel
   return {
     sessionId: "own-1",
     connectionId: "conn-tg",
+    channelKey: "telegram",
     channelLabel: "Telegram",
     title: "You",
     kind: "direct",
@@ -76,6 +78,7 @@ describe("describeChannelConversation", () => {
     expect(describeChannelConversation("own-1", overview)).toEqual({
       sessionId: "own-1",
       connectionId: "conn-tg",
+      channelKey: "telegram",
       channelLabel: "Telegram",
       title: "You",
       kind: "direct",
@@ -160,6 +163,21 @@ describe("new messages in a channel conversation", () => {
   it("finds the newest message across both sides of every turn", () => {
     expect(newestMessageTimestamp(turns)).toBe("2026-10-25T09:50:00.000Z");
     expect(newestMessageTimestamp([])).toBeUndefined();
+  });
+
+  it("finds when the person last wrote, never a reply or a desk message", () => {
+    // The assistant's replies and the operator's desk question come later than "new-one" but are not theirs.
+    expect(latestChannelTurnAt(turns.slice(0, 3))).toBe("2026-10-25T09:40:00.000Z");
+    expect(latestChannelTurnAt(turns)).toBe("2026-10-25T09:50:00.000Z");
+    // The newest is read by moment, wherever the turn sits in the list.
+    expect(
+      latestChannelTurnAt([
+        turn("later", "2026-10-25T10:00:00Z", "external_channel"),
+        turn("earlier", "2026-10-25T09:59:59.999Z", "external_channel"),
+      ]),
+    ).toBe("2026-10-25T10:00:00Z");
+    expect(latestChannelTurnAt([turn("desk", "2026-10-25T09:30:00.000Z", "operator")])).toBeUndefined();
+    expect(latestChannelTurnAt([])).toBeUndefined();
   });
 
   it("compares moments, not spellings of them", () => {
