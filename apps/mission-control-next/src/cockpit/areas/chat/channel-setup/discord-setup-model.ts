@@ -113,9 +113,9 @@ export function discordChannelPlace(
 
 /**
  * The draft's values once who may message the bot and where it posts are chosen. The person who made the bot is the
- * only one let in (Discord's connection lets the maker skip pairing, and narrows the default channel to them, only
- * when all three of these are saved together). Direct messages turn the server rules off and drop the server; a
- * channel keeps them on for that one server. The values given are not changed.
+ * only one let in (Discord's connection lets the maker skip pairing only when all three of these are saved together,
+ * and narrows the default channel to the allowed senders). Direct messages turn the server rules off and drop the
+ * server; a channel keeps them on for that one server. The values given are not changed.
  */
 export function discordChoiceValues(
   values: Record<string, unknown>,
@@ -143,16 +143,43 @@ const idsIn = (value: unknown): string[] =>
 const textOf = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined;
 
+/** Whether the values were saved for a different bot than the one a check named. A draft naming no bot was not. */
+const savedForAnotherBot = (values: Record<string, unknown>, applicationId: string): boolean => {
+  const saved = textOf(values.applicationId);
+  return saved !== undefined && saved !== applicationId;
+};
+
+/** Who may message the bot and where it posts, as `discordChoiceValues` saves them, except the access mode. */
+const CHOICE_KEYS: ReadonlySet<string> = new Set([
+  "ownerActorIds",
+  "allowedSenders",
+  "guildPolicy",
+  "defaultGuildId",
+  "defaultChannelId",
+]);
+
+/**
+ * The draft's values for the bot a token check named. When they were saved for another bot, who may message it and
+ * where it posts are dropped, so the defaults are chosen again for the new one (the same person's direct messages with
+ * another bot are another channel). The access mode stays, so nobody is let in until then. The values given are not
+ * changed.
+ */
+export function discordValuesForBot(values: Record<string, unknown>, applicationId: string): Record<string, unknown> {
+  if (!savedForAnotherBot(values, applicationId)) return { ...values };
+  return Object.fromEntries(Object.entries(values).filter(([key]) => !CHOICE_KEYS.has(key)));
+}
+
 /**
  * Who may message the bot and where it posts, as `discordChoiceValues` saved them, so a page coming back to the setup
  * goes on from there. A person counts only when all three saves are there and they still made the bot; where it posts
  * counts only with such a person, and a channel only while the bot is in its server. The server rules' default
- * ("allowlist", with no channel) is no choice.
+ * ("allowlist", with no channel) is no choice, and nothing saved for another bot is either.
  */
 export function savedDiscordChoices(
   values: Record<string, unknown>,
-  check: Pick<DiscordSetupCheckResult, "makers" | "servers">,
+  check: Pick<DiscordSetupCheckResult, "applicationId" | "makers" | "servers">,
 ): { makerId: string | null; posting: DiscordPosting | null } {
+  if (savedForAnotherBot(values, check.applicationId)) return { makerId: null, posting: null };
   const owners = idsIn(values.ownerActorIds);
   const senders = idsIn(values.allowedSenders);
   const makerId =

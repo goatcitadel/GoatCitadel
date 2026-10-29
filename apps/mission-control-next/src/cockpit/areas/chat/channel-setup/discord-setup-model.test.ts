@@ -14,6 +14,7 @@ import {
   discordPostingValue,
   discordTokenWorks,
   discordTurnOnChanges,
+  discordValuesForBot,
   postingFromValue,
   savedDiscordChoices,
 } from "./discord-setup-model";
@@ -203,7 +204,7 @@ describe("discordChoiceValues", () => {
 });
 
 describe("savedDiscordChoices", () => {
-  const check = { makers: [ADA, { id: "334", name: "Bo" }], servers: [SERVER] };
+  const check = { applicationId: "222", makers: [ADA, { id: "334", name: "Bo" }], servers: [SERVER] };
   const who = { ownerActorIds: ["333"], allowedSenders: ["333"], inboundAccessMode: "allowlist" };
 
   it("finds nothing on a draft with no choice", () => {
@@ -235,5 +236,54 @@ describe("savedDiscordChoices", () => {
     expect(
       savedDiscordChoices({ ...who, guildPolicy: "allowlist", defaultGuildId: "404", defaultChannelId: "701" }, check),
     ).toEqual({ makerId: "333", posting: null });
+  });
+
+  it("goes on with nothing saved for another bot, so the defaults are chosen again for this one", () => {
+    // The same person made both bots, but the direct messages saved are with the old bot.
+    const forOldBot = { applicationId: "222", ...who, guildPolicy: "off", defaultChannelId: "dm-old-bot" };
+    const inServer = { applicationId: "222", ...who, guildPolicy: "allowlist", defaultGuildId: "900" };
+    const newBot = { ...check, applicationId: "333" };
+
+    expect(savedDiscordChoices(forOldBot, newBot)).toEqual({ makerId: null, posting: null });
+    expect(savedDiscordChoices({ ...inServer, defaultChannelId: "701" }, newBot)).toEqual({
+      makerId: null,
+      posting: null,
+    });
+    // The bot it was saved for still goes on with them, and so does a draft that names no bot.
+    expect(savedDiscordChoices(forOldBot, check)).toEqual({ makerId: "333", posting: { kind: "direct" } });
+    const { applicationId: _named, ...unnamed } = forOldBot;
+    expect(savedDiscordChoices(unnamed, newBot)).toEqual({ makerId: "333", posting: { kind: "direct" } });
+  });
+});
+
+describe("discordValuesForBot", () => {
+  const saved = {
+    setupPage: "messaging",
+    applicationId: "222",
+    label: "kept",
+    ownerActorIds: ["333"],
+    allowedSenders: ["333"],
+    inboundAccessMode: "allowlist",
+    guildPolicy: "allowlist",
+    defaultGuildId: "900",
+    defaultChannelId: "701",
+  };
+
+  it("drops who may message the bot and where it posts when the token now belongs to another bot", () => {
+    const before = structuredClone(saved);
+    expect(discordValuesForBot(saved, "333")).toEqual({
+      setupPage: "messaging",
+      applicationId: "222",
+      label: "kept",
+      // Still only allowed senders, and now none: nobody is let in until the new bot's maker is chosen.
+      inboundAccessMode: "allowlist",
+    });
+    expect(saved).toEqual(before);
+  });
+
+  it("keeps everything for the same bot, or a draft that names no bot yet", () => {
+    expect(discordValuesForBot(saved, "222")).toEqual(saved);
+    const { applicationId: _named, ...unnamed } = saved;
+    expect(discordValuesForBot(unnamed, "333")).toEqual(unnamed);
   });
 });

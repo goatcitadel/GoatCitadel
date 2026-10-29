@@ -14,6 +14,7 @@ import {
   DISCORD_CATALOG_ID,
   DISCORD_TOKEN_FAILED,
   DISCORD_UNREACHABLE,
+  discordValuesForBot,
   savedDiscordChoices,
   type DiscordPosting,
 } from "./discord-setup-model";
@@ -237,7 +238,8 @@ export function useDiscordSetup(workspaceId: string, resumeDraftId?: string): Di
         const saved = await updateChannelSetupDraft(draft.draftId, {
           expectedRevision: stored.revision,
           draft: {
-            ...stored.draft,
+            // A token for another bot drops the old bot's choices, so the defaults are chosen again for this one.
+            ...discordValuesForBot(stored.draft, check.applicationId),
             setupPage: CHAT_SETUP_PAGE,
             runtimeMode: "gateway",
             applicationId: check.applicationId,

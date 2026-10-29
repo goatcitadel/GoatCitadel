@@ -1007,6 +1007,36 @@ describe("useDiscordSetup, choosing where the bot posts", () => {
     expect(lastUpdate()[1].draft).toMatchObject({ ownerActorIds: ["333"], guildPolicy: "off" });
   });
 
+  it("chooses the defaults again when a new token belongs to another bot, dropping the old bot's choices", async () => {
+    // Saved for bot 222: direct messages with Ada, in the channel Discord opened between her and that bot.
+    resumeAt({ ...WHO, guildPolicy: "off", defaultChannelId: "dm-old-bot" });
+    arrangeServers();
+    await mount();
+    expect(current.posting).toEqual({ kind: "direct" });
+    expect(directQuestions()).toEqual([]);
+
+    // The same person made the new bot, 333, so only its direct messages with her are new.
+    arrangeServers({ applicationId: "333" });
+    api.submitChannelSetupDraftSecrets.mockImplementation(async (_id: string, input: { expectedRevision: number }) =>
+      draft({ revision: input.expectedRevision + 1, draft: current.draft!.draft, secretState: TOKEN_STORED }),
+    );
+    await run(() => current.checkToken("MTIzNDU2.OTHER.BOT"));
+
+    // The write that names the new bot carries none of the old bot's choices.
+    const named = api.updateChannelSetupDraft.mock.calls.find(([, input]) => input.draft.applicationId === "333");
+    expect(named?.[1].draft).not.toHaveProperty("defaultChannelId");
+    expect(named?.[1].draft).not.toHaveProperty("ownerActorIds");
+    // The defaults are chosen again for the new bot: a direct message channel opened with Ada for it.
+    expect(directQuestions()).toEqual([expect.objectContaining({ directMessageWith: "333" })]);
+    expect(lastUpdate()[1].draft).toMatchObject({
+      applicationId: "333",
+      ownerActorIds: ["333"],
+      guildPolicy: "off",
+      defaultChannelId: "dm-333",
+    });
+    expect(current).toMatchObject({ makerId: "333", posting: { kind: "direct" }, error: undefined });
+  });
+
   it("chooses the defaults when checking again finds a server, and forgets them when that check fails", async () => {
     resumeAt();
     api.checkDiscordSetup.mockResolvedValueOnce(checkResult({ messageContentIntent: false }));
