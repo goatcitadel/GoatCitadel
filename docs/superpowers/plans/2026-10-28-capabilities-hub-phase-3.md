@@ -53,7 +53,7 @@ Each PR is cut from a freshly fetched `origin/main` in its own worktree (superpo
 
 | PR | Tasks | Ships |
 |---|---|---|
-| 3a | 1–5 | Gateway: categories, use counts, the installed list and details, and the skill switch with the operator skip. No UI yet. |
+| 3a | 1–5 | Gateway: categories, use counts, the installed list and details, and the skill switch with the operator skip. No new UI: Task 5 only updates the skip setting's explanation in Settings (`SettingsApprovalSkipControl.tsx`) so it matches the switch. |
 | 3b | 6–11 | The Skills tab's Installed view: data layer, tab wiring, redirects and command palette, a slimmer Library, the switch, rows, the skill panel, public truth and browser proof. |
 | 3c | 12–16 | Discover and one-step install: the source check and install routes, the Discover list, the Discover view, the install panel with Import from Git, and proof. |
 
@@ -67,6 +67,7 @@ Each PR is cut from a freshly fetched `origin/main` in its own worktree (superpo
   - an install's next step
 
   It never merges catalogs (`apps/mission-control-next/AGENTS.md` lines 24 and 27).
+- **Every mutation route sits behind the Gateway idempotency plugin** (`apps/gateway/src/plugins/idempotency.ts`). It requires an `Idempotency-Key` header, and a replayed key gets the first answer. Below it, the switch's owner-level dedupe is the deterministic `skill.lifecycle` approval id: a retry after a lost response replays the same approval and writes no second audit line. Task 12's routes name their own owner boundary the same way.
 - **HX-402 holds.** Every skill state change and every Skill Hub operation still creates its approval, and only the recovered approval effect applies it.
   - The skip resolves that approval as the operator. It never writes skill state or Hub records itself.
   - Only `capability-skill-actions-service.ts` may resolve an approval on the operator's behalf (guard test, Task 5).
@@ -339,7 +340,7 @@ export class CapabilitySkillsService {
   - `it.each` over the origin rules.
   - `it("maps enabled, sleep and disabled to on, paused and off")`.
   - `it("keeps callable false for an enabled skill that isn't reviewed")`.
-  - `it("hides a skill the workspace left out, and hides nothing when the choices can't be read")`.
+  - `it("lists every skill whatever the workspace's choices, with no hidden marker")`.
   - `it("counts each waiting candidate once across its versions")`.
   - `it("leaves candidatesWaiting out when the catalog can't be read")`.
   - `it("reports a waiting approval for its skill")`.
@@ -375,14 +376,15 @@ export class CapabilitySkillsService {
 export type CapabilitySkillActionOutcome =
   | { status: "approved"; approvalId: string }   // resolved by the skip; the change applies in a moment
   | { status: "waiting"; approvalId: string }    // waiting on the operator
-  | { status: "unchanged" };                     // already in that state
+  | { status: "unchanged" }                      // already in that state
+  | { status: "declined"; approvalId: string; expired: boolean }; // this exact request was already rejected, edited or ran out of time (as built, Ruling R9)
 export interface CapabilitySkillStateRequest {
   workspaceId: string; skillId: string; state: SkillRuntimeState; expectedRevision: number;
 }
 export class CapabilitySkillActionsService {
   setState(input: CapabilitySkillStateRequest & { actorId: string }): Promise<CapabilitySkillActionOutcome>;
 }
-// POST /api/v1/capabilities/skills/state → 202 { waiting | approved } | 200 { unchanged }
+// POST /api/v1/capabilities/skills/state → 202 { waiting | approved } | 200 { unchanged | declined }
 ```
 
 **When the skip applies** (read once per request):
@@ -800,6 +802,8 @@ export interface CapabilitySkillOperationRequest { workspaceId: string; snapshot
 | callable | done |
 | latest settlement blocked or manual_reconciliation | failed |
 
+A rejected or expired approval doesn't count as pending, so the item reads as the step before it: `check_passed` for an install, `installed_off` for a switch-on. The install route then answers `declined` (with `expired`), as the skill switch does.
+
 - **The installs list** holds every Hub item in this workspace whose step is not `done`, `check_passed` or `blocked`, so an interrupted install is found again after a reload.
 - **`asksFor`** comes from the snapshot's permission envelope. Tool ids stay ids; the cockpit labels them with Phase 2's `tool-labels.ts`.
 - **Review errors** keep the review's own code in the error details (`UNKNOWN_FRONTMATTER_DIMENSION`, `BUNDLE_MANIFEST_INVALID`, an untrusted Git host and the rest), with a 422 and a plain message.
@@ -968,7 +972,7 @@ export function describeCheckFailure(code: string | undefined, fallback: string)
 3. The flow then follows `fetchCapabilitySkillInstalls`:
    - every 1 s while a step is applying
    - every 5 s while one is waiting
-4. When the step reads `installed_off` after this confirmation, it requests `activate` without a second confirmation. The one confirmation covers both requests, and each still asks when the setting is off.
+4. When the step reads `installed_off` after this confirmation, it requests `activate` without the operator pressing anything else in the panel. "One confirmation" means one panel submission, not one approval decision. Installing and switching on stay two separate approvals, and with the skip setting off each waits for its own approval in the panel.
 
 The state lives in a module store keyed by snapshot id, so a panel unmount or list refresh doesn't lose it. After a reload, the installs list is the truth. An install found at `installed_off` with no flow running shows "Installed, not switched on" and a "Switch on" button, which requests `activate`.
 
@@ -1079,6 +1083,7 @@ Only an `https` URL is accepted in the browser (a plain message otherwise). The 
 - **Uses count chat turns that loaded the skill.** That covers Chat, scheduled and remote-worker turns. The spec's `usageCount` only moves on the resolve-activation route, so it would read "Not used yet" for skills used daily.
 - **No index for the use counts.** The 10-minute cache bounds the scan, and an index would bring the Postgres dual-lineage migration work. Revisit if a large install shows a slow first read.
 - **Code Mode has no Library entries today** (the Gateway lists none), so the slimmed Library holds candidates, proposals and mesh entries.
+- **Skill details send the loaded `SKILL.md` text as it is.** There is no new file read: it is the loader's copy, the same text `GET /api/v1/skills` already returns for every skill. The loader has no size cap; capping it belongs there, as a follow-up.
 - **Switches are install-wide,** like the skill state they change. Self-authored skills follow the active workspace.
 - **Discover's marketplaces are searched with the existing fetch,** which predates the network allowlist and reaches two fixed sites. Opening Discover doesn't use it.
 
