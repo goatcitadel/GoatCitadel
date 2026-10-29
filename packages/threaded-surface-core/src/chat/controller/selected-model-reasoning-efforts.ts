@@ -6,18 +6,19 @@ interface ProviderReasoningSource {
 }
 
 /**
- * The reasoning efforts the Gateway accepts for this model, in the order it checks them: a provider that reports no
- * reasoning takes only "none"; otherwise the model's catalog list, then the provider's declared list (plus "none",
- * which is always accepted). Undefined when nothing is known, so every effort stays offered and the Gateway decides.
+ * The reasoning efforts this model can be sent with, in the order dispatch resolves them: the model's own catalog list
+ * first (the Gateway removes it for adapters that never send an effort, such as the Claude Code CLI); then, for a
+ * provider that reports no reasoning, only "none"; then the provider's declared list plus "none". Undefined when
+ * nothing is known, so every effort stays offered and the Gateway decides.
  */
 export function selectedModelReasoningEfforts(
   provider: ProviderReasoningSource | undefined,
   model: string,
 ): ChatCompletionReasoningEffort[] | undefined {
   if (!provider) return undefined;
-  if (provider.capabilities?.reasoning === false) return ["none"];
   const byModel = provider.reasoningEffortsByModel?.[model];
   if (byModel?.length) return byModel;
+  if (provider.capabilities?.reasoning === false) return ["none"];
   const declared = provider.capabilities?.reasoningEfforts;
   if (declared?.length) return ["none", ...declared.filter((effort) => effort !== "none")];
   return undefined;
