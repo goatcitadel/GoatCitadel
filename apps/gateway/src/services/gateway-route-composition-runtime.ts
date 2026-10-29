@@ -4,6 +4,7 @@ import { generateVaultKey } from "@goatcitadel/contracts/citadel-vault-node";
 import { DEFAULT_CITADEL_ID } from "@goatcitadel/contracts";
 import { getStartupPhaseRecorder } from "../diagnostics/startup-phases.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import { reportCapabilityScopeFault } from "./capability-scope-resolver.js";
 import { createCronRoutePort } from "./cron-route-service.js";
 import { createDashboardRoutePort } from "./dashboard-route-service.js";
 import { createFilesRoutePort } from "./files-route-service.js";
@@ -240,6 +241,7 @@ export function composeRuntimeAdminRouteDependencies(
       },
       resolveCitadelId: async (workspaceId) =>
         (await gateway.storage.workspaces?.find(workspaceId))?.citadelId ?? DEFAULT_CITADEL_ID,
+      onError: reportCapabilityScopeFault((input) => gateway.recordDevDiagnostic(input)),
     },
     citadels: gateway.storage.citadels,
     masonInterpret: async (prompt, attribution): Promise<string> => {

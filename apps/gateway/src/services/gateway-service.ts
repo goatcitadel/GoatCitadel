@@ -118,7 +118,11 @@ import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
-import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
+import {
+  CapabilityScopeResolver,
+  isCapabilityAllowed,
+  reportCapabilityScopeFault,
+} from "./capability-scope-resolver.js";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import { WorkspaceTurnSkills } from "./workspace-turn-skills.js";
 import { ChatCapabilityDiscoveryService } from "./chat-capability-discovery-service.js";
@@ -1581,6 +1585,7 @@ export class GatewayService {
       listAllIntegrationIds: async () =>
         (await this.storage.integrationConnections.list(undefined, 1000)).map((c) => c.connectionId),
       listAllMcpServerIds: async () => (await this.listMcpServers()).map((server) => server.serverId),
+      onError: reportCapabilityScopeFault((input) => this.recordDevDiagnostic(input)),
     });
     // HX-408 M1: the publication owner reads/writes only the durable mesh
     // capability storage, so it composes ahead of the capability system that
@@ -1656,6 +1661,7 @@ export class GatewayService {
       resolver: this.capabilityScopeResolver,
       resolveCitadelId: async (workspaceId) =>
         (await this.storage.workspaces?.find(workspaceId))?.citadelId ?? DEFAULT_CITADEL_ID,
+      onError: reportCapabilityScopeFault((input) => this.recordDevDiagnostic(input)),
     });
     this.skillLearningService = new SkillLearningService({
       rootDir: config.rootDir,

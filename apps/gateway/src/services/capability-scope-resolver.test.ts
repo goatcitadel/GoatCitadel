@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CapabilityScopeAssignment } from "@goatcitadel/contracts";
-import { CapabilityScopeResolver, computeEffectiveSet, isCapabilityAllowed } from "./capability-scope-resolver.js";
+import {
+  CapabilityScopeResolver,
+  computeEffectiveSet,
+  isCapabilityAllowed,
+  reportCapabilityScopeFault,
+} from "./capability-scope-resolver.js";
 
 function row(
   scopeKind: "citadel" | "workspace",
@@ -138,5 +143,23 @@ describe("CapabilityScopeResolver", () => {
     expect([...(r.skills as Set<string>)]).toEqual([]);
     expect([...(r.integrations as Set<string>)]).toEqual([]);
     expect([...(r.mcpServers as Set<string>)]).toEqual([]);
+  });
+});
+
+describe("reportCapabilityScopeFault", () => {
+  it("records only the error name, never its message", () => {
+    const record = vi.fn();
+
+    reportCapabilityScopeFault(record)(new TypeError("no such table at /private/path/goatcitadel.db"));
+    reportCapabilityScopeFault(record)("not an error");
+
+    expect(record.mock.calls.map(([input]) => input.context)).toEqual([
+      { errorName: "TypeError" },
+      { errorName: "string" },
+    ]);
+    expect(JSON.stringify(record.mock.calls)).not.toContain("private");
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "warn", event: "capability_scope.read_failed" }),
+    );
   });
 });

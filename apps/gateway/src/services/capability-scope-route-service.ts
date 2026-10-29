@@ -26,6 +26,8 @@ export interface CapabilityScopeRouteServiceDeps {
   listRegistry: (resourceType: CapabilityResourceType) => Promise<CapabilityRegistryEntry[]>;
   /** Resolve a workspace's citadel id (mirrors turn-prep). */
   resolveCitadelId: (workspaceId: string) => Promise<string>;
+  /** Reports a fault reading a workspace's Citadel; its skill choices then fail closed. */
+  onError?: (error: unknown) => void;
 }
 
 /** A workspace id guaranteed to have no assignment rows, so the resolver yields the

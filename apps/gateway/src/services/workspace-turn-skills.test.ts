@@ -112,6 +112,24 @@ describe("WorkspaceTurnSkills", () => {
     expect(onError).toHaveBeenCalledTimes(1);
   });
 
+  it("chooses no installed skill, and reports why, when the workspace's Citadel cannot be read", async () => {
+    const source = catalog();
+    const onError = vi.fn();
+    const failure = new Error("workspace store unavailable");
+    const skills = new WorkspaceTurnSkills(source, {
+      resolver: resolver([]),
+      resolveCitadelId: async () => {
+        throw failure;
+      },
+      onError,
+    });
+
+    await skills.listSkills("workspace-a");
+
+    expect(source.listSkills).toHaveBeenCalledWith(new Set(), "workspace-a");
+    expect(onError).toHaveBeenCalledWith(failure);
+  });
+
   it("never hides a skill because integrations or MCP servers cannot be listed", async () => {
     const source = catalog();
     const unavailable = () => {

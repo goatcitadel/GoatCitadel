@@ -8,17 +8,25 @@ export interface WorkspaceSkillChoiceSources {
   resolver: Pick<CapabilityScopeResolver, "resolveSkills">;
   /** The workspace's Citadel, read the same way the capability scope routes and the MCP scope gate read it. */
   resolveCitadelId(workspaceId: string): Promise<string>;
+  /** Reports a fault reading the workspace's Citadel (`reportCapabilityScopeFault`). */
+  onError?: (error: unknown) => void;
 }
 
 /**
  * A workspace's effective skill choices: its own selection narrowed by its Citadel's, or "ALL" when neither has
- * chosen. The resolver fails closed, so a fault reading the choices leaves no installed skill chosen.
+ * chosen. Both reads fail closed: a fault reading the Citadel or the choices leaves no installed skill chosen.
  */
 export async function resolveWorkspaceSkillChoices(
   sources: WorkspaceSkillChoiceSources,
   workspaceId: string,
 ): Promise<EffectiveCapabilitySet> {
-  const citadelId = await sources.resolveCitadelId(workspaceId);
+  let citadelId: string;
+  try {
+    citadelId = await sources.resolveCitadelId(workspaceId);
+  } catch (error) {
+    sources.onError?.(error);
+    return new Set<string>();
+  }
   return await sources.resolver.resolveSkills(citadelId || DEFAULT_CITADEL_ID, workspaceId);
 }
 

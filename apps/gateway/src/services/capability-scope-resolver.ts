@@ -1,5 +1,6 @@
 import type { CapabilityResourceType, CapabilityScopeAssignment, CapabilityScopeKind } from "@goatcitadel/contracts";
 import { DEFAULT_CITADEL_ID } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
 
 export const CAPABILITY_SCOPING_DISABLED_ENV = "GOATCITADEL_CAPABILITY_SCOPING_DISABLED";
 
@@ -146,6 +147,31 @@ export class CapabilityScopeResolver {
       workspace.filter((r) => r.resourceType === type),
     );
   }
+}
+
+/** The bounded, redacted evidence a scope read fault leaves: the error's name only, since its message can carry
+ *  storage detail. The read itself still fails closed. */
+export function reportCapabilityScopeFault(
+  record: (input: {
+    level: "warn";
+    category: "gateway";
+    event: string;
+    message: string;
+    context: { errorName: string };
+  }) => void,
+): (error: unknown) => void {
+  return (error) => {
+    const errorName = error instanceof Error ? error.name : typeof error;
+    const message = "Capability scope choices could not be read, so none count as chosen.";
+    logger.warn(message, { errorName });
+    record({
+      level: "warn",
+      category: "gateway",
+      event: "capability_scope.read_failed",
+      message,
+      context: { errorName },
+    });
+  };
 }
 
 function readKillSwitch(): boolean {

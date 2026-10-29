@@ -273,7 +273,7 @@ Notes:
 - A workspace's own approved self-authored skills (`extra:reviewed-*`, loaded only in the workspace that captured them) always count as chosen: no selection can name them, and approving one was already a choice for that workspace. `CapabilitySystemService.listSkills` adds them after the choice filter, so the scoped catalog route lists them too. Their own switch and lifecycle, including revocation, still apply.
 - The choices narrow what lifecycle, each skill's install-wide switch, deny-wins policy and approvals already allow; they never widen it.
 - Reads without a workspace stay install-wide: the operator's `POST /api/v1/skills/resolve-activation`, Library and the skill management views. The base prompt's skill index lists only the install's chosen skills and, as before, no self-authored ones.
-- A fault reading the choices leaves no installed skill chosen. A fault listing integrations or MCP servers never hides a skill. `GOATCITADEL_CAPABILITY_SCOPING_DISABLED` switches the choices off, so every skill counts as chosen.
+- A fault reading the workspace's Citadel or its choices leaves no installed skill chosen. `reportCapabilityScopeFault` logs it and records a `capability_scope.read_failed` diagnostic carrying the error's name only. A fault listing integrations or MCP servers never hides a skill. `GOATCITADEL_CAPABILITY_SCOPING_DISABLED` switches the choices off, so every skill counts as chosen.
 
 ### Chat Trusted Automatic Fan-Out
 
