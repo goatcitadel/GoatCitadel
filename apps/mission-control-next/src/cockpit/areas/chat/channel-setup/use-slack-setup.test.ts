@@ -3,7 +3,15 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { ChannelSetupDraft, SlackSetupCheckResult } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SLACK_APP_TOKEN_FAILED, SLACK_BOT_TOKEN_FAILED } from "./slack-setup-model";
+import { SETUP_CODE_TTL_MS } from "./setup-code";
+import {
+  SLACK_APP_TOKEN_FAILED,
+  SLACK_BOT_TOKEN_FAILED,
+  SLACK_SAY_HI_POLL_MS,
+  SLACK_UNREACHABLE,
+  slackDraftWithPosting,
+  slackDraftWithSender,
+} from "./slack-setup-model";
 import { SLACK_CATALOG_ID, useSlackSetup, type SlackSetupState } from "./use-slack-setup";
 
 const api = vi.hoisted(() => ({
@@ -73,8 +81,17 @@ function Probe({ workspaceId, resumeDraftId }: { workspaceId: string; resumeDraf
 
 async function settle() {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+    else await new Promise((resolve) => setTimeout(resolve, 0));
   });
+}
+
+/** Lets fake time pass, with every question that falls due asked and answered. */
+async function advance(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+  await settle();
 }
 
 async function mount(workspaceId = "default", resumeDraftId?: string) {
@@ -114,7 +131,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmounted while the fake timers are still installed, so what the hook scheduled is cleared from them.
   act(() => root.unmount());
+  vi.useRealTimers();
   container.remove();
 });
 
@@ -440,5 +459,440 @@ describe("useSlackSetup", () => {
     await settle();
     expect(current.draft).toBeNull();
     expect(api.checkSlackSetup).not.toHaveBeenCalled();
+  });
+});
+
+const ADA = { actorId: "U777", directChannelId: "D777", displayName: "Ada Lovelace" };
+const CHANNELS = [
+  { id: "C100", name: "general", private: false },
+  { id: "G200", name: "secret", private: true },
+];
+
+/** A page whose two tokens have checked out, on a draft at version 3, under fake time. */
+async function mountReady() {
+  vi.useFakeTimers();
+  arrangeCheck();
+  await mount();
+  await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
+  api.checkSlackSetup.mockReset();
+  api.checkSlackSetup.mockResolvedValue(checkResult());
+}
+
+/** Gets a code, lets the first question be asked, and has Ada say hi in answer to it. The draft is then at version 5. */
+async function sayHi() {
+  await run(() => current.newCode());
+  api.checkSlackSetup.mockResolvedValue(checkResult({ codeSender: ADA }));
+  await advance(SLACK_SAY_HI_POLL_MS);
+}
+
+describe("useSlackSetup, saying hi", () => {
+  it("saves a fresh code and asks every 6 seconds", async () => {
+    await mountReady();
+    expect(current.code).toBeNull();
+    await run(() => current.newCode());
+
+    const code = current.code!;
+    expect(code).toMatch(/^[A-Za-z0-9]{10}$/);
+    expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith("draft-1", {
+      expectedRevision: 3,
+      draft: expect.objectContaining({ setupCode: code, receiveMode: "socket", slackTeamId: "T1" }),
+    });
+    expect(current.draft?.revision).toBe(4);
+    expect(current.codeExpired).toBe(false);
+    expect(current.sender).toBeNull();
+
+    expect(SLACK_SAY_HI_POLL_MS).toBe(6_000);
+    await advance(SLACK_SAY_HI_POLL_MS - 1);
+    expect(api.checkSlackSetup).not.toHaveBeenCalled();
+    await advance(1);
+    // Only the code is asked about: the channel list shares conversations.list's budget and waits for step 4.
+    expect(api.checkSlackSetup).toHaveBeenCalledExactlyOnceWith({
+      draftId: "draft-1",
+      expectedRevision: 4,
+      setupCode: code,
+    });
+    await advance(SLACK_SAY_HI_POLL_MS * 2);
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(3);
+    for (const [input] of api.checkSlackSetup.mock.calls) {
+      expect(input).not.toHaveProperty("listChannels");
+      expect(input).not.toHaveProperty("checkAppToken");
+    }
+  });
+
+  it("stops once someone says hi and makes them the allowed sender", async () => {
+    await mountReady();
+    await run(() => current.newCode());
+    const before = current.draft!;
+    api.checkSlackSetup.mockResolvedValue(checkResult({ codeSender: ADA }));
+    await advance(SLACK_SAY_HI_POLL_MS);
+
+    expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith("draft-1", {
+      expectedRevision: before.revision,
+      draft: slackDraftWithSender(before.draft, ADA),
+    });
+    expect(api.updateChannelSetupDraft.mock.lastCall![1].draft).toMatchObject({
+      allowedSenders: ["U777"],
+      ownerActorIds: ["U777"],
+      inboundAccessMode: "allowlist",
+    });
+    expect(current.sender).toEqual(ADA);
+    // Direct messages with them are where it posts until the operator chooses otherwise.
+    expect(current.posting).toEqual({ kind: "direct" });
+    expect(current.draft?.revision).toBe(before.revision + 1);
+    expect(current.manyConversations).toBe(false);
+    expect(current.error).toBeUndefined();
+
+    // Nobody is asked after that, and nothing is left scheduled.
+    const asked = api.checkSlackSetup.mock.calls.length;
+    await advance(SETUP_CODE_TTL_MS);
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(asked);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(current.codeExpired).toBe(false);
+  });
+
+  it("stops after 10 minutes and offers a new code", async () => {
+    await mountReady();
+    await run(() => current.newCode());
+    const first = current.code!;
+    await advance(SETUP_CODE_TTL_MS);
+
+    expect(current.codeExpired).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    const asked = api.checkSlackSetup.mock.calls.length;
+    expect(asked).toBeGreaterThan(50);
+    await advance(SLACK_SAY_HI_POLL_MS * 5);
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(asked);
+
+    // A new code replaces the old one, is saved, and is listened for.
+    await run(() => current.newCode());
+    expect(current.code).not.toBe(first);
+    expect(current.codeExpired).toBe(false);
+    expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith(
+      "draft-1",
+      expect.objectContaining({ draft: expect.objectContaining({ setupCode: current.code }) }),
+    );
+    await advance(SLACK_SAY_HI_POLL_MS);
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(asked + 1);
+    expect(api.checkSlackSetup).toHaveBeenLastCalledWith(expect.objectContaining({ setupCode: current.code }));
+  });
+
+  it("stops when the page closes", async () => {
+    await mountReady();
+    await run(() => current.newCode());
+    await advance(SLACK_SAY_HI_POLL_MS);
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(1);
+
+    await act(async () => root.unmount());
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(SETUP_CODE_TTL_MS);
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a hi that arrives after the page has closed", async () => {
+    await mountReady();
+    await run(() => current.newCode());
+    let answer!: (result: SlackSetupCheckResult) => void;
+    api.checkSlackSetup.mockReturnValue(new Promise<SlackSetupCheckResult>((resolve) => (answer = resolve)));
+    await advance(SLACK_SAY_HI_POLL_MS);
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(1);
+
+    await act(async () => root.unmount());
+    const writes = api.updateChannelSetupDraft.mock.calls.length;
+    await act(async () => {
+      answer(checkResult({ codeSender: ADA }));
+    });
+    await settle();
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(writes);
+  });
+
+  it("notes many conversations, and takes the note back once the hi is seen", async () => {
+    await mountReady();
+    await run(() => current.newCode());
+    api.checkSlackSetup.mockResolvedValue(checkResult({ manyConversations: true }));
+    await advance(SLACK_SAY_HI_POLL_MS);
+    expect(current.manyConversations).toBe(true);
+    expect(current.sender).toBeNull();
+    expect(current.error).toBeUndefined();
+
+    api.checkSlackSetup.mockResolvedValue(checkResult({ manyConversations: true, codeSender: ADA }));
+    await advance(SLACK_SAY_HI_POLL_MS);
+    expect(current.sender).toEqual(ADA);
+    expect(current.manyConversations).toBe(false);
+  });
+
+  it("ignores a question that fails and asks again with the next one", async () => {
+    await mountReady();
+    await run(() => current.newCode());
+    api.checkSlackSetup.mockRejectedValueOnce(new Error(`Bearer ${BOT_TOKEN} rate limited`));
+    await advance(SLACK_SAY_HI_POLL_MS);
+    expect(current.error).toBeUndefined();
+    expect(current.sender).toBeNull();
+
+    api.checkSlackSetup.mockResolvedValue(checkResult({ codeSender: ADA }));
+    await advance(SLACK_SAY_HI_POLL_MS);
+    expect(current.sender).toEqual(ADA);
+    expect(JSON.stringify(current)).not.toContain("SECRET");
+  });
+
+  it("tries to save the same hi again, with the draft as it is now, when saving it failed", async () => {
+    await mountReady();
+    await run(() => current.newCode());
+    api.checkSlackSetup.mockResolvedValue(checkResult({ codeSender: ADA }));
+    api.updateChannelSetupDraft.mockRejectedValueOnce(new Error("This changed somewhere else."));
+    api.fetchChannelSetupDraft.mockResolvedValue(draft({ revision: 6, draft: { setupCode: "x" } }));
+    await advance(SLACK_SAY_HI_POLL_MS);
+    expect(current.sender).toBeNull();
+    expect(current.error).toBeTruthy();
+    expect(current.draft?.revision).toBe(6);
+
+    await advance(SLACK_SAY_HI_POLL_MS);
+    expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith(
+      "draft-1",
+      expect.objectContaining({ expectedRevision: 6 }),
+    );
+    expect(current.sender).toEqual(ADA);
+    expect(current.error).toBeUndefined();
+  });
+
+  it("says why when the code cannot be saved, and offers no code", async () => {
+    await mountReady();
+    api.updateChannelSetupDraft.mockRejectedValueOnce(new Error("This changed somewhere else."));
+    api.fetchChannelSetupDraft.mockResolvedValue(draft({ revision: 3 }));
+    await run(() => current.newCode());
+    expect(current.code).toBeNull();
+    expect(current.error).toBeTruthy();
+    expect(current.busy).toBe(false);
+    await advance(SLACK_SAY_HI_POLL_MS * 3);
+    expect(api.checkSlackSetup).not.toHaveBeenCalled();
+
+    await run(() => current.newCode());
+    expect(current.code).not.toBeNull();
+    expect(current.error).toBeUndefined();
+  });
+
+  it("asks for no code before the tokens work", async () => {
+    vi.useFakeTimers();
+    await mount();
+    await run(() => current.newCode());
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+    expect(current.code).toBeNull();
+  });
+
+  it("starts the code and the asking again from nothing when the tokens are checked anew", async () => {
+    await mountReady();
+    await sayHi();
+    expect(current.sender).toEqual(ADA);
+
+    api.submitChannelSetupDraftSecrets.mockResolvedValue(
+      draft({ revision: 6, draft: current.draft!.draft, secretState: TOKENS_STORED }),
+    );
+    await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
+    expect(current.sender).toBeNull();
+    expect(current.posting).toBeNull();
+    expect(current.channels).toBeNull();
+    expect(current.code).toBeNull();
+  });
+
+  it("stops and forgets everything when the operator starts over", async () => {
+    await mountReady();
+    await run(() => current.newCode());
+    await advance(SLACK_SAY_HI_POLL_MS);
+    await run(() => current.startOver());
+
+    expect(current).toMatchObject({ draft: null, workspace: null, sender: null, code: null, posting: null });
+    expect(vi.getTimerCount()).toBe(0);
+    const asked = api.checkSlackSetup.mock.calls.length;
+    await advance(SETUP_CODE_TTL_MS);
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(asked);
+  });
+
+  it("asks nothing while the setup is being discarded", async () => {
+    await mountReady();
+    await run(() => current.newCode());
+    let finish!: (result: unknown) => void;
+    api.discardChannelSetupDraft.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    let discarding: Promise<void> = Promise.resolve();
+    await act(async () => {
+      discarding = current.startOver();
+      await Promise.resolve();
+    });
+    expect(current.busy).toBe(true);
+    await advance(SLACK_SAY_HI_POLL_MS * 2);
+    expect(api.checkSlackSetup).not.toHaveBeenCalled();
+
+    finish({ draftId: "draft-1", deleted: true });
+    await run(() => discarding);
+    expect(current.draft).toBeNull();
+  });
+
+  it("keeps listening when starting over could not discard the setup", async () => {
+    await mountReady();
+    await run(() => current.newCode());
+    api.discardChannelSetupDraft.mockRejectedValue(new Error("This changed somewhere else."));
+    await run(() => current.startOver());
+    expect(current.error).toBeTruthy();
+    expect(current.code).not.toBeNull();
+    await advance(SLACK_SAY_HI_POLL_MS);
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useSlackSetup, where it posts", () => {
+  it("lists channels on Refresh channels and saves a chosen one", async () => {
+    await mountReady();
+    await sayHi();
+    expect(current.channels).toBeNull();
+    const asked = api.checkSlackSetup.mock.calls.length;
+
+    api.checkSlackSetup.mockResolvedValue(checkResult({ channels: CHANNELS }));
+    await run(() => current.refreshChannels());
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(asked + 1);
+    expect(api.checkSlackSetup).toHaveBeenLastCalledWith({
+      draftId: "draft-1",
+      expectedRevision: 5,
+      listChannels: true,
+    });
+    expect(current.channels).toEqual(CHANNELS);
+    expect(current.busy).toBe(false);
+    expect(current.error).toBeUndefined();
+
+    const before = current.draft!;
+    await run(() => current.choosePosting({ kind: "channel", channelId: "G200" }));
+    expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith("draft-1", {
+      expectedRevision: before.revision,
+      draft: slackDraftWithPosting(before.draft, { kind: "channel", channelId: "G200" }, CHANNELS),
+    });
+    expect(current.posting).toEqual({ kind: "channel", channelId: "G200" });
+    expect(current.draft?.revision).toBe(before.revision + 1);
+    expect(current.error).toBeUndefined();
+    // Choosing asks nothing of Slack: the list was read once.
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(asked + 1);
+
+    await run(() => current.choosePosting({ kind: "direct" }));
+    expect(current.posting).toEqual({ kind: "direct" });
+    expect(current.draft?.draft.targets).toEqual([expect.objectContaining({ channel: "D777", default: true })]);
+  });
+
+  it("chooses no channel the list does not have", async () => {
+    await mountReady();
+    await sayHi();
+    api.checkSlackSetup.mockResolvedValue(checkResult({ channels: CHANNELS }));
+    await run(() => current.refreshChannels());
+    const writes = api.updateChannelSetupDraft.mock.calls.length;
+    await run(() => current.choosePosting({ kind: "channel", channelId: "C404" }));
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(writes);
+    expect(current.posting).toEqual({ kind: "direct" });
+  });
+
+  it("chooses nothing before anyone has said hi", async () => {
+    await mountReady();
+    const writes = api.updateChannelSetupDraft.mock.calls.length;
+    await run(() => current.choosePosting({ kind: "direct" }));
+    await run(() => current.refreshChannels());
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(writes);
+    expect(api.checkSlackSetup).not.toHaveBeenCalled();
+  });
+
+  it("says one plain sentence when the channels cannot be listed, and keeps what was chosen", async () => {
+    await mountReady();
+    await sayHi();
+    api.checkSlackSetup.mockRejectedValue(new Error(`HTTP 429 Authorization: Bearer ${BOT_TOKEN}`));
+    await run(() => current.refreshChannels());
+    expect(current.error).toBe(SLACK_UNREACHABLE);
+    expect(current.channels).toBeNull();
+    expect(current.posting).toEqual({ kind: "direct" });
+    expect(current.busy).toBe(false);
+    expect(JSON.stringify(current)).not.toContain("HTTP 429");
+    expect(JSON.stringify(current)).not.toContain("SECRET");
+
+    // A reply with no list is no list.
+    api.checkSlackSetup.mockResolvedValue(checkResult());
+    await run(() => current.refreshChannels());
+    expect(current.error).toBe(SLACK_UNREACHABLE);
+    expect(current.channels).toBeNull();
+
+    api.checkSlackSetup.mockResolvedValue(checkResult({ channels: CHANNELS }));
+    await run(() => current.refreshChannels());
+    expect(current.error).toBeUndefined();
+    expect(current.channels).toEqual(CHANNELS);
+  });
+
+  it("says why when the choice cannot be saved, and leaves the old choice standing", async () => {
+    await mountReady();
+    await sayHi();
+    api.checkSlackSetup.mockResolvedValue(checkResult({ channels: CHANNELS }));
+    await run(() => current.refreshChannels());
+    api.updateChannelSetupDraft.mockRejectedValueOnce(new Error("This changed somewhere else."));
+    api.fetchChannelSetupDraft.mockResolvedValue(draft({ revision: 9, draft: current.draft!.draft }));
+    await run(() => current.choosePosting({ kind: "channel", channelId: "C100" }));
+    expect(current.error).toBeTruthy();
+    expect(current.posting).toEqual({ kind: "direct" });
+    expect(current.draft?.revision).toBe(9);
+    expect(current.busy).toBe(false);
+  });
+
+  it("falls back to direct messages when a saved channel is no longer among the bot's channels", async () => {
+    vi.useFakeTimers();
+    const saved = slackDraftWithPosting(
+      slackDraftWithSender({ setupPage: "messaging", receiveMode: "socket" }, ADA),
+      { kind: "channel", channelId: "C100" },
+      CHANNELS,
+    );
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [pageDraft({ draft: saved })] });
+    api.checkSlackSetup.mockResolvedValue(checkResult());
+    api.updateChannelSetupDraft.mockImplementation(
+      async (_id: string, input: { expectedRevision: number; draft: Record<string, unknown> }) =>
+        draft({ revision: input.expectedRevision + 1, draft: input.draft, secretState: TOKENS_STORED }),
+    );
+    await mount();
+    expect(current.posting).toEqual({ kind: "channel", channelId: "C100" });
+
+    // The bot was taken out of #general: the list read now doesn't have it.
+    api.checkSlackSetup.mockResolvedValue(checkResult({ channels: [CHANNELS[1]!] }));
+    await run(() => current.refreshChannels());
+    expect(current.channels).toEqual([CHANNELS[1]]);
+    expect(current.posting).toEqual({ kind: "direct" });
+    expect(api.updateChannelSetupDraft.mock.lastCall![1].draft.targets).toEqual([
+      expect.objectContaining({ channel: "D777", default: true }),
+    ]);
+  });
+});
+
+describe("useSlackSetup, coming back to a setup", () => {
+  it("goes on from who said hi and where it posts, without a new code or any asking", async () => {
+    vi.useFakeTimers();
+    const saved = slackDraftWithPosting(
+      slackDraftWithSender({ setupPage: "messaging", receiveMode: "socket" }, ADA),
+      { kind: "channel", channelId: "C100" },
+      CHANNELS,
+    );
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [pageDraft({ draft: saved })] });
+    api.checkSlackSetup.mockResolvedValue(checkResult());
+    await mount();
+
+    expect(current.sender).toEqual(ADA);
+    expect(current.posting).toEqual({ kind: "channel", channelId: "C100" });
+    expect(current.code).toBeNull();
+    expect(current.channels).toBeNull();
+    expect(api.checkSlackSetup).toHaveBeenCalledExactlyOnceWith({
+      draftId: "draft-1",
+      expectedRevision: 4,
+      checkAppToken: true,
+    });
+    await advance(SLACK_SAY_HI_POLL_MS * 3);
+    expect(api.checkSlackSetup).toHaveBeenCalledTimes(1);
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+  });
+
+  it("knows no sender when the tokens no longer work, so the fields come back first", async () => {
+    vi.useFakeTimers();
+    const saved = slackDraftWithSender({ setupPage: "messaging" }, ADA);
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [pageDraft({ draft: saved })] });
+    api.checkSlackSetup.mockResolvedValue(checkResult({ appToken: "rejected" }));
+    await mount();
+    expect(current.workspace).toBeNull();
+    expect(current.sender).toBeNull();
+    expect(current.posting).toBeNull();
+    expect(current.error).toBe(SLACK_APP_TOKEN_FAILED);
   });
 });
