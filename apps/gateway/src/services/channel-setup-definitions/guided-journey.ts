@@ -40,10 +40,10 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     prerequisites: [
       "Your own Slack app with the chat:write scope, installed to your workspace.",
       "The bot invited to each private channel (/invite @your-app).",
-      "To receive messages: an OAuth install from here with message history scopes, and a public HTTPS address for this Gateway.",
+      "To receive messages: Socket Mode with an app-level token (no public web address needed), or an OAuth install from here with message history scopes and a public HTTPS address for this Gateway.",
     ],
     firstMessage:
-      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot.",
+      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. With Socket Mode, send your bot a direct message and check the reply. To receive on a web address instead (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot.",
   },
   telegram: {
     summary:
