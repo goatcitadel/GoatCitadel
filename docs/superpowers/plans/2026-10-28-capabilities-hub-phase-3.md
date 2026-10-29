@@ -12,7 +12,7 @@
   - one skill's details, including its `SKILL.md` text
   - in PR 3c: the Discover list, a source check, and the install steps
 - Operator actions go through new Capabilities routes that call the existing owners, so the same `skill.lifecycle` or `skill_hub.lifecycle` approval is created as today. When the operator's skip applies, the route resolves that approval at once as the operator, with a recorded reason. The existing approval effect then applies the change, so HX-402's "the approval effect is the only executor" rule and its Journey records stay unchanged. The old `/api/v1/skills/*` routes, Chat commands and the AI's tools never skip.
-- When a change does ask, the approval opens in the skill's panel and approves in one click (the #625 dialog), with "Open in Inbox" beside it.
+- When a change does ask, the approval opens in the skill's panel and approves in one click (the #625 dialog). The cockpit Inbox can't list skill approvals, which have no workspace (found in PR 3b), so the tab never points there.
 
 **Tech Stack:** TypeScript, React 19, TanStack Query, Tailwind (cockpit tokens), Fastify, zod, Vitest, node:test (storage), SQLite and Postgres storage.
 
@@ -40,7 +40,7 @@ After this phase, Library's catalog keeps only candidate skills, proposals and m
 
 ## Decided without asking (check these)
 
-- **Approvals open in the panel.** You asked on 2026-10-28 for approvals to pop up where you are and take one click. Skill changes that ask open the #625 approval dialog in the skill's panel, with "Open in Inbox" beside it. Connectors and Tools still link to Inbox; bringing them in line is a follow-up.
+- **Approvals open in the panel.** You asked on 2026-10-28 for approvals to pop up where you are and take one click. Skill changes that ask open the #625 approval dialog in the skill's panel. The tab never links to the Inbox, which can't list skill approvals (R37). Connectors and Tools still link to Inbox; bringing them in line is a follow-up.
 - **Use counts come from chats.** The spec names the skill's `usageCount`, but that field only moves on one rarely used route, never in a chat. Counting from chat turns is the honest number.
 - **Installing with the skip setting off asks twice:** once to install, once to switch it on. The spec keeps each Skill Hub operation's own approval. Both approvals open in the panel.
 - **Discover goes online only when you search.** Opening it shows GoatCitadel's own skill packs and the curated list. Typing a search also asks AgentSkill and SkillsMP, and each search is cached for 10 minutes.
@@ -100,7 +100,7 @@ Each PR is cut from a freshly fetched `origin/main` in its own worktree (superpo
 ## Review Focus
 
 1. **The skip setting is off (the default) and the operator switches a skill on.**
-   - The approval opens in the panel, and the row says "Waiting on you in Inbox" with a link. The switch stays Off.
+   - The approval opens in the panel, and the row says "Waiting for your approval" with a "Review" button that opens the panel. The switch stays Off.
    - Approving in one click turns it On once the change applies. Declining says so and leaves it Off. After 15 minutes it says the request expired.
    - A reload while waiting still shows the wait, because the Gateway reports the pending approval.
    - *(Tasks 4, 8, 10)*
@@ -670,7 +670,7 @@ export function skillSearchSuggestion(items: readonly CapabilitySkillItem[]): st
 
 | Condition (first match) | State word | Reason line |
 |---|---|---|
-| waiting | Waiting on you in Inbox | "Open in Inbox" link (`inboxApprovalLink`) |
+| waiting | Waiting for your approval | a "Review" button that opens the panel (R37: the Inbox can't list skill approvals) |
 | off | Off | The AI can't use it |
 | `leftOutOfWorkspace` (Task 6b) | Left out of this workspace | This workspace's skill choices leave it out, so the AI can't use it here. Links to the workspace's capability settings. The switch still works for the whole install. |
 | paused | Paused | Used only when you name it |
@@ -746,7 +746,7 @@ export function skillIdFromSearch(search: string): string | undefined;
    - "Pause" when on, or "Resume" when paused, through `setPaused`
    - "Takes effect in new chats." when on
    - "Paused skills are used only when you name them in Chat." when paused
-4. **The approval in place.** When `waitingApprovalId` is set, `SettingsApprovalDialog` opens once for it. "Open in Inbox" stays beside the waiting line.
+4. **The approval in place.** When `waitingApprovalId` is set, `SettingsApprovalDialog` opens once for it, and "Review the change" reopens it (R37).
 5. "Uses": the uses line plus "last used `<relative time>`" when known.
 6. "Tags": each tag is a button that puts the tag in the tab's search and closes the panel.
 7. **"Instructions":** the `SKILL.md` body as safe markdown (`NativeMessageRenderer`, role assistant). Its container carries the class that scopes the markdown styles. It shows the first 12 lines, then "Show all".
@@ -769,7 +769,7 @@ export function skillIdFromSearch(search: string): string | undefined;
 
 - [ ] **Step 1: Write the failing tests:**
   - `it("renders a script tag in the instructions as text")`.
-  - `it("opens the approval in place once, and keeps Open in Inbox")`.
+  - `it("opens the approval in place once, and reopens it from the panel")`.
   - `it("pauses and resumes from the panel")`.
   - `it("searches the tab when a tag is pressed")`.
   - `it("keeps ids, URLs and hashes inside Technical details")`.
