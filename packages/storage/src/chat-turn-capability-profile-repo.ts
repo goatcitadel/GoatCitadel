@@ -122,12 +122,53 @@ export interface ChatTurnCapabilityProfileScope {
   profileHash: string;
 }
 
+/** One skill's chat turns in a time window. A turn counts once per skill, however often the profile lists it. */
+export interface SkillUseCount {
+  skillId: string;
+  uses: number;
+  lastUsedAt: string;
+}
+
+/**
+ * A skill is used when a turn's frozen profile lists it under `selection.activatedSkills[].skillId`. That list is
+ * written only when the turn loaded skill instructions, so the text test skips the JSON parse for every other turn.
+ * No index leads with created_at and none is added: the Gateway caches this read.
+ */
+const SKILL_USES_SINCE_SQLITE = `
+  SELECT json_extract(skill.value, '$.skillId') AS skill_id,
+         COUNT(DISTINCT profile.profile_id) AS uses,
+         MAX(profile.created_at) AS last_used_at
+  FROM chat_turn_capability_profiles profile,
+       json_each(profile.profile_json, '$.selection.activatedSkills') skill
+  WHERE profile.created_at >= @since
+    AND instr(profile.profile_json, '"activatedSkills"') > 0
+    AND json_type(skill.value, '$.skillId') = 'text'
+  GROUP BY skill_id
+  ORDER BY skill_id ASC
+`;
+
+const SKILL_USES_SINCE_POSTGRES = `
+  SELECT skill.value ->> 'skillId' AS skill_id,
+         COUNT(DISTINCT profile.profile_id) AS uses,
+         MAX(profile.created_at) AS last_used_at
+  FROM chat_turn_capability_profiles profile
+  CROSS JOIN LATERAL jsonb_array_elements(
+    (profile.profile_json::jsonb) -> 'selection' -> 'activatedSkills'
+  ) AS skill(value)
+  WHERE profile.created_at >= @since
+    AND position('"activatedSkills"' IN profile.profile_json) > 0
+    AND jsonb_typeof(skill.value -> 'skillId') = 'string'
+  GROUP BY skill_id
+  ORDER BY skill_id ASC
+`;
+
 export class ChatTurnCapabilityProfileRepository {
   private readonly insertStmt;
   private readonly getStmt;
   private readonly findByTurnStmt;
   private readonly findByRunStmt;
   private readonly findScopeByTurnStmt;
+  private readonly countSkillUsesSinceStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
@@ -153,6 +194,9 @@ export class ChatTurnCapabilityProfileRepository {
       FROM chat_turn_capability_profiles
       WHERE turn_id = ?
     `);
+    this.countSkillUsesSinceStmt = db.prepare(
+      db.dialect === "postgres" ? SKILL_USES_SINCE_POSTGRES : SKILL_USES_SINCE_SQLITE,
+    );
   }
 
   public create(input: ChatTurnCapabilityProfileRecord): ChatTurnCapabilityProfileRecord {
@@ -219,6 +263,24 @@ export class ChatTurnCapabilityProfileRepository {
       ...(row.auth_actor_id !== null ? { authActorId: row.auth_actor_id } : {}),
       profileHash: row.profile_hash,
     };
+  }
+
+  /**
+   * Chat turns whose profile was frozen at or after `sinceIso`, per skill they loaded, with the latest such turn.
+   * Reads the stored profile JSON without verifying it. PostgreSQL hands COUNT(*) back as a bigint string, so the
+   * count is converted here.
+   */
+  public countSkillUsesSince(sinceIso: string): SkillUseCount[] {
+    const rows = this.countSkillUsesSinceStmt.all({ since: sinceIso });
+    return (Array.isArray(rows) ? rows : []).flatMap((row: unknown) => {
+      if (!isRecord(row) || typeof row.skill_id !== "string" || typeof row.last_used_at !== "string") {
+        return [];
+      }
+      const uses = Number(row.uses);
+      return Number.isSafeInteger(uses) && uses > 0
+        ? [{ skillId: row.skill_id, uses, lastUsedAt: row.last_used_at }]
+        : [];
+    });
   }
 
   public inspectByTurn(turnId: string): ChatTurnCapabilityProfileEnvelope {
@@ -293,17 +355,28 @@ export function verifyChatTurnCapabilityCatalogBinding(
     if (meshEntry || tool.meshPublication) {
       const projection = catalogTool.mesh;
       const binding = tool.meshPublication;
-      if (!meshEntry || !projection || !binding || catalogTool.category !== "mesh_published" ||
-        catalogTool.toolName !== undefined || projection.status !== "active" ||
+      if (
+        !meshEntry ||
+        !projection ||
+        !binding ||
+        catalogTool.category !== "mesh_published" ||
+        catalogTool.toolName !== undefined ||
+        projection.status !== "active" ||
         projection.capabilityKind !== (catalogTool.kind === "mesh_tool" ? "tool" : "mcp_server") ||
-        catalogTool.capabilityId !== deriveMeshCapabilityId(projection.nodeId, projection.capabilityKind, projection.localId) ||
-        binding.nodeId !== projection.nodeId || binding.publisherGeneration !== projection.publisherGeneration ||
-        binding.manifestSha256 !== projection.manifestSha256 || binding.entrySha256 !== projection.entrySha256 ||
+        catalogTool.capabilityId !==
+          deriveMeshCapabilityId(projection.nodeId, projection.capabilityKind, projection.localId) ||
+        binding.nodeId !== projection.nodeId ||
+        binding.publisherGeneration !== projection.publisherGeneration ||
+        binding.manifestSha256 !== projection.manifestSha256 ||
+        binding.entrySha256 !== projection.entrySha256 ||
         binding.effectPosture !== projection.effectPosture ||
-        (projection.activation && (projection.activation.revoked ||
-          projection.activation.activationId !== binding.activationId ||
-          projection.activation.activationRevision !== binding.activationRevision)) ||
-        tool.effectPotential?.potential !== "unknown" || tool.effectPotential.sourceKind !== "remote") {
+        (projection.activation &&
+          (projection.activation.revoked ||
+            projection.activation.activationId !== binding.activationId ||
+            projection.activation.activationRevision !== binding.activationRevision)) ||
+        tool.effectPotential?.potential !== "unknown" ||
+        tool.effectPotential.sourceKind !== "remote"
+      ) {
         throw new Error(`Capability profile ${profile.profileId} mesh tool does not match its callable publication.`);
       }
     }

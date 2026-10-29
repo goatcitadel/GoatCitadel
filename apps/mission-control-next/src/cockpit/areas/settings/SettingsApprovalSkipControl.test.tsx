@@ -69,6 +69,17 @@ describe("cockpit Settings approval skip", () => {
       await vi.waitFor(() => expect(container.textContent).toContain("Current: Off"));
       expect(container.textContent).toContain("Apply my Settings and Capabilities changes without an Inbox approval");
       expect(container.textContent).toContain("connectors you install from Capabilities");
+      expect(container.textContent).toContain("skills you switch on from Capabilities");
+      // Off, and pausing a skill that is on, apply without asking whatever the setting says (Q1: A, Ruling R10),
+      // except on a remote-hardened install. Pausing an off skill gives power back, so the copy never claims it.
+      expect(container.textContent).toContain(
+        "Turning a skill off, or pausing one that is on, from Capabilities applies right away even when this is off",
+      );
+      expect(container.textContent).not.toContain("pausing it from Capabilities");
+      expect(container.textContent).toContain("a remote-hardened install still asks");
+      expect(container.textContent).toContain("A skill switch keeps its approval, marked as approved by you");
+      // Installs from Capabilities beyond connectors don't exist yet, so the copy doesn't claim them.
+      expect(container.textContent).not.toContain("skills you install");
       expect(container.textContent).not.toContain("Apply my Settings changes without");
       expect(container.textContent).toContain("Change requests a model makes in Chat still need your approval.");
       expect(container.textContent).toContain(
