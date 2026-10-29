@@ -17,6 +17,7 @@ import {
   onboardingDefaultsInput,
   type OnboardingDefaultsDraft,
 } from "./onboarding-defaults-binding";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function useOnboardingDefaults(options: {
   state?: OnboardingState;
@@ -106,7 +107,7 @@ export function useOnboardingDefaults(options: {
       });
       setNotice(null);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Defaults could not be reviewed.");
+      setNotice(describeApiError(error, "Defaults could not be reviewed.").summary);
     }
   }
   async function confirm(): Promise<boolean> {

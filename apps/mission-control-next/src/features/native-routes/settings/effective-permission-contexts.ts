@@ -1,6 +1,7 @@
 import type { LocalOperatorOverrideRecord } from "@goatcitadel/contracts";
 import { fetchEffectivePermissionProfile } from "@goatcitadel/mission-control-shared/api/client";
 import { EFFECTIVE_PERMISSION_CONTEXTS } from "./sections/PermissionProfileDraftFields";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export interface EffectivePermissionSurfaceState {
   surface: (typeof EFFECTIVE_PERMISSION_CONTEXTS)[number];
@@ -23,7 +24,7 @@ export async function readEffectivePermissionContexts(workspaceId: string): Prom
           await fetchEffectivePermissionProfile({ workspaceId, surface }),
         );
       } catch (error) {
-        return { surface, error: error instanceof Error ? error.message : "Effective policy unavailable." };
+        return { surface, error: describeApiError(error, "Effective policy unavailable.").summary };
       }
     }),
   );

@@ -10,6 +10,7 @@ import { useSessionViewState } from "../../../../hooks/use-session-view-state";
 import { useAsyncLoad, type Notice } from "../SettingsShared";
 import { addonActionAvailable, assertAddonStatus, type AddonAction } from "./addon-owner-binding";
 import { commitAddonReview, useAddonMutation, type AddonReview } from "./addon-lifecycle";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function useAddonSettings() {
   const base = getGatewayApiBaseUrl(),
@@ -75,7 +76,7 @@ export function useAddonSettings() {
               base,
               id: selectedAddonId,
               loading: false,
-              error: error instanceof Error ? error.message : "Status unavailable.",
+              error: describeApiError(error, "Status unavailable.").summary,
             });
         });
     return () => {
@@ -115,7 +116,7 @@ export function useAddonSettings() {
           base,
           id: selectedAddonId,
           loading: false,
-          error: error instanceof Error ? error.message : "Status unavailable.",
+          error: describeApiError(error, "Status unavailable.").summary,
         });
     }
   }

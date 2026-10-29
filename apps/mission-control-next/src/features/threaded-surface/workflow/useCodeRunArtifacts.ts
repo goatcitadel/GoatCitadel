@@ -16,6 +16,7 @@ import {
   summarizeCapabilitySnapshotProfile,
 } from "./code-workbench-evidence";
 import type { useCodeRunLedger } from "./useCodeRunLedger";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function useCodeRunArtifacts(ledger: ReturnType<typeof useCodeRunLedger>) {
   const { selectedRunDetail, selectedRunScope, selectedRunComparisonScope, comparisonCandidates } = ledger;
@@ -52,9 +53,7 @@ export function useCodeRunArtifacts(ledger: ReturnType<typeof useCodeRunLedger>)
       .catch((error: unknown) => {
         if (!cancelled) {
           setCapabilitySnapshot(null);
-          setCapabilitySnapshotError(
-            error instanceof Error ? error.message : "Unable to load frozen capability snapshot.",
-          );
+          setCapabilitySnapshotError(describeApiError(error, "Unable to load frozen capability snapshot.").summary);
         }
       })
       .finally(() => {
@@ -104,7 +103,7 @@ export function useCodeRunArtifacts(ledger: ReturnType<typeof useCodeRunLedger>)
       .catch((error: unknown) => {
         if (!cancelled) {
           setArtifactPreview(null);
-          setArtifactPreviewError(error instanceof Error ? error.message : "Unable to load Code Mode artifact.");
+          setArtifactPreviewError(describeApiError(error, "Unable to load Code Mode artifact.").summary);
         }
       })
       .finally(() => {
@@ -137,7 +136,7 @@ export function useCodeRunArtifacts(ledger: ReturnType<typeof useCodeRunLedger>)
       .catch((error: unknown) => {
         if (!cancelled) {
           setRunComparison(null);
-          setRunComparisonError(error instanceof Error ? error.message : "Unable to compare Code Mode runs.");
+          setRunComparisonError(describeApiError(error, "Unable to compare Code Mode runs.").summary);
         }
       })
       .finally(() => {

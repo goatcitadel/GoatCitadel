@@ -7,6 +7,7 @@ import {
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { SHELL_NAVIGATION_EVENTS } from "../../app/shell-transition";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 const ACTIVE_POLL_INTERVAL_MS = 3_000;
 const CONFLICT_MESSAGE =
@@ -217,7 +218,7 @@ export function useDurableBackgroundTaskRail(input: {
             : `Background-task state could not be loaded (HTTP ${caught.status ?? "error"}).`,
         );
       } else {
-        setError(caught instanceof Error ? caught.message : "Background-task state could not be loaded.");
+        setError(describeApiError(caught, "Background-task state could not be loaded.").summary);
       }
     } finally {
       if (requestId === requestSequence.current && isCurrent()) {

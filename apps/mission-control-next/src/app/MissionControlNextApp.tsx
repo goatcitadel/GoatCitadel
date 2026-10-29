@@ -86,6 +86,7 @@ import {
   resolveEffectiveShellTheme,
   resolveShellThemeClass,
 } from "./mission-control-shell-model";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export {
   countDashboardSessions,
@@ -219,7 +220,10 @@ export function MissionControlNextApp() {
   const { inspectorOpen, setInspectorOpen, detailEntry, setDetailEntry } = useShellInspector(detailPanelPinned);
   const shellInspectorAvailable = route.area !== "chat";
   const { notifications, pushNotification, dismissNotification, deliverRealtimeNotification, lastEnabledSoundModeRef } =
-    useShellNotifications({ notificationPreferences, visibleSessionId: route.area === "chat" ? route.sessionId : undefined });
+    useShellNotifications({
+      notificationPreferences,
+      visibleSessionId: route.area === "chat" ? route.sessionId : undefined,
+    });
   const { streamState, streamTruthMode } = useEventStream({
     gatewayReady,
     onRealtimeNotification: deliverRealtimeNotification,
@@ -453,7 +457,7 @@ export function MissionControlNextApp() {
       } catch (error) {
         pushNotification(
           "error",
-          error instanceof Error ? `Trust report export failed: ${error.message}` : "Trust report export failed.",
+          `Trust report export failed: ${describeApiError(error, "Try again.").summary}`,
           "trust-report",
         );
       }
@@ -664,7 +668,7 @@ export function MissionControlNextApp() {
         return;
       }
       setWorkspaceOptions([]);
-      setWorkspaceSelectionError(error instanceof Error ? error.message : "Workspace directory could not load.");
+      setWorkspaceSelectionError(describeApiError(error, "Workspace directory could not load.").summary);
       setWorkspaceSelectionStatus("error");
     }
   }, [activeCitadelId, activeWorkspaceId, setActiveScope]);
@@ -1002,7 +1006,11 @@ export function MissionControlNextApp() {
               />
 
               <ShellRouteStage
-                sectionTabs={route.area === "chat" ? null : <RailGroupTabs route={route} sections={groupedRailItems} navigate={navigate} />}
+                sectionTabs={
+                  route.area === "chat" ? null : (
+                    <RailGroupTabs route={route} sections={groupedRailItems} navigate={navigate} />
+                  )
+                }
                 currentRouteDescription={currentRouteDescription}
                 currentRouteLabel={currentRouteLabel}
                 fallback={<RouteSurfaceFallback label={currentRouteLabel} description={currentRouteDescription} />}
@@ -1022,7 +1030,6 @@ export function MissionControlNextApp() {
               onClose={() => setInspectorOpen(false)}
               onTogglePinned={() => setDetailPanelPinned(!detailPanelPinned)}
             />
-
           </UnifiedSidebarFrame>
 
           <NotificationStack items={notifications} onDismiss={dismissNotification} />

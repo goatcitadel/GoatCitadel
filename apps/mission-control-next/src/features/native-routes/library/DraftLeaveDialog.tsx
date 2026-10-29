@@ -8,6 +8,7 @@ import {
   getDirtySectionKeys,
   withDraftLeaveDecision,
 } from "./use-form-dirty";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export type DraftLeaveDialogProps = {
   open: boolean;
@@ -57,7 +58,7 @@ export function useDraftLeaveDialogState({
       if (isCurrent?.() !== false) onContinue();
     } catch (cause) {
       if (isCurrent?.() !== false)
-        setError(cause instanceof Error ? cause.message : "Unable to save. Your draft is preserved.");
+        setError(describeApiError(cause, "Unable to save. Your draft is preserved.").summary);
     } finally {
       if (saveAttempt.current === attempt) {
         saveAttempt.current = null;

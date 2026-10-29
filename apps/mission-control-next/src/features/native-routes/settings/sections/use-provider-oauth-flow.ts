@@ -20,6 +20,7 @@ import type { ProviderNoticeSetter } from "./provider-section-types";
 import { assertSettingsPlanResponse } from "./provider-connection-actions";
 import { useProviderOAuthOperation } from "./use-provider-oauth-operation";
 import { useProviderOAuthPolling } from "./use-provider-oauth-polling";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 function assertOAuthPlan(plan: ChangePlanRecord, workspaceId: string) {
   if (
@@ -76,7 +77,7 @@ export function useProviderOAuthFlow({
     } catch (error) {
       if (statusRequest.current === id) {
         setCodexOAuthStatus(null);
-        setCodexOAuthStatusError(error instanceof Error ? error.message : String(error));
+        setCodexOAuthStatusError(describeApiError(error).summary);
       }
       throw error;
     }
@@ -118,14 +119,15 @@ export function useProviderOAuthFlow({
       ) {
         const activePlans = await fetchChangePlans(context, { limit: 50 });
         if (!isCurrent()) return;
-        plan = activePlans.items.find(
-          (candidate) =>
-            candidate.request.kind === "provider_connection" &&
-            candidate.request.providerId === "openai-codex" &&
-            !["completed", "applied", "cancelled", "failed", "rolled_back", "rollback_failed"].includes(
-              candidate.status,
-            ),
-        ) ?? null;
+        plan =
+          activePlans.items.find(
+            (candidate) =>
+              candidate.request.kind === "provider_connection" &&
+              candidate.request.providerId === "openai-codex" &&
+              !["completed", "applied", "cancelled", "failed", "rolled_back", "rollback_failed"].includes(
+                candidate.status,
+              ),
+          ) ?? null;
         if (!plan)
           plan = await write(
             () =>

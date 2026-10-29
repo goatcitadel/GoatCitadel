@@ -19,6 +19,7 @@ import {
   validWorkspacePlan,
   type PackPlanAction,
 } from "./pack-plan-binding";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export const PACK_ACTION_LABELS: Record<PackPlanAction, string> = {
   confirm: "Confirm reviewed setup action",
@@ -123,7 +124,7 @@ export function usePackPlanAction(plan: ChangePlanRecord, workspaceId: string, o
     } catch (error) {
       if (valid()) {
         setReview(null);
-        setNotice(error instanceof Error ? error.message : "The setup action could not be confirmed.");
+        setNotice(describeApiError(error, "The setup action could not be confirmed.").summary);
       }
     } finally {
       operation.finish();

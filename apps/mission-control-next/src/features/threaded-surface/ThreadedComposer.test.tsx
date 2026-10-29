@@ -1906,7 +1906,8 @@ describe("ThreadedComposer", () => {
       await Promise.resolve();
     });
 
-    expect(collectText(renderer.root)).toContain("Preview unavailable: API error 503: preview unavailable");
+    expect(collectText(renderer.root)).toContain("Preview unavailable: Something went wrong. Try again.");
+    expect(collectText(renderer.root)).not.toContain("API error 503");
   });
 
   it("revokes authenticated image object URLs when a preview resolves after unmount", async () => {

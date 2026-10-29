@@ -16,6 +16,7 @@ import { useIsMounted } from "@next/hooks/use-is-mounted";
 import type { CodePanelType } from "./code-workbench-model";
 import type { CodeModeRunLedgerItem } from "./format";
 import { effectiveCodeModeVerificationStatus, codeModeArtifactIntegritySummary } from "./code-workbench-evidence";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function useCodeRunLedger(props: CodePanelType["props"]) {
   const { workbenchState, selectedTurn, workspaceId, output, onRunHelperSnippet } = props;
@@ -143,7 +144,7 @@ export function useCodeRunLedger(props: CodePanelType["props"]) {
       .catch((error: unknown) => {
         if (!cancelled) {
           setRunList([]);
-          setRunListError(error instanceof Error ? error.message : "Unable to load Code Mode run ledger.");
+          setRunListError(describeApiError(error, "Unable to load Code Mode run ledger.").summary);
         }
       })
       .finally(() => {
@@ -176,9 +177,7 @@ export function useCodeRunLedger(props: CodePanelType["props"]) {
       .catch((error: unknown) => {
         if (!cancelled) {
           setExecutionBackends(null);
-          setExecutionBackendsError(
-            error instanceof Error ? error.message : "Unable to load Code Mode execution backends.",
-          );
+          setExecutionBackendsError(describeApiError(error, "Unable to load Code Mode execution backends.").summary);
         }
       });
     return () => {
@@ -206,7 +205,7 @@ export function useCodeRunLedger(props: CodePanelType["props"]) {
       .catch((error: unknown) => {
         if (!cancelled) {
           setRunDetail(null);
-          setRunDetailError(error instanceof Error ? error.message : "Unable to load Code Mode run detail.");
+          setRunDetailError(describeApiError(error, "Unable to load Code Mode run detail.").summary);
         }
       })
       .finally(() => {
@@ -243,7 +242,7 @@ export function useCodeRunLedger(props: CodePanelType["props"]) {
         if (!cancelled) {
           setVerificationEvidence([]);
           setVerificationError(
-            error instanceof Error ? error.message : "Unable to load durable Code Mode verification evidence.",
+            describeApiError(error, "Unable to load durable Code Mode verification evidence.").summary,
           );
         }
       })
@@ -285,7 +284,7 @@ export function useCodeRunLedger(props: CodePanelType["props"]) {
       ]);
     } catch (error) {
       if (isMounted()) {
-        setVerificationError(error instanceof Error ? error.message : "Unable to run the named Code Mode proof.");
+        setVerificationError(describeApiError(error, "Unable to run the named Code Mode proof.").summary);
       }
     } finally {
       if (isMounted()) {

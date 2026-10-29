@@ -21,6 +21,7 @@ import { TimeText } from "../../ui/TimeText";
 import type { AutonomousActivationGrantStatus, AutonomousActivationKind } from "@goatcitadel/contracts";
 import { formatMoney } from "@goatcitadel/mission-control-shared/content/format";
 import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 const GRANT_STATUS_LABELS: Record<AutonomousActivationGrantStatus, string> = {
   active: "Active",
@@ -70,8 +71,7 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
       {snapshot.isFetching ? <p role="status">Loading autonomous grants…</p> : null}
       {snapshot.isError ? (
         <p role="alert">
-          Grants could not load:{" "}
-          {snapshot.error instanceof Error ? snapshot.error.message : "No details were returned."}
+          Grants could not load: {describeApiError(snapshot.error, "No details were returned.").summary}
         </p>
       ) : null}
       {control.checking ? <p role="status">Reviewing the exact current grant…</p> : null}

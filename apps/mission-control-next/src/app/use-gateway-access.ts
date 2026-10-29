@@ -14,6 +14,7 @@ import {
   subscribeGatewayAuthRejection,
   type GatewayAccessPreflightResult,
 } from "@goatcitadel/mission-control-shared/api/shell-client";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 /*
  * W4.4 (ship punchlist): gateway access preflight extracted from the shell.
@@ -99,7 +100,7 @@ export function useGatewayAccess(options?: { batchStartupReads?: boolean }): Use
           error && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403)
             ? "access-blocked"
             : "unreachable",
-        message: error instanceof Error ? error.message : "Gateway preflight failed.",
+        message: describeApiError(error, "Gateway preflight failed.").summary,
         healthDetail: getGatewayApiBaseUrl(),
       });
     } finally {

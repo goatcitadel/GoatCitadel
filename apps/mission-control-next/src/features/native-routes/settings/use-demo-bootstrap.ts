@@ -5,6 +5,7 @@ import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/cl
 import { getOnboardingAttempt, setOnboardingAttempt, useOnboardingAttempt } from "./onboarding-completion-state";
 import { assertDemoReceipt, demoStateBinding, readDemoDestination } from "./demo-bootstrap-binding";
 import { recordDemoReceipt, useDemoReceipt } from "./demo-bootstrap-state";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function useDemoBootstrap(scope: string) {
   const base = getGatewayApiBaseUrl(),
@@ -126,7 +127,7 @@ export function useDemoBootstrap(scope: string) {
       else if (isCurrent())
         setFeedback({
           identity,
-          message: error instanceof Error ? error.message : "Demo preparation could not be checked.",
+          message: describeApiError(error, "Demo preparation could not be checked.").summary,
         });
     } finally {
       if (getOnboardingAttempt(key)?.phase === "pending") setOnboardingAttempt(key);

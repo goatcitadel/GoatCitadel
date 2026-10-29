@@ -9,6 +9,7 @@ import {
   type TaskCreateDraft,
 } from "./task-create-mutation";
 import { useTaskMutation } from "./task-mutation-state";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function useTaskCreate(options: {
   workspaceId: string;
@@ -19,7 +20,13 @@ export function useTaskCreate(options: {
 }) {
   const base = getGatewayApiBaseUrl();
   const key = taskCreateKey(base, options.workspaceId);
-  const identity = canonicalJsonString([base, options.workspaceId, options.citadelId, options.draft, options.viewIdentity]);
+  const identity = canonicalJsonString([
+    base,
+    options.workspaceId,
+    options.citadelId,
+    options.draft,
+    options.viewIdentity,
+  ]);
   const live = useRef({ identity, generation: 0, lifetime: 0, mounted: true });
   if (live.current.identity !== identity) {
     live.current.identity = identity;
@@ -65,7 +72,7 @@ export function useTaskCreate(options: {
         draft,
       });
     } catch (error) {
-      setFeedback({ identity, text: error instanceof Error ? error.message : "Task review unavailable." });
+      setFeedback({ identity, text: describeApiError(error, "Task review unavailable.").summary });
     }
   }
   async function confirm(onConfirmed: (task: TaskRecord, isCurrent: () => boolean) => unknown, direct = false) {
@@ -73,9 +80,14 @@ export function useTaskCreate(options: {
     if (direct) {
       if (!current(generation) || attempt.phase !== "idle") return;
       try {
-        origin = { generation, lifetime: live.current.lifetime, submitted: structuredClone(options.draft), draft: normalizeTaskCreateDraft(options.draft) };
+        origin = {
+          generation,
+          lifetime: live.current.lifetime,
+          submitted: structuredClone(options.draft),
+          draft: normalizeTaskCreateDraft(options.draft),
+        };
       } catch (error) {
-        setFeedback({ identity, text: error instanceof Error ? error.message : "Task creation unavailable." });
+        setFeedback({ identity, text: describeApiError(error, "Task creation unavailable.").summary });
         return;
       }
     }
@@ -84,13 +96,15 @@ export function useTaskCreate(options: {
     live.current.generation++;
     const dispatchGeneration = live.current.generation;
     let acknowledgedIdentity: string | undefined;
-    const owns = () => live.current.lifetime === origin.lifetime && (
-      current(dispatchGeneration) || (
-        acknowledgedIdentity !== undefined && acknowledgedIdentity !== identity &&
-        live.current.mounted && getGatewayApiBaseUrl() === base &&
-        live.current.identity === acknowledgedIdentity && live.current.generation === dispatchGeneration + 1
-      )
-    );
+    const owns = () =>
+      live.current.lifetime === origin.lifetime &&
+      (current(dispatchGeneration) ||
+        (acknowledgedIdentity !== undefined &&
+          acknowledgedIdentity !== identity &&
+          live.current.mounted &&
+          getGatewayApiBaseUrl() === base &&
+          live.current.identity === acknowledgedIdentity &&
+          live.current.generation === dispatchGeneration + 1));
     setReview(undefined);
     const result = await commitTaskCreate({
       base,
@@ -106,9 +120,14 @@ export function useTaskCreate(options: {
         const acknowledged = options.onRecorded?.(result.task, origin.submitted);
         // Permit only this verified acknowledgement's one exact input transition.
         // Off-view settlement, new input, explicit invalidation and ABA cannot adopt it.
-        if (originCurrent && acknowledged) acknowledgedIdentity = canonicalJsonString([
-          base, options.workspaceId, options.citadelId, acknowledged, options.viewIdentity,
-        ]);
+        if (originCurrent && acknowledged)
+          acknowledgedIdentity = canonicalJsonString([
+            base,
+            options.workspaceId,
+            options.citadelId,
+            acknowledged,
+            options.viewIdentity,
+          ]);
       } catch {
         /* Preserve confirmed owner truth. */
       }

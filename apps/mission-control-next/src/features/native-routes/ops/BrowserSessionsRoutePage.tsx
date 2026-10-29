@@ -29,6 +29,7 @@ import { formatDateTime, nativeLoad, nativeLoadIssues, useAsyncLoad } from "../s
 import { LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 type BrowserSessionFilter = BrowserSessionStatus | "all";
 const GRANT_SCOPES: BrowserSessionGrantScope[] = ["read", "interact", "state", "admin"];
@@ -130,8 +131,7 @@ function BrowserSessionsWorkspacePage({ route, activeWorkspaceId, activeWorkspac
       }
       return cleared;
     } catch (err) {
-      if (mounted.current && editorEpoch.current === token)
-        setActionError(err instanceof Error ? err.message : String(err));
+      if (mounted.current && editorEpoch.current === token) setActionError(describeApiError(err).summary);
       return false;
     } finally {
       mutationBusy.current = false;
@@ -157,8 +157,7 @@ function BrowserSessionsWorkspacePage({ route, activeWorkspaceId, activeWorkspac
       await reload();
       await detail.reload();
     } catch (err) {
-      if (mounted.current && token === editorEpoch.current)
-        setActionError(err instanceof Error ? err.message : String(err));
+      if (mounted.current && token === editorEpoch.current) setActionError(describeApiError(err).summary);
     } finally {
       mutationBusy.current = false;
       if (mounted.current) setBusyAction(null);
@@ -204,8 +203,7 @@ function BrowserSessionsWorkspacePage({ route, activeWorkspaceId, activeWorkspac
       await detail.reload();
       return cleared;
     } catch (err) {
-      if (mounted.current && editorEpoch.current === token)
-        setActionError(err instanceof Error ? err.message : String(err));
+      if (mounted.current && editorEpoch.current === token) setActionError(describeApiError(err).summary);
       return false;
     } finally {
       mutationBusy.current = false;
@@ -238,8 +236,7 @@ function BrowserSessionsWorkspacePage({ route, activeWorkspaceId, activeWorkspac
       }
       await detail.reload();
     } catch (err) {
-      if (mounted.current && token === editorEpoch.current)
-        setActionError(err instanceof Error ? err.message : String(err));
+      if (mounted.current && token === editorEpoch.current) setActionError(describeApiError(err).summary);
     } finally {
       mutationBusy.current = false;
       if (mounted.current) setBusyAction(null);
