@@ -1,4 +1,4 @@
-import type { ApprovalRequest } from "@goatcitadel/contracts";
+import { isInstallWideApproval, type ApprovalRequest } from "@goatcitadel/contracts";
 import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 // Tool names and approval kinds are open strings; the chat presenter names the known ones.
 import { presentApprovalAction } from "../chat/chat-vocabulary";
@@ -20,12 +20,23 @@ export function ApprovalReviewSummary({
   const evidence = buildApprovalRequestReviewEvidenceModel(approval);
   const { activeCitadelId } = useUiPreferences();
   const workspaceName = useWorkspaceNameLookup(activeCitadelId);
+  // An approval of no workspace (a skill change) is decided once for the whole install, not in the active workspace.
+  const installWide = isInstallWideApproval(approval);
   const scopeWorkspaceId = approval.linkage?.workspaceId ?? workspaceId;
   const sessionId = approval.linkage?.sessionId;
   const workspaceLabel =
     workspaceName(scopeWorkspaceId) ?? (scopeWorkspaceId === workspaceId ? "This workspace" : "Another workspace");
   const support = splitApprovalSupport(evidence?.supporting ?? []);
-  const scope = evidence?.scopeSummary ?? `${workspaceLabel}${sessionId ? " · one linked conversation" : ""}.`;
+  const scope =
+    evidence?.scopeSummary ??
+    (installWide
+      ? "Every workspace on this install."
+      : `${workspaceLabel}${sessionId ? " · one linked conversation" : ""}.`);
+  const scopeIdentifiers = [
+    installWide ? undefined : `Workspace ${scopeWorkspaceId}`,
+    sessionId ? `Conversation ${sessionId}` : undefined,
+    approval.expiresAt ? `Expires ${approval.expiresAt}` : undefined,
+  ].filter((part): part is string => part !== undefined);
   const { owner: ownerExplanation, model: modelExplanation } = splitApprovalExplanation(approval);
   return (
     <section
@@ -107,13 +118,11 @@ export function ApprovalReviewSummary({
           <span className="text-fg-muted">Written by a model after the request; advisory only.</span>
         </p>
       ) : null}
-      <TechnicalDetails label="Scope identifiers">
-        <p className="break-all font-mono text-xs">
-          Workspace {scopeWorkspaceId}
-          {sessionId ? ` · Conversation ${sessionId}` : ""}
-          {approval.expiresAt ? ` · Expires ${approval.expiresAt}` : ""}
-        </p>
-      </TechnicalDetails>
+      {scopeIdentifiers.length ? (
+        <TechnicalDetails label="Scope identifiers">
+          <p className="break-all font-mono text-xs">{scopeIdentifiers.join(" · ")}</p>
+        </TechnicalDetails>
+      ) : null}
       {approval.rollbackNote ? (
         <p>
           <strong>Recovery:</strong> {approval.rollbackNote}
