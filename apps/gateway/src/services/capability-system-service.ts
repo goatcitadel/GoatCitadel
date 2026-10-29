@@ -554,12 +554,15 @@ export class CapabilitySystemService {
         };
       }),
     );
-    if (workspaceId) {
-      const candidates = await listWorkspaceCandidateSkills(this.options, this.candidateRoot, workspaceId, stateMap);
-      this.candidateQuarantine.record(workspaceId, candidates.quarantined);
-      all.push(...candidates.skills);
+    const chosen = filterSkillItemsByEffectiveSet(all, effectiveSkills);
+    if (!workspaceId) {
+      return chosen;
     }
-    return filterSkillItemsByEffectiveSet(all, effectiveSkills);
+    // A workspace's own approved self-authored skills always count as chosen: no Citadel or workspace
+    // selection can name them, and approving one was already a choice for that workspace.
+    const candidates = await listWorkspaceCandidateSkills(this.options, this.candidateRoot, workspaceId, stateMap);
+    this.candidateQuarantine.record(workspaceId, candidates.quarantined);
+    return [...chosen, ...candidates.skills];
   }
 
   private async resolveSkillLifecycle(skill: LoadedSkill): Promise<SkillLifecycleRecord> {

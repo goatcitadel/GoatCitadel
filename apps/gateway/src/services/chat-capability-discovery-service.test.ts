@@ -35,7 +35,7 @@ describe("Chat read-only capability discovery owner", () => {
       discoveryOnly: true,
       capabilities: [{ toolName: "calendar.read" }],
     });
-    expect(host.listCatalog).toHaveBeenCalledWith("callable", "ALL", "workspace-1");
+    expect(host.listCatalog).toHaveBeenCalledWith("callable", "workspace-1");
     host.listCatalog.mockResolvedValue([]);
     expect(await service.discover(request)).toMatchObject({ capabilities: [] });
     expect(host.requireSession).toHaveBeenCalledTimes(2);
@@ -60,7 +60,7 @@ describe("Chat read-only capability discovery owner", () => {
   it("refuses inactive skill content rather than treating its name as authority", async () => {
     const { host, request, service } = fixture();
     await expect(service.readSkill(request)).rejects.toThrow(/not currently callable/);
-    expect(host.listCatalog).toHaveBeenCalledWith("callable", "ALL", "workspace-1");
-    expect(host.listSkills).toHaveBeenCalledWith("ALL", "workspace-1");
+    expect(host.listCatalog).toHaveBeenCalledWith("callable", "workspace-1");
+    expect(host.listSkills).toHaveBeenCalledWith("workspace-1");
   });
 });
