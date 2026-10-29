@@ -73,8 +73,7 @@ export function SettingsApprovalSkipControl() {
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
             Off by default. When on, Settings changes such as the network allowlist, connectors you install from
-            Capabilities and skills you switch on there apply right away instead of waiting for an approval in the
-            Inbox.
+            Capabilities and skills you switch on there apply right away instead of waiting for your approval.
           </p>
         </div>
         <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
@@ -105,7 +104,7 @@ export function SettingsApprovalSkipControl() {
                 draft.setValue(event.target.checked);
               }}
             />
-            Apply my Settings and Capabilities changes without an Inbox approval
+            Apply my Settings and Capabilities changes without asking first
           </label>
           <ul id="settings-approval-skip-facts" className="mt-2 list-inside list-disc space-y-1 text-xs text-fg-muted">
             {SKIP_FACTS.map((fact) => (

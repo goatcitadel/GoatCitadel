@@ -44,7 +44,7 @@ const ENV: Record<string, string> = {
   GOATCITADEL_NPU_AUTOSTART: "false",
   GOATCITADEL_NPU_ENABLED: "false",
   GOATCITADEL_RATE_LIMIT_ENABLED: "false",
-  // The operator's "apply my changes without an Inbox approval" setting, on unless a test group turns it off.
+  // The operator's "apply my changes without asking first" setting, on unless a test group turns it off.
   GOATCITADEL_FEATURE_SETTINGS_APPROVAL_SKIP_ENABLED: "true",
 };
 

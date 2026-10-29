@@ -127,7 +127,7 @@ export interface CapabilitySkillDetail {
  * approval's id follows from the request, so asking again for the same change, before the skill changes, hands back the
  * approval it already made while that one waits or once it is approved.
  * - `approved`: approved, by the skip now or earlier, and its own effect applies the change (or already has).
- * - `waiting`: it waits in the Inbox for the operator.
+ * - `waiting`: it waits for the operator's approval.
  * - `declined`: the switch answers this only for the expiry race: the approval ran out of time just as the skip approved
  *   it, so `expired` is `true` and nothing changes. Asking again makes a fresh approval, linked to this one, as it does
  *   after any decline or expiry. The type keeps `expired` as a flag for the Phase 3 install route, which reuses it.

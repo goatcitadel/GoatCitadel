@@ -12,8 +12,8 @@ import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import type { SkillStateMutationOutcome } from "./skill-state-service.js";
 
 /**
- * Why the operator's own switch applied without waiting in the Inbox, written as the note on the approval the skip
- * resolves. Only this file may use them (capability-skill-skip-guard.test.ts).
+ * Why the operator's own switch applied without waiting for the operator's approval, written as the note on the
+ * approval the skip resolves. Only this file may use them (capability-skill-skip-guard.test.ts).
  */
 export const OPERATOR_SKILL_SKIP_NOTES = {
   setting: "Applied without asking: your setting to skip approvals for your own changes is on.",
@@ -92,7 +92,7 @@ export class CapabilitySkillActionsService {
     } catch (error) {
       // It ran out of time as it was approved: the owner committed the expiry check's rejection, so nothing changes.
       if (error instanceof ApprovalExpiredAfterCommitError) return { status: "declined", approvalId, expired: true };
-      // Nothing was approved, so the approval still waits in the Inbox for the operator.
+      // Nothing was approved, so the change still waits for the operator's approval.
       this.reportFailure?.("resolve", error);
       return { status: "waiting", approvalId };
     }

@@ -50,7 +50,7 @@ export async function fetchCapabilitySkillDetail(
 }
 
 /**
- * Switches a skill on, paused, or off. The outcome says whether the change applied, waits for an approval in the Inbox,
+ * Switches a skill on, paused, or off. The outcome says whether the change applied, waits for the operator's approval,
  * was declined, or changed nothing. No field chooses the operator's skip; the Gateway decides it. The client adds the
  * Idempotency-Key every non-GET carries.
  */
