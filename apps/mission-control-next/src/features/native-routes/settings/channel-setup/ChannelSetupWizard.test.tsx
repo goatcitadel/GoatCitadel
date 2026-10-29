@@ -7,7 +7,7 @@ import { DraftLeaveDialog } from "../../library/DraftLeaveDialog";
 // @vitest-environment happy-dom
 import { useState, type ComponentProps } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import type { ChannelSetupDefinition, ChannelSetupDraft } from "@goatcitadel/contracts";
+import { redactStructuredSecrets, type ChannelSetupDefinition, type ChannelSetupDraft } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelSetupWizard, type ChannelSetupWizardFeedback } from "./ChannelSetupWizard";
 import { ChannelsSection } from "../sections/ChannelsSection";
@@ -1347,6 +1347,105 @@ describe("channel confirmed receipts and OAuth scope", () => {
       "synthetic-unsent-token",
     );
     next.unmount();
+  });
+  it("accepts a save whose receipt withholds a token-shaped variable name, then shows the Validate field error", async () => {
+    const pasted = "abc.def-ghi.jkl1234567890";
+    const advice = "That looks like a token, not a variable name. Paste it into Bot token instead.";
+    // The Gateway projects every draft it returns: a variable-name field that holds no name is withheld.
+    channelApiMocks.updateChannelSetupDraft.mockImplementationOnce(
+      async (_draftId: string, input: { draft?: Record<string, unknown> }) => {
+        currentApiDraft = {
+          ...currentApiDraft,
+          revision: currentApiDraft.revision + 1,
+          draft: redactStructuredSecrets(input.draft ?? currentApiDraft.draft, { redactEnvAssignmentsAsWhole: true })
+            .value,
+        };
+        return currentApiDraft;
+      },
+    );
+    channelApiMocks.validateChannelSetupDraft.mockImplementationOnce(async () => {
+      currentApiDraft = { ...currentApiDraft, revision: currentApiDraft.revision + 1 };
+      return {
+        ...validationResponse,
+        draftRevision: currentApiDraft.revision,
+        status: "error",
+        issues: [
+          {
+            key: "botTokenEnv_malformed",
+            level: "error",
+            message: advice,
+            fieldKey: "botTokenEnv",
+            failureCategory: "malformed_value",
+          },
+        ],
+      };
+    });
+    const renderer = await renderChannelsSection();
+    await click(findStepButton(renderer.root, "Paste your connection values"));
+    await changeValue(findHostControl(renderer.root, "input", "channel-discord-draft-1-botTokenEnv"), pasted);
+    await click(findStepButton(renderer.root, "Validate and test the connection"));
+    await click(findButton(renderer.root, "Validate"));
+    await flushWork();
+
+    expect(channelApiMocks.updateChannelSetupDraft.mock.lastCall?.[1].draft).toMatchObject({ botTokenEnv: pasted });
+    expect(currentApiDraft.draft.botTokenEnv).toBe("[REDACTED]");
+    expect(textOf(renderer.root)).not.toContain("Outcome uncertain");
+    expect(channelApiMocks.validateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    await click(findStepButton(renderer.root, "Paste your connection values"));
+    expect(textOf(renderer.root)).toContain(advice);
+    expect(findHostControl(renderer.root, "input", "channel-discord-draft-1-botTokenEnv").props.value).toBe("");
+    expect(textOf(renderer.root)).not.toContain(pasted);
+    renderer.unmount();
+  });
+  it("accepts a cleared variable-name field that the save receipt projects as withheld", async () => {
+    channelApiMocks.updateChannelSetupDraft.mockImplementationOnce(
+      async (_draftId: string, input: { draft?: Record<string, unknown> }) => {
+        currentApiDraft = {
+          ...currentApiDraft,
+          revision: currentApiDraft.revision + 1,
+          draft: redactStructuredSecrets(input.draft ?? currentApiDraft.draft, { redactEnvAssignmentsAsWhole: true })
+            .value,
+        };
+        return currentApiDraft;
+      },
+    );
+    const renderer = await renderChannelsSection();
+    await click(findStepButton(renderer.root, "Paste your connection values"));
+    await changeValue(findHostControl(renderer.root, "input", "channel-discord-draft-1-botTokenEnv"), "");
+    await click(findButton(renderer.root, "Save draft"));
+    await flushWork();
+
+    expect(channelApiMocks.updateChannelSetupDraft.mock.lastCall?.[1].draft).toMatchObject({ botTokenEnv: "" });
+    expect(currentApiDraft.draft.botTokenEnv).toBe("[REDACTED]");
+    expect(textOf(renderer.root)).not.toContain("Outcome uncertain");
+    expect(textOf(renderer.root)).toContain("Channel draft saved.");
+    renderer.unmount();
+  });
+  it("keeps the outcome uncertain when the save receipt echoes a different public value", async () => {
+    channelApiMocks.updateChannelSetupDraft.mockImplementationOnce(
+      async (_draftId: string, input: { draft?: Record<string, unknown> }) => {
+        currentApiDraft = {
+          ...currentApiDraft,
+          revision: currentApiDraft.revision + 1,
+          draft: { ...input.draft, defaultChannelId: "111111111111111111" },
+        };
+        return currentApiDraft;
+      },
+    );
+    const renderer = await renderChannelsSection();
+    await click(findStepButton(renderer.root, "Paste your connection values"));
+    await changeValue(
+      findHostControl(renderer.root, "input", "channel-discord-draft-1-defaultChannelId"),
+      "987654321098765432",
+    );
+    await click(findButton(renderer.root, "Save draft"));
+    await flushWork();
+
+    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    expect(textOf(renderer.root)).toContain("did not acknowledge the submitted public fields");
+    expect(textOf(renderer.root)).toContain("Outcome uncertain");
+    expect(findButton(renderer.root, "Save draft").props.disabled).toBe(true);
+    renderer.unmount();
   });
   it("withholds staged Slack OAuth start when the workspace changes during saved-draft preflight", async () => {
     const slack = {
