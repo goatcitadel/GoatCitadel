@@ -6,6 +6,7 @@ import {
   buildSkillLifecycleApprovalBinding,
   buildSkillLifecycleApprovalPayload,
 } from "./skill-governance-journey-producer.js";
+import type { SkillStateMutationOutcome } from "./skill-state-service.js";
 
 const RESEARCH: SkillListItem = {
   skillId: "bundled:research",
@@ -46,13 +47,36 @@ function stateApproval(approvalId: string, skillId: string): ApprovalRequest {
   };
 }
 
+const WAITING: SkillStateMutationOutcome = {
+  pendingApproval: {
+    approvalId: "approval-research",
+    status: "pending",
+    kind: "skill.lifecycle",
+    action: "skill_state_set",
+    subjectKind: "skill",
+    subjectId: "bundled:research",
+    requestSha256: "a".repeat(64),
+    expectedStateSha256: "b".repeat(64),
+    createdAt: "2026-10-28T00:00:00.000Z",
+    replayed: false,
+    skillIds: ["bundled:research"],
+  },
+};
+
 function owners(overrides: Partial<CapabilitySkillsOwners> = {}): CapabilitySkillsOwners {
   return {
     chatTurnCapabilityProfiles: { countSkillUsesSince: vi.fn(async (): Promise<SkillUseCount[]> => []) },
-    skills: { listSkills: vi.fn(async () => [RESEARCH]) },
+    skills: {
+      listSkills: vi.fn(async () => [RESEARCH]),
+      setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => WAITING),
+    },
     capabilityScope: { resolveEffectiveSkills: vi.fn(async () => "ALL" as const) },
     capabilities: { listCapabilityCatalog: vi.fn(async () => []) },
-    approvals: { listApprovalsPage: vi.fn(async (): Promise<ApprovalListResponse> => ({ items: [] })) },
+    approvals: {
+      listApprovalsPage: vi.fn(async (): Promise<ApprovalListResponse> => ({ items: [] })),
+      resolveApproval: vi.fn(async () => ({})),
+    },
+    audit: { append: vi.fn(async () => undefined) },
     features: { isFeatureEnabled: vi.fn(async () => false) },
     deploymentProfile: () => "trusted_local",
     ...overrides,
@@ -118,9 +142,9 @@ describe("composeCapabilitySkills", () => {
           : { items: [stateApproval("approval-research", "bundled:research")] },
     );
 
-    const response = await composeCapabilitySkills(owners({ approvals: { listApprovalsPage } })).skills.list(
-      "workspace-a",
-    );
+    const response = await composeCapabilitySkills(
+      owners({ approvals: { listApprovalsPage, resolveApproval: vi.fn() } }),
+    ).skills.list("workspace-a");
 
     expect(listApprovalsPage.mock.calls.map(([input]) => input)).toEqual([
       { status: "pending", limit: 200 },
@@ -135,9 +159,9 @@ describe("composeCapabilitySkills", () => {
     try {
       const listApprovalsPage = vi.fn(async (): Promise<ApprovalListResponse> => ({ items: [], nextCursor: "more" }));
 
-      const response = await composeCapabilitySkills(owners({ approvals: { listApprovalsPage } })).skills.list(
-        "workspace-a",
-      );
+      const response = await composeCapabilitySkills(
+        owners({ approvals: { listApprovalsPage, resolveApproval: vi.fn() } }),
+      ).skills.list("workspace-a");
 
       expect(listApprovalsPage).toHaveBeenCalledTimes(25);
       expect(response.issues).toEqual(["Waiting approvals couldn't be read right now."]);
@@ -182,5 +206,88 @@ describe("composeCapabilitySkills", () => {
 
     expect(response.operatorApprovalSkip).toBe(false);
     expect(parts.features.isFeatureEnabled).not.toHaveBeenCalled();
+  });
+
+  it("switches a skill through its owners: the skill state owner asks, the Inbox's resolve approves", async () => {
+    const parts = owners({ features: { isFeatureEnabled: vi.fn(async () => true) } });
+
+    const outcome = await composeCapabilitySkills(parts).actions.setState({
+      workspaceId: "workspace-a",
+      skillId: "bundled:research",
+      state: "enabled",
+      expectedRevision: 4,
+      actorId: "operator-1",
+    });
+
+    expect(outcome).toEqual({ status: "approved", approvalId: "approval-research" });
+    // No note: the switch has none, and the owner's own approval is the one resolved.
+    expect(parts.skills.setSkillState).toHaveBeenCalledExactlyOnceWith("bundled:research", "enabled", undefined, {
+      expectedRevision: 4,
+      requesterId: "operator-1",
+    });
+    expect(parts.features.isFeatureEnabled).toHaveBeenCalledWith("settingsApprovalSkipEnabled");
+    expect(parts.approvals.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-research", {
+      decision: "approve",
+      resolvedBy: "operator-1",
+      resolutionNote: "Applied without asking: your setting to skip approvals for your own changes is on.",
+    });
+    // The approvals audit stream, as the Change Plan skip writes it.
+    expect(parts.audit.append).toHaveBeenCalledExactlyOnceWith("approvals", {
+      event: "operator_approval_skipped",
+      approvalId: "approval-research",
+      kind: "skill.lifecycle",
+      reason: "setting",
+      actorId: "operator-1",
+    });
+  });
+
+  it("never reads the skip setting for a switch on a remote_hardened install", async () => {
+    const parts = owners({ deploymentProfile: () => "remote_hardened" });
+
+    const outcome = await composeCapabilitySkills(parts).actions.setState({
+      workspaceId: "workspace-a",
+      skillId: "bundled:research",
+      state: "disabled",
+      expectedRevision: 4,
+      actorId: "operator-1",
+    });
+
+    expect(outcome).toEqual({ status: "waiting", approvalId: "approval-research" });
+    expect(parts.features.isFeatureEnabled).not.toHaveBeenCalled();
+    expect(parts.approvals.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it("writes a failed resolve to the server log with secrets redacted", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const resolveApproval = vi.fn(async () => {
+        throw new Error("approval store rejected Authorization: Bearer sk-live-abcdefghijklmnopqrstuvwxyz0123456789");
+      });
+      const parts = owners({
+        approvals: {
+          listApprovalsPage: vi.fn(async (): Promise<ApprovalListResponse> => ({ items: [] })),
+          resolveApproval,
+        },
+      });
+
+      const outcome = await composeCapabilitySkills(parts).actions.setState({
+        workspaceId: "workspace-a",
+        skillId: "bundled:research",
+        state: "disabled",
+        expectedRevision: 4,
+        actorId: "operator-1",
+      });
+
+      expect(outcome).toEqual({ status: "waiting", approvalId: "approval-research" });
+      const logged = stderr.mock.calls
+        .map(([chunk]) => String(chunk))
+        .filter((line) => line.includes("a Capabilities skill switch step failed"));
+      expect(logged).toHaveLength(1);
+      expect(JSON.parse(logged[0] ?? "{}")).toMatchObject({ level: "error", step: "resolve" });
+      expect(logged[0]).toContain("approval store rejected");
+      expect(logged[0]).not.toContain("sk-live-abcdefghijklmnopqrstuvwxyz0123456789");
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });

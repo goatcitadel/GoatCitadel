@@ -18,6 +18,7 @@ import {
 } from "./citadels-route-service.js";
 import { CapabilitiesRouteService, type CapabilitiesRoutePort } from "./capabilities-route-service.js";
 import type { CapabilityConnectorsService } from "./capability-connectors-service.js";
+import type { CapabilitySkillActionsService } from "./capability-skill-actions-service.js";
 import type { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
 import type { CapabilitySkillsService } from "./capability-skills-service.js";
 import type { CapabilityToolUsageService } from "./capability-tool-usage-service.js";
@@ -312,6 +313,7 @@ export interface GatewayRouteServices {
   capabilitySkills?: {
     usage: Pick<CapabilitySkillUsageService, "read">;
     skills: Pick<CapabilitySkillsService, "list" | "detail">;
+    actions: Pick<CapabilitySkillActionsService, "setState">;
   };
   /** The Capabilities Tools tab's tool groups. Composed by the gateway service over the policy probe and the switches. */
   capabilityTools?: Pick<CapabilityToolsService, "list">;

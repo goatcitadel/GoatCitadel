@@ -1,5 +1,6 @@
 import type { CapabilityCatalogEntry, SkillLifecycleState } from "./capabilities.js";
 import type { SkillCategoryId, SkillOrigin } from "./skill-categories.js";
+import type { SkillRuntimeState } from "./skills.js";
 
 // ---------------------------------------------------------------------------
 // Skill use counts: GET /api/v1/capabilities/skills/usage
@@ -88,4 +89,28 @@ export interface CapabilitySkillDetail {
   stateUpdatedAt?: string;
   /** The inspectable catalog's `skill:<id>` entry, for the policy and source inspectors. Absent when unreadable. */
   catalogEntry?: CapabilityCatalogEntry;
+}
+
+// ---------------------------------------------------------------------------
+// The skill switch: POST /api/v1/capabilities/skills/state
+// ---------------------------------------------------------------------------
+
+/**
+ * What switching a skill did. Every change creates the skill's approval; the operator's skip only resolves it.
+ * - `approved`: the skip approved it as the operator, and its own effect applies the change in a moment.
+ * - `waiting`: it waits in the Inbox for the operator.
+ * - `unchanged`: the skill is already in that state, so nothing was asked.
+ */
+export type CapabilitySkillActionOutcome =
+  | { status: "approved"; approvalId: string }
+  | { status: "waiting"; approvalId: string }
+  | { status: "unchanged" };
+
+/** The switch's request. There is no field that chooses the skip; the Gateway decides it. */
+export interface CapabilitySkillStateRequest {
+  workspaceId: string;
+  skillId: string;
+  state: SkillRuntimeState;
+  /** The skill's `revision` from the list. A skill that changed since is refused with a 409. */
+  expectedRevision: number;
 }

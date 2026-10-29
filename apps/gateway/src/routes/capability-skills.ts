@@ -1,21 +1,42 @@
 import type { FastifyBaseLogger, FastifyInstance, FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { redactStructuredSecrets, ServiceUnavailableError } from "@goatcitadel/contracts";
+import { ConflictError, redactStructuredSecrets, ServiceUnavailableError } from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
+import { withRouteAccess } from "./route-access.js";
 
 const usageQuerySchema = z.object({ refresh: z.enum(["true", "false"]).optional() }).strict();
 const listQuerySchema = z.object({ workspaceId: z.string().min(1).max(200) }).strict();
 const detailQuerySchema = z
   .object({ workspaceId: z.string().min(1).max(200), skillId: z.string().min(1).max(300) })
   .strict();
+// No field chooses the skip, and an extra key is refused: the Gateway alone decides whether the operator is asked.
+const stateBodySchema = z
+  .object({
+    workspaceId: z.string().min(1).max(200),
+    skillId: z.string().min(1).max(300),
+    state: z.enum(["enabled", "sleep", "disabled"]),
+    expectedRevision: z.number().int().positive(),
+  })
+  .strict();
 
 const UNREADABLE_MESSAGE = "Skill use counts can't be read right now.";
 const UNAVAILABLE_LIST_MESSAGE = "Skills can't be read right now.";
+const UNAVAILABLE_SWITCH_MESSAGE = "Skills can't be switched right now.";
+const PINNED_MESSAGE = "This skill is pinned. Change it through a proposal in Library.";
 // Each read lists the workspace's skills, its choices, the inspectable catalog and the waiting approvals.
 const LIST_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;
 
-/** Capabilities › Skills: the installed skills, one skill's details, and how often the AI has used each skill. */
+/**
+ * Capabilities › Skills: the installed skills, one skill's details, how often the AI has used each skill, and the
+ * switch that turns a skill on, pauses it or turns it off.
+ */
 export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
+  const operatorSwitch = withRouteAccess(fastify, "operator", {
+    // The body is a workspace, a skill id, a state and a revision; the bound matches the other operator save routes.
+    bodyLimit: 20 * 1_024,
+    config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+  });
+
   /**
    * Every skill loaded for a workspace, with its category, origin, state, whether it is callable, whether the
    * workspace's skill choices leave it out, and any approval it waits on. It reads local state only and publishes no
@@ -67,6 +88,27 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
       }
     },
   );
+
+  /**
+   * Switches one skill, install-wide. It always asks the skill state owner, which creates the skill's usual approval;
+   * when the operator's skip applies, the switch approves that approval at once as the operator, and the approval's
+   * own effect applies the change. 202 with `approved` or `waiting`, or 200 with `unchanged`. A pinned skill or a
+   * stale revision is a 409.
+   */
+  fastify.post("/api/v1/capabilities/skills/state", operatorSwitch, async (request, reply) => {
+    const body = stateBodySchema.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
+    try {
+      markNoStore(reply);
+      const outcome = await requireActions(fastify).setState({
+        ...body.data,
+        actorId: request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`,
+      });
+      return reply.code(outcome.status === "unchanged" ? 200 : 202).send(outcome);
+    } catch (error) {
+      return sendRouteError(reply, plainPinnedRefusal(error), request.log);
+    }
+  });
 };
 
 /** A read that fails answers with plain wording only, and no counts. The real error stays in the log. */
@@ -87,6 +129,22 @@ function requireSkills(fastify: FastifyInstance) {
   const owner = fastify.services.capabilitySkills?.skills;
   if (!owner) throw new ServiceUnavailableError(UNAVAILABLE_LIST_MESSAGE);
   return owner;
+}
+
+function requireActions(fastify: FastifyInstance) {
+  const owner = fastify.services.capabilitySkills?.actions;
+  if (!owner) throw new ServiceUnavailableError(UNAVAILABLE_SWITCH_MESSAGE);
+  return owner;
+}
+
+/**
+ * The skill state owner refuses a pinned skill with a conflict that names the skill and its proposal flow. The
+ * operator sees where to go instead; any other conflict, such as a stale revision, passes through as the owner wrote it.
+ */
+function plainPinnedRefusal(error: unknown): unknown {
+  return error instanceof ConflictError && error.code === "STATE_CONFLICT" && error.message.startsWith("Pinned skill ")
+    ? new ConflictError({ message: PINNED_MESSAGE })
+    : error;
 }
 
 function markNoStore(reply: { header(name: string, value: string): unknown }): void {

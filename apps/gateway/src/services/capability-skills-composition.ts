@@ -2,15 +2,19 @@ import {
   redactStructuredSecrets,
   type ApprovalListResponse,
   type ApprovalRequest,
+  type ApprovalResolveInput,
   type CapabilityCatalogEntry,
   type DeploymentProfile,
   type SkillListItem,
+  type SkillRuntimeState,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { SkillUseCount } from "@goatcitadel/storage";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
+import { CapabilitySkillActionsService, type CapabilitySkillActionStep } from "./capability-skill-actions-service.js";
 import { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
 import { CapabilitySkillsService, type CapabilitySkillsSource } from "./capability-skills-service.js";
+import type { SkillStateMutationAuthorityInput, SkillStateMutationOutcome } from "./skill-state-service.js";
 
 const log = logger.child("capability-skills");
 
@@ -19,11 +23,24 @@ const PENDING_APPROVAL_PAGE_LIMIT = 200;
 /** 5,000 waiting approvals. Past that the read fails, rather than answering from a part of the list. */
 const PENDING_APPROVAL_MAX_PAGES = 25;
 
-/** The existing owner of each source the Capabilities Skills tab reads. Each is read-only here. */
+/**
+ * The existing owner of each source the Capabilities Skills tab reads, and of the approval its switch asks for. The
+ * tab writes nothing itself: a switch only asks the skill state owner and, when the operator's skip applies, resolves
+ * that owner's approval through the Inbox's own resolve.
+ */
 export interface CapabilitySkillsOwners {
   chatTurnCapabilityProfiles: { countSkillUsesSince(sinceIso: string): Promise<readonly SkillUseCount[]> };
-  /** The skill list; with a workspace it includes that workspace's approved self-authored skills. */
-  skills: { listSkills(effectiveSkills: "ALL", workspaceId: string): Promise<readonly SkillListItem[]> };
+  skills: {
+    /** The skill list; with a workspace it includes that workspace's approved self-authored skills. */
+    listSkills(effectiveSkills: "ALL", workspaceId: string): Promise<readonly SkillListItem[]>;
+    /** Asks for a skill's state change: a `skill.lifecycle` approval, or "nothing to change". */
+    setSkillState(
+      skillId: string,
+      state: SkillRuntimeState,
+      note: string | undefined,
+      authority: SkillStateMutationAuthorityInput,
+    ): Promise<SkillStateMutationOutcome>;
+  };
   /** The workspace skill choices, as the skill list and catalog routes resolve them. */
   capabilityScope: { resolveEffectiveSkills(workspaceId: string): Promise<EffectiveCapabilitySet> };
   /** The catalog route's owner. */
@@ -34,12 +51,15 @@ export interface CapabilitySkillsOwners {
       workspaceId: string,
     ): Promise<readonly CapabilityCatalogEntry[]>;
   };
-  /** The Inbox list's owner. */
+  /** The Inbox's owner: its list, and the resolve its Approve button uses. */
   approvals: {
     listApprovalsPage(input: { status: "pending"; limit: number; cursor?: string }): Promise<ApprovalListResponse>;
+    resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<unknown>;
   };
+  /** The audit log; the switch's skip goes to its approvals stream, as the Change Plan skip does. */
+  audit: { append(stream: "approvals", payload: Record<string, unknown>): Promise<void> };
   features: { isFeatureEnabled(flag: "settingsApprovalSkipEnabled"): Promise<boolean> };
-  /** The install's deployment profile, read on every list. */
+  /** The install's deployment profile, read on every list and every switch. */
   deploymentProfile(): DeploymentProfile;
 }
 
@@ -47,6 +67,7 @@ export interface CapabilitySkillsOwners {
 export interface CapabilitySkills {
   usage: CapabilitySkillUsageService;
   skills: CapabilitySkillsService;
+  actions: CapabilitySkillActionsService;
 }
 
 /** Wires the Skills tab to its owners. */
@@ -56,9 +77,11 @@ export function composeCapabilitySkills({
   capabilityScope,
   capabilities,
   approvals,
+  audit,
   features,
   deploymentProfile,
 }: CapabilitySkillsOwners): CapabilitySkills {
+  const readApprovalSkipSetting = () => features.isFeatureEnabled("settingsApprovalSkipEnabled");
   return {
     usage: new CapabilitySkillUsageService((sinceIso) => chatTurnCapabilityProfiles.countSkillUsesSince(sinceIso)),
     skills: new CapabilitySkillsService(
@@ -69,9 +92,20 @@ export function composeCapabilitySkills({
         listInspectableCatalog: (workspaceId) => capabilities.listCapabilityCatalog("inspectable", "ALL", workspaceId),
         listPendingApprovals: () => readAllPendingApprovals((input) => approvals.listApprovalsPage(input)),
         deploymentProfile,
-        readApprovalSkipSetting: () => features.isFeatureEnabled("settingsApprovalSkipEnabled"),
+        readApprovalSkipSetting,
       },
       reportFailedRead,
+    ),
+    actions: new CapabilitySkillActionsService(
+      {
+        // The switch carries no note; the approval's own preview shows the state change.
+        setSkillState: (skillId, state, authority) => skills.setSkillState(skillId, state, undefined, authority),
+        resolveApproval: (approvalId, input) => approvals.resolveApproval(approvalId, input),
+        appendApprovalAudit: (event, payload) => audit.append("approvals", { event, ...payload }),
+        deploymentProfile,
+        readApprovalSkipSetting,
+      },
+      reportFailedStep,
     ),
   };
 }
@@ -104,6 +138,16 @@ function reportFailedRead(source: CapabilitySkillsSource, error: unknown): void 
     error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { value: error };
   log.error("a Capabilities skills source could not be read", {
     source,
+    err: redactStructuredSecrets(diagnostic).value,
+  });
+}
+
+/** The answer stays plain (the approval waits, or the skip is recorded only on the approval); the real error is logged. */
+function reportFailedStep(step: CapabilitySkillActionStep, error: unknown): void {
+  const diagnostic =
+    error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { value: error };
+  log.error("a Capabilities skill switch step failed", {
+    step,
     err: redactStructuredSecrets(diagnostic).value,
   });
 }

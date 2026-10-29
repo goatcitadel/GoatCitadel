@@ -3950,6 +3950,7 @@ export class GatewayService {
         capabilityScope: composed.capabilityScope,
         capabilities: composed.capabilities,
         approvals: composed.approvals,
+        audit: this.storage.audit,
         features: this,
         deploymentProfile: () => this.config.assistant.deploymentProfile,
       }),
