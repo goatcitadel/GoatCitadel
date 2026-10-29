@@ -49,20 +49,14 @@ export async function proveCatalogDraftNavigation({ page, readGrants }) {
     const origin = await page.evaluate(() => performance.timeOrigin),
       sourceUrl = page.url();
     const { field, value } = await fillNavigationGrantDraft(page);
-    const trigger = () => page.getByRole("link", { name: "Open tools in Library", exact: true }).click();
+    const trigger = () => page.getByRole("link", { name: "Open tools in Capabilities", exact: true }).click();
     await reviewNavigationDraft(page, trigger, "Cancel");
     assert.equal(await field.inputValue(), value);
     assert.deepEqual(writes, []);
     await reviewNavigationDraft(page, trigger, "Keep draft and close");
-    await page.waitForURL(
-      (url) =>
-        url.pathname === "/library" &&
-        url.searchParams.get("shell") === "cockpit" &&
-        url.searchParams.get("type") === "tool",
-    );
-    const type = page.getByRole("combobox", { name: /^Type(?:\s|$)/u });
-    await type.waitFor();
-    assert.equal(await type.inputValue(), "tool");
+    await page.waitForURL((url) => url.pathname === "/capabilities/tools" && url.searchParams.get("shell") === "cockpit");
+    // The Tools tab's list of groups is on screen once its data has loaded.
+    await page.getByRole("heading", { name: "All tools", exact: true }).waitFor();
     await page.goBack();
     await page.waitForURL(sourceUrl);
     await field.waitFor();
@@ -77,7 +71,7 @@ export async function proveCatalogDraftNavigation({ page, readGrants }) {
     });
     // Explicitly discard this task-owned text-only draft; this never saves a grant.
     await reviewNavigationDraft(page, trigger, "Discard changes");
-    await page.waitForURL((url) => url.pathname === "/library");
+    await page.waitForURL((url) => url.pathname === "/capabilities/tools");
     assert.deepEqual(writes, []);
     return { canceledBeforeNavigation: true, retainedAfterBack: true, grantWrites: 0 };
   } finally {

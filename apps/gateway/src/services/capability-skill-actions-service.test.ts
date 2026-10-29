@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  APPROVAL_EXPIRY_ACTOR_ID,
   ConflictError,
   type ApprovalRequest,
   type DeploymentProfile,
@@ -36,11 +35,10 @@ function pending(status: SkillLifecyclePendingApproval["status"] = "pending"): S
   };
 }
 
-type ApprovalRead = Pick<ApprovalRequest, "status" | "resolvedBy" | "preview">;
+type ApprovalRead = Pick<ApprovalRequest, "preview">;
 
-/** The approval as the Inbox reads it. By default it waits, made while the skill was on. */
+/** The approval as the Inbox reads it. By default it was made while the skill was on. */
 const approvalRead = (overrides: Partial<ApprovalRead> = {}): ApprovalRead => ({
-  status: "pending",
   preview: { title: "Approve skill state change", skillId: SKILL, currentState: "enabled" },
   ...overrides,
 });
@@ -306,38 +304,8 @@ describe("CapabilitySkillActionsService", () => {
   });
 
   // The owner's approval ids follow from the request, so asking again for the same change hands back the approval it
-  // already made. A decided one is never resolved again, and no second skip is recorded.
-  describe("when the same request was already decided", () => {
-    it("answers declined for a replayed rejected approval", async () => {
-      const parts = sources({
-        setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => pending("rejected")),
-        readApproval: vi.fn(async () => approvalRead({ status: "rejected", resolvedBy: ACTOR })),
-        readApprovalSkipSetting: vi.fn(async () => true),
-      });
-
-      const outcome = await new CapabilitySkillActionsService(parts).setState(request("enabled"));
-
-      expect(outcome).toEqual({ status: "declined", approvalId: "approval-1", expired: false });
-      expect(parts.readApproval).toHaveBeenCalledExactlyOnceWith("approval-1");
-      expect(parts.readApprovalSkipSetting).not.toHaveBeenCalled();
-      expect(parts.resolveApproval).not.toHaveBeenCalled();
-      expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
-    });
-
-    it("answers declined and expired for a replayed approval the expiry check rejected", async () => {
-      const parts = sources({
-        setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => pending("rejected")),
-        readApproval: vi.fn(async () => approvalRead({ status: "rejected", resolvedBy: APPROVAL_EXPIRY_ACTOR_ID })),
-      });
-
-      const outcome = await new CapabilitySkillActionsService(parts).setState(request("disabled"));
-
-      // Switching off would skip as tightening, but this request skipped nothing.
-      expect(outcome).toEqual({ status: "declined", approvalId: "approval-1", expired: true });
-      expect(parts.resolveApproval).not.toHaveBeenCalled();
-      expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
-    });
-
+  // already made while it waits or once it is approved; after a decline the owner makes a fresh one instead.
+  describe("when the same request was already approved", () => {
     it("answers approved for a replayed approved approval, with no second audit line", async () => {
       const parts = sources({
         setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => pending("approved")),
@@ -350,33 +318,7 @@ describe("CapabilitySkillActionsService", () => {
       expect(parts.resolveApproval).not.toHaveBeenCalled();
       expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
       expect(parts.readApproval).not.toHaveBeenCalled();
-    });
-
-    it("answers declined for a replayed edited approval, which never applies", async () => {
-      // An edit withdraws a skill approval: its effect runs only on approve, so the change never happens.
-      const parts = sources({
-        setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => pending("edited")),
-        readApprovalSkipSetting: vi.fn(async () => true),
-      });
-
-      const outcome = await new CapabilitySkillActionsService(parts).setState(request("enabled"));
-
-      expect(outcome).toEqual({ status: "declined", approvalId: "approval-1", expired: false });
-      expect(parts.resolveApproval).not.toHaveBeenCalled();
-      expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
-    });
-
-    it("fails the request rather than guess when a rejected approval can't be read", async () => {
-      const failure = new Error("approval store locked");
-      const parts = sources({
-        setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => pending("rejected")),
-        readApproval: vi.fn(async (): Promise<ApprovalRead> => {
-          throw failure;
-        }),
-      });
-
-      await expect(new CapabilitySkillActionsService(parts).setState(request("enabled"))).rejects.toBe(failure);
-      expect(parts.resolveApproval).not.toHaveBeenCalled();
+      expect(parts.readApprovalSkipSetting).not.toHaveBeenCalled();
     });
   });
 });

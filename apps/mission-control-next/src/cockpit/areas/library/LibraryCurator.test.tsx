@@ -142,6 +142,13 @@ it("reviews an archive with honest re-enable copy: Cancel sends nothing, Confirm
   expect(text).toContain("alpha");
   expect(text).toContain("installation-wide");
   expect(text).toContain("Curator has no restore");
+  expect(text).toContain("re-enabling is a governed state change in Capabilities › Skills");
+  expect(text).not.toContain("Skills and tools");
+  // The skill opens in its own panel on the Skills tab.
+  const skillLink = [...dialog()!.querySelectorAll("a")].find(
+    (anchor) => anchor.textContent === "Open this skill in Capabilities › Skills",
+  );
+  expect(skillLink?.getAttribute("href")).toBe("/capabilities/skills?item=skill%3Askill-alpha&shell=cockpit");
   await click("Cancel");
   expect(archiveCuratorSkill).not.toHaveBeenCalled();
   vi.mocked(archiveCuratorSkill).mockResolvedValue({
@@ -160,6 +167,7 @@ it("reviews an archive with honest re-enable copy: Cancel sends nothing, Confirm
     reason: "manual archive from Mission Control",
   });
   await vi.waitFor(() => expect(container.textContent).toContain("alpha archived."));
+  expect(container.textContent).toContain("until its state is changed in Capabilities › Skills.");
 });
 
 it("keeps a lost archive response locked and offers only the exact replay", async () => {

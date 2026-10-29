@@ -1,5 +1,4 @@
 import {
-  APPROVAL_EXPIRY_ACTOR_ID,
   SKILL_LIFECYCLE_APPROVAL_KIND,
   type ApprovalRequest,
   type ApprovalResolveInput,
@@ -10,11 +9,11 @@ import {
 } from "@goatcitadel/contracts";
 import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
-import type { SkillLifecyclePendingApproval, SkillStateMutationOutcome } from "./skill-state-service.js";
+import type { SkillStateMutationOutcome } from "./skill-state-service.js";
 
 /**
- * Why the operator's own switch applied without waiting in the Inbox, written as the note on the approval the skip
- * resolves. Only this file may use them (capability-skill-skip-guard.test.ts).
+ * Why the operator's own switch applied without waiting for the operator's approval, written as the note on the
+ * approval the skip resolves. Only this file may use them (capability-skill-skip-guard.test.ts).
  */
 export const OPERATOR_SKILL_SKIP_NOTES = {
   setting: "Applied without asking: your setting to skip approvals for your own changes is on.",
@@ -30,8 +29,8 @@ const SKIP_AUDIT_EVENT = "operator_approval_skipped";
 export interface CapabilitySkillActionSources {
   /**
    * The skill state owner. It creates the skill's `skill.lifecycle` approval with the operator as requester, or
-   * answers that nothing changes, and refuses a pinned skill or a stale revision. Only that approval's effect ever
-   * applies the change.
+   * answers that nothing changes, and refuses a pinned skill or a stale revision. It hands back only an approval that
+   * waits or was approved: after a decline it makes a fresh one. Only that approval's effect ever applies the change.
    */
   setSkillState(
     skillId: string,
@@ -41,10 +40,10 @@ export interface CapabilitySkillActionSources {
   /** The Inbox's own resolve, which records the decision and runs the approval's effect. */
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<unknown>;
   /**
-   * One approval as the Inbox reads it: who turned an earlier request down, and the state the skill was in when the
-   * owner made this one (`preview.currentState`, written in the same commit as the change it binds).
+   * One approval as the Inbox reads it: the state the skill was in when the owner made it (`preview.currentState`,
+   * written in the same commit as the change it binds).
    */
-  readApproval(approvalId: string): Promise<Pick<ApprovalRequest, "status" | "resolvedBy" | "preview">>;
+  readApproval(approvalId: string): Promise<Pick<ApprovalRequest, "preview">>;
   /** One event on the approvals audit stream. */
   appendApprovalAudit(event: string, payload: Record<string, unknown>): Promise<void>;
   /** The install's deployment profile, read on every switch. */
@@ -79,8 +78,9 @@ export class CapabilitySkillActionsService {
     });
     if (outcome.pendingApproval === null) return { status: "unchanged" };
     const { approvalId, status } = outcome.pendingApproval;
-    // The owner's approval ids follow from the request, so the same request can hand back an approval already decided.
-    if (status !== "pending") return await this.alreadyDecided(approvalId, status);
+    // The owner's approval ids follow from the request, so the same request can hand back the one it already approved.
+    // That one is never resolved again, and no second skip is recorded.
+    if (status === "approved") return { status: "approved", approvalId };
     const reason = await this.skipReason(approvalId, input.state);
     if (!reason) return { status: "waiting", approvalId };
     try {
@@ -92,35 +92,12 @@ export class CapabilitySkillActionsService {
     } catch (error) {
       // It ran out of time as it was approved: the owner committed the expiry check's rejection, so nothing changes.
       if (error instanceof ApprovalExpiredAfterCommitError) return { status: "declined", approvalId, expired: true };
-      // Nothing was approved, so the approval still waits in the Inbox for the operator.
+      // Nothing was approved, so the change still waits for the operator's approval.
       this.reportFailure?.("resolve", error);
       return { status: "waiting", approvalId };
     }
     await this.recordSkip({ approvalId, kind: SKILL_LIFECYCLE_APPROVAL_KIND, reason, actorId: input.actorId });
     return { status: "approved", approvalId };
-  }
-
-  /**
-   * The answer for an approval this same request made earlier and someone already decided. Nothing is resolved and no
-   * skip is recorded, since this request skipped nothing. Only an approved one applies: an edited skill approval is
-   * withdrawn and its effect never runs, so it reads as declined, like a rejected one. The expiry check rejects as its
-   * own actor, which is how an expired request is told apart.
-   */
-  private async alreadyDecided(
-    approvalId: string,
-    status: Exclude<SkillLifecyclePendingApproval["status"], "pending">,
-  ): Promise<CapabilitySkillActionOutcome> {
-    switch (status) {
-      case "approved":
-        return { status: "approved", approvalId };
-      case "edited":
-        return { status: "declined", approvalId, expired: false };
-      case "rejected": {
-        const approval = await this.sources.readApproval(approvalId);
-        const expired = approval.status === "rejected" && approval.resolvedBy === APPROVAL_EXPIRY_ACTOR_ID;
-        return { status: "declined", approvalId, expired };
-      }
-    }
   }
 
   /**

@@ -592,7 +592,7 @@ describe("CockpitShell", () => {
     libraryArea.failure = new Error("synthetic Library failure");
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     window.history.replaceState(null, "", "/library?shell=cockpit");
-    window.history.pushState(null, "", "/library/skills?shell=cockpit");
+    window.history.pushState(null, "", "/library/memory?shell=cockpit");
     try {
       await act(async () => {
         root.render(
@@ -616,8 +616,8 @@ describe("CockpitShell", () => {
   it("retries a failed area when only its query string changes", async () => {
     libraryArea.failure = new Error("synthetic Library failure");
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    window.history.replaceState(null, "", "/library?type=skill&shell=cockpit");
-    window.history.pushState(null, "", "/library?type=tool&shell=cockpit");
+    window.history.replaceState(null, "", "/library?type=proposal&shell=cockpit");
+    window.history.pushState(null, "", "/library?type=candidate_skill&shell=cockpit");
     try {
       await act(async () => {
         root.render(
@@ -629,7 +629,7 @@ describe("CockpitShell", () => {
       await vi.waitFor(() => expect(failedView("Library")).toBe(true));
       libraryArea.failure = null;
       await act(async () => window.history.back());
-      expect(window.location.search).toBe("?type=skill&shell=cockpit");
+      expect(window.location.search).toBe("?type=proposal&shell=cockpit");
       await vi.waitFor(() => expect(container.textContent).toContain("Library content"));
       expect(failedView("Library")).toBe(false);
     } finally {

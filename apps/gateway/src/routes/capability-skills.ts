@@ -33,7 +33,10 @@ const NOT_SWITCHABLE_MESSAGE = "This skill can't be switched from here.";
 const REFUSALS = {
   pinned: { code: "STATE_CONFLICT", message: "This skill is pinned. Change it through a proposal in Library." },
   stale: { code: "WRITE_CONFLICT", message: "This skill changed since you opened it. Reload and try again." },
-  duplicate: { code: "ALREADY_EXISTS", message: "This exact change was already asked for elsewhere. Check the Inbox." },
+  duplicate: {
+    code: "ALREADY_EXISTS",
+    message: "Someone already asked for this exact change, and it is waiting for approval.",
+  },
 } as const satisfies Record<CapabilitySkillStateRefusal, { code: ConflictError["code"]; message: string }>;
 // Each read lists the workspace's skills, its choices, the inspectable catalog and the waiting approvals.
 const LIST_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;
@@ -104,8 +107,10 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
    * Switches one skill, install-wide. It always asks the skill state owner, which creates the skill's usual approval;
    * when the operator's skip applies, the switch approves that approval at once as the operator, and the approval's
    * own effect applies the change. 202 with `approved` or `waiting`; 200 with `unchanged`, or `declined` when the
-   * request was turned down. A pinned skill, a stale revision or someone else's identical request is a 409 with its
-   * own code; a skill the switch can't reach is a 404. Neither names the skill.
+   * approval ran out of time just as the skip approved it (`expired`); asking again then makes a fresh approval. A
+   * pinned skill, a stale revision or someone else's identical request is a 409 with its own code; so is the same
+   * change turned down many times in a row (`STATE_CONFLICT`, with no `details.reason`). A skill the switch can't
+   * reach is a 404. None names the skill.
    */
   fastify.post("/api/v1/capabilities/skills/state", operatorSwitch, async (request, reply) => {
     const body = stateBodySchema.safeParse(request.body);

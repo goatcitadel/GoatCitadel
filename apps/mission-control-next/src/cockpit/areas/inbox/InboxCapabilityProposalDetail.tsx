@@ -118,7 +118,7 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {recordAnswered(view) && !proposal && !scopeChanged ? (
         <p className="text-fg-muted">
-          This proposal is no longer in this workspace&apos;s Inbox. Use Open capabilities to check its current status.
+          This proposal is no longer in this workspace&apos;s Inbox. Use Open proposals to check its current status.
         </p>
       ) : null}
       {proposal ? (
@@ -129,24 +129,26 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
           </p>
           {proposal.candidateId ? (
             <p>
-              A candidate is linked to this proposal. Use Open capabilities to review its current version before
-              requesting promotion.
+              A candidate is linked to this proposal. Use Open proposals to review its current version before requesting
+              promotion.
             </p>
           ) : null}
           <p className="text-xs text-fg-muted">
             {plural(current.events.length, "recorded event")}. Proposal review here does not activate a capability.
           </p>
           <p className="text-xs text-fg-muted">
-            Decisions for this proposal are unavailable in Inbox. Candidates are promoted from Library › Capabilities.
+            Decisions for this proposal are unavailable in Inbox. Candidates are promoted from Library › Candidates and
+            mesh.
           </p>
         </div>
       ) : null}
+      {/* The same place the Inbox's own link for this item points to (`/library?type=proposal`). */}
       <NativeOwnerLink
-        href="/library/capabilities"
+        href="/library?type=proposal"
         scope={[workspaceId, item.id]}
         className="w-fit text-sm font-medium text-accent hover:underline"
       >
-        Open capabilities
+        Open proposals
       </NativeOwnerLink>
     </section>
   );

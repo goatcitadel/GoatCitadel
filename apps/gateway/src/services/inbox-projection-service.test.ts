@@ -568,6 +568,31 @@ describe("Gateway inbox projection", () => {
     expect(JSON.stringify(projection)).not.toContain("document-resolved");
   });
 
+  it("sends a capability proposal to the Library, which lists proposals, not to the Skills tab", async () => {
+    const deps = dependencies();
+    const proposal = {
+      proposalId: "capability-a",
+      proposalKind: "skill",
+      status: "proposed",
+      title: "Review skill proposal",
+      summary: "A proposed skill",
+      payload: { workspaceId: "workspace-a" },
+      createdAt: "2026-09-28T12:00:00.000Z",
+      updatedAt: "2026-09-28T12:01:00.000Z",
+    };
+    vi.mocked(deps.storage.capabilityProposals.list).mockResolvedValue([
+      proposal,
+      { ...proposal, proposalId: "capability-foreign", payload: { workspaceId: "workspace-b" } },
+    ] as never);
+
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    expect(projection.items.map((item) => item.id)).toEqual(["capability_proposal:capability-a"]);
+    expect(projection.items[0]).toMatchObject({
+      source: { workspaceId: "workspace-a", proposalId: "capability-a" },
+      href: "/library?type=proposal",
+    });
+  });
+
   it("carries the exact memory candidate ID and excludes mis-scoped owner records", async () => {
     const deps = dependencies();
     vi.mocked(deps.memory.listTraceMemoryCandidates).mockResolvedValue([

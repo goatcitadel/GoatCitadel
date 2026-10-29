@@ -6,9 +6,9 @@ export interface SwitchProps {
   onCheckedChange: (next: boolean) => void;
   /** The accessible name, for example the connector's name. The visible On/Off word is not part of it. */
   label: string;
-  /** Visible state word while on. Defaults to "On". */
+  /** Visible state word while on. Defaults to "On". An empty word prints none, for a view that states it once elsewhere. */
   onText?: string;
-  /** Visible state word while off. Defaults to "Off". */
+  /** Visible state word while off. Defaults to "Off". An empty word prints none, as `onText`. */
   offText?: string;
   disabled?: boolean;
   /**
@@ -39,6 +39,7 @@ export function Switch({
   describedBy,
 }: SwitchProps) {
   const unavailable = disabled || pending;
+  const word = checked ? onText : offText;
   // A switch that is saving ignores toggles instead of going native-disabled, so focus stays where the operator left it.
   const handleCheckedChange = (next: boolean) => {
     if (pending) return;
@@ -46,16 +47,18 @@ export function Switch({
   };
   return (
     <span className="inline-flex items-center gap-2">
-      <span
-        aria-hidden="true"
-        className={cn(
-          "min-w-6 text-right text-sm font-medium",
-          checked ? "text-fg" : "text-fg-secondary",
-          unavailable && "opacity-50",
-        )}
-      >
-        {checked ? onText : offText}
-      </span>
+      {word ? (
+        <span
+          aria-hidden="true"
+          className={cn(
+            "min-w-6 text-right text-sm font-medium",
+            checked ? "text-fg" : "text-fg-secondary",
+            unavailable && "opacity-50",
+          )}
+        >
+          {word}
+        </span>
+      ) : null}
       <SwitchPrimitive.Root
         checked={checked}
         onCheckedChange={handleCheckedChange}

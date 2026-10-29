@@ -71,7 +71,7 @@ it("points runtime authority and mesh capabilities at the pages that manage them
   );
   expect(new URL(diagnostics!.href).pathname).toBe("/system/diagnostics");
   const library = [...records.querySelectorAll("a")].find(
-    (node) => node.textContent === "Open Library › Skills and tools",
+    (node) => node.textContent === "Open Library › Candidates and mesh",
   );
   expect(new URL(library!.href).pathname).toBe("/library");
 });

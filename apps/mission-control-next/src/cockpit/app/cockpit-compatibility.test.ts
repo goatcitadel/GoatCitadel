@@ -73,6 +73,8 @@ describe("Cockpit compatibility coverage", () => {
   });
   it.each([
     "/capabilities",
+    "/capabilities/skills",
+    "/capabilities/skills?item=skill%3Areview&workspaceId=w#top",
     "/capabilities/connectors",
     "/capabilities/connectors?workspaceId=w#top",
     "/capabilities/tools",
@@ -81,19 +83,21 @@ describe("Cockpit compatibility coverage", () => {
     expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
   });
   it.each([
-    "/capabilities/skills",
+    "/capabilities/skills/extra",
     "/capabilities/connectors/extra",
     "/capabilities/tools/extra",
+    "/capabilities/plugins",
     "/capabilities/unknown",
   ])("reports %s missing until its tab exists", (href) => {
     expect(resolveCockpitCompatibility(href)).toEqual({ kind: "missing" });
   });
-  it.each(["/capabilities/connectors?shell=classic", "/capabilities/tools?shell=classic"])(
-    "offers Classic for an explicit rollback of the Capabilities area: %s",
-    (href) => {
-      expect(resolveCockpitCompatibility(href)).toMatchObject({ kind: "classic" });
-    },
-  );
+  it.each([
+    "/capabilities/skills?shell=classic",
+    "/capabilities/connectors?shell=classic",
+    "/capabilities/tools?shell=classic",
+  ])("offers Classic for an explicit rollback of the Capabilities area: %s", (href) => {
+    expect(resolveCockpitCompatibility(href)).toMatchObject({ kind: "classic" });
+  });
   it("retains explicit Classic Projects rollback", () => {
     expect(resolveCockpitCompatibility("/projects/p?shell=classic&workspaceId=w#context")).toMatchObject({
       kind: "classic",
@@ -233,26 +237,123 @@ describe("Cockpit compatibility coverage", () => {
   });
 });
 
-it.each([
-  "tool",
-  "skill",
-  "code_mode",
-  "proposal",
-  "candidate_skill",
-  "mesh_tool",
-  "mesh_mcp_server",
-  "mesh_skill",
-] as const)("opens a generated %s catalog record link without dropping selection or filters", (kind) => {
-  const href =
-    catalogHref(
-      { search: "retained", kind: "all", status: "available", trust: "all" },
-      { kind, capabilityId: "record /?" },
-    ) + "#details";
-  expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
-});
-it("keeps the supported catalog alias /library/skills native", () => {
-  const href = "/library/skills";
-  expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
+it.each(["code_mode", "proposal", "candidate_skill", "mesh_tool", "mesh_mcp_server", "mesh_skill"] as const)(
+  "opens a generated %s catalog record link without dropping selection or filters",
+  (kind) => {
+    const href =
+      catalogHref(
+        { search: "retained", kind: "all", status: "available", trust: "all" },
+        { kind, capabilityId: "record /?" },
+      ) + "#details";
+    expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
+  },
+);
+describe("the Library skills and tools addresses", () => {
+  it.each([
+    ["/library/skills", "/capabilities/skills"],
+    ["/library/skills/", "/capabilities/skills"],
+    ["/library/capabilities", "/capabilities/skills"],
+    ["/library?type=skill", "/capabilities/skills"],
+    ["/library/?type=skill", "/capabilities/skills"],
+    ["/library?type=tool", "/capabilities/tools"],
+  ])("sends %s to %s", (from, to) => {
+    expect(resolveCockpitCompatibility(from)).toEqual({ kind: "native", href: to });
+  });
+  it.each([
+    ["/library/skills", "/capabilities/skills"],
+    ["/library/capabilities", "/capabilities/skills"],
+    ["/library?type=skill", "/capabilities/skills"],
+    ["/library?type=tool", "/capabilities/tools"],
+  ])("sends %s to %s without the catalog filters or the fragment", (from, to) => {
+    const separator = from.includes("?") ? "&" : "?";
+    expect(
+      resolveCockpitCompatibility(`${from}${separator}q=review&type=skill&status=available&trust=trusted#details`),
+    ).toEqual({ kind: "native", href: to });
+  });
+  it.each([
+    ["/library/skills", "/capabilities/skills"],
+    ["/library/capabilities", "/capabilities/skills"],
+    ["/library?type=skill", "/capabilities/skills"],
+    ["/library?type=tool", "/capabilities/tools"],
+  ])("keeps the workspace and the shell travelling from %s", (from, to) => {
+    const separator = from.includes("?") ? "&" : "?";
+    expect(resolveCockpitCompatibility(`${from}${separator}workspaceId=w&shell=cockpit`)).toEqual({
+      kind: "native",
+      href: `${to}?workspaceId=w&shell=cockpit`,
+    });
+    expect(
+      resolveCockpitCompatibility(`${from}${separator}q=a&workspaceId=w&shellScope=keep&shell=cockpit#top`),
+    ).toEqual({ kind: "native", href: `${to}?workspaceId=w&shellScope=keep&shell=cockpit` });
+  });
+  it.each(["/library/skills", "/library/capabilities", "/library?type=skill", "/library?type=tool"])(
+    "keeps an explicit Classic rollback on the Library for %s",
+    (from) => {
+      const separator = from.includes("?") ? "&" : "?";
+      expect(resolveCockpitCompatibility(`${from}${separator}shell=classic`)).toMatchObject({ kind: "classic" });
+    },
+  );
+  it("leaves the Library and the kinds it still lists where they were", () => {
+    for (const href of [
+      "/library",
+      "/library?workspaceId=w",
+      "/library?type=proposal",
+      "/library?type=candidate_skill&shell=cockpit",
+      "/library?type=mesh_tool",
+      "/library?type=code_mode",
+    ]) {
+      expect(resolveCockpitCompatibility(href), href).toEqual({ kind: "native", href });
+    }
+  });
+  it("sends a Library skill record to its Capabilities panel", () => {
+    const href = catalogHref(
+      { search: "retained", kind: "skill", status: "available", trust: "all" },
+      { kind: "skill", capabilityId: "skill:review" },
+    );
+    // The catalog filters stay behind; the shell stays. The record is the panel's item.
+    expect(resolveCockpitCompatibility(`${href}#details`)).toEqual({
+      kind: "native",
+      href: "/capabilities/skills?shell=cockpit&item=skill%3Areview",
+    });
+    expect(resolveCockpitCompatibility("/library/skill/skill%3Acode-review?workspaceId=w")).toEqual({
+      kind: "native",
+      href: "/capabilities/skills?workspaceId=w&item=skill%3Acode-review",
+    });
+    // An id without the `skill:` prefix names the same skill.
+    expect(resolveCockpitCompatibility("/library/skill/review")).toEqual({
+      kind: "native",
+      href: "/capabilities/skills?item=skill%3Areview",
+    });
+    expect(resolveCockpitCompatibility("/library/skill/skill%3Areview?shell=classic")).toMatchObject({
+      kind: "classic",
+    });
+  });
+  it("sends a Library tool record to its group, or to Tools when it has none", () => {
+    // `fs.read` is a Files tool, `shell.exec` a Shell and code tool: the id is `tool:<name>`.
+    expect(
+      resolveCockpitCompatibility(
+        catalogHref(
+          { search: "x", kind: "tool", status: "all", trust: "all" },
+          { kind: "tool", capabilityId: "tool:fs.read" },
+        ) + "#details",
+      ),
+    ).toEqual({ kind: "native", href: "/capabilities/tools?shell=cockpit&item=group%3Afiles" });
+    expect(resolveCockpitCompatibility("/library/tool/tool%3Ashell.exec?workspaceId=w")).toEqual({
+      kind: "native",
+      href: "/capabilities/tools?workspaceId=w&item=group%3Ashell_and_code",
+    });
+    // An id without the `tool:` prefix is a tool name too.
+    expect(resolveCockpitCompatibility("/library/tool/fs.write?workspaceId=w")).toEqual({
+      kind: "native",
+      href: "/capabilities/tools?workspaceId=w&item=group%3Afiles",
+    });
+    expect(resolveCockpitCompatibility("/library/tool/tool%3Ano-such-tool-anywhere?workspaceId=w#x")).toEqual({
+      kind: "native",
+      href: "/capabilities/tools?workspaceId=w",
+    });
+    expect(resolveCockpitCompatibility("/library/tool/tool%3Aread?shell=classic")).toMatchObject({
+      kind: "classic",
+    });
+  });
 });
 describe("the Library tools address", () => {
   it("sends /library/tools to /capabilities/tools", () => {
@@ -284,20 +385,27 @@ describe("the Library tools address", () => {
   it("does not widen to other Library tools paths", () => {
     expect(resolveCockpitCompatibility("/library/tools/extra")).toEqual({ kind: "missing" });
   });
-  it("leaves the one-tool record links where they were", () => {
+  it("sends the one-tool record links to the tool's group", () => {
     const href = catalogHref(
       { search: "", kind: "all", status: "all", trust: "all" },
       { kind: "tool", capabilityId: "fs.write" },
     );
-    expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
+    expect(resolveCockpitCompatibility(href)).toEqual({
+      kind: "native",
+      href: "/capabilities/tools?shell=cockpit&item=group%3Afiles",
+    });
   });
 });
-it.each(["/library/unknown/record", "/library/tool/%invalid", "/library/tool/record/extra"])(
-  "rejects unsupported catalog selection %s",
-  (href) => {
-    expect(resolveCockpitCompatibility(href)).toEqual({ kind: "missing" });
-  },
-);
+it.each([
+  "/library/unknown/record",
+  "/library/tool/%invalid",
+  "/library/tool/record/extra",
+  "/library/skill/%invalid",
+  "/library/skill/skill%3Areview/extra",
+  "/library/skills/extra",
+])("rejects unsupported catalog selection %s", (href) => {
+  expect(resolveCockpitCompatibility(href)).toEqual({ kind: "missing" });
+});
 
 it.each(["history", "all", "recovery", "approved", "rejected", "edited"])(
   "keeps %s approval audit bookmarks native with exact record/scope/query/fragment",

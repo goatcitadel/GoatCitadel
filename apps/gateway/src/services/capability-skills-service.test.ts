@@ -86,6 +86,8 @@ function sources(overrides: Partial<CapabilitySkillsSources> = {}): CapabilitySk
     listPendingApprovals: vi.fn(async () => []),
     // The skill state owner's lookup: the loaded skills, without the workspace's self-authored one.
     listSwitchableSkillIds: vi.fn(async () => ["bundled:research", "extra:pdf-tools"]),
+    // A workspace that chose nothing: its turns may load every skill listed.
+    listWorkspaceTurnSkills: vi.fn(async () => SKILLS),
     shippedSkillDirs: vi.fn(() => ({ folders: new Set<string>(), packs: new Set<string>() })),
     deploymentProfile: vi.fn(() => "trusted_local" as const),
     readApprovalSkipSetting: vi.fn(async () => false),
@@ -111,9 +113,61 @@ describe("CapabilitySkillsService.list", () => {
       ["extra:pdf-tools", "imported"],
       ["bundled:research", "built_in"],
     ]);
-    // Chat doesn't filter by the workspace's skill choices, so no row claims a skill is hidden there.
-    expect(response.items.some((item) => "hiddenInWorkspace" in item)).toBe(false);
+    // The workspace's turns may load every one of them, so no row is left out.
+    expect(response.items.map((item) => item.leftOutOfWorkspace)).toEqual([false, false, false]);
     expect(Number.isNaN(Date.parse(response.generatedAt))).toBe(false);
+  });
+
+  it("marks a skill the workspace's choices leave out", async () => {
+    const reads = sources({
+      // The turn list keeps the chosen skill and the workspace's own self-authored one, not pdf-tools.
+      listWorkspaceTurnSkills: vi.fn(async () => [SKILLS[0]!, SKILLS[2]!]),
+    });
+
+    const response = await new CapabilitySkillsService(reads).list(WORKSPACE_ID);
+
+    expect(reads.listWorkspaceTurnSkills).toHaveBeenCalledExactlyOnceWith(WORKSPACE_ID);
+    // The tab still lists every skill, whatever the choices; it only says which ones Chat can't use here.
+    expect(response.items.map((item) => [item.skillId, item.leftOutOfWorkspace])).toEqual([
+      ["extra:reviewed-0123456789ab", false],
+      ["extra:pdf-tools", true],
+      ["bundled:research", false],
+    ]);
+    expect(response.issues).toEqual([]);
+  });
+
+  it("marks nothing when the workspace chooses all skills", async () => {
+    const response = await new CapabilitySkillsService(sources()).list(WORKSPACE_ID);
+
+    expect(response.items.every((item) => item.leftOutOfWorkspace === false)).toBe(true);
+    expect(response.issues).toEqual([]);
+  });
+
+  it("never marks the workspace's own self-authored skills", async () => {
+    // A choice of one skill: the turn list is that skill plus the workspace's self-authored ones.
+    const response = await new CapabilitySkillsService(
+      sources({ listWorkspaceTurnSkills: vi.fn(async () => [SKILLS[2]!]) }),
+    ).list(WORKSPACE_ID);
+
+    expect(response.items.find((item) => item.origin === "self_authored")?.leftOutOfWorkspace).toBe(false);
+    expect(response.items.filter((item) => item.leftOutOfWorkspace)).toHaveLength(2);
+  });
+
+  it("leaves the mark out, with an issue line, when the workspace's skills can't be read", async () => {
+    const reportFailure = vi.fn();
+    const response = await new CapabilitySkillsService(
+      sources({ listWorkspaceTurnSkills: failing("choices unreadable") }),
+      reportFailure,
+    ).list(WORKSPACE_ID);
+
+    // A guess either way would be wrong: the rows stay, without the claim.
+    expect(response.items).toHaveLength(3);
+    expect(response.items.some((item) => "leftOutOfWorkspace" in item)).toBe(false);
+    expect(response.issues).toEqual(["Which skills this workspace's chats can use couldn't be read right now."]);
+    expect(reportFailure).toHaveBeenCalledWith(
+      "turn_skills",
+      expect.objectContaining({ message: "choices unreadable" }),
+    );
   });
 
   it("counts each waiting candidate once across its versions", async () => {
@@ -204,6 +258,7 @@ describe("CapabilitySkillsService.list", () => {
   it("lists the issues in a fixed order", async () => {
     const response = await new CapabilitySkillsService(
       sources({
+        listWorkspaceTurnSkills: failing("choices unreadable"),
         listSwitchableSkillIds: failing("skills not loaded"),
         listPendingApprovals: failing("approvals unreadable"),
       }),
@@ -212,6 +267,7 @@ describe("CapabilitySkillsService.list", () => {
     expect(response.issues).toEqual([
       "Waiting approvals couldn't be read right now.",
       "Which skills can be switched couldn't be read right now.",
+      "Which skills this workspace's chats can use couldn't be read right now.",
     ]);
   });
 

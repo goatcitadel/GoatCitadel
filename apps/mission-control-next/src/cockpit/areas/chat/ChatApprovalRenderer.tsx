@@ -27,7 +27,9 @@ import { OutsideRootWriteGrantOptions } from "./OutsideRootWriteGrantOptions";
 
 type RendererCode = typeof import("./ChatApprovalRendererBody");
 type DecisionProps = ComponentProps<RendererCode["ApprovalDecisionBar"]>;
-type ChatApprovalRendererProps = Omit<DecisionProps, "approval"> & {
+type ChatApprovalRendererProps = Omit<DecisionProps, "approval" | "workspaceId"> & {
+  /** Chat reads and decides its approvals in the conversation's workspace. */
+  workspaceId: string;
   approvalId: string;
   approval?: ApprovalRequest | null;
   recordPending: boolean;

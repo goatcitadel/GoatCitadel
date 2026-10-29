@@ -1,4 +1,4 @@
-import { TOOL_GROUPS, type CapabilityToolBlock, type ToolGroupId } from "@goatcitadel/contracts";
+import { TOOL_GROUPS, toolGroupForTool, type CapabilityToolBlock, type ToolGroupId } from "@goatcitadel/contracts";
 
 /** The Tools tab, without a panel open. */
 export const TOOLS_HREF = "/capabilities/tools";
@@ -19,6 +19,17 @@ function toolGroupIdOf(value: string | null | undefined): ToolGroupId | undefine
 /** The address that opens one group's panel. */
 export function toolGroupItemHref(groupId: ToolGroupId): string {
   return `${TOOLS_HREF}?item=${encodeURIComponent(`${ITEM_PREFIX}${groupId}`)}`;
+}
+
+/** The address of the group panel a built-in tool is in, or of the Tools tab for a tool in no group (a connector's). */
+export function toolHref(toolName: string): string {
+  const group = toolGroupForTool(toolName);
+  return group ? toolGroupItemHref(group.id) : TOOLS_HREF;
+}
+
+/** The tool name in a Library tool record id (`tool:<name>`). An id without the prefix is already a name. */
+export function toolNameFromCapabilityId(capabilityId: string): string {
+  return capabilityId.startsWith("tool:") ? capabilityId.slice("tool:".length) : capabilityId;
 }
 
 /**

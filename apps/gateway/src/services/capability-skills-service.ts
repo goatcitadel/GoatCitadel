@@ -31,6 +31,12 @@ export interface CapabilitySkillsSources {
    * A workspace's self-authored skills are not among them.
    */
   listSwitchableSkillIds(): Promise<readonly string[]>;
+  /**
+   * The skills the workspace's turns may load: the ones its skill choices keep, plus its own approved self-authored
+   * skills. This is the list Chat, scheduled turns and remote workers read, so a loaded skill missing from it is one
+   * the workspace's choices leave out.
+   */
+  listWorkspaceTurnSkills(workspaceId: string): Promise<readonly SkillListItem[]>;
   /** Where GoatCitadel's own skills outside `skills/bundled` come from on this install, to tell them from imports. */
   shippedSkillDirs(): ShippedSkillDirs;
   /** The install's deployment profile, read on every list. */
@@ -39,7 +45,13 @@ export interface CapabilitySkillsSources {
   readApprovalSkipSetting(): Promise<boolean>;
 }
 
-export type CapabilitySkillsSource = "skills" | "catalog" | "approvals" | "switchable" | "approval_skip";
+export type CapabilitySkillsSource =
+  | "skills"
+  | "catalog"
+  | "approvals"
+  | "switchable"
+  | "turn_skills"
+  | "approval_skip";
 
 /** Called with the real error of a failed read, so the response can carry plain wording only. */
 export type CapabilitySkillsFailureReporter = (source: CapabilitySkillsSource, error: unknown) => void;
@@ -48,6 +60,7 @@ const UNREADABLE_SKILLS = "Skills can't be read right now.";
 const ISSUE_MESSAGES = {
   approvals: "Waiting approvals couldn't be read right now.",
   switchable: "Which skills can be switched couldn't be read right now.",
+  turnSkills: "Which skills this workspace's chats can use couldn't be read right now.",
 } as const;
 
 /**
@@ -61,11 +74,12 @@ export class CapabilitySkillsService {
   ) {}
 
   public async list(workspaceId: string): Promise<CapabilitySkillsResponse> {
-    const [skills, catalog, approvals, switchable, operatorApprovalSkip] = await Promise.all([
+    const [skills, catalog, approvals, switchable, turnSkills, operatorApprovalSkip] = await Promise.all([
       this.readSkills(workspaceId),
       this.attempt("catalog", () => this.sources.listInspectableCatalog(workspaceId)),
       this.attempt("approvals", () => this.sources.listPendingApprovals()),
       this.attempt("switchable", () => this.sources.listSwitchableSkillIds()),
+      this.attempt("turn_skills", () => this.sources.listWorkspaceTurnSkills(workspaceId)),
       this.readOperatorApprovalSkip(),
     ]);
 
@@ -73,6 +87,7 @@ export class CapabilitySkillsService {
     const issues = [
       ...(approvals.ok ? [] : [ISSUE_MESSAGES.approvals]),
       ...(switchable.ok ? [] : [ISSUE_MESSAGES.switchable]),
+      ...(turnSkills.ok ? [] : [ISSUE_MESSAGES.turnSkills]),
     ];
     const candidatesWaiting = catalog.ok ? countWaitingCandidates(catalog.value) : undefined;
     return {
@@ -82,6 +97,8 @@ export class CapabilitySkillsService {
         pendingApprovalIds: approvals.ok ? pendingSkillApprovalIds(approvals.value) : new Map(),
         // A lookup that can't be read offers no switch, rather than one the owner might refuse.
         switchableSkillIds: new Set(switchable.ok ? switchable.value : []),
+        // A list that can't be read marks no row, rather than guessing which skills the workspace's turns may load.
+        ...(turnSkills.ok ? { turnSkillIds: new Set(turnSkills.value.map((skill) => skill.skillId)) } : {}),
         shippedSkillDirs: this.sources.shippedSkillDirs(),
       }),
       // Absent when the catalog couldn't be read, or when it cut its candidate list off.

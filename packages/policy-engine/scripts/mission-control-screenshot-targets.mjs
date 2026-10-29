@@ -55,8 +55,8 @@ export const PUBLIC_SCREENSHOT_TARGETS = Object.freeze([
     routeSlug: "cockpit-library-capabilities",
     file: "library-capabilities.png",
     theme: "dark",
-    title: "Library · Capabilities",
-    description: "Inspectable skills, tools, MCP servers, and channels with trust and provenance.",
+    title: "Library · Candidates and mesh",
+    description: "Skill candidates, proposals, and mesh entries with trust and provenance.",
   },
   {
     slug: "system-health",

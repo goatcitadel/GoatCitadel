@@ -3,6 +3,8 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
+import { SKILLS_HREF } from "../capabilities/skills/skill-links";
+import { TOOLS_HREF } from "../capabilities/tools/tool-links";
 import { loadCapabilityCatalog } from "../library/capability-catalog";
 
 export function SafetyCatalogSummary() {
@@ -10,8 +12,8 @@ export function SafetyCatalogSummary() {
   const query = useQuery({ queryKey: queryKeys.capabilities(), queryFn: loadCapabilityCatalog });
   const catalog = query.isError ? undefined : query.data;
   const links = [
-    { kind: "tool", label: "Tools", action: "Open tools in Library" },
-    { kind: "skill", label: "Skills", action: "Open skills in Library" },
+    { kind: "tool", label: "Tools", action: "Open tools in Capabilities", href: `${TOOLS_HREF}?shell=cockpit` },
+    { kind: "skill", label: "Skills", action: "Open skills in Capabilities", href: `${SKILLS_HREF}?shell=cockpit` },
   ];
   return (
     <section
@@ -24,8 +26,8 @@ export function SafetyCatalogSummary() {
             Tools and skills
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            Library shows availability, policy, trust, and settings for each entry. An entry in the catalog does not
-            bypass approvals or grant permission for a specific action.
+            Capabilities shows availability, policy, trust, and settings for each skill and tool. An entry in the
+            catalog does not bypass approvals or grant permission for a specific action.
           </p>
         </div>
         <Button size="sm" disabled={query.isFetching} onClick={() => void query.refetch()}>
@@ -50,9 +52,8 @@ export function SafetyCatalogSummary() {
             </p>
           ) : null}
           <div className="mt-3 divide-y divide-line-subtle">
-            {links.map(({ kind, label, action }) => {
+            {links.map(({ kind, label, action, href }) => {
               const entries = catalog.items.filter((item) => item.kind === kind);
-              const href = `/library?shell=cockpit&type=${kind}`;
               return (
                 <div key={kind} className="py-3">
                   <h4 className="text-sm font-medium text-fg">{label}</h4>

@@ -23,8 +23,8 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS: Partial<
       "When on, models that report their reasoning stream it into Chat above the answer. While the model thinks, its newest line shows beside the label; the full text stays shut unless you open it.",
   },
   settingsApprovalSkipEnabled: {
-    label: "Apply my Settings and Capabilities changes without an Inbox approval",
+    label: "Apply my Settings and Capabilities changes without asking first",
     description:
-      "When on, a change you save through the Settings forms, a connector you install from Capabilities, or a skill you switch on from Capabilities applies right away instead of waiting for an approval in the Inbox. Credential changes and change requests from Chat still need approval. Turning a skill off, or pausing one that is on, from Capabilities applies right away even when this is off.",
+      "When on, a change you save through the Settings forms, a connector you install from Capabilities, or a skill you switch on from Capabilities applies right away instead of waiting for your approval. Credential changes and change requests from Chat still need approval. Turning a skill off, or pausing one that is on, from Capabilities applies right away even when this is off.",
   },
 };

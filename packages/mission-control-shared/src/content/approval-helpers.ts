@@ -2,6 +2,7 @@ import type { ApprovalRequest, RuntimeLifecycleResponse } from "@goatcitadel/con
 import { presentApprovalOutcome, presentApprovalStatus } from "./status-vocabulary.js";
 import { externalSourceKnowledgeApprovalEvidence } from "./external-source-approval-evidence.js";
 import { communicationsMailSendApprovalEvidence } from "./communications-approval-evidence.js";
+import { skillStateApprovalEvidence } from "./skill-state-approval-evidence.js";
 
 export interface ApprovalEvidenceBlock {
   label: string;
@@ -347,6 +348,10 @@ export function buildApprovalRequestReviewEvidenceModel(approval: ApprovalReques
   if (approval.kind === "change_plan_effect") {
     const planEvidence = changePlanEffectApprovalEvidence(approval);
     if (planEvidence) return planEvidence;
+  }
+  if (approval.kind === "skill.lifecycle") {
+    const skillEvidence = skillStateApprovalEvidence(approval);
+    if (skillEvidence) return skillEvidence;
   }
   return citadelWardApprovalEvidence(approval) ?? buildApprovalReviewEvidenceModel(approval.preview);
 }

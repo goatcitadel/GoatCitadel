@@ -44,7 +44,7 @@ const ENV: Record<string, string> = {
   GOATCITADEL_NPU_AUTOSTART: "false",
   GOATCITADEL_NPU_ENABLED: "false",
   GOATCITADEL_RATE_LIMIT_ENABLED: "false",
-  // The operator's "apply my changes without an Inbox approval" setting, on unless a test group turns it off.
+  // The operator's "apply my changes without asking first" setting, on unless a test group turns it off.
   GOATCITADEL_FEATURE_SETTINGS_APPROVAL_SKIP_ENABLED: "true",
 };
 
@@ -263,6 +263,53 @@ describe("the Capabilities skill switch over the real Gateway, with the skip set
     expect(await gateway.readSkill(skillId)).toMatchObject({ state: "off", pendingApprovalId: approvalId });
     expect(gateway.readApprovalAudit()).not.toContainEqual(expect.objectContaining({ approvalId }));
   });
+
+  it("applies the fresh approval through its own effect", async () => {
+    const skillId = "bundled:coding";
+    // Off first: turning a skill off only takes power away, so that applies at once.
+    const off = await gateway.switchSkill(skillId, "disabled", (await gateway.readSkill(skillId)).revision);
+    expect(off.statusCode, off.body).toBe(202);
+    await vi.waitFor(async () => expect(await gateway.readRuntimeState(skillId)).toBe("disabled"), {
+      timeout: 20_000,
+      interval: 100,
+    });
+    const revision = (await gateway.readSkill(skillId)).revision;
+
+    // Switching it on asks, and the operator turns that down in the Inbox.
+    const first = await gateway.switchSkill(skillId, "enabled", revision);
+    expect(first.statusCode, first.body).toBe(202);
+    expect(first.json<CapabilitySkillActionOutcome>()).toMatchObject({ status: "waiting" });
+    const declinedId = (first.json<CapabilitySkillActionOutcome>() as { approvalId: string }).approvalId;
+    const rejected = await gateway.inject("POST", `/api/v1/approvals/${declinedId}/resolve`, { decision: "reject" });
+    expect(rejected.statusCode, rejected.body).toBe(200);
+
+    // Asking again for the same change, from the same state, makes a fresh approval, linked to the declined one.
+    const again = await gateway.switchSkill(skillId, "enabled", revision);
+    expect(again.statusCode, again.body).toBe(202);
+    const fresh = again.json<CapabilitySkillActionOutcome>();
+    expect(fresh).toMatchObject({ status: "waiting", approvalId: expect.any(String) });
+    const freshId = (fresh as { approvalId: string }).approvalId;
+    expect(freshId).not.toBe(declinedId);
+    expect(await gateway.readApproval(freshId)).toMatchObject({
+      status: "pending",
+      payload: { skillLifecycle: { supersedesApprovalId: declinedId } },
+    });
+
+    // The operator approves the fresh one in the Inbox, and its own effect switches the skill on.
+    const approved = await gateway.inject("POST", `/api/v1/approvals/${freshId}/resolve`, { decision: "approve" });
+    expect(approved.statusCode, approved.body).toBe(200);
+    await vi.waitFor(async () => expect(await gateway.readRuntimeState(skillId)).toBe("enabled"), {
+      timeout: 20_000,
+      interval: 100,
+    });
+    expect(await gateway.readApproval(freshId)).toMatchObject({ status: "approved" });
+    expect(await gateway.readApproval(declinedId)).toMatchObject({ status: "rejected" });
+    expect(await gateway.readSkill(skillId)).toMatchObject({ state: "on", callable: true });
+    // Nothing here was skipped: the operator answered both in the Inbox.
+    expect(gateway.readApprovalAudit()).not.toContainEqual(
+      expect.objectContaining({ event: "operator_approval_skipped", approvalId: freshId }),
+    );
+  });
 });
 
 describe("the Capabilities skill switch over a real remote_hardened Gateway", { timeout: 300_000 }, () => {
@@ -286,14 +333,24 @@ describe("the Capabilities skill switch over a real remote_hardened Gateway", { 
     expect(await gateway.readSkill(skillId)).toMatchObject({ state: "on", pendingApprovalId: approvalId });
     expect(gateway.readApprovalAudit()).not.toContainEqual(expect.objectContaining({ approvalId }));
 
-    // The operator turns it down in the Inbox. The same click again hands back that decided approval: it says so.
+    // The operator turns it down in the Inbox. The same click again makes a fresh approval, linked to that one, and it
+    // asks again.
     const rejected = await gateway.inject("POST", `/api/v1/approvals/${approvalId}/resolve`, { decision: "reject" });
     expect(rejected.statusCode, rejected.body).toBe(200);
-    const again = await gateway.switchSkill(skillId, "disabled", before.revision);
-    expect(again.statusCode, again.body).toBe(200);
-    expect(again.json()).toEqual({ status: "declined", approvalId, expired: false });
-    expect(await gateway.readRuntimeState(skillId)).toBe("enabled");
     expect((await gateway.readSkill(skillId)).pendingApprovalId).toBeUndefined();
+    const again = await gateway.switchSkill(skillId, "disabled", before.revision);
+    expect(again.statusCode, again.body).toBe(202);
+    const fresh = again.json<CapabilitySkillActionOutcome>();
+    expect(fresh).toMatchObject({ status: "waiting", approvalId: expect.any(String) });
+    const freshId = (fresh as { approvalId: string }).approvalId;
+    expect(freshId).not.toBe(approvalId);
+    expect(await gateway.readApproval(freshId)).toMatchObject({
+      status: "pending",
+      payload: { skillLifecycle: { supersedesApprovalId: approvalId } },
+    });
+    expect((await gateway.readApproval(approvalId)).status).toBe("rejected");
+    expect(await gateway.readRuntimeState(skillId)).toBe("enabled");
+    expect((await gateway.readSkill(skillId)).pendingApprovalId).toBe(freshId);
   });
 });
 

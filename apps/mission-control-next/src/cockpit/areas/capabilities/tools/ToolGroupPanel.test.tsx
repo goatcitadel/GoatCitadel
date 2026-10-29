@@ -38,6 +38,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", async (original) => ({
   ...(await original<object>()),
   ...plans,
 }));
+// Library's inspector has its own tests (CapabilityPolicyInspector.test.tsx); here only what the panel hands it.
+vi.mock("../../library/CapabilityPolicyInspector", () => ({
+  CapabilityPolicyInspector: ({ workspaceId, toolName }: { workspaceId: string; toolName?: string }) => (
+    <p data-policy-inspector={`${workspaceId}|${toolName ?? ""}`}>Tool policy inspector</p>
+  ),
+}));
 
 const LIST_KEY = toolListQuery("ws-1").queryKey;
 const USAGE_KEY = toolUsageQuery().queryKey;
@@ -563,6 +569,46 @@ describe("Tool group panel", () => {
       "fs.write",
       "fs.delete",
     ]);
+  });
+
+  it("checks a tool's policy from the group panel's technical details", async () => {
+    await renderPanel("files");
+    // Hidden with the rest of Technical details.
+    expect(container.querySelector("[data-policy-inspector]")).toBeNull();
+    expect(container.querySelector("select")).toBeNull();
+
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    prefs.showTechnicalDetails = true;
+    await renderPanel("files");
+    const details = container.querySelector("details")!;
+    const picker = [...details.querySelectorAll("label")].find((entry) =>
+      entry.textContent?.startsWith("Check a tool's policy"),
+    );
+    const select = picker?.querySelector("select");
+    expect([...(select?.options ?? [])].map((option) => option.value)).toEqual(["fs.read", "fs.write", "fs.delete"]);
+    // One divider: the inspector draws its own, so the picker adds none.
+    expect(picker?.parentElement?.className ?? "").not.toContain("border-t");
+    // The first tool is checked until another is chosen, in the workspace the panel reads.
+    expect(details.querySelector("[data-policy-inspector]")?.getAttribute("data-policy-inspector")).toBe(
+      "ws-1|fs.read",
+    );
+
+    await act(async () => {
+      select!.value = "fs.write";
+      select!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(details.querySelector("[data-policy-inspector]")?.getAttribute("data-policy-inspector")).toBe(
+      "ws-1|fs.write",
+    );
+  });
+
+  it("offers no policy check for a group with no tools", async () => {
+    prefs.showTechnicalDetails = true;
+    await renderPanel("git", listOf({ git: { tools: [] } }));
+    expect(container.querySelector("details")).not.toBeNull();
+    expect(container.querySelector("[data-policy-inspector]")).toBeNull();
+    expect(container.querySelector("select")).toBeNull();
   });
 });
 

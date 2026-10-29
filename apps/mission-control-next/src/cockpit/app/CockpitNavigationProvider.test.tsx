@@ -136,7 +136,7 @@ describe("central cockpit navigation", () => {
       draft.setValue({ name: "Retained text" });
     });
     await act(async () => {
-      route.navigate("/library?type=tool#catalog");
+      route.navigate("/library?type=proposal#catalog");
     });
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
     expect(push).not.toHaveBeenCalled();
@@ -144,13 +144,13 @@ describe("central cockpit navigation", () => {
     expect(draft.value.name).toBe("Retained text");
     expect(window.location.pathname).toBe("/work");
     await act(async () => {
-      route.navigate("/library?type=tool#catalog");
+      route.navigate("/library?type=proposal#catalog");
       route.navigate("/inbox");
     });
     await click("Keep draft and close");
     expect(push).toHaveBeenCalledTimes(1);
     expect(window.location.pathname + window.location.search + window.location.hash).toBe(
-      "/library?type=tool&shell=cockpit#catalog",
+      "/library?type=proposal&shell=cockpit#catalog",
     );
     expect(draft.value.name).toBe("Retained text");
     expect(draft.isDirty).toBe(true);
@@ -281,7 +281,8 @@ describe("central cockpit navigation", () => {
       finish();
       await pending;
     });
-    expect(window.location.pathname).toBe("/library");
+    // A Library skills address has moved: the approved move lands where the redirect sends it.
+    expect(window.location.pathname).toBe("/capabilities/skills");
   });
 
   it("asks the browser to confirm a reload or close only while a draft is unsaved", async () => {
@@ -596,23 +597,29 @@ describe("browser Back and Forward with unsaved drafts", () => {
 });
 
 it("replaces a compatibility entry once while preserving state, scope and fragment", async () => {
-  window.history.replaceState({retained: "yes"}, "", "/ops/approvals?approvalId=a&workspaceId=w#review");
+  window.history.replaceState({ retained: "yes" }, "", "/ops/approvals?approvalId=a&workspaceId=w#review");
   const length = window.history.length;
   await render();
   expect(window.location.pathname).toBe("/inbox");
   expect(window.location.hash).toBe("#review");
-  expect(window.history.state).toMatchObject({retained: "yes"});
+  expect(window.history.state).toMatchObject({ retained: "yes" });
   expect(window.history.length).toBe(length);
   expect(route.search).toContain("workspaceId=w");
 });
 it("reviews a compatibility navigation and leaves it untouched on cancel", async () => {
   await render();
-  await act(async () => { draft.setValue({name: "Unsaved"}); });
-  await act(async () => { route.navigate("/ops/approvals?approvalId=a#record"); });
+  await act(async () => {
+    draft.setValue({ name: "Unsaved" });
+  });
+  await act(async () => {
+    route.navigate("/ops/approvals?approvalId=a#record");
+  });
   expect(window.location.pathname).toBe("/work");
   await click("Cancel");
   expect(window.location.pathname).toBe("/work");
-  await act(async () => { route.navigate("/ops/approvals?approvalId=a#record"); });
+  await act(async () => {
+    route.navigate("/ops/approvals?approvalId=a#record");
+  });
   await click("Keep draft and close");
   expect(window.location.pathname).toBe("/inbox");
   expect(window.location.hash).toBe("#record");

@@ -81,8 +81,8 @@ describe("change plan approval evidence (R91)", () => {
       ...approval,
       payload: { planId: "plan-2", kind: "runtime_configuration", intentHash: INTENT_HASH },
       preview: {
-        title: "Turn on Apply my Settings and Capabilities changes without an Inbox approval",
-        summary: "Saves you approving your own Settings changes in Inbox.",
+        title: "Turn on Apply my Settings and Capabilities changes without asking first",
+        summary: "Saves you approving your own Settings changes.",
         impact: "  ",
         risk: "danger",
       },
@@ -91,8 +91,8 @@ describe("change plan approval evidence (R91)", () => {
     const model = buildApprovalRequestReviewEvidenceModel(settingsSave);
 
     expect(model?.targetEntries).toEqual([
-      { label: "Change", value: "Turn on Apply my Settings and Capabilities changes without an Inbox approval" },
-      { label: "What it does", value: "Saves you approving your own Settings changes in Inbox." },
+      { label: "Change", value: "Turn on Apply my Settings and Capabilities changes without asking first" },
+      { label: "What it does", value: "Saves you approving your own Settings changes." },
     ]);
   });
 

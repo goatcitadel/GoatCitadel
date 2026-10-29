@@ -232,12 +232,12 @@ function ownerForTrustPolicyRow(row: TrustPolicyMatrixRow): string {
     case "tools.localOperatorOverrides":
       return "Ops / Approvals";
     case "capabilities.catalog":
-      return "Library / Capabilities";
+      return "Library / Candidates and mesh";
     case "mcp.servers":
     case "mcp.tools":
       return "Settings / MCP";
     case "skills.lifecycle":
-      return "Library / Skills";
+      return "Capabilities / Skills";
     case "addons.catalog":
     case "addons.installed":
       return "Settings / Add-ons";
@@ -245,7 +245,7 @@ function ownerForTrustPolicyRow(row: TrustPolicyMatrixRow): string {
       return row.kind === "tool"
         ? "Settings / Tools"
         : row.kind === "capability"
-          ? "Library / Capabilities"
+          ? "Library / Candidates and mesh"
           : "Settings";
   }
 }
