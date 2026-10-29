@@ -364,10 +364,160 @@ describe("slack webhook helpers", () => {
       }),
     );
     expect(deriveSlackWebhookIdempotencyKey("conn-slack", payload, Buffer.from(JSON.stringify(payload), "utf8"))).toBe(
-      "slack:conn-slack:Ev789",
+      "slack:conn-slack:message:C123:1712109984.300000",
     );
     expect(deriveSlackWebhookIdempotencyKey("conn-slack", {}, Buffer.from("raw", "utf8"))).toMatch(
       /^slack:conn-slack:[a-f0-9]{64}$/,
+    );
+  });
+
+  it("reads an app_mention as a room message without the mention", () => {
+    const result = normalizeSlackWebhookPayload({
+      connectionId: "conn-1",
+      botUserId: "UBOT",
+      payload: {
+        type: "event_callback",
+        event_id: "Ev-mention",
+        team_id: "T1",
+        event: { type: "app_mention", user: "U1", text: "<@UBOT> hello", channel: "C1", ts: "1.2" },
+      },
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        eventType: "message",
+        eventId: "1.2",
+        actorId: "U1",
+        content: "hello",
+        room: "C1",
+        peer: undefined,
+        deliveryReplyToMessageId: "1.2",
+      }),
+    );
+  });
+
+  it("strips only a leading mention of this bot, and the whitespace after it", () => {
+    const read = (text: string, botUserId?: string) =>
+      normalizeSlackWebhookPayload({
+        connectionId: "conn-1",
+        botUserId,
+        payload: {
+          type: "event_callback",
+          event: { type: "app_mention", user: "U1", text, channel: "C1", ts: "1.2" },
+        },
+      });
+
+    expect(read("  <@UBOT>   what is due?", "UBOT")).toEqual(expect.objectContaining({ content: "what is due?" }));
+    expect(read("<@UBOT|goatcitadel> what is due?", "UBOT")).toEqual(
+      expect.objectContaining({ content: "what is due?" }),
+    );
+    // A mention later in the text, or of someone else, stays as typed.
+    expect(read("ask <@UBOT> what is due?", "UBOT")).toEqual(
+      expect.objectContaining({ content: "ask <@UBOT> what is due?" }),
+    );
+    expect(read("<@UOTHER> hi <@UBOT>", "UBOT")).toEqual(expect.objectContaining({ content: "<@UOTHER> hi <@UBOT>" }));
+    // Without a known bot user there is nothing to strip.
+    expect(read("<@UBOT> hello")).toEqual(expect.objectContaining({ content: "<@UBOT> hello" }));
+    // A bare mention carries no request.
+    expect(read("<@UBOT>", "UBOT")).toEqual(expect.objectContaining({ kind: "ignore", eventType: "app_mention" }));
+  });
+
+  it("leaves a plain message event's text untouched, mention included", () => {
+    expect(
+      normalizeSlackWebhookPayload({
+        connectionId: "conn-1",
+        botUserId: "UBOT",
+        payload: {
+          type: "event_callback",
+          event: {
+            type: "message",
+            user: "U1",
+            text: "<@UBOT> hello",
+            channel: "C1",
+            channel_type: "channel",
+            ts: "1.2",
+          },
+        },
+      }),
+    ).toEqual(expect.objectContaining({ kind: "message", content: "<@UBOT> hello" }));
+  });
+
+  it("drops an app_mention authored by a bot or by this bot itself", () => {
+    const mention = { type: "app_mention", text: "<@UBOT> loop", channel: "C1", ts: "1.2" };
+    const read = (event: Record<string, unknown>) =>
+      normalizeSlackWebhookPayload({
+        connectionId: "conn-1",
+        botUserId: "UBOT",
+        appId: "A1",
+        payload: { type: "event_callback", event },
+      });
+
+    expect(read({ ...mention, user: "U9", bot_id: "B1" })).toEqual(expect.objectContaining({ kind: "ignore" }));
+    expect(read({ ...mention, user: "UBOT" })).toEqual(expect.objectContaining({ kind: "ignore" }));
+    expect(read({ ...mention, user: "U9", app_id: "A1" })).toEqual(expect.objectContaining({ kind: "ignore" }));
+  });
+
+  it("does not treat an app_mention file share as a voice message", () => {
+    const result = normalizeSlackWebhookPayload({
+      connectionId: "conn-1",
+      botUserId: "UBOT",
+      voiceInboundEnabled: true,
+      payload: {
+        type: "event_callback",
+        event: {
+          type: "app_mention",
+          subtype: "file_share",
+          user: "U1",
+          text: "<@UBOT> listen",
+          channel: "C1",
+          ts: "1.2",
+          files: [{ id: "F1", mimetype: "audio/webm", url_private_download: "https://files.slack.com/f1" }],
+        },
+      },
+    });
+
+    expect(result).toEqual(expect.objectContaining({ kind: "ignore", eventType: "app_mention" }));
+  });
+
+  it("gives a message and its app_mention the same key", () => {
+    const envelope = (eventId: string, type: "message" | "app_mention") => ({
+      type: "event_callback",
+      event_id: eventId,
+      event: { type, user: "U1", text: "<@UBOT> hello", channel: "C1", ts: "1.2" },
+    });
+    const keyOf = (payload: unknown) =>
+      deriveSlackWebhookIdempotencyKey("conn-1", payload, Buffer.from(JSON.stringify(payload), "utf8"));
+
+    expect(keyOf(envelope("Ev-a", "message"))).toBe("slack:conn-1:message:C1:1.2");
+    expect(keyOf(envelope("Ev-b", "app_mention"))).toBe("slack:conn-1:message:C1:1.2");
+  });
+
+  it("keeps different messages on different keys", () => {
+    const keyOf = (channel: string, ts: string) => {
+      const payload = {
+        type: "event_callback",
+        event_id: "Ev-same",
+        event: { type: "message", user: "U1", text: "hi", channel, ts },
+      };
+      return deriveSlackWebhookIdempotencyKey("conn-1", payload, Buffer.from(JSON.stringify(payload), "utf8"));
+    };
+
+    expect(new Set([keyOf("C1", "1.2"), keyOf("C1", "1.3"), keyOf("C2", "1.2")]).size).toBe(3);
+  });
+
+  it("keeps the event_id key when there is no channel and ts", () => {
+    const keyOf = (event: Record<string, unknown>) => {
+      const payload = { type: "event_callback", event_id: "Ev-x", event };
+      return deriveSlackWebhookIdempotencyKey("conn-1", payload, Buffer.from(JSON.stringify(payload), "utf8"));
+    };
+
+    expect(keyOf({ type: "message", text: "hi" })).toBe("slack:conn-1:Ev-x");
+    expect(keyOf({ type: "message", text: "hi", channel: "C1" })).toBe("slack:conn-1:Ev-x");
+    expect(keyOf({ type: "message", text: "hi", ts: "1.2" })).toBe("slack:conn-1:Ev-x");
+    expect(keyOf({ type: "message", text: "hi", channel: "", ts: "" })).toBe("slack:conn-1:Ev-x");
+    expect(deriveSlackWebhookIdempotencyKey("conn-1", { type: "event_callback" }, Buffer.from("raw", "utf8"))).toMatch(
+      /^slack:conn-1:[a-f0-9]{64}$/,
     );
   });
 });

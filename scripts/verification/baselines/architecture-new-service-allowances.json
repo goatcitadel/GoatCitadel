@@ -2640,6 +2640,14 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/slack-event-processor.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 4,
+      "reason": "Reviewed new shared Slack event handler for the webhook route and Socket Mode (operator approval 2026-10-28, up to 10 dependency reads): moves the sender rules, voice shares and plain-message dispatch out of the webhook route so both receivers handle an event identically, and gives a message and its app_mention one idempotency key. It reads only its own deps bag (the integration-webhook route port); the route supplies it, so integration-webhooks-slack-routes.ts gains no member reads. Original baseline, inventory and existing-owner caps are unchanged.",
+      "evidence": "2026-10-28: slack-event-processor.test.ts covers the direct and channel dispatch, the sender rules, the voice share, the fresh connection read, Socket Mode only, disabled and disconnected connections, the other-workspace drop, ignored bot messages and url_verification, the one-key message and app_mention pair and the failing and enabled voice flag; slack-webhook.test.ts covers app_mention and the key; integrations.webhooks.test.ts, integration-webhooks.loop22.test.ts, integration-webhooks.rate-limit.test.ts, integration-webhooks.security.test.ts, integration-webhooks.saved-keys.test.ts and integrations.webhooks-voice.test.ts pass; repository counters measure 0 host callbacks and 4 dependency accesses (cap 4, within the 10 approved)."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/channel-stream-adapters/telegram-stream-adapter.ts",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 6,
