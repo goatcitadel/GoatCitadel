@@ -1,6 +1,6 @@
 # Communication Channel Setup Guide
 
-Last updated: 2026-10-28
+Last updated: 2026-10-29
 Target audience: beginner to intermediate operators
 
 This guide walks through GoatCitadel channel setup in the order that makes the most sense for operator-facing `1.0` validation.
@@ -24,7 +24,7 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, Matrix, QQBot, WeCom, 
 | `channel.matrix` | Bot access token | whoami auth, joined-room check, test notice (an `m.notice`); opt-in `/sync` inbound (`inboundStreamEnabled`) | yes |
 | `channel.qqbot` | AppID + AppSecret | token mint, bot identity (`/users/@me`), optional active test message; ed25519-signed webhook inbound | yes |
 | `channel.wecom` | CorpID + AgentId + application Secret | `gettoken`, application lookup, callback-credential check, test message; encrypted callback inbound when the Token and EncodingAESKey are set | yes |
-| `channel.whatsapp` | Cloud API access token + phone-number id | sender auth plus test message; signed inbound webhook runtime when app secret + verify token are configured | yes |
+| `channel.whatsapp` | Cloud API access token + phone-number id (the Chat page also takes the Business Account ID, App ID and App secret) | sender auth plus test message; signed inbound webhook runtime when app secret + verify token are configured; the Chat page checks the five values with Meta (read-only) | yes |
 | `channel.nextcloud-talk` | Base URL + Talk token | structural and semantic validation | yes |
 | `channel.line` | Channel access token | token auth plus test push message; signed inbound webhook runtime when channel secret is configured | yes |
 | `channel.zalo` | Official Account access token | test message through the OA send path | yes |
@@ -77,6 +77,10 @@ Also keep these rules:
 - keep break-glass env vars off
 - keep bot tokens in environment variables, not repo files
 - test in a sandbox server/channel/workspace before wider rollout
+
+### Public web address
+
+Channels that a vendor delivers to over the internet (WhatsApp, LINE, QQBot, WeCom, Google Chat in Chat app mode, and Telegram when it sends to a web address) need an `https://` address that reaches GoatCitadel. GoatCitadel does not provide one: use your own domain, reverse proxy or tunnel, then set it once in Settings › Channels › **Public web address**. Every `https://<your-gateway-host>/…` address in this guide starts with it. The WhatsApp page and each channel's webhook address block build the full address from it, and show a placeholder and a **Set your public web address** link until it is set. It must be a full `https://` address of at most 200 characters, with no user name or password and nothing after `?` or `#`, on a host the internet can reach (not `localhost` or a private network address). Saving it is a Settings change that you approve in place. Details are in [CHANNEL_GUIDED_SETUP.md](./CHANNEL_GUIDED_SETUP.md#public-web-address).
 
 ## Local Channels First
 
@@ -389,6 +393,10 @@ Official reference:
 
 ## WhatsApp (Cloud API)
 
+### Quick setup from Messaging
+
+In Chat, open **Messaging**, select **+ Add**, then **WhatsApp**. Meta delivers messages only to a public `https://` address, so the page first asks for GoatCitadel's public web address (Settings › Channels › Public web address; use your own domain, reverse proxy or tunnel, since GoatCitadel does not provide one). You make a Meta app yourself and paste five values: the access token (a system user's token is best, since a temporary one stops working), the Phone number ID, the WhatsApp Business Account ID, the App ID and the App secret. GoatCitadel checks them with Meta (read-only calls: the number, `debug_token`, the account's numbers and its subscribed apps), stores the token and secret as masked credentials, and names the number. If the token will stop working, the page says when and points you to **Change the key** later. You then set Meta's Callback URL and Verify token yourself (WhatsApp › Configuration › Verify and save, then subscribe to `messages`); GoatCitadel answers Meta's check at the draft's address for 15 minutes at a time (in memory, for Chat-made setups only) and, if the app isn't subscribed, offers one button that subscribes it. You send a one-time code from your phone (a QR code or `wa.me` link); the person who sends it becomes the only allowed sender and the default recipient. Turn on tests, then activates in place, and adds `graph.facebook.com` to the network allowlist if it is missing. Pairing for other people is not on the page yet: add more numbers to `allowedSenders` in Settings › Channels. WhatsApp allows a free-form reply only within 24 hours of the person's last message, so Chat's composer and GoatCitadel refuse a later operator reply (answers the agent writes are not checked). A connection that keeps its Phone number ID, Business Account ID, App ID and App secret changes its access token from **Change the key**. Settings › Channels keeps WhatsApp's guide for the other ways (environment-variable keys, a send-only connection), which is the step list below. The real-account checks of this page (a real Meta app, the five values, the Callback URL, hi, Turn on, a reply within the window and a reply after 24 hours) are still owed by the operator. Details are in [CHANNEL_GUIDED_SETUP.md](./CHANNEL_GUIDED_SETUP.md).
+
 Official references:
 
 - https://developers.facebook.com/docs/whatsapp/cloud-api
@@ -423,7 +431,7 @@ On top of the signature check, each inbound sender must pass the connection's se
    - add each permitted sender phone number to `allowedSenders`
    - an empty allowlist rejects every inbound message before it reaches a session
 9. In the Meta app dashboard under `WhatsApp > Configuration`, point the webhook subscription at:
-   - `https://<your-gateway-host>/api/v1/integrations/connections/<connectionId>/whatsapp/webhook`
+   - `https://<your-gateway-host>/api/v1/integrations/connections/<connectionId>/whatsapp/webhook`, where the address starts with the public web address from Settings › Channels (the connection's webhook address block shows the full address)
    - use the same verify token value you configured in step 5
 10. Subscribe to the `messages` webhook field, finalize the connection, and confirm manually that:
     - the Meta challenge succeeds
@@ -449,6 +457,14 @@ WHATSAPP_WEBHOOK_VERIFY_TOKEN=long-random-string-you-chose
 - inbound `413` or rejected large payloads: inbound webhook bodies are capped at 256 KiB; oversized deliveries are dropped before processing
 - delivery statuses appear without messages: expected when Meta posts status-only payloads; send a real inbound text to validate routing
 - local-only gateway URL: Meta cannot call loopback or non-public HTTP endpoints; use a reachable HTTPS URL
+- "Meta didn't accept the access token." (Messaging page): the token is wrong, revoked or expired (Graph's access-token error, code `190`, reads this way too); make a system user's token in Business Settings › System users, and for a channel that is already on use **Change the key** on its page
+- "That access token was made for a different Meta app." or "Meta didn't accept that App ID and App secret together." (Messaging page): the token, App ID and App secret must all come from the same Meta app
+- "That phone number isn't in that WhatsApp Business Account.": the Phone number ID and the WhatsApp Business Account ID come from different accounts (GoatCitadel reads only the first 100 numbers of an account)
+- "Meta hasn't checked your address yet. Choose Verify and save in Meta, then check again." (Messaging page): the Callback URL or Verify token in WhatsApp › Configuration doesn't match the page, the public web address isn't reachable from the internet, or the draft was started over (a new draft has a new Callback URL); choose **Check again** after fixing it
+- "Meta isn't set to send this number's messages to your app yet.": choose **Let this app receive your number's messages**, or subscribe to `messages` under WhatsApp › Configuration
+- your hi is never seen on the Messaging page: the code may have expired, so get a new one; send it from your phone to the business number as it is, and with Meta's test number add the phone under API Setup › To first
+- the composer says "WhatsApp allows a reply only within 24 hours of their last message. Once they message again, you can reply.": the free-form reply window has closed; have the person message the number again (Meta's error code for a late send is `131047`)
+- Turn on or **Save key** can't deliver its test message: WhatsApp delivers a plain message only within 24 hours of the recipient's last message to the number; have them message it first
 
 ## LINE
 
@@ -467,7 +483,7 @@ Official references:
    - `channelAccessTokenEnv=LINE_CHANNEL_ACCESS_TOKEN`
    - `channelSecretEnv=LINE_CHANNEL_SECRET`
 6. Set the webhook URL to:
-   - `https://<your-gateway-host>/api/v1/integrations/connections/<connectionId>/line/webhook`
+   - `https://<your-gateway-host>/api/v1/integrations/connections/<connectionId>/line/webhook`, where the address starts with the public web address from Settings › Channels
 7. Enable webhooks in LINE, finalize the connection, and confirm manually that:
    - LINE accepts the webhook endpoint
    - an inbound test message reaches GoatCitadel
@@ -539,7 +555,7 @@ Inbound is a signed webhook. GoatCitadel verifies the ed25519 signature (keyed f
    - `appSecretEnv=QQBOT_APP_SECRET` (an earlier `tokenEnv` value is shown here as `appSecretEnv` when you edit)
    - `defaultTarget=user:<openid>` (optional)
    - `sandbox=true` while the application is unpublished
-5. Save and enable the connection, then in the QQ console set the callback URL to `https://<your-gateway>/api/v1/integrations/connections/<connectionId>/qqbot/webhook` and subscribe to the events you need. QQ sends a validation request (op 13) that GoatCitadel answers with an AppSecret signature; QQ may send it without signature headers, and if it includes them they must verify. Every other event must be signed.
+5. Save and enable the connection, then in the QQ console set the callback URL to `https://<your-gateway>/api/v1/integrations/connections/<connectionId>/qqbot/webhook` (the address starts with the public web address from Settings › Channels) and subscribe to the events you need. QQ sends a validation request (op 13) that GoatCitadel answers with an AppSecret signature; QQ may send it without signature headers, and if it includes them they must verify. Every other event must be signed.
 6. Add the QQ openids that may start turns to `allowedSenders`.
 7. Run the guided test: it mints a token, reads the bot identity and, when you run the explicit send, sends one active test message to the default target. A rejection of that message can be a quota, not a credential problem.
 
@@ -575,7 +591,7 @@ Inbound is an encrypted callback and stays off until the callback Token and Enco
    - `secretEnv=WECOM_SECRET`
    - `defaultTarget=user:<userid>` (optional)
 5. For inbound, choose a Token and generate an EncodingAESKey in the application's message-receiving settings, export them (for example `WECOM_CALLBACK_TOKEN` and `WECOM_ENCODING_AES_KEY`) and set `callbackTokenEnv` and `encodingAesKeyEnv`.
-6. Save and enable the connection, then set the callback URL in WeCom to `https://<your-gateway>/api/v1/integrations/connections/<connectionId>/wecom/webhook`. WeCom sends an encrypted `echostr` that GoatCitadel verifies and answers.
+6. Save and enable the connection, then set the callback URL in WeCom to `https://<your-gateway>/api/v1/integrations/connections/<connectionId>/wecom/webhook` (the address starts with the public web address from Settings › Channels). WeCom sends an encrypted `echostr` that GoatCitadel verifies and answers.
 7. Add the WeCom userids that may start turns to `allowedSenders`.
 8. Run the guided test: it mints a token, reads the application, reports whether the callback credentials are set (a missing Token or EncodingAESKey only disables inbound) and, when you run the explicit send, sends one test message.
 

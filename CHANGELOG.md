@@ -14,12 +14,17 @@ All notable changes to GoatCitadel are documented in this file.
 - Slack can receive over Socket Mode: GoatCitadel opens a connection to Slack, so receiving needs no public web address or signing secret. It takes an app-level token (`appToken`) and `receiveMode: "socket"`. Slack refreshes the connection every few hours and GoatCitadel reopens it without an error. Socket Mode always lets in only allowlisted senders, so an older Slack connection saved as open and switched to it is not open to the whole workspace, and it leaves voice messages out.
 - Slack handles `app_mention` events, so a bot answers when it is mentioned in a channel it has been added to.
 - A Discord bot's or a Slack Socket Mode connection's tokens can be changed from the channel's page in Chat (**Change the key**), with the same in-place approval as Telegram.
+- WhatsApp is set up from Chat › Messaging, on a page like the others. You make a Meta app and paste five values (access token, Phone number ID, WhatsApp Business Account ID, App ID and App secret); GoatCitadel checks them with Meta with read-only calls, makes a verify token, shows the Callback URL and Verify token to paste into Meta, answers Meta's address check and hears a signed one-time code for 15 minutes at a time (in memory, for Chat-made setups only), offers one button that subscribes the app, and ends with Turn on in place. The person who sends the code is the only allowed sender. Pairing for other people is not on the page yet. Settings › Channels keeps WhatsApp's guide for the other ways. The real-account checks are still to be run.
+- A public web address setting (Settings › Channels › **Public web address**, `publicWebAddress`). It must be a public `https://` address, is saved through a Settings change you approve in place, and is what the WhatsApp page and every channel's webhook address block build their full address from.
+- WhatsApp's access token can be changed from the channel's page in Chat (**Change the key**) for a connection that keeps its Phone number ID, Business Account ID, App ID and App secret.
+- WhatsApp's 24-hour reply window: the Chat composer is off, with a reason, and GoatCitadel refuses (409) an operator reply sent more than 24 hours after the person's last message. Answers the agent writes are not checked.
 
 ### Changed
 
 - A Slack post that arrives twice, as a message and as an `app_mention`, runs one turn. Slack events now dedupe on the post's channel and timestamp instead of the event id. A retry that straddles the upgrade may run once more.
 - On a Discord connection that lets only allowlisted senders in, an owner who is also on the allowlist skips the pairing code in direct messages, and the default server channel answers only the allowlisted senders. The owner mark affects only that direct-message skip, so clearing it never opens the channel to everyone, and an owner mark without the allowlist entry changes nothing.
 - The Slack tile in the channel picker no longer says receiving needs a public web address.
+- The WhatsApp tile in the channel picker opens the new Chat page, at "About 15 min". WhatsApp's guide in Settings keeps the App ID and WhatsApp Business Account ID with the connection.
 - Slack setups that only use an incoming webhook no longer need slack.com.
 - A saved connection whose variable name breaks the channel's rule stops sending until you rename it. The setup check says how.
 - The guides' content version changed, so a setup test run before this update runs again.
