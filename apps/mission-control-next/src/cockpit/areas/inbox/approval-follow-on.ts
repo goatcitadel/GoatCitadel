@@ -1,4 +1,5 @@
 import {
+  isInstallWideApproval,
   readDurableChatTurnExecutionPayloadAuthority,
   type ApprovalRequest,
   type DurableRunRecord,
@@ -19,8 +20,14 @@ export async function readApprovalFollowOn(approval: ApprovalRequest, workspaceI
     if (!current()) throw new Error("Approval access changed. Reopen the current record.");
   };
   checkAccess();
+  // An approval of no workspace (a skill change) keeps no workspace in its follow-on records; any other keeps its own.
+  const installWide = isInstallWideApproval(approval);
   for (const record of [replay.approval, lifecycle.approval]) {
-    if (!record || record.approvalId !== approval.approvalId || record.linkage?.workspaceId !== workspaceId)
+    if (
+      !record ||
+      record.approvalId !== approval.approvalId ||
+      (installWide ? !isInstallWideApproval(record) : record.linkage?.workspaceId !== workspaceId)
+    )
       throw new Error("The follow-on record does not match this approval scope.");
   }
   if (lifecycle.canonical?.approvalId && lifecycle.canonical.approvalId !== approval.approvalId)

@@ -1,10 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
-import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { queryKeys } from "../../data/query-keys";
 import { ApprovalDecisionBar } from "./ApprovalDecisionBar";
-import { nullWhenMissing } from "./inbox-record-read";
+import { inboxApprovalRecordKey, readInboxApproval } from "./inbox-record-read";
 
 /** Only the two lowest risk tiers may be decided straight from the list; everything else opens for review. */
 export function canDecideInRow(item: OperatorInboxItem): boolean {
@@ -31,10 +30,12 @@ export function InboxRowDecision({
   const access = useProjectAccess(workspaceId);
   const queryClient = useQueryClient();
   const approvalId = item.source.approvalId;
-  const queryKey = ["approvals", "record", workspaceId, approvalId, access.identity];
+  // An approval of no workspace is read and decided without one, as in the detail panel.
+  const installWide = item.source.installWide === true;
+  const queryKey = inboxApprovalRecordKey(workspaceId, installWide, approvalId!, access.identity);
   const query = useQuery({
     queryKey,
-    queryFn: ({ signal }) => nullWhenMissing(fetchApproval(approvalId!, { workspaceId, signal })),
+    queryFn: ({ signal }) => readInboxApproval(approvalId!, { workspaceId, installWide, signal }),
     enabled: Boolean(approvalId),
     staleTime: 15_000,
   });
@@ -50,7 +51,7 @@ export function InboxRowDecision({
       compact
       item={item}
       approval={approval}
-      workspaceId={workspaceId}
+      workspaceId={installWide ? null : workspaceId}
       onResolved={(message) => refresh(message, true)}
       onInvalidated={(message) =>
         refresh(message ?? "The approval changed. Review the refreshed record before deciding.", false)

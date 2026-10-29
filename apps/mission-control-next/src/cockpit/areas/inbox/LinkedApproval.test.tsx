@@ -9,15 +9,30 @@ vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchAppro
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: api.workspaceId }),
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
 vi.mock("../../app/ScopeSwitcher", () => ({
   ScopeSwitcher: ({ open, destination }: { open: boolean; destination: string }) =>
     open ? <p>Scope review: {destination}</p> : null,
 }));
-vi.mock("./InboxApprovalDetail", () => ({ InboxApprovalDetail: () => <p>Scoped approval details</p> }));
+// A stand-in detail by default; `detail.real` renders the real one, so a test can see the detail's own read.
+const detail = vi.hoisted(() => ({ real: false }));
+vi.mock("./InboxApprovalDetail", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./InboxApprovalDetail")>();
+  return {
+    InboxApprovalDetail: (props: Parameters<typeof actual.InboxApprovalDetail>[0]) =>
+      detail.real ? <actual.InboxApprovalDetail {...props} /> : <p>Scoped approval details</p>,
+  };
+});
+vi.mock("./InboxApprovalActions", () => ({
+  InboxApprovalActions: () => <button type="button">Decision controls</button>,
+}));
 let root: Root, host: HTMLDivElement, client: QueryClient;
 beforeEach(() => {
   window.history.replaceState({ retained: true }, "", "/inbox?approvalId=a%2F1&workspaceId=other&extra=keep#review");
   api.workspaceId = "active";
+  detail.real = false;
   api.read.mockReset();
   host = document.createElement("div");
   document.body.append(host);
@@ -80,6 +95,29 @@ it("shows authorized same-workspace records and preserves permission errors", as
   });
   await vi.waitFor(() => expect(host.querySelector('[role="alert"]')).not.toBeNull());
   expect(host.textContent).not.toContain("Scoped approval details");
+});
+it("opens a linked install-wide approval as an install-wide item", async () => {
+  detail.real = true;
+  // A skill change: it belongs to no workspace, so it has no linkage.
+  api.read.mockResolvedValue({
+    approvalId: "a/1",
+    kind: "skill.lifecycle",
+    riskLevel: "danger",
+    status: "pending",
+    payload: {},
+    preview: { title: "Approve skill state change", skillId: "planner", state: "enabled", currentState: "disabled" },
+    createdAt: "2026-10-29T10:00:00Z",
+    explanationStatus: "not_requested",
+  });
+  await render();
+  await vi.waitFor(() => expect(host.textContent).toContain("Decision controls"));
+  expect(host.textContent).not.toContain("belongs to another workspace");
+  // The link's read and the detail's own read both go without a workspace.
+  expect(api.read).toHaveBeenCalledTimes(2);
+  for (const [id, options] of api.read.mock.calls) {
+    expect(id).toBe("a/1");
+    expect(options).not.toHaveProperty("workspaceId");
+  }
 });
 it("opens specialist decisions in the native owner without rewriting its source URL", async () => {
   api.read.mockResolvedValue({

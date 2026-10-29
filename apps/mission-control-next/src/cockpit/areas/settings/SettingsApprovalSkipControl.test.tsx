@@ -67,8 +67,8 @@ describe("cockpit Settings approval skip", () => {
     const { container, unmount } = await mount();
     try {
       await vi.waitFor(() => expect(container.textContent).toContain("Current: Off"));
-      // The heading and the checkbox both name the setting; neither sends skill approvals to the Inbox, which can't list
-      // them (a skill approval belongs to no workspace and is approved in the Skills tab).
+      // The heading and the checkbox both name the setting; neither sends skill approvals to the Inbox (a skill change
+      // is approved in the Skills tab, where it was asked for, and also waits in the Inbox).
       expect(container.querySelector("h3")?.textContent).toBe(
         "Apply my Settings and Capabilities changes without asking first",
       );

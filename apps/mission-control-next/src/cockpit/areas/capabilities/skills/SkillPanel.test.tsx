@@ -625,7 +625,7 @@ describe("Skill panel switch", () => {
     expect(dialog()?.textContent).not.toContain("Turn Planner on");
   });
 
-  it("never points a skill approval at the Inbox", async () => {
+  it("approves a skill change in its panel and never points it at the Inbox, where it also waits", async () => {
     await renderTab();
     waitOnPlanner();
     await settle();
