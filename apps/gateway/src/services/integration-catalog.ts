@@ -143,6 +143,11 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         required: false,
         secretRef: true,
       }),
+      text("appTokenEnv", "App-level Token ENV Var", {
+        placeholder: "SLACK_APP_TOKEN",
+        required: false,
+        secretRef: true,
+      }),
       json("targets", "Channel Targets", {
         defaultValue: "[]",
         description: 'Named Slack targets. Example: [{"label":"Ops","channel":"#ops","default":true}]',

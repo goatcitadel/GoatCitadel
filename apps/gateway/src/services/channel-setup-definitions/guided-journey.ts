@@ -36,7 +36,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
   },
   slack: {
     summary:
-      "Send messages from your own Slack app into the channels you choose. Receiving messages needs an app installed with OAuth and a public HTTPS address.",
+      "Send messages from your own Slack app into the channels you choose. To receive messages without a public web address, set Slack up from Messaging in Chat. Here, receiving needs an app installed with OAuth and a public HTTPS address.",
     prerequisites: [
       "Your own Slack app with the chat:write scope, installed to your workspace.",
       "The bot invited to each private channel (/invite @your-app).",
@@ -213,7 +213,7 @@ const ADVANCED_KEYS = new Set([
  * operator saw. Change it whenever the text of any guide, or the text the guides share, changes. Changing it also makes
  * older setup test results out of date, so those tests run again.
  */
-const GUIDED_CONTENT_VERSION_SUFFIX = ".guided-2026-10-28";
+export const GUIDED_CONTENT_VERSION_SUFFIX = ".guided-2026-10-29";
 /** A draft value `hydrate` sets when the saved connection was open access. It is never part of the saved config. */
 const OPEN_ACCESS_MARKER = "inboundAccessWasOpen";
 /** Webhook inbound that is always default-deny: the runtime ignores a stored open_legacy mode for these. */

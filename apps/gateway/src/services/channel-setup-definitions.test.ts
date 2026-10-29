@@ -16,7 +16,7 @@ import {
   secretNameForVariable,
 } from "./channel-setup-definitions/common.js";
 import { describeDroppedSender } from "./channel-inbound-dispatch.js";
-import { withGuidedJourney } from "./channel-setup-definitions/guided-journey.js";
+import { GUIDED_CONTENT_VERSION_SUFFIX, withGuidedJourney } from "./channel-setup-definitions/guided-journey.js";
 import { createLineDefinition } from "./channel-setup-definitions/line.js";
 import { isAllowedSecretEnvName } from "./channel-secret-resolution.js";
 import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
@@ -480,7 +480,7 @@ describe("channel setup definitions", () => {
     const testStep = definition.wizard.steps.find((step) => step.kind === "test");
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/dry run/i);
-    expect(definition.wizard.contentVersion).toBe("2026.10.ntfy.stream.v3.guided-2026-10-28");
+    expect(definition.wizard.contentVersion).toBe(`2026.10.ntfy.stream.v3${GUIDED_CONTENT_VERSION_SUFFIX}`);
   });
 
   it("gives guided Nextcloud Talk setup a test step and a finalize confirmation step", () => {
@@ -500,7 +500,7 @@ describe("channel setup definitions", () => {
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/room/i);
     expect(definition.testing.levels).toContain("live-send");
-    expect(definition.wizard.contentVersion).toBe("2026.08.nextcloud-talk.v2.guided-2026-10-28");
+    expect(definition.wizard.contentVersion).toBe(`2026.08.nextcloud-talk.v2${GUIDED_CONTENT_VERSION_SUFFIX}`);
   });
 
   it("ends every previously test-terminal guided wizard on a finalize confirmation step", () => {
@@ -524,7 +524,7 @@ describe("channel setup definitions", () => {
         `${catalogId} confirm step needs success criteria`,
       ).toBeGreaterThan(0);
       expect(definition.wizard.contentVersion, `${catalogId} contentVersion must be bumped`).toBe(
-        contentVersion + ".guided-2026-10-28",
+        contentVersion + GUIDED_CONTENT_VERSION_SUFFIX,
       );
     }
   });
@@ -537,7 +537,7 @@ describe("channel setup definitions", () => {
     expect(definitions).not.toHaveLength(0);
     for (const definition of definitions) {
       expect(
-        definition.wizard.contentVersion.endsWith(".guided-2026-10-28"),
+        definition.wizard.contentVersion.endsWith(GUIDED_CONTENT_VERSION_SUFFIX),
         `${definition.catalog.catalogId} content version ${definition.wizard.contentVersion}`,
       ).toBe(true);
     }
@@ -610,7 +610,9 @@ describe("channel setup definitions", () => {
 
   it("collects Google Chat app (service-account) fields and forces a default-deny sender allowlist", () => {
     const definition = requireChannelSetupDefinition("channel.google-chat");
-    expect(definition.definition.wizard.contentVersion).toBe("2026.10.google-chat.app.v2.guided-2026-10-28");
+    expect(definition.definition.wizard.contentVersion).toBe(
+      `2026.10.google-chat.app.v2${GUIDED_CONTENT_VERSION_SUFFIX}`,
+    );
     expect(definition.definition.adapter.adapterVersion).toBe("2026.10.google-chat.app.v2");
     expect(definition.definition.validation.validationVersion).toBe("2026.10.google-chat.app.v2");
     const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
@@ -1682,6 +1684,7 @@ describe("the shared guide builder", () => {
       "nextcloud-talk.tokenEnv": "both",
       "ntfy.tokenEnv": "outbound",
       "qqbot.appSecretEnv": "both",
+      "slack.appTokenEnv": "outbound",
       "telegram.webhookSecretEnv": "inbound",
       "wecom.secretEnv": "outbound",
       "wecom.callbackTokenEnv": "both",

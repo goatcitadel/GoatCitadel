@@ -29,7 +29,7 @@ export const CHANNEL_PICKER_HINTS: Readonly<Record<string, ChannelPickerHintEntr
   telegram: { group: "quickest", minutes: 3 },
   discord: { group: "quickest", minutes: 5 },
   ntfy: { group: "quickest", note: "Needs an ntfy topic you control" },
-  slack: { group: "quickest", note: "Receiving needs a public web address" },
+  slack: { group: "quickest", minutes: 5 },
 
   mattermost: { group: "team_chat", note: "Needs a Mattermost server" },
   matrix: { group: "team_chat", note: "Needs a Matrix bot account" },
@@ -50,7 +50,8 @@ export const CHANNEL_PICKER_HINTS: Readonly<Record<string, ChannelPickerHintEntr
  * Each list comes from the code the channel sends through: `comms-executor.ts`, `qqbot-client.ts`,
  * `wecom-client.ts`, `google-chat-service-account.ts` and the live probes. A channel whose host the
  * operator chooses has no fixed host here; its URL field is in `CHANNEL_HOST_FIELDS` instead. Slack has
- * none either: its API host only matters with a bot token, so it is in `CHANNEL_CONDITIONAL_HOSTS`.
+ * none either: its API host only matters with a bot token or an app-level token, so it is in
+ * `CHANNEL_CONDITIONAL_HOSTS`.
  */
 export const CHANNEL_REQUIRED_HOSTS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   telegram: Object.freeze(["api.telegram.org"]),
@@ -91,11 +92,15 @@ const GOOGLE_CHAT_APP_FIELDS: readonly string[] = Object.freeze([
  * Hosts a channel needs only while certain fields are set, keyed by catalog key. Google's token host follows the
  * guide's "Connect with" choice, which the setup wizard always holds (an edit draft derives it from the saved keys), so
  * a key left behind after switching back to an incoming webhook does not ask for it. Slack's API host follows its bot
- * token (pasted, or from an OAuth install): an incoming webhook posts to its own address and never contacts it.
+ * token (pasted, or from an OAuth install) or its app-level token (Socket Mode asks Slack for its connection address
+ * with it): an incoming webhook posts to its own address and never contacts it.
  */
 export const CHANNEL_CONDITIONAL_HOSTS: Readonly<Record<string, readonly FrozenHostRule[]>> = Object.freeze({
   slack: Object.freeze([
-    Object.freeze({ host: "slack.com", whenAnyFieldSet: Object.freeze(["botToken", "slackInstallId"]) }),
+    Object.freeze({
+      host: "slack.com",
+      whenAnyFieldSet: Object.freeze(["botToken", "slackInstallId", "appToken", "appTokenEnv"]),
+    }),
   ]),
   qqbot: Object.freeze([
     Object.freeze({ host: "sandbox.api.sgroup.qq.com", whenAnyFieldSet: Object.freeze(["sandbox"]), equals: true }),
@@ -111,7 +116,8 @@ function inboundWebhookRoute(key: string): string {
 
 /**
  * Channels that receive on a Gateway webhook route (`routes/integration-webhooks-<key>-routes.ts`),
- * keyed by catalog key. Telegram receives on a webhook only when its receive mode is `webhook`.
+ * keyed by catalog key. Telegram and Slack receive on a webhook only when their receive mode is `webhook`
+ * (Slack's other mode keeps a connection open to Slack and needs no address).
  * Google Chat receives only in Chat app mode, which is when a service-account key is given; its
  * webhook mode only sends. A saved connection has no mode, only its keys, so this rule reads the keys.
  */
@@ -120,7 +126,10 @@ export const CHANNEL_INBOUND_WEBHOOKS: Readonly<Record<string, FrozenInboundWebh
     pathTemplate: inboundWebhookRoute("telegram"),
     whenFieldEquals: Object.freeze({ fieldKey: "receiveMode", value: "webhook" }),
   }),
-  slack: Object.freeze({ pathTemplate: inboundWebhookRoute("slack") }),
+  slack: Object.freeze({
+    pathTemplate: inboundWebhookRoute("slack"),
+    whenFieldEquals: Object.freeze({ fieldKey: "receiveMode", value: "webhook" }),
+  }),
   whatsapp: Object.freeze({ pathTemplate: inboundWebhookRoute("whatsapp") }),
   line: Object.freeze({ pathTemplate: inboundWebhookRoute("line") }),
   qqbot: Object.freeze({ pathTemplate: inboundWebhookRoute("qqbot") }),

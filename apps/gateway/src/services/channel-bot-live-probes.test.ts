@@ -204,6 +204,243 @@ describe("channel bot live probes", () => {
     ]);
   });
 
+  describe("Slack app-level token check", () => {
+    const BOT_TOKEN = "xoxb-111-222-botsecret";
+    const APP_TOKEN = "xapp-1-A0123-456-appsecret";
+    const SOCKET_URL = "wss://wss-primary.slack.com/link/?ticket=ticket-secret-123&app_id=A0123";
+    const SECRETS = [BOT_TOKEN, APP_TOKEN, SOCKET_URL, "ticket-secret-123"];
+
+    function slackFetcher(open: () => Response | Promise<Response>) {
+      return vi.fn(async (url: string, _init?: RequestInit) => {
+        if (url === "https://slack.com/api/apps.connections.open") {
+          return open();
+        }
+        if (url === "https://slack.com/api/chat.postMessage") {
+          return new Response(JSON.stringify({ ok: true, ts: "1712.100", channel: "C123" }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      });
+    }
+
+    const accepted = () => new Response(JSON.stringify({ ok: true, url: SOCKET_URL }), { status: 200 });
+
+    function expectNoSecret(value: unknown) {
+      const text = JSON.stringify(value);
+      for (const secret of SECRETS) {
+        expect(text).not.toContain(secret);
+      }
+    }
+
+    it("asks Slack to open a Socket Mode connection with the app-level token, reads only ok, and opens no socket", async () => {
+      const socket = vi.fn();
+      vi.stubGlobal("WebSocket", socket);
+      try {
+        const fetcher = slackFetcher(accepted);
+
+        const result = await runSlackBotLiveChecks({
+          token: BOT_TOKEN,
+          appToken: APP_TOKEN,
+          includeSandboxSend: false,
+          fetcher,
+        });
+
+        expect(result.probe.steps).toEqual([
+          expect.objectContaining({ key: "slack_token_auth", status: "pass" }),
+          expect.objectContaining({ key: "slack_socket_auth", label: "App-level token", status: "pass" }),
+        ]);
+        expect(result.checks.every((check) => check.status === "pass")).toBe(true);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        const [url, init] = fetcher.mock.calls[1] ?? [];
+        expect(url).toBe("https://slack.com/api/apps.connections.open");
+        expect(init?.method).toBe("POST");
+        expect(init?.headers).toMatchObject({ Authorization: `Bearer ${APP_TOKEN}` });
+        expect(socket).not.toHaveBeenCalled();
+        expectNoSecret(result);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("fails with a fixed sentence when Slack does not accept the app-level token, and sends nothing", async () => {
+      const fetcher = slackFetcher(
+        () => new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 }),
+      );
+
+      const result = await runSlackBotLiveChecks({
+        token: BOT_TOKEN,
+        appToken: APP_TOKEN,
+        channel: "C123",
+        includeSandboxSend: true,
+        fetcher,
+      });
+
+      expect(result.probe.steps).toEqual([
+        expect.objectContaining({ key: "slack_token_auth", status: "pass" }),
+        expect.objectContaining({
+          key: "slack_socket_auth",
+          label: "App-level token",
+          status: "fail",
+          message: "Slack didn't accept the app-level token.",
+          failureCategory: "credential_rejected",
+        }),
+      ]);
+      expect(result.checks.at(-1)).toEqual({
+        key: "slack_socket_auth",
+        status: "fail",
+        message: "App-level token: Slack didn't accept the app-level token.",
+      });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expectNoSecret(result);
+    });
+
+    it("says the same thing when Slack refuses the token with an HTTP error", async () => {
+      const result = await runSlackBotLiveChecks({
+        token: BOT_TOKEN,
+        appToken: APP_TOKEN,
+        includeSandboxSend: false,
+        fetcher: slackFetcher(() => new Response("Unauthorized", { status: 401 })),
+      });
+
+      expect(result.probe.steps.at(-1)).toMatchObject({
+        key: "slack_socket_auth",
+        status: "fail",
+        message: "Slack didn't accept the app-level token.",
+        failureCategory: "credential_rejected",
+      });
+    });
+
+    it("warns, rather than blaming the token, when Slack is busy or down", async () => {
+      for (const status of [429, 503]) {
+        const result = await runSlackBotLiveChecks({
+          token: BOT_TOKEN,
+          appToken: APP_TOKEN,
+          includeSandboxSend: false,
+          fetcher: slackFetcher(() => new Response("{}", { status })),
+        });
+
+        expect(result.probe.steps.at(-1), String(status)).toMatchObject({
+          key: "slack_socket_auth",
+          status: "warn",
+          message: "Slack couldn't check the app-level token right now. Try again in a minute.",
+          failureCategory: "platform_unavailable",
+        });
+      }
+    });
+
+    it("never builds its message from an error, a reply or the address Slack returns", async () => {
+      const quoting = await runSlackBotLiveChecks({
+        token: BOT_TOKEN,
+        appToken: APP_TOKEN,
+        includeSandboxSend: false,
+        fetcher: slackFetcher(() => {
+          throw new Error(`fetch failed: POST https://slack.com/api/apps.connections.open Bearer ${APP_TOKEN}`);
+        }),
+      });
+      const echoing = await runSlackBotLiveChecks({
+        token: BOT_TOKEN,
+        appToken: APP_TOKEN,
+        includeSandboxSend: false,
+        fetcher: slackFetcher(
+          () =>
+            new Response(
+              JSON.stringify({ ok: false, error: `bad token ${APP_TOKEN} for ${SOCKET_URL}`, url: SOCKET_URL }),
+              { status: 200 },
+            ),
+        ),
+      });
+      const html = await runSlackBotLiveChecks({
+        token: BOT_TOKEN,
+        appToken: APP_TOKEN,
+        includeSandboxSend: false,
+        fetcher: slackFetcher(() => new Response(`<html>${APP_TOKEN} ${SOCKET_URL}</html>`, { status: 400 })),
+      });
+
+      expect(quoting.probe.steps.at(-1)).toMatchObject({
+        key: "slack_socket_auth",
+        status: "warn",
+        message: "Couldn't reach Slack to check the app-level token.",
+        failureCategory: "platform_unavailable",
+      });
+      expect(echoing.probe.steps.at(-1)).toMatchObject({
+        status: "fail",
+        message: "Slack didn't accept the app-level token.",
+      });
+      expect(html.probe.steps.at(-1)).toMatchObject({
+        status: "fail",
+        message: "Slack didn't accept the app-level token.",
+      });
+      for (const result of [quoting, echoing, html]) {
+        expectNoSecret(result);
+      }
+    });
+
+    it("keeps going to the test send when the app-level token is accepted", async () => {
+      const fetcher = slackFetcher(accepted);
+
+      const result = await runSlackBotLiveChecks({
+        token: BOT_TOKEN,
+        appToken: APP_TOKEN,
+        channel: "C123",
+        includeSandboxSend: true,
+        fetcher,
+      });
+
+      expect(result.probe.steps.map((step) => step.key)).toEqual([
+        "slack_token_auth",
+        "slack_socket_auth",
+        "slack_sandbox_send",
+        "slack_sandbox_cleanup",
+      ]);
+      expect(result.checks.every((check) => check.status === "pass")).toBe(true);
+      expectNoSecret(result);
+    });
+
+    it("does not check the app-level token when the bot token is refused", async () => {
+      const fetcher = vi.fn(
+        async () => new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 }),
+      );
+
+      const result = await runSlackBotLiveChecks({
+        token: BOT_TOKEN,
+        appToken: APP_TOKEN,
+        includeSandboxSend: false,
+        fetcher,
+      });
+
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(result.probe.steps.map((step) => step.key)).toEqual(["slack_token_auth"]);
+    });
+
+    it("fails a Socket Mode connection that has no app-level token, without asking Slack", async () => {
+      const fetcher = slackFetcher(accepted);
+
+      const result = await runSlackBotLiveChecks({
+        token: BOT_TOKEN,
+        requireAppToken: true,
+        includeSandboxSend: false,
+        fetcher,
+      });
+
+      expect(result.probe.steps.at(-1)).toMatchObject({
+        key: "slack_socket_auth",
+        label: "App-level token",
+        status: "fail",
+        message: "Socket Mode needs the app-level token.",
+        failureCategory: "missing_input",
+      });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves a connection without an app-level token exactly as it was", async () => {
+      const fetcher = slackFetcher(accepted);
+
+      const result = await runSlackBotLiveChecks({ token: BOT_TOKEN, includeSandboxSend: false, fetcher });
+
+      expect(result.probe.steps.map((step) => step.key)).toEqual(["slack_token_auth"]);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("runs Discord auth, channel access, sandbox send, cleanup, and runtime probes", async () => {
     const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "https://discord.com/api/v10/users/@me") {

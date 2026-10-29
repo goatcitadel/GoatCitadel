@@ -26,6 +26,10 @@ interface ProbeResponse {
 
 interface SlackProbeInput {
   token: string;
+  /** A Socket Mode connection's app-level token (xapp-). It is tried against `apps.connections.open`; no socket is opened. */
+  appToken?: string;
+  /** True for a Socket Mode connection: with no `appToken` to try, the app-level token check fails instead of being left out. */
+  requireAppToken?: boolean;
   channel?: string;
   threadTs?: string;
   includeSandboxSend: boolean;
@@ -143,6 +147,14 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
 
+  if (input.appToken || input.requireAppToken) {
+    const socketAuth = await checkSlackAppToken(input);
+    probe.steps.push(socketAuth);
+    if (socketAuth.status !== "pass") {
+      return { checks: mapProbeStepsToChecks(probe.steps), probe };
+    }
+  }
+
   if (!input.includeSandboxSend) {
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
@@ -243,6 +255,64 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
       failureCategory: "platform_unavailable",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
+  }
+}
+
+/**
+ * Asks Slack whether the app-level token can open a Socket Mode connection, and reads only the `ok` of its answer. The
+ * answer carries the address of a socket with a one-time ticket in it, so that address is never read, kept or shown, and
+ * no socket is opened. Every message here is a fixed sentence: none is built from the token, an error, a reply or an
+ * address, so none can carry one.
+ */
+async function checkSlackAppToken(input: SlackProbeInput): Promise<ChannelProbeReport["steps"][number]> {
+  const step = { key: "slack_socket_auth", label: "App-level token" };
+  if (!input.appToken) {
+    return {
+      ...step,
+      status: "fail",
+      message: "Socket Mode needs the app-level token.",
+      failureCategory: "missing_input",
+    };
+  }
+  try {
+    const response = await input.fetcher("https://slack.com/api/apps.connections.open", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.appToken}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+    });
+    const text = await readBoundedResponseText(response, {
+      maxBytes: 16 * 1024,
+      timeoutMs: 5_000,
+      label: "channel bot probe",
+    });
+    const status = response.status;
+    if (status === 429 || status >= 500) {
+      return {
+        ...step,
+        status: "warn",
+        message: "Slack couldn't check the app-level token right now. Try again in a minute.",
+        failureCategory: "platform_unavailable",
+      };
+    }
+    const accepted = status >= 200 && status < 300 && parseJsonRecord(text).ok === true;
+    if (!accepted) {
+      return {
+        ...step,
+        status: "fail",
+        message: "Slack didn't accept the app-level token.",
+        failureCategory: status >= 200 && status < 300 ? "credential_rejected" : inferFailureCategory(status),
+      };
+    }
+    return { ...step, status: "pass", message: "Slack accepted the token." };
+  } catch {
+    return {
+      ...step,
+      status: "warn",
+      message: "Couldn't reach Slack to check the app-level token.",
+      failureCategory: "platform_unavailable",
+    };
   }
 }
 

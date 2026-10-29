@@ -180,38 +180,51 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       groups: true,
     },
     resolveInboundModes: (config) =>
-      hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"]) ? ["webhook"] : ["none"],
+      isSlackSocketInboundEnabled(config)
+        ? ["stream"]
+        : hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
+          ? ["webhook"]
+          : ["none"],
     chunkingMode: "fallback",
     supportsStreaming: false,
     resolveRuntimePosture: (config) =>
-      hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
-        ? {
-            outboundTransport: "api",
-            inboundTransport: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"]) ? "webhook" : undefined,
-            lifecycle: "stateless",
-            inboundReadiness: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"]) ? "ready" : "unsupported",
-            operatorSummary: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
-              ? "Slack bot-token delivery is normalized as a stateless API bridge with signed webhook ingress. Rich outbound actions and inbound event routing are both available in the current runtime."
-              : "Slack bot-token delivery is normalized as a stateless outbound API bridge. Rich outbound actions are available, but inbound routing is still disabled until a signing secret is configured.",
-          }
-        : {
-            outboundTransport: "webhook",
-            inboundTransport: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"]) ? "webhook" : undefined,
-            lifecycle: "stateless",
-            inboundReadiness: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"]) ? "ready" : "unsupported",
-            operatorSummary: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
-              ? "Slack webhook delivery is normalized as a stateless send path with signed webhook ingress. Inbound event routing is available, but replies, reactions, unsend, and inline uploads still require a bot token."
-              : "Slack webhook delivery is normalized as a stateless outbound-only path. Replies, reactions, unsend, and inline uploads require a bot-token connection.",
-          },
+      isSlackSocketInboundEnabled(config)
+        ? describeSlackSocketPosture(config)
+        : hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
+          ? {
+              outboundTransport: "api",
+              inboundTransport: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"]) ? "webhook" : undefined,
+              lifecycle: "stateless",
+              inboundReadiness: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
+                ? "ready"
+                : "unsupported",
+              operatorSummary: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
+                ? "Slack bot-token delivery is normalized as a stateless API bridge with signed webhook ingress. Rich outbound actions and inbound event routing are both available in the current runtime."
+                : "Slack bot-token delivery is normalized as a stateless outbound API bridge. Rich outbound actions are available, but inbound routing is still disabled until a signing secret is configured.",
+            }
+          : {
+              outboundTransport: "webhook",
+              inboundTransport: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"]) ? "webhook" : undefined,
+              lifecycle: "stateless",
+              inboundReadiness: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
+                ? "ready"
+                : "unsupported",
+              operatorSummary: hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
+                ? "Slack webhook delivery is normalized as a stateless send path with signed webhook ingress. Inbound event routing is available, but replies, reactions, unsend, and inline uploads still require a bot token."
+                : "Slack webhook delivery is normalized as a stateless outbound-only path. Replies, reactions, unsend, and inline uploads require a bot-token connection.",
+            },
     resolveSupportNotes: (config) =>
       hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
         ? [
             "Interactive actions use the Slack Web API and require the bot to have the needed chat and reactions scopes.",
             "Slack bot-token connections support URL-backed attachment previews and uploaded inline files when the app has files:write and can reach Slack upload hosts.",
-            hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
-              ? "Slack inbound event routing is enabled through the signed Events API webhook path."
-              : "Slack inbound routing remains disabled until a signing secret is configured.",
-            ...(hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
+            isSlackSocketInboundEnabled(config)
+              ? SLACK_SOCKET_SUPPORT_NOTE
+              : hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
+                ? "Slack inbound event routing is enabled through the signed Events API webhook path."
+                : "Slack inbound routing remains disabled until a signing secret is configured.",
+            // Voice shares need an extra file-reading scope, so Socket Mode leaves them out.
+            ...(!isSlackSocketInboundEnabled(config) && hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
               ? [
                   "When inbound channel voice is enabled, Slack audio file shares are transcribed: the gateway downloads the file from files.slack.com with the bot token (needs the files:read scope, 8 MB cap) and routes the transcript as an untrusted voice turn. files.slack.com must be in the network allowlist (toolPolicy.sandbox.networkAllowlist); otherwise the download is refused and the turn runs on the [voice message] fallback.",
                 ]
@@ -220,9 +233,11 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
           ]
         : [
             "Webhook-only Slack connections support send only plus URL-backed attachment previews. Reactions, unsend, replies, and inline file uploads require a bot token.",
-            hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
-              ? "Webhook-only Slack fallback can ingest signed Slack events, but rich outbound actions still require a bot token."
-              : "Webhook-only Slack fallback is outbound only and does not provide inbound routing.",
+            isSlackSocketInboundEnabled(config)
+              ? SLACK_SOCKET_SUPPORT_NOTE
+              : hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
+                ? "Webhook-only Slack fallback can ingest signed Slack events, but rich outbound actions still require a bot token."
+                : "Webhook-only Slack fallback is outbound only and does not provide inbound routing.",
             "Webhook-only Slack fallback still relies on manual confirmation after finalize.",
           ],
     requiredAnyOf: [["botTokenEnv", "botToken", "webhookUrl", "url"]],
@@ -1385,6 +1400,31 @@ function isMattermostInboundEnabled(config: Record<string, unknown>): boolean {
     hasAnyConfigured(config, ["serverUrl"]) &&
     hasAnyConfigured(config, ["botToken", "botTokenEnv", "token", "tokenEnv"])
   );
+}
+
+/**
+ * Slack Socket Mode: GoatCitadel keeps a connection open to Slack and hears events over it, so the connection is
+ * chosen by its receive mode alone. Older connections never had one and receive by webhook, so only an explicit
+ * "socket" counts. Whether the app-level token is present is a setup and runtime matter, not part of the mode.
+ */
+export function isSlackSocketInboundEnabled(config: Record<string, unknown>): boolean {
+  return readConfigString(config, "receiveMode") === "socket";
+}
+
+const SLACK_SOCKET_SUPPORT_NOTE =
+  "Receives direct messages and mentions over a connection GoatCitadel keeps open to Slack; no public web address is needed.";
+
+function describeSlackSocketPosture(config: Record<string, unknown>): ChannelRuntimePosture {
+  const hasAppToken = hasAnyConfigured(config, ["appToken", "appTokenEnv"]);
+  return {
+    outboundTransport: hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"]) ? "api" : "webhook",
+    inboundTransport: "stream",
+    lifecycle: "persistent",
+    inboundReadiness: hasAppToken ? "ready" : "unsupported",
+    operatorSummary: hasAppToken
+      ? "Slack Socket Mode keeps a connection GoatCitadel opens to Slack, so direct messages and mentions arrive with no public web address. Replies, reactions, and unsend use the bot token over the Slack Web API."
+      : "Slack is set to receive over Socket Mode, but receiving stays off until the app-level token is configured. Replies, reactions, and unsend use the bot token over the Slack Web API.",
+  };
 }
 
 /** Mirrors the Matrix stream adapter: strict opt-in, homeserver URL and an access token. */
