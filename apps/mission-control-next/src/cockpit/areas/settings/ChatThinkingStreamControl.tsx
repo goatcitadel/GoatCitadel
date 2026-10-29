@@ -3,6 +3,7 @@ import { CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS, type ChangePlanRecord } from "
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { Button } from "../../ui/Button";
+import { Switch } from "../../ui/Switch";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useGovernedRuntimeSetting } from "./use-governed-runtime-setting";
 import {
@@ -70,8 +71,8 @@ export function ChatThinkingStreamControl() {
             {CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS[FLAG]?.label}
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            Off by default. When on, a model's reasoning streams into Chat, shown above its answer under “Thinking…” and
-            kept shut unless you open it.
+            Off by default. When on, a model's reasoning streams into Chat above its answer under “Thinking…”. While the
+            model thinks, its newest line shows next to that label; the full text stays shut unless you open it.
           </p>
         </div>
         <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
@@ -91,19 +92,21 @@ export function ChatThinkingStreamControl() {
               features.{FLAG} · Settings version {settings.data?.revision}
             </p>
           </TechnicalDetails>
-          <label className="mt-3 flex items-center gap-2 text-sm text-fg-secondary">
-            <input
-              type="checkbox"
+          <div className="mt-3 flex items-center gap-3 text-sm text-fg-secondary">
+            <Switch
               checked={draft.value}
-              aria-describedby="chat-thinking-stream-facts"
-              disabled={governed.locked}
-              onChange={(event) => {
+              onCheckedChange={(next) => {
                 governed.clearNotice();
-                draft.setValue(event.target.checked);
+                draft.setValue(next);
               }}
+              label="Show model reasoning in Chat"
+              disabled={governed.locked && !governed.busy}
+              pending={governed.busy}
+              describedBy="chat-thinking-stream-facts"
             />
-            Show model reasoning in Chat
-          </label>
+            {/* The switch is named by its label; this is the same words for sighted operators. */}
+            <span aria-hidden="true">Show model reasoning in Chat</span>
+          </div>
           <ul id="chat-thinking-stream-facts" className="mt-2 list-inside list-disc space-y-1 text-xs text-fg-muted">
             {THINKING_FACTS.map((fact) => (
               <li key={fact}>{fact}</li>

@@ -51,7 +51,7 @@ async function mount() {
   return { container, unmount };
 }
 
-const checkbox = (container: HTMLElement) => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+const toggle = (container: HTMLElement) => container.querySelector<HTMLButtonElement>('[role="switch"]')!;
 
 afterEach(() => {
   __resetSettingsChangesForTests();
@@ -67,12 +67,14 @@ describe("cockpit model reasoning in Chat setting", () => {
       await vi.waitFor(() => expect(container.textContent).toContain("Current: Off"));
       expect(container.querySelector("h3")?.textContent).toBe("Model reasoning in Chat");
       expect(container.textContent).toContain("Off by default.");
-      const facts = document.getElementById(checkbox(container).getAttribute("aria-describedby")!)!;
+      const facts = document.getElementById(toggle(container).getAttribute("aria-describedby")!)!;
       expect(facts.textContent).toContain("unreviewed text");
       expect(facts.textContent).toContain("Only models that report their reasoning send any.");
       expect(facts.textContent).toContain("gone after a page reload");
-      expect(checkbox(container).checked).toBe(false);
-      expect(checkbox(container).disabled).toBe(false);
+      expect(toggle(container).getAttribute("aria-label")).toBe("Show model reasoning in Chat");
+      expect(toggle(container).getAttribute("aria-checked")).toBe("false");
+      expect(toggle(container).disabled).toBe(false);
+      expect(container.textContent).toContain("its newest line shows next to that label");
     } finally {
       unmount();
     }
@@ -97,7 +99,7 @@ describe("cockpit model reasoning in Chat setting", () => {
     const { container, unmount } = await mount();
     try {
       await vi.waitFor(() => expect(container.textContent).toContain("Current: Off"));
-      await act(async () => checkbox(container).click());
+      await act(async () => toggle(container).click());
       await act(async () => {
         [...container.querySelectorAll("button")].find((item) => item.textContent === "Save setting")!.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -125,7 +127,7 @@ describe("cockpit model reasoning in Chat setting", () => {
     try {
       await vi.waitFor(() => expect(container.textContent).toContain("GoatCitadel did not report this setting"));
       expect(container.textContent).not.toContain("Current: Off");
-      expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+      expect(container.querySelector('[role="switch"]')).toBeNull();
     } finally {
       unmount();
     }

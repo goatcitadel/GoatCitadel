@@ -281,8 +281,9 @@ $body = @{ expectedRevision = $settings.revision; features = @{ chatThinkingStre
 Invoke-RestMethod -Method Patch -Uri "<gateway>/api/v1/settings" -Headers @{ "Idempotency-Key" = [guid]::NewGuid().ToString() } -ContentType "application/json" -Body $body
 ```
 
-Confirm in the settings response that `features.chatThinkingStreamV1Enabled` is true. If it cannot be set, record the
-PERF-01 re-test as Blocked ("thinking stream flag not settable in the sandbox") and continue with journeys 1 and 3.
+The response carries a change-plan receipt; until its approval is resolved, the settings it returns still show the old
+value. Approve it (in the Inbox, or in the switch's in-place approval), then read `<gateway>/api/v1/settings` again and
+confirm `features.chatThinkingStreamV1Enabled` is true. If it cannot be set, record the PERF-01 re-test as Blocked ("thinking stream flag not settable in the sandbox") and continue with journeys 1 and 3.
 
 Step 2, three model journeys:
 
