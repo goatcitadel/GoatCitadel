@@ -146,8 +146,9 @@ const SOURCE_RULES = new Map<string, Rule>([
       ),
   ],
   ["capabilities", () => effect(CAPABILITY_KEYS, ["skills"])],
-  // A switch asking for approval and a change applying both publish here, so they refresh the list and the details.
-  ["skills", () => effect([queryKeys.capabilities(), ...CAPABILITY_SKILL_KEYS], ["skills"])],
+  // A switch asking for approval and a change applying both publish here, so they refresh the list and the details,
+  // and the Inbox, where a skill approval waits in every workspace (its creation publishes no `approvals` event).
+  ["skills", () => effect([queryKeys.capabilities(), ...CAPABILITY_SKILL_KEYS, queryKeys.inboxAll()], ["skills"])],
   // A tool call inside a turn changes no catalog or grant; the turn's own chat events carry it.
   ["tools", (e) => (e.eventType === "tool_invoked" ? effect([], ["tools"]) : effect(TOOL_KEYS, ["tools"]))],
   ["policy", (e) => (e.eventType === "tool_invoked" ? effect([], ["tools"]) : effect(TOOL_KEYS, ["tools"]))],

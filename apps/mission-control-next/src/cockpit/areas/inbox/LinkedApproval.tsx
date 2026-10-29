@@ -3,6 +3,7 @@ import { useInspector } from "../../app/inspector";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { isInstallWideApproval } from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -123,7 +124,8 @@ export function LinkedApprovalDetail({ approvalId }: { approvalId: string }) {
         title: "Linked approval",
         summary: "Review the current approval",
         createdAt: approval.createdAt,
-        source: { workspaceId, approvalId },
+        // An approval of no workspace (a skill change) is shown as the Inbox lists it: read and decided without one.
+        source: { workspaceId, approvalId, ...(isInstallWideApproval(approval) ? { installWide: true as const } : {}) },
         href,
       }}
     />

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 const sha256Hex = (value: string) => createHash("sha256").update(value).digest("hex");
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalJsonString, type ApprovalRequest } from "@goatcitadel/contracts";
 import { readApprovalFollowOn } from "./approval-follow-on";
 const api = vi.hoisted(() => ({ replay: vi.fn(), lifecycle: vi.fn(), run: vi.fn() }));
@@ -80,6 +80,32 @@ it("refuses foreign scope and malformed original Chat binding", async () => {
 it("does not fetch work after current access changes during the lifecycle read", async () => {
   await expect(readApprovalFollowOn(approval, "one", () => false)).rejects.toThrow("access changed");
   expect(api.run).not.toHaveBeenCalled();
+});
+describe("an approval of no workspace (a skill change)", () => {
+  const installWide = { approvalId: "a", kind: "skill.lifecycle", status: "approved" } as ApprovalRequest;
+  it("accepts follow-on records of an install-wide approval that stay install-wide", async () => {
+    api.replay.mockResolvedValue({ approval: installWide, effects: [], events: [] });
+    api.lifecycle.mockResolvedValue({ approval: installWide, turns: [] });
+    const result = await readApprovalFollowOn(installWide, "default", () => true);
+    expect(result.replay.approval).toBe(installWide);
+    expect(result.run).toBeUndefined();
+    expect(result.wait).toBeUndefined();
+    expect(api.run).not.toHaveBeenCalled();
+  });
+  it("refuses follow-on records of an install-wide approval that name a workspace", async () => {
+    const linked = { ...installWide, linkage: { workspaceId: "default" } };
+    for (const [replay, lifecycle] of [
+      [installWide, linked],
+      [linked, installWide],
+      [linked, linked],
+    ]) {
+      api.replay.mockResolvedValue({ approval: replay, effects: [], events: [] });
+      api.lifecycle.mockResolvedValue({ approval: lifecycle, turns: [] });
+      await expect(readApprovalFollowOn(installWide, "default", () => true)).rejects.toThrow(
+        "The follow-on record does not match this approval scope.",
+      );
+    }
+  });
 });
 it("refuses a wait record from a different approval even with no original run", async () => {
   api.lifecycle.mockResolvedValue({

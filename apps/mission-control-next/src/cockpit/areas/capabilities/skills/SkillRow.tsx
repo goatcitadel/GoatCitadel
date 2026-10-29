@@ -35,9 +35,10 @@ export interface SkillRowProps {
  * (`useSkillSwitch`), so a request, a wait for approval or a failure shows on all of them. `item` should be the live
  * row from the cached list.
  *
- * A change that waits is approved in the skill's panel, never in Inbox, which can't show a skill approval: the row's
- * Review button opens the panel with the approval open in it. A flip of the row's own switch that starts a wait opens
- * the panel by itself, so approving takes one more click; a wait found when the list loads opens nothing.
+ * A change that waits is approved in the skill's panel, where it was asked for, and the row never points at the Inbox,
+ * although it also waits there: the row's Review button opens the panel with the approval open in it. A flip of the
+ * row's own switch that starts a wait opens the panel by itself, so approving takes one more click; a wait found when
+ * the list loads opens nothing.
  */
 export function SkillRow({ item, uses, onView }: SkillRowProps) {
   const sw = useSkillSwitch(item);

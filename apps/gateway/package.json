@@ -62,6 +62,8 @@
     "test:postgres:auth": "vitest run src/services/settings-auth-service.test.ts",
     "pretest:postgres:memory": "pnpm --filter @goatcitadel/storage build",
     "test:postgres:memory": "vitest run src/services/memory-lifecycle-service.real-postgres.test.ts",
+    "pretest:postgres:inbox": "pnpm --filter @goatcitadel/storage build",
+    "test:postgres:inbox": "vitest run src/services/inbox-projection-service.real-postgres.test.ts",
     "test:improvement-ledger": "tsx --test src/services/improvement-service.node.test.ts src/improvement-operator-proof.node.test.ts",
     "test:node": "tsx --test src/services/chat-generated-artifact-service.test.ts src/services/chat-thread-knowledge-service.test.ts",
     "test:coverage": "pnpm test:coverage:vitest --coverage.reportsDirectory=coverage && pnpm test:node",

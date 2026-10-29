@@ -304,7 +304,8 @@ describe("Skills tab", () => {
       await render();
 
       expect(wordOf("Planner")).toBe("Waiting for your approval");
-      // The approval is decided in the panel; the Inbox can't show a skill approval, so nothing points there.
+      // The approval is decided in the panel, where the change was asked for; it also waits in the Inbox, but nothing
+      // here points there.
       expect(rowOf("Planner").querySelector("a")).toBeNull();
       expect(rowOf("Planner").textContent).not.toContain("Inbox");
       const review = button("Review Planner", rowOf("Planner"));

@@ -122,6 +122,14 @@ export interface ApprovalListResponse {
   nextCursor?: string;
 }
 
+/**
+ * An approval with no linkage belongs to the install, not to a workspace (a skill switch change is one),
+ * so every workspace's Inbox lists it. A linkage that exists but names no workspace is not install-wide.
+ */
+export function isInstallWideApproval(approval: Pick<ApprovalRequest, "linkage">): boolean {
+  return approval.linkage === undefined;
+}
+
 export interface ApprovalCreateInput {
   kind: string;
   riskLevel: ApprovalRequest["riskLevel"];

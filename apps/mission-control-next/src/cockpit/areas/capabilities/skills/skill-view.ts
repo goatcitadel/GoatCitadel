@@ -92,8 +92,8 @@ const NOT_USABLE_OTHERWISE: NotUsablePresentation = {
  *
  * `uses` is the uses line. It is the reason of a skill that is on and usable, the only row that has no other reason.
  *
- * A wait has no link: a skill approval belongs to no workspace, so the Inbox, which lists a workspace's approvals,
- * never shows it. It is decided in the skill's panel instead.
+ * A wait has no link: a skill change is approved in the skill's panel, where it was asked for. It also waits in the
+ * Inbox, but nothing here sends the operator there.
  */
 export function presentSkillState(
   item: CapabilitySkillItem,

@@ -14,9 +14,9 @@ const PAUSED_NOTE =
 
 /**
  * The approval the change waits on, decided here: it opens on its own once, and "Review the change" opens it again.
- * Skill approvals belong to no workspace, so the Inbox (which lists a workspace's approvals) never shows them, and
- * nothing here points there. A decline publishes no skill event, so the switch is asked to read the approval at once
- * rather than at its next check.
+ * The change is approved where it was asked for, in one click, so nothing here points at the Inbox, although it also
+ * waits there. A decline publishes no skill event, so the switch is asked to read the approval at once rather than at
+ * its next check.
  */
 function ApprovalInPlace({ item, sw, approvalId }: { item: CapabilitySkillItem; sw: SkillSwitch; approvalId: string }) {
   return (

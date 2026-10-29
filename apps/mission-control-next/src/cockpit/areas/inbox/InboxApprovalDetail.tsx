@@ -10,7 +10,6 @@ import { RiskBadge } from "../../ui/RiskBadge";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
-import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import {
@@ -23,7 +22,7 @@ import { StatusBadge } from "../../ui/StatusBadge";
 import { approvalExpiryLabel, approvalExplanationLine, splitApprovalSupport } from "./approval-preview";
 import { InboxApprovalActions } from "./InboxApprovalActions";
 import { queryKeys } from "../../data/query-keys";
-import { nullWhenMissing } from "./inbox-record-read";
+import { inboxApprovalRecordKey, readInboxApproval } from "./inbox-record-read";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { hasExpired, useMinuteClock } from "./use-minute-clock";
 
@@ -53,11 +52,14 @@ export function InboxApprovalDetail({
   }, [decisionNotice, pageOwnsFocus]);
   const queryClient = useQueryClient();
   const approvalId = item.source.approvalId;
+  // An approval of no workspace (a skill change) is read and decided without one; the Inbox's workspace stays the
+  // scope for everything else here (its refresh, the settlement, the audit).
+  const installWide = item.source.installWide === true;
   // The same key as Chat's blocker card, so moving between them is a cache hit (IN-11).
-  const queryKey = ["approvals", "record", workspaceId, approvalId, access.identity];
+  const queryKey = inboxApprovalRecordKey(workspaceId, installWide, approvalId!, access.identity);
   const query = useQuery({
     queryKey,
-    queryFn: ({ signal }) => nullWhenMissing(fetchApproval(approvalId!, { workspaceId, signal })),
+    queryFn: ({ signal }) => readInboxApproval(approvalId!, { workspaceId, installWide, signal }),
     enabled: Boolean(approvalId),
     staleTime: 0,
   });
@@ -294,7 +296,9 @@ export function InboxApprovalDetail({
               specialistEvidence={specialistEvidence}
               item={item}
               approval={approval}
-              workspaceId={workspaceId}
+              workspaceId={installWide ? null : workspaceId}
+              // The operator asked for a skill change themselves, so it approves in one click, as on the Skills tab.
+              reviewedInPlace={installWide && approval.kind === "skill.lifecycle"}
               focusAction={focusAction}
               checking={checking || (specialist && specialistQuery.isFetching)}
               onResolved={(message) => rereadSettled(message, true)}

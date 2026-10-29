@@ -219,6 +219,15 @@ describe("resolveRealtimeEvent", () => {
     expect(gap.kind === "mapped" ? gap.effect.keys : []).toContainEqual(["skills"]);
   });
 
+  it("refreshes the Inbox when a skill change asks for approval or applies, because it waits in every workspace's Inbox", () => {
+    // A skill approval publishes no `approvals` event when it is made, only the `skills` one.
+    for (const type of ["skill_mutation_approval_requested", "skill_state_mutation_applied"]) {
+      const result = resolveRealtimeEvent(event(type, "skills"));
+      const keys = result.kind === "mapped" ? result.effect.keys : [];
+      expect(keys).toContainEqual(queryKeys.inboxAll());
+    }
+  });
+
   it("leaves the approvals rule alone: a resolved approval re-reads only the approval queries", () => {
     // A declined skill approval publishes no skills event, so the switch hook's own poll covers that case.
     expect(resolveRealtimeEvent(event("approval_resolved", "approvals", { links: { approvalId: "a-1" } }))).toEqual({

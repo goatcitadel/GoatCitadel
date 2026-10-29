@@ -181,7 +181,7 @@ describe("presentSkillState", () => {
     expect(present.link).toEqual(link);
   });
 
-  it("gives a wait no link: a skill approval is decided in the skill's panel, not in Inbox", () => {
+  it("gives a wait no link: a skill approval is decided in the skill's panel, where it was asked for", () => {
     const wait = { waiting: true, waitingApprovalId: "approval-1" };
     const present = presentSkillState(skill(), wait, USES);
     expect(present.link).toBeUndefined();

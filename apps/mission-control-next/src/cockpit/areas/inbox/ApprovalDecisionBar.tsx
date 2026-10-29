@@ -61,7 +61,11 @@ interface ApprovalDecisionBarProps {
   compact?: boolean;
   /** Pin the Approve/Deny buttons to the bottom of the scrolling panel so they never need a scroll to reach. */
   stickyDecisions?: boolean;
-  /** The bar sits inside a dialog that is this approval's review, so a danger-level Approve is one click. */
+  /**
+   * The approval's full review is already in front of the operator, so a danger-level Approve is one click: the bar
+   * sits inside a dialog that is this approval's review (Settings), or in the Inbox inspector, below the full review of
+   * a skill change that belongs to no workspace and that the operator asked for themselves.
+   */
   reviewedInPlace?: boolean;
   onResolved: (message: string) => void;
   onInvalidated: (message?: string) => void;
