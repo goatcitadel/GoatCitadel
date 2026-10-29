@@ -78,6 +78,77 @@ describe("public channel draft OAuth metadata ownership", () => {
       "Renamed",
     );
   });
+  describe("the Slack setup page in Chat, which makes a create draft and never adopts an installation", () => {
+    const created = (values: Record<string, unknown> = {}): ChannelSetupDraft => ({
+      ...draft(values),
+      lifecycleMode: "create",
+    });
+    const dmRow = {
+      id: "slack:D777",
+      label: "Ada Lovelace",
+      channel: "D777",
+      kind: "private",
+      source: "recent_update",
+      setupCodeMatched: true,
+      default: true,
+    };
+    const channelRow = {
+      id: "slack:C100",
+      label: "#general",
+      channel: "C100",
+      kind: "channel",
+      source: "connection_config",
+      default: true,
+    };
+
+    it("passes the token check's write through unchanged: the page mark and socket mode", () => {
+      const current = created({ label: "kept" });
+      const input = { expectedRevision: 3, draft: { label: "kept", setupPage: "messaging", receiveMode: "socket" } };
+      const result = protectChannelOAuthDraftMetadata(current, input);
+      expect(result.draft).toEqual(input.draft);
+      expect(result.expectedRevision).toBe(3);
+    });
+
+    it("passes the code, the hi and a chosen channel through unchanged, each spread on the one before", () => {
+      const checked = { setupPage: "messaging", receiveMode: "socket" };
+      const withCode = { ...checked, setupCode: "Kp4mWz9RtX" };
+      const withHi = {
+        ...withCode,
+        allowedSenders: ["U777"],
+        ownerActorIds: ["U777"],
+        inboundAccessMode: "allowlist",
+        targets: [dmRow],
+      };
+      const inChannel = { ...withHi, targets: [{ ...dmRow, default: false }, channelRow] };
+      for (const [before, after] of [
+        [checked, withCode],
+        [withCode, withHi],
+        [withHi, inChannel],
+      ]) {
+        const result = protectChannelOAuthDraftMetadata(created(before), { expectedRevision: 3, draft: after });
+        expect(result.draft).toEqual(after);
+      }
+    });
+
+    it("adds no installation key of its own to a page-made draft", () => {
+      const result = protectChannelOAuthDraftMetadata(created(), {
+        expectedRevision: 3,
+        draft: { setupPage: "messaging", receiveMode: "socket", allowedSenders: ["U777"] },
+      });
+      for (const key of CHANNEL_SLACK_OAUTH_METADATA_KEYS) expect(result.draft).not.toHaveProperty(key);
+    });
+
+    it("still refuses the identity the page used to write, which is why it no longer does", () => {
+      const current = created();
+      expect(() =>
+        protectChannelOAuthDraftMetadata(current, {
+          expectedRevision: 3,
+          draft: { setupPage: "messaging", receiveMode: "socket", slackTeamId: "T1", slackTeamName: "Goat Team" },
+        }),
+      ).toThrow(/explicitly adopt the bound installation/);
+    });
+  });
+
   it("does not invent an OAuth receipt for manual Slack setup or change unrelated catalogs", () => {
     const input = { expectedRevision: 3, label: "Manual", draft: { targets: [], defaultChannel: "C1" } };
     expect(protectChannelOAuthDraftMetadata(draft(), input)).toEqual(input);

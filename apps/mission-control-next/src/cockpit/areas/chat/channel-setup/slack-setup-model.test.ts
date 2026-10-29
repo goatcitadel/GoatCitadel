@@ -55,11 +55,11 @@ describe("slackSenderName", () => {
 
 describe("slackDraftWithSender", () => {
   it("makes them the only allowed sender and an owner, with their direct messages as the default", () => {
-    const next = slackDraftWithSender({ receiveMode: "socket", setupCode: "abc", slackTeamId: "T1" }, ADA);
+    const next = slackDraftWithSender({ receiveMode: "socket", setupCode: "abc", setupPage: "messaging" }, ADA);
     expect(next).toEqual({
       receiveMode: "socket",
       setupCode: "abc",
-      slackTeamId: "T1",
+      setupPage: "messaging",
       allowedSenders: ["U777"],
       ownerActorIds: ["U777"],
       inboundAccessMode: "allowlist",

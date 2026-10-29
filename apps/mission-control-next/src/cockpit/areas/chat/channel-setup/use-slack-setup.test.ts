@@ -55,10 +55,34 @@ function draft(overrides: Partial<ChannelSetupDraft> = {}): ChannelSetupDraft {
 function pageDraft(overrides: Partial<ChannelSetupDraft> = {}): ChannelSetupDraft {
   return draft({
     revision: 4,
-    draft: { setupPage: "messaging", receiveMode: "socket", slackTeamId: "T1" },
+    draft: { setupPage: "messaging", receiveMode: "socket" },
     secretState: TOKENS_STORED,
     ...overrides,
   });
+}
+
+/**
+ * The Slack installation identity keys the gateway refuses on any Slack draft update, whatever the value (see
+ * `CHANNEL_SLACK_OAUTH_METADATA_KEYS` in the gateway's channel-oauth-draft-metadata.ts): it is authored only by a bound
+ * OAuth adoption. The page holds the workspace and the bot in its own state instead.
+ */
+const PROTECTED_KEYS = [
+  "authMode",
+  "slackInstallId",
+  "slackTeamId",
+  "slackTeamName",
+  "slackAppId",
+  "slackBotUserId",
+  "slackScopes",
+  "slackInstallerUserId",
+  "oauthConnectedAt",
+] as const;
+
+/** The protected keys found in the values of every draft update made so far. */
+function protectedKeysWritten(): string[] {
+  return api.updateChannelSetupDraft.mock.calls.flatMap(([, input]) =>
+    PROTECTED_KEYS.filter((key) => Object.hasOwn(input.draft ?? {}, key)),
+  );
 }
 
 function checkResult(overrides: Partial<SlackSetupCheckResult> = {}): SlackSetupCheckResult {
@@ -165,20 +189,15 @@ describe("useSlackSetup", () => {
       expectedRevision: 2,
       checkAppToken: true,
     });
-    // The last write merges into the draft's own values, with the version the secret write returned.
+    // The last write merges only the page mark and socket mode into the draft's own values, with the version the
+    // secret write returned. The workspace and the bot are never written: the gateway owns installation identity.
     expect(api.updateChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", {
       expectedRevision: 2,
-      draft: {
-        label: "kept",
-        setupPage: "messaging",
-        receiveMode: "socket",
-        slackTeamId: "T1",
-        slackTeamName: "Goat Team",
-        slackBotUserId: "U9",
-      },
+      draft: { label: "kept", setupPage: "messaging", receiveMode: "socket" },
     });
     expect(current.draft?.revision).toBe(3);
-    expect(current.draft?.draft).toMatchObject({ setupPage: "messaging", slackTeamName: "Goat Team" });
+    expect(current.draft?.draft).toEqual({ label: "kept", setupPage: "messaging", receiveMode: "socket" });
+    // They are held in the page's state, from the check's answer.
     expect(current.workspace).toEqual({ id: "T1", name: "Goat Team" });
     expect(current.bot).toEqual({ userId: "U9", name: "goatcitadel" });
     expect(current.busy).toBe(false);
@@ -495,7 +514,7 @@ describe("useSlackSetup, saying hi", () => {
     expect(code).toMatch(/^[A-Za-z0-9]{10}$/);
     expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith("draft-1", {
       expectedRevision: 3,
-      draft: expect.objectContaining({ setupCode: code, receiveMode: "socket", slackTeamId: "T1" }),
+      draft: expect.objectContaining({ setupCode: code, setupPage: "messaging", receiveMode: "socket" }),
     });
     expect(current.draft?.revision).toBe(4);
     expect(current.codeExpired).toBe(false);
@@ -894,5 +913,51 @@ describe("useSlackSetup, coming back to a setup", () => {
     expect(current.sender).toBeNull();
     expect(current.posting).toBeNull();
     expect(current.error).toBe(SLACK_APP_TOKEN_FAILED);
+  });
+
+  it("shows the workspace and the bot the check names, not anything the draft says about them", async () => {
+    vi.useFakeTimers();
+    // A draft that carries another workspace's identity (an OAuth-adopted one, say): the page does not read it.
+    const saved = pageDraft({
+      draft: { setupPage: "messaging", receiveMode: "socket", slackTeamId: "T-OLD", slackBotUserId: "U-OLD" },
+    });
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [saved] });
+    api.checkSlackSetup.mockResolvedValue(checkResult());
+    await mount();
+    expect(current.workspace).toEqual({ id: "T1", name: "Goat Team" });
+    expect(current.bot).toEqual({ userId: "U9", name: "goatcitadel" });
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+  });
+});
+
+describe("useSlackSetup, installation identity", () => {
+  it("writes none of the keys the gateway reserves for OAuth adoption, at any step", async () => {
+    await mountReady();
+    // Token check: the page mark and socket mode only.
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    await sayHi();
+    api.checkSlackSetup.mockResolvedValue(checkResult({ channels: CHANNELS }));
+    await run(() => current.refreshChannels());
+    await run(() => current.choosePosting({ kind: "channel", channelId: "C100" }));
+    await run(() => current.choosePosting({ kind: "direct" }));
+    // The code, the hi, and two choices were saved as well.
+    expect(api.updateChannelSetupDraft.mock.calls.length).toBeGreaterThanOrEqual(5);
+    expect(protectedKeysWritten()).toEqual([]);
+    // What the gateway holds for the draft carries none either, so a later write that spreads it adds none.
+    for (const key of PROTECTED_KEYS) expect(current.draft?.draft).not.toHaveProperty(key);
+  });
+
+  it("writes none of them when a check fails and is tried again, or when the code is saved again", async () => {
+    vi.useFakeTimers();
+    arrangeCheck(checkResult({ appToken: "rejected" }));
+    await mount();
+    await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
+    api.checkSlackSetup.mockResolvedValue(checkResult());
+    await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
+    await run(() => current.newCode());
+    await advance(SETUP_CODE_TTL_MS);
+    await run(() => current.newCode());
+    expect(api.updateChannelSetupDraft.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(protectedKeysWritten()).toEqual([]);
   });
 });

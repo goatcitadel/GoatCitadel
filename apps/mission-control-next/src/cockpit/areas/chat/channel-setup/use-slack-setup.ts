@@ -53,7 +53,8 @@ export interface SlackSetupState {
   posting: SlackPosting | null;
   /**
    * Stores both tokens on the draft in one write, then asks Slack whether each is accepted. Starts the draft when there
-   * is none. Once both are, the draft is marked as made on this page and keeps the workspace and the bot.
+   * is none. Once both are, the draft is marked as made on this page. The workspace and the bot come from the check's
+   * answer and are held here, never written to the draft.
    */
   checkTokens(botToken: string, appToken: string): Promise<void>;
   /** Discards the draft and its stored tokens. */
@@ -82,16 +83,14 @@ const NO_CHOICES = {
 
 const EMPTY: Core = { draft: null, workspace: null, bot: null, busy: false, error: undefined, ...NO_CHOICES };
 
-/** What the draft keeps of a check that worked: socket mode, and the workspace and bot by id and name. */
-function draftWithWorkspace(values: Record<string, unknown>, check: SlackSetupCheckResult): Record<string, unknown> {
-  return {
-    ...values,
-    setupPage: CHAT_SETUP_PAGE,
-    receiveMode: "socket",
-    slackTeamId: check.workspace.id,
-    slackTeamName: check.workspace.name,
-    slackBotUserId: check.bot.userId,
-  };
+/**
+ * What the draft keeps of a check that worked: that it was made on this page, and that it receives over a socket. The
+ * workspace and the bot are not written. The gateway refuses every installation identity key (`slackTeamId`,
+ * `slackTeamName`, `slackBotUserId` and the rest) on any Slack draft update, because only a bound OAuth adoption
+ * authors them; the page holds them in its own state from the check's answer instead.
+ */
+function draftAsMadeHere(values: Record<string, unknown>): Record<string, unknown> {
+  return { ...values, setupPage: CHAT_SETUP_PAGE, receiveMode: "socket" };
 }
 
 /** Who said hi on an earlier visit, and where the draft says it posts, so the page goes on from there. */
@@ -291,7 +290,7 @@ export function useSlackSetup(workspaceId: string, resumeDraftId?: string): Slac
         }
         const saved = await updateChannelSetupDraft(draft.draftId, {
           expectedRevision: stored.revision,
-          draft: draftWithWorkspace(stored.draft, check),
+          draft: draftAsMadeHere(stored.draft),
         });
         set({ draft: saved, workspace: check.workspace, bot: check.bot, busy: false });
       } catch {

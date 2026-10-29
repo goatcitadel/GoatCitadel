@@ -956,7 +956,7 @@ describe("SlackSetupPage, coming back to a setup", () => {
   function savedSetup(values: Record<string, unknown>) {
     return draft({
       revision: 5,
-      draft: { setupPage: "messaging", receiveMode: "socket", slackTeamId: "T1", ...values },
+      draft: { setupPage: "messaging", receiveMode: "socket", ...values },
       secretState: TOKENS_STORED,
     });
   }
@@ -1016,5 +1016,49 @@ describe("SlackSetupPage, coming back to a setup", () => {
     await advance(SETUP_CODE_TTL_MS);
     expect(api.checkSlackSetup).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("SlackSetupPage, installation identity", () => {
+  /**
+   * The keys the gateway refuses on any Slack draft update: installation identity is authored only by a bound OAuth
+   * adoption (`CHANNEL_SLACK_OAUTH_METADATA_KEYS` in the gateway's channel-oauth-draft-metadata.ts).
+   */
+  const RESERVED = [
+    "authMode",
+    "slackInstallId",
+    "slackTeamId",
+    "slackTeamName",
+    "slackAppId",
+    "slackBotUserId",
+    "slackScopes",
+    "slackInstallerUserId",
+    "oauthConnectedAt",
+  ];
+
+  it("goes through the whole setup against a gateway that refuses those keys, and never sends one", async () => {
+    api.updateChannelSetupDraft.mockImplementation(
+      async (_id: string, input: { expectedRevision: number; draft: Record<string, unknown> }) => {
+        const reserved = RESERVED.find((key) => Object.hasOwn(input.draft, key));
+        if (reserved)
+          throw new Error(`Slack installation metadata belongs to its authorization receipt (${reserved}).`);
+        return draft({ revision: input.expectedRevision + 1, draft: input.draft, secretState: TOKENS_STORED });
+      },
+    );
+    turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "completed", plan: { planId: "plan-1" } });
+    await mountAtHi();
+    // The token check got through, so the workspace and the bot are named from its answer.
+    expect(steps()[1]!.textContent).toContain("Tokens work. Your bot is @goatcitadel in Goat Team.");
+    await choose(GENERAL);
+    await choose(DIRECT);
+    await click(button("Turn on"));
+
+    expect(states()).toEqual(["done", "done", "done", "done", "done"]);
+    expect(container.querySelectorAll('[data-tone="error"]')).toHaveLength(0);
+    // The token check, the code, the hi and two choices were all saved.
+    expect(api.updateChannelSetupDraft.mock.calls.length).toBeGreaterThanOrEqual(5);
+    for (const [, input] of api.updateChannelSetupDraft.mock.calls) {
+      for (const key of RESERVED) expect(input.draft).not.toHaveProperty(key);
+    }
   });
 });
