@@ -1,38 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Archive,
-  ArchiveRestore,
-  Castle,
-  FolderPlus,
-  MessageSquarePlus,
-  Pencil,
-  Pin,
-  PinOff,
-  RefreshCw,
-  Save,
-} from "lucide-react";
-import type {
-  ChatGeneratedArtifactRecord,
-  ChatMode,
-  ChatProjectRecord,
-  ChatSessionRecord,
-} from "@goatcitadel/contracts";
+import { Archive, ArchiveRestore, FolderPlus, Pin, PinOff, RefreshCw } from "lucide-react";
+import type { ChatMode, ChatProjectRecord, ChatSessionRecord } from "@goatcitadel/contracts";
 import {
   archiveChatProject,
   createChatSession,
   createChatProject,
-  fetchChatGeneratedArtifacts,
-  fetchChatProjects,
-  fetchChatSessions,
   restoreChatProject,
   updateChatProject,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { RecentCrossProjectSessionsRow } from "./RecentCrossProjectSessionsRow";
-import {
-  ProjectGlyphButton,
-  ProjectThreadGroup,
-  filterEmptyLabel,
-} from "./ProjectsRoutePage.components";
+import { fetchProjectData, type ProjectData } from "./fetch-project-data";
+import { ProjectEditorCard } from "./ProjectEditorCard";
+import { ProjectsLeadStack } from "./ProjectsLeadStack";
+import { ProjectGlyphButton, ProjectThreadGroup, filterEmptyLabel } from "./ProjectsRoutePage.components";
 import { ProjectHomeBasePanel } from "./ProjectHomeBasePanel";
 import { ProjectAutomaticFanoutCard } from "./ProjectAutomaticFanoutCard";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
@@ -62,13 +42,9 @@ import "../native-routes.css";
 
 export { deriveProjectHome } from "./ProjectsRoutePage.helpers";
 
-type ProjectsState = {
+type ProjectsState = ProjectData & {
   loading: boolean;
   error: string | null;
-  artifactIssue: string | null;
-  projects: ChatProjectRecord[];
-  sessions: ChatSessionRecord[];
-  artifacts: ChatGeneratedArtifactRecord[];
 };
 
 type ProjectSessionStartOptions = {
@@ -106,11 +82,21 @@ function ProjectsWorkspace({
   const [editor, setEditor] = useState<"create" | "edit" | null>(null);
   const [query, setQuery] = useSessionViewState(`projects:${activeCitadelId}:${activeWorkspaceId}:query`, "");
   const leave = useDraftLeave();
-  const creation = useSessionDraft(JSON.stringify([activeCitadelId, activeWorkspaceId, "project", "create"]), EMPTY_PROJECT_DRAFT, undefined, {
-    label: "New project", active: editor === "create", onSave: () => handleCreateProject(),
-  });
+  const creation = useSessionDraft(
+    JSON.stringify([activeCitadelId, activeWorkspaceId, "project", "create"]),
+    EMPTY_PROJECT_DRAFT,
+    undefined,
+    {
+      label: "New project",
+      active: editor === "create",
+      onSave: () => handleCreateProject(),
+    },
+  );
   const { value: createDraft, setValue: setCreateDraft } = creation;
-  const [filterView, setFilterView] = useSessionViewState<ProjectFilterView>(`projects:${activeCitadelId}:${activeWorkspaceId}:filter`, "all");
+  const [filterView, setFilterView] = useSessionViewState<ProjectFilterView>(
+    `projects:${activeCitadelId}:${activeWorkspaceId}:filter`,
+    "all",
+  );
   const createProjectNameRef = useRef<HTMLInputElement | null>(null);
   const isMounted = useIsMounted();
 
@@ -129,8 +115,12 @@ function ProjectsWorkspace({
   const pinController = useProjectPinController(activeWorkspaceId, access.presentationScope);
 
   const handleFocusCreateProject = () => leave.request(() => setEditor("create"));
-  useEffect(() => { if (editor === "create") createProjectNameRef.current?.focus(); }, [editor]);
-  useEffect(() => { setEditor(null); }, [route.projectId]);
+  useEffect(() => {
+    if (editor === "create") createProjectNameRef.current?.focus();
+  }, [editor]);
+  useEffect(() => {
+    setEditor(null);
+  }, [route.projectId]);
 
   const handleOpenSurface = useCallback(
     (mode: ChatMode) => {
@@ -202,12 +192,12 @@ function ProjectsWorkspace({
         issueCount: nextData.artifactIssue ? 1 : 0,
       });
     }
-    void load().catch((error: Error) => {
+    void load().catch((error: unknown) => {
       if (!cancelled) {
         setState((current) => ({
           ...current,
           loading: false,
-          error: error.message,
+          error: getErrorMessage(error),
         }));
       }
     });
@@ -252,7 +242,14 @@ function ProjectsWorkspace({
 
   const visibleProjects = useMemo(() => {
     return state.projects.filter((project) => {
-      if (query.trim() && ![project.name, project.description, project.workspacePath].join(" ").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) return false;
+      if (
+        query.trim() &&
+        ![project.name, project.description, project.workspacePath]
+          .join(" ")
+          .toLocaleLowerCase()
+          .includes(query.trim().toLocaleLowerCase())
+      )
+        return false;
       switch (filterView) {
         case "pinned":
           return pinController.isPinned(project.projectId);
@@ -275,9 +272,21 @@ function ProjectsWorkspace({
   const routedProject = state.projects.find((project) => project.projectId === route.projectId) ?? null;
   const selectedProject = routedProject ?? fallbackProject;
   const isProjectDetailRoute = routedProject !== null;
-  const editing = useSessionDraft(JSON.stringify([activeCitadelId, activeWorkspaceId, "project", selectedProject?.projectId, "edit"]), {
-    name: selectedProject?.name ?? "", workspacePath: selectedProject?.workspacePath ?? "", description: selectedProject?.description ?? "",
-  }, selectedProject?.revision, { label: selectedProject?.name ?? "Project", available: Boolean(selectedProject), active: isProjectDetailRoute && editor === "edit", onSave: () => handleSaveProject() });
+  const editing = useSessionDraft(
+    JSON.stringify([activeCitadelId, activeWorkspaceId, "project", selectedProject?.projectId, "edit"]),
+    {
+      name: selectedProject?.name ?? "",
+      workspacePath: selectedProject?.workspacePath ?? "",
+      description: selectedProject?.description ?? "",
+    },
+    selectedProject?.revision,
+    {
+      label: selectedProject?.name ?? "Project",
+      available: Boolean(selectedProject),
+      active: isProjectDetailRoute && editor === "edit",
+      onSave: () => handleSaveProject(),
+    },
+  );
   const { value: editDraft, setValue: setEditDraft } = editing;
 
   useEffect(() => {
@@ -421,7 +430,10 @@ function ProjectsWorkspace({
       recordRouteAction("projects", "project.created", {
         projectId: project.projectId,
       });
-      if (clean) { setEditor(null); navigate({ area: "projects", projectId: project.projectId, theme: route.theme }); }
+      if (clean) {
+        setEditor(null);
+        navigate({ area: "projects", projectId: project.projectId, theme: route.theme });
+      }
       return clean;
     } catch (error) {
       if (isMounted()) {
@@ -449,9 +461,10 @@ function ProjectsWorkspace({
     setProjectActionBusy("save");
     try {
       const project = await updateChatProject(selectedProject.projectId, {
-        expectedRevision: revisionConflict?.projectId === selectedProject.projectId
-          ? selectedProject.revision
-          : editing.baseRevision as number,
+        expectedRevision:
+          revisionConflict?.projectId === selectedProject.projectId
+            ? selectedProject.revision
+            : (editing.baseRevision as number),
         citadelId: activeCitadelId,
         workspaceId: activeWorkspaceId,
         name,
@@ -466,7 +479,11 @@ function ProjectsWorkspace({
         projects: current.projects.map((item) => (item.projectId === project.projectId ? project : item)),
       }));
       clearRevisionConflict();
-      const clean = editing.acceptSaved({ name: project.name, workspacePath: project.workspacePath, description: project.description ?? "" }, project.revision, editDraft);
+      const clean = editing.acceptSaved(
+        { name: project.name, workspacePath: project.workspacePath, description: project.description ?? "" },
+        project.revision,
+        editDraft,
+      );
       recordRouteAction("projects", "project.updated", {
         projectId: project.projectId,
       });
@@ -559,130 +576,17 @@ function ProjectsWorkspace({
 
   const totalProjectSessions = state.sessions.filter((session) => session.projectId).length;
 
-  // WS-D2: "Continue where you left off" lead built from the already-selected
-  // project and its derived home. The Open action reuses the most-recent session
-  // (via the same navigate shape the thread groups use) or falls back to
-  // continuing the project's freshest surface. Suppressed when no project exists
-  // so the existing guided empty state leads instead.
-  const recentLeadSession = projectHome?.recentSessions[0] ?? null;
-  const projectContinuationLead =
-    selectedProject && projectHome ? (
-      <article className="mc-next-project-lead-card" aria-label="Continue where you left off">
-        <div className="mc-next-settings-selectable-head">
-          <strong>{selectedProject.name}</strong>
-          <span>{projectHome.healthLabel}</span>
-        </div>
-        <p>
-          {/* "No activity yet" reads as a full phrase; only real timestamps get the "Last activity" prefix. */}
-          {`${projectHome.lastActivityLabel === "No activity yet" ? "" : "Last activity "}${projectHome.lastActivityLabel} · ${
-            projectHome.activeCount
-          } active ${projectHome.activeCount === 1 ? "thread" : "threads"} · ${
-            selectedProject.description?.trim() || selectedProject.workspacePath
-          }`}
-        </p>
-        <div className="mc-next-settings-button-row">
-          <NativeButton
-            onClick={() => {
-              if (recentLeadSession) {
-                navigate({
-                  area: recentLeadSession.mode ?? "chat",
-                  sessionId: recentLeadSession.sessionId,
-                  projectId: selectedProject.projectId,
-                  theme: route.theme,
-                });
-                return;
-              }
-              navigate({ area: "projects", projectId: selectedProject.projectId, theme: route.theme });
-            }}
-          >
-            <MessageSquarePlus size={16} />
-            {recentLeadSession ? "Open latest thread" : "Open project"}
-          </NativeButton>
-          <NativeButton variant="outline" onClick={handleOpenCitadels}>
-            <Castle size={16} />
-            Open Citadel
-          </NativeButton>
-        </div>
-      </article>
-    ) : null;
-  const emptyProjectLead =
-    state.projects.length === 0 ? (
-      <article className="mc-next-project-empty-guide mc-next-project-empty-guide-promoted">
-        <div>
-          <span className="mc-next-project-lead-eyebrow">First project</span>
-          <strong>Create a bounded home for the work</strong>
-          <p>Start with a project, then open Chat or use the sample mission to shape its first run.</p>
-        </div>
-        <div className="mc-next-settings-button-row">
-          <NativeButton onClick={handleFocusCreateProject}>
-            <FolderPlus size={16} />
-            Create project
-          </NativeButton>
-          <NativeButton variant="outline" onClick={() => handleOpenSurface("chat")}>
-            <MessageSquarePlus size={16} />
-            Start Chat
-          </NativeButton>
-          <NativeButton variant="outline" onClick={handleOpenStartHere}>
-            Use sample mission
-          </NativeButton>
-        </div>
-      </article>
-    ) : null;
-  const citadelLead = (
-    <article className="mc-next-project-citadel-lead" aria-label="Default Citadels">
-      <div>
-        <span>Citadels</span>
-        <strong>Personal and Company operating spaces ship by default.</strong>
-        <p>
-          Use Citadels to govern projects with a Charter, Chambers, Wards, and Gatehouse posture before work crosses
-          sensitive boundaries.
-        </p>
-      </div>
-      <div className="mc-next-project-citadel-defaults" aria-label="Default Citadel types">
-        <div>
-          <strong>Personal</strong>
-          <span>Private goals, routines, notes, and approval-gated assistance.</span>
-        </div>
-        <div>
-          <strong>Company</strong>
-          <span>Shared work, business memory, roles, and governed operating posture.</span>
-        </div>
-      </div>
-      <div className="mc-next-settings-button-row">
-        <NativeButton onClick={handleOpenCitadels}>
-          <Castle size={16} />
-          Open Citadels
-        </NativeButton>
-        <NativeButton variant="outline" onClick={handleOpenMason}>
-          <FolderPlus size={16} />
-          Use Mason
-        </NativeButton>
-      </div>
-    </article>
-  );
-  const leadContent = !routedProject ? (
-    <div className="mc-next-project-lead-stack">
-      {projectContinuationLead}
-      {emptyProjectLead}
-      {state.projects.length === 0 ? (
-        <NativeDisclosureCard
-          id="projects-citadel-context"
-          title="About Citadels"
-          subtitle="How Personal and Company operating spaces govern projects."
-        >
-          {citadelLead}
-        </NativeDisclosureCard>
-      ) : (
-        citadelLead
-      )}
-    </div>
-  ) : undefined;
-
   return (
     <NativePageFrame
       area="projects"
       kicker={isProjectDetailRoute ? "Projects · Detail" : "Projects · Containers"}
-      title={editor === "create" ? "New project" : editor === "edit" ? `Edit ${routedProject?.name ?? "project"}` : routedProject?.name ?? "Projects"}
+      title={
+        editor === "create"
+          ? "New project"
+          : editor === "edit"
+            ? `Edit ${routedProject?.name ?? "project"}`
+            : (routedProject?.name ?? "Projects")
+      }
       description={
         routedProject
           ? `Threads, artifacts, and controls for ${routedProject.name} inside ${activeWorkspaceName}.`
@@ -690,13 +594,48 @@ function ProjectsWorkspace({
       }
       loading={state.loading}
       error={state.error}
-      lead={!editor && state.projects.length === 0 ? leadContent : undefined}
+      lead={
+        !editor && !routedProject && state.projects.length === 0 ? (
+          <ProjectsLeadStack
+            selectedProject={selectedProject}
+            projectHome={projectHome}
+            projectCount={state.projects.length}
+            theme={route.theme}
+            navigate={navigate}
+            onCreateProject={handleFocusCreateProject}
+            onStartChat={() => handleOpenSurface("chat")}
+            onUseSample={handleOpenStartHere}
+            onOpenCitadels={handleOpenCitadels}
+            onOpenMason={handleOpenMason}
+          />
+        ) : undefined
+      }
       metrics={[
         { label: "Projects", value: String(state.projects.length) },
         { label: "Project sessions", value: String(totalProjectSessions) },
         { label: "Citadel", value: activeCitadelId ?? "legacy", technical: true },
       ]}
-      actions={editor ? <NativeButton variant="ghost" onClick={() => leave.request(() => setEditor(null))}>{(editor === "create" ? creation : editing).isDirty ? "Keep draft and close" : "Close editor"}</NativeButton> : routedProject ? <><NativeButton variant="ghost" onClick={() => navigate({ area: "projects", theme: route.theme })}>All projects</NativeButton><NativeButton variant="outline" onClick={() => setEditor("edit")}>{editing.isDirty ? "Resume edit · Unsaved" : "Edit project"}</NativeButton></> : <NativeButton onClick={handleFocusCreateProject}><FolderPlus size={16} />{creation.isDirty ? "Resume new project" : "New project"}</NativeButton>}
+      actions={
+        editor ? (
+          <NativeButton variant="ghost" onClick={() => leave.request(() => setEditor(null))}>
+            {(editor === "create" ? creation : editing).isDirty ? "Keep draft and close" : "Close editor"}
+          </NativeButton>
+        ) : routedProject ? (
+          <>
+            <NativeButton variant="ghost" onClick={() => navigate({ area: "projects", theme: route.theme })}>
+              All projects
+            </NativeButton>
+            <NativeButton variant="outline" onClick={() => setEditor("edit")}>
+              {editing.isDirty ? "Resume edit · Unsaved" : "Edit project"}
+            </NativeButton>
+          </>
+        ) : (
+          <NativeButton onClick={handleFocusCreateProject}>
+            <FolderPlus size={16} />
+            {creation.isDirty ? "Resume new project" : "New project"}
+          </NativeButton>
+        )
+      }
     >
       {revisionConflict ? <NoticeBanner tone="warning" message={revisionConflict.message} /> : null}
       {actionError ? <NoticeBanner tone="error" message={actionError} /> : null}
@@ -704,108 +643,131 @@ function ProjectsWorkspace({
         <NoticeBanner tone="warning" message={`Project artifact records could not load: ${state.artifactIssue}`} />
       ) : null}
       <NativeGrid className="mc-next-native-projects-grid">
-        {!routedProject && !editor ? <NativeCard
-          title="Projects"
-          subtitle="Containers that bind Chat threads, files, and proof together."
-          density="compact"
-          actions={
-            <button type="button" className="mc-next-settings-filter" onClick={() => void loadProjects()}>
-              <RefreshCw size={16} />
-              Refresh
-            </button>
-          }
-        >
-          <label className="mc-next-settings-field"><span>Search projects</span><input type="search" className="mc-next-settings-input" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-          <FilterPillGroup
-            label="Filter projects by state"
-            idPrefix="projects-filter"
-            value={filterView}
-            options={PROJECT_FILTER_VIEWS.map((entry) => ({
-              value: entry.id,
-              label: entry.label,
-              count: filterCounts[entry.id],
-              ariaLabel: `${entry.label} projects (${filterCounts[entry.id]})`,
-            }))}
-            onChange={(value) => setFilterView(value as ProjectFilterView)}
-          />
-          <NativeSelectableList density="compact" maxHeight="min(62vh, 38rem)">
-            {visibleProjects.length ? (
-              visibleProjects.map((project) => {
-                const counts = countsByProject.get(project.projectId) ?? createEmptyCounts();
-                const pinned = pinController.isPinned(project.projectId);
-                const isArchived = project.lifecycleStatus === "archived";
-                const isSelected = selectedProject?.projectId === project.projectId;
-                return (
-                  <div
-                    key={project.projectId}
-                    className={`mc-next-project-card${isSelected ? " is-selected" : ""}${
-                      isArchived ? " is-archived" : ""
-                    }${pinned ? " is-pinned" : ""}`}
-                  >
-                    <button
-                      type="button"
-                      className={`mc-next-settings-selectable mc-next-project-card-body${isSelected ? " active" : ""}`}
-                      aria-pressed={isSelected}
-                      onClick={() => navigate({ area: "projects", projectId: project.projectId, theme: route.theme })}
-                    >
-                      <div className="mc-next-settings-selectable-head">
-                        <strong>{project.name}{hasSessionDraft(JSON.stringify([activeCitadelId, activeWorkspaceId, "project", project.projectId, "edit"])) ? " · Unsaved" : ""}</strong>
-                        <span>{counts.chat + counts.cowork + counts.code} threads</span>
-                      </div>
-                      <p>{project.description?.trim() || project.workspacePath}</p>
-                      <div className="mc-next-project-counts">
-                        <span>Chat {counts.chat + counts.cowork + counts.code}</span>
-                      </div>
-                    </button>
+        {!routedProject && !editor ? (
+          <NativeCard
+            title="Projects"
+            subtitle="Containers that bind Chat threads, files, and proof together."
+            density="compact"
+            actions={
+              <button type="button" className="mc-next-settings-filter" onClick={() => void loadProjects()}>
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+            }
+          >
+            <label className="mc-next-settings-field">
+              <span>Search projects</span>
+              <input
+                type="search"
+                className="mc-next-settings-input"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
+            <FilterPillGroup
+              label="Filter projects by state"
+              idPrefix="projects-filter"
+              value={filterView}
+              options={PROJECT_FILTER_VIEWS.map((entry) => ({
+                value: entry.id,
+                label: entry.label,
+                count: filterCounts[entry.id],
+                ariaLabel: `${entry.label} projects (${filterCounts[entry.id]})`,
+              }))}
+              onChange={(value) => setFilterView(value as ProjectFilterView)}
+            />
+            <NativeSelectableList density="compact" maxHeight="min(62vh, 38rem)">
+              {visibleProjects.length ? (
+                visibleProjects.map((project) => {
+                  const counts = countsByProject.get(project.projectId) ?? createEmptyCounts();
+                  const pinned = pinController.isPinned(project.projectId);
+                  const isArchived = project.lifecycleStatus === "archived";
+                  const isSelected = selectedProject?.projectId === project.projectId;
+                  return (
                     <div
-                      className="mc-next-project-card-glyphs"
-                      role="group"
-                      aria-label={`Actions for ${project.name}`}
+                      key={project.projectId}
+                      className={`mc-next-project-card${isSelected ? " is-selected" : ""}${
+                        isArchived ? " is-archived" : ""
+                      }${pinned ? " is-pinned" : ""}`}
                     >
-                      <ProjectGlyphButton
-                        label={pinned ? `Unpin project ${project.name}` : `Pin project ${project.name}`}
-                        pressed={pinned}
-                        onClick={() => handleTogglePin(project)}
+                      <button
+                        type="button"
+                        className={`mc-next-settings-selectable mc-next-project-card-body${isSelected ? " active" : ""}`}
+                        aria-pressed={isSelected}
+                        onClick={() => navigate({ area: "projects", projectId: project.projectId, theme: route.theme })}
                       >
-                        {pinned ? <PinOff size={14} aria-hidden="true" /> : <Pin size={14} aria-hidden="true" />}
-                      </ProjectGlyphButton>
-                      {isArchived ? (
+                        <div className="mc-next-settings-selectable-head">
+                          <strong>
+                            {project.name}
+                            {hasSessionDraft(
+                              JSON.stringify([
+                                activeCitadelId,
+                                activeWorkspaceId,
+                                "project",
+                                project.projectId,
+                                "edit",
+                              ]),
+                            )
+                              ? " · Unsaved"
+                              : ""}
+                          </strong>
+                          <span>{counts.chat + counts.cowork + counts.code} threads</span>
+                        </div>
+                        <p>{project.description?.trim() || project.workspacePath}</p>
+                        <div className="mc-next-project-counts">
+                          <span>Chat {counts.chat + counts.cowork + counts.code}</span>
+                        </div>
+                      </button>
+                      <div
+                        className="mc-next-project-card-glyphs"
+                        role="group"
+                        aria-label={`Actions for ${project.name}`}
+                      >
                         <ProjectGlyphButton
-                          label={`Unarchive project ${project.name}`}
-                          pressed={false}
-                          busy={cardActionBusy === `restore:${project.projectId}`}
-                          onClick={() => void handleRestoreProject(project)}
+                          label={pinned ? `Unpin project ${project.name}` : `Pin project ${project.name}`}
+                          pressed={pinned}
+                          onClick={() => handleTogglePin(project)}
                         >
-                          <ArchiveRestore size={14} aria-hidden="true" />
+                          {pinned ? <PinOff size={14} aria-hidden="true" /> : <Pin size={14} aria-hidden="true" />}
                         </ProjectGlyphButton>
-                      ) : (
-                        <ProjectGlyphButton
-                          label={`Archive project ${project.name}`}
-                          pressed={false}
-                          busy={cardActionBusy === `archive:${project.projectId}`}
-                          onClick={() => void handleArchiveProject(project)}
-                        >
-                          <Archive size={14} aria-hidden="true" />
-                        </ProjectGlyphButton>
-                      )}
+                        {isArchived ? (
+                          <ProjectGlyphButton
+                            label={`Unarchive project ${project.name}`}
+                            pressed={false}
+                            busy={cardActionBusy === `restore:${project.projectId}`}
+                            onClick={() => void handleRestoreProject(project)}
+                          >
+                            <ArchiveRestore size={14} aria-hidden="true" />
+                          </ProjectGlyphButton>
+                        ) : (
+                          <ProjectGlyphButton
+                            label={`Archive project ${project.name}`}
+                            pressed={false}
+                            busy={cardActionBusy === `archive:${project.projectId}`}
+                            onClick={() => void handleArchiveProject(project)}
+                          >
+                            <Archive size={14} aria-hidden="true" />
+                          </ProjectGlyphButton>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })
-            ) : (
-              <>
-                <EmptyState
-                  size="compact"
-                  title={
-                    state.projects.length === 0
-                      ? "No active projects found in this workspace."
-                      : filterEmptyLabel(filterView)
-                  }
-                />
-              </>
-            )}
-          </NativeSelectableList>
-        </NativeCard> : null}
+                  );
+                })
+              ) : (
+                <>
+                  <EmptyState
+                    size="compact"
+                    title={
+                      state.projects.length === 0
+                        ? "No active projects found in this workspace."
+                        : filterEmptyLabel(filterView)
+                    }
+                  />
+                </>
+              )}
+            </NativeSelectableList>
+          </NativeCard>
+        ) : null}
 
         {routedProject && !editor ? (
           <NativeCard
@@ -819,7 +781,35 @@ function ProjectsWorkspace({
               value: String((countsByProject.get(routedProject.projectId) ?? createEmptyCounts())[surface.mode]),
             }))}
           >
-            <details className="mc-next-project-menu"><summary>Project actions</summary><div className="mc-next-settings-button-row"><NativeButton variant="ghost" onClick={handleFocusCreateProject}>New project</NativeButton><NativeButton variant="ghost" onClick={() => void loadProjects()}>Refresh</NativeButton><NativeButton variant="ghost" aria-label={`${pinController.isPinned(routedProject.projectId) ? "Unpin" : "Pin"} project ${routedProject.name}`} onClick={() => handleTogglePin(routedProject)}>{pinController.isPinned(routedProject.projectId) ? "Unpin" : "Pin"}</NativeButton><NativeButton variant="ghost" aria-label={`${routedProject.lifecycleStatus === "archived" ? "Unarchive" : "Archive"} project ${routedProject.name}`} onClick={() => void (routedProject.lifecycleStatus === "archived" ? handleRestoreProject(routedProject) : handleArchiveProject(routedProject))}>{routedProject.lifecycleStatus === "archived" ? "Unarchive" : "Archive"}</NativeButton></div></details>
+            <details className="mc-next-project-menu">
+              <summary>Project actions</summary>
+              <div className="mc-next-settings-button-row">
+                <NativeButton variant="ghost" onClick={handleFocusCreateProject}>
+                  New project
+                </NativeButton>
+                <NativeButton variant="ghost" onClick={() => void loadProjects()}>
+                  Refresh
+                </NativeButton>
+                <NativeButton
+                  variant="ghost"
+                  aria-label={`${pinController.isPinned(routedProject.projectId) ? "Unpin" : "Pin"} project ${routedProject.name}`}
+                  onClick={() => handleTogglePin(routedProject)}
+                >
+                  {pinController.isPinned(routedProject.projectId) ? "Unpin" : "Pin"}
+                </NativeButton>
+                <NativeButton
+                  variant="ghost"
+                  aria-label={`${routedProject.lifecycleStatus === "archived" ? "Unarchive" : "Archive"} project ${routedProject.name}`}
+                  onClick={() =>
+                    void (routedProject.lifecycleStatus === "archived"
+                      ? handleRestoreProject(routedProject)
+                      : handleArchiveProject(routedProject))
+                  }
+                >
+                  {routedProject.lifecycleStatus === "archived" ? "Unarchive" : "Archive"}
+                </NativeButton>
+              </div>
+            </details>
             {projectHome ? (
               <ProjectHomeBasePanel
                 home={projectHome}
@@ -827,7 +817,9 @@ function ProjectsWorkspace({
                 projectName={routedProject.name}
                 onNewChat={() => void handleNewSession("chat")}
                 onContinue={(mode) => void handleContinueSession(mode)}
-                onOpenSession={(sessionId) => navigate({ area: "chat", projectId: routedProject.projectId, sessionId, theme: route.theme })}
+                onOpenSession={(sessionId) =>
+                  navigate({ area: "chat", projectId: routedProject.projectId, sessionId, theme: route.theme })
+                }
                 onStartIntake={(intent) => void handleStartIntake(intent)}
                 onOpenMemory={() => navigate({ area: "library", section: "memory", theme: route.theme })}
                 onOpenArtifacts={() =>
@@ -840,7 +832,18 @@ function ProjectsWorkspace({
                 }
               />
             ) : null}
-            <NativeDisclosureCard id="project-governance" title="Project settings" subtitle="Governed delegation and project scope" lazy><ProjectAutomaticFanoutCard project={routedProject} workspaceId={activeWorkspaceId} citadelId={activeCitadelId} /></NativeDisclosureCard>
+            <NativeDisclosureCard
+              id="project-governance"
+              title="Project settings"
+              subtitle="Governed delegation and project scope"
+              lazy
+            >
+              <ProjectAutomaticFanoutCard
+                project={routedProject}
+                workspaceId={activeWorkspaceId}
+                citadelId={activeCitadelId}
+              />
+            </NativeDisclosureCard>
             <div className="mc-next-project-thread-groups">
               {SURFACES.map((surface) => (
                 <ProjectThreadGroup
@@ -856,112 +859,20 @@ function ProjectsWorkspace({
           </NativeCard>
         ) : null}
 
-        {editor ? <NativeCard
-          className="mc-next-project-controls-card"
-          title={editor === "create" ? "Create project" : "Project details"}
-          subtitle={
-            routedProject
-              ? "Create a new project or rename the selected one. Pin and archive live on each card."
-              : "Create a project here, or select one from the list to open its threads and edit its details."
-          }
-          density="compact"
-          scrollBody
-          bodyMaxHeight="min(70vh, 42rem)"
-        >
-          <div className="mc-next-project-controls">
-            {editor === "create" ? <section className="mc-next-project-control-section">
-              <div className="mc-next-project-control-heading">
-                <FolderPlus size={16} />
-                <strong>Create project</strong>
-              </div>
-              <label className="mc-next-settings-field">
-                <span>Name</span>
-                <input
-                  aria-label="New project name"
-                  ref={createProjectNameRef}
-                  className="mc-next-settings-input"
-                  value={createDraft.name}
-                  onChange={(event) => setCreateDraft((current) => ({ ...current, name: event.target.value }))}
-                  placeholder="Release readiness"
-                />
-              </label>
-              <label className="mc-next-settings-field">
-                <span>Workspace path</span>
-                <input
-                  aria-label="New project workspace path"
-                  className="mc-next-settings-input"
-                  value={createDraft.workspacePath}
-                  onChange={(event) => setCreateDraft((current) => ({ ...current, workspacePath: event.target.value }))}
-                  placeholder="Local project path"
-                />
-              </label>
-              <label className="mc-next-settings-field">
-                <span>Description</span>
-                <textarea
-                  aria-label="New project description"
-                  className="mc-next-settings-textarea"
-                  value={createDraft.description}
-                  onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))}
-                  placeholder="What this project is for."
-                />
-              </label>
-              <NativeButton
-                aria-label="Create project from form"
-                disabled={projectActionBusy === "create"}
-                onClick={() => void handleCreateProject()}
-              >
-                <FolderPlus size={16} />
-                {projectActionBusy === "create" ? "Creating..." : "Create project"}
-              </NativeButton>
-            </section> : null}
-
-            {routedProject && editor === "edit" ? (
-              <section className="mc-next-project-control-section">
-                <div className="mc-next-project-control-heading">
-                  <Pencil size={16} />
-                  <strong>Edit selected</strong>
-                </div>
-                <label className="mc-next-settings-field">
-                  <span>Name</span>
-                  <input
-                    className="mc-next-settings-input"
-                    aria-label="Edit project name"
-                    value={editDraft.name}
-                    onChange={(event) => setEditDraft((current) => ({ ...current, name: event.target.value }))}
-                  />
-                </label>
-                <label className="mc-next-settings-field">
-                  <span>Workspace path</span>
-                  <input
-                    className="mc-next-settings-input"
-                    aria-label="Edit project workspace path"
-                    value={editDraft.workspacePath}
-                    onChange={(event) => setEditDraft((current) => ({ ...current, workspacePath: event.target.value }))}
-                  />
-                </label>
-                <label className="mc-next-settings-field">
-                  <span>Description</span>
-                  <textarea
-                    className="mc-next-settings-textarea"
-                    aria-label="Edit project description"
-                    value={editDraft.description}
-                    onChange={(event) => setEditDraft((current) => ({ ...current, description: event.target.value }))}
-                  />
-                </label>
-                <div className="mc-next-settings-button-row">
-                  <NativeButton disabled={projectActionBusy === "save"} onClick={() => void handleSaveProject()}>
-                    <Save size={16} />
-                    {projectActionBusy === "save" ? "Saving..." : "Save project"}
-                  </NativeButton>
-                </div>
-                <p className="mc-next-settings-field-note">
-                  Revision {routedProject.revision} fences concurrent edits. Pin or archive {routedProject.name} from
-                  the card glyphs in the projects list.
-                </p>
-              </section>
-            ) : null}
-          </div>
-        </NativeCard> : null}
+        {editor ? (
+          <ProjectEditorCard
+            editor={editor}
+            routedProject={routedProject}
+            createDraft={createDraft}
+            setCreateDraft={setCreateDraft}
+            editDraft={editDraft}
+            setEditDraft={setEditDraft}
+            projectActionBusy={projectActionBusy}
+            createProjectNameRef={createProjectNameRef}
+            onCreate={() => void handleCreateProject()}
+            onSave={() => void handleSaveProject()}
+          />
+        ) : null}
       </NativeGrid>
       {!routedProject && !editor ? (
         <RecentCrossProjectSessionsRow workspaceId={activeWorkspaceId} route={route} navigate={navigate} />
@@ -969,38 +880,4 @@ function ProjectsWorkspace({
       {leave.dialog}
     </NativePageFrame>
   );
-}
-
-async function fetchProjectData(
-  activeWorkspaceId: string,
-  activeCitadelId?: string,
-): Promise<Pick<ProjectsState, "projects" | "sessions" | "artifacts" | "artifactIssue">> {
-  const artifactsRequest = fetchChatGeneratedArtifacts({
-    citadelId: activeCitadelId,
-    workspaceId: activeWorkspaceId,
-    limit: 1000,
-  })
-    .then((response) => ({ items: response.items, issue: null as string | null }))
-    .catch((error: unknown) => ({
-      items: [] as ChatGeneratedArtifactRecord[],
-      issue: getErrorMessage(error),
-    }));
-  const [projectsResponse, sessionsResponse, artifactsResponse] = await Promise.all([
-    fetchChatProjects("all", 300, activeWorkspaceId, activeCitadelId),
-    fetchChatSessions({
-      citadelId: activeCitadelId,
-      workspaceId: activeWorkspaceId,
-      scope: "all",
-      view: "all",
-      includeHidden: true,
-      limit: 1000,
-    }),
-    artifactsRequest,
-  ]);
-  return {
-    projects: projectsResponse.items,
-    sessions: sessionsResponse.items,
-    artifacts: artifactsResponse.items,
-    artifactIssue: artifactsResponse.issue,
-  };
 }
