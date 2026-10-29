@@ -2,7 +2,9 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { AutonomousGrantsSettings } from "./AutonomousGrantsSettings";
+import { CockpitNavigationContext } from "../../app/cockpit-navigation-context";
 import {
   autonomousGrantFixture as grant,
   revokedAutonomousGrantFixture as revoked,
@@ -95,6 +97,34 @@ it("names the workspace and keeps grant, workspace and project IDs in technical 
   expect(text(card())).toContain(grant.workspaceId);
   expect(text(card())).toContain(grant.grantId);
   preferences.showTechnicalDetails = false;
+});
+
+it("links a refused grant load to Settings › Access in the same alert", async () => {
+  api.fetchAutonomousActivationGrants.mockImplementation(async () => {
+    throw new ApiRequestError("API error 403: forbidden", { kind: "http", method: "GET", path: "/x", status: 403 });
+  });
+  const navigate = vi.fn();
+  await act(async () => {
+    view = create(
+      <CockpitNavigationContext.Provider
+        value={{ isTransitionPending: () => false, navigate, requestTransition: () => undefined }}
+      >
+        <QueryClientProvider client={client}>
+          <AutonomousGrantsSettings workspaceId="workspace-a" />
+        </QueryClientProvider>
+      </CockpitNavigationContext.Provider>,
+    );
+  });
+  await act(async () => {
+    await new Promise((done) => setTimeout(done, 10));
+  });
+  const alert = view!.root.find((node) => node.props.role === "alert");
+  expect(text(alert)).toContain("You don't have permission to do that.");
+  expect(text(alert)).not.toContain("API error 403");
+  const link = alert.findByType("a");
+  expect(text(link)).toBe("Review access in Settings");
+  link.props.onClick({ preventDefault: () => undefined });
+  expect(navigate).toHaveBeenCalledWith("/settings/access#device-access");
 });
 
 it("shows exact scope and consequences, cancels with zero writes, then requires canonical revocation", async () => {

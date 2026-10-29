@@ -22,6 +22,9 @@ import type { AutonomousActivationGrantStatus, AutonomousActivationKind } from "
 import { formatMoney } from "@goatcitadel/mission-control-shared/content/format";
 import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { useCockpitNavigation } from "../../app/cockpit-navigation-context";
+
+const ACCESS_SETTINGS_PATH = "/settings/access#device-access";
 
 const GRANT_STATUS_LABELS: Record<AutonomousActivationGrantStatus, string> = {
   active: "Active",
@@ -47,6 +50,9 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
   const control = useAutonomousGrantRevocation({ scope: workspaceId, reload: () => snapshot.refetch() });
   const { activeCitadelId } = useUiPreferences();
   const workspaceName = useWorkspaceNameLookup(activeCitadelId);
+  const { navigate } = useCockpitNavigation();
+  const loadFailure = snapshot.isError ? describeApiError(snapshot.error, "No details were returned.") : undefined;
+  const accessFailure = loadFailure?.category === "authentication" || loadFailure?.category === "permission";
   const items = (snapshot.isError ? [] : (snapshot.data ?? [])).filter((item) =>
     `${item.grantId} ${item.workspaceId} ${item.projectId ?? ""} ${item.reason}`
       .toLowerCase()
@@ -69,9 +75,24 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
         Refresh autonomous grants
       </Button>
       {snapshot.isFetching ? <p role="status">Loading autonomous grants…</p> : null}
-      {snapshot.isError ? (
+      {loadFailure ? (
         <p role="alert">
-          Grants could not load: {describeApiError(snapshot.error, "No details were returned.").summary}
+          Grants could not load: {loadFailure.summary}
+          {accessFailure ? (
+            <>
+              {" "}
+              <a
+                href={ACCESS_SETTINGS_PATH}
+                className="text-accent hover:underline"
+                onClick={(event) => {
+                  event.preventDefault();
+                  navigate(ACCESS_SETTINGS_PATH);
+                }}
+              >
+                Review access in Settings
+              </a>
+            </>
+          ) : null}
         </p>
       ) : null}
       {control.checking ? <p role="status">Reviewing the exact current grant…</p> : null}
