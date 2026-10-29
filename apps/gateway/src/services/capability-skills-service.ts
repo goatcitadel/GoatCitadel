@@ -120,10 +120,10 @@ export class CapabilitySkillsService {
 
   /** `remote_hardened` always asks, and its setting is never read (Ruling R3). An unreadable setting asks too. */
   private async readOperatorApprovalSkip(): Promise<boolean> {
-    const deploymentProfile = this.sources.deploymentProfile();
-    if (deploymentProfile === "remote_hardened") return false;
-    const setting = await this.attempt("approval_skip", () => this.sources.readApprovalSkipSetting());
-    return setting.ok && allowsOperatorApprovalSkip(deploymentProfile, setting.value);
+    return await allowsOperatorApprovalSkip(this.sources.deploymentProfile(), async () => {
+      const setting = await this.attempt("approval_skip", () => this.sources.readApprovalSkipSetting());
+      return setting.ok && setting.value;
+    });
   }
 
   private async attempt<T>(

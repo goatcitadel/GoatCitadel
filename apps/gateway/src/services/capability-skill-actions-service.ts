@@ -126,8 +126,8 @@ export class CapabilitySkillActionsService {
    */
   private async skipReason(state: SkillRuntimeState): Promise<OperatorSkillSkipReason | undefined> {
     const deploymentProfile = this.sources.deploymentProfile();
+    if (await allowsOperatorApprovalSkip(deploymentProfile, () => this.readSkipSetting())) return "setting";
     if (deploymentProfile === "remote_hardened") return undefined;
-    if (allowsOperatorApprovalSkip(deploymentProfile, await this.readSkipSetting())) return "setting";
     return TIGHTENING_STATES.has(state) ? "tightening" : undefined;
   }
 
