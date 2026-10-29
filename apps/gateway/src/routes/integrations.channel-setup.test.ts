@@ -23,10 +23,18 @@ describe("channel setup routes", () => {
     decorateIntegrationServices(app, { discardChannelSetupDraft });
     await app.register(integrationsRoutes);
     const draftId = "11111111-1111-1111-1111-111111111111";
-    const missingReview = await app.inject({ method: "DELETE", url: `/api/v1/channels/drafts/${draftId}`, payload: {} });
+    const missingReview = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/channels/drafts/${draftId}`,
+      payload: {},
+    });
     expect(missingReview.statusCode).toBe(400);
     expect(discardChannelSetupDraft).not.toHaveBeenCalled();
-    const response = await app.inject({ method: "DELETE", url: `/api/v1/channels/drafts/${draftId}`, payload: { expectedRevision: 3 } });
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/channels/drafts/${draftId}`,
+      payload: { expectedRevision: 3 },
+    });
     expect(response.statusCode).toBe(200);
     expect(discardChannelSetupDraft).toHaveBeenCalledExactlyOnceWith(draftId, 3);
     expect(response.json()).toEqual({ draftId, deleted: true });
