@@ -6,6 +6,7 @@ import {
 } from "@goatcitadel/contracts";
 import { fetchMcpElicitations, respondMcpElicitation } from "@goatcitadel/mission-control-shared/api/client";
 import { mcpResponseContent } from "./mcp-elicitation-fields";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 type Attempt = { phase: "idle" | "checking" | "sending" | "recorded" | "uncertain"; message?: string };
 const IDLE: Attempt = { phase: "idle" },
@@ -122,7 +123,7 @@ export async function commitMcpElicitationResponse({
             message:
               "MCP response outcome is unconfirmed. Another response is locked for this app session; inspect the Gateway record.",
           }
-        : { phase: "idle", message: error instanceof Error ? error.message : "The MCP request could not be checked." },
+        : { phase: "idle", message: describeApiError(error, "The MCP request could not be checked.").summary },
     );
     return;
   }

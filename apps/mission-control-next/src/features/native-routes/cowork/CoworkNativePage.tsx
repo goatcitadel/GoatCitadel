@@ -49,6 +49,7 @@ import {
 } from "../shared/library-primitives";
 import { CoworkExecutionGlance, buildCoworkExecutionSnapshot } from "./CoworkExecutionGlance";
 import { NativeLane } from "./NativeLane";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 type TaskCardRecord = TaskRecord;
 type CoworkOperatorRecord = {
@@ -171,7 +172,7 @@ export function CoworkNativePage({
       if (!cancelled) {
         setState({
           loading: false,
-          error: error.message,
+          error: describeApiError(error).summary,
           data: null,
         });
       }
@@ -271,7 +272,7 @@ export function CoworkNativePage({
       })
       .catch((error: Error) => {
         if (!cancelled) {
-          setDeliverables({ loading: false, error: error.message, data: [] });
+          setDeliverables({ loading: false, error: describeApiError(error).summary, data: [] });
         }
       });
     return () => {

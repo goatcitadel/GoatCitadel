@@ -6,6 +6,7 @@ import { createMcpEditForm } from "./sections/mcp-editor-drafts";
 import { useMcpServerReview } from "./sections/useMcpServerReview";
 import { commitMcpServerUpdate, isGatewayMcpServer, useMcpServerMutation } from "./mcp-server-mutation";
 import { mcpLines, reviewedMcpPolicy } from "./mcp-policy-fields";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 /** Retained drafts, owner review and CAS save shared by both Settings presentations. */
 export function useMcpEditor({
@@ -91,7 +92,7 @@ export function useMcpEditor({
           : {}),
       };
     } catch (error) {
-      notify({ tone: "warning", message: error instanceof Error ? error.message : "Review the MCP policy fields." });
+      notify({ tone: "warning", message: describeApiError(error, "Review the MCP policy fields.").summary });
       return false;
     }
     const generation = editorGeneration.current;

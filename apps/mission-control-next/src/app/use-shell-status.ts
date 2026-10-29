@@ -3,6 +3,7 @@ import type { RuntimeBuildIdentity } from "@goatcitadel/contracts";
 import type { DashboardStateResponse, HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { fetchDashboardState, fetchHealthSummary } from "@goatcitadel/mission-control-shared/api/client";
 import { fetchRuntimeBuildIdentity } from "@goatcitadel/mission-control-shared/api/review-readiness";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 /*
  * W4.4 (ship punchlist): shell status (dashboard + daemon health) extracted
@@ -79,7 +80,7 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
         setStatus((current) => ({
           ...current,
           lastLoadedAt: Date.now(),
-          dashboardError: error instanceof Error ? error.message : "Unable to refresh dashboard status.",
+          dashboardError: describeApiError(error, "Unable to refresh dashboard status.").summary,
         }));
       });
     const healthRequest = fetchHealthSummary()
@@ -101,7 +102,7 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
         setStatus((current) => ({
           ...current,
           lastLoadedAt: Date.now(),
-          healthError: error instanceof Error ? error.message : "Unable to refresh daemon health.",
+          healthError: describeApiError(error, "Unable to refresh daemon health.").summary,
         }));
       });
     const identityRequest = fetchRuntimeBuildIdentity()
@@ -123,7 +124,7 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
         setStatus((current) => ({
           ...current,
           lastLoadedAt: Date.now(),
-          runtimeIdentityError: error instanceof Error ? error.message : "Unable to refresh build identity.",
+          runtimeIdentityError: describeApiError(error, "Unable to refresh build identity.").summary,
         }));
       });
     try {

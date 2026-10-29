@@ -188,7 +188,7 @@ export function WorkSchedules() {
     try {
       advanced = scheduleSettingsInput(editor.value, createAction);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Invalid advanced settings.");
+      setNotice(describeApiError(error, "Invalid advanced settings.").summary);
       return;
     }
     const jobId = createScheduleJobId(trimmedName);

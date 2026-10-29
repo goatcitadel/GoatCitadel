@@ -6,6 +6,7 @@ import type {
   ChatSessionWorkbenchFileOperationPreviewResponse,
 } from "@goatcitadel/contracts";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 /*
  * Owns the file-action form state (operation, paths, notice) so typing a path
@@ -40,7 +41,9 @@ interface WorkbenchFileActionFormProps {
   busy: boolean;
   repoBlockedReason: string | null;
   selectedFilePath?: string;
-  onFileOperationPreview?: (input: ChatSessionWorkbenchFileOperationPreviewRequest) => Promise<ChatSessionWorkbenchFileOperationPreviewResponse | null>;
+  onFileOperationPreview?: (
+    input: ChatSessionWorkbenchFileOperationPreviewRequest,
+  ) => Promise<ChatSessionWorkbenchFileOperationPreviewResponse | null>;
   onFileOperation?: (input: ChatSessionWorkbenchFileOperationRequest) => Promise<boolean>;
 }
 
@@ -60,7 +63,11 @@ export const WorkbenchFileActionForm = memo(function WorkbenchFileActionForm({
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const formRevision = useRef(0);
-  const invalidateReview = () => { formRevision.current += 1; setReview(null); setNotice(null); };
+  const invalidateReview = () => {
+    formRevision.current += 1;
+    setReview(null);
+    setNotice(null);
+  };
 
   const targetRequired = workbenchFileActionNeedsTarget(operation);
   const blockedReason =
@@ -82,22 +89,32 @@ export const WorkbenchFileActionForm = memo(function WorkbenchFileActionForm({
     if (blockedReason || busy || pendingRef.current || !onFileOperationPreview) return;
     const revision = formRevision.current;
     const input = { operation, path: path.trim(), targetPath: targetRequired ? targetPath.trim() : undefined };
-    pendingRef.current = true; setPending(true); setReview(null); setNotice(null);
+    pendingRef.current = true;
+    setPending(true);
+    setReview(null);
+    setNotice(null);
     try {
       const result = await onFileOperationPreview(input);
       if (!isMounted() || revision !== formRevision.current) return;
       setReview(result);
       if (!result) setNotice("Unable to review this action. Check the details above and try again.");
     } catch (error) {
-      if (isMounted() && revision === formRevision.current) setNotice(error instanceof Error ? error.message : "Unable to review this action.");
-    } finally { pendingRef.current = false; if (isMounted()) setPending(false); }
+      if (isMounted() && revision === formRevision.current)
+        setNotice(describeApiError(error, "Unable to review this action.").summary);
+    } finally {
+      pendingRef.current = false;
+      if (isMounted()) setPending(false);
+    }
   };
 
   const runFileAction = async () => {
     if (blockedReason || busy || pendingRef.current || !onFileOperation || !review) return;
     const revision = formRevision.current;
     const input = { ...review.input, expectedRevision: review.revision };
-    pendingRef.current = true; setPending(true); setReview(null); setNotice(null);
+    pendingRef.current = true;
+    setPending(true);
+    setReview(null);
+    setNotice(null);
     try {
       const completed = await onFileOperation(input);
       if (!isMounted() || revision !== formRevision.current) return;
@@ -111,8 +128,12 @@ export const WorkbenchFileActionForm = memo(function WorkbenchFileActionForm({
       if (targetRequired) setTargetPath("");
       formRevision.current += 1;
     } catch (error) {
-      if (isMounted() && revision === formRevision.current) setNotice(error instanceof Error ? error.message : "File action was not confirmed. Review again before retrying.");
-    } finally { pendingRef.current = false; if (isMounted()) setPending(false); }
+      if (isMounted() && revision === formRevision.current)
+        setNotice(describeApiError(error, "File action was not confirmed. Review again before retrying.").summary);
+    } finally {
+      pendingRef.current = false;
+      if (isMounted()) setPending(false);
+    }
   };
 
   return (
@@ -185,20 +206,48 @@ export const WorkbenchFileActionForm = memo(function WorkbenchFileActionForm({
       </div>
       {review ? (
         <div className="mc-next-code-file-action-review" role="region" aria-label="File action review">
-          <p><strong>{WORKBENCH_FILE_ACTIONS.find((item) => item.operation === review.input.operation)?.label}</strong> {review.input.path}
-            {review.input.targetPath ? ` → ${review.input.targetPath}` : ""}</p>
-          <p>{review.sourceKind === "absent" ? "The new path is currently absent." :
-            `${review.affectedPaths.length} existing path${review.affectedPaths.length === 1 ? "" : "s"}; ${review.totalBytes.toLocaleString()} bytes.`}
+          <p>
+            <strong>{WORKBENCH_FILE_ACTIONS.find((item) => item.operation === review.input.operation)?.label}</strong>{" "}
+            {review.input.path}
+            {review.input.targetPath ? ` → ${review.input.targetPath}` : ""}
+          </p>
+          <p>
+            {review.sourceKind === "absent"
+              ? "The new path is currently absent."
+              : `${review.affectedPaths.length} existing path${review.affectedPaths.length === 1 ? "" : "s"}; ${review.totalBytes.toLocaleString()} bytes.`}
             {review.input.targetPath ? " The destination is currently absent." : ""}
-            {review.input.operation === "delete" ? " Applying this action deletes these files and folders." : ""}</p>
-          {review.affectedPaths.length > 0 ? <details><summary>Review affected paths ({review.affectedPaths.length})</summary>
-            <ul>{review.affectedPaths.map((entry) => <li key={entry.path}>{entry.path}{entry.kind === "directory" ? "/" : ""}</li>)}</ul>
-          </details> : null}
-          <button type="button" className="mc-next-panel-button primary" disabled={busy || pending || Boolean(blockedReason)}
-            onClick={() => { void runFileAction(); }}>Apply reviewed action</button>
+            {review.input.operation === "delete" ? " Applying this action deletes these files and folders." : ""}
+          </p>
+          {review.affectedPaths.length > 0 ? (
+            <details>
+              <summary>Review affected paths ({review.affectedPaths.length})</summary>
+              <ul>
+                {review.affectedPaths.map((entry) => (
+                  <li key={entry.path}>
+                    {entry.path}
+                    {entry.kind === "directory" ? "/" : ""}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+          <button
+            type="button"
+            className="mc-next-panel-button primary"
+            disabled={busy || pending || Boolean(blockedReason)}
+            onClick={() => {
+              void runFileAction();
+            }}
+          >
+            Apply reviewed action
+          </button>
         </div>
       ) : null}
-      {notice ? <p className="mc-next-workbench-empty" role="status">{notice}</p> : null}
+      {notice ? (
+        <p className="mc-next-workbench-empty" role="status">
+          {notice}
+        </p>
+      ) : null}
     </div>
   );
 });

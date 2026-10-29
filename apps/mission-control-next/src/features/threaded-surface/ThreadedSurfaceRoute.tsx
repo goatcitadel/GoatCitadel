@@ -8,6 +8,7 @@ import {
 } from "@goatcitadel/threaded-surface-core";
 import type { ThreadedGatewayStatusSummary } from "@goatcitadel/threaded-surface-core/work-trust";
 import { ThreadedSurfacePage, type ThreadedPermissionState } from "./ThreadedSurfacePage";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function ThreadedSurfaceRoute({
   surface,
@@ -141,7 +142,7 @@ function ThreadedSurfacePermissionBridge({
       })
       .catch((error: unknown) => {
         if (!cancelled) {
-          setPermissionState({ loading: false, error: error instanceof Error ? error.message : String(error) });
+          setPermissionState({ loading: false, error: describeApiError(error).summary });
         }
       });
     return () => {
@@ -149,16 +150,20 @@ function ThreadedSurfacePermissionBridge({
     };
   }, [permissionQuery]);
 
-  return <>
-    <p className="sr-only" role="status">Chat view loaded.</p>
-    <ThreadedSurfacePage
-      surface={surface}
-      input={input}
-      permissionState={permissionState}
-      onCopyTrustReport={onCopyTrustReport}
-      onOpenUniversalRunDetail={onOpenUniversalRunDetail}
-    />
-  </>;
+  return (
+    <>
+      <p className="sr-only" role="status">
+        Chat view loaded.
+      </p>
+      <ThreadedSurfacePage
+        surface={surface}
+        input={input}
+        permissionState={permissionState}
+        onCopyTrustReport={onCopyTrustReport}
+        onOpenUniversalRunDetail={onOpenUniversalRunDetail}
+      />
+    </>
+  );
 }
 
 export function resolveThreadedPermissionQuery({

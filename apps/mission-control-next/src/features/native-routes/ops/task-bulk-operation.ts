@@ -4,6 +4,7 @@ import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-in
 import { bulkTaskAction, fetchTask } from "@goatcitadel/mission-control-shared/api/tasks";
 import { taskRecordsEqual } from "./task-detail-mutation";
 import { acquireTaskMutations, taskMutationKey } from "./task-mutation-state";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export type TaskBulkAction = "unblock" | "retry" | "close";
 export type TaskBulkResult =
@@ -120,7 +121,7 @@ export async function commitTaskBulkAction(input: {
     const changed = result.tasks.filter((task) => task.revision > expectedRevisionsByTaskId[task.taskId]!).length;
     return { kind: "confirmed", tasks: result.tasks, changed, matched: ids.length - changed };
   } catch (error) {
-    if (!dispatched) return { kind: "refused", message: error instanceof Error ? error.message : String(error) };
+    if (!dispatched) return { kind: "refused", message: describeApiError(error).summary };
     if (refusedBeforeCommit(error))
       return error.status === 409
         ? {
@@ -128,9 +129,9 @@ export async function commitTaskBulkAction(input: {
             message:
               "One or more selected tasks changed on the Gateway. Nothing was applied; review the current tasks.",
           }
-        : { kind: "refused", message: `Nothing was applied. ${error.message}` };
+        : { kind: "refused", message: `Nothing was applied. ${describeApiError(error).summary}` };
     admission.uncertain(UNCERTAIN);
-    return { kind: "uncertain", message: error instanceof Error ? error.message : String(error) };
+    return { kind: "uncertain", message: describeApiError(error).summary };
   } finally {
     admission.settle();
   }

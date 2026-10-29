@@ -34,6 +34,7 @@ import {
   samePackValue,
 } from "./pack-evidence-binding";
 import { beginPackAttempt, usePackAttempt } from "./pack-mutation-state";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export type PackReview = { generation: number } & (
   | { kind: "stage"; preview: CapabilityPackPreview; source?: string }
@@ -304,7 +305,7 @@ export function usePortablePacks(workspaceId: string) {
     } catch (error) {
       if (valid(captured)) {
         setReview(null);
-        setNotice(error instanceof Error ? error.message : "Pack evidence could not be confirmed.");
+        setNotice(describeApiError(error, "Pack evidence could not be confirmed.").summary);
       }
       return false;
     } finally {

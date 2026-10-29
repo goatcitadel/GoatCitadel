@@ -21,6 +21,7 @@ import "../native-routes.css";
 import { BoardReviewConflict, commitReviewedBoard } from "./board-mutation";
 import { useBoardMutationState } from "./board-mutation-state";
 import { useBoardMutationView } from "./use-board-mutation-view";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 type PendingTransition = "archive" | "restore" | null;
 
@@ -710,7 +711,7 @@ function errorStatus(error: unknown): number | undefined {
 }
 
 function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
+  return describeApiError(error, fallback).summary;
 }
 
 function requireValue<T>(value: T | undefined, label: string): T {

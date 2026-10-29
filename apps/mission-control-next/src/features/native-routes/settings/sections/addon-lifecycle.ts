@@ -19,6 +19,7 @@ import {
   assertAddonStatus,
   type AddonAction,
 } from "./addon-owner-binding";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 type Attempt = { phase: "idle" | "pending" | "uncertain"; message?: string };
 const IDLE: Attempt = { phase: "idle" };
@@ -114,7 +115,7 @@ export async function commitAddonReview(review: AddonReview): Promise<AddonCommi
     }
     return {
       kind: "blocked",
-      message: error instanceof Error ? error.message : "Add-on owner evidence is unavailable.",
+      message: describeApiError(error, "Add-on owner evidence is unavailable.").summary,
     };
   } finally {
     if (attempt(base) === pending) setAttempt(base, IDLE);

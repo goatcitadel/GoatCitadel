@@ -18,6 +18,7 @@ import type { NativeRoutePagesProps } from "../types";
 import { formatDateTime, nativeLoad, nativeLoadIssues, truncateText, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryCodeBlock, LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
 import { fetchStructuredReviewRun } from "@goatcitadel/mission-control-shared/api/review-readiness";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 type NativeListItem = { title: string; meta?: string; body?: string };
 type RunTracePayload = Record<string, unknown>;
@@ -145,7 +146,7 @@ function SelectedRunDetailPage({ route, activeWorkspaceId, activeWorkspaceName, 
       await navigator.clipboard.writeText(exported.content);
       setExportNotice(`Copied trace export ${exported.filename}.`);
     } catch (err) {
-      setExportError(err instanceof Error ? err.message : String(err));
+      setExportError(describeApiError(err).summary);
     } finally {
       setExporting(false);
     }
@@ -177,7 +178,7 @@ function SelectedRunDetailPage({ route, activeWorkspaceId, activeWorkspaceName, 
       document.body.removeChild(anchor);
       setReceiptNotice(`Downloaded signed evidence receipt ${filename}.`);
     } catch (err) {
-      setReceiptError(err instanceof Error ? err.message : String(err));
+      setReceiptError(describeApiError(err).summary);
     } finally {
       if (objectUrl) {
         URL.revokeObjectURL(objectUrl);
@@ -201,7 +202,7 @@ function SelectedRunDetailPage({ route, activeWorkspaceId, activeWorkspaceName, 
     } catch (err) {
       if (sequence !== receiptSequence.current) return;
       setReceiptInspection({ loading: false, receipt: null, verification: null });
-      setReceiptError(err instanceof Error ? err.message : String(err));
+      setReceiptError(describeApiError(err).summary);
     }
   };
 

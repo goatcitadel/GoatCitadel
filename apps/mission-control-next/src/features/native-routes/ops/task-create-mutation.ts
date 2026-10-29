@@ -3,6 +3,7 @@ import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { createTask, fetchTask } from "@goatcitadel/mission-control-shared/api/tasks";
 import { acquireTaskMutations } from "./task-mutation-state";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export type TaskCreateDraft = { title: string; description: string; priority: TaskRecord["priority"] };
 export const TASK_CREATE_BOUNDARY =
@@ -74,7 +75,7 @@ export async function commitTaskCreate(review: {
       admission.uncertain(message);
       return { kind: "uncertain", message };
     }
-    return { kind: "blocked", message: cause instanceof Error ? cause.message : "The task could not be reviewed." };
+    return { kind: "blocked", message: describeApiError(cause, "The task could not be reviewed.").summary };
   } finally {
     admission.settle();
   }

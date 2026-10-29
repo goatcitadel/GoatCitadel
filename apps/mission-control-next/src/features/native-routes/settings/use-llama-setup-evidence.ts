@@ -3,6 +3,7 @@ import type { LlamaCppSetupProjection } from "@goatcitadel/contracts";
 import { fetchChangePlan, fetchLlamaCppSetup } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { llamaProjectionReady, llamaScopeKey, rememberLlamaPlan, requireLlamaPlan } from "./llama-setup-state";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function useLlamaSetupEvidence(workspaceId: string) {
   const installation = getGatewayApiBaseUrl(),
@@ -32,8 +33,14 @@ export function useLlamaSetupEvidence(workspaceId: string) {
     };
   }, []);
   const refresh = useCallback(async () => {
-    if (!workspaceId.trim() || !life.current.mounted || life.current.view !== renderedView
-      || life.current.key !== key || getGatewayApiBaseUrl() !== installation) return;
+    if (
+      !workspaceId.trim() ||
+      !life.current.mounted ||
+      life.current.view !== renderedView ||
+      life.current.key !== key ||
+      getGatewayApiBaseUrl() !== installation
+    )
+      return;
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
@@ -42,7 +49,8 @@ export function useLlamaSetupEvidence(workspaceId: string) {
     const current = () =>
       life.current.mounted &&
       life.current.view === renderedView &&
-      request.current === controller && !controller.signal.aborted &&
+      request.current === controller &&
+      !controller.signal.aborted &&
       life.current.key === key &&
       life.current.epoch === epoch &&
       life.current.read === read &&
@@ -77,7 +85,7 @@ export function useLlamaSetupEvidence(workspaceId: string) {
           key,
           projection: previous.key === key ? previous.projection : undefined,
           loading: false,
-          error: error instanceof Error ? error.message : "Setup evidence unavailable.",
+          error: describeApiError(error, "Setup evidence unavailable.").summary,
         }));
     } finally {
       if (request.current === controller) request.current = undefined;
