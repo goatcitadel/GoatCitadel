@@ -7,7 +7,7 @@ import type {
   OperatorInboxResponse,
   OperatorInboxSourceCoverage,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { isInstallWideApproval, NotFoundError } from "@goatcitadel/contracts";
 import { redactUrlForError } from "@goatcitadel/policy-engine";
 import { redactLocalHomePaths } from "./user-facing-failure-text.js";
 import type { AsyncStorage } from "@goatcitadel/storage";
@@ -75,6 +75,30 @@ function changePlanApproval(
   if (!title || !summary) return undefined;
   const planId = text(payload.planId);
   return { title: bounded(title), summary: bounded(summary), ...(planId ? { planId } : {}) };
+}
+
+/** What the operator does to a skill for each runtime state a switch change can name. */
+const SKILL_STATE_VERBS: ReadonlyMap<string, string> = new Map([
+  ["enabled", "Turn on"],
+  ["sleep", "Pause"],
+  ["disabled", "Turn off"],
+]);
+
+/**
+ * A skill change reads as the change: "Turn on skill planner", "Pause skill planner" or "Turn off skill planner"
+ * from its preview, else the preview's own title. A skill switch applies to the whole install, so it says so.
+ */
+function skillLifecycleApproval(
+  kind: string,
+  preview: Record<string, unknown>,
+): { title?: string; summary: string } | undefined {
+  if (kind !== "skill.lifecycle") return undefined;
+  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+  const skillId = text(preview.skillId);
+  const verb = typeof preview.state === "string" ? SKILL_STATE_VERBS.get(preview.state) : undefined;
+  const title =
+    preview.action === "skill_state_set" && skillId && verb ? `${verb} skill ${skillId}` : text(preview.title);
+  return { ...(title ? { title: bounded(title) } : {}), summary: "Applies to every workspace." };
 }
 
 function approvalTargetSummary(preview: unknown): string {
@@ -236,23 +260,32 @@ export class InboxProjectionService {
     };
 
     await collect("approvals", ["needs_decision"], async () => {
-      const page = await this.deps.storage.approvals.listPage({ status: "pending", limit: SOURCE_LIMIT, workspaceId });
+      // Approvals that belong to no workspace (a skill switch change) are listed in every workspace's Inbox.
+      const page = await this.deps.storage.approvals.listPage({
+        status: "pending",
+        limit: SOURCE_LIMIT,
+        workspaceId,
+        includeInstallWide: true,
+      });
       return {
         partial: Boolean(page.nextCursor),
         items: page.items.map((approval): OperatorInboxItem => {
           const plan = changePlanApproval(approval.kind, approval.payload, approval.preview);
+          const skill = skillLifecycleApproval(approval.kind, approval.preview);
           return {
             id: `approval:${approval.approvalId}`,
             kind: "approval",
             group: "needs_decision",
-            title: plan?.title ?? `Review ${approvalKindWords(approval.linkage?.toolName ?? approval.kind)}`,
-            summary: plan?.summary ?? approvalTargetSummary(approval.preview),
+            title:
+              plan?.title ?? skill?.title ?? `Review ${approvalKindWords(approval.linkage?.toolName ?? approval.kind)}`,
+            summary: plan?.summary ?? skill?.summary ?? approvalTargetSummary(approval.preview),
             createdAt: approval.createdAt,
             expiresAt: approval.expiresAt,
             riskLevel: approval.riskLevel,
             source: {
               workspaceId,
               approvalId: approval.approvalId,
+              ...(isInstallWideApproval(approval) ? { installWide: true as const } : {}),
               ...(!plan && approval.linkage?.toolName ? { toolName: approval.linkage.toolName } : {}),
               ...(plan?.planId ? { planId: plan.planId } : {}),
               ...(approval.linkage?.sessionId ? { sessionId: approval.linkage.sessionId } : {}),

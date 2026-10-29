@@ -210,6 +210,9 @@ jobs:
       - name: Run real Postgres Gateway memory lifecycle lane
         run: pnpm --filter @goatcitadel/gateway test:postgres:memory
 
+      - name: Run real Postgres Gateway Inbox projection lane
+        run: pnpm --filter @goatcitadel/gateway test:postgres:inbox
+
   bundled-postgres-restart:
     name: Bundled Postgres stopped-container restart
     runs-on: ubuntu-24.04

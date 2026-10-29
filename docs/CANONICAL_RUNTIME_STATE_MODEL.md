@@ -241,6 +241,7 @@ Notes:
 - The Capabilities switch refuses before any approval exists, in plain words that name no skill: a pinned skill, a stale revision or another requester's identical request is a `409` whose `details.reason` is `pinned`, `stale` or `duplicate` (`CapabilitySkillStateRefusal`), the same change turned down many times in a row is a `409` (`STATE_CONFLICT`) with no `details.reason`, and a skill the state owner can't find is a `404`. The switch answers `declined` only when an approval ran out of time just as the skip approved it. The owner looks skills up among the install's loaded skills, so a workspace's self-authored skills are listed with `switchable: false`.
 - Use counts come from the immutable chat turn capability profiles. `SkillListItem.usageCount` moves only on the resolve-activation route, so the Skills tab never shows it as uses.
 - The Skills tab lists every skill loaded for the workspace whatever its skill choices, and marks the ones the choices leave out: `CapabilitySkillItem.leftOutOfWorkspace` is `true` for a skill missing from `WorkspaceTurnSkills.listSkills(workspaceId)`, the list Chat, scheduled turns and remote workers load from (see Workspace Skill Choices), and `false` for the rest, including every skill when nothing is chosen and the workspace's own self-authored skills. When the workspace's Citadel or choices can't be read, its turns use none of the installed skills, so every installed row is marked, as Chat behaves. When the list itself can't be read, no row carries the field and an issue line says so.
+- A waiting skill change is listed in every workspace's Inbox, where it can be approved or denied; the Skills tab still approves it in place.
 
 ### Chat Workspace Exploration and Delegated Scope
 
@@ -759,6 +760,9 @@ Notes:
 - `RuntimeLifecycleResponse.linked` is the related/inferred set. It may include alternate runs, sessions, turns, and tasks, but those values do not overwrite the canonical field set.
 - Approval resolution follow-on truth is owned by `approval + approval_events + approval_effects`.
 - `approval_wait_runs` remains a canonical wait mapping, but it is not canonical execution truth. Mission Control should label it as wait mapping, not canonical run ownership. Post-resolution wake, pending action execution, inbox finalization, and after-hooks are tracked through effect rows.
+- An approval with no `linkage` is install-wide: it belongs to the operator, not to a workspace (`isInstallWideApproval` in `packages/contracts/src/approvals.ts`). The Inbox projection (`apps/gateway/src/services/inbox-projection-service.ts`) lists each pending one in every workspace's Inbox as an approval item with `source.installWide: true`, and `source.workspaceId` is then the Inbox it is listed in. It is read without a workspace, because a workspace-scoped read of it still answers not found, and it is decided once for the whole install.
+- A `linkage` that names no workspace (for example one with only a `toolName`) does not make an approval install-wide: that approval stays out of every workspace's Inbox.
+- These kinds are created install-wide: every `skill.lifecycle` approval; a `capability.lifecycle` approval for a legacy candidate that never recorded a workspace; an `auth.device_access` approval when no request attribution was added to its linkage; `verification.approval.wait` (the dev verification routes only); and any approval made through `POST /api/v1/approvals` without a `linkage`.
 
 ### Realtime Event
 

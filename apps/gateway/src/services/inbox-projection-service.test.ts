@@ -336,6 +336,108 @@ describe("Gateway inbox projection", () => {
       status: "pending",
       limit: 200,
       workspaceId: "workspace-a",
+      includeInstallWide: true,
+    });
+  });
+
+  it("asks the approvals owner for this workspace's approvals and install-wide ones", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
+      items: [
+        {
+          approvalId: "approval-linked",
+          kind: "tool.invoke",
+          status: "pending",
+          riskLevel: "caution",
+          payload: {},
+          preview: {},
+          linkage: { workspaceId: "workspace-a", toolName: "fs.write" },
+          createdAt: "2026-10-29T12:00:00.000Z",
+        },
+        {
+          approvalId: "approval-skill",
+          kind: "skill.lifecycle",
+          status: "pending",
+          riskLevel: "danger",
+          payload: {},
+          preview: {
+            title: "Approve skill state change",
+            action: "skill_state_set",
+            skillId: "planner",
+            state: "enabled",
+            currentState: "disabled",
+          },
+          createdAt: "2026-10-29T12:01:00.000Z",
+        },
+      ],
+    } as never);
+
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+
+    expect(deps.storage.approvals.listPage).toHaveBeenCalledWith({
+      status: "pending",
+      limit: 200,
+      workspaceId: "workspace-a",
+      includeInstallWide: true,
+    });
+    const item = (approvalId: string) => projection.items.find((entry) => entry.id === `approval:${approvalId}`);
+    expect(item("approval-skill")).toMatchObject({
+      title: "Turn on skill planner",
+      summary: "Applies to every workspace.",
+      source: { workspaceId: "workspace-a", approvalId: "approval-skill", installWide: true },
+    });
+    expect(item("approval-skill")?.source).toEqual({
+      workspaceId: "workspace-a",
+      approvalId: "approval-skill",
+      installWide: true,
+    });
+    expect(item("approval-linked")?.source).not.toHaveProperty("installWide");
+    expect(item("approval-linked")?.title).toBe("Review fs write");
+  });
+
+  it("words a skill approval from its preview and keeps other kinds' titles and summaries", async () => {
+    const deps = dependencies();
+    const skill = (approvalId: string, preview: Record<string, unknown>, kind = "skill.lifecycle") => ({
+      approvalId,
+      kind,
+      status: "pending",
+      riskLevel: "danger",
+      payload: {},
+      preview,
+      createdAt: "2026-10-29T12:00:00.000Z",
+    });
+    const change = { title: "Approve skill state change", action: "skill_state_set", skillId: "planner" };
+    vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
+      items: [
+        skill("on", { ...change, state: "enabled" }),
+        skill("pause", { ...change, state: "sleep" }),
+        skill("off", { ...change, state: "disabled" }),
+        skill("unknown-state", { ...change, state: "archived" }),
+        skill("no-skill-id", { ...change, skillId: "", state: "enabled" }),
+        skill("bulk", { title: "Approve bulk skill change", action: "skill_state_bulk_set", state: "disabled" }),
+        skill("untitled", { action: "skill_state_bulk_set" }),
+        skill("other-kind", { ...change, state: "enabled" }, "demo.first_run"),
+      ],
+    } as never);
+
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+
+    const read = (approvalId: string) => {
+      const item = projection.items.find((entry) => entry.id === `approval:${approvalId}`);
+      return { title: item?.title, summary: item?.summary };
+    };
+    const everyWorkspace = "Applies to every workspace.";
+    expect(read("on")).toEqual({ title: "Turn on skill planner", summary: everyWorkspace });
+    expect(read("pause")).toEqual({ title: "Pause skill planner", summary: everyWorkspace });
+    expect(read("off")).toEqual({ title: "Turn off skill planner", summary: everyWorkspace });
+    expect(read("unknown-state")).toEqual({ title: "Approve skill state change", summary: everyWorkspace });
+    expect(read("no-skill-id")).toEqual({ title: "Approve skill state change", summary: everyWorkspace });
+    expect(read("bulk")).toEqual({ title: "Approve bulk skill change", summary: everyWorkspace });
+    expect(read("untitled")).toEqual({ title: "Review skill lifecycle", summary: everyWorkspace });
+    expect(read("other-kind")).toEqual({
+      title: "Review demo first run",
+      summary:
+        "Review the requested action and its policy reason. Target details are available in the approval record.",
     });
   });
 
@@ -974,6 +1076,76 @@ describe("Gateway inbox projection", () => {
       const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
       expect(projection.items.map((item) => item.id)).toEqual(["completed_background_run:watcher-a"]);
       expect(projection.coverage.find((entry) => entry.source === "completed_background_runs")?.state).toBe("partial");
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("lists one install-wide skill approval in every workspace's Inbox and keeps linked ones scoped", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    try {
+      const linked = (workspaceId: string) =>
+        storage.approvals.create({
+          kind: "tool.invoke",
+          riskLevel: "caution",
+          payload: { workspaceId },
+          preview: { toolName: "documents.create", path: `notes/${workspaceId}.md` },
+          linkage: { workspaceId, toolName: "documents.create" },
+        });
+      const linkedA = linked("workspace-a");
+      const linkedB = linked("workspace-b");
+      const skill = storage.approvals.createDeterministicDetachedWithTtlDuration(
+        {
+          approvalId: "skill-lifecycle-planner",
+          kind: "skill.lifecycle",
+          riskLevel: "danger",
+          payload: { action: "skill_state_set", skillId: "planner" },
+          preview: {
+            title: "Approve skill state change",
+            action: "skill_state_set",
+            skillId: "planner",
+            state: "enabled",
+            currentState: "disabled",
+          },
+        },
+        60 * 60_000,
+      ).approval;
+      // A tool approval whose linkage names no workspace is not install-wide, so no Inbox lists it.
+      const toolOnly = storage.approvals.create({
+        kind: "tool.invoke",
+        riskLevel: "caution",
+        payload: {},
+        preview: { toolName: "fs.write", path: "notes/loose.md" },
+        linkage: { toolName: "fs.write" },
+      });
+      const deps = { ...dependencies(), storage: createSqliteAsyncStorage(storage) };
+      const service = new InboxProjectionService(deps);
+
+      const approvalItems = async (workspaceId: string) =>
+        (await service.getProjection(workspaceId)).items.filter((item) => item.kind === "approval");
+      const inboxA = await approvalItems("workspace-a");
+      const inboxB = await approvalItems("workspace-b");
+
+      expect(inboxA.map((item) => item.source.approvalId).sort()).toEqual(
+        [linkedA.approvalId, skill.approvalId].sort(),
+      );
+      expect(inboxB.map((item) => item.source.approvalId).sort()).toEqual(
+        [linkedB.approvalId, skill.approvalId].sort(),
+      );
+      for (const [workspaceId, inbox] of [
+        ["workspace-a", inboxA],
+        ["workspace-b", inboxB],
+      ] as const) {
+        const skillItem = inbox.find((item) => item.source.approvalId === skill.approvalId);
+        expect(skillItem).toMatchObject({
+          title: "Turn on skill planner",
+          summary: "Applies to every workspace.",
+          source: { workspaceId, installWide: true },
+        });
+        const linkedItem = inbox.find((item) => item.source.approvalId !== skill.approvalId);
+        expect(linkedItem?.source).not.toHaveProperty("installWide");
+        expect(inbox.map((item) => item.source.approvalId)).not.toContain(toolOnly.approvalId);
+      }
     } finally {
       storage.close();
     }
