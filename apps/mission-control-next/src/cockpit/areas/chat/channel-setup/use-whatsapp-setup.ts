@@ -146,7 +146,8 @@ export function useWhatsAppSetup(workspaceId: string, resumeDraftId?: string): W
       const outcome = await saveWhatsAppDraft(draft, { ...draft.draft, webhookCheckedAt: checkedAt });
       if (!live()) return;
       if (outcome.kind === "failed") {
-        // Meta's check stays known for 15 minutes, so the next question finds it and tries again, from the draft as it is.
+        // Meta's check stays known for 15 minutes. A wait that is running asks again with its next question and finds it,
+        // so the note is tried again from the draft as it is now; `showCheck` starts a wait when none was running.
         set({ ...(outcome.latest ? { draft: outcome.latest } : {}), error: outcome.error });
         return;
       }
@@ -236,8 +237,15 @@ export function useWhatsAppSetup(workspaceId: string, resumeDraftId?: string): W
         error: undefined,
       });
       if (noted || !live()) return;
-      if (check.addressCheckedAt) await noteAddress(check.addressCheckedAt, set, live);
-      else listenForAddress(set, live);
+      if (!check.addressCheckedAt) {
+        listenForAddress(set, live);
+        return;
+      }
+      await noteAddress(check.addressCheckedAt, set, live);
+      // A note that failed leaves no wait running, and this one has to start it: its next question finds Meta's check
+      // again and tries the note again. A note that went through has stopped waiting (it dropped `live`), and so has a
+      // page that went or an action that took over, so nothing starts for those.
+      if (live() && !current().addressCheckedAt) listenForAddress(set, live);
     },
     [current, listenForAddress, noteAddress],
   );

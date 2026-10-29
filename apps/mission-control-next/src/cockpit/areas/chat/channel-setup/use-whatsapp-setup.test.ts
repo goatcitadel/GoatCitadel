@@ -190,6 +190,26 @@ async function metaChecksAddress() {
   api.checkWhatsAppSetup.mockResolvedValue({});
 }
 
+/**
+ * Makes the next write that notes Meta's check on the draft go wrong, as a change made somewhere else would. Every other
+ * write goes through the implementation the test set. `failure` is what the note's write does instead.
+ */
+function failNextNote(failure: () => Promise<never> = () => Promise.reject(new Error("This changed somewhere else."))) {
+  type Write = (
+    id: string,
+    input: { expectedRevision: number; draft: Record<string, unknown> },
+  ) => Promise<ChannelSetupDraft>;
+  const write = api.updateChannelSetupDraft.getMockImplementation() as Write;
+  let failed = false;
+  api.updateChannelSetupDraft.mockImplementation(async (id: string, input: Parameters<Write>[1]) => {
+    if (!failed && "webhookCheckedAt" in input.draft) {
+      failed = true;
+      return failure();
+    }
+    return write(id, input);
+  });
+}
+
 describe("useWhatsAppSetup, checking the details", () => {
   it("starts with nothing: no draft, no number, not busy", async () => {
     await mount();
@@ -548,6 +568,89 @@ describe("useWhatsAppSetup, waiting for Meta to check the address", () => {
     });
     expect(current.addressCheckedAt).toBe(CHECKED_AT);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("waits on, and notes the check with a later question, when noting a check from the details' own check failed", async () => {
+    arrangeCheck(checkResult({ addressCheckedAt: CHECKED_AT }));
+    failNextNote();
+    api.fetchChannelSetupDraft.mockResolvedValue(
+      draft({ revision: 6, draft: { setupPage: "messaging", ...IDS }, secretState: ALL_SECRETS }),
+    );
+    await mount();
+    await run(() => current.checkDetails(DETAILS));
+
+    // The number shows, the failure is said, and a wait is running: the step is not stuck until a reload.
+    expect(current.number).toEqual(NUMBER);
+    expect(current.error).toBeTruthy();
+    expect(current.addressCheckedAt).toBeUndefined();
+    expect(current.addressExpired).toBe(false);
+    expect(current.busy).toBe(false);
+    expect(current.draft?.revision).toBe(6);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    // The next question finds Meta's check again, and notes it from the draft as it is now.
+    api.checkWhatsAppSetup.mockResolvedValue({ addressCheckedAt: CHECKED_AT });
+    await advance(WHATSAPP_LISTEN_POLL_MS);
+    expect(api.checkWhatsAppSetup).toHaveBeenLastCalledWith({ draftId: "draft-1", expectedRevision: 6 });
+    expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith("draft-1", {
+      expectedRevision: 6,
+      draft: expect.objectContaining({ webhookCheckedAt: CHECKED_AT }),
+    });
+    expect(current.addressCheckedAt).toBe(CHECKED_AT);
+    expect(current.error).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("starts no wait when the page closes while a check from the details' own check is being noted", async () => {
+    arrangeCheck(checkResult({ addressCheckedAt: CHECKED_AT }));
+    let refuse: (reason: unknown) => void = () => undefined;
+    failNextNote(() => new Promise<never>((_resolve, reject) => (refuse = reject)));
+    await mount();
+    let checking: Promise<void> = Promise.resolve();
+    await act(async () => {
+      checking = current.checkDetails(DETAILS);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await settle();
+    // The note is out: the mark, the three IDs and the note have been written, and the note has not come back.
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(3);
+
+    await act(async () => root.unmount());
+    await act(async () => {
+      refuse(new Error("offline"));
+      await checking;
+    });
+    await settle();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(api.checkWhatsAppSetup).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts no second wait when the verify token is made while a check from the details is being noted", async () => {
+    arrangeCheck(checkResult({ addressCheckedAt: CHECKED_AT }));
+    let refuse: (reason: unknown) => void = () => undefined;
+    failNextNote(() => new Promise<never>((_resolve, reject) => (refuse = reject)));
+    await mount();
+    let checking: Promise<void> = Promise.resolve();
+    await act(async () => {
+      checking = current.checkDetails(DETAILS);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await settle();
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(3);
+    // `busy` is false while the note is out, so a new verify token can be made; it starts the wait itself.
+    api.submitChannelSetupDraftSecrets.mockClear();
+    await run(() => current.newVerifyToken());
+    expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledTimes(1);
+    const timers = vi.getTimerCount();
+    expect(timers).toBeGreaterThan(0);
+
+    await act(async () => {
+      refuse(new Error("offline"));
+      await checking;
+    });
+    await settle();
+    // The note's failure does not start another: the wait the new token started is the only one.
+    expect(vi.getTimerCount()).toBe(timers);
   });
 
   it("stops after 10 minutes, says Meta has not checked yet, and asks again when told to", async () => {
@@ -1007,6 +1110,36 @@ describe("useWhatsAppSetup, coming back to a setup", () => {
       draft: expect.objectContaining({ webhookCheckedAt: CHECKED_AT }),
     });
     expect(current.addressCheckedAt).toBe(CHECKED_AT);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("waits on, and notes the check with a later question, when noting a check from the first question failed", async () => {
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [pageDraft()] });
+    api.checkWhatsAppSetup.mockResolvedValue(checkResult({ addressCheckedAt: CHECKED_AT }));
+    api.updateChannelSetupDraft.mockImplementation(
+      async (_id: string, input: { expectedRevision: number; draft: Record<string, unknown> }) =>
+        pageDraft({ revision: input.expectedRevision + 1, draft: input.draft }),
+    );
+    failNextNote();
+    api.fetchChannelSetupDraft.mockResolvedValue(pageDraft({ revision: 6 }));
+    await mount();
+
+    // The number shows, the failure is said, and a wait is running: the operator is not left with nothing.
+    expect(current.number).toEqual(NUMBER);
+    expect(current.error).toBeTruthy();
+    expect(current.draft?.revision).toBe(6);
+    expect(current.addressCheckedAt).toBeUndefined();
+    expect(current.addressExpired).toBe(false);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    api.checkWhatsAppSetup.mockResolvedValue({ addressCheckedAt: CHECKED_AT });
+    await advance(WHATSAPP_LISTEN_POLL_MS);
+    expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith("draft-1", {
+      expectedRevision: 6,
+      draft: expect.objectContaining({ webhookCheckedAt: CHECKED_AT }),
+    });
+    expect(current.addressCheckedAt).toBe(CHECKED_AT);
+    expect(current.error).toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
   });
 
