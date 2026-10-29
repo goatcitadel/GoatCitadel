@@ -5,6 +5,7 @@ import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { channelPageHref, channelPickerHref, type MessagingView } from "../../../app/routes";
 import { settingsChannelSetupHref } from "./channel-picker-model";
 import { useChannelConnection } from "../use-channel-connections";
+import { DiscordSetupPage } from "./DiscordSetupPage";
 import { SetupFrame as Frame } from "./SetupFrame";
 import { TelegramKeyChange } from "./TelegramKeyChange";
 import { TelegramSetupPage } from "./TelegramSetupPage";
@@ -33,6 +34,7 @@ interface KeyChangePageProps {
  */
 export const SETUP_PAGES: ReadonlyMap<string, ComponentType<SetupPageProps>> = new Map([
   ["telegram", TelegramSetupPage],
+  ["discord", DiscordSetupPage],
 ]);
 
 /**

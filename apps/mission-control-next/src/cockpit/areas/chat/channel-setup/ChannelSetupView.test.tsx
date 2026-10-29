@@ -42,7 +42,11 @@ beforeEach(() => {
   api.fetchChannelSetupDefinitions.mockReset();
   api.fetchChannelSetupDrafts.mockReset();
   api.fetchChannelSetupDefinitions.mockResolvedValue({
-    items: [definition("telegram", "Telegram"), definition("mattermost", "Mattermost")],
+    items: [
+      definition("telegram", "Telegram"),
+      definition("discord", "Discord"),
+      definition("mattermost", "Mattermost"),
+    ],
   });
   api.fetchChannelSetupDrafts.mockResolvedValue({ items: [] });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -67,6 +71,14 @@ describe("ChannelSetupView", () => {
     expect(api.fetchChannelSetupDrafts).toHaveBeenCalledWith({ catalogId: "channel.telegram" });
   });
 
+  it("opens Discord's own setup page", async () => {
+    await mount("discord");
+    expect(container.querySelector("h1")?.textContent).toBe("Set up Discord");
+    expect(container.textContent).toContain("Paste your bot's token");
+    expect(container.textContent).not.toContain("Its steps are in Settings");
+    expect(api.fetchChannelSetupDrafts).toHaveBeenCalledWith({ catalogId: "channel.discord" });
+  });
+
   it("still sends a channel without a page of its own to Settings", async () => {
     await mount("mattermost");
     expect(container.querySelector("h1")?.textContent).toBe("Add Mattermost");
@@ -87,6 +99,7 @@ describe("the pages ChannelSetupView chooses between", () => {
   it("has a setup page only for a channel the picker opens in Chat", () => {
     for (const key of SETUP_PAGES.keys()) expect(CONVERTED_SETUP_CHANNELS.has(key), key).toBe(true);
     expect(SETUP_PAGES.has("telegram")).toBe(true);
+    expect(SETUP_PAGES.has("discord")).toBe(true);
   });
 
   it("has a key page for exactly the channels the channel page sends there", () => {
