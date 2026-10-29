@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiRequestError } from "./http-internal";
-import { describeApiError, GATEWAY_UNREACHABLE_SUMMARY } from "./describe-api-error";
+import { describeApiError, describeApiErrorText, GATEWAY_UNREACHABLE_SUMMARY } from "./describe-api-error";
 
 function httpError(status: number, body?: unknown): ApiRequestError {
   return new ApiRequestError(`API error ${status}: {}`, {
@@ -15,10 +15,19 @@ function httpError(status: number, body?: unknown): ApiRequestError {
 describe("describeApiError", () => {
   it("classifies disabled features and access failures without permission retries", () => {
     for (const code of ["FEATURE_DISABLED", "STATE_CONFLICT"]) {
-      expect(describeApiError(httpError(409, { code, details: { flag: "feature" } }))).toMatchObject({ category: "feature_disabled", retryable: false });
+      expect(describeApiError(httpError(409, { code, details: { flag: "feature" } }))).toMatchObject({
+        category: "feature_disabled",
+        retryable: false,
+      });
     }
-    expect(describeApiError(httpError(409, { code: "STATE_CONFLICT" }))).toMatchObject({ category: "conflict", retryable: true });
-    expect(describeApiError(httpError(403, { code: "FEATURE_DISABLED", details: { flag: "feature" } }))).toMatchObject({ category: "permission", retryable: false });
+    expect(describeApiError(httpError(409, { code: "STATE_CONFLICT" }))).toMatchObject({
+      category: "conflict",
+      retryable: true,
+    });
+    expect(describeApiError(httpError(403, { code: "FEATURE_DISABLED", details: { flag: "feature" } }))).toMatchObject({
+      category: "permission",
+      retryable: false,
+    });
     expect(describeApiError(httpError(401))).toMatchObject({ category: "authentication", retryable: false });
     expect(describeApiError(httpError(503))).toMatchObject({ category: "transient", retryable: true });
   });
@@ -68,5 +77,27 @@ describe("describeApiError", () => {
     expect(
       describeApiError(httpError(409, { error: "Revision 4 is stale.", code: "STATE_CONFLICT" })).summary,
     ).toContain("Refresh and try again");
+  });
+
+  it("reads a stored ApiRequestError message back into plain copy", () => {
+    const refused =
+      'API error 422: {"error":"Claude Code CLI / claude-sonnet-5-5 does not support deep effort. Choose off effort instead.","code":"FIELD_INVALID","details":{"supportedEfforts":["off"]}}';
+    const described = describeApiErrorText(refused);
+    expect(described.summary).toBe(
+      "Claude Code CLI / claude-sonnet-5-5 does not support deep effort. Choose off effort instead.",
+    );
+    expect(described.technical).toBe(refused);
+    expect(describeApiErrorText('API error 503: {"error":"upstream down"}').summary).toContain("gateway hit an error");
+    expect(describeApiErrorText("API error 409: {}").summary).toContain("Refresh and try again");
+    expect(describeApiErrorText("API error 400: not json at /api/v1/x").summary).toBe(
+      "The gateway couldn't complete that request.",
+    );
+  });
+
+  it("passes plain sentences through and hides other technical text", () => {
+    expect(describeApiErrorText("This chat changed elsewhere. Retry.").summary).toBe(
+      "This chat changed elsewhere. Retry.",
+    );
+    expect(describeApiErrorText("TypeError: x is undefined", "Unable to load.").summary).toBe("Unable to load.");
   });
 });

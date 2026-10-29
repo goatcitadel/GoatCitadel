@@ -616,6 +616,14 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   await requestNotServerError(app, "GET", `/api/v1/capabilities/tools?workspaceId=${encodeURIComponent(workspaceId)}`);
   await requestNotServerError(app, "GET", "/api/v1/capabilities/tools/usage");
   await requestNotServerError(app, "GET", "/api/v1/capabilities/tools/usage?refresh=true");
+  await requestNotServerError(app, "GET", "/api/v1/capabilities/skills/usage");
+  await requestNotServerError(app, "GET", "/api/v1/capabilities/skills/usage?refresh=true");
+  await requestNotServerError(app, "GET", `/api/v1/capabilities/skills?workspaceId=${encodeURIComponent(workspaceId)}`);
+  await requestNotServerError(
+    app,
+    "GET",
+    `/api/v1/capabilities/skills/detail?workspaceId=${encodeURIComponent(workspaceId)}&skillId=bundled%3Aresearch`,
+  );
   if (serverId) {
     await requestNotServerError(app, "PATCH", `/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, {
       trustTier: "restricted",

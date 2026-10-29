@@ -119,6 +119,7 @@ import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
 import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
+import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import { WorkspaceTurnSkills } from "./workspace-turn-skills.js";
 import { ChatCapabilityDiscoveryService } from "./chat-capability-discovery-service.js";
 import {
@@ -481,6 +482,8 @@ import {
 import { WebSearchCredentialService } from "./web-search-credential-service.js";
 import { composeCapabilityConnectors } from "./capability-connectors-composition.js";
 import { composeCapabilityTools, composeCapabilityToolUsage } from "./capability-tools-composition.js";
+import { composeCapabilitySkills } from "./capability-skills-composition.js";
+import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
 import { applyRuntimeBrowserBackendDefaults } from "./runtime-browser-backend-defaults.js";
 import { submitEvolutionWebSearchCredential } from "./web-search-credential-change.js";
@@ -3559,10 +3562,11 @@ export class GatewayService {
       repository: this.storage.changePlans,
       adapters: evolutionAdapters,
       isEnabled: async () => await this.isFeatureEnabled("evolutionControlPlaneV1Enabled"),
-      // The operator's opt-in never applies to a remote_hardened install.
-      allowsOperatorApprovalSkip: async () =>
-        this.config.assistant.deploymentProfile !== "remote_hardened" &&
-        (await this.isFeatureEnabled("settingsApprovalSkipEnabled")),
+      // The operator's opt-in never applies to a remote_hardened install, which never reads it.
+      allowsOperatorApprovalSkip: () =>
+        allowsOperatorApprovalSkip(this.config.assistant.deploymentProfile, () =>
+          this.isFeatureEnabled("settingsApprovalSkipEnabled"),
+        ),
       appendAudit: async (event, payload) => {
         await this.storage.audit.append("approvals", { event, ...payload });
       },
@@ -3944,6 +3948,17 @@ export class GatewayService {
         deploymentProfile: () => this.config.assistant.deploymentProfile,
         safeWriteFallbackDir: () =>
           path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out"),
+      }),
+      capabilitySkills: composeCapabilitySkills({
+        chatTurnCapabilityProfiles: this.storage.chatTurnCapabilityProfiles,
+        skills: this,
+        loadedSkills: () => this.skillsService.list(),
+        capabilities: composed.capabilities,
+        approvals: composed.approvals,
+        audit: this.storage.audit,
+        features: this,
+        deploymentProfile: () => this.config.assistant.deploymentProfile,
+        rootDir: this.config.rootDir,
       }),
     };
   }
@@ -10605,9 +10620,9 @@ export class GatewayService {
       : await approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType);
   }
 
-  public async listSkills(): Promise<SkillListItem[]> {
+  public async listSkills(effectiveSkills?: EffectiveCapabilitySet, workspaceId?: string): Promise<SkillListItem[]> {
     await this.skillStateService.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
-    return await this.capabilitySystemService.listSkills();
+    return await this.capabilitySystemService.listSkills(effectiveSkills, workspaceId);
   }
 
   public async createCapabilityProposal(

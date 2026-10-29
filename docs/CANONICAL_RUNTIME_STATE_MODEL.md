@@ -225,6 +225,22 @@ Notes:
 - The switch stops the AI only. GatewayService's own deliveries (channel replies, the operator's own sends and Library actions) carry a process-local own-delivery marker (`packages/policy-engine/src/own-delivery.ts`) that skips this one check; deny rules, Wards and approvals still apply. An own call that asks first stays own once the operator approves it: the engine records the fact on the approval's `pending_action_registered` event and re-mints the marker when the approval runs.
 - The engine reads the live config, so a save applies to the next call. Core, `mcp.invoke` and unknown ids in a hand-edited list are ignored, and a value that isn't a list switches nothing off.
 
+### Skill State
+
+Definition:
+The install-wide switch on each loaded skill: on (`enabled`), paused (`sleep`, used only when named or confidently matched) or off (`disabled`, never callable).
+
+Authority:
+- State owner: `SkillStateService` (`apps/gateway/src/services/skill-state-service.ts`). Every change is a `skill.lifecycle` approval (HX-402); only the recovered `skill_lifecycle_apply` approval effect applies it.
+- Mutation: `PATCH /api/v1/skills/by-id/state`, `/api/v1/skills/:skillId/state` and `/api/v1/skills/bulk-state`, Chat's `/skill` commands, and the Capabilities switch `POST /api/v1/capabilities/skills/state` (`apps/gateway/src/services/capability-skill-actions-service.ts`). Each asks the state owner for the approval.
+- Read models: `GET /api/v1/capabilities/skills` (the Skills tab's list) and `GET /api/v1/capabilities/skills/detail` (one skill's details) from `apps/gateway/src/services/capability-skills-service.ts`; `GET /api/v1/capabilities/skills/usage` (chat turns that loaded each skill in the last 365 days) from `apps/gateway/src/services/capability-skill-usage-service.ts`
+
+Notes:
+- Only the Capabilities switch follows the operator's `settingsApprovalSkipEnabled` opt-in, and it still creates the approval: when the skip applies it resolves that approval at once as the requesting operator, with a recorded note and an `operator_approval_skipped` approvals-audit event. Switching on, or pausing a skill that is off, skips only with the opt-in on; turning a skill off, or pausing one that is on, skips even with it off (the starting state is the one recorded on the approval); a `remote_hardened` install always asks. See [docs/EVOLUTION_CONTROL_PLANE.md](./EVOLUTION_CONTROL_PLANE.md).
+- The Capabilities switch refuses before any approval exists, in plain words that name no skill: a pinned skill, a stale revision or another requester's identical request is a `409` whose `details.reason` is `pinned`, `stale` or `duplicate` (`CapabilitySkillStateRefusal`), and a skill the state owner can't find is a `404`. The owner looks skills up among the install's loaded skills, so a workspace's self-authored skills are listed with `switchable: false`.
+- Use counts come from the immutable chat turn capability profiles. `SkillListItem.usageCount` moves only on the resolve-activation route, so the Skills tab never shows it as uses.
+- The Skills tab lists every skill loaded for the workspace whatever its skill choices, and marks none as hidden. Chat, scheduled turns and remote workers do honour the choices: see Workspace Skill Choices.
+
 ### Chat Workspace Exploration and Delegated Scope
 
 Definition:
