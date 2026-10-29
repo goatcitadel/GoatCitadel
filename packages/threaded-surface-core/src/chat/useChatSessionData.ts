@@ -6,7 +6,6 @@ import {
   type ChatSessionBindingRecord,
   type ChatSessionPrefsRecord,
   type ChatSpecialistCandidateRecord,
-  type ChatThreadResponse,
   type LearnedMemoryItemRecord,
   type McpServerRecord,
   type McpServerTemplateRecord,
@@ -21,6 +20,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useChatThreadState } from "./use-chat-thread-state";
 import {
   fetchChatGeneratedArtifacts,
   fetchChatHistoryWindow,
@@ -103,7 +103,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
 
   const [projects, setProjects] = useState<ChatProjectsResponse | null>(null);
   const [sessions, setSessions] = useState<ChatSessionsResponse | null>(null);
-  const [thread, setThread] = useState<ChatThreadResponse | null>(null);
+  const [thread, setThread] = useChatThreadState();
   const [prefs, setPrefs] = useState<ChatSessionPrefsRecord | null>(null);
   const [binding, setBinding] = useState<ChatSessionBindingRecord | null>(null);
   const [generatedArtifacts, setGeneratedArtifacts] = useState<ChatGeneratedArtifactsResponse | null>(null);
@@ -204,7 +204,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
     setSpecialistCandidates([]);
     setMessagesLoading(false);
     setSecondaryLoading(false);
-  }, []);
+  }, [setThread]);
 
   const loadSidebar = useCallback(
     async (nextHistoryView: ChatHistoryView = historyView, options: ChatSidebarLoadOptions = {}) => {

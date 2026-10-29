@@ -434,3 +434,33 @@ function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThre
   // length means nothing changed — keep the original array's identity.
   return deduped.length === citations.length ? citations : deduped;
 }
+
+/**
+ * Keeps streamed reasoning when a fresh copy of the thread replaces the one in memory. The Gateway never saves
+ * `thinking`, so a reloaded thread (for example the one fetched when a turn ends) has none; without this the
+ * reasoning the operator just watched would vanish. Only the same conversation's turns that the new copy leaves
+ * without reasoning get the remembered text, and an unchanged thread is returned as is.
+ */
+export function carryOverStreamedThinking(
+  previous: ChatThreadResponse | null,
+  next: ChatThreadResponse | null,
+): ChatThreadResponse | null {
+  if (!previous || !next || previous === next || previous.sessionId !== next.sessionId) {
+    return next;
+  }
+  const remembered = new Map<string, string>();
+  for (const turn of previous.turns) {
+    if (turn.thinking) remembered.set(turn.turnId, turn.thinking);
+  }
+  if (remembered.size === 0) {
+    return next;
+  }
+  let changed = false;
+  const turns = next.turns.map((turn) => {
+    const thinking = remembered.get(turn.turnId);
+    if (!thinking || turn.thinking) return turn;
+    changed = true;
+    return { ...turn, thinking };
+  });
+  return changed ? { ...next, turns } : next;
+}

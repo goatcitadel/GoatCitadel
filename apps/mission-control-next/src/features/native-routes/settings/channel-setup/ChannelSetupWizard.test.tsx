@@ -1421,6 +1421,32 @@ describe("channel confirmed receipts and OAuth scope", () => {
     expect(textOf(renderer.root)).toContain("Channel draft saved.");
     renderer.unmount();
   });
+  it("keeps the outcome uncertain when the save receipt echoes a different public value", async () => {
+    channelApiMocks.updateChannelSetupDraft.mockImplementationOnce(
+      async (_draftId: string, input: { draft?: Record<string, unknown> }) => {
+        currentApiDraft = {
+          ...currentApiDraft,
+          revision: currentApiDraft.revision + 1,
+          draft: { ...input.draft, defaultChannelId: "111111111111111111" },
+        };
+        return currentApiDraft;
+      },
+    );
+    const renderer = await renderChannelsSection();
+    await click(findStepButton(renderer.root, "Paste your connection values"));
+    await changeValue(
+      findHostControl(renderer.root, "input", "channel-discord-draft-1-defaultChannelId"),
+      "987654321098765432",
+    );
+    await click(findButton(renderer.root, "Save draft"));
+    await flushWork();
+
+    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    expect(textOf(renderer.root)).toContain("did not acknowledge the submitted public fields");
+    expect(textOf(renderer.root)).toContain("Outcome uncertain");
+    expect(findButton(renderer.root, "Save draft").props.disabled).toBe(true);
+    renderer.unmount();
+  });
   it("accepts a save whose receipt withholds only the token in a public server address", async () => {
     const serverUrl = "https://chat.example.com/?token=abc";
     const withServerUrl: ChannelSetupDefinition = {
