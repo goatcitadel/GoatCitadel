@@ -73,6 +73,9 @@ vi.mock("./CitadelBlueprintSettings", () => ({
   CitadelBlueprintSettings: () => <OwnerProbe name="Blueprint owner" />,
 }));
 vi.mock("./ChannelsSettings", () => ({ ChannelsSettings: () => <OwnerProbe name="Channels owner" /> }));
+vi.mock("./PublicWebAddressSettings", () => ({
+  PublicWebAddressSettings: () => <OwnerProbe name="Public web address owner" />,
+}));
 vi.mock("./ToolGrantSettings", () => ({ ToolGrantSettings: () => <OwnerProbe name="Tool grants owner" /> }));
 vi.mock("./PermissionProfileSettings", () => ({
   PermissionProfileSettings: () => <OwnerProbe name="Permission owner" />,
@@ -233,6 +236,14 @@ describe("Settings section tabs", () => {
     expect(container.textContent).not.toContain("Llama owner");
     expect(container.querySelector('a[href="/settings/models#local-ai"]')?.textContent).toBe("Models › Local AI");
     expect(owner.mounted.mock.calls.filter(([name]) => name === "Llama owner")).toHaveLength(1);
+  });
+  it("puts the public web address above the channel setup that builds its addresses from it", async () => {
+    await render("/settings/connections?shell=cockpit#channels");
+    await vi.waitFor(() => expect(container.textContent).toContain("Channels owner"));
+    const text = container.textContent ?? "";
+    expect(text).toContain("Public web address owner");
+    expect(text.indexOf("Public web address owner")).toBeLessThan(text.indexOf("Channels owner"));
+    expect(text).not.toContain("does not match");
   });
   it("links Trust & policy to the one explanation of how rules combine", async () => {
     await render("/settings/safety?shell=cockpit#trust-policy");
