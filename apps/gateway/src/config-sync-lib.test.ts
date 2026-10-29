@@ -143,7 +143,13 @@ describe("sandbox root persistence", () => {
         },
       },
     } as unknown as GatewayRuntimeConfig;
-    const payload = buildUnifiedConfigPayloadFromRuntime(runtimeConfig, {} as never, {} as never, { jobs: [] }, relativeSerializer);
+    const payload = buildUnifiedConfigPayloadFromRuntime(
+      runtimeConfig,
+      {} as never,
+      {} as never,
+      { jobs: [] },
+      relativeSerializer,
+    );
     const sandbox = (payload.toolPolicy as { sandbox: Record<string, unknown> }).sandbox;
     expect(sandbox.operatorWriteRoots).toEqual([
       { allowDelete: true, preset: "os_temp" },

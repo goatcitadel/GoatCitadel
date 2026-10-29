@@ -123,8 +123,8 @@ export function buildUnifiedConfigPayloadFromRuntime(
       // path: it is re-resolved on the server at every load.
       ...(runtimeConfig.toolPolicy.sandbox.operatorWriteRoots
         ? {
-            operatorWriteRoots: runtimeConfig.toolPolicy.sandbox.operatorWriteRoots.map(({ path: rootPath, ...root }) =>
-              root.preset ? root : { ...root, path: serializeSandboxRoot(rootPath) },
+            operatorWriteRoots: runtimeConfig.toolPolicy.sandbox.operatorWriteRoots.map(
+              ({ path: rootPath, ...root }) => (root.preset ? root : { ...root, path: serializeSandboxRoot(rootPath) }),
             ),
           }
         : {}),
