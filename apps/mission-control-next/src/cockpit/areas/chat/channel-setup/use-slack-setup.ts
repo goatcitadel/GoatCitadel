@@ -253,7 +253,19 @@ export function useSlackSetup(workspaceId: string, resumeDraftId?: string): Slac
         set({ busy: false, error: SLACK_APP_TOKEN_FAILED });
         return;
       }
-      set({ workspace: check.workspace, bot: check.bot, ...savedChoices(found.draft), busy: false });
+      // The tokens were stored but the page went, or its last write failed, before the draft was set to receive over a
+      // socket. That is saved before the later steps open, so Turn on never finishes a connection that cannot receive.
+      let resumed = found;
+      if (found.draft.receiveMode !== "socket") {
+        const outcome = await saveSlackDraft(found, draftAsMadeHere(found.draft));
+        if (!live()) return;
+        if (outcome.kind === "failed") {
+          set({ ...(outcome.latest ? { draft: outcome.latest } : {}), busy: false, error: outcome.error });
+          return;
+        }
+        resumed = outcome.draft;
+      }
+      set({ draft: resumed, workspace: check.workspace, bot: check.bot, ...savedChoices(resumed.draft), busy: false });
     })();
     return () => {
       invalidate();

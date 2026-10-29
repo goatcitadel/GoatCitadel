@@ -276,7 +276,10 @@ lists Slack at "About 5 min".
   made, before the tokens are stored, so even a draft whose first check failed
   goes on where it was left: the page checks both stored tokens with Slack
   again, and who said hi and where it posts come back from the draft, so no new
-  code is asked for. When someone else says hi with a new code, they replace the
+  code is asked for. A draft whose tokens were stored before it was set to
+  `receiveMode: "socket"` (the page closed, or that write failed) is set then,
+  before the later steps open; if that write fails, they stay shut and the page
+  says why. When someone else says hi with a new code, they replace the
   earlier sender, whose direct messages are dropped from the draft. **Start
   over** discards the draft and its stored tokens.
 - **Allowed hosts.** Slack needs `slack.com` in the network allowlist, for the Web

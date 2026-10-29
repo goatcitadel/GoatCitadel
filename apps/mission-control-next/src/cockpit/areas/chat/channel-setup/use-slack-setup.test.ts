@@ -453,6 +453,42 @@ describe("useSlackSetup", () => {
     expect(current.busy).toBe(false);
   });
 
+  it("sets a resumed draft to receive over a socket when its tokens were stored before that was saved", async () => {
+    const halfSaved = pageDraft({ revision: 5, draft: { setupPage: "messaging", label: "kept" } });
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [halfSaved] });
+    api.checkSlackSetup.mockResolvedValue(checkResult());
+    api.updateChannelSetupDraft.mockImplementation(
+      async (_id: string, input: { expectedRevision: number; draft: Record<string, unknown> }) =>
+        pageDraft({ revision: input.expectedRevision + 1, draft: input.draft }),
+    );
+    await mount();
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", {
+      expectedRevision: 5,
+      draft: { setupPage: "messaging", label: "kept", receiveMode: "socket" },
+    });
+    expect(current.draft?.revision).toBe(6);
+    expect(current.draft?.draft.receiveMode).toBe("socket");
+    expect(current.workspace).toEqual({ id: "T1", name: "Goat Team" });
+    expect(current.error).toBeUndefined();
+    expect(halfSaved.draft).toEqual({ setupPage: "messaging", label: "kept" });
+    expect(protectedKeysWritten()).toEqual([]);
+  });
+
+  it("keeps the later steps shut when a resumed draft cannot be set to receive over a socket", async () => {
+    const halfSaved = pageDraft({ revision: 5, draft: { setupPage: "messaging" } });
+    const moved = pageDraft({ revision: 6, draft: { setupPage: "messaging" } });
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [halfSaved] });
+    api.checkSlackSetup.mockResolvedValue(checkResult());
+    api.updateChannelSetupDraft.mockRejectedValue(new Error("revision conflict"));
+    api.fetchChannelSetupDraft.mockResolvedValue(moved);
+    await mount();
+    expect(current.workspace).toBeNull();
+    expect(current.bot).toBeNull();
+    expect(current.draft?.revision).toBe(6);
+    expect(current.error).toEqual(expect.any(String));
+    expect(current.busy).toBe(false);
+  });
+
   it("leaves a resumed setup unchecked unless both tokens are stored", async () => {
     const stored: ChannelSetupDraft["secretState"][] = [
       {},
