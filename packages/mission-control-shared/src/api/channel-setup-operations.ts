@@ -3,6 +3,8 @@ import type {
   ChannelSetupDiscoveryResult,
   DiscordSetupCheckInput,
   DiscordSetupCheckResult,
+  SlackSetupCheckInput,
+  SlackSetupCheckResult,
   TelegramChannelPairingList,
   TelegramChannelPairingApproveInput,
   TelegramChannelPairingRevokeInput,
@@ -18,6 +20,9 @@ export function discoverTelegramSetupTargets(input: ChannelSetupDiscoveryInput):
 }
 export function checkDiscordSetup(input: DiscordSetupCheckInput): Promise<DiscordSetupCheckResult> {
   return request("/api/v1/channels/discord/setup-check", { method: "POST", body: JSON.stringify(input) });
+}
+export function checkSlackSetup(input: SlackSetupCheckInput): Promise<SlackSetupCheckResult> {
+  return request("/api/v1/channels/slack/setup-check", { method: "POST", body: JSON.stringify(input) });
 }
 export function fetchTelegramChannelPairings(connectionId: string): Promise<TelegramChannelPairingList> {
   return request(`${connectionPath(connectionId)}/telegram/pairings`, { cache: "no-store" });

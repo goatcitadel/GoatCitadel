@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import rateLimit from "@fastify/rate-limit";
 import { ValidationError } from "@goatcitadel/contracts";
 import {
   cleanupIntegrationTestApp,
@@ -503,6 +504,126 @@ describe("channel setup routes", () => {
       const response = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
       expect(response.statusCode).toBe(500);
       expect(response.body).not.toContain("abc.def");
+    });
+  });
+
+  describe("Slack setup check", () => {
+    const url = "/api/v1/channels/slack/setup-check";
+    const draftId = "11111111-1111-1111-1111-111111111111";
+    const result = {
+      workspace: { id: "T1", name: "Acme" },
+      bot: { userId: "UBOT", name: "goatcitadel" },
+      appToken: "ok",
+      codeSender: { actorId: "U1", directChannelId: "D2", displayName: "Sam" },
+      channels: [{ id: "C1", name: "general", private: false }],
+    };
+
+    async function appWith(checkSlackSetup: ReturnType<typeof vi.fn>, options: { rateLimited?: true } = {}) {
+      app = Fastify();
+      decorateIntegrationServices(app, { checkSlackSetup });
+      if (options.rateLimited) await app.register(rateLimit, { global: false, allowList: [] });
+      await app.register(integrationsRoutes);
+      return app;
+    }
+
+    it("passes a draft check through, and is never cached", async () => {
+      const checkSlackSetup = vi.fn(async () => result);
+      const server = await appWith(checkSlackSetup);
+      const payload = {
+        draftId,
+        expectedRevision: 3,
+        checkAppToken: true,
+        setupCode: "Ab3dEf7hJk",
+        listChannels: true,
+      };
+      const response = await server.inject({ method: "POST", url, payload });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual(result);
+      expect(checkSlackSetup).toHaveBeenCalledExactlyOnceWith(payload);
+      const bare = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+      expect(bare.statusCode).toBe(200);
+      expect(checkSlackSetup).toHaveBeenLastCalledWith({ draftId, expectedRevision: 3 });
+    });
+
+    it("takes a strict body", async () => {
+      const checkSlackSetup = vi.fn(async () => result);
+      const server = await appWith(checkSlackSetup);
+      for (const payload of [
+        { draftId, expectedRevision: 3, token: "xoxb-1" },
+        { draftId, expectedRevision: 3, botToken: "xoxb-1" },
+        { draftId, expectedRevision: 3, source: "draft" },
+        { draftId, expectedRevision: 3, guildId: "1234567890" },
+        { draftId, expectedRevision: 3, checkAppToken: false },
+        { draftId, expectedRevision: 3, checkAppToken: "yes" },
+        { draftId, expectedRevision: 3, listChannels: false },
+        { draftId, expectedRevision: 3, listChannels: 1 },
+        { draftId, expectedRevision: 3, setupCode: 12345 },
+        { draftId, expectedRevision: 3, setupCode: null },
+        { draftId: "not-a-guid", expectedRevision: 3 },
+        { draftId, expectedRevision: 0 },
+        { draftId, expectedRevision: 1.5 },
+        { draftId },
+        { expectedRevision: 3 },
+        {},
+      ]) {
+        const response = await server.inject({ method: "POST", url, payload });
+        expect(response.statusCode, JSON.stringify(payload)).toBe(400);
+        expect(response.headers["cache-control"]).toBe("no-store");
+      }
+      expect(checkSlackSetup).not.toHaveBeenCalled();
+    });
+
+    it("takes a setup code of at most 128 characters", async () => {
+      const checkSlackSetup = vi.fn(async () => result);
+      const server = await appWith(checkSlackSetup);
+      const tooLong = await server.inject({
+        method: "POST",
+        url,
+        payload: { draftId, expectedRevision: 3, setupCode: "a".repeat(129) },
+      });
+      expect(tooLong.statusCode).toBe(400);
+      expect(checkSlackSetup).not.toHaveBeenCalled();
+      const longest = await server.inject({
+        method: "POST",
+        url,
+        payload: { draftId, expectedRevision: 3, setupCode: "a".repeat(128) },
+      });
+      expect(longest.statusCode).toBe(200);
+      expect(checkSlackSetup).toHaveBeenCalledTimes(1);
+    });
+
+    it("answers a refusal with 400 and its fixed sentence", async () => {
+      const refusal = "Slack didn't accept the bot token.";
+      const checkSlackSetup = vi.fn().mockRejectedValue(new ValidationError({ message: refusal }));
+      const server = await appWith(checkSlackSetup);
+      const response = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+      expect(response.statusCode).toBe(400);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toMatchObject({ error: refusal });
+    });
+
+    it("answers anything unexpected with a generic 500 that quotes nothing", async () => {
+      const checkSlackSetup = vi
+        .fn()
+        .mockRejectedValue(new Error("Authorization: Bearer xoxb-1 wss://wss-primary.slack.com/link/?ticket=abc"));
+      const server = await appWith(checkSlackSetup);
+      const response = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+      expect(response.statusCode).toBe(500);
+      expect(response.body).not.toContain("xoxb-1");
+      expect(response.body).not.toContain("ticket");
+    });
+
+    it("allows 20 checks a minute, then answers 429", async () => {
+      const checkSlackSetup = vi.fn(async () => result);
+      const server = await appWith(checkSlackSetup, { rateLimited: true });
+      for (let index = 0; index < 20; index += 1) {
+        const response = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+        expect(response.statusCode).toBe(200);
+      }
+      const limited = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+      expect(limited.statusCode).toBe(429);
+      expect(checkSlackSetup).toHaveBeenCalledTimes(20);
     });
   });
 });

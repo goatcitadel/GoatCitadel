@@ -34,3 +34,32 @@ export interface DiscordSetupCheckResult {
   channels?: ChannelSetupPerson[];
   directChannelId?: string;
 }
+
+export interface SlackSetupCheckInput extends ChannelSetupCheckDraftRef {
+  /** Ask Slack whether the app-level token is accepted. Nothing is opened. */
+  checkAppToken?: true;
+  /** Look for this code in the bot's newest direct messages. */
+  setupCode?: string;
+  /** List the channels the bot is in. */
+  listChannels?: true;
+}
+
+/** Who sent the setup code to the bot, and the direct-message conversation it arrived in. */
+export interface SlackSetupCodeSender {
+  actorId: string;
+  directChannelId: string;
+  displayName?: string;
+}
+
+export interface SlackSetupCheckResult {
+  workspace: { id: string; name: string };
+  bot: { userId: string; name: string };
+  /** Present only when `checkAppToken` was asked. `missing` means the draft has no app-level token to try. */
+  appToken?: "ok" | "rejected" | "missing";
+  /** Present only when `setupCode` was asked and someone sent it. */
+  codeSender?: SlackSetupCodeSender;
+  /** The bot has more direct-message conversations than GoatCitadel looked at. */
+  manyConversations?: true;
+  /** Channels the bot is in, by name. Present only when `listChannels` was asked. */
+  channels?: Array<{ id: string; name: string; private: boolean }>;
+}

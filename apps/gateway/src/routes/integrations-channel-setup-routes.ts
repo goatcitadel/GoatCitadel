@@ -30,6 +30,15 @@ const discordSetupCheckSchema = z
     directMessageWith: discordIdSchema.optional(),
   })
   .strict();
+const slackSetupCheckSchema = z
+  .object({
+    draftId: z.guid(),
+    expectedRevision: z.number().int().positive(),
+    checkAppToken: z.literal(true).optional(),
+    setupCode: z.string().max(128).optional(),
+    listChannels: z.literal(true).optional(),
+  })
+  .strict();
 
 export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance): void {
   fastify.addHook("preHandler", async (request, reply) => {
@@ -86,6 +95,24 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
           .send({ error: "A Discord setup check needs a draft and its current revision, and takes only Discord ids." });
       try {
         return reply.send(await fastify.services.channelSetup.checkDiscordSetup(parsed.data));
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+  // Reads Slack with a draft's saved tokens and answers with names only. Never logged, never cached.
+  fastify.post(
+    "/api/v1/channels/slack/setup-check",
+    { logLevel: "silent", config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsed = slackSetupCheckSchema.safeParse(request.body);
+      reply.header("cache-control", "no-store");
+      if (!parsed.success)
+        return reply.code(400).send({
+          error: "A Slack setup check needs a draft and its current revision, and takes only the checks Slack offers.",
+        });
+      try {
+        return reply.send(await fastify.services.channelSetup.checkSlackSetup(parsed.data));
       } catch (error) {
         return sendRouteError(reply, error, request.log);
       }
