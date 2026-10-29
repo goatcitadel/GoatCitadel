@@ -6,6 +6,7 @@ import {
   type CapabilityCatalogEntry,
   type SkillListItem,
 } from "@goatcitadel/contracts";
+import { CATALOG_CANDIDATE_VERSION_LIMIT } from "./capability-skills-projection.js";
 import { CapabilitySkillsService, type CapabilitySkillsSources } from "./capability-skills-service.js";
 import {
   buildSkillLifecycleApprovalBinding,
@@ -153,6 +154,19 @@ describe("CapabilitySkillsService.list", () => {
     ).list(WORKSPACE_ID);
 
     expect(response.candidatesWaiting).toBe(2);
+  });
+
+  it("leaves candidatesWaiting out when the catalog cut its candidate list off", async () => {
+    const versions = Array.from({ length: CATALOG_CANDIDATE_VERSION_LIMIT }, (_, index) =>
+      candidate(`workflow-${index}`, "v1"),
+    );
+
+    const response = await new CapabilitySkillsService(
+      sources({ listInspectableCatalog: vi.fn(async () => versions) }),
+    ).list(WORKSPACE_ID);
+
+    expect(response).not.toHaveProperty("candidatesWaiting");
+    expect(response.issues).toEqual([]);
   });
 
   it("leaves candidatesWaiting out when the catalog can't be read", async () => {

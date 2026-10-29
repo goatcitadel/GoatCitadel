@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type {
   ApprovalRequest,
@@ -8,6 +9,7 @@ import type {
 import {
   buildCapabilitySkillDetail,
   buildCapabilitySkillItems,
+  CATALOG_CANDIDATE_VERSION_LIMIT,
   countWaitingCandidates,
   hiddenSkillIds,
   pendingSkillApprovalIds,
@@ -311,6 +313,23 @@ describe("countWaitingCandidates", () => {
     const { candidateId: _omitted, ...withoutId } = candidateEntry("workflow-a", "v2", "candidate");
 
     expect(countWaitingCandidates([candidateEntry("workflow-a", "v1", "candidate"), withoutId])).toBe(1);
+  });
+
+  it("gives no count once the catalog's candidate list reaches its limit, since older ones may be cut off", () => {
+    // Mostly decided versions: the waiting ones the catalog shows are fewer than the ones that may wait.
+    const versions = (count: number) =>
+      Array.from({ length: count }, (_, index) =>
+        candidateEntry(`workflow-${index}`, "v1", index < 3 ? "candidate" : "approved"),
+      );
+
+    expect(countWaitingCandidates(versions(CATALOG_CANDIDATE_VERSION_LIMIT - 1))).toBe(3);
+    expect(countWaitingCandidates(versions(CATALOG_CANDIDATE_VERSION_LIMIT))).toBeUndefined();
+  });
+
+  it("uses the same limit as the catalog's candidate list", () => {
+    const catalog = readFileSync(new URL("./capability-system-service.ts", import.meta.url), "utf8");
+
+    expect(catalog).toContain(`storage.candidateSkillVersions.list(${CATALOG_CANDIDATE_VERSION_LIMIT})`);
   });
 });
 

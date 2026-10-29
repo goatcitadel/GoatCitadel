@@ -81,6 +81,7 @@ export class CapabilitySkillsService {
       ...(approvals.ok ? [] : [ISSUE_MESSAGES.approvals]),
       ...(switchable.ok ? [] : [ISSUE_MESSAGES.switchable]),
     ];
+    const candidatesWaiting = catalog.ok ? countWaitingCandidates(catalog.value) : undefined;
     return {
       workspaceId,
       items: buildCapabilitySkillItems({
@@ -94,7 +95,8 @@ export class CapabilitySkillsService {
         switchableSkillIds: new Set(switchable.ok ? switchable.value : []),
         shippedSkillDirs: this.sources.shippedSkillDirs(),
       }),
-      ...(catalog.ok ? { candidatesWaiting: countWaitingCandidates(catalog.value) } : {}),
+      // Absent when the catalog couldn't be read, or when it cut its candidate list off.
+      ...(candidatesWaiting === undefined ? {} : { candidatesWaiting }),
       operatorApprovalSkip,
       issues,
       generatedAt: new Date().toISOString(),

@@ -71,7 +71,11 @@ export interface CapabilitySkillsResponse {
   workspaceId: string;
   /** Every skill loaded for the workspace, including its approved self-authored skills, ordered by name. */
   items: CapabilitySkillItem[];
-  /** Candidate skills waiting for review, once per candidate. Absent when it couldn't be read. */
+  /**
+   * Candidate skills waiting for review across the whole install, not only this workspace, once per candidate. Absent
+   * when it couldn't be read, or when the catalog's candidate list reached its limit, so an undercount is never shown as
+   * exact.
+   */
   candidatesWaiting?: number;
   /**
    * Whether the operator's setting to skip approvals for their own changes applies here, which is what decides

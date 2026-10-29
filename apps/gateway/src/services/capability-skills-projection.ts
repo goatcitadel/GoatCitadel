@@ -93,13 +93,23 @@ export function pendingSkillApprovalIds(approvals: readonly ApprovalRequest[]): 
 }
 
 /**
- * Candidate skills still waiting for review. The catalog lists one entry per version
- * (`candidate:<candidateId>:<versionId>`), so a candidate counts once however many of its versions wait.
+ * How many candidate skill versions the catalog lists at most: the most recently updated ones, across the whole
+ * install (`candidateSkillVersions.list(200)` in CapabilitySystemService's catalog).
  */
-export function countWaitingCandidates(catalog: readonly CapabilityCatalogEntry[]): number {
+export const CATALOG_CANDIDATE_VERSION_LIMIT = 200;
+
+/**
+ * Candidate skills still waiting for review, across the whole install. The catalog lists one entry per version
+ * (`candidate:<candidateId>:<versionId>`), so a candidate counts once however many of its versions wait. When the
+ * catalog's candidate entries reach its limit, older ones may be cut off, so there is no count rather than an
+ * undercount shown as exact.
+ */
+export function countWaitingCandidates(catalog: readonly CapabilityCatalogEntry[]): number | undefined {
+  const candidateEntries = catalog.filter((entry) => entry.kind === "candidate_skill");
+  if (candidateEntries.length >= CATALOG_CANDIDATE_VERSION_LIMIT) return undefined;
   const waiting = new Set<string>();
-  for (const entry of catalog) {
-    if (entry.kind !== "candidate_skill" || entry.lifecycleState !== "candidate") continue;
+  for (const entry of candidateEntries) {
+    if (entry.lifecycleState !== "candidate") continue;
     const candidateId = entry.candidateId ?? entry.capabilityId.split(":")[1];
     if (candidateId) waiting.add(candidateId);
   }
