@@ -33,7 +33,10 @@ const NOT_SWITCHABLE_MESSAGE = "This skill can't be switched from here.";
 const REFUSALS = {
   pinned: { code: "STATE_CONFLICT", message: "This skill is pinned. Change it through a proposal in Library." },
   stale: { code: "WRITE_CONFLICT", message: "This skill changed since you opened it. Reload and try again." },
-  duplicate: { code: "ALREADY_EXISTS", message: "This exact change was already asked for elsewhere. Check the Inbox." },
+  duplicate: {
+    code: "ALREADY_EXISTS",
+    message: "Someone already asked for this exact change, and it is waiting for approval.",
+  },
 } as const satisfies Record<CapabilitySkillStateRefusal, { code: ConflictError["code"]; message: string }>;
 // Each read lists the workspace's skills, its choices, the inspectable catalog and the waiting approvals.
 const LIST_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;

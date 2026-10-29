@@ -414,7 +414,7 @@ describe("capability skill state route", () => {
         message: "Approval 7f0c2a59-3a52-5d0e-9b8e-0c6c7b8d9e01 already exists with different immutable request bytes.",
       }),
       {
-        error: "This exact change was already asked for elsewhere. Check the Inbox.",
+        error: "Someone already asked for this exact change, and it is waiting for approval.",
         code: "ALREADY_EXISTS",
         details: { reason: "duplicate" },
       },

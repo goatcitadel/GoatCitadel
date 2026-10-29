@@ -583,7 +583,7 @@ describe("useSkillSwitch", () => {
   });
 
   it("shows the route's own message for a 409 or 404", async () => {
-    const duplicate = "This exact change was already asked for elsewhere. Check the Inbox.";
+    const duplicate = "Someone already asked for this exact change, and it is waiting for approval.";
     const notSwitchable = "This skill can't be switched from here.";
     skills.setCapabilitySkillState
       .mockRejectedValueOnce(refused(409, duplicate, "duplicate"))
