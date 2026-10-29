@@ -264,6 +264,64 @@ describe("buildCapabilitySkillItems", () => {
       tags: ["docs"],
     });
   });
+
+  describe("leftOutOfWorkspace", () => {
+    const SKILLS = [
+      skill({ skillId: "bundled:research", source: "bundled", name: "research" }),
+      skill({ skillId: "extra:pdf-tools", name: "pdf-tools" }),
+      skill({
+        skillId: "extra:reviewed-0123456789ab",
+        name: "inspect-work-item",
+        capabilityCategory: "self_generated",
+      }),
+    ];
+    const leftOut = (turnSkillIds: ReadonlySet<string> | undefined) =>
+      Object.fromEntries(
+        buildCapabilitySkillItems({ ...ITEMS_INPUT, skills: SKILLS, turnSkillIds }).map((item) => [
+          item.skillId,
+          item.leftOutOfWorkspace,
+        ]),
+      );
+
+    it("marks a skill the workspace's choices leave out", () => {
+      expect(leftOut(new Set(["bundled:research", "extra:reviewed-0123456789ab"]))).toEqual({
+        "bundled:research": false,
+        "extra:pdf-tools": true,
+        "extra:reviewed-0123456789ab": false,
+      });
+    });
+
+    it("marks nothing when the workspace chooses all skills", () => {
+      expect(leftOut(new Set(SKILLS.map((item) => item.skillId)))).toEqual({
+        "bundled:research": false,
+        "extra:pdf-tools": false,
+        "extra:reviewed-0123456789ab": false,
+      });
+    });
+
+    it("never marks the workspace's own self-authored skills", () => {
+      // No choice can name a self-authored skill, so the turn list always carries it.
+      const marks = leftOut(new Set(["extra:reviewed-0123456789ab"]));
+
+      expect(marks["extra:reviewed-0123456789ab"]).toBe(false);
+      expect(marks["bundled:research"]).toBe(true);
+    });
+
+    it("marks a skill when the workspace chose no skill at all", () => {
+      expect(leftOut(new Set<string>())).toEqual({
+        "bundled:research": true,
+        "extra:pdf-tools": true,
+        "extra:reviewed-0123456789ab": true,
+      });
+    });
+
+    it("leaves the mark out of every row when the workspace's skills weren't read", () => {
+      const items = buildCapabilitySkillItems({ ...ITEMS_INPUT, skills: SKILLS });
+
+      expect(items).toHaveLength(3);
+      expect(items.some((item) => "leftOutOfWorkspace" in item)).toBe(false);
+    });
+  });
 });
 
 describe("countWaitingCandidates", () => {

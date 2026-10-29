@@ -55,6 +55,14 @@ export interface CapabilitySkillItem {
    * `true` but still refused (see `pinned`).
    */
   switchable: boolean;
+  /**
+   * `true` when the workspace's skill choices leave this skill out: the workspace's own selection, narrowed by its
+   * Citadel's, doesn't include it, so its Chat turns, scheduled turns and remote workers neither load nor call it,
+   * whatever its switch says. The row is listed anyway. `false` when they may load it: every skill when nothing is
+   * chosen, and always the workspace's own approved self-authored skills, which no choice can name. Absent when which
+   * skills the workspace's turns may load couldn't be read, with an issue line saying so; it is never guessed.
+   */
+  leftOutOfWorkspace?: boolean;
   pinned: boolean;
   lifecycleState?: SkillLifecycleState;
   tags: string[];
@@ -116,9 +124,9 @@ export interface CapabilitySkillDetail {
  * approval it already made while that one waits or once it is approved.
  * - `approved`: approved, by the skip now or earlier, and its own effect applies the change (or already has).
  * - `waiting`: it waits in the Inbox for the operator.
- * - `declined`: the request was turned down, so nothing changes. `expired` when the expiry check rejected it: no one
- *   answered in time, or it ran out just as the skip approved it. Otherwise the operator rejected or edited it. Asking
- *   again makes a fresh approval, linked to this one.
+ * - `declined`: the switch answers this only for the expiry race: the approval ran out of time just as the skip approved
+ *   it, so `expired` is `true` and nothing changes. Asking again makes a fresh approval, linked to this one, as it does
+ *   after any decline or expiry. The type keeps `expired` as a flag because other changes reuse this outcome.
  * - `unchanged`: the skill is already in that state, so nothing was asked.
  */
 export type CapabilitySkillActionOutcome =

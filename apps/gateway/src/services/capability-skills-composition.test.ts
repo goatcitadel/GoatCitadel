@@ -77,6 +77,8 @@ function owners(overrides: Partial<CapabilitySkillsOwners> = {}): CapabilitySkil
       setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => WAITING),
     },
     loadedSkills: vi.fn(() => [{ skillId: "bundled:research" }]),
+    // A workspace that chose nothing: its turns may load every skill.
+    listWorkspaceTurnSkills: vi.fn(async () => [RESEARCH]),
     capabilities: { listCapabilityCatalog: vi.fn(async () => []) },
     approvals: {
       listApprovalsPage: vi.fn(async (): Promise<ApprovalListResponse> => ({ items: [] })),
@@ -185,6 +187,58 @@ describe("composeCapabilitySkills", () => {
       ["bundled:research", true],
     ]);
     expect(parts.loadedSkills).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks the skills the workspace's turns may not load, from the reader Chat itself uses", async () => {
+    const pdfTools: SkillListItem = { ...RESEARCH, skillId: "extra:pdf-tools", name: "pdf-tools", source: "extra" };
+    const parts = owners({
+      skills: {
+        listSkills: vi.fn(async () => [RESEARCH, pdfTools]),
+        setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => WAITING),
+      },
+      listWorkspaceTurnSkills: vi.fn(async () => [RESEARCH]),
+    });
+
+    const response = await composeCapabilitySkills(parts).skills.list("workspace-a");
+
+    expect(parts.listWorkspaceTurnSkills).toHaveBeenCalledExactlyOnceWith("workspace-a");
+    expect(response.items.map((item) => [item.skillId, item.leftOutOfWorkspace])).toEqual([
+      ["extra:pdf-tools", true],
+      ["bundled:research", false],
+    ]);
+    expect(response.issues).toEqual([]);
+  });
+
+  it("writes a failed read of the workspace's turn skills to the log, and shows only plain wording", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const listWorkspaceTurnSkills = vi.fn(async (): Promise<SkillListItem[]> => {
+        throw new Error("choices store rejected Authorization: Bearer sk-live-abcdefghijklmnopqrstuvwxyz0123456789");
+      });
+
+      const response = await composeCapabilitySkills(owners({ listWorkspaceTurnSkills })).skills.list("workspace-a");
+
+      const logged = stderr.mock.calls
+        .map(([chunk]) => String(chunk))
+        .filter((line) => line.includes("a Capabilities skills source could not be read"));
+      expect(logged).toHaveLength(1);
+      expect(JSON.parse(logged[0] ?? "{}")).toMatchObject({ level: "error", source: "turn_skills" });
+      expect(logged[0]).toContain("choices store rejected");
+      expect(logged[0]).not.toContain("sk-live-abcdefghijklmnopqrstuvwxyz0123456789");
+      expect(JSON.stringify(response)).not.toContain("choices store rejected");
+      expect(response.items.some((item) => "leftOutOfWorkspace" in item)).toBe(false);
+      expect(response.issues).toEqual(["Which skills this workspace's chats can use couldn't be read right now."]);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("is wired to the reader Chat's turns use, so a left-out skill is exactly one they can't load", () => {
+    const source = readFileSync(new URL("./gateway-service.ts", import.meta.url), "utf8");
+
+    expect(source).toContain(
+      "listWorkspaceTurnSkills: (workspaceId) => this.workspaceTurnSkills.listSkills(workspaceId),",
+    );
   });
 
   it("is wired to the same skill lookup GatewayService gives the skill state owner", () => {
