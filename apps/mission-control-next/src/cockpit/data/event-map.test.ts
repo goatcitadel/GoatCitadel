@@ -188,6 +188,63 @@ describe("resolveRealtimeEvent", () => {
     expect(otherKeys).not.toContainEqual(["tools", "capability-tools"]);
   });
 
+  it("refreshes the skill list and details when a skill change applies, and no event re-reads the use counts", () => {
+    const listPrefix = ["skills", "capability-skills"];
+    const detailPrefix = ["skills", "capability-skill-detail"];
+    // The prefixes cover the per-workspace list and the per-skill details, so a change refreshes whichever is open.
+    expect(queryKeys.capabilitySkills("ws-1").slice(0, 2)).toEqual(listPrefix);
+    expect(queryKeys.capabilitySkillDetail("ws-1", "s-1").slice(0, 2)).toEqual(detailPrefix);
+    expect(queryKeys.capabilitySkillUsage().slice(0, 2)).toEqual(["skills", "capability-skill-usage"]);
+    // The Gateway publishes both skill events with source `skills`: a switch asking for approval, and a change applying.
+    for (const type of ["skill_mutation_approval_requested", "skill_state_mutation_applied"]) {
+      const result = resolveRealtimeEvent(event(type, "skills"));
+      expect(result.kind).toBe("mapped");
+      const keys = result.kind === "mapped" ? result.effect.keys : [];
+      expect(keys).toContainEqual(listPrefix);
+      expect(keys).toContainEqual(detailPrefix);
+      // These events name the prefixes, not the use counts' key and not the whole `skills` topic.
+      expect(keys).not.toContainEqual(queryKeys.capabilitySkillUsage());
+      expect(keys).not.toContainEqual(["skills"]);
+    }
+    // The curator and capability owners move candidates and proposals, which the list's waiting count reads.
+    for (const source of ["curator", "capabilities"]) {
+      const result = resolveRealtimeEvent(event("capability_updated", source));
+      const keys = result.kind === "mapped" ? result.effect.keys : [];
+      expect(keys).toContainEqual(listPrefix);
+      expect(keys).toContainEqual(detailPrefix);
+      expect(keys).not.toContainEqual(queryKeys.capabilitySkillUsage());
+    }
+    // A replay gap is the one event that re-reads the whole `skills` topic, use counts included.
+    const gap = resolveRealtimeEvent(event("replay_gap", "gateway", { payload: { kind: "replay_gap" } }));
+    expect(gap.kind === "mapped" ? gap.effect.keys : []).toContainEqual(["skills"]);
+  });
+
+  it("leaves the approvals rule alone: a resolved approval re-reads only the approval queries", () => {
+    // A declined skill approval publishes no skills event, so the switch hook's own poll covers that case.
+    expect(resolveRealtimeEvent(event("approval_resolved", "approvals", { links: { approvalId: "a-1" } }))).toEqual({
+      kind: "mapped",
+      effect: { keys: [["approvals"]], refresh: ["approvals"] },
+    });
+  });
+
+  it("refreshes the skill list when a runtime settings change plan moves, because the skip setting decides the switch", () => {
+    // `operatorApprovalSkip` is read from the settings, so its change re-reads the list that carries it.
+    expect(SETTINGS_READER_KEYS).toContainEqual(["skills", "capability-skills"]);
+    const result = resolveRealtimeEvent(
+      event("change_plan.completed", "evolution_control_plane", {
+        payload: { targetOwnerId: "runtime_settings", planId: "p-1" },
+      }),
+    );
+    const keys = result.kind === "mapped" ? result.effect.keys : [];
+    expect(keys).toContainEqual(["skills", "capability-skills"]);
+    // Other change plans leave the list alone.
+    const other = resolveRealtimeEvent(
+      event("change_plan.completed", "evolution_control_plane", { payload: { targetOwnerId: "workspace_config" } }),
+    );
+    const otherKeys = other.kind === "mapped" ? other.effect.keys : [];
+    expect(otherKeys).not.toContainEqual(["skills", "capability-skills"]);
+  });
+
   it("refreshes every settings reader when a runtime settings change plan moves", () => {
     for (const targetOwnerId of ["runtime_settings", "runtime_settings.llm_defaults"]) {
       const result = resolveRealtimeEvent(

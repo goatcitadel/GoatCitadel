@@ -1,0 +1,42 @@
+import { queryOptions } from "@tanstack/react-query";
+import {
+  fetchCapabilitySkillDetail,
+  fetchCapabilitySkillUsage,
+  fetchCapabilitySkills,
+} from "@goatcitadel/mission-control-shared/api/capability-skills";
+import { queryKeys } from "./query-keys";
+
+/**
+ * The Capabilities installed skills for one workspace. Every observer of this key must use these options (the Skills
+ * tab, and the skill panel with `enabled: false`): all observers write their options onto the one shared query, so an
+ * observer that carried no `queryFn` of its own would leave the next re-read with nothing to run.
+ */
+export function skillListQuery(workspaceId: string) {
+  return queryOptions({
+    queryKey: queryKeys.capabilitySkills(workspaceId),
+    queryFn: ({ signal }) => fetchCapabilitySkills(workspaceId, { signal }),
+  });
+}
+
+/**
+ * A year of skill use counts. They change slowly and the Gateway caches them, so a minute is fresh enough. A manual
+ * refresh asks the Gateway to re-count through `fetchCapabilitySkillUsage({ refresh: true })`.
+ */
+export function skillUsageQuery() {
+  return queryOptions({
+    queryKey: queryKeys.capabilitySkillUsage(),
+    queryFn: ({ signal }) => fetchCapabilitySkillUsage({ signal }),
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * One skill's details for its panel. Every observer of this key must use these options, for the same reason as the
+ * list: the key names the workspace and the skill, so a skill change refreshes it through the shared prefix.
+ */
+export function skillDetailQuery(workspaceId: string, skillId: string) {
+  return queryOptions({
+    queryKey: queryKeys.capabilitySkillDetail(workspaceId, skillId),
+    queryFn: ({ signal }) => fetchCapabilitySkillDetail(workspaceId, skillId, { signal }),
+  });
+}
