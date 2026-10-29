@@ -46,6 +46,8 @@ describe("presentSkillState", () => {
     tone: string;
     reason: string;
     link?: { label: string; href: string };
+    /** Which row of the order matched, for the views that word a state's own note (the panel's On and Paused lines). */
+    kind: string;
   }> = [
     {
       name: "waiting on an approval",
@@ -53,6 +55,7 @@ describe("presentSkillState", () => {
       label: "Waiting for your approval",
       tone: "waiting",
       reason: "The change applies once you approve it.",
+      kind: "waiting",
     },
     {
       name: "waiting before the approval is known",
@@ -60,6 +63,7 @@ describe("presentSkillState", () => {
       label: "Waiting for your approval",
       tone: "waiting",
       reason: "The change applies once you approve it.",
+      kind: "waiting",
     },
     {
       name: "waiting beats off",
@@ -68,6 +72,7 @@ describe("presentSkillState", () => {
       label: "Waiting for your approval",
       tone: "waiting",
       reason: "The change applies once you approve it.",
+      kind: "waiting",
     },
     {
       name: "off",
@@ -75,6 +80,7 @@ describe("presentSkillState", () => {
       label: "Off",
       tone: "neutral",
       reason: "The AI can't use it",
+      kind: "off",
     },
     {
       name: "off beats left out",
@@ -82,6 +88,7 @@ describe("presentSkillState", () => {
       label: "Off",
       tone: "neutral",
       reason: "The AI can't use it",
+      kind: "off",
     },
     {
       name: "left out of this workspace",
@@ -90,6 +97,7 @@ describe("presentSkillState", () => {
       tone: "waiting",
       reason: "This workspace's skill choices leave it out, so the AI can't use it here.",
       link: { label: "Change this workspace's skills", href: WORKSPACE_CAPABILITIES_HREF },
+      kind: "left_out",
     },
     {
       name: "left out beats paused",
@@ -98,6 +106,7 @@ describe("presentSkillState", () => {
       tone: "waiting",
       reason: "This workspace's skill choices leave it out, so the AI can't use it here.",
       link: { label: "Change this workspace's skills", href: WORKSPACE_CAPABILITIES_HREF },
+      kind: "left_out",
     },
     {
       name: "a candidate that isn't reviewed",
@@ -105,6 +114,7 @@ describe("presentSkillState", () => {
       label: "Not usable yet",
       tone: "waiting",
       reason: "It hasn't been reviewed, so the AI can't use it",
+      kind: "not_usable",
     },
     {
       name: "a draft",
@@ -112,6 +122,7 @@ describe("presentSkillState", () => {
       label: "Not usable yet",
       tone: "waiting",
       reason: "It's a draft, so the AI can't use it",
+      kind: "not_usable",
     },
     {
       name: "a retired skill",
@@ -119,6 +130,7 @@ describe("presentSkillState", () => {
       label: "Retired",
       tone: "neutral",
       reason: "It's retired, so the AI can't use it",
+      kind: "not_usable",
     },
     {
       name: "a revoked skill",
@@ -126,6 +138,7 @@ describe("presentSkillState", () => {
       label: "Revoked",
       tone: "failed",
       reason: "It was revoked, so the AI can't use it",
+      kind: "not_usable",
     },
     {
       name: "an approved skill the list calls not callable",
@@ -133,6 +146,7 @@ describe("presentSkillState", () => {
       label: "Not usable yet",
       tone: "waiting",
       reason: "The AI can't use it yet",
+      kind: "not_usable",
     },
     {
       name: "a not-callable skill with no review state",
@@ -140,6 +154,7 @@ describe("presentSkillState", () => {
       label: "Not usable yet",
       tone: "waiting",
       reason: "The AI can't use it yet",
+      kind: "not_usable",
     },
     {
       name: "not callable beats paused",
@@ -147,6 +162,7 @@ describe("presentSkillState", () => {
       label: "Not usable yet",
       tone: "waiting",
       reason: "It hasn't been reviewed, so the AI can't use it",
+      kind: "not_usable",
     },
     {
       name: "paused",
@@ -154,13 +170,14 @@ describe("presentSkillState", () => {
       label: "Paused",
       tone: "neutral",
       reason: "Used only when you name it",
+      kind: "paused",
     },
-    { name: "on and callable", label: "On", tone: "done", reason: USES },
+    { name: "on and callable", label: "On", tone: "done", reason: USES, kind: "on" },
   ];
 
-  it.each(CASES)("words $name", ({ item, wait = IDLE, label, tone, reason, link }) => {
+  it.each(CASES)("words $name", ({ item, wait = IDLE, label, tone, reason, link, kind }) => {
     const present = presentSkillState(skill(item), wait, USES);
-    expect(present).toMatchObject({ label, tone, reason });
+    expect(present).toMatchObject({ label, tone, reason, kind });
     expect(present.link).toEqual(link);
   });
 

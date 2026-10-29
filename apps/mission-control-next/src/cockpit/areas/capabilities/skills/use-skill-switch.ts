@@ -88,6 +88,7 @@ export interface SkillSwitch {
 
 type Failure = NonNullable<SkillSwitch["failure"]>;
 type WaitingEntry = Extract<SkillSwitchEntry, { phase: "waiting" }>;
+type FailedEntry = Extract<SkillSwitchEntry, { phase: "failed" }>;
 
 /** Where one skill's list lives, for the checks that run once no view of the skill is mounted. */
 interface ListContext {
@@ -167,11 +168,19 @@ function fail(
 ) {
   const entry = readSkillSwitch(skillId);
   if (entry?.phase === "waiting") settled.add(entry.approvalId);
-  setSkillSwitch(skillId, { phase: "failed", message, conflict, ...(change ? { change } : {}) });
+  const context = contexts.get(skillId);
+  // The version the line is about: once the skill moves past it some other way, the line no longer holds.
+  const revision = context ? rowOf(context, skillId)?.revision : undefined;
+  setSkillSwitch(skillId, {
+    phase: "failed",
+    message,
+    conflict,
+    ...(change ? { change } : {}),
+    ...(revision === undefined ? {} : { revision }),
+  });
   forget(skillId);
   // Whatever happened, the list shows what is held now. A decline sends no skill event, so this also drops the
   // list's waiting mark.
-  const context = contexts.get(skillId);
   if (readAgain && context) void readList(context);
 }
 
@@ -336,19 +345,42 @@ async function send(
   if (readSkillSwitch(skillId) === SAVING) receive(item, target, outcome);
 }
 
+/**
+ * Follows the approval the list marks as waiting, unless this tab already took on how it ended. Says whether it did.
+ * Nobody here asked for it, so it is a picked-up wait: not read out, and it opens nothing by itself.
+ */
+function pickUpWait(item: CapabilitySkillItem, context: ListContext): boolean {
+  const { skillId, pendingApprovalId: approvalId } = item;
+  if (!approvalId || settled.has(approvalId)) return false;
+  contexts.set(skillId, context);
+  startWaiting({ phase: "waiting", skillId, approvalId, from: item.state, recovered: true });
+  return true;
+}
+
+/** Whether a failure's line no longer says anything true about the skill the list shows. */
+function failureOutdated(entry: FailedEntry, item: CapabilitySkillItem): boolean {
+  // A change still being applied when the checks ran out: the line goes once the list shows it.
+  if (entry.change) return shows(entry.change, item);
+  // A conflict keeps its line and its Reload until the operator reloads: the list read after it is newer by nature.
+  if (entry.conflict) return false;
+  // Any other line (a decline, an expiry, a refusal) is about the version it failed on.
+  return entry.revision !== undefined && item.revision !== entry.revision;
+}
+
 /** Takes on what the list says about the skill: a wait from before a reload, or a change that now shows. */
 function observe(item: CapabilitySkillItem, context: ListContext) {
   const { skillId } = item;
   const entry = readSkillSwitch(skillId);
   if (!entry) {
-    const approvalId = item.pendingApprovalId;
-    if (!approvalId || settled.has(approvalId)) return;
-    contexts.set(skillId, context);
-    return startWaiting({ phase: "waiting", skillId, approvalId, from: item.state, recovered: true });
+    pickUpWait(item, context);
+    return;
   }
   if (entry.phase === "saving") return;
   if (entry.phase === "failed") {
-    if (entry.change && shows(entry.change, item)) setSkillSwitch(skillId, undefined);
+    // A newer approval the list marks (asked for again in Chat, or the one a duplicate refusal points at) replaces the
+    // line, because the Skills tab is the only place a skill approval can be decided. The approval this tab saw end is
+    // settled, so its line stays until the next click, or until the skill moves past it.
+    if (!pickUpWait(item, context) && failureOutdated(entry, item)) setSkillSwitch(skillId, undefined);
     return;
   }
   if (shows(entry, item)) return finish(skillId);

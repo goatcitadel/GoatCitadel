@@ -1,4 +1,4 @@
-import { useId, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import { SKILL_ORIGIN_LABELS, type CapabilitySkillItem } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
@@ -36,7 +36,8 @@ export interface SkillRowProps {
  * row from the cached list.
  *
  * A change that waits is approved in the skill's panel, never in Inbox, which can't show a skill approval: the row's
- * Review button opens the panel with the approval open in it.
+ * Review button opens the panel with the approval open in it. A flip of the row's own switch that starts a wait opens
+ * the panel by itself, so approving takes one more click; a wait found when the list loads opens nothing.
  */
 export function SkillRow({ item, uses, onView }: SkillRowProps) {
   const sw = useSkillSwitch(item);
@@ -47,6 +48,18 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
   // different object, even with the same words.
   const mountedWith = useRef(sw.failure);
   const announceFailure = sw.failure !== mountedWith.current;
+  // Set by a flip of this row's switch until its request settles. A flip in the panel leaves it alone: the panel is
+  // already open there.
+  const flipped = useRef(false);
+  const flip = (next: boolean) => {
+    flipped.current = true;
+    sw.setOn(next);
+  };
+  useEffect(() => {
+    if (!flipped.current || sw.pending) return;
+    flipped.current = false;
+    if (sw.waiting && sw.waitStartedHere) onView(item.skillId);
+  }, [sw.pending, sw.waiting, sw.waitStartedHere, item.skillId, onView]);
   return (
     <li className="min-w-0 rounded-lg border border-line-subtle bg-raised p-3">
       <div className="flex min-w-0 items-start gap-3">
@@ -61,7 +74,7 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
             {item.switchable ? (
               <Switch
                 checked={sw.checked}
-                onCheckedChange={sw.setOn}
+                onCheckedChange={flip}
                 label={item.name}
                 onText={state.label}
                 offText={state.label}

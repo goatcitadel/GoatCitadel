@@ -488,6 +488,27 @@ describe("Skill panel switch", () => {
     });
   });
 
+  // Switched on or paused, but the AI can't use it: the line under the state says why, and neither note claims it works.
+  it.each([
+    [
+      "a candidate that is on",
+      skill({ skillId: "fresh", name: "Fresh import", callable: false, lifecycleState: "candidate" }),
+    ],
+    ["a left-out skill that is on", skill({ skillId: "mailer", name: "Mailer", leftOutOfWorkspace: true })],
+    [
+      "a left-out skill that is paused",
+      skill({ skillId: "mailer", name: "Mailer", state: "paused", leftOutOfWorkspace: true }),
+    ],
+  ])("shows neither the On nor the Paused note for %s", async (_what, item) => {
+    api.fetchCapabilitySkills.mockResolvedValue(listOf([...ITEMS, item]));
+    await renderTab();
+    await openPanel(item.name);
+    expect(body()!.querySelector('[role="switch"]')).not.toBeNull();
+    expect(panelText()).toContain("so the AI can't use it");
+    expect(panelText()).not.toContain("Takes effect in new chats.");
+    expect(panelText()).not.toContain("Paused skills are used only when you name them in Chat.");
+  });
+
   it.each([
     ["an off skill", "Planner"],
     ["a pinned skill", "Locked down"],
@@ -536,6 +557,34 @@ describe("Skill panel switch", () => {
     await press(buttonIn(document.body, "Close inspector"));
     await openPanel("Planner");
     expect(dialog()).toBeUndefined();
+  });
+
+  it("opens the approval in place when a row switch asks", async () => {
+    // Notes waits on an approval found when the list loads: nobody here just asked, so nothing opens by itself.
+    api.fetchCapabilitySkills.mockResolvedValue(
+      listOf(
+        ITEMS.map((entry) => (entry.skillId === "notes" ? { ...entry, pendingApprovalId: "approval-old" } : entry)),
+      ),
+    );
+    api.setCapabilitySkillState.mockResolvedValueOnce({ status: "waiting", approvalId: APPROVAL_ID });
+    await renderTab();
+    expect(buttonIn(rowOf("Notes"), "Review Notes")).toBeDefined();
+    expect(body()).toBeNull();
+    expect(dialog()).toBeUndefined();
+
+    // Flipping Planner's switch in its row brings up its panel with the approval open, so one more click approves it.
+    await press(rowOf("Planner").querySelector<HTMLElement>('button[role="switch"]'));
+    expect(api.setCapabilitySkillState).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "ws-1",
+      skillId: "planner",
+      state: "enabled",
+      expectedRevision: 3,
+    });
+    await vi.waitFor(() => expect(inspectorNamed("Planner")).not.toBeNull());
+    await vi.waitFor(() => expect(dialog()).toBeDefined());
+    expect(dialog()?.textContent).toContain("Turn Planner on");
+    await press(buttonIn(dialog(), "Approve once"));
+    expect(decisions.resolveApproval).toHaveBeenCalledExactlyOnceWith(APPROVAL_ID, "approve");
   });
 
   it("reopens the approval from the panel", async () => {

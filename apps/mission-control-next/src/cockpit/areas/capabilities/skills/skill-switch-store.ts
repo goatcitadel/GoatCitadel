@@ -32,9 +32,16 @@ export type SkillSwitchEntry =
   | ({ readonly phase: "applying" } & SkillChange)
   /**
    * Why the last change didn't happen. `change` is set only when the checks ran out while the change was still being
-   * applied, so the line goes once the list shows it.
+   * applied, so the line goes once the list shows it. `revision` is the skill's version in the list when it failed:
+   * a line without `change` goes once the skill moves past it some other way.
    */
-  | { readonly phase: "failed"; readonly message: string; readonly conflict: boolean; readonly change?: SkillChange };
+  | {
+      readonly phase: "failed";
+      readonly message: string;
+      readonly conflict: boolean;
+      readonly change?: SkillChange;
+      readonly revision?: number;
+    };
 
 export type FollowingEntry = Extract<SkillSwitchEntry, { phase: "waiting" | "applying" }>;
 

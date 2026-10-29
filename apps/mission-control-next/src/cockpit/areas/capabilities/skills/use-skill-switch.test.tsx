@@ -501,6 +501,80 @@ describe("useSkillSwitch", () => {
     expect(sw("planner").failure).toBeUndefined();
   });
 
+  it("shows a newer waiting approval after a decline", async () => {
+    await render();
+    await waitOnPlanner();
+    approvals.fetchApproval.mockResolvedValue(approval("rejected"));
+    await beat(5_000);
+    expect(sw("planner").failure?.message).toBe("Not changed. The change was declined.");
+
+    // The declined approval is still marked in a list read meanwhile: it is the one this tab declined, so the line stays.
+    server = listOf({}, { planner: { pendingApprovalId: "approval-1" } });
+    await act(async () => client.invalidateQueries({ queryKey: KEY }));
+    await settle();
+    expect(sw("planner")).toMatchObject({
+      waiting: false,
+      failure: { message: "Not changed. The change was declined." },
+    });
+
+    // Asked again somewhere else (Chat's skill command): the list marks a new approval, and the switch waits on it.
+    approvals.fetchApproval.mockReset();
+    approvals.fetchApproval.mockResolvedValue(approval("pending", "operator", "approval-2"));
+    server = listOf({}, { planner: { pendingApprovalId: "approval-2" } });
+    await act(async () => client.invalidateQueries({ queryKey: KEY }));
+    await settle();
+    expect(sw("planner")).toMatchObject({ waiting: true, waitingApprovalId: "approval-2", waitStartedHere: false });
+    expect(sw("planner").failure).toBeUndefined();
+    expect(sw("planner").waitingTarget).toBeUndefined();
+    await beat(5_000);
+    expect(approvals.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-2", { signal: expect.any(AbortSignal) });
+  });
+
+  it("shows the waiting approval after a duplicate refusal", async () => {
+    const duplicate = "Someone already asked for this exact change, and it is waiting for approval.";
+    skills.setCapabilitySkillState.mockRejectedValueOnce(refused(409, duplicate, "duplicate"));
+    await render();
+    // The list this tab holds doesn't show the wait yet; the route does, and so does the list read after the refusal.
+    server = listOf({}, { planner: { pendingApprovalId: "approval-5" } });
+
+    await act(async () => sw("planner").setOn(true));
+    await settle();
+    expect(listReads()).toBe(1);
+    expect(sw("planner")).toMatchObject({ waiting: true, waitingApprovalId: "approval-5", waitStartedHere: false });
+    expect(sw("planner").failure).toBeUndefined();
+  });
+
+  it("drops a decline line once the skill changes some other way", async () => {
+    await render();
+    await waitOnPlanner();
+    approvals.fetchApproval.mockResolvedValue(approval("rejected"));
+    await beat(5_000);
+    expect(sw("planner").failure?.message).toBe("Not changed. The change was declined.");
+
+    // A read that shows the same version keeps the line.
+    await act(async () => client.invalidateQueries({ queryKey: KEY }));
+    await settle();
+    expect(sw("planner").failure?.message).toBe("Not changed. The change was declined.");
+
+    // The skill moved on (its note changed elsewhere, at the same state): the line is about an older version, so it goes.
+    server = listOf({}, { planner: { revision: 5 } });
+    await act(async () => client.invalidateQueries({ queryKey: KEY }));
+    await settle();
+    expect(sw("planner").failure).toBeUndefined();
+    expect(sw("planner")).toMatchObject({ checked: false, waiting: false, pending: false });
+
+    // A conflict keeps its own line and its Reload until the operator reloads, even though the list read after it is newer.
+    skills.setCapabilitySkillState.mockRejectedValueOnce(
+      refused(409, "This skill changed since you opened it. Reload and try again.", "stale"),
+    );
+    server = listOf({}, { planner: { revision: 5 }, writer: { revision: 6 } });
+    const reads = listReads();
+    await act(async () => sw("writer").setOn(false));
+    await settle();
+    expect(listReads()).toBe(reads + 1);
+    expect(sw("writer").failure).toMatchObject({ conflict: true });
+  });
+
   it("picks up a wait from the list after a reload", async () => {
     server = listOf({}, { planner: { pendingApprovalId: "approval-9" } });
     client.setQueryData(KEY, server);

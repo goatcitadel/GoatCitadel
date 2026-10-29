@@ -72,11 +72,13 @@ export function SkillPanelSwitch({
         />
       </div>
       <div id={noteId} role={announce ? "status" : undefined} className="space-y-1 text-xs text-fg-secondary">
-        {sw.waiting ? (
+        {/* The notes say what On and Paused do, so only a skill the AI can use here takes one; the reason line under
+            the badge already says why any other skill can't be used. */}
+        {state.kind === "waiting" ? (
           <p className="font-medium text-fg">{state.reason}</p>
-        ) : item.state === "on" ? (
+        ) : state.kind === "on" ? (
           <p>{ON_NOTE}</p>
-        ) : item.state === "paused" ? (
+        ) : state.kind === "paused" ? (
           <p>{PAUSED_NOTE}</p>
         ) : null}
         {item.pinned ? <p>{PINNED_NOTE}</p> : null}

@@ -40,8 +40,21 @@ export interface SkillStateLink {
   href: string;
 }
 
-/** The state word of a skill, the tone it reads in, and the line that says why, with the link that goes with it. */
-export type SkillStatePresentation = StatusPresentation & { reason: string; link?: SkillStateLink };
+/**
+ * Which row of `presentSkillState`'s order a skill matched. Only `on` and `paused` mean the AI can use the skill here,
+ * so only they take the panel's note about what the state does.
+ */
+export type SkillStateKind = "waiting" | "off" | "left_out" | "not_usable" | "paused" | "on";
+
+/**
+ * The state word of a skill, the tone it reads in, and the line that says why, with the link that goes with it, and the
+ * row of the order it matched.
+ */
+export type SkillStatePresentation = StatusPresentation & {
+  reason: string;
+  link?: SkillStateLink;
+  kind: SkillStateKind;
+};
 
 /**
  * The colour of the line that says why a skill reads as it does. Only the states that warn take a colour, the text
@@ -57,14 +70,16 @@ export const SKILL_TONE_TEXT: Readonly<Record<StatusTone, string>> = {
   neutral: "text-fg-secondary",
 };
 
-const NOT_USABLE: Readonly<Partial<Record<SkillLifecycleState, SkillStatePresentation>>> = {
+type NotUsablePresentation = Omit<SkillStatePresentation, "kind">;
+
+const NOT_USABLE: Readonly<Partial<Record<SkillLifecycleState, NotUsablePresentation>>> = {
   candidate: { label: "Not usable yet", tone: "waiting", reason: "It hasn't been reviewed, so the AI can't use it" },
   draft: { label: "Not usable yet", tone: "waiting", reason: "It's a draft, so the AI can't use it" },
   deprecated: { label: "Retired", tone: "neutral", reason: "It's retired, so the AI can't use it" },
   revoked: { label: "Revoked", tone: "failed", reason: "It was revoked, so the AI can't use it" },
 };
 
-const NOT_USABLE_OTHERWISE: SkillStatePresentation = {
+const NOT_USABLE_OTHERWISE: NotUsablePresentation = {
   label: "Not usable yet",
   tone: "waiting",
   reason: "The AI can't use it yet",
@@ -86,20 +101,31 @@ export function presentSkillState(
   uses = "",
 ): SkillStatePresentation {
   if (sw.waiting) {
-    return { label: "Waiting for your approval", tone: "waiting", reason: "The change applies once you approve it." };
+    return {
+      label: "Waiting for your approval",
+      tone: "waiting",
+      reason: "The change applies once you approve it.",
+      kind: "waiting",
+    };
   }
-  if (item.state === "off") return { label: "Off", tone: "neutral", reason: "The AI can't use it" };
+  if (item.state === "off") return { label: "Off", tone: "neutral", reason: "The AI can't use it", kind: "off" };
   if (item.leftOutOfWorkspace === true) {
     return {
       label: "Left out of this workspace",
       tone: "waiting",
       reason: "This workspace's skill choices leave it out, so the AI can't use it here.",
       link: { label: "Change this workspace's skills", href: WORKSPACE_CAPABILITIES_HREF },
+      kind: "left_out",
     };
   }
-  if (!item.callable) return (item.lifecycleState && NOT_USABLE[item.lifecycleState]) || NOT_USABLE_OTHERWISE;
-  if (item.state === "paused") return { label: "Paused", tone: "neutral", reason: "Used only when you name it" };
-  return { label: "On", tone: "done", reason: uses };
+  if (!item.callable) {
+    const notUsable = (item.lifecycleState && NOT_USABLE[item.lifecycleState]) || NOT_USABLE_OTHERWISE;
+    return { ...notUsable, kind: "not_usable" };
+  }
+  if (item.state === "paused") {
+    return { label: "Paused", tone: "neutral", reason: "Used only when you name it", kind: "paused" };
+  }
+  return { label: "On", tone: "done", reason: uses, kind: "on" };
 }
 
 /**
