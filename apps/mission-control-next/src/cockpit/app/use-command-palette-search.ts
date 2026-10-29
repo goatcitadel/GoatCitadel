@@ -148,10 +148,10 @@ export function useCommandPaletteSearch(open: boolean, scope: PaletteScope, quer
               error: new Error("The Inbox has not been read yet. Open Inbox to read it."),
             }),
         catalog.data
-          ? groupFromCache("capabilities", "Library capabilities", () => searchCapabilities(catalog.data, text))
+          ? groupFromCache("capabilities", "Capabilities", () => searchCapabilities(catalog.data, text))
           : catalog.isError
-            ? paletteGroup("capabilities", "Library capabilities", { error: catalog.error })
-            : { id: "capabilities", label: "Library capabilities", items: [], coverage: "", searching: true },
+            ? paletteGroup("capabilities", "Capabilities", { error: catalog.error })
+            : { id: "capabilities", label: "Capabilities", items: [], coverage: "", searching: true },
         ...LIBRARY_SOURCES.map((source, index) => groupFromRead(source.id, source.label, library[index]!)),
       ]
     : [];

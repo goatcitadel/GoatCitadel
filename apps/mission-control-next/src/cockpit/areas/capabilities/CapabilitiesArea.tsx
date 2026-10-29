@@ -11,6 +11,7 @@ import {
 } from "./capabilities-tabs";
 import { ConnectorsTab } from "./connectors/ConnectorsTab";
 import { readLastCapabilitiesTab, writeLastCapabilitiesTab } from "./last-tab-preference";
+import { SkillsTab } from "./skills/SkillsTab";
 import { ToolsTab } from "./tools/ToolsTab";
 
 /**
@@ -39,6 +40,7 @@ export function CapabilitiesArea() {
     >
       <section className={`${AREA_PAGE} min-h-full`}>
         <AreaHeader title="Capabilities" description="Everything GoatCitadel's AI can use, in one place." />
+        {tab === "skills" ? <SkillsTab /> : null}
         {tab === "connectors" ? <ConnectorsTab /> : null}
         {tab === "tools" ? <ToolsTab /> : null}
       </section>

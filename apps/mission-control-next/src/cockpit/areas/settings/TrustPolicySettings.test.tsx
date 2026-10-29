@@ -137,9 +137,9 @@ describe("native Trust evidence", () => {
       expect(detail.textContent).toContain(value);
     expect(detail.textContent).toContain("secret value not shown");
     await act(async () =>
-      detail.querySelector<HTMLAnchorElement>('a[href="/library?type=skill&shell=cockpit"]')!.click(),
+      detail.querySelector<HTMLAnchorElement>('a[href="/capabilities/skills?shell=cockpit"]')!.click(),
     );
-    expect(api.navigate).toHaveBeenCalledExactlyOnceWith("/library?type=skill&shell=cockpit");
+    expect(api.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/skills?shell=cockpit");
     expect(fetch).not.toHaveBeenCalled();
   });
   it("carries native owner scope, query and fragment context without authorizing a mutation", async () => {
@@ -152,13 +152,13 @@ describe("native Trust evidence", () => {
     await act(async () => recordedSkillButton().click());
     const link = container.querySelector<HTMLAnchorElement>('[role="dialog"] a')!;
     const target = new URL(link.href);
-    expect(target.pathname).toBe("/library");
+    expect(target.pathname).toBe("/capabilities/skills");
     expect(target.searchParams.get("workspaceId")).toBe("workspace-a");
     expect(target.searchParams.get("citadelId")).toBe("citadel-a");
     expect(target.searchParams.get("runId")).toBe("run-a");
     expect(target.searchParams.get("sessionId")).toBe("session-a");
     expect(target.searchParams.getAll("keep")).toEqual(["one", "two"]);
-    expect(target.searchParams.get("type")).toBe("skill");
+    expect(target.searchParams.has("type")).toBe(false);
     expect(target.hash).toBe("#old-evidence");
     expect(target.searchParams.get("shell")).toBe("cockpit");
     const stateBefore = structuredClone(window.history.state);

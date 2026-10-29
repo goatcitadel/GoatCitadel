@@ -192,6 +192,22 @@ describe("first-run verification values", () => {
   });
 });
 
+it("sends the canvas proof lane to the Skills tab in Capabilities", async () => {
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <FirstRunVerification />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("Ecosystem proof lanes"));
+  const link = container.querySelector<HTMLAnchorElement>('a[href="/capabilities/skills"]');
+  expect(link).not.toBeNull();
+  await act(async () => link!.click());
+  expect(api.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/skills");
+  expect(container.querySelector('a[href="/library/capabilities"]')).toBeNull();
+});
+
 it("offers only the safe approval rules in installation defaults (ST-R04)", async () => {
   await render();
   await open();

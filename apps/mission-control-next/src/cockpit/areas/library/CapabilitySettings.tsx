@@ -7,6 +7,7 @@ import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { resolveCockpitContinuation } from "../../app/cockpit-compatibility";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { skillIdFromCapabilityId, skillItemHref } from "../capabilities/skills/skill-links";
 import type { CapabilityCatalogView } from "./capability-catalog";
 import { useCapabilitySkillState } from "./use-capability-skill-state";
 import { CapabilityLifecycleInspector } from "./CapabilityLifecycleInspector";
@@ -46,19 +47,25 @@ function CapabilityOwnerLink({ item }: { item: CapabilityCatalogEntry }) {
       </a>
     );
   }
-  const owner = resolveCockpitContinuation(
-    "/library/" +
-      encodeURIComponent(item.kind) +
-      "/" +
-      encodeURIComponent(item.capabilityId) +
-      "?type=" +
-      encodeURIComponent(item.kind),
-    { search: window.location.search, hash: window.location.hash, workspaceId: activeWorkspaceId ?? "default" },
-  );
+  // A skill is opened in Capabilities, in its own panel; every other kind keeps its Library record.
+  const href =
+    item.kind === "skill"
+      ? skillItemHref(item.skillId ?? skillIdFromCapabilityId(item.capabilityId))
+      : "/library/" +
+        encodeURIComponent(item.kind) +
+        "/" +
+        encodeURIComponent(item.capabilityId) +
+        "?type=" +
+        encodeURIComponent(item.kind);
+  const owner = resolveCockpitContinuation(href, {
+    search: window.location.search,
+    hash: window.location.hash,
+    workspaceId: activeWorkspaceId ?? "default",
+  });
   if (owner.kind !== "native") return <p role="status">Capability settings unavailable</p>;
   return (
     <NativeOwnerLink href={owner.href} scope={[activeCitadelId, activeWorkspaceId, item.kind, item.capabilityId]}>
-      {item.kind === "skill" ? "Open current skills view" : "Open current capability view"}
+      {item.kind === "skill" ? "Open this skill in Capabilities" : "Open current capability view"}
     </NativeOwnerLink>
   );
 }

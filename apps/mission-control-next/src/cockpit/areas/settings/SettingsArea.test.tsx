@@ -200,25 +200,26 @@ describe("Settings section tabs", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("First run status"));
     expect(window.location.hash).toBe("#onboarding");
   });
-  it("keeps the real read-only Library inspection links in Tools and preserves unknown callability", async () => {
+  it("keeps the real read-only Capabilities links in Tools and preserves unknown callability", async () => {
     await render("/settings/safety?shell=cockpit#approval-mode");
     expect(active()).toBe("Tools");
     await vi.waitFor(() =>
-      expect(container.querySelector('a[href="/library?shell=cockpit&type=tool"]')).not.toBeNull(),
+      expect(container.querySelector('a[href="/capabilities/tools?shell=cockpit"]')).not.toBeNull(),
     );
-    const tools = container.querySelector<HTMLAnchorElement>('a[href="/library?shell=cockpit&type=tool"]')!;
+    const tools = container.querySelector<HTMLAnchorElement>('a[href="/capabilities/tools?shell=cockpit"]')!;
     const panel = tools.closest('[role="tabpanel"]')!;
     expect(panel.hasAttribute("hidden")).toBe(false);
-    expect(tools.textContent).toBe("Open tools in Library");
-    expect(panel.querySelector('a[href="/library?shell=cockpit&type=skill"]')?.textContent).toBe(
-      "Open skills in Library",
+    expect(tools.textContent).toBe("Open tools in Capabilities");
+    expect(panel.querySelector('a[href="/capabilities/skills?shell=cockpit"]')?.textContent).toBe(
+      "Open skills in Capabilities",
     );
+    expect(panel.textContent).not.toContain("Library");
     expect(panel.textContent).toContain("Callability unknown");
     expect(panel.textContent).not.toContain("in the current callable catalog");
     expect(panel.textContent).toContain("does not bypass approvals or grant permission");
     expect(catalog.read).toHaveBeenCalledTimes(1);
     await act(async () => tools.click());
-    expect(window.location.pathname + window.location.search).toBe("/library?shell=cockpit&type=tool");
+    expect(window.location.pathname + window.location.search).toBe("/capabilities/tools?shell=cockpit");
   });
   it("mounts llama.cpp setup and the managed runtime on one owner page each, linking from the other", async () => {
     await render("/settings/models?shell=cockpit#local-ai");

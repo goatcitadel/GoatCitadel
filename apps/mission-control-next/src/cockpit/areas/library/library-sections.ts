@@ -1,6 +1,6 @@
 /** One label per Library section, shared by the section tab and the page heading (LB-17). */
 export const LIBRARY_SECTION_LABELS = {
-  capabilities: "Skills and tools",
+  capabilities: "Candidates and mesh",
   memory: "Memory",
   notes: "Notes",
   files: "Files",

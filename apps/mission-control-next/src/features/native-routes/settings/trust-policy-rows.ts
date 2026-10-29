@@ -237,7 +237,7 @@ function ownerForTrustPolicyRow(row: TrustPolicyMatrixRow): string {
     case "mcp.tools":
       return "Settings / MCP";
     case "skills.lifecycle":
-      return "Library / Skills";
+      return "Capabilities / Skills";
     case "addons.catalog":
     case "addons.installed":
       return "Settings / Add-ons";

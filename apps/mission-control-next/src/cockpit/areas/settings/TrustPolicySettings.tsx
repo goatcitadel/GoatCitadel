@@ -32,7 +32,7 @@ const OWNER_LINKS: Record<string, string> = {
   "Settings / MCP": "/settings/connections#mcp-servers",
   "Settings / Add-ons": "/settings/connections#addons",
   "Library / Capabilities": "/library?shell=cockpit",
-  "Library / Skills": "/library?type=skill&shell=cockpit",
+  "Capabilities / Skills": "/capabilities/skills?shell=cockpit",
   "Ops / Approvals": "/inbox?view=history&shell=cockpit",
 };
 

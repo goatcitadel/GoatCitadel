@@ -27,7 +27,7 @@ const item: OperatorInboxItem = {
   createdAt: "2026-09-28T00:00:00.000Z",
   updatedAt: "2026-09-28T01:00:00.000Z",
   source: { workspaceId: "workspace-a", proposalId: "proposal-a" },
-  href: "/library/capabilities?shell=classic",
+  href: "/library?type=proposal&shell=classic",
 };
 const detail: CapabilityProposalDetailRecord = {
   proposal: {
@@ -94,6 +94,9 @@ describe("Inbox capability proposal detail", () => {
     expect(api.fetchCapabilityProposal).toHaveBeenCalledWith("proposal-a");
     expect(container.textContent).toContain("A candidate is linked to this proposal");
     expect(container.textContent).toContain("Decisions for this proposal are unavailable in Inbox");
+    expect(container.textContent).toContain("Use Open candidates to review its current version");
+    expect(container.textContent).toContain("Candidates are promoted from Library › Candidates and mesh.");
+    expect(container.textContent).not.toContain("Open capabilities");
     expect(container.textContent).not.toContain("workspace-a");
   });
 
@@ -130,10 +133,10 @@ describe("Inbox capability proposal detail", () => {
     await render();
     expect(api.fetchCapabilityProposal).not.toHaveBeenCalled();
     expect(container.textContent).toContain("no longer in this workspace's Inbox");
-    const capabilitiesLink = [...container.querySelectorAll("a")].find(
-      (link) => link.textContent === "Open capabilities",
-    );
-    expect(capabilitiesLink?.getAttribute("href")).toContain("/library/capabilities");
+    expect(container.textContent).toContain("Use Open candidates to check its current status");
+    const candidatesLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Open candidates");
+    // Candidates are listed in Library, not on the Skills tab, which holds installed skills only.
+    expect(candidatesLink?.getAttribute("href")).toBe("/library?type=candidate_skill&shell=cockpit");
   });
 
   it("hides foreign, resolved, and changed owner records", () => {

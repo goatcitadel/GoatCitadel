@@ -16,6 +16,7 @@ vi.mock("./connectors/ConnectorsTab", () => ({
   },
 }));
 vi.mock("./tools/ToolsTab", () => ({ ToolsTab: () => <div data-testid="tools-tab" /> }));
+vi.mock("./skills/SkillsTab", () => ({ SkillsTab: () => <div data-testid="skills-tab" /> }));
 
 const LAST_TAB_KEY = "goatcitadel.cockpit.capabilities.last-tab.v1";
 
@@ -66,8 +67,10 @@ describe("Capabilities page", () => {
     expect(container.querySelector("nav")?.getAttribute("aria-label")).toBe("Capabilities sections");
     expect(tabLink("Connectors")?.getAttribute("aria-current")).toBe("page");
     expect(tabLink("Connectors")?.getAttribute("href")).toBe("/capabilities/connectors");
+    expect(tabLink("Skills")?.getAttribute("href")).toBe("/capabilities/skills");
     expect(tabLink("Tools")?.getAttribute("href")).toBe("/capabilities/tools");
     expect(shown("connectors-tab")).toBe(true);
+    expect(shown("skills-tab")).toBe(false);
     expect(route.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/connectors", { replace: true });
     // Landing on the default is not a choice, so nothing is remembered yet.
     expect(window.localStorage.getItem(LAST_TAB_KEY)).toBeNull();
@@ -118,13 +121,23 @@ describe("Capabilities page", () => {
   });
 
   it("ignores a remembered tab that no longer exists", async () => {
-    window.localStorage.setItem(LAST_TAB_KEY, "skills");
+    window.localStorage.setItem(LAST_TAB_KEY, "plugins");
     await render();
     expect(tabLink("Connectors")?.getAttribute("aria-current")).toBe("page");
     expect(route.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/connectors", { replace: true });
   });
 
+  it("opens the Skills tab when it was the last one", async () => {
+    window.localStorage.setItem(LAST_TAB_KEY, "skills");
+    await render();
+    expect(tabLink("Skills")?.getAttribute("aria-current")).toBe("page");
+    expect(shown("skills-tab")).toBe(true);
+    expect(shown("connectors-tab")).toBe(false);
+    expect(route.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/skills", { replace: true });
+  });
+
   it.each([
+    ["skills", "Skills", "skills-tab"],
     ["connectors", "Connectors", "connectors-tab"],
     ["tools", "Tools", "tools-tab"],
   ])("opens %s for its address and remembers it", async (id, label, testId) => {
@@ -170,6 +183,8 @@ describe("Capabilities page", () => {
     expect(route.navigate).toHaveBeenCalledWith("/capabilities/tools");
     await act(async () => tabLink("Connectors")?.click());
     expect(route.navigate).toHaveBeenCalledWith("/capabilities/connectors");
+    await act(async () => tabLink("Skills")?.click());
+    expect(route.navigate).toHaveBeenCalledWith("/capabilities/skills");
   });
 });
 
@@ -180,7 +195,9 @@ describe("readCapabilitiesTab", () => {
     [["connectors", "extra"], "connectors"],
     [["tools"], "tools"],
     [["tools", "extra"], "tools"],
-    [["skills"], "connectors"],
+    [["skills"], "skills"],
+    [["skills", "extra"], "skills"],
+    [["plugins"], "connectors"],
     [[""], "connectors"],
   ])("reads %j as %s", (rest, expected) => {
     expect(readCapabilitiesTab(rest)).toBe(expected);
@@ -188,6 +205,8 @@ describe("readCapabilitiesTab", () => {
 
   it("gives every tab an id, a label and an address under /capabilities", () => {
     for (const tab of CAPABILITIES_TABS) expect(tab.href).toBe(`/capabilities/${tab.id}`);
-    expect(CAPABILITIES_TABS.map((tab) => tab.label)).toEqual(["Connectors", "Tools"]);
+    expect(CAPABILITIES_TABS.map((tab) => tab.label)).toEqual(["Skills", "Connectors", "Tools"]);
+    // Skills come first, but a first visit still opens Connectors.
+    expect(readCapabilitiesTab([])).toBe("connectors");
   });
 });

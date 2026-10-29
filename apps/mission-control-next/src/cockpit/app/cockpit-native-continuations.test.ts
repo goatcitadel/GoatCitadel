@@ -19,7 +19,10 @@ describe("internal native owner continuations", () => {
     ["/work/runs/run%2Fone?workspaceId=workspace-a", "/work/runs/run%2Fone"],
     ["/inbox/approvals/approval%2Fone?approvalId=approval%2Fone&workspaceId=workspace-a", "/inbox"],
     ["/inbox?item=change_plan%3Aplan-a&workspaceId=workspace-a", "/inbox"],
-    ["/library/skill/skill%3Areview?type=skill&workspaceId=workspace-a", "/library/skill/skill%3Areview"],
+    [
+      "/library/candidate_skill/candidate%3Areview?type=candidate_skill&workspaceId=workspace-a",
+      "/library/candidate_skill/candidate%3Areview",
+    ],
     [
       "/library/proposal/proposal%3Areview?type=proposal&workspaceId=workspace-a",
       "/library/proposal/proposal%3Areview",
@@ -40,6 +43,25 @@ describe("internal native owner continuations", () => {
     expect(url.searchParams.get("shell")).toBe("cockpit");
     expect(url.searchParams.has("shellScope")).toBe(false);
     expect(url.hash).toBe(input.includes("#") ? new URL(input, "http://cockpit.invalid").hash : "#evidence");
+  });
+  it("sends a Library skill or tool continuation to Capabilities, keeping the carried scope", () => {
+    for (const [input, pathname, item] of [
+      ["/library/skill/skill%3Areview?type=skill&workspaceId=workspace-a", "/capabilities/skills", "skill:review"],
+      ["/library/tool/tool%3Afs.read?type=tool&workspaceId=workspace-a", "/capabilities/tools", "group:files"],
+    ] as const) {
+      const result = resolveCockpitContinuation(input, context);
+      expect(result.kind).toBe("native");
+      if (result.kind !== "native") throw new Error("Expected a Capabilities destination");
+      const url = new URL(result.href, "http://cockpit.invalid");
+      expect(url.pathname).toBe(pathname);
+      expect(url.searchParams.get("item")).toBe(item);
+      expect(url.searchParams.has("type")).toBe(false);
+      expect(url.searchParams.get("workspaceId")).toBe("workspace-a");
+      expect(url.searchParams.get("citadelId")).toBe("c");
+      expect(url.searchParams.getAll("keep")).toEqual(["yes", "two"]);
+      expect(url.searchParams.get("shell")).toBe("cockpit");
+      expect(url.searchParams.has("shellScope")).toBe(false);
+    }
   });
   it("lands generic task inspection on WorkBoard despite retained run context", () => {
     const result = resolveCockpitContinuation("/work", context);

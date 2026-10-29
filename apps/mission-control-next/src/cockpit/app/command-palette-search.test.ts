@@ -156,4 +156,54 @@ describe("palette Gateway object search", () => {
     expect(descriptions[1]).toMatch(/^Tool · /);
     expect(descriptions.join(" ")).not.toContain("mesh_mcp_server");
   });
+
+  it("opens a skill result in Capabilities and says where it is", () => {
+    const catalog = {
+      items: [
+        { kind: "skill", capabilityId: "skill:review", skillId: "review", title: "Needle review", summary: "" },
+        // A record that carries no skill id still names its skill in its capability id.
+        { kind: "skill", capabilityId: "skill:triage", title: "Needle triage", summary: "" },
+      ],
+      issues: [],
+    } as unknown as CapabilityCatalogView;
+    const items = searchCapabilities(catalog, "needle").items;
+    expect(items.map((item) => item.target)).toEqual([
+      { href: "/capabilities/skills?item=skill%3Areview" },
+      { href: "/capabilities/skills?item=skill%3Atriage" },
+    ]);
+    expect(items.map((item) => item.description)).toEqual([
+      "Skill · Capabilities › Skills",
+      "Skill · Capabilities › Skills",
+    ]);
+  });
+
+  it("opens a tool result at its group, or at Tools when it is in no group", () => {
+    const catalog = {
+      items: [
+        { kind: "tool", capabilityId: "tool:fs.read", toolName: "fs.read", title: "Needle read", summary: "" },
+        { kind: "tool", capabilityId: "tool:shell.exec", title: "Needle shell", summary: "" },
+        { kind: "tool", capabilityId: "tool:linear.find", toolName: "linear.find", title: "Needle find", summary: "" },
+      ],
+      issues: [],
+    } as unknown as CapabilityCatalogView;
+    const items = searchCapabilities(catalog, "needle").items;
+    expect(items.map((item) => item.target)).toEqual([
+      { href: "/capabilities/tools?item=group%3Afiles" },
+      { href: "/capabilities/tools?item=group%3Ashell_and_code" },
+      { href: "/capabilities/tools" },
+    ]);
+    for (const item of items) expect(item.description).toBe("Tool · Capabilities › Tools");
+  });
+
+  it("keeps the other kinds' Library links and descriptions", () => {
+    const catalog = {
+      items: [{ kind: "candidate_skill", capabilityId: "cand-1", title: "Needle candidate", summary: "" }],
+      issues: [],
+    } as unknown as CapabilityCatalogView;
+    const [item] = searchCapabilities(catalog, "needle").items;
+    expect(item?.target).toEqual({
+      href: "/library/candidate_skill/cand-1?shell=cockpit&q=needle",
+    });
+    expect(item?.description).toBe("Candidate skill · Installation catalog; availability is reviewed in Library");
+  });
 });
