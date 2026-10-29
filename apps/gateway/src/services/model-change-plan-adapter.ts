@@ -8,7 +8,6 @@ import {
   type ChatSessionPrefsRecord,
   type ChatThinkingLevel,
   type ChangePlanRecord,
-  type LlmModelReasoningMetadata,
   type LlmModelRecord,
   type LlmProviderSummary,
 } from "@goatcitadel/contracts";
@@ -28,7 +27,11 @@ export interface ModelChangePlanAdapterDependencies {
   readonly getSettings: () => Promise<RuntimeSettings>;
   readonly updateSettings: (input: UpdateSettingsInput) => Promise<RuntimeSettings>;
   readonly listModels: (providerId: string) => Promise<readonly LlmModelRecord[]>;
-  readonly getModelReasoningMetadata: (providerId: string, model: string) => LlmModelReasoningMetadata | undefined;
+  /** Efforts dispatch would honor for the exact model: live catalog, then model metadata, then provider. */
+  readonly getDispatchReasoningEfforts: (
+    providerId: string,
+    model: string,
+  ) => readonly ChatCompletionReasoningEffort[] | undefined;
 }
 
 export class ModelChangePlanAdapter implements EvolutionControlPlaneAdapter<ModelChangeRequest> {
@@ -223,14 +226,10 @@ export class ModelChangePlanAdapter implements EvolutionControlPlaneAdapter<Mode
     }
     if (!level) return;
     const requested = reasoningEffortForThinkingLevel(level);
-    const modelReasoning = this.deps.getModelReasoningMetadata(provider.providerId, model);
-    const supported = modelReasoning?.supportedEfforts ?? provider.capabilities?.reasoningEfforts;
     if (requested === "none") return;
-    if (provider.capabilities?.reasoning === false || (supported && !supported.includes(requested))) {
-      const supportedEfforts =
-        provider.capabilities?.reasoning === false
-          ? (["off"] as ChatThinkingLevel[])
-          : thinkingLevelsForReasoningEfforts(["none", ...(supported ?? [])]);
+    const supported = this.supportedEfforts(provider, model);
+    if (supported && !supported.includes(requested)) {
+      const supportedEfforts = thinkingLevelsForReasoningEfforts(["none", ...supported]);
       throw new SemanticValidationError(
         `${provider.label} / ${model} does not support ${level} effort. Choose ${formatEffortChoices(supportedEfforts)}.`,
         {
@@ -241,6 +240,17 @@ export class ModelChangePlanAdapter implements EvolutionControlPlaneAdapter<Mode
         },
       );
     }
+  }
+
+  private supportedEfforts(
+    provider: LlmProviderSummary,
+    model: string,
+  ): readonly ChatCompletionReasoningEffort[] | undefined {
+    const dispatchEfforts = this.deps.getDispatchReasoningEfforts(provider.providerId, model);
+    if (dispatchEfforts) return dispatchEfforts;
+    // The LLM owner does not know this provider; fall back to the summary settings published.
+    if (provider.capabilities?.reasoning === false) return ["none"];
+    return provider.capabilities?.reasoningEfforts;
   }
 
   private async listAvailableModels(provider: LlmProviderSummary): Promise<readonly LlmModelRecord[]> {

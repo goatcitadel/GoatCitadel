@@ -13,6 +13,7 @@ import type {
   CapabilityArtifactRecord,
   CapabilityCatalogEntry,
   CapabilityCatalogSnapshotRecord,
+  CapabilityScopeAssignment,
   CandidateSkillVersionRecord,
   ChatMessageRecord,
   ChatSessionWorkbenchRecord,
@@ -35,6 +36,9 @@ import { canonicalJsonString, ConflictError } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { CapabilitySystemService, __internal } from "./capability-system-service.js";
 import { resolveCandidateLifecycleWorkspace } from "./capability-candidate-lifecycle-scope.js";
+import { CapabilityScopeResolver } from "./capability-scope-resolver.js";
+import { resolveChatRuntimeSkillSelection } from "./chat-skill-selection-runtime.js";
+import { WorkspaceTurnSkills } from "./workspace-turn-skills.js";
 import type { CapabilityRuntimeConfig } from "../config.js";
 
 const tempRoots: string[] = [];
@@ -7531,3 +7535,188 @@ function attachAiderPinWorkbench(
   Object.assign(storage, { chatSessionWorkbench: { get: workbenchGet } });
   return workbenchGet;
 }
+
+describe("workspace skill choices in turns", () => {
+  const WORKSPACE = "workspace-a";
+  const citadelRow = (resourceRef: string, enabled = true): CapabilityScopeAssignment => ({
+    assignmentId: `citadel-${resourceRef}`,
+    scopeKind: "citadel",
+    scopeId: "personal",
+    resourceType: "skill",
+    resourceRef,
+    enabled,
+    createdAt: "2026-10-28T00:00:00.000Z",
+    updatedAt: "2026-10-28T00:00:00.000Z",
+  });
+  const workspaceRow = (resourceRef: string, enabled = true): CapabilityScopeAssignment => ({
+    ...citadelRow(resourceRef, enabled),
+    assignmentId: `workspace-${resourceRef}`,
+    scopeKind: "workspace",
+    scopeId: WORKSPACE,
+  });
+
+  async function bundledSkill(name: string): Promise<LoadedSkill> {
+    // A bundled skill is callable only when its folder binds to exact bytes.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), `goat-skill-${name}-`));
+    tempRoots.push(dir);
+    const body = `# ${name}\n\nUse ${name} for ${name} work.\n`;
+    await fs.writeFile(path.join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} skill\n---\n${body}`);
+    return {
+      skillId: `bundled:${name}`,
+      name,
+      description: `${name} skill`,
+      source: "bundled",
+      dir,
+      declaredTools: [],
+      requires: [],
+      keywords: [name],
+      instructionBody: body,
+      mtime: "2026-10-28T00:00:00.000Z",
+    };
+  }
+
+  /** An approved self-authored (workflow capture) skill in one workspace, written as reviewed artifacts. */
+  async function approveSelfAuthoredSkill(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    workspaceId: string,
+  ): Promise<string> {
+    const candidateId = `candidate-release-notes-${workspaceId}`;
+    const bundleRoot = `data/capability-candidates/${candidateId}`;
+    await fs.mkdir(path.join(harness.rootDir, bundleRoot), { recursive: true });
+    const artifact = async (name: string, content: string) => {
+      const relPath = `${bundleRoot}/${name}`;
+      await fs.writeFile(path.join(harness.rootDir, relPath), content, "utf8");
+      const bytes = Buffer.from(content, "utf8");
+      return {
+        artifactId: `${candidateId}-${name}`,
+        relPath,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        bytes: bytes.length,
+        mimeType: "text/plain",
+        createdAt: "2026-10-28T00:00:00.000Z",
+      };
+    };
+    harness.storage.candidateSkillVersions.upsert({
+      candidateId,
+      versionId: `${candidateId}-v1`,
+      sourceKind: "workflow_capture",
+      lineageStatus: "governed",
+      workspaceId,
+      title: "Release notes",
+      bundleRoot,
+      lifecycleState: "approved",
+      manifestArtifact: await artifact("manifest.json", JSON.stringify({ source: "workflow_capture" })),
+      instructionArtifact: await artifact(
+        "SKILL.md",
+        "---\nname: release-notes\ndescription: Draft release notes from merged changes.\n---\n# Release notes\n\nDraft release notes from the merged changes.\n",
+      ),
+      proofArtifact: await artifact("proof.json", JSON.stringify({ validated: true })),
+      createdAt: "2026-10-28T00:00:00.000Z",
+      updatedAt: "2026-10-28T00:00:00.000Z",
+    } as CandidateSkillVersionRecord);
+    return `extra:reviewed-${createHash("sha256").update(candidateId).digest("hex").slice(0, 12)}`;
+  }
+
+  async function fixture(rows: CapabilityScopeAssignment[]) {
+    const harness = await createHarness({ loadedSkills: [await bundledSkill("alpha"), await bundledSkill("beta")] });
+    const selfAuthored = await approveSelfAuthoredSkill(harness, WORKSPACE);
+    const resolver = new CapabilityScopeResolver({
+      listAssignmentsForScope: (kind, id) => rows.filter((row) => row.scopeKind === kind && row.scopeId === id),
+      listAllSkillIds: () => ["bundled:alpha", "bundled:beta"],
+      listAllIntegrationIds: () => [],
+      listAllMcpServerIds: () => [],
+      isDisabled: () => false,
+    });
+    const turnSkills = new WorkspaceTurnSkills(harness.service, { resolver, resolveCitadelId: async () => "personal" });
+    const select = (explicitSkills: string[], workspaceId?: string) =>
+      resolveChatRuntimeSkillSelection(
+        {
+          getSkillActivationPolicy: async () => ({
+            revision: 1,
+            guardedAutoThreshold: 0.72,
+            requireFirstUseConfirmation: false,
+          }),
+          turnSkills,
+          skillStateService: { readSkillStates: async () => new Map(), recordSkillUsage: vi.fn() },
+          storage: harness.storage as never,
+        },
+        { text: "Draft the notes for this week.", explicitSkills },
+        false,
+        workspaceId,
+      );
+    return { harness, turnSkills, selfAuthored, select };
+  }
+
+  const skillIds = (items: Array<{ skillId?: string }>) =>
+    items
+      .map((item) => item.skillId)
+      .filter((id): id is string => Boolean(id))
+      .sort();
+  const catalogSkillIds = (entries: CapabilityCatalogEntry[]) =>
+    skillIds(entries.filter((entry) => entry.kind === "skill"));
+
+  it("never loads or offers a skill the workspace's choices leave out", async () => {
+    const { harness, turnSkills, selfAuthored, select } = await fixture([workspaceRow("bundled:alpha")]);
+    const chosen = ["bundled:alpha", selfAuthored].sort();
+
+    expect(skillIds(await turnSkills.listSkills(WORKSPACE))).toEqual(chosen);
+    expect(catalogSkillIds(await turnSkills.listCatalog("inspectable", WORKSPACE))).toEqual(chosen);
+    expect(catalogSkillIds(await turnSkills.listCatalog("callable", WORKSPACE))).toEqual(chosen);
+    // Even named outright, a left-out skill is never selected for the turn.
+    const selection = await select(["bundled:alpha", "bundled:beta", selfAuthored], WORKSPACE);
+    expect(skillIds(selection.selected)).toEqual(chosen);
+    // The base prompt's index lists only the install's chosen skills; it has never listed self-authored ones.
+    expect(catalogSkillIds(await turnSkills.listInstalledCatalog("callable", WORKSPACE))).toEqual(["bundled:alpha"]);
+    // Operator views stay install-wide.
+    expect(skillIds(await harness.service.listSkills())).toEqual(["bundled:alpha", "bundled:beta"]);
+  });
+
+  it("follows the Citadel's choices when the workspace inherits them", async () => {
+    const { turnSkills, selfAuthored } = await fixture([citadelRow("bundled:beta")]);
+
+    expect(catalogSkillIds(await turnSkills.listCatalog("callable", WORKSPACE))).toEqual(
+      ["bundled:beta", selfAuthored].sort(),
+    );
+  });
+
+  it("reads exactly as before for a workspace that has made no choices", async () => {
+    const { harness, turnSkills, selfAuthored, select } = await fixture([]);
+    const everything = ["bundled:alpha", "bundled:beta", selfAuthored].sort();
+
+    expect(skillIds(await turnSkills.listSkills(WORKSPACE))).toEqual(everything);
+    expect(await turnSkills.listCatalog("callable", WORKSPACE)).toEqual(
+      await harness.service.listCatalog("callable", "ALL", WORKSPACE),
+    );
+    expect(await turnSkills.listInstalledCatalog("callable", WORKSPACE)).toEqual(
+      await harness.service.listCatalog("callable"),
+    );
+    expect(skillIds((await select(["bundled:alpha", "bundled:beta", selfAuthored], WORKSPACE)).selected)).toEqual(
+      everything,
+    );
+    // A read with no workspace (the operator's resolve-activation route) stays install-wide.
+    expect(skillIds((await select(["bundled:alpha", "bundled:beta"])).selected)).toEqual([
+      "bundled:alpha",
+      "bundled:beta",
+    ]);
+  });
+
+  it("keeps a workspace's own approved self-authored skill usable whatever its choices leave out", async () => {
+    const { turnSkills, selfAuthored, select } = await fixture([
+      workspaceRow("bundled:alpha", false),
+      workspaceRow("bundled:beta", false),
+    ]);
+
+    expect(skillIds(await turnSkills.listSkills(WORKSPACE))).toEqual([selfAuthored]);
+    expect(catalogSkillIds(await turnSkills.listCatalog("callable", WORKSPACE))).toEqual([selfAuthored]);
+    expect(skillIds((await select([selfAuthored, "bundled:alpha"], WORKSPACE)).selected)).toEqual([selfAuthored]);
+    // It stays its own workspace's skill: another workspace never loads it.
+    expect(skillIds(await turnSkills.listSkills("workspace-b"))).toEqual(["bundled:alpha", "bundled:beta"]);
+  });
+
+  it("keeps the workspace's self-authored skills on the scoped catalog read that operator routes use", async () => {
+    const { harness, selfAuthored } = await fixture([]);
+
+    const scoped = await harness.service.listCatalog("callable", new Set(["bundled:alpha"]), WORKSPACE);
+    expect(catalogSkillIds(scoped)).toEqual(["bundled:alpha", selfAuthored].sort());
+  });
+});

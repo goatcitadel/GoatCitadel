@@ -2,6 +2,7 @@ import type { ChatGeneratedArtifactRecord, ChatModePresetRecord } from "@goatcit
 import type { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import type { MissionThreadedRenderSurfaceInput } from "../../MissionThreadedControllerHost.types";
 import { resolveProviderModelSelection } from "../chat-page-helpers";
+import { selectedModelReasoningEfforts } from "./selected-model-reasoning-efforts";
 import { useChatCapabilityProfileInspection } from "../useChatCapabilityProfileInspection";
 import type { useChatContextActions } from "../useChatContextActions";
 import type { useChatDockWorkbenchController } from "../useChatDockWorkbenchController";
@@ -249,11 +250,10 @@ export function createChatContextDockProps({
           providerOptions: providerRouting.providerOptions,
           selectedProviderId: providerRouting.selectedProviderId,
           selectedModel: providerRouting.selectedModel,
-          selectedModelReasoningEfforts: providerCatalog.providers.find(
-            (provider) => provider.providerId === providerRouting.selectedProviderId,
-          )?.reasoningEffortsByModel?.[
-            providerRouting.selectedModel?.replace(`${providerRouting.selectedProviderId}/`, "") ?? ""
-          ],
+          selectedModelReasoningEfforts: selectedModelReasoningEfforts(
+            providerCatalog.providers.find((provider) => provider.providerId === providerRouting.selectedProviderId),
+            providerRouting.selectedModel?.replace(`${providerRouting.selectedProviderId}/`, "") ?? "",
+          ),
           selectedModelFastAvailable: providerCatalog.providers.find(
             (provider) => provider.providerId === providerRouting.selectedProviderId,
           )?.fastModeByModel?.[

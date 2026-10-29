@@ -165,7 +165,7 @@ Notes:
 - The `durableKernelV1Enabled` feature flag gates durable-run APIs. The `replayOverridesV1Enabled` flag (default: off) gates replay-with-overrides.
 - `unifiedComposerPaletteV1Enabled` is a Gateway-authored Mission Control projection gate. It changes only the Chat composer discovery surface: its client registry reads existing scoped APIs, caches source results per session, and degrades source failures independently. It does not create a second capability catalog, widen file/workspace access, or make inactive agents, candidates, proposals, or non-callable skills executable.
 - `chatAsyncClarificationV1Enabled` (default: on) gates the optional `user_input.request` Chat tool. It is callable only in top-level interactive durable Chat, allows one unanswered question at a time (at most 16 per turn, each expiring after 15 minutes), and its answers enter the next model boundary as ordinary clarification context; they never create grants or approvals. An explicit `false` in config, `GOATCITADEL_FEATURE_CHAT_ASYNC_CLARIFICATION_V1_ENABLED`, or stored settings removes the tool from the callable catalog and model schema and makes the executor, issuance, and reply paths fail closed. Upgrade note: a flag save before this default changed persisted the whole resolved flag set, including `false` for this flag; that stored value is indistinguishable from a deliberate opt-out and is kept, so such installs enable the tool in Settings feature flags. Optional prompts are only issued and read on operator-bound durable Chat turns; scheduled, heartbeat, channel and orchestration-phase turns read an empty mailbox.
-- `chatThinkingStreamV1Enabled` (default: off, decided in #343) gates `thinking_delta` stream chunks. When an operator turns it on (config, `GOATCITADEL_FEATURE_CHAT_THINKING_STREAM_V1_ENABLED`, or stored settings), Anthropic thinking and OpenAI-compatible `reasoning_content` deltas are forwarded per provider chunk, with a single end-of-pass chunk as the fallback when a pass streamed none. Chat shows the text in a collapsible "Thinking…" disclosure that opens while the turn runs and collapses when it settles; the disclosure is not a live region, and the timeline's single live region announces "model is thinking" once per phase rather than per delta. Reasoning text is unreviewed model output, not an explanation of the answer or an authority record. It stays off by default until the streaming-render performance re-test with a live reasoning model (PERF-01 in `docs/review/2026-10-cockpit-verification-gaps.md`) has been run.
+- `chatThinkingStreamV1Enabled` (default: off, decided in #343) gates `thinking_delta` stream chunks. When an operator turns it on (config, `GOATCITADEL_FEATURE_CHAT_THINKING_STREAM_V1_ENABLED`, stored settings, or the Cockpit's Settings › Models › Model reasoning in Chat switch, which saves through a change plan), Anthropic thinking and OpenAI-compatible `reasoning_content` deltas are forwarded per provider chunk, with a single end-of-pass chunk as the fallback when a pass streamed none. Classic Chat shows the text in a collapsible "Thinking…" disclosure that opens while the turn runs and collapses when it settles; the disclosure is not a live region, and the timeline's single live region announces "model is thinking" once per phase rather than per delta. The Cockpit keeps the disclosure shut above the answer, with the newest reasoning line as a preview that screen readers skip. Reasoning lives only in the browser: a reloaded thread keeps what this browser streamed, and a page reload loses it. Reasoning text is unreviewed model output, not an explanation of the answer or an authority record. It stays off by default until the streaming-render performance re-test with a live reasoning model (PERF-01 in `docs/review/2026-10-cockpit-verification-gaps.md`) has been run.
 
 ### Evolution Change Plan
 
@@ -225,6 +225,22 @@ Notes:
 - The switch stops the AI only. GatewayService's own deliveries (channel replies, the operator's own sends and Library actions) carry a process-local own-delivery marker (`packages/policy-engine/src/own-delivery.ts`) that skips this one check; deny rules, Wards and approvals still apply. An own call that asks first stays own once the operator approves it: the engine records the fact on the approval's `pending_action_registered` event and re-mints the marker when the approval runs.
 - The engine reads the live config, so a save applies to the next call. Core, `mcp.invoke` and unknown ids in a hand-edited list are ignored, and a value that isn't a list switches nothing off.
 
+### Skill State
+
+Definition:
+The install-wide switch on each loaded skill: on (`enabled`), paused (`sleep`, used only when named or confidently matched) or off (`disabled`, never callable).
+
+Authority:
+- State owner: `SkillStateService` (`apps/gateway/src/services/skill-state-service.ts`). Every change is a `skill.lifecycle` approval (HX-402); only the recovered `skill_lifecycle_apply` approval effect applies it.
+- Mutation: `PATCH /api/v1/skills/by-id/state`, `/api/v1/skills/:skillId/state` and `/api/v1/skills/bulk-state`, Chat's `/skill` commands, and the Capabilities switch `POST /api/v1/capabilities/skills/state` (`apps/gateway/src/services/capability-skill-actions-service.ts`). Each asks the state owner for the approval.
+- Read models: `GET /api/v1/capabilities/skills` (the Skills tab's list) and `GET /api/v1/capabilities/skills/detail` (one skill's details) from `apps/gateway/src/services/capability-skills-service.ts`; `GET /api/v1/capabilities/skills/usage` (chat turns that loaded each skill in the last 365 days) from `apps/gateway/src/services/capability-skill-usage-service.ts`
+
+Notes:
+- Only the Capabilities switch follows the operator's `settingsApprovalSkipEnabled` opt-in, and it still creates the approval: when the skip applies it resolves that approval at once as the requesting operator, with a recorded note and an `operator_approval_skipped` approvals-audit event. Switching on, or pausing a skill that is off, skips only with the opt-in on; turning a skill off, or pausing one that is on, skips even with it off (the starting state is the one recorded on the approval); a `remote_hardened` install always asks. See [docs/EVOLUTION_CONTROL_PLANE.md](./EVOLUTION_CONTROL_PLANE.md).
+- The Capabilities switch refuses before any approval exists, in plain words that name no skill: a pinned skill, a stale revision or another requester's identical request is a `409` whose `details.reason` is `pinned`, `stale` or `duplicate` (`CapabilitySkillStateRefusal`), and a skill the state owner can't find is a `404`. The owner looks skills up among the install's loaded skills, so a workspace's self-authored skills are listed with `switchable: false`.
+- Use counts come from the immutable chat turn capability profiles. `SkillListItem.usageCount` moves only on the resolve-activation route, so the Skills tab never shows it as uses.
+- The Skills tab lists every skill loaded for the workspace whatever its skill choices, and marks none as hidden. Chat, scheduled turns and remote workers do honour the choices: see Workspace Skill Choices.
+
 ### Chat Workspace Exploration and Delegated Scope
 
 Definition:
@@ -241,6 +257,23 @@ Notes:
 - The explorer report is derived from persisted delegation truth and contains the answer, evidence references, approved searched paths and scope hashes, partial-result state, and explicit gaps. Secret projection removes delegated host roots and resolved host paths.
 - Additional scope is available only for active `workspace-explorer` or `coder` steps. Chat receives opaque IDs for bounded, server-discovered eligible paths; it cannot submit an arbitrary path. Selected IDs re-enter `submit_work_result` as the existing scope-expansion approval wait.
 - Approval application rechecks the exact step, approval, dispatch generation, and prior scope hash. Approval expands only that step's server-owned approved paths, computes a new scope hash, and resumes through durable execution; rejection, expiry, or stale binding retains the prior scope and fails closed.
+
+### Workspace Skill Choices
+
+Definition:
+Which installed skills a workspace's turns may load or call. A Citadel and each of its workspaces can choose skills. A workspace that has not chosen inherits its Citadel's choice, a workspace's choice only narrows its Citadel's, and with no choice at either level every installed skill counts as chosen (`"ALL"`).
+
+Authority:
+- Selection: `capability_scope` assignments with `resourceType: "skill"` (`packages/storage/src/capability-scope-repo.ts`), changed through `apps/gateway/src/routes/capability-scope-routes.ts`
+- Resolution: `resolveWorkspaceSkillChoices` in `apps/gateway/src/services/workspace-turn-skills.ts`, over `CapabilityScopeResolver.resolveSkills`. `CapabilityScopeRouteService.resolveEffectiveSkills` (the skill list and catalog routes) uses the same function.
+- Turn-time reads: `WorkspaceTurnSkills` in the same file. Chat and scheduled turns read every skill through it: the capability profile freeze, skill selection, activated and admitted skill instructions, feature and mesh admission, `capability.discover` and skill reads, the base prompt's skill index and the runner's live callable check. Remote workers revalidate against it too.
+
+Notes:
+- A skill the choices leave out is never auto-loaded, selected (even by name), readable through skill discovery or callable in that workspace's turns. A turn frozen before the choice changed is checked against the current callable set before dispatch and fails closed.
+- A workspace's own approved self-authored skills (`extra:reviewed-*`, loaded only in the workspace that captured them) always count as chosen: no selection can name them, and approving one was already a choice for that workspace. `CapabilitySystemService.listSkills` adds them after the choice filter, so the scoped catalog route lists them too. Their own switch and lifecycle, including revocation, still apply.
+- The choices narrow what lifecycle, each skill's install-wide switch, deny-wins policy and approvals already allow; they never widen it.
+- Reads without a workspace stay install-wide: the operator's `POST /api/v1/skills/resolve-activation`, Library and the skill management views. The base prompt's skill index lists only the install's chosen skills and, as before, no self-authored ones.
+- A fault reading the workspace's Citadel or its choices leaves no installed skill chosen. `reportCapabilityScopeFault` logs it and records a `capability_scope.read_failed` diagnostic carrying the error's name only. A fault listing integrations or MCP servers never hides a skill. `GOATCITADEL_CAPABILITY_SCOPING_DISABLED` switches the choices off, so every skill counts as chosen.
 
 ### Chat Trusted Automatic Fan-Out
 

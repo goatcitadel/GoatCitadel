@@ -15,9 +15,10 @@ export const SETTINGS_APPROVAL_SKIP_ANCHOR = "settings-approval-skip";
 const FLAG = "settingsApprovalSkipEnabled";
 /** What the switch does and does not change, as the Gateway enforces it. */
 const SKIP_FACTS = [
-  "Covers saves through the Settings forms, such as the network allowlist, Firecrawl, approval mode and runtime switches, and connectors you install from Capabilities. GoatCitadel sign-in, API keys and other credentials still ask for approval.",
+  "Covers saves through the Settings forms, such as the network allowlist, Firecrawl, approval mode and runtime switches, connectors you install from Capabilities, and skills you switch on from Capabilities. GoatCitadel sign-in, API keys and other credentials still ask for approval.",
+  "Turning a skill off, or pausing one that is on, from Capabilities applies right away even when this is off, because it only takes power away; a remote-hardened install still asks. Skill changes made anywhere else, such as Chat's skill commands, still ask.",
   "Change requests a model makes in Chat still need your approval. Anything that can call the Settings or Capabilities API as you, such as a script on this computer while GoatCitadel sign-in is off, can also make these changes without one.",
-  "Each change is still recorded as a change plan, with its audit trail and any undo it supports.",
+  "Each Settings change and connector install is still recorded as a change plan, with its audit trail and any undo it supports. A skill switch keeps its approval, marked as approved by you, with the reason.",
   "Turning this on needs one last approval. A remote-hardened install ignores it.",
 ];
 const onOff = (value: boolean) => (value ? "On" : "Off");
@@ -71,8 +72,9 @@ export function SettingsApprovalSkipControl() {
             {CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS[FLAG]?.label}
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            Off by default. When on, a change you save in Settings, such as the network allowlist, or a connector you
-            install from Capabilities applies right away instead of waiting for an approval in the Inbox.
+            Off by default. When on, Settings changes such as the network allowlist, connectors you install from
+            Capabilities and skills you switch on there apply right away instead of waiting for an approval in the
+            Inbox.
           </p>
         </div>
         <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>

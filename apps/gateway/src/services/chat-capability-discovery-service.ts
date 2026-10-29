@@ -1,20 +1,17 @@
 import { ConflictError, type ToolInvokeRequest, type ChatSessionRecord } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
-import type { CapabilitySystemService } from "./capability-system-service.js";
 import { searchCallableCapabilities } from "./callable-capability-discovery.js";
 import { buildTrustedSkillSnapshot } from "./chat-turn-capability-profile-service.js";
 import { readGovernedSkillContent } from "./governed-skill-instruction-service.js";
+import type { WorkspaceTurnSkills } from "./workspace-turn-skills.js";
 
 /** Read-only Chat discovery ports. Execution and activation authority stay with their owners. */
 export interface ChatCapabilityDiscoveryHost {
   requireEnabled(): Promise<void>;
   requireSession(sessionId: string): Promise<ChatSessionRecord>;
-  listCatalog(
-    ...args: Parameters<CapabilitySystemService["listCatalog"]>
-  ): ReturnType<CapabilitySystemService["listCatalog"]>;
-  listSkills(
-    ...args: Parameters<CapabilitySystemService["listSkills"]>
-  ): ReturnType<CapabilitySystemService["listSkills"]>;
+  /** The session workspace's turn-time reads: a skill its choices leave out is neither found nor readable. */
+  listCatalog: WorkspaceTurnSkills["listCatalog"];
+  listSkills: WorkspaceTurnSkills["listSkills"];
   listLifecycle(
     ...args: Parameters<AsyncStorage["skillLifecycle"]["list"]>
   ): ReturnType<AsyncStorage["skillLifecycle"]["list"]>;
@@ -42,7 +39,7 @@ export class ChatCapabilityDiscoveryService {
     return searchCallableCapabilities({
       query: String(request.args.query ?? ""),
       ...(typeof request.args.limit === "number" ? { limit: request.args.limit } : {}),
-      callableCatalog: await this.host.listCatalog("callable", "ALL", workspaceId),
+      callableCatalog: await this.host.listCatalog("callable", workspaceId),
     });
   }
 
@@ -50,9 +47,9 @@ export class ChatCapabilityDiscoveryService {
     const workspaceId = await this.requireWorkspace(request);
     const skillId = String(request.args.skillId ?? "");
     const [catalog, lifecycleRows, loadedSkills] = await Promise.all([
-      this.host.listCatalog("callable", "ALL", workspaceId),
+      this.host.listCatalog("callable", workspaceId),
       this.host.listLifecycle(),
-      this.host.listSkills("ALL", workspaceId),
+      this.host.listSkills(workspaceId),
     ]);
     const callableEntry = catalog.find((entry) => entry.kind === "skill" && entry.skillId === skillId);
     return readGovernedSkillContent({

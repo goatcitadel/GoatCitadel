@@ -1,4 +1,4 @@
-import { isApiRequestError } from "./http-internal.js";
+import { ApiRequestError, isApiRequestError, parseApiError } from "./http-internal.js";
 
 export interface ApiErrorDescription {
   summary: string;
@@ -25,14 +25,28 @@ export function describeApiError(error: unknown, fallback = DEFAULT_FALLBACK): A
       return { summary: summaryForStatus(401, undefined), technical, category: "authentication", retryable: false };
     }
     if (error.status === 403) {
-      return { summary: "You don't have permission to do that. Review Settings > Access before trying again. Anonymous access in auth-none mode cannot use protected operator actions; signed-in callers still need permission.", technical, category: "permission", retryable: false };
+      return {
+        summary:
+          "You don't have permission to do that. Review Settings > Access before trying again. Anonymous access in auth-none mode cannot use protected operator actions; signed-in callers still need permission.",
+        technical,
+        category: "permission",
+        retryable: false,
+      };
     }
     if (error.status === 409 && readDisabledFeatureFlag(error.body)) {
-      return { summary: "This feature is turned off for this installation.", technical, category: "feature_disabled", retryable: false };
+      return {
+        summary: "This feature is turned off for this installation.",
+        technical,
+        category: "feature_disabled",
+        retryable: false,
+      };
     }
-    return { summary: summaryForStatus(error.status, readBodyMessage(error.body)), technical,
+    return {
+      summary: summaryForStatus(error.status, readBodyMessage(error.body)),
+      technical,
       ...(error.status === 409 ? { category: "conflict" as const, retryable: true } : {}),
-      ...(error.status !== undefined && error.status >= 500 ? { category: "transient" as const, retryable: true } : {}) };
+      ...(error.status !== undefined && error.status >= 500 ? { category: "transient" as const, retryable: true } : {}),
+    };
   }
 
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
@@ -52,8 +66,35 @@ export function describeApiError(error: unknown, fallback = DEFAULT_FALLBACK): A
   return { summary: trimmed };
 }
 
+const RECORDED_API_ERROR = /^API error (\d{3}):?\s*([\s\S]*)$/u;
+
+/**
+ * Operator copy for an error that was kept only as its message string (many controllers store `error.message`).
+ * An `ApiRequestError` message is "API error <status>: <body>", so it is read back into its status and body and
+ * described like the error itself; any other text gets the same plain-text handling as `describeApiError`.
+ */
+export function describeApiErrorText(text: string, fallback = DEFAULT_FALLBACK): ApiErrorDescription {
+  const match = RECORDED_API_ERROR.exec(text.trim());
+  if (!match) return describeApiError(text, fallback);
+  const bodyText = match[2] ?? "";
+  const status = Number(match[1]);
+  const described = describeApiError(
+    new ApiRequestError(text, {
+      kind: "http",
+      method: "",
+      path: "",
+      status,
+      body: parseApiError(bodyText).body,
+      bodyText,
+    }),
+    fallback,
+  );
+  return { ...described, technical: text };
+}
+
 function summaryForStatus(status: number | undefined, bodyMessage: string | undefined): string {
-  if (status === 401) return "Gateway credentials are missing or expired. Sign in again through Settings > Access to continue.";
+  if (status === 401)
+    return "Gateway credentials are missing or expired. Sign in again through Settings > Access to continue.";
   if (status === 403) return "You don't have permission to do that.";
   if (status === 404) return "That item no longer exists. Refresh to see the latest.";
   if (status === 409) return "This changed somewhere else. Refresh and try again.";
@@ -78,7 +119,12 @@ function readBodyMessage(body: unknown): string | undefined {
 function readDisabledFeatureFlag(body: unknown): string | undefined {
   if (!body || typeof body !== "object") return undefined;
   const record = body as { code?: unknown; details?: unknown };
-  if ((record.code !== "FEATURE_DISABLED" && record.code !== "STATE_CONFLICT") || !record.details || typeof record.details !== "object") return undefined;
+  if (
+    (record.code !== "FEATURE_DISABLED" && record.code !== "STATE_CONFLICT") ||
+    !record.details ||
+    typeof record.details !== "object"
+  )
+    return undefined;
   const flag = (record.details as { flag?: unknown }).flag;
   return typeof flag === "string" && flag.trim() ? flag : undefined;
 }

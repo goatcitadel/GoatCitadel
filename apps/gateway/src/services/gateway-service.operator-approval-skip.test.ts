@@ -105,13 +105,17 @@ describe("GatewayService operator approval skip for Capabilities installs", () =
     service.config.assistant.deploymentProfile = "remote_hardened";
     try {
       expect(await service.isFeatureEnabled("settingsApprovalSkipEnabled")).toBe(true);
+      const readFlag = vi.spyOn(service, "isFeatureEnabled");
 
       const waiting = await confirmInstall("deepwiki");
 
       expect(waiting.status).toBe("awaiting_approval");
       expect(waiting.requiredAction?.kind).toBe("approval");
       expect(await eventTypes(waiting.planId)).not.toContain("operator_approval_skipped");
+      // The skip is decided without reading the setting, so a failing read can't matter here.
+      expect(readFlag).not.toHaveBeenCalledWith("settingsApprovalSkipEnabled");
     } finally {
+      vi.restoreAllMocks();
       service.config.assistant.deploymentProfile = previous;
     }
   });

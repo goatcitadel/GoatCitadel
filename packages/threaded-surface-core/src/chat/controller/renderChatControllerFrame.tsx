@@ -1,3 +1,4 @@
+import { describeApiErrorText } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { PageHeader } from "@goatcitadel/mission-control-shared/components/PageHeader";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { MissionThreadedConfirmations } from "../../MissionThreadedConfirmations";
@@ -203,7 +204,8 @@ export function renderChatControllerFrame({
           }
         />
       ) : null}
-      {error && !hostErrorAlreadyInThread ? <p className="error">{error}</p> : null}
+      {/* Controllers keep only error.message, so an API failure arrives as "API error <status>: <json>"; say it plainly. */}
+      {error && !hostErrorAlreadyInThread ? <p className="error">{describeApiErrorText(error).summary}</p> : null}
       {sessionData.isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
       {renderSurface(threadedSurfaceInput)}
       <MissionThreadedConfirmations

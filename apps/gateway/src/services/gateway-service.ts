@@ -118,7 +118,13 @@ import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
-import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
+import {
+  CapabilityScopeResolver,
+  isCapabilityAllowed,
+  reportCapabilityScopeFault,
+} from "./capability-scope-resolver.js";
+import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
+import { WorkspaceTurnSkills } from "./workspace-turn-skills.js";
 import { ChatCapabilityDiscoveryService } from "./chat-capability-discovery-service.js";
 import {
   resolveChatFeatureAdmission,
@@ -480,6 +486,8 @@ import {
 import { WebSearchCredentialService } from "./web-search-credential-service.js";
 import { composeCapabilityConnectors } from "./capability-connectors-composition.js";
 import { composeCapabilityTools, composeCapabilityToolUsage } from "./capability-tools-composition.js";
+import { composeCapabilitySkills } from "./capability-skills-composition.js";
+import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
 import { applyRuntimeBrowserBackendDefaults } from "./runtime-browser-backend-defaults.js";
 import { submitEvolutionWebSearchCredential } from "./web-search-credential-change.js";
@@ -1065,6 +1073,7 @@ export class GatewayService {
   public readonly approvalRemoteTokenSecrets: ApprovalRemoteTokenSecretService;
   private readonly skillsService: SkillsService;
   private readonly capabilityScopeResolver: CapabilityScopeResolver;
+  private readonly workspaceTurnSkills: WorkspaceTurnSkills;
   public readonly orchestrationEngine: OrchestrationEngine;
   private readonly orchestrationWorktreeService: OrchestrationWorktreeService;
   private readonly orchestrationPhaseExecutionService: OrchestrationPhaseExecutionService;
@@ -1576,6 +1585,7 @@ export class GatewayService {
       listAllIntegrationIds: async () =>
         (await this.storage.integrationConnections.list(undefined, 1000)).map((c) => c.connectionId),
       listAllMcpServerIds: async () => (await this.listMcpServers()).map((server) => server.serverId),
+      onError: reportCapabilityScopeFault((input) => this.recordDevDiagnostic(input)),
     });
     // HX-408 M1: the publication owner reads/writes only the durable mesh
     // capability storage, so it composes ahead of the capability system that
@@ -1646,6 +1656,12 @@ export class GatewayService {
       onAutonomousActivationGrantRevoked: async (grantId) => {
         await this.durableFanout.cancelForGrant(grantId, "grant_revoked");
       },
+    });
+    this.workspaceTurnSkills = new WorkspaceTurnSkills(this.capabilitySystemService, {
+      resolver: this.capabilityScopeResolver,
+      resolveCitadelId: async (workspaceId) =>
+        (await this.storage.workspaces?.find(workspaceId))?.citadelId ?? DEFAULT_CITADEL_ID,
+      onError: reportCapabilityScopeFault((input) => this.recordDevDiagnostic(input)),
     });
     this.skillLearningService = new SkillLearningService({
       rootDir: config.rootDir,
@@ -1911,8 +1927,7 @@ export class GatewayService {
       listToolCatalog: () => this.listToolCatalog(),
       getModelOutputTokenLimit: (providerId, model) => this.llmService.getModelOutputTokenLimit(providerId, model),
       describeProviderToolSupport: (providerId) => this.llmService.describeProviderToolSupport(providerId),
-      listCapabilityCatalog: (scope, workspaceId) =>
-        this.capabilitySystemService.listCatalog(scope, "ALL", workspaceId),
+      listCapabilityCatalog: (scope, workspaceId) => this.workspaceTurnSkills.listCatalog(scope, workspaceId),
       revalidateRequesterTool: (profile, canonicalName) => this.revalidateNativeMcpChatTool(profile, canonicalName),
       revalidateMeshTool: (profile, canonicalName) => this.revalidateMeshChatTool(profile, canonicalName),
       createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
@@ -2694,8 +2709,7 @@ export class GatewayService {
       storage: this.storage,
       assertMcpServerInScope: (request) => this.assertMcpServerInCapabilityScope(request),
       readAuthConnectionState: (actor) => this.readMcpRequesterAuthConnectionState(actor),
-      listCallableCapabilities: (workspaceId) =>
-        this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+      listCallableCapabilities: (workspaceId) => this.workspaceTurnSkills.listCatalog("callable", workspaceId),
       resolveOAuthAccessToken: (server) => this.mcpOAuth.resolveAccessToken(server),
       getNetworkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
       packageRoot: path.resolve(this.config.rootDir, this.config.assistant.dataDir, "reviewed-mcp-packages"),
@@ -2712,8 +2726,8 @@ export class GatewayService {
     this.chatCapabilityDiscovery = new ChatCapabilityDiscoveryService({
       requireEnabled: () => this.requireFeatureEnabled("boundedToolExposureV1Enabled"),
       requireSession: (sessionId) => this.requireChatSession(sessionId),
-      listCatalog: (...args) => this.capabilitySystemService.listCatalog(...args),
-      listSkills: (...args) => this.capabilitySystemService.listSkills(...args),
+      listCatalog: (scope, workspaceId) => this.workspaceTurnSkills.listCatalog(scope, workspaceId),
+      listSkills: (workspaceId) => this.workspaceTurnSkills.listSkills(workspaceId),
       listLifecycle: () => this.storage.skillLifecycle.list(),
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
@@ -3397,7 +3411,8 @@ export class GatewayService {
         getSettings: () => this.getSettings(),
         updateSettings: (input) => this.updateSettings(input),
         listModels: (providerId) => this.llmService.listModels(providerId),
-        getModelReasoningMetadata: (providerId, model) => this.llmService.getModelReasoningMetadata(providerId, model),
+        getDispatchReasoningEfforts: (providerId, model) =>
+          this.llmService.getDispatchReasoningEfforts(providerId, model),
       }),
       new RuntimeConfigurationChangePlanAdapter({
         getSettings: () => this.getSettings(),
@@ -3553,10 +3568,11 @@ export class GatewayService {
       repository: this.storage.changePlans,
       adapters: evolutionAdapters,
       isEnabled: async () => await this.isFeatureEnabled("evolutionControlPlaneV1Enabled"),
-      // The operator's opt-in never applies to a remote_hardened install.
-      allowsOperatorApprovalSkip: async () =>
-        this.config.assistant.deploymentProfile !== "remote_hardened" &&
-        (await this.isFeatureEnabled("settingsApprovalSkipEnabled")),
+      // The operator's opt-in never applies to a remote_hardened install, which never reads it.
+      allowsOperatorApprovalSkip: () =>
+        allowsOperatorApprovalSkip(this.config.assistant.deploymentProfile, () =>
+          this.isFeatureEnabled("settingsApprovalSkipEnabled"),
+        ),
       appendAudit: async (event, payload) => {
         await this.storage.audit.append("approvals", { event, ...payload });
       },
@@ -3938,6 +3954,17 @@ export class GatewayService {
         deploymentProfile: () => this.config.assistant.deploymentProfile,
         safeWriteFallbackDir: () =>
           path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out"),
+      }),
+      capabilitySkills: composeCapabilitySkills({
+        chatTurnCapabilityProfiles: this.storage.chatTurnCapabilityProfiles,
+        skills: this,
+        loadedSkills: () => this.skillsService.list(),
+        capabilities: composed.capabilities,
+        approvals: composed.approvals,
+        audit: this.storage.audit,
+        features: this,
+        deploymentProfile: () => this.config.assistant.deploymentProfile,
+        rootDir: this.config.rootDir,
       }),
     };
   }
@@ -7645,7 +7672,7 @@ export class GatewayService {
         // execution time; never recompute this binding from raw storage.
         resolveToolCallBeforeInterposition: (workspaceId) =>
           this.hooksService.getToolCallBeforeInterposition(workspaceId),
-        listCapabilityCatalog: (scope) => this.capabilitySystemService.listCatalog(scope, "ALL", input.workspaceId),
+        listCapabilityCatalog: (scope) => this.workspaceTurnSkills.listCatalog(scope, input.workspaceId),
         resolveToolSchema: (runnerInput, nativeTools, meshTools) =>
           this.turnRuntime.resolveCapabilityToolSchema(runnerInput, nativeTools, meshTools),
         resolveMeshToolSchemas: (hookInput) => resolveMeshChatToolSchemas(this.meshChatBindingDeps(), hookInput),
@@ -7789,7 +7816,7 @@ export class GatewayService {
   public async resolveActivatedSkillInstructions(
     profile: ChatTurnCapabilityProfileRecord,
   ): Promise<string | undefined> {
-    const loadedSkills = await this.capabilitySystemService.listSkills("ALL", profile.identity.workspaceId);
+    const loadedSkills = await this.workspaceTurnSkills.listSkills(profile.identity.workspaceId);
     return renderGovernedActivatedSkillInstructions({
       profile,
       loadedSkills,
@@ -7807,10 +7834,10 @@ export class GatewayService {
       getSkillSelectionMode: async () => (await this.getSkillActivationPolicy()).selectionMode ?? "legacy",
       resolveSkills: (content, workspaceId) =>
         this.resolveSkillActivationForRuntime({ text: content }, false, workspaceId),
-      listCallable: (workspaceId) => this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+      listCallable: (workspaceId) => this.workspaceTurnSkills.listCatalog("callable", workspaceId),
       listLifecycle: () => this.storage.skillLifecycle.list(),
       contextDocs: (workspaceId) => this.createWorkspaceSkillContextDocReader(workspaceId),
-      listLoadedSkills: (workspaceId) => this.capabilitySystemService.listSkills("ALL", workspaceId),
+      listLoadedSkills: (workspaceId) => this.workspaceTurnSkills.listSkills(workspaceId),
       getModelContextWindow: (providerId, model) => this.llmService.getModelContextWindow(providerId, model),
       routeFingerprint: (primary, fallback) => fingerprintChatProviderFallbackRoute(this.llmService, primary, fallback),
       resolveRemotePlacement: (input) => this.selectRemoteWorkerAdmission(input),
@@ -7839,7 +7866,7 @@ export class GatewayService {
         selectCallableMeshChatAdmission(
           {
             assertTurnAdmissionWrite: (admission) => this.assertTurnAdmissionWrite(admission),
-            listCallable: (workspaceId) => this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+            listCallable: (workspaceId) => this.workspaceTurnSkills.listCatalog("callable", workspaceId),
             resolveSchemas: (request) => resolveMeshChatToolSchemas(this.meshChatBindingDeps(), request),
             prepareToolAccessEvaluation: (request) => this.prepareToolAccessEvaluation(request),
             inspectSchemaAccess: (request, schema) =>
@@ -7861,7 +7888,7 @@ export class GatewayService {
         getChatSessionPrefs: (sessionId) => this.getChatSessionPrefs(sessionId),
         resolveToolPolicyContext: (request) => this.resolveToolPolicyContext(request),
         resolveCapabilityToolSchema: (request) => this.turnRuntime.resolveCapabilityToolSchema(request),
-        listCallable: (workspaceId) => this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+        listCallable: (workspaceId) => this.workspaceTurnSkills.listCatalog("callable", workspaceId),
         resolveMeshToolSchemas: (request) => resolveMeshChatToolSchemas(this.meshChatBindingDeps(), request),
         getToolCallBeforeInterposition: (workspaceId) => this.hooksService.getToolCallBeforeInterposition(workspaceId),
         resolveRuntimeOwnerBinding: (toolName) => this.pluginToolOverrideService.resolveRuntimeOwnerBinding(toolName),
@@ -9274,7 +9301,7 @@ export class GatewayService {
             getToolCallBeforeInterposition: (workspaceId) =>
               this.hooksService.getToolCallBeforeInterposition(workspaceId),
             listToolCatalog: () => this.listToolCatalog(),
-            listCallable: (workspaceId) => this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+            listCallable: (workspaceId) => this.workspaceTurnSkills.listCatalog("callable", workspaceId),
             resolveRuntimeOwnerBinding: (toolName) =>
               this.pluginToolOverrideService.resolveRuntimeOwnerBinding(toolName),
             inspectToolAccess: (request, options) => this.inspectToolAccess(request, options),
@@ -9283,8 +9310,7 @@ export class GatewayService {
         ),
       revalidateRequesterTool: (profile, canonicalName) => this.revalidateNativeMcpChatTool(profile, canonicalName),
       revalidateMeshTool: (profile, canonicalName) => this.revalidateMeshChatTool(profile, canonicalName),
-      listCallableCapabilities: (workspaceId) =>
-        this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+      listCallableCapabilities: (workspaceId) => this.workspaceTurnSkills.listCatalog("callable", workspaceId),
       resolvePolicyContext: async (profile, taskId) => {
         const input = {
           operatorId: profile.identity.operatorId,
@@ -9604,7 +9630,7 @@ export class GatewayService {
             throw new Error("Mesh admission actor was revoked.");
         },
         readAdmission: (scope) => this.storage.sessionMutationAdmissions.findFeatureReferences(scope),
-        listCallable: (workspaceId) => this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+        listCallable: (workspaceId) => this.workspaceTurnSkills.listCatalog("callable", workspaceId),
       },
       handle,
     );
@@ -10600,9 +10626,9 @@ export class GatewayService {
       : await approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType);
   }
 
-  public async listSkills(): Promise<SkillListItem[]> {
+  public async listSkills(effectiveSkills?: EffectiveCapabilitySet, workspaceId?: string): Promise<SkillListItem[]> {
     await this.skillStateService.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
-    return await this.capabilitySystemService.listSkills();
+    return await this.capabilitySystemService.listSkills(effectiveSkills, workspaceId);
   }
 
   public async createCapabilityProposal(
@@ -10620,7 +10646,7 @@ export class GatewayService {
    */
   public async resolveBasePromptCapabilityCatalog(scope?: BasePromptCatalogScope): Promise<BaseAgentPromptToolset> {
     try {
-      const catalog = await this.capabilitySystemService.listCatalog("callable");
+      const catalog = await this.workspaceTurnSkills.listInstalledCatalog("callable", scope?.workspaceId);
       const toolNames: string[] = [];
       const skills: BaseAgentPromptSkill[] = [];
       for (const entry of catalog) {
@@ -10761,7 +10787,7 @@ export class GatewayService {
     return resolveChatRuntimeSkillSelection(
       {
         getSkillActivationPolicy: () => this.getSkillActivationPolicy(),
-        capabilitySystemService: this.capabilitySystemService,
+        turnSkills: this.workspaceTurnSkills,
         skillStateService: this.skillStateService,
         storage: this.storage,
       },

@@ -6,6 +6,7 @@ import type {
   ChatSessionRecord,
 } from "@goatcitadel/contracts";
 import { cancelChangePlan, createChangePlan } from "@goatcitadel/mission-control-shared/api/client";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import { runWithSelectedSession } from "./mission-threaded-controller-helpers";
 import { isTerminalChangePlanStatus } from "./change-plan-controller-helpers";
@@ -80,7 +81,8 @@ export function useChatModelChangePlans({
             };
           });
         } catch (error) {
-          setUiError(error instanceof Error ? error.message : "Unable to prepare this model change.");
+          // A refused effort or model comes back as a 422 whose sentence says what to choose; never show the raw body.
+          setUiError(describeApiError(error, "Unable to prepare this model change.").summary);
         }
       });
     },
@@ -128,7 +130,7 @@ export function useChatModelChangePlans({
           pushLocalNotice("Change plan cancelled.", "success");
         })
         .catch((error) => {
-          setUiError(error instanceof Error ? error.message : "Unable to cancel this Change Plan.");
+          setUiError(describeApiError(error, "Unable to cancel this Change Plan.").summary);
         });
     },
     [
@@ -180,7 +182,7 @@ export function useChatModelChangePlans({
           setLinkedDefaultChangePlan(created);
         })
         .catch((error) => {
-          setUiError(error instanceof Error ? error.message : "Unable to prepare the default-model change.");
+          setUiError(describeApiError(error, "Unable to prepare the default-model change.").summary);
         });
     },
     [

@@ -179,6 +179,7 @@ export {
   verifyChatTurnCapabilityProfile,
   verifyChatTurnCapabilitySkillBindings,
 } from "./chat-turn-capability-profile-repo.js";
+export type { SkillUseCount } from "./chat-turn-capability-profile-repo.js";
 import { ChatTurnRecoveryRepository } from "./chat-turn-recovery-repo.js";
 import { ChatStreamEventRepository } from "./chat-stream-event-repo.js";
 import { ChatExecutionPlanRepository } from "./chat-execution-plan-repo.js";

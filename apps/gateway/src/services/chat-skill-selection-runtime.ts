@@ -11,15 +11,16 @@ import type {
   SkillActivationPolicy,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
-import type { CapabilitySystemService } from "./capability-system-service.js";
 import type { SkillStateService } from "./skill-state-service.js";
 import { resolveCallableSkillSelection } from "./callable-skill-activation.js";
+import type { WorkspaceTurnSkills } from "./workspace-turn-skills.js";
 import { logger } from "@goatcitadel/gateway-core";
 const log = logger.child("gateway-service");
 
 export interface ChatSkillSelectionRuntimeHost {
   getSkillActivationPolicy(): Promise<SkillActivationPolicy>;
-  capabilitySystemService: Pick<CapabilitySystemService, "listSkills" | "listCatalog">;
+  /** A workspace turn selects only among the skills its choices keep; without a workspace, install-wide. */
+  turnSkills: Pick<WorkspaceTurnSkills, "listSkills" | "listCatalog">;
   skillStateService: Pick<SkillStateService, "readSkillStates" | "recordSkillUsage">;
   storage: Pick<AsyncStorage, "skillAggregateRevisions">;
 }
@@ -35,9 +36,9 @@ export async function resolveChatRuntimeSkillSelection(
   const selection = resolveCallableSkillSelection(
     {
       request: input,
-      loadedSkills: await host.capabilitySystemService.listSkills("ALL", workspaceId),
-      inspectableCatalog: await host.capabilitySystemService.listCatalog("inspectable", "ALL", workspaceId),
-      callableCatalog: await host.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+      loadedSkills: await host.turnSkills.listSkills(workspaceId),
+      inspectableCatalog: await host.turnSkills.listCatalog("inspectable", workspaceId),
+      callableCatalog: await host.turnSkills.listCatalog("callable", workspaceId),
     },
     { mode: policy.selectionMode ?? "legacy" },
   );

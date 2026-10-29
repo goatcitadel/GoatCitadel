@@ -7,6 +7,7 @@ import { createNoopSecretStore } from "../test/llm-fixtures.js";
 import { GoogleCloudAuthService } from "./google-cloud-auth-service.js";
 import { LlmReasoningProfileError } from "./llm-reasoning-profile.js";
 import { LlmService, sanitizeProviderResponseForPublicProjection } from "./llm-service.js";
+import { ModelChangePlanAdapter } from "./model-change-plan-adapter.js";
 
 const roots: string[] = [];
 
@@ -142,6 +143,110 @@ describe("LlmService Vertex AI integration", () => {
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { label: "model metadata", withMetadata: true, capabilitySource: "model_metadata" },
+    { label: "the provider's declared list", withMetadata: false, capabilitySource: "provider_config" },
+  ])(
+    "lets a Change Plan pick an effort from $label even though Gemini infers reasoning off, and dispatch honors it",
+    async ({ withMetadata, capabilitySource }) => {
+      const root = createRoot();
+      const sentBodies: Array<Record<string, unknown>> = [];
+      const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        sentBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return jsonResponse({
+          id: "vertex-completion",
+          model: "google/gemini-2.5-flash",
+          choices: [{ index: 0, message: { role: "assistant", content: "done" }, finish_reason: "stop" }],
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const googleCloudAuthService = new GoogleCloudAuthService({ env: {}, fetch: fetchMock as typeof fetch });
+      vi.spyOn(googleCloudAuthService, "resolve").mockResolvedValue({
+        accessToken: "short-lived-token",
+        expiresAt: "2026-07-13T20:00:00.000Z",
+        projectId: "config-project",
+        location: "europe-west4",
+        endpointId: "openapi",
+        baseUrl:
+          "https://europe-west4-aiplatform.googleapis.com/v1/projects/config-project/locations/europe-west4/endpoints/openapi",
+        credentialType: "adc",
+        credentialSource: "adc_file",
+      });
+      const service = new LlmService(
+        vertexConfig("google-adc"),
+        {},
+        {
+          secretStore: createNoopSecretStore(),
+          googleCloudAuthService,
+          modelMetadataPath: withMetadata ? writeMetadata(root) : writeEmptyMetadata(root),
+          enforceNetworkAllowlist: false,
+        },
+      );
+      // ADC readiness is not under test; the mocked token resolver stands in for a probed credential.
+      const vertex = {
+        ...service.listProviders().find((provider) => provider.providerId === "vertex")!,
+        authReadiness: { status: "ready" },
+      } as any;
+      // The failing shape: Gemini's id makes capability inference say "no reasoning".
+      expect(vertex.capabilities?.reasoning).toBe(false);
+      expect(service.getDispatchReasoningEfforts("vertex", "google/gemini-2.5-flash")).toEqual([
+        "low",
+        "medium",
+        "high",
+      ]);
+
+      const adapter = new ModelChangePlanAdapter({
+        getChatSessionPrefs: vi.fn(),
+        updateChatSessionPrefs: vi.fn(),
+        getSettings: vi.fn(
+          async () =>
+            ({
+              revision: 1,
+              llm: { activeProviderId: "vertex", activeModel: "google/gemini-2.5-flash", providers: [vertex] },
+            }) as any,
+        ),
+        updateSettings: vi.fn(),
+        listModels: vi.fn(async () => [{ id: "google/gemini-2.5-flash" }] as any),
+        getDispatchReasoningEfforts: (providerId, model) => service.getDispatchReasoningEfforts(providerId, model),
+      });
+      const context = {
+        origin: { surface: "chat", workspaceId: "default", actorId: "operator-1" },
+        actions: { confirmation: (input: any) => ({ kind: "confirmation", ...input }) },
+      } as any;
+      await expect(
+        adapter.prepare(context, {
+          kind: "installation_default_model",
+          providerId: "vertex",
+          model: "google/gemini-2.5-flash",
+          thinkingLevel: "standard",
+        }),
+      ).resolves.toMatchObject({ status: "awaiting_confirmation" });
+      await expect(
+        adapter.prepare(context, {
+          kind: "installation_default_model",
+          providerId: "vertex",
+          model: "google/gemini-2.5-flash",
+          thinkingLevel: "deep",
+        }),
+      ).rejects.toMatchObject({
+        httpStatus: 422,
+        details: expect.objectContaining({ supportedEfforts: ["off", "minimal", "standard", "extended"] }),
+      });
+
+      const response = await service.chatCompletions({
+        messages: [{ role: "user", content: "Think a little" }],
+        reasoning: { effort: "medium" },
+      });
+      expect(sentBodies[0]).toMatchObject({ reasoning_effort: "medium" });
+      expect(response.routing?.reasoning).toMatchObject({
+        requested: "medium",
+        actual: "medium",
+        disposition: "honored",
+        capabilitySource,
+      });
+    },
+  );
 
   it("does not promote missing, malformed, or unprobed metadata ADC as route-ready", () => {
     const root = createRoot();
@@ -613,6 +718,12 @@ function writeMetadata(root: string): string {
       },
     }),
   );
+  return path;
+}
+
+function writeEmptyMetadata(root: string): string {
+  const path = join(root, "empty-metadata.json");
+  writeFileSync(path, JSON.stringify({ version: 1, entries: {} }));
   return path;
 }
 
