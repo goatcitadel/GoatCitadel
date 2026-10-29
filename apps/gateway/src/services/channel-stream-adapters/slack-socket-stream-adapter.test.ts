@@ -536,6 +536,25 @@ describe("slack socket stream adapter", () => {
     expect(h.processEvent).toHaveBeenCalledTimes(1);
   });
 
+  it("still ends the run, with a fixed sentence, if finishing a socket ever fails", async () => {
+    const h = harness();
+    const runCtx = h.ctx();
+    const run = h.start(runCtx);
+    await until(() => h.sockets.length === 1, "the first socket");
+
+    runCtx.signal.removeEventListener = () => {
+      throw new Error(`cleanup failed: ${APP_TOKEN} ticket=secret-ticket`);
+    };
+    h.sockets[0]!.frame({ type: "disconnect", reason: "refresh_requested" });
+    await run.done;
+
+    expect(run.state.value).toBe("rejected");
+    const error = run.state.error as Error;
+    expect(error.message).toBe(CLOSED);
+    expect(error.cause).toBeUndefined();
+    expect([error.message, error.stack ?? ""].join("\n")).not.toMatch(/xapp-1|ticket=/);
+  });
+
   describe("failures", () => {
     const secretish = `leaked ${APP_TOKEN} wss://wss-primary.slack.com/link/?ticket=secret-ticket`;
 

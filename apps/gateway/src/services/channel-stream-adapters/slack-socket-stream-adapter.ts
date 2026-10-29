@@ -204,7 +204,9 @@ export function createSlackSocketStreamAdapter(deps: SlackSocketStreamAdapterDep
       const finishAfterDrain = (outcome: SocketEnd | Error) => {
         if (ended || ending) return;
         ending = true;
-        void chain.then(() => finish(outcome));
+        // The chain never rejects and `finish` does not throw; if either ever did, the run still ends, with a fixed
+        // sentence (rejecting an already settled run is a no-op, and nothing from the failure is kept).
+        void chain.then(() => finish(outcome)).catch(() => reject(new Error(CLOSED)));
       };
       const onAbort = () => finish("aborted");
       const armQuietTimer = () => {
