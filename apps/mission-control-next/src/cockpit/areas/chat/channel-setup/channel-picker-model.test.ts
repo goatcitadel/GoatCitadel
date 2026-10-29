@@ -7,6 +7,7 @@ import {
   chatSetupHref,
   chatSetupHrefForDraft,
   CONVERTED_SETUP_CHANNELS,
+  hasChatKeyChangePage,
   KEY_CHANGE_CHANNELS,
   settingsChannelSetupHref,
 } from "./channel-picker-model";
@@ -213,5 +214,65 @@ describe("where a channel is set up", () => {
     expect(chatSetupHrefForDraft(other, definitions)).toBeUndefined();
     const gone = { draftId: "d", catalogId: "channel.gone", lifecycleMode: "create" as const, draft: {} };
     expect(chatSetupHrefForDraft(gone, definitions)).toBeUndefined();
+  });
+});
+
+describe("which connections change their key on a page in Chat", () => {
+  const connection = (key: string, config: Record<string, unknown> = {}) => ({ key, config });
+
+  it("keeps Telegram as it was: always", () => {
+    expect(hasChatKeyChangePage(connection("telegram"))).toBe(true);
+    expect(hasChatKeyChangePage(connection("telegram", { receiveMode: "webhook" }))).toBe(true);
+  });
+
+  it("leaves every other channel to Settings", () => {
+    expect(hasChatKeyChangePage(connection("mattermost", { receiveMode: "socket", runtimeMode: "gateway" }))).toBe(
+      false,
+    );
+  });
+
+  describe("Discord, only when it receives through the bot", () => {
+    it.each([
+      ["a connection saved as gateway", { runtimeMode: "gateway" }],
+      ["a gateway mode with stray spaces", { runtimeMode: " gateway " }],
+      ["a bot token and no mode", { botToken: "[REDACTED]" }],
+      ["a bot token variable and no mode", { botTokenEnv: "DISCORD_BOT_TOKEN" }],
+      ["an older token key and no mode", { token: "[REDACTED]" }],
+      ["an older token variable and no mode", { tokenEnv: "DISCORD_TOKEN" }],
+      ["a webhook beside a bot token and no mode", { webhookUrl: "[REDACTED]", botToken: "[REDACTED]" }],
+    ])("is true for %s", (_name, config) => {
+      expect(hasChatKeyChangePage(connection("discord", config))).toBe(true);
+    });
+
+    it.each([
+      ["a connection saved as bridge", { runtimeMode: "bridge" }],
+      ["a bridge that also holds a bot token", { runtimeMode: "bridge", botToken: "[REDACTED]" }],
+      ["a webhook and no bot token", { webhookUrl: "[REDACTED]" }],
+      ["a webhook variable and no bot token", { webhookUrlEnv: "DISCORD_WEBHOOK_URL" }],
+      ["nothing that says how it receives", {}],
+      ["blank token settings", { botToken: "  ", botTokenEnv: "" }],
+      ["a token setting that is not text", { botToken: true }],
+    ])("is false for %s: it has no bot token to change", (_name, config) => {
+      expect(hasChatKeyChangePage(connection("discord", config))).toBe(false);
+    });
+  });
+
+  describe("Slack, only when it receives over Socket Mode", () => {
+    it.each([
+      ["socket", { receiveMode: "socket" }],
+      ["socket with stray spaces", { receiveMode: " socket " }],
+    ])("is true for %s", (_name, config) => {
+      expect(hasChatKeyChangePage(connection("slack", config))).toBe(true);
+    });
+
+    it.each([
+      ["a webhook connection", { receiveMode: "webhook" }],
+      ["an OAuth install", { authMode: "oauth", receiveMode: "webhook", slackTeamId: "T1" }],
+      ["an OAuth install saved before the choice existed", { authMode: "oauth" }],
+      ["a send-only webhook", { webhookUrl: "[REDACTED]" }],
+      ["nothing that says how it receives", {}],
+    ])("is false for %s: it has no app-level token to change", (_name, config) => {
+      expect(hasChatKeyChangePage(connection("slack", config))).toBe(false);
+    });
   });
 });

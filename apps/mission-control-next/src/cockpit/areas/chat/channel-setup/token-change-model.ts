@@ -31,6 +31,12 @@ export type TokenCheckOutcome =
     }
   | { kind: "rejected"; error: string };
 
+/**
+ * The one thing saving does that the operator can see in their chat. The setup pages say "there" after naming where the
+ * bot posts; this page lists nothing before the line, so it names the place itself.
+ */
+export const KEY_CHANGE_TEST_MESSAGE = "GoatCitadel sends a test message where your bot posts and then removes it";
+
 /** Said of the bot the channel has now when nothing names it. */
 export const BOT_IT_USES_NOW = "the bot this channel uses now";
 

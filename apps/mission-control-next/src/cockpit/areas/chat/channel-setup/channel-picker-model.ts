@@ -1,4 +1,9 @@
-import type { ChannelPickerGroup, ChannelSetupDefinition, ChannelSetupDraft } from "@goatcitadel/contracts";
+import type {
+  ChannelPickerGroup,
+  ChannelSetupDefinition,
+  ChannelSetupDraft,
+  IntegrationConnection,
+} from "@goatcitadel/contracts";
 import { channelSetupHref } from "../../../app/routes";
 import { isChatSetupDraft } from "./setup-draft-session";
 
@@ -17,6 +22,41 @@ export const CHAT_ONLY_SETUP_CHANNELS: ReadonlySet<string> = new Set(["telegram"
  * `ChannelSetupView` backs each one; this list is here so the channel page can link to it without loading the pages.
  */
 export const KEY_CHANGE_CHANNELS: ReadonlySet<string> = new Set(["telegram", "discord", "slack"]);
+
+const textOf = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() ? value.trim() : undefined;
+
+/**
+ * Whether a Discord connection receives through its bot, so it has a bot token to change. This mirrors the gateway's own
+ * reading of a saved connection (`inferDiscordConfigRuntimeMode`, which setup hydrates a connection with): a saved
+ * "gateway" or "bridge" decides; without one a bot token or its variable name (also under the older `token` keys)
+ * means the bot, and a webhook alone, or nothing, means the webhook-only bridge. The public config shows a secret as
+ * a marker or a name, never its value, which is all this needs.
+ */
+function discordUsesBot(config: Readonly<Record<string, unknown>>): boolean {
+  const mode = textOf(config.runtimeMode);
+  if (mode === "gateway" || mode === "bridge") return mode === "gateway";
+  return ["botToken", "botTokenEnv", "token", "tokenEnv"].some((key) => textOf(config[key]) !== undefined);
+}
+
+/**
+ * Whether this connection's key is changed on a page of its own in Chat. Telegram always; Discord and Slack only where
+ * the page fits, because it asks for the tokens of a bot: a Discord webhook-only (bridge) connection has no bot token,
+ * and a Slack webhook or OAuth connection has no app-level token (Socket Mode is what uses one). Those keep their
+ * change in Settings. The one predicate decides both the channel page's link and the view that opens, so they cannot
+ * disagree.
+ */
+export function hasChatKeyChangePage(connection: Pick<IntegrationConnection, "key" | "config">): boolean {
+  if (!KEY_CHANGE_CHANNELS.has(connection.key)) return false;
+  switch (connection.key) {
+    case "discord":
+      return discordUsesBot(connection.config);
+    case "slack":
+      return textOf(connection.config.receiveMode) === "socket";
+    default:
+      return true;
+  }
+}
 
 export interface ChannelPickerTile {
   /** The channel's catalog key, as it appears in the add-channel address. */

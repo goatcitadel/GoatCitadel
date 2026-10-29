@@ -4,7 +4,7 @@ import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { channelPageHref, channelPickerHref, type MessagingView } from "../../../app/routes";
-import { settingsChannelSetupHref } from "./channel-picker-model";
+import { hasChatKeyChangePage, settingsChannelSetupHref } from "./channel-picker-model";
 import { useChannelConnection } from "../use-channel-connections";
 import { ChannelTokenChange } from "./ChannelTokenChange";
 import { DiscordSetupPage } from "./DiscordSetupPage";
@@ -44,7 +44,8 @@ export const SETUP_PAGES: ReadonlyMap<string, ComponentType<SetupPageProps>> = n
 
 /**
  * The channels whose key is changed on a page of their own in Chat, by catalog key. `KEY_CHANGE_CHANNELS` lists the same
- * keys for the channel page, which links here without loading these pages.
+ * keys for the channel page, which links here without loading these pages. Which connections of those channels the
+ * page fits is `hasChatKeyChangePage`'s to say.
  */
 export const KEY_CHANGE_PAGES: ReadonlyMap<string, ComponentType<KeyChangePageProps>> = new Map<
   string,
@@ -56,12 +57,14 @@ export const KEY_CHANGE_PAGES: ReadonlyMap<string, ComponentType<KeyChangePagePr
 ]);
 
 /**
- * Changing a channel's key. A channel with a key page of its own is changed there. Any other channel's key is Settings'
- * still, so this says so and links there: also while the channel cannot be read, because Settings can still change it.
+ * Changing a channel's key. A connection the channel's key page fits (`hasChatKeyChangePage`) is changed there. Any other
+ * key is Settings' still, so this says so and links there: also while the channel cannot be read, because Settings can
+ * still change it.
  */
 function KeyChange({ connectionId, workspaceId }: { connectionId: string; workspaceId: string }) {
   const { connection, connections } = useChannelConnection(connectionId);
-  const Page = connection ? KEY_CHANGE_PAGES.get(connection.key) : undefined;
+  // The same test as the channel page's link: a connection the key page does not fit is changed in Settings.
+  const Page = connection && hasChatKeyChangePage(connection) ? KEY_CHANGE_PAGES.get(connection.key) : undefined;
   if (connection && Page) return <Page connectionId={connectionId} connection={connection} workspaceId={workspaceId} />;
   const back = { href: channelPageHref(connectionId), label: "Back to channel" };
   if (connections.isPending) {

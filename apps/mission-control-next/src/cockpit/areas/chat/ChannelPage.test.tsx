@@ -297,15 +297,29 @@ describe("ChannelPage", () => {
   });
 
   it.each([
-    ["discord", "Discord"],
-    ["slack", "Slack"],
-  ])("changes %s's key here, in Chat, on its own page", async (key, label) => {
+    ["discord", "Discord", { runtimeMode: "gateway" }],
+    ["slack", "Slack", { receiveMode: "socket" }],
+  ])("changes %s's key here, in Chat, on its own page, when it uses a bot", async (key, label, config) => {
     load({
-      connection: connection({ catalogId: `channel.${key}`, key, label, config: {} }),
+      connection: connection({ catalogId: `channel.${key}`, key, label, config }),
       overview: overviewOf(channel({ channelKey: key, label })),
     });
     await mount();
     expect(keyLinks()).toEqual(["/chat/messaging/conn-1/key"]);
+  });
+
+  it.each([
+    ["a Discord webhook-only (bridge) connection", "discord", { runtimeMode: "bridge", webhookUrl: "[REDACTED]" }],
+    ["a Discord connection with only a webhook", "discord", { webhookUrl: "[REDACTED]" }],
+    ["a Slack webhook connection", "slack", { receiveMode: "webhook", webhookUrl: "[REDACTED]" }],
+    ["a Slack OAuth connection", "slack", { authMode: "oauth", receiveMode: "webhook", slackTeamId: "T1" }],
+  ])("keeps the key of %s in Settings: it has no bot token for Chat's page to change", async (_name, key, config) => {
+    load({
+      connection: connection({ catalogId: `channel.${key}`, key, label: key, config }),
+      overview: overviewOf(channel({ channelKey: key, label: key })),
+    });
+    await mount();
+    expect(keyLinks()).toEqual(["/settings/connections#channels"]);
   });
 
   it("sends a channel without its own key page to Settings to change the key", async () => {

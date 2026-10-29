@@ -10,9 +10,9 @@ import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { CONNECTIONS_QUERY_KEY } from "../use-channel-connections";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
-import { botChanged, botChangeNote, runningBotName } from "./token-change-model";
+import { botChanged, botChangeNote, KEY_CHANGE_TEST_MESSAGE, runningBotName } from "./token-change-model";
 import { TOKEN_CHANGE_CHANNELS, type TokenChangeChannel } from "./token-change-channels";
-import { hostChange, TEST_MESSAGE_THERE_CHANGE, TurnOnStep, turnOnStatus } from "./TurnOnStep";
+import { hostChange, TurnOnStep, turnOnStatus } from "./TurnOnStep";
 import { useChannelSetupHosts } from "./use-channel-picker-groups";
 import { useTokenChange, type TokenChangeState } from "./use-token-change";
 import { useTurnOn, type TurnOnState } from "./use-turn-on";
@@ -99,7 +99,7 @@ function TokenChangeSteps({
     <div className="space-y-3">
       {botChange && !saved ? <Warning>{botChange}</Warning> : null}
       <TurnOnStep
-        changes={[TEST_MESSAGE_THERE_CHANGE, ...hosts.missing.map(hostChange)]}
+        changes={[KEY_CHANGE_TEST_MESSAGE, ...hosts.missing.map(hostChange)]}
         turnOn={turnOn}
         wording={channel.wording}
         onTurnOn={() => {

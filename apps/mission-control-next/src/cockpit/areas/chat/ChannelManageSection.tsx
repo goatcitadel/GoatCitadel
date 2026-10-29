@@ -6,13 +6,16 @@ import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { Section } from "../../ui/Section";
 import { ChannelActionNote } from "./ChannelActionNote";
-import { KEY_CHANGE_CHANNELS } from "./channel-setup/channel-picker-model";
+import { hasChatKeyChangePage } from "./channel-setup/channel-picker-model";
 import { REMOVE_CONSEQUENCE, removeChannelTitle } from "./channel-remove-copy";
 import { useChannelLifecycle } from "./use-channel-lifecycle";
 
-/** A channel with a key page of its own in Chat changes its key there; every other channel's is still changed in Settings. */
+/**
+ * A connection with a key page of its own in Chat changes its key there; every other connection's, such as a Discord
+ * webhook or a Slack OAuth install, is still changed in Settings.
+ */
 function keyChangeHref(connection: IntegrationConnection): string {
-  return KEY_CHANGE_CHANNELS.has(connection.key)
+  return hasChatKeyChangePage(connection)
     ? channelKeyChangeHref(connection.connectionId)
     : "/settings/connections#channels";
 }

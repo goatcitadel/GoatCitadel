@@ -28,7 +28,7 @@ const DEFINITIONS = [
   },
 ] as unknown as ChannelSetupDefinition[];
 
-function connectionOf(key: string, label: string): IntegrationConnection {
+function connectionOf(key: string, label: string, config?: Record<string, unknown>): IntegrationConnection {
   return {
     connectionId: "conn-1",
     revision: "a".repeat(64),
@@ -38,7 +38,7 @@ function connectionOf(key: string, label: string): IntegrationConnection {
     label,
     enabled: true,
     status: "connected",
-    config: key === "telegram" ? { botUsername: "@MyGoatBot", receiveMode: "poll" } : {},
+    config: config ?? (key === "telegram" ? { botUsername: "@MyGoatBot", receiveMode: "poll" } : {}),
     createdAt: "2026-10-01T09:00:00.000Z",
     updatedAt: "2026-10-01T09:00:00.000Z",
   } as IntegrationConnection;
@@ -178,12 +178,12 @@ it("shows Telegram's own key page for a Telegram channel's key change, with a wa
 });
 
 it.each([
-  ["discord", "Discord", "Change Discord's token", "Paste the new token"],
-  ["slack", "Slack", "Change Slack's tokens", "Paste the new tokens"],
+  ["discord", "Discord", { runtimeMode: "gateway" }, "Change Discord's token", "Paste the new token"],
+  ["slack", "Slack", { receiveMode: "socket" }, "Change Slack's tokens", "Paste the new tokens"],
 ])(
-  "shows %s's own token page for its key change, with a way back to the channel page",
-  async (key, label, title, step) => {
-    api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf(key, label)] });
+  "shows %s's own token page for the key change of a connection that uses a bot, with a way back to the channel page",
+  async (key, label, config, title, step) => {
+    api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf(key, label, config)] });
     await render({ kind: "change_key", connectionId: "conn-1" });
     expect(container.querySelector("h1")?.textContent).toBe(title);
     expect(container.textContent).toContain(step);
@@ -193,6 +193,27 @@ it.each([
     expect(live.effects).toBe(0);
   },
 );
+
+it.each([
+  [
+    "a Discord webhook-only (bridge) connection",
+    "discord",
+    "Discord",
+    { runtimeMode: "bridge", webhookUrl: "[REDACTED]" },
+  ],
+  ["a Discord connection with only a webhook", "discord", "Discord", { webhookUrl: "[REDACTED]" }],
+  ["a Slack webhook connection", "slack", "Slack", { receiveMode: "webhook", webhookUrl: "[REDACTED]" }],
+  ["a Slack OAuth connection", "slack", "Slack", { authMode: "oauth", receiveMode: "webhook", slackTeamId: "T1" }],
+])("points the key change of %s at Settings, with no token page", async (_name, key, label, config) => {
+  api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf(key, label, config)] });
+  await render({ kind: "change_key", connectionId: "conn-1" });
+  expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");
+  expect(container.textContent).toContain("You can't change a key from Chat yet. Settings has it.");
+  expect(link("Change the key in Settings").pathname).toBe("/settings/connections");
+  expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
+  expect(container.textContent).not.toContain("Paste the new token");
+  expect(container.querySelector('input[type="password"]')).toBeNull();
+});
 
 it("points a key change for any other channel at Settings, with a way back to the channel page", async () => {
   await render({ kind: "change_key", connectionId: "conn-1" });

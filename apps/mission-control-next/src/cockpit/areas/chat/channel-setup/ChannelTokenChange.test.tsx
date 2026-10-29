@@ -39,7 +39,8 @@ const DISCORD_TOKEN = "NEW.DISCORD.SECRET-TOKEN";
 const SLACK_BOT_TOKEN = "xoxb-NEW-SECRET-BOT-TOKEN";
 const SLACK_APP_TOKEN = "xapp-1-NEW-SECRET-APP-TOKEN";
 const CONNECTION_REVISION = "a".repeat(64);
-const TEST_MESSAGE = "GoatCitadel sends a test message there and then removes it";
+// The only line this page lists beside a missing host, so it names where the message goes ("there" would have no antecedent).
+const TEST_MESSAGE = "GoatCitadel sends a test message where your bot posts and then removes it";
 const STORED = { botToken: { configured: true, custody: "temporary" as const } };
 
 type Key = "discord" | "slack";
@@ -57,7 +58,7 @@ function connection(key: Key, config: Record<string, unknown> = {}): Integration
     status: "connected",
     config:
       key === "discord"
-        ? { applicationId: "1000", ...config }
+        ? { runtimeMode: "gateway", applicationId: "1000", ...config }
         : { receiveMode: "socket", slackBotUserId: "UOLD", slackTeamId: "T1", ...config },
     createdAt: "2026-10-01T09:00:00.000Z",
     updatedAt: "2026-10-01T09:00:00.000Z",
@@ -412,6 +413,8 @@ describe("ChannelTokenChange for Discord", () => {
       turnOnApi.turnOnChannelDraft.mockResolvedValue({ kind: "completed", plan });
       await toDiscordChecked(connection("discord", { applicationId: "2000" }));
       expect([...steps()[1]!.querySelectorAll("li")].map((item) => item.textContent)).toEqual([TEST_MESSAGE]);
+      // The setup pages say "there", after naming where the bot posts; this page lists nothing before the line.
+      expect(container.textContent).not.toContain("test message there");
       expect(button("Turn on")).toBeUndefined();
 
       await click(button("Save key"));
