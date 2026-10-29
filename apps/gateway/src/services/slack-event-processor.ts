@@ -13,8 +13,9 @@ import { asRecord, asString } from "./webhook-json-helpers.js";
  * Shared Slack event handling.
  *
  * Extracted from routes/integration-webhooks-slack-routes.ts so the webhook route and Socket Mode handle an event
- * the same way: sender rules, voice shares and plain messages. The webhook route still owns delivery acceptance
- * (signing secret, team and app binding, rate limit); this module only decides what an accepted event does.
+ * the same way: sender rules, voice shares and plain messages. Socket Mode differs in two ways: its sender rules are
+ * always allowlist-only, and it leaves voice shares out. The webhook route still owns delivery acceptance (signing
+ * secret, team and app binding, rate limit); this module only decides what an accepted event does.
  */
 
 export interface SlackEventDeps {
@@ -122,24 +123,17 @@ export async function runSlackEvent(deps: SlackEventDeps, connectionId: string, 
     payload,
     botUserId: asString(config.slackBotUserId),
     appId: asString(config.slackAppId),
-    voiceInboundEnabled: await readVoiceInboundEnabled(deps),
+    // Voice messages over Socket Mode are left out: the app has no file-reading scope, so the voice flag is not read.
+    voiceInboundEnabled: false,
   });
   if (normalized.kind !== "message") {
     return undefined;
   }
   return dispatchSlackEvent(deps, {
-    connection: { ...connection, connectionId },
+    // Socket Mode inbound is always allowlist-only, as for every stream channel: a legacy connection saved as open
+    // (or with no access mode) and switched to Socket Mode is never open to the whole workspace.
+    connection: { ...connection, connectionId, config: { ...config, inboundAccessMode: "allowlist" } },
     parsed: normalized,
     payload,
   });
-}
-
-// Mirrors readWebhookVoiceInboundEnabled: a failing flag read means voice is off. The error is dropped without
-// being logged or rethrown because its message could carry connection details.
-async function readVoiceInboundEnabled(deps: SlackEventDeps): Promise<boolean> {
-  try {
-    return (await deps.webhooks.isVoiceInboundEnabled?.()) === true;
-  } catch {
-    return false;
-  }
 }

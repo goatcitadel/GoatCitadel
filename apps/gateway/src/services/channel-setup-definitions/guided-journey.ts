@@ -289,8 +289,10 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
         ...normalizeGuidedChannelInboundAccess(key, draft, draft.hydration?.rawLegacyConfig ?? {}),
       };
       // Stream and Google Chat app inbound are new for a connection, so a hydrated open_legacy mode must not carry over.
+      // Slack's Socket Mode is a stream too: a legacy Slack connection switched to it is saved as allowlist-only.
       return normalized.inboundStreamEnabled === true ||
         normalized.receiveEvents === true ||
+        (key === "slack" && normalized.receiveMode === "socket") ||
         FORCED_WEBHOOK_INBOUND_KEYS.has(key) ||
         (key === "google-chat" && Boolean(normalized.serviceAccountKeyEnv ?? normalized.serviceAccountKey))
         ? { ...normalized, inboundAccessMode: "allowlist" }

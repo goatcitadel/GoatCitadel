@@ -235,6 +235,11 @@ lists Slack at "About 5 min".
   choice; the app-level token is stored as `appToken`) or `webhook` (Slack posts
   signed events to a public web address). Settings › Channels offers the same
   choice. Connections saved before the choice existed receive by `webhook`.
+  Socket Mode always lets in only allowlisted senders, as every stream channel
+  does: a connection switched to it in Settings is saved with
+  `inboundAccessMode: "allowlist"`, and a socket event is checked as allowlist-only
+  even on a connection still saved as open, so a legacy open connection is never
+  open to the whole workspace. The web address route is unchanged.
 - **Who can message the bot.** The person who sends the code becomes the bot's
   only allowed sender and its recorded owner (`allowedSenders`, `ownerActorIds`
   and `inboundAccessMode: "allowlist"`), and their direct messages become the
@@ -247,8 +252,9 @@ lists Slack at "About 5 min".
   page writes no Slack installation identity (workspace and bot id), which the
   gateway reserves for OAuth installs, so a connection made here does not check
   an event's workspace against a saved one, and a mention still starts with the
-  bot's own `<@…>` text. The app has no `files:read` scope, so voice messages
-  sent to it are not transcribed.
+  bot's own `<@…>` text. Voice messages over Socket Mode are left out: the app
+  has no `files:read` scope, so the socket path does not read the voice setting
+  and an audio share with no text is ignored.
 - **Starting and resuming.** Slack ends each connection every few hours.
   GoatCitadel opens the next one at once, without an error or a backoff, when
   Slack sends a `disconnect` with reason `warning` or `refresh_requested`, and

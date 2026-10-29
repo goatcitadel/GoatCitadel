@@ -408,39 +408,58 @@ describe("slack event processor", () => {
     expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
   });
 
-  it("runSlackEvent treats a failing voice flag as off without throwing", async () => {
+  it("runSlackEvent leaves voice out: an audio share is not a voice turn even with the voice flag on", async () => {
     const acceptInboundChannelEvent = vi.fn();
+    const isVoiceInboundEnabled = vi.fn(async () => true);
     const webhooks = createFakeWebhooks({
       getIntegrationConnection: async () => connectionRecord(),
-      isVoiceInboundEnabled: async () => {
-        throw new Error("settings unavailable");
-      },
+      isVoiceInboundEnabled,
       acceptInboundChannelEvent,
     });
 
-    // With the flag off, an audio share with no text is ignored rather than dispatched.
+    // A Socket Mode app has no file-reading scope, so an audio share with no text is ignored rather than dispatched.
     await expect(runSlackEvent(createDeps(webhooks), CONNECTION_ID, voiceShare())).resolves.toBeUndefined();
     expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+    expect(isVoiceInboundEnabled).not.toHaveBeenCalled();
   });
 
-  it("runSlackEvent dispatches an audio share as a voice turn when the voice flag is on", async () => {
+  it("runSlackEvent lets in only allowlisted senders, even on a connection saved as open_legacy", async () => {
+    for (const config of [
+      { ...SOCKET_CONFIG, inboundAccessMode: "open_legacy", allowedSenders: undefined },
+      { ...SOCKET_CONFIG, inboundAccessMode: undefined, allowedSenders: undefined },
+    ]) {
+      const acceptInboundChannelEvent = vi.fn();
+      const webhooks = createFakeWebhooks({
+        getIntegrationConnection: async () => connectionRecord({ config }),
+        acceptInboundChannelEvent,
+      });
+
+      const reply = await runSlackEvent(createDeps(webhooks), CONNECTION_ID, directMessage());
+
+      // A legacy Slack connection switched to Socket Mode is not open to the whole workspace.
+      expect(reply).toEqual(expect.objectContaining({ accepted: true, ignored: true, reason: "allowlist_empty" }));
+      expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+    }
+  });
+
+  it("runSlackEvent accepts an allowlisted sender on a connection saved as open_legacy, and no one else", async () => {
     const acceptInboundChannelEvent = vi.fn(async (input: { eventType: string; message: { eventId: string } }) =>
       acceptedEvent(input),
     );
     const webhooks = createFakeWebhooks({
-      getIntegrationConnection: async () => connectionRecord(),
-      isVoiceInboundEnabled: async () => true,
+      getIntegrationConnection: async () =>
+        connectionRecord({ config: { ...SOCKET_CONFIG, inboundAccessMode: "open_legacy", allowedSenders: ["U1"] } }),
       acceptInboundChannelEvent,
     });
 
-    await runSlackEvent(createDeps(webhooks), CONNECTION_ID, voiceShare());
+    const allowed = await runSlackEvent(createDeps(webhooks), CONNECTION_ID, directMessage());
+    const other = await runSlackEvent(createDeps(webhooks), CONNECTION_ID, directMessage({ user: "U2", ts: "2.2" }));
 
+    expect(allowed).toEqual(expect.objectContaining({ accepted: true, durableAccepted: true }));
+    expect(other).toEqual(expect.objectContaining({ ignored: true, reason: "sender_not_allowlisted" }));
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
     expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dispatchKind: "voice_agent_turn",
-        idempotencyKey: `slack:${CONNECTION_ID}:message:D1:1712109984.200000`,
-        voiceRequest: expect.objectContaining({ channel: "slack", fileId: "F0VOICE01" }),
-      }),
+      expect.objectContaining({ message: expect.objectContaining({ actorId: "U1" }) }),
     );
   });
 });

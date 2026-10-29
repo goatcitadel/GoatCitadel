@@ -187,6 +187,18 @@ describe("Slack receive mode setup", () => {
     );
   });
 
+  it("saves Socket Mode as allowlist-only, even for a legacy connection hydrated as open", () => {
+    const legacy = slack.hydrate(connection({ botToken: "xoxb-1", signingSecret: "s3cret" }));
+    expect(legacy.draft.inboundAccessMode).toBe("open_legacy");
+
+    const socket = slack.normalize(draftOf({ ...legacy.draft, receiveMode: "socket" }, legacy.hydration));
+    const webhook = slack.normalize(draftOf({ ...legacy.draft, receiveMode: "webhook" }, legacy.hydration));
+
+    expect(socket.inboundAccessMode).toBe("allowlist");
+    // The webhook path is unchanged: a connection saved as open keeps that until the operator changes it.
+    expect(webhook.inboundAccessMode).toBe("open_legacy");
+  });
+
   it("carries ownerActorIds through hydrate and normalize", () => {
     const hydrated = slack.hydrate(connection({ ...BASE_DRAFT, ownerActorIds: ["U1", " U2 ", "u1"] }));
 
