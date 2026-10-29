@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChangePlanRecord } from "@goatcitadel/contracts";
+import {
+  PUBLIC_WEB_ADDRESS_HAS_EXTRA,
+  PUBLIC_WEB_ADDRESS_HAS_LOGIN,
+  PUBLIC_WEB_ADDRESS_NOT_HTTPS,
+  PUBLIC_WEB_ADDRESS_NOT_PUBLIC,
+  PUBLIC_WEB_ADDRESS_NOT_URL,
+  PUBLIC_WEB_ADDRESS_TOO_LONG,
+  ValidationError,
+  type ChangePlanRecord,
+} from "@goatcitadel/contracts";
 import { RuntimeConfigurationChangePlanAdapter } from "./runtime-configuration-change-plan-adapter.js";
 
 const context = {
@@ -665,5 +674,158 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
       current = writeAccessSettings({ globalToolAccess: { allow: ["fs.read", "fs.write"], deny: ["fs.delete"] } });
       expect((await adapter.verify(context, toolPlan as ChangePlanRecord)).status).toBe("completed");
     });
+  });
+});
+
+describe("RuntimeConfigurationChangePlanAdapter public web address", () => {
+  const setRequest = (publicWebAddress: string | null) =>
+    ({
+      kind: "runtime_configuration" as const,
+      change: { operation: "public_web_address_configuration" as const, config: { publicWebAddress } },
+    }) as const;
+
+  function addressAdapter(initial: Record<string, unknown> = {}) {
+    let current = settings({ revision: 7, ...initial });
+    const updateSettings = vi.fn(async (input: Record<string, unknown>) => {
+      const { expectedRevision: _expectedRevision, ...patch } = input;
+      const next = { ...current, ...patch, revision: current.revision + 1 };
+      if (patch.publicWebAddress === null) delete next.publicWebAddress;
+      current = next;
+      return current;
+    });
+    const validateSettingsUpdate = vi.fn(async () => undefined);
+    const adapter = new RuntimeConfigurationChangePlanAdapter({
+      ...authCredentialDeps,
+      getSettings: async () => current,
+      updateSettings,
+      validateSettingsUpdate,
+    });
+    return { adapter, updateSettings, validateSettingsUpdate };
+  }
+
+  it("prepares a set as a caution that names the address, targeted at its own resource", async () => {
+    const { adapter } = addressAdapter();
+    const prepared = await adapter.prepare(context, setRequest("https://example.com"));
+
+    expect(prepared).toMatchObject({
+      target: { ownerId: "runtime_settings", resourceId: "public_web_address_configuration", expectedRevision: 7 },
+      summary: "Set GoatCitadel's public web address to https://example.com",
+      risk: "caution",
+      status: "awaiting_confirmation",
+      requiredAction: {
+        kind: "confirmation",
+        confirmationText: "Set GoatCitadel's public web address to https://example.com",
+      },
+    });
+  });
+
+  it("prepares a clear as a caution", async () => {
+    const { adapter } = addressAdapter({ publicWebAddress: "https://example.com" });
+    const prepared = await adapter.prepare(context, setRequest(null));
+
+    expect(prepared).toMatchObject({
+      target: { resourceId: "public_web_address_configuration" },
+      summary: "Clear GoatCitadel's public web address",
+      risk: "caution",
+      status: "awaiting_confirmation",
+    });
+  });
+
+  it("keeps the written copy free of banned cockpit words", async () => {
+    const { adapter } = addressAdapter();
+    for (const address of ["https://example.com", null]) {
+      const prepared = await adapter.prepare(context, setRequest(address));
+      const copy = [prepared.title, prepared.summary, prepared.impact].join(" ");
+      expect(copy).not.toMatch(/posture|gateway|revision|evidence|owner|snapshot|canonical|durable|projection|replay/i);
+    }
+  });
+
+  it("names the normalized address when a plan carries an address that was not tidied", async () => {
+    const { adapter } = addressAdapter();
+    const prepared = await adapter.prepare(context, setRequest("  https://Example.com/goat/ "));
+
+    expect(prepared.summary).toBe("Set GoatCitadel's public web address to https://example.com/goat");
+  });
+
+  it.each([
+    ["example.com", PUBLIC_WEB_ADDRESS_NOT_URL],
+    ["http://example.com", PUBLIC_WEB_ADDRESS_NOT_HTTPS],
+    ["https://user:pw@example.com", PUBLIC_WEB_ADDRESS_HAS_LOGIN],
+    ["https://example.com/?a=1", PUBLIC_WEB_ADDRESS_HAS_EXTRA],
+    ["https://192.168.1.5", PUBLIC_WEB_ADDRESS_NOT_PUBLIC],
+    ["https://" + "a".repeat(200) + ".com", PUBLIC_WEB_ADDRESS_TOO_LONG],
+  ])("refuses to prepare %s with its own sentence", async (address, sentence) => {
+    const { adapter, updateSettings } = addressAdapter();
+
+    const error = await adapter.prepare(context, setRequest(address)).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ValidationError);
+    expect((error as ValidationError).message).toBe(sentence);
+    expect((error as ValidationError).httpStatus).toBe(400);
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("needs no second dry run, because the address check is the owner's whole check", async () => {
+    const { adapter, validateSettingsUpdate } = addressAdapter();
+    await adapter.prepare(context, setRequest("https://example.com"));
+    expect(validateSettingsUpdate).not.toHaveBeenCalled();
+  });
+
+  it("hands the address to the settings owner to store, and null to clear it", async () => {
+    const { adapter, updateSettings } = addressAdapter();
+    const set = setRequest("https://example.com/goat");
+    const prepared = await adapter.prepare(context, set);
+    await adapter.apply(context, { request: set, target: prepared.target } as ChangePlanRecord);
+    expect(updateSettings).toHaveBeenLastCalledWith({
+      expectedRevision: 7,
+      publicWebAddress: "https://example.com/goat",
+    });
+
+    const clear = setRequest(null);
+    const clearing = await adapter.prepare(context, clear);
+    await adapter.apply(context, {
+      request: clear,
+      target: { ...clearing.target, expectedRevision: 8 },
+    } as ChangePlanRecord);
+    expect(updateSettings).toHaveBeenLastCalledWith({ expectedRevision: 8, publicWebAddress: null });
+  });
+
+  it("verifies an address that was not tidied against the tidied one the settings owner stores", async () => {
+    const untidy = setRequest("  https://Example.com/goat/ ");
+    const stored = addressAdapter({ publicWebAddress: "https://example.com/goat" });
+    const target = { ownerId: "runtime_settings", resourceId: "public_web_address_configuration", expectedRevision: 7 };
+
+    await expect(
+      stored.adapter.verify(context, { request: untidy, target } as ChangePlanRecord),
+    ).resolves.toMatchObject({
+      status: "completed",
+    });
+  });
+
+  it("verifies against the owner: set matches only the same address, clear only an unset one", async () => {
+    const set = setRequest("https://example.com");
+    const clear = setRequest(null);
+    const unset = addressAdapter();
+    const same = addressAdapter({ publicWebAddress: "https://example.com" });
+    const other = addressAdapter({ publicWebAddress: "https://other.example.com" });
+    const target = { ownerId: "runtime_settings", resourceId: "public_web_address_configuration", expectedRevision: 7 };
+
+    const verify = async (harness: ReturnType<typeof addressAdapter>, request: typeof set | typeof clear) =>
+      (await harness.adapter.verify(context, { request, target } as ChangePlanRecord)).status;
+
+    expect(await verify(same, set)).toBe("completed");
+    expect(await verify(unset, set)).toBe("manual_required");
+    expect(await verify(other, set)).toBe("manual_required");
+    expect(await verify(unset, clear)).toBe("completed");
+    expect(await verify(same, clear)).toBe("manual_required");
+  });
+
+  it("does not take a reconcile for done when the owner holds a different address", async () => {
+    const { adapter } = addressAdapter({ publicWebAddress: "https://other.example.com" });
+    const result = await adapter.reconcile(context, {
+      request: setRequest("https://example.com"),
+      target: { ownerId: "runtime_settings", resourceId: "public_web_address_configuration", expectedRevision: 7 },
+    } as ChangePlanRecord);
+    expect(result).toMatchObject({ effectObserved: false, status: "manual_required" });
   });
 });

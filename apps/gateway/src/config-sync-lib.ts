@@ -86,6 +86,8 @@ export function buildUnifiedConfigPayloadFromRuntime(
     auditDir: runtimeConfig.assistant.auditDir,
     workspaceDir: runtimeConfig.assistant.workspaceDir,
     worktreesDir: runtimeConfig.assistant.worktreesDir,
+    // Left out when unset, so clearing the address removes the key from the saved file.
+    ...(runtimeConfig.assistant.publicWebAddress ? { publicWebAddress: runtimeConfig.assistant.publicWebAddress } : {}),
     auth: {
       mode: runtimeConfig.assistant.auth.mode,
       allowLoopbackBypass: runtimeConfig.assistant.auth.allowLoopbackBypass,

@@ -20,6 +20,7 @@ import { projectChatFeatureAvailability } from "./chat-feature-availability.js";
 import { normalizeFirecrawlApiKeyEnvName } from "@goatcitadel/policy-engine";
 import {
   APPROVAL_EXPIRY_ACTOR_ID,
+  checkPublicWebAddress,
   clampInt,
   ConflictError,
   isGoatError,
@@ -204,17 +205,19 @@ export interface SettingsAuthRuntimeDependencies {
 export async function getSettings(deps: SettingsRuntimeDependencies): Promise<RuntimeSettings> {
   const features = await deps.readFeatureFlags();
   const toolPolicy = deps.config.toolPolicy;
+  const assistant = deps.config.assistant;
   return {
     chatFeatureAvailability: projectChatFeatureAvailability(
-      deps.config.assistant.durable ?? { enabled: false, executionEnabled: false },
+      assistant.durable ?? { enabled: false, executionEnabled: false },
       features,
     ),
     revision: deps.readSettingsRevision?.() ?? 1,
-    environment: deps.config.assistant.environment,
-    deploymentProfile: deps.config.assistant.deploymentProfile,
-    toolApprovalMode: toolPolicy.tools.approvalMode ?? deps.config.assistant.toolApprovalMode ?? "approve_risky",
+    environment: assistant.environment,
+    deploymentProfile: assistant.deploymentProfile,
+    toolApprovalMode: toolPolicy.tools.approvalMode ?? assistant.toolApprovalMode ?? "approve_risky",
     budgetMode: deps.config.budgets.mode,
-    workspaceDir: deps.config.assistant.workspaceDir,
+    workspaceDir: assistant.workspaceDir,
+    ...(assistant.publicWebAddress ? { publicWebAddress: assistant.publicWebAddress } : {}),
     writeJailRoots: toolPolicy.sandbox.writeJailRoots,
     readOnlyRoots: toolPolicy.sandbox.readOnlyRoots,
     operatorWriteRoots: projectOperatorWriteRoots(toolPolicy),
@@ -223,35 +226,35 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
     readAccessMode: toolPolicy.sandbox.readAccessMode ?? "roots_only",
     outsideRootWriteMode: toolPolicy.sandbox.outsideRootWriteMode ?? "deny",
     networkAllowlist: toolPolicy.sandbox.networkAllowlist,
-    approvalExplainer: deps.config.assistant.approvalExplainer,
+    approvalExplainer: assistant.approvalExplainer,
     memory: {
-      enabled: deps.config.assistant.memory.enabled,
+      enabled: assistant.memory.enabled,
       qmd: {
-        enabled: deps.config.assistant.memory.qmd.enabled,
-        applyToChat: deps.config.assistant.memory.qmd.applyToChat,
-        applyToOrchestration: deps.config.assistant.memory.qmd.applyToOrchestration,
-        minPromptChars: deps.config.assistant.memory.qmd.minPromptChars,
-        maxContextTokens: deps.config.assistant.memory.qmd.maxContextTokens,
-        cacheTtlSeconds: deps.config.assistant.memory.qmd.cacheTtlSeconds,
-        distillerProviderId: deps.config.assistant.memory.qmd.distiller.providerId,
-        distillerModel: deps.config.assistant.memory.qmd.distiller.model,
+        enabled: assistant.memory.qmd.enabled,
+        applyToChat: assistant.memory.qmd.applyToChat,
+        applyToOrchestration: assistant.memory.qmd.applyToOrchestration,
+        minPromptChars: assistant.memory.qmd.minPromptChars,
+        maxContextTokens: assistant.memory.qmd.maxContextTokens,
+        cacheTtlSeconds: assistant.memory.qmd.cacheTtlSeconds,
+        distillerProviderId: assistant.memory.qmd.distiller.providerId,
+        distillerModel: assistant.memory.qmd.distiller.model,
       },
     },
     web: {
       firecrawl: {
-        enabled: deps.config.assistant.web.firecrawl.enabled,
-        baseUrl: deps.config.assistant.web.firecrawl.baseUrl,
-        apiKeyEnv: deps.config.assistant.web.firecrawl.apiKeyEnv,
-        timeoutMs: deps.config.assistant.web.firecrawl.timeoutMs,
-        defaultReadBackend: deps.config.assistant.web.firecrawl.defaultReadBackend,
-        fallbackToNative: deps.config.assistant.web.firecrawl.fallbackToNative,
+        enabled: assistant.web.firecrawl.enabled,
+        baseUrl: assistant.web.firecrawl.baseUrl,
+        apiKeyEnv: assistant.web.firecrawl.apiKeyEnv,
+        timeoutMs: assistant.web.firecrawl.timeoutMs,
+        defaultReadBackend: assistant.web.firecrawl.defaultReadBackend,
+        fallbackToNative: assistant.web.firecrawl.fallbackToNative,
         baseUrlAllowlisted: isFirecrawlBaseUrlAllowlisted(
-          deps.config.assistant.web.firecrawl.baseUrl,
+          assistant.web.firecrawl.baseUrl,
           toolPolicy.sandbox.networkAllowlist,
         ),
       },
       search: {
-        engineOrder: normalizeWebSearchEngineOrder(deps.config.assistant.web.search?.engineOrder),
+        engineOrder: normalizeWebSearchEngineOrder(assistant.web.search?.engineOrder),
       },
     },
     auth: getAuthRuntimeSettings(deps),
@@ -260,39 +263,37 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
       useCache: true,
     }),
     mesh: {
-      enabled: deps.config.assistant.mesh.enabled,
-      mode: deps.config.assistant.mesh.mode,
-      nodeId: deps.config.assistant.mesh.nodeId,
-      mdns: deps.config.assistant.mesh.discovery.mdns,
-      staticPeers: deps.config.assistant.mesh.discovery.staticPeers,
-      requireMtls: deps.config.assistant.mesh.security.requireMtls,
-      tailnetEnabled: deps.config.assistant.mesh.security.tailnet.enabled,
+      enabled: assistant.mesh.enabled,
+      mode: assistant.mesh.mode,
+      nodeId: assistant.mesh.nodeId,
+      mdns: assistant.mesh.discovery.mdns,
+      staticPeers: assistant.mesh.discovery.staticPeers,
+      requireMtls: assistant.mesh.security.requireMtls,
+      tailnetEnabled: assistant.mesh.security.tailnet.enabled,
     },
     npu: {
-      enabled: deps.config.assistant.npu.enabled,
-      autoStart: deps.config.assistant.npu.autoStart,
-      sidecarUrl: deps.config.assistant.npu.sidecar.baseUrl,
+      enabled: assistant.npu.enabled,
+      autoStart: assistant.npu.autoStart,
+      sidecarUrl: assistant.npu.sidecar.baseUrl,
       status: deps.npuSidecar.getStatus(),
     },
     llamaCpp: {
-      enabled: deps.config.assistant.llamaCpp.enabled,
-      autoStart: deps.config.assistant.llamaCpp.autoStart,
-      managementMode:
-        deps.config.assistant.llamaCpp.managementMode ??
-        (deps.config.assistant.llamaCpp.autoStart ? "managed" : "external"),
-      baseUrl: deps.config.assistant.llamaCpp.server.baseUrl,
-      command: deps.config.assistant.llamaCpp.server.command,
-      extraArgs: deps.config.assistant.llamaCpp.server.extraArgs,
-      modelsRootPath: deps.config.assistant.llamaCpp.launch.modelsRootPath,
-      modelPath: deps.config.assistant.llamaCpp.launch.modelPath,
-      alias: deps.config.assistant.llamaCpp.launch.alias,
-      ctxSize: deps.config.assistant.llamaCpp.launch.ctxSize,
-      threads: deps.config.assistant.llamaCpp.launch.threads,
-      gpuLayers: deps.config.assistant.llamaCpp.launch.gpuLayers,
-      parallel: deps.config.assistant.llamaCpp.launch.parallel,
-      batchSize: deps.config.assistant.llamaCpp.launch.batchSize,
-      ubatchSize: deps.config.assistant.llamaCpp.launch.ubatchSize,
-      flashAttention: deps.config.assistant.llamaCpp.launch.flashAttention,
+      enabled: assistant.llamaCpp.enabled,
+      autoStart: assistant.llamaCpp.autoStart,
+      managementMode: assistant.llamaCpp.managementMode ?? (assistant.llamaCpp.autoStart ? "managed" : "external"),
+      baseUrl: assistant.llamaCpp.server.baseUrl,
+      command: assistant.llamaCpp.server.command,
+      extraArgs: assistant.llamaCpp.server.extraArgs,
+      modelsRootPath: assistant.llamaCpp.launch.modelsRootPath,
+      modelPath: assistant.llamaCpp.launch.modelPath,
+      alias: assistant.llamaCpp.launch.alias,
+      ctxSize: assistant.llamaCpp.launch.ctxSize,
+      threads: assistant.llamaCpp.launch.threads,
+      gpuLayers: assistant.llamaCpp.launch.gpuLayers,
+      parallel: assistant.llamaCpp.launch.parallel,
+      batchSize: assistant.llamaCpp.launch.batchSize,
+      ubatchSize: assistant.llamaCpp.launch.ubatchSize,
+      flashAttention: assistant.llamaCpp.launch.flashAttention,
       status: deps.llamaCppRuntime.getStatus(),
     },
     features,
@@ -308,6 +309,8 @@ export interface UpdateSettingsInput {
   /** Whether writes outside every write root may raise an approval. */
   outsideRootWriteMode?: OutsideRootWriteMode;
   networkAllowlist?: string[];
+  /** The https address the internet uses to reach this installation. Checked and stored tidied; `null` clears it. */
+  publicWebAddress?: string | null;
   /** Add or remove one operator write root; validated against the write-root safety rules. */
   operatorWriteRootChange?: OperatorWriteRootChange;
   /** Set the global posture of one curated filesystem mutation tool. */
@@ -630,6 +633,18 @@ export async function updateSettings(
     }
     if (firecrawl.fallbackToNative !== undefined) {
       deps.config.assistant.web.firecrawl.fallbackToNative = firecrawl.fallbackToNative;
+    }
+  }
+
+  if (input.publicWebAddress !== undefined) {
+    const assistant = deps.config.assistant;
+    if (input.publicWebAddress === null) {
+      delete assistant.publicWebAddress;
+    } else {
+      const checked = checkPublicWebAddress(input.publicWebAddress);
+      // The sentence is the whole answer; it never repeats what was typed.
+      if (!checked.ok) throw new ValidationError({ message: checked.problem });
+      assistant.publicWebAddress = checked.address;
     }
   }
 

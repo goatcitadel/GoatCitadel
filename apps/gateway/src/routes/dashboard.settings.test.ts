@@ -987,3 +987,200 @@ describe("dashboard settings routes", () => {
     expect(settings.deletePersonality).toHaveBeenCalledWith("operator", catalog.revision);
   });
 });
+
+describe("dashboard settings public web address", () => {
+  let app: FastifyInstance | null = null;
+
+  afterEach(async () => {
+    await app?.close();
+    app = null;
+  });
+
+  /** A settings owner that keeps the address a confirmed plan sets, the way the real one keeps what it applied. */
+  async function buildApp(options: { evolutionEnabled?: boolean; publicWebAddress?: string } = {}) {
+    const state: { revision: number; publicWebAddress?: string } = {
+      revision: 8,
+      ...(options.publicWebAddress ? { publicWebAddress: options.publicWebAddress } : {}),
+    };
+    const getSettings = vi.fn(() => ({ ...state }));
+    const updateSettings = vi.fn(() => ({ ...state }));
+    const create = vi.fn(async (input: Record<string, any>) => ({
+      planId: "plan-public-web-address",
+      revision: 1,
+      requiredAction: { kind: "confirmation", actionNonce: "nonce-public-web-address-1" },
+      ...input,
+    }));
+    const confirm = vi.fn(async () => {
+      const config = (create.mock.calls[0]![0] as Record<string, any>).request.change.config;
+      state.revision += 1;
+      if (config.publicWebAddress === null) delete state.publicWebAddress;
+      else state.publicWebAddress = config.publicWebAddress;
+      return {
+        planId: "plan-public-web-address",
+        revision: 3,
+        status: "completed",
+        risk: "caution",
+        summary: "Set GoatCitadel's public web address",
+        result: { summary: "GoatCitadel's public web address is set." },
+      };
+    });
+    app = Fastify();
+    app.decorate("services", {
+      settings: { getSettings, updateSettings },
+      evolution: { isEnabled: vi.fn(async () => options.evolutionEnabled ?? true), create, confirm },
+    } as never);
+    await app.register(dashboardRoutes);
+    return { app, create, confirm, updateSettings };
+  }
+
+  it("makes a plan with the address tidied, and the settings show it once the plan is applied", async () => {
+    const { app: server, create, confirm, updateSettings } = await buildApp();
+
+    const before = await server.inject({ method: "GET", url: "/api/v1/settings" });
+    expect(before.json()).not.toHaveProperty("publicWebAddress");
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 8, publicWebAddress: "https://Example.com/" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: {
+          kind: "runtime_configuration",
+          change: {
+            operation: "public_web_address_configuration",
+            config: { publicWebAddress: "https://example.com" },
+          },
+        },
+        expectedTargetRevision: 8,
+      }),
+    );
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ surface: "settings" }),
+      "plan-public-web-address",
+      1,
+      "nonce-public-web-address-1",
+      { operatorSettingsSave: true },
+    );
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      publicWebAddress: "https://example.com",
+      changePlanReceipt: { planId: "plan-public-web-address", status: "completed", risk: "caution" },
+    });
+
+    const after = await server.inject({ method: "GET", url: "/api/v1/settings" });
+    expect(after.json()).toMatchObject({ revision: 9, publicWebAddress: "https://example.com" });
+  });
+
+  it("clears the address with null, and the setting is absent afterwards", async () => {
+    const { app: server, create } = await buildApp({ publicWebAddress: "https://example.com" });
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 8, publicWebAddress: null },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: {
+          kind: "runtime_configuration",
+          change: { operation: "public_web_address_configuration", config: { publicWebAddress: null } },
+        },
+      }),
+    );
+    expect(response.json()).not.toHaveProperty("publicWebAddress");
+    const after = await server.inject({ method: "GET", url: "/api/v1/settings" });
+    expect(after.json()).not.toHaveProperty("publicWebAddress");
+  });
+
+  it.each([
+    ["http://example.com", "Use an https:// address. Meta and the other services send only to secure addresses."],
+    ["example.com", "Enter a full address that starts with https://."],
+    ["https://user:pw@example.com", "Leave the user name and password out of the address."],
+    ["https://example.com/?a=1", "Leave out anything after ? or #."],
+    ["https://192.168.1.5", "Use an address the internet can reach, not one on this computer or your home network."],
+    ["https://" + "a".repeat(200) + ".com", "Use an address under 200 characters."],
+  ])("answers %s with a 400 and its sentence, and makes no plan", async (publicWebAddress, sentence) => {
+    const { app: server, create, confirm, updateSettings } = await buildApp();
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 8, publicWebAddress },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: sentence, code: "FIELD_INVALID" });
+    expect(create).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("does not repeat what was typed back in the answer", async () => {
+    const { app: server } = await buildApp();
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 8, publicWebAddress: "https://operator:hunter2@example.com" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).not.toContain("hunter2");
+    expect(response.body).not.toContain("operator:");
+  });
+
+  it("refuses a value that is not a bounded string or null before it reaches the plan", async () => {
+    const { app: server, create } = await buildApp();
+
+    for (const publicWebAddress of [
+      42,
+      true,
+      { address: "https://example.com" },
+      "https://example.com/" + "a".repeat(400),
+    ]) {
+      const response = await server.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        payload: { expectedRevision: 8, publicWebAddress },
+      });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("refuses the address saved together with another settings key", async () => {
+    const { app: server, create, updateSettings } = await buildApp();
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 8, publicWebAddress: "https://example.com", budgetMode: "saver" },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ code: "FIELD_INVALID" });
+    expect(create).not.toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("leaves a save without a plan to the settings owner, which checks and tidies the address itself", async () => {
+    const { app: server, create, updateSettings } = await buildApp({ evolutionEnabled: false });
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 8, publicWebAddress: "https://Example.com/" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(create).not.toHaveBeenCalled();
+    expect(updateSettings).toHaveBeenCalledWith({ expectedRevision: 8, publicWebAddress: "https://Example.com/" });
+  });
+});

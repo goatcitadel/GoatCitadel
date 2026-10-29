@@ -130,6 +130,8 @@ export const updateSettingsSchema = z.object({
   readAccessMode: z.enum(["roots_only", "approval_required", "full_disk"]).optional(),
   outsideRootWriteMode: z.enum(["deny", "approval_required"]).optional(),
   networkAllowlist: z.array(z.string().min(1)).optional(),
+  // Checked and tidied by `checkPublicWebAddress` (200 characters at most); `null` clears it.
+  publicWebAddress: z.string().max(400).nullable().optional(),
   operatorWriteRootChange: operatorWriteRootChangeSchema.optional(),
   globalToolAccessChange: globalToolAccessChangeSchema.optional(),
   toolGroupChange: toolGroupChangeSchema.optional(),

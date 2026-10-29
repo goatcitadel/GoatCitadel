@@ -3,6 +3,7 @@ import { CHAT_RESTORATION_FEATURE_FLAGS } from "./chat-feature-references.js";
 import { LLM_API_STYLES, LLM_PROVIDER_AUTH_MODES } from "./llm.js";
 import type { LlmApiStyle, LlmProviderAuthMode, LlmProviderCapabilities, LlmProviderGoogleCloudConfig } from "./llm.js";
 import { isRuntimeWriteAccessOperation, type RuntimeWriteAccessOperation } from "./operator-write-access.js";
+import { isPublicWebAddressRuntimeOperation, type PublicWebAddressRuntimeOperation } from "./public-web-address.js";
 import { isWebSearchRuntimeOperation, type WebSearchRuntimeOperation } from "./web-search.js";
 
 /**
@@ -264,6 +265,7 @@ export type ChangePlanRuntimeConfigurationOperation =
     }
   | { readonly operation: "memory_configuration"; readonly config: ChangePlanMemoryConfiguration }
   | { readonly operation: "web_firecrawl_configuration"; readonly config: ChangePlanFirecrawlConfiguration }
+  | PublicWebAddressRuntimeOperation
   | WebSearchRuntimeOperation
   | { readonly operation: "mesh_configuration"; readonly config: ChangePlanMeshConfiguration }
   | { readonly operation: "npu_configuration"; readonly config: ChangePlanNpuConfiguration }
@@ -792,6 +794,8 @@ function isRuntimeConfigurationOperation(value: unknown): value is ChangePlanRun
       return hasOnlyKeys(value, ["operation", "config"]) && isMemoryConfiguration(value.config);
     case "web_firecrawl_configuration":
       return hasOnlyKeys(value, ["operation", "config"]) && isFirecrawlConfiguration(value.config);
+    case "public_web_address_configuration":
+      return isPublicWebAddressRuntimeOperation(value);
     case "web_search_configuration":
     case "web_search_credential":
       return isWebSearchRuntimeOperation(value);
