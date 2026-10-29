@@ -126,6 +126,7 @@ export * from "./curator.js";
 export * from "./knowledge.js";
 export * from "./ui-forms.js";
 export * from "./chat.js";
+export * from "./chat-turn-reasoning.js";
 export * from "./change-plan.js";
 export * from "./change-plan-chat-compat.js";
 export * from "./change-plan-feature-flag-labels.js";

@@ -1,4 +1,4 @@
-import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
+import { capChatTurnReasoning, isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 import type {
   ChatMessageRecord,
   ChatSessionPrefsRecord,
@@ -32,13 +32,6 @@ export function isThreadMutatingStreamChunk(chunk: ChatStreamChunk): boolean {
       return false;
   }
 }
-
-/** Reducer keeps at most this many trailing characters of accumulated thinking
- * text per turn (see the `thinking_delta` case below). Bounds unbounded reasoning
- * streams from growing thread state without limit while keeping the freshest
- * (most relevant) reasoning visible. */
-const MAX_THINKING_CHARS = 16_000;
-const THINKING_TRUNCATION_MARKER = "… ";
 
 export function updateThreadFromStreamChunk(
   current: ChatThreadResponse | null,
@@ -305,7 +298,7 @@ function updateTurnFromStreamChunk(
     case "trace_update":
       return applyTraceUpdate(turn, chunk.trace);
     case "thinking_delta": {
-      const nextThinking = capThinkingText(`${turn.thinking ?? ""}${chunk.delta}`);
+      const nextThinking = capChatTurnReasoning(`${turn.thinking ?? ""}${chunk.delta}`);
       if (turn.thinking === nextThinking) {
         return turn;
       }
@@ -317,20 +310,6 @@ function updateTurnFromStreamChunk(
     default:
       return turn;
   }
-}
-
-/**
- * Caps accumulated thinking text at {@link MAX_THINKING_CHARS}. When over the
- * cap, keeps the TAIL (freshest reasoning) and prefixes the head-truncation
- * marker so it stays clear that earlier text was dropped, not that reasoning
- * stopped.
- */
-function capThinkingText(text: string): string {
-  if (text.length <= MAX_THINKING_CHARS) {
-    return text;
-  }
-  const keepChars = MAX_THINKING_CHARS - THINKING_TRUNCATION_MARKER.length;
-  return `${THINKING_TRUNCATION_MARKER}${text.slice(text.length - keepChars)}`;
 }
 
 function applyTraceUpdate(turn: ChatThreadTurnRecord, trace: ChatThreadTurnRecord["trace"]): ChatThreadTurnRecord {
@@ -436,10 +415,11 @@ function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThre
 }
 
 /**
- * Keeps streamed reasoning when a fresh copy of the thread replaces the one in memory. The Gateway never saves
- * `thinking`, so a reloaded thread (for example the one fetched when a turn ends) has none; without this the
- * reasoning the operator just watched would vanish. Only the same conversation's turns that the new copy leaves
- * without reasoning get the remembered text, and an unchanged thread is returned as is.
+ * Keeps streamed reasoning when a fresh copy of the thread replaces the one in memory. The Gateway saves a turn's
+ * reasoning only when the turn commits, waits for approval or waits for input, so a copy fetched mid-turn, or from a
+ * Gateway that predates the saved copy, has none; without this the reasoning the operator just watched would vanish.
+ * A turn the new copy already carries reasoning for keeps the saved text. Only the same conversation's turns that the
+ * new copy leaves without reasoning get the remembered text, and an unchanged thread is returned as is.
  */
 export function carryOverStreamedThinking(
   previous: ChatThreadResponse | null,

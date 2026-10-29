@@ -1596,6 +1596,12 @@ export interface ChatTurnTraceRecord {
   status: ChatTurnLifecycleStatus;
   failure?: ChatTurnFailureRecord;
   completion?: ChatTurnCompletionRecord;
+  /**
+   * The model's streamed reasoning for this turn, saved when `chatThinkingStreamV1Enabled` is on; secret-redacted
+   * and capped by `capChatTurnReasoning`. Unreviewed model output, not an explanation of the answer or an
+   * authority record. The thread API moves it to the turn's `thinking` and leaves it off the public trace.
+   */
+  reasoning?: string;
   mode: ChatMode;
   model?: string;
   webMode: ChatWebMode;
@@ -2239,10 +2245,10 @@ export interface ChatThreadTurnRecord {
   generatedArtifacts?: ChatGeneratedArtifactReference[];
   branch: ChatThreadTurnBranchRecord;
   /**
-   * Accumulated streamed reasoning/"thinking" text for this turn, populated only
-   * when the gateway's `chatThinkingStreamV1Enabled` flag is on (default off).
-   * Capped at 16k chars by the reducer (tail kept, head-truncation marker
-   * prefixed) so unbounded reasoning cannot grow the thread state without limit.
+   * The model's reasoning/"thinking" text for this turn, present only when the
+   * gateway's `chatThinkingStreamV1Enabled` flag was on (default off). The thread
+   * API returns the saved copy; while a turn streams, the reducer accumulates it.
+   * Both cap it with `capChatTurnReasoning` (tail kept, head-truncation marker).
    */
   thinking?: string;
 }
