@@ -17,15 +17,16 @@ import {
   SharedHostAdmissionClosedError,
   type SharedHostLifecycleAdmissionPort,
 } from "./shared-host-lifecycle-service.js";
-import type {
-  ChannelTypingResult,
-  ChatChannelConversation,
-  DiscordGuildAccessRule,
-  DiscordInboundDmPolicy,
-  DiscordPairingRecord,
-  DiscordRuntimeMode,
-  DiscordRuntimeStatus,
-  IntegrationConnection,
+import {
+  resolveAllowedSenders,
+  type ChannelTypingResult,
+  type ChatChannelConversation,
+  type DiscordGuildAccessRule,
+  type DiscordInboundDmPolicy,
+  type DiscordPairingRecord,
+  type DiscordRuntimeMode,
+  type DiscordRuntimeStatus,
+  type IntegrationConnection,
 } from "@goatcitadel/contracts";
 import {
   SHARED_CHANNEL_COMMANDS,
@@ -33,7 +34,7 @@ import {
   normalizeChannelApprovalToken,
 } from "./channel-command-contract.js";
 import { buildChannelConversation } from "./channel-conversation.js";
-import { isAllowlistedChannelOwner, resolveAllowlistedOwnerActorIds } from "./channel-owner-access.js";
+import { isAllowlistedChannelOwner } from "./channel-owner-access.js";
 import {
   createConnectionSecretReferenceResolver,
   isSecureStorageReference,
@@ -1309,16 +1310,27 @@ function resolveDiscordGuildRule(
   const defaultGuildId = readConfigString(config, "defaultGuildId");
   if (defaultGuildId && defaultGuildId === guildId) {
     const defaultChannelId = readConfigString(config, "defaultChannelId");
-    // When the connection names who made the bot (owners who are also on the allowlist), only they are answered in the
-    // default channel. An owner mark with no allowlist entry leaves the rule as it was.
-    const botMakerIds = resolveAllowlistedOwnerActorIds(config);
+    const allowlistedSenderIds = resolveDefaultChannelUsers(config);
     return {
       requireMention: true,
-      ...(botMakerIds.length > 0 ? { users: botMakerIds } : {}),
+      ...(allowlistedSenderIds.length > 0 ? { users: allowlistedSenderIds } : {}),
       channels: defaultChannelId ? [defaultChannelId] : undefined,
     };
   }
   return undefined;
+}
+
+/**
+ * Who the default channel answers: the connection's allowlisted senders, on a connection that lets only allowlisted
+ * senders in, read (trimmed, lowercased, de-duplicated) the way the inbound allowlist reads them. The owner mark plays
+ * no part here: it only decides whether the maker skips pairing in direct messages, so clearing it never reopens the
+ * channel. A connection with no allowlist, or not in allowlist mode, keeps the open default rule.
+ */
+function resolveDefaultChannelUsers(config: Record<string, unknown>): string[] {
+  if (config.inboundAccessMode !== "allowlist") {
+    return [];
+  }
+  return [...resolveAllowedSenders(config)];
 }
 
 function readGuildRuleMap(config: Record<string, unknown>): Record<string, DiscordGuildAccessRule> {

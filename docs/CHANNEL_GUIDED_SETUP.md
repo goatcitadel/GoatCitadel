@@ -154,12 +154,14 @@ min".
   `allowedSenders` and `inboundAccessMode: "allowlist"` together, and the pairing
   bypass needs all three. A person who is both an owner and on that allowlist
   skips the pairing code in direct messages and direct-message slash commands. In
-  the chosen server and channel the bot answers only that person, and only when
-  they mention it. The direct-message policy stays `pairing`, so anyone else who
-  messages the bot privately still gets a pairing code, and anyone else in the
-  chosen channel is ignored. Marking an account "This is you" on the channel page
-  does not change who may message; taking the maker off the allowlist ends the
-  bypass.
+  the chosen server and channel the bot answers only the people on the allowlist
+  (`allowedSenders` on an `allowlist` connection), and only when they mention it.
+  The direct-message policy stays `pairing`, so anyone else who messages the bot
+  privately still gets a pairing code, and anyone else in the chosen channel is
+  ignored. The "This is you" mark on the channel page only decides whether the
+  maker skips pairing in direct messages: clearing it sends them to pairing
+  there, and the chosen channel still answers only the allowlist. Taking the
+  maker off the allowlist ends both the bypass and their answers in the channel.
 - **Starting and resuming.** A setup made on this page is marked
   (`setupPage: "messaging"`) and goes on there. Opening the page again goes on
   with the newest unfinished one, or the one the address names; the stored token
