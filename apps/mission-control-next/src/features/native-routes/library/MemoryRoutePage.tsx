@@ -75,6 +75,7 @@ export {
   readMetadataStringList,
   resolveMemoryItemWorkspaceLabel,
 } from "./MemoryRoutePage.helpers";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 /**
  * Sentinel value for the "all" pill — clears the namespace filter.
@@ -146,9 +147,13 @@ function formatRecommendationPatchValue(value: unknown): string {
   return "Runtime-provided value";
 }
 
-export function MemoryRoutePage(props: NativeRoutePagesProps) { return <MemoryWorkspace key={props.activeWorkspaceId} {...props} />; }
+export function MemoryRoutePage(props: NativeRoutePagesProps) {
+  return <MemoryWorkspace key={props.activeWorkspaceId} {...props} />;
+}
 function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspaceId }: NativeRoutePagesProps) {
-  const view = ["quality", "maintenance", "graph"].includes(route.view ?? "") ? route.view as "quality" | "maintenance" | "graph" : "items";
+  const view = ["quality", "maintenance", "graph"].includes(route.view ?? "")
+    ? (route.view as "quality" | "maintenance" | "graph")
+    : "items";
   const [search, setSearch] = useSessionViewState(`memory:${activeWorkspaceId}:query`, "");
   const [query, setQuery] = useState(search);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -156,12 +161,28 @@ function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspace
   const [editing, setEditing] = useState(false);
   const [policyEditing, setPolicyEditing] = useState(false);
   const leave = useDraftLeave();
-  useEffect(() => { const timer = setTimeout(() => setQuery(search.trim()), 250); return () => clearTimeout(timer); }, [search]);
-  const memory = useMemoryOperatorSnapshot(activeWorkspaceId, { view, query, sourcesOpen, itemDetailsOpen: detailOpen });
-  const canonicalPolicy = memory.data?.maintenanceStatus?.policy;
-  const policyEditor = useSessionDraft(JSON.stringify(["memory", activeWorkspaceId, "maintenance-policy"]), canonicalPolicy ? toMemoryMaintenancePolicyDraft(canonicalPolicy) : memory.policyDraft, canonicalPolicy?.revision, {
-    label: "Memory maintenance policy", active: view === "maintenance" && policyEditing, available: Boolean(canonicalPolicy), onSave: savePolicyDraft,
+  useEffect(() => {
+    const timer = setTimeout(() => setQuery(search.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+  const memory = useMemoryOperatorSnapshot(activeWorkspaceId, {
+    view,
+    query,
+    sourcesOpen,
+    itemDetailsOpen: detailOpen,
   });
+  const canonicalPolicy = memory.data?.maintenanceStatus?.policy;
+  const policyEditor = useSessionDraft(
+    JSON.stringify(["memory", activeWorkspaceId, "maintenance-policy"]),
+    canonicalPolicy ? toMemoryMaintenancePolicyDraft(canonicalPolicy) : memory.policyDraft,
+    canonicalPolicy?.revision,
+    {
+      label: "Memory maintenance policy",
+      active: view === "maintenance" && policyEditing,
+      available: Boolean(canonicalPolicy),
+      onSave: savePolicyDraft,
+    },
+  );
   async function savePolicyDraft(): Promise<boolean> {
     const submitted = policyEditor.value;
     if (!submitted) return false;
@@ -274,10 +295,21 @@ function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspace
   }, [memoryItems, namespaceFilter]);
   const selectedVisibleItem = memoryItems.find((item) => item.itemId === memory.selectedItemId) ?? null;
   const draftKey = (id: string | null) => JSON.stringify(["memory", activeWorkspaceId, id, "edit"]);
-  const editorDraft = useSessionDraft(draftKey(memory.selectedItemId), {
-    title: selectedVisibleItem?.title ?? "", content: selectedVisibleItem?.content ?? "", pinned: selectedVisibleItem?.pinned ?? false,
-    ttlOverrideSeconds: selectedVisibleItem?.ttlOverrideSeconds ? String(selectedVisibleItem.ttlOverrideSeconds) : "",
-  }, selectedVisibleItem?.updatedAt, { label: selectedVisibleItem?.title ?? "Memory item", active: editing && detailOpen, available: Boolean(selectedVisibleItem) });
+  const editorDraft = useSessionDraft(
+    draftKey(memory.selectedItemId),
+    {
+      title: selectedVisibleItem?.title ?? "",
+      content: selectedVisibleItem?.content ?? "",
+      pinned: selectedVisibleItem?.pinned ?? false,
+      ttlOverrideSeconds: selectedVisibleItem?.ttlOverrideSeconds ? String(selectedVisibleItem.ttlOverrideSeconds) : "",
+    },
+    selectedVisibleItem?.updatedAt,
+    {
+      label: selectedVisibleItem?.title ?? "Memory item",
+      active: editing && detailOpen,
+      available: Boolean(selectedVisibleItem),
+    },
+  );
   const { value: draft, setValue: setDraft } = editorDraft;
   // Prune batch ids against the *visible* list, not the full snapshot: the
   // destructive atomic batch must only count and touch rows the operator can
@@ -289,7 +321,6 @@ function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspace
     () => Array.from(batchSelected).filter((id) => visibleItems.some((item) => item.itemId === id)),
     [batchSelected, visibleItems],
   );
-
 
   const fileAreas = useMemo(() => summarizeMemorySubspaces(memory.data?.files ?? []), [memory.data?.files]);
   const sectionErrors = memory.data?.sectionErrors;
@@ -389,7 +420,7 @@ function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspace
       })
       .catch((error: Error) => {
         if (!cancelled) {
-          setEvidence({ loading: false, error: error.message, items: [] });
+          setEvidence({ loading: false, error: describeApiError(error).summary, items: [] });
         }
       });
     return () => {
@@ -417,7 +448,7 @@ function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspace
       })
       .catch((error: Error) => {
         if (isMounted()) {
-          setRecallBenchmark({ loading: false, error: error.message, result: null });
+          setRecallBenchmark({ loading: false, error: describeApiError(error).summary, result: null });
         }
       });
   };
@@ -442,7 +473,8 @@ function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspace
       setBatchSelected(new Set());
     }
   };
-  const handleBatchForget = () => queryPending ? Promise.resolve() : memory.batchForgetItems(batchIds).then(clearBatchSelectionOnSuccess);
+  const handleBatchForget = () =>
+    queryPending ? Promise.resolve() : memory.batchForgetItems(batchIds).then(clearBatchSelectionOnSuccess);
   const handleBatchPin = (pinned: boolean) => {
     if (!queryPending) void memory.batchSetItemsPinned(batchIds, pinned).then(clearBatchSelectionOnSuccess);
   };
@@ -460,7 +492,30 @@ function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspace
         { label: "Workspace", value: activeWorkspaceName },
       ]}
     >
-      <nav className="mc-next-view-tabs" aria-label="Memory views">{(["items", "quality", "maintenance", "graph"] as const).map((id) => <NativeButton key={id} variant={view === id ? "secondary" : "ghost"} aria-current={view === id ? "page" : undefined} onClick={() => leave.request(() => { setDetailOpen(false); setEditing(false); navigate({ ...route, view: id }); })}>{id.charAt(0).toUpperCase() + id.slice(1)}</NativeButton>)}<NativeButton variant="ghost" aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>Sources</NativeButton><NativeButton variant="ghost" onClick={() => void memory.reload()}>Refresh</NativeButton></nav>
+      <nav className="mc-next-view-tabs" aria-label="Memory views">
+        {(["items", "quality", "maintenance", "graph"] as const).map((id) => (
+          <NativeButton
+            key={id}
+            variant={view === id ? "secondary" : "ghost"}
+            aria-current={view === id ? "page" : undefined}
+            onClick={() =>
+              leave.request(() => {
+                setDetailOpen(false);
+                setEditing(false);
+                navigate({ ...route, view: id });
+              })
+            }
+          >
+            {id.charAt(0).toUpperCase() + id.slice(1)}
+          </NativeButton>
+        ))}
+        <NativeButton variant="ghost" aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>
+          Sources
+        </NativeButton>
+        <NativeButton variant="ghost" onClick={() => void memory.reload()}>
+          Refresh
+        </NativeButton>
+      </nav>
       {memory.notice ? <NoticeBanner tone={memory.notice.tone} message={memory.notice.message} /> : null}
       {memory.pendingMutationApprovals.map((pending) => (
         <div
@@ -477,7 +532,16 @@ function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspace
               {pending.replayed ? " (already requested)" : ""}. Nothing has changed yet — resolve it from the Approvals
               surface to apply.
             </span>
-            <NativeButton variant="outline" onClick={() => leave.request(() => navigate({ area: "ops", section: "approvals", approvalId: pending.approvalId, theme: route.theme }))}>Review approval</NativeButton>
+            <NativeButton
+              variant="outline"
+              onClick={() =>
+                leave.request(() =>
+                  navigate({ area: "ops", section: "approvals", approvalId: pending.approvalId, theme: route.theme }),
+                )
+              }
+            >
+              Review approval
+            </NativeButton>
             <NativeButton variant="outline" onClick={() => memory.dismissPendingMutationApproval(pending.approvalId)}>
               Dismiss
             </NativeButton>
@@ -488,289 +552,342 @@ function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspace
         <SectionTruthNotice message="Memory settings truth is unavailable. Admin and maintenance controls are locked until the backend confirms feature state." />
       ) : null}
       <NativeGrid className="mc-next-memory-shell">
-        {view === "graph" ? <NativeCard
-          title="Memory model"
-          subtitle="Presentation taxonomy for existing lifecycle records; it does not grant new memory authority."
-          stats={[
-            { label: "Kinds", value: String(memoryModelRows.length) },
-            { label: "Records", value: String(memoryModelRows.reduce((sum, item) => sum + item.count, 0)) },
-          ]}
-        >
-          <div className="mc-next-provenance-coverage-grid">
-            {memoryModelRows.map((item) => (
-              <div key={item.kind} className={`mc-next-provenance-coverage-item is-${item.status}`}>
-                <div>
-                  <strong>{item.label}</strong>
-                  <span>{item.count} records</span>
+        {view === "graph" ? (
+          <NativeCard
+            title="Memory model"
+            subtitle="Presentation taxonomy for existing lifecycle records; it does not grant new memory authority."
+            stats={[
+              { label: "Kinds", value: String(memoryModelRows.length) },
+              { label: "Records", value: String(memoryModelRows.reduce((sum, item) => sum + item.count, 0)) },
+            ]}
+          >
+            <div className="mc-next-provenance-coverage-grid">
+              {memoryModelRows.map((item) => (
+                <div key={item.kind} className={`mc-next-provenance-coverage-item is-${item.status}`}>
+                  <div>
+                    <strong>{item.label}</strong>
+                    <span>{item.count} records</span>
+                  </div>
+                  <p>{item.detail}</p>
                 </div>
-                <p>{item.detail}</p>
-              </div>
-            ))}
-          </div>
-        </NativeCard> : null}
-        {view === "items" ? <NativeCard
-          title="Memory items"
-          subtitle="Real memory item truth comes first; files and QMD stay secondary."
-          stats={[
-            { label: "Visible", value: memory.data ? String(visibleItems.length) : "Unavailable" },
-            { label: "Workspace", value: activeWorkspaceName },
-          ]}
-        >
-          <div className="mc-next-settings-field-grid" role="search" aria-label="Memory item search">
-            <label className="mc-next-settings-field span-2" htmlFor={searchInputId}>
-              <span id={`${searchInputId}-label`}>Search memory</span>
-              <input
-                id={searchInputId}
-                type="search"
-                className="mc-next-settings-input"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Namespace, title, or content"
-                aria-describedby={memoryListCountId}
-              />
-            </label>
-          </div>
-          <MemoryEnumerationControls
-            loaded={memoryItems.length}
-            visible={visibleItems.length}
-            total={memory.data?.memoryItemsPage?.total}
-            hasMore={Boolean(memory.data?.memoryItemsPage?.nextCursor)}
-            searching={memory.loading || search.trim() !== query}
-            unavailable={Boolean(sectionErrors?.memoryItems || memoryAdminTruthUnknown)}
-            loadingMore={memory.loadingMoreMemoryItems}
-            error={memory.memoryItemsPageError}
-            onLoadMore={memory.loadMoreMemoryItems}
-            onReload={memory.reload}
-          />
-          {namespacePillOptions.length > 1 ? (
-            <FilterPillGroup
-              label="Memory namespace filter"
-              options={namespacePillOptions}
-              value={namespaceFilter}
-              onChange={setNamespaceFilter}
-              idPrefix="memory-namespace-filter"
-            />
-          ) : null}
-          <div className="mc-next-approvals-risk-strip">
-            <StatusChip tone="success">
-              Active {memoryAdminTruthUnknown || sectionErrors?.memoryItems ? "unavailable" : memory.data?.memoryItems.filter((item) => item.lifecycleState === "active").length ?? 0}
-            </StatusChip>
-            <StatusChip tone="warning">
-              Expired {memoryAdminTruthUnknown || sectionErrors?.memoryItems ? "unavailable" : memory.data?.memoryItems.filter((item) => item.lifecycleState === "expired").length ?? 0}
-            </StatusChip>
-            <StatusChip tone="muted">
-              Forgotten {memoryAdminTruthUnknown || sectionErrors?.memoryItems ? "unavailable" : memory.data?.memoryItems.filter((item) => item.lifecycleState === "forgotten").length ?? 0}
-            </StatusChip>
-            <StatusChip
-              tone={memoryAdminState === "enabled" ? "success" : memoryAdminTruthUnknown ? "warning" : "muted"}
-            >
-              Admin {memoryAdminState}
-            </StatusChip>
-            <StatusChip tone={retrievalStatus?.enabled ? "success" : retrievalStatus ? "muted" : "warning"}>
-              Retrieval {formatRetrievalMode(retrievalStatus)}
-            </StatusChip>
-            <StatusChip tone={formatFallbackTone(retrievalStatus)}>
-              Fallback {formatFallbackMode(retrievalStatus)}
-            </StatusChip>
-          </div>
-          <SectionTruthNotice message={sectionErrors?.memoryRetrievalStatus ?? null} />
-          <SectionTruthNotice
-            message={
-              sectionErrors?.memoryItems ??
-              (memoryAdminTruthUnknown
-                ? "Memory item truth is gated because settings truth could not be loaded."
-                : memoryAdminState === "disabled"
-                  ? "Memory lifecycle admin is disabled by settings."
-                  : null)
-            }
-          />
-          <div id={memoryListCountId} className="mc-next-sr-only" aria-live="polite" aria-atomic="true">
-            {memoryAdminTruthUnknown || sectionErrors?.memoryItems ? "Memory results unavailable." : visibleItems.length === 0
-              ? "No memory items match the current filter."
-              : `${visibleItems.length} memory ${visibleItems.length === 1 ? "item" : "items"} visible.`}
-          </div>
-          <div className="mc-next-approvals-list" role="group" aria-label="Memory items">
-            {visibleItems.length === 0 ? (
-              <>
-                <EmptyState
-                  size="compact"
-                  title={
-                    sectionErrors?.memoryItems ? "Memory results unavailable. Retry to load current records." : memoryAdminTruthUnknown
-                      ? "Memory item truth is unavailable until backend settings truth reloads."
-                      : memoryAdminState === "disabled"
-                        ? "Memory lifecycle admin is disabled in settings."
-                        : "No memory items match the current filter."
-                  }
+              ))}
+            </div>
+          </NativeCard>
+        ) : null}
+        {view === "items" ? (
+          <NativeCard
+            title="Memory items"
+            subtitle="Real memory item truth comes first; files and QMD stay secondary."
+            stats={[
+              { label: "Visible", value: memory.data ? String(visibleItems.length) : "Unavailable" },
+              { label: "Workspace", value: activeWorkspaceName },
+            ]}
+          >
+            <div className="mc-next-settings-field-grid" role="search" aria-label="Memory item search">
+              <label className="mc-next-settings-field span-2" htmlFor={searchInputId}>
+                <span id={`${searchInputId}-label`}>Search memory</span>
+                <input
+                  id={searchInputId}
+                  type="search"
+                  className="mc-next-settings-input"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Namespace, title, or content"
+                  aria-describedby={memoryListCountId}
                 />
-                {memoryAdminState === "disabled" ? (
-                  <div className="mc-next-memory-disabled-guide">
-                    <p>
-                      Durable item edits stay locked until settings allow them. Conversation, planning, and build work
-                      can continue without durable memory writes.
-                    </p>
-                    <div className="mc-next-settings-button-row">
-                      <NativeButton
-                        variant="default"
-                        onClick={() => navigate({ area: "settings", section: "trust-policy", theme: route.theme })}
-                      >
-                        <Settings size={16} />
-                        Open settings
-                      </NativeButton>
-                      <NativeButton variant="default" onClick={() => navigate({ area: "chat", theme: route.theme })}>
-                        <MessageSquareText size={16} />
-                        Continue without durable memory
-                      </NativeButton>
-                    </div>
-                  </div>
-                ) : null}
-              </>
-            ) : (
-              visibleItems.map((item) => {
-                const isSelected = memory.selectedItemId === item.itemId;
-                return (
-                  <div key={item.itemId} className="mc-next-memory-batch-row">
-                    <input
-                      type="checkbox"
-                      checked={batchSelected.has(item.itemId)}
-                      disabled={!memoryCanMutate || batchBusy}
-                      onChange={() => toggleBatchSelect(item.itemId)}
-                      aria-label={`Select memory item ${item.title} for batch actions`}
-                    />
-                    <button
-                      id={`memory-list-item-${item.itemId}`}
-                      type="button"
-                      aria-pressed={isSelected}
-                      aria-current={isSelected ? "true" : undefined}
-                      aria-label={`Memory item ${item.title} in namespace ${item.namespace}, lifecycle ${item.lifecycleState}, ${item.pinned ? "pinned" : "unpinned"}, updated ${formatShortDateTime(item.updatedAt)}`}
-                      className={`mc-next-approvals-list-item${isSelected ? " is-selected" : ""}`}
-                      onClick={() => leave.request(() => { memory.setSelectedItemId(item.itemId); setDetailOpen(true); setEditing(false); }, [editorDraft.key])}
-                    >
-                      <div className="mc-next-directory-list-head">
-                        <strong>{item.title}{hasSessionDraft(draftKey(item.itemId)) ? " · Unsaved" : ""}</strong>
-                        <span>{formatShortDateTime(item.updatedAt)}</span>
-                      </div>
-                      <div className="mc-next-approvals-chip-row">
-                        <StatusChip tone="default">
-                          {formatMemoryEngineeringKind(classifyMemoryItemKind(item))}
-                        </StatusChip>
-                        <StatusChip
-                          tone={
-                            item.lifecycleState === "active"
-                              ? "success"
-                              : item.lifecycleState === "expired"
-                                ? "warning"
-                                : "muted"
-                          }
-                        >
-                          {item.lifecycleState}
-                        </StatusChip>
-                        <StatusChip tone={item.pinned ? "default" : "muted"}>
-                          {item.pinned ? "pinned" : "unpinned"}
-                        </StatusChip>
-                      </div>
-                      <p>{item.namespace}</p>
-                    </button>
-                  </div>
-                );
-              })
-            )}
-          </div>
-          {batchIds.length > 0 ? (
-            <MemoryBatchToolbar
-              count={batchIds.length}
-              maxCount={MEMORY_BATCH_MAX_OPERATIONS}
-              canMutate={memoryCanMutate}
-              busy={batchBusy}
-              forgetBusy={memory.busyKey === "memory-batch:forget"}
-              onForget={handleBatchForget}
-              onPin={handleBatchPin}
-              onClear={() => setBatchSelected(new Set())}
+              </label>
+            </div>
+            <MemoryEnumerationControls
+              loaded={memoryItems.length}
+              visible={visibleItems.length}
+              total={memory.data?.memoryItemsPage?.total}
+              hasMore={Boolean(memory.data?.memoryItemsPage?.nextCursor)}
+              searching={memory.loading || search.trim() !== query}
+              unavailable={Boolean(sectionErrors?.memoryItems || memoryAdminTruthUnknown)}
+              loadingMore={memory.loadingMoreMemoryItems}
+              error={memory.memoryItemsPageError}
+              onLoadMore={memory.loadMoreMemoryItems}
+              onReload={memory.reload}
             />
-          ) : null}
-        </NativeCard> : null}
-        <DetailInspector open={detailOpen} title={selectedVisibleItem?.title ?? "Memory detail"} subtitle={selectedVisibleItem ? `${selectedVisibleItem.lifecycleState} · ${selectedVisibleItem.namespace}` : "Record unavailable"} onClose={() => leave.request(() => { setDetailOpen(false); setEditing(false); }, [editorDraft.key])}>
-{memory.notice ? <NoticeBanner tone={memory.notice.tone} message={memory.notice.message} /> : null}
+            {namespacePillOptions.length > 1 ? (
+              <FilterPillGroup
+                label="Memory namespace filter"
+                options={namespacePillOptions}
+                value={namespaceFilter}
+                onChange={setNamespaceFilter}
+                idPrefix="memory-namespace-filter"
+              />
+            ) : null}
+            <div className="mc-next-approvals-risk-strip">
+              <StatusChip tone="success">
+                Active{" "}
+                {memoryAdminTruthUnknown || sectionErrors?.memoryItems
+                  ? "unavailable"
+                  : (memory.data?.memoryItems.filter((item) => item.lifecycleState === "active").length ?? 0)}
+              </StatusChip>
+              <StatusChip tone="warning">
+                Expired{" "}
+                {memoryAdminTruthUnknown || sectionErrors?.memoryItems
+                  ? "unavailable"
+                  : (memory.data?.memoryItems.filter((item) => item.lifecycleState === "expired").length ?? 0)}
+              </StatusChip>
+              <StatusChip tone="muted">
+                Forgotten{" "}
+                {memoryAdminTruthUnknown || sectionErrors?.memoryItems
+                  ? "unavailable"
+                  : (memory.data?.memoryItems.filter((item) => item.lifecycleState === "forgotten").length ?? 0)}
+              </StatusChip>
+              <StatusChip
+                tone={memoryAdminState === "enabled" ? "success" : memoryAdminTruthUnknown ? "warning" : "muted"}
+              >
+                Admin {memoryAdminState}
+              </StatusChip>
+              <StatusChip tone={retrievalStatus?.enabled ? "success" : retrievalStatus ? "muted" : "warning"}>
+                Retrieval {formatRetrievalMode(retrievalStatus)}
+              </StatusChip>
+              <StatusChip tone={formatFallbackTone(retrievalStatus)}>
+                Fallback {formatFallbackMode(retrievalStatus)}
+              </StatusChip>
+            </div>
+            <SectionTruthNotice message={sectionErrors?.memoryRetrievalStatus ?? null} />
+            <SectionTruthNotice
+              message={
+                sectionErrors?.memoryItems ??
+                (memoryAdminTruthUnknown
+                  ? "Memory item truth is gated because settings truth could not be loaded."
+                  : memoryAdminState === "disabled"
+                    ? "Memory lifecycle admin is disabled by settings."
+                    : null)
+              }
+            />
+            <div id={memoryListCountId} className="mc-next-sr-only" aria-live="polite" aria-atomic="true">
+              {memoryAdminTruthUnknown || sectionErrors?.memoryItems
+                ? "Memory results unavailable."
+                : visibleItems.length === 0
+                  ? "No memory items match the current filter."
+                  : `${visibleItems.length} memory ${visibleItems.length === 1 ? "item" : "items"} visible.`}
+            </div>
+            <div className="mc-next-approvals-list" role="group" aria-label="Memory items">
+              {visibleItems.length === 0 ? (
+                <>
+                  <EmptyState
+                    size="compact"
+                    title={
+                      sectionErrors?.memoryItems
+                        ? "Memory results unavailable. Retry to load current records."
+                        : memoryAdminTruthUnknown
+                          ? "Memory item truth is unavailable until backend settings truth reloads."
+                          : memoryAdminState === "disabled"
+                            ? "Memory lifecycle admin is disabled in settings."
+                            : "No memory items match the current filter."
+                    }
+                  />
+                  {memoryAdminState === "disabled" ? (
+                    <div className="mc-next-memory-disabled-guide">
+                      <p>
+                        Durable item edits stay locked until settings allow them. Conversation, planning, and build work
+                        can continue without durable memory writes.
+                      </p>
+                      <div className="mc-next-settings-button-row">
+                        <NativeButton
+                          variant="default"
+                          onClick={() => navigate({ area: "settings", section: "trust-policy", theme: route.theme })}
+                        >
+                          <Settings size={16} />
+                          Open settings
+                        </NativeButton>
+                        <NativeButton variant="default" onClick={() => navigate({ area: "chat", theme: route.theme })}>
+                          <MessageSquareText size={16} />
+                          Continue without durable memory
+                        </NativeButton>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                visibleItems.map((item) => {
+                  const isSelected = memory.selectedItemId === item.itemId;
+                  return (
+                    <div key={item.itemId} className="mc-next-memory-batch-row">
+                      <input
+                        type="checkbox"
+                        checked={batchSelected.has(item.itemId)}
+                        disabled={!memoryCanMutate || batchBusy}
+                        onChange={() => toggleBatchSelect(item.itemId)}
+                        aria-label={`Select memory item ${item.title} for batch actions`}
+                      />
+                      <button
+                        id={`memory-list-item-${item.itemId}`}
+                        type="button"
+                        aria-pressed={isSelected}
+                        aria-current={isSelected ? "true" : undefined}
+                        aria-label={`Memory item ${item.title} in namespace ${item.namespace}, lifecycle ${item.lifecycleState}, ${item.pinned ? "pinned" : "unpinned"}, updated ${formatShortDateTime(item.updatedAt)}`}
+                        className={`mc-next-approvals-list-item${isSelected ? " is-selected" : ""}`}
+                        onClick={() =>
+                          leave.request(() => {
+                            memory.setSelectedItemId(item.itemId);
+                            setDetailOpen(true);
+                            setEditing(false);
+                          }, [editorDraft.key])
+                        }
+                      >
+                        <div className="mc-next-directory-list-head">
+                          <strong>
+                            {item.title}
+                            {hasSessionDraft(draftKey(item.itemId)) ? " · Unsaved" : ""}
+                          </strong>
+                          <span>{formatShortDateTime(item.updatedAt)}</span>
+                        </div>
+                        <div className="mc-next-approvals-chip-row">
+                          <StatusChip tone="default">
+                            {formatMemoryEngineeringKind(classifyMemoryItemKind(item))}
+                          </StatusChip>
+                          <StatusChip
+                            tone={
+                              item.lifecycleState === "active"
+                                ? "success"
+                                : item.lifecycleState === "expired"
+                                  ? "warning"
+                                  : "muted"
+                            }
+                          >
+                            {item.lifecycleState}
+                          </StatusChip>
+                          <StatusChip tone={item.pinned ? "default" : "muted"}>
+                            {item.pinned ? "pinned" : "unpinned"}
+                          </StatusChip>
+                        </div>
+                        <p>{item.namespace}</p>
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            {batchIds.length > 0 ? (
+              <MemoryBatchToolbar
+                count={batchIds.length}
+                maxCount={MEMORY_BATCH_MAX_OPERATIONS}
+                canMutate={memoryCanMutate}
+                busy={batchBusy}
+                forgetBusy={memory.busyKey === "memory-batch:forget"}
+                onForget={handleBatchForget}
+                onPin={handleBatchPin}
+                onClear={() => setBatchSelected(new Set())}
+              />
+            ) : null}
+          </NativeCard>
+        ) : null}
+        <DetailInspector
+          open={detailOpen}
+          title={selectedVisibleItem?.title ?? "Memory detail"}
+          subtitle={
+            selectedVisibleItem
+              ? `${selectedVisibleItem.lifecycleState} · ${selectedVisibleItem.namespace}`
+              : "Record unavailable"
+          }
+          onClose={() =>
+            leave.request(() => {
+              setDetailOpen(false);
+              setEditing(false);
+            }, [editorDraft.key])
+          }
+        >
+          {memory.notice ? <NoticeBanner tone={memory.notice.tone} message={memory.notice.message} /> : null}
 
           {selectedVisibleItem ? (
             <>
-              {!editing ? <><div className="mc-next-memory-content">{selectedVisibleItem.content}</div><NativeButton variant="outline" onClick={() => setEditing(true)}>{editorDraft.isDirty ? "Resume edit · Unsaved" : "Edit item"}</NativeButton></> : null}
-              {editing ? <div
-                className="mc-next-settings-field-grid"
-                role="group"
-                aria-label={`Edit memory item ${selectedVisibleItem.title}`}
-              >
-                <label className="mc-next-settings-field span-2" htmlFor={editTitleId}>
-                  <span>Title</span>
-                  <input
-                    id={editTitleId}
-                    type="text"
-                    className="mc-next-settings-input"
-                    value={draft.title}
-                    disabled={!memoryCanMutate}
-                    onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
-                    aria-label="Memory item title"
-                  />
-                </label>
-                <label className="mc-next-settings-field" htmlFor={editTtlId}>
-                  <span>TTL override seconds</span>
-                  <input
-                    id={editTtlId}
-                    type="text"
-                    inputMode="numeric"
-                    className="mc-next-settings-input"
-                    value={draft.ttlOverrideSeconds}
-                    disabled={!memoryCanMutate}
-                    onChange={(event) =>
-                      setDraft((current) => ({ ...current, ttlOverrideSeconds: event.target.value }))
-                    }
-                    placeholder="empty = default"
-                    aria-label="TTL override in seconds, empty for default"
-                  />
-                </label>
-                <label className="mc-next-settings-field" htmlFor={editPinnedId}>
-                  <span>Pinned</span>
-                  <select
-                    id={editPinnedId}
-                    className="mc-next-settings-input"
-                    value={draft.pinned ? "true" : "false"}
-                    disabled={!memoryCanMutate}
-                    onChange={(event) => setDraft((current) => ({ ...current, pinned: event.target.value === "true" }))}
-                    aria-label="Pinned state for this memory item"
-                  >
-                    <option value="true">Pinned</option>
-                    <option value="false">Not pinned</option>
-                  </select>
-                </label>
-                <label className="mc-next-settings-field span-2" htmlFor={editContentId}>
-                  <span>Content</span>
-                  <textarea
-                    id={editContentId}
-                    className="mc-next-settings-textarea"
-                    value={draft.content}
-                    disabled={!memoryCanMutate}
-                    onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
-                    aria-label="Memory item content"
-                  />
-                </label>
-              </div> : null}
-              <div className="mc-next-runtime-actions" role="group" aria-label="Memory item actions">
-                {editing ? <NativeButton
-                  variant="default"
-                  disabled={!memoryCanMutate || memory.busyKey === `item:${selectedVisibleItem.itemId}`}
-                  aria-label={`Save changes to memory item ${selectedVisibleItem.title}`}
-                  onClick={() =>
-                    void memory.saveItemPatch(selectedVisibleItem.itemId, {
-                      title: draft.title,
-                      content: draft.content,
-                      pinned: draft.pinned,
-                      ttlOverrideSeconds: draft.ttlOverrideSeconds.trim()
-                        ? Number.parseInt(draft.ttlOverrideSeconds, 10)
-                        : null,
-                    })
-                  }
+              {!editing ? (
+                <>
+                  <div className="mc-next-memory-content">{selectedVisibleItem.content}</div>
+                  <NativeButton variant="outline" onClick={() => setEditing(true)}>
+                    {editorDraft.isDirty ? "Resume edit · Unsaved" : "Edit item"}
+                  </NativeButton>
+                </>
+              ) : null}
+              {editing ? (
+                <div
+                  className="mc-next-settings-field-grid"
+                  role="group"
+                  aria-label={`Edit memory item ${selectedVisibleItem.title}`}
                 >
-                  Request item changes
-                </NativeButton> : null}
+                  <label className="mc-next-settings-field span-2" htmlFor={editTitleId}>
+                    <span>Title</span>
+                    <input
+                      id={editTitleId}
+                      type="text"
+                      className="mc-next-settings-input"
+                      value={draft.title}
+                      disabled={!memoryCanMutate}
+                      onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
+                      aria-label="Memory item title"
+                    />
+                  </label>
+                  <label className="mc-next-settings-field" htmlFor={editTtlId}>
+                    <span>TTL override seconds</span>
+                    <input
+                      id={editTtlId}
+                      type="text"
+                      inputMode="numeric"
+                      className="mc-next-settings-input"
+                      value={draft.ttlOverrideSeconds}
+                      disabled={!memoryCanMutate}
+                      onChange={(event) =>
+                        setDraft((current) => ({ ...current, ttlOverrideSeconds: event.target.value }))
+                      }
+                      placeholder="empty = default"
+                      aria-label="TTL override in seconds, empty for default"
+                    />
+                  </label>
+                  <label className="mc-next-settings-field" htmlFor={editPinnedId}>
+                    <span>Pinned</span>
+                    <select
+                      id={editPinnedId}
+                      className="mc-next-settings-input"
+                      value={draft.pinned ? "true" : "false"}
+                      disabled={!memoryCanMutate}
+                      onChange={(event) =>
+                        setDraft((current) => ({ ...current, pinned: event.target.value === "true" }))
+                      }
+                      aria-label="Pinned state for this memory item"
+                    >
+                      <option value="true">Pinned</option>
+                      <option value="false">Not pinned</option>
+                    </select>
+                  </label>
+                  <label className="mc-next-settings-field span-2" htmlFor={editContentId}>
+                    <span>Content</span>
+                    <textarea
+                      id={editContentId}
+                      className="mc-next-settings-textarea"
+                      value={draft.content}
+                      disabled={!memoryCanMutate}
+                      onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
+                      aria-label="Memory item content"
+                    />
+                  </label>
+                </div>
+              ) : null}
+              <div className="mc-next-runtime-actions" role="group" aria-label="Memory item actions">
+                {editing ? (
+                  <NativeButton
+                    variant="default"
+                    disabled={!memoryCanMutate || memory.busyKey === `item:${selectedVisibleItem.itemId}`}
+                    aria-label={`Save changes to memory item ${selectedVisibleItem.title}`}
+                    onClick={() =>
+                      void memory.saveItemPatch(selectedVisibleItem.itemId, {
+                        title: draft.title,
+                        content: draft.content,
+                        pinned: draft.pinned,
+                        ttlOverrideSeconds: draft.ttlOverrideSeconds.trim()
+                          ? Number.parseInt(draft.ttlOverrideSeconds, 10)
+                          : null,
+                      })
+                    }
+                  >
+                    Request item changes
+                  </NativeButton>
+                ) : null}
                 <NativeButton
                   variant="destructive"
                   disabled={!memoryCanMutate || memory.busyKey === `forget:${selectedVisibleItem.itemId}`}
@@ -794,8 +911,37 @@ function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspace
                   setPendingForget(false);
                 }}
               />
-              <details className="mc-next-memory-sources"><summary>Sources and lifecycle</summary><dl className="mc-next-memory-metadata"><div><dt>Lifecycle</dt><dd>{selectedVisibleItem.lifecycleState} · {selectedVisibleItem.status}</dd></div><div><dt>Expires</dt><dd>{formatMaybeDateTime(selectedVisibleItem.expiresAt)} · TTL {selectedVisibleItem.ttlOverrideSeconds ?? "default"}</dd></div><div><dt>Item ID</dt><dd><code>{selectedVisibleItem.itemId}</code></dd></div><div><dt>Updated</dt><dd>{formatShortDateTime(selectedVisibleItem.updatedAt)}</dd></div></dl><MemoryProvenancePanel item={selectedVisibleItem} writeEnvelopeCount={memoryWriteEnvelopes.length} /></details>
-              <details className="mc-next-memory-history"><summary>Item history</summary>
+              <details className="mc-next-memory-sources">
+                <summary>Sources and lifecycle</summary>
+                <dl className="mc-next-memory-metadata">
+                  <div>
+                    <dt>Lifecycle</dt>
+                    <dd>
+                      {selectedVisibleItem.lifecycleState} · {selectedVisibleItem.status}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Expires</dt>
+                    <dd>
+                      {formatMaybeDateTime(selectedVisibleItem.expiresAt)} · TTL{" "}
+                      {selectedVisibleItem.ttlOverrideSeconds ?? "default"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Item ID</dt>
+                    <dd>
+                      <code>{selectedVisibleItem.itemId}</code>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Updated</dt>
+                    <dd>{formatShortDateTime(selectedVisibleItem.updatedAt)}</dd>
+                  </div>
+                </dl>
+                <MemoryProvenancePanel item={selectedVisibleItem} writeEnvelopeCount={memoryWriteEnvelopes.length} />
+              </details>
+              <details className="mc-next-memory-history">
+                <summary>Item history</summary>
                 <SectionTruthNotice message={sectionErrors?.memoryHistory ?? null} />
                 {memory.data?.memoryHistory.length ? (
                   // Visible "·" separators wrapped in aria-hidden so screen
@@ -824,956 +970,1043 @@ function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspace
           ) : (
             <EmptyState size="compact" title="Select a memory item to inspect it." />
           )}
-
-</DetailInspector>
-        {view === "quality" ? <NativeCard
-          title="Evidence and write gate"
-          subtitle="Recent runtime envelopes and memory-write decisions without exposing secret payloads."
-          stats={[
-            { label: "Envelopes", value: String(evidence.items.length) },
-            { label: "Memory writes", value: String(memoryWriteEnvelopes.length) },
-          ]}
-        >
-          <div className="mc-next-approvals-risk-strip">
-            <StatusChip tone={evidence.error ? "warning" : "success"}>
-              {evidence.error ? "partial" : evidence.loading ? "loading" : "loaded"}
-            </StatusChip>
-            <StatusChip tone="muted">
-              {evidence.items.filter((item) => item.signatureStatus === "unsigned_local").length} unsigned local
-            </StatusChip>
-            <StatusChip tone="success">
-              {evidence.items.filter((item) => item.signatureStatus === "signed_hmac").length} signed
-            </StatusChip>
-          </div>
-          <SectionTruthNotice message={evidence.error ? `Evidence envelopes unavailable: ${evidence.error}` : null} />
-          {memoryWriteEnvelopes.length > 0 ? (
-            <ul className="mc-next-approvals-compact-list">
-              {memoryWriteEnvelopes.map((item) => {
-                const decision = readMemoryWriteDecision(item);
-                return (
-                  <li key={item.envelopeId}>
-                    <strong>{decision}</strong>
-                    {" · "}
-                    {formatShortDateTime(item.createdAt)}
-                    {" · "}
-                    {shortId(item.contentHash)}
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <EmptyState
-              size="compact"
-              title={evidence.loading ? "Loading evidence envelopes." : "No memory write-gate envelopes recorded yet."}
-            />
-          )}
-          <div className="mc-next-runtime-actions">
-            <NativeButton
-              variant="secondary"
-              aria-label="Refresh evidence envelopes"
-              onClick={() => {
-                setEvidence((current) => ({ ...current, loading: true, error: null }));
-                void fetchEvidenceEnvelopes({ workspaceId: activeWorkspaceId, limit: 12 })
-                  .then((result) => {
-                    if (isMounted()) {
-                      setEvidence({ loading: false, error: null, items: result.items });
-                    }
-                  })
-                  .catch((error: Error) => {
-                    if (isMounted()) {
-                      setEvidence({ loading: false, error: error.message, items: [] });
-                    }
-                  });
-              }}
-            >
-              <ShieldCheck size={16} aria-hidden="true" />
-              Refresh evidence
-            </NativeButton>
-          </div>
-        </NativeCard> : null}
-        {view === "quality" ? <NativeCard
-          title="Recall quality"
-          subtitle="Recent feedback on stale, missing, irrelevant, and useful memory selections."
-          stats={[
-            { label: "Feedback", value: String(memoryFeedback.length) },
-            { label: "Open", value: String(openFeedbackCount) },
-          ]}
-        >
-          <SectionTruthNotice message={sectionErrors?.memoryFeedback ?? null} />
-          <div className="mc-next-approvals-risk-strip">
-            <StatusChip tone="success">Useful {usefulFeedbackCount}</StatusChip>
-            <StatusChip tone={openFeedbackCount > 0 ? "warning" : "muted"}>Open {openFeedbackCount}</StatusChip>
-            <StatusChip tone="muted">Issues {Math.max(0, memoryFeedback.length - usefulFeedbackCount)}</StatusChip>
-          </div>
-          {memoryFeedback.length > 0 ? (
-            <ul className="mc-next-approvals-compact-list">
-              {memoryFeedback.map((item) => (
-                <li key={item.feedbackId}>
-                  <strong>{item.kind}</strong>
-                  {" · "}
-                  {item.status}
-                  {" · "}
-                  {formatFeedbackTarget(item.targetKind, item.targetRef ?? item.contextId ?? item.citationId)}
-                  {item.note ? <p>{item.note}</p> : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState size="compact" title="No recall feedback has been recorded yet." />
-          )}
-        </NativeCard> : null}
-        {view === "quality" ? <NativeCard
-          title="Quality queue"
-          subtitle="Open memory quality findings from lifecycle scans, feedback, and learning staleness checks."
-          stats={[
-            { label: "Issues", value: String(memoryQualityIssues.length) },
-            { label: "Open", value: String(openQualityIssueCount) },
-            { label: "High", value: String(highQualityIssueCount) },
-          ]}
-        >
-          <SectionTruthNotice message={sectionErrors?.memoryQualityIssues ?? null} />
-          <div className="mc-next-runtime-actions" role="group" aria-label="Memory quality actions">
-            <NativeButton
-              variant="default"
-              disabled={!memoryCanMutate || memory.busyKey === "memory-quality:scan"}
-              aria-label="Run memory quality scan"
-              onClick={() => void memory.scanMemoryQuality()}
-            >
-              <SearchCheck size={16} aria-hidden="true" />
-              Scan quality
-            </NativeButton>
-            <NativeButton
-              variant="secondary"
-              aria-label="Refresh memory quality issues"
-              onClick={() => void memory.reload()}
-            >
-              <RefreshCw size={16} aria-hidden="true" />
-              Refresh
-            </NativeButton>
-          </div>
-          <div className="mc-next-approvals-risk-strip">
-            <StatusChip tone={highQualityIssueCount > 0 ? "critical" : "muted"}>
-              High {highQualityIssueCount}
-            </StatusChip>
-            <StatusChip tone={openQualityIssueCount > 0 ? "warning" : "success"}>
-              Open {openQualityIssueCount}
-            </StatusChip>
-            <StatusChip tone="muted">
-              Closed {memoryQualityIssues.filter((item) => item.status !== "open").length}
-            </StatusChip>
-          </div>
-          {memoryQualityIssues.length > 0 ? (
-            <ul className="mc-next-approvals-compact-list">
-              {memoryQualityIssues.map((issue) => (
-                <li key={issue.issueId}>
-                  <strong>{formatMemoryQualityIssueKind(issue.kind)}</strong>
-                  {" · "}
-                  {issue.status}
-                  {" · "}
-                  {issue.severity}
-                  {" · "}
-                  {formatFeedbackTarget(issue.targetKind, issue.targetRef)}
-                  <p>{issue.summary}</p>
-                  <div
-                    className="mc-next-runtime-actions"
-                    role="group"
-                    aria-label={`Resolve memory quality issue ${issue.summary}`}
-                  >
-                    <NativeButton
-                      variant="secondary"
-                      disabled={!memoryCanMutate || issue.status === "resolved"}
-                      aria-label={`Resolve memory quality issue ${issue.summary}`}
-                      onClick={() =>
-                        void memory.patchQualityIssue(issue.issueId, "resolved", "Resolved from Library memory queue.")
-                      }
-                    >
-                      Resolve
-                    </NativeButton>
-                    <NativeButton
-                      variant="secondary"
-                      disabled={!memoryCanMutate || issue.status === "dismissed"}
-                      aria-label={`Dismiss memory quality issue ${issue.summary}`}
-                      onClick={() =>
-                        void memory.patchQualityIssue(
-                          issue.issueId,
-                          "dismissed",
-                          "Dismissed from Library memory queue.",
-                        )
-                      }
-                    >
-                      Dismiss
-                    </NativeButton>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState size="compact" title="No memory quality issues are queued." />
-          )}
-        </NativeCard> : null}
-        {view === "quality" ? <NativeCard
-          title="Recall workbench"
-          subtitle="Prompt-level retrieval benchmark for explicit memory recall."
-          stats={[
-            { label: "Runs", value: String(recallBenchmark.result?.itemCount ?? 0) },
-            {
-              label: "Overlap",
-              value: recallBenchmark.result ? recallBenchmark.result.avgOverlapScore.toFixed(2) : "n/a",
-            },
-          ]}
-        >
-          <div className="mc-next-settings-field-grid" role="group" aria-label="Recall benchmark prompt">
-            <label className="mc-next-settings-field span-2" htmlFor={recallPromptId}>
-              <span>Probe</span>
-              <select
-                id={recallPromptId}
-                className="mc-next-settings-input"
-                value={recallPrompt}
-                onChange={(event) => setRecallPrompt(event.target.value)}
-                aria-label="Recall benchmark prompt"
-              >
-                {RECALL_BENCHMARK_PROMPTS.map((item) => (
-                  <option key={item.label} value={item.prompt}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="mc-next-runtime-actions" role="group" aria-label="Recall benchmark actions">
-            <NativeButton
-              variant="default"
-              disabled={recallBenchmark.loading}
-              aria-label="Run recall benchmark"
-              onClick={runRecallProbe}
-            >
-              Run probe
-            </NativeButton>
-          </div>
-          <SectionTruthNotice message={recallBenchmark.error} />
-          {recallBenchmark.result ? (
-            <>
-              <div className="mc-next-runtime-metric-grid">
-                <div className="mc-next-runtime-metric">
-                  <span>Latency</span>
-                  <strong>{Math.round(recallBenchmark.result.avgLatencyMs)}ms</strong>
-                  <p>{recallBenchmark.result.retrievalStrategies.join(", ") || "no strategy"}</p>
-                </div>
-                <div className="mc-next-runtime-metric">
-                  <span>Citations</span>
-                  <strong>{String(recallBenchmark.result.items[0]?.citationsCount ?? 0)}</strong>
-                  <p>{recallBenchmark.result.items[0]?.qmdStatus ?? "no qmd"}</p>
-                </div>
-              </div>
-              <NativeList
-                density="compact"
-                items={recallBenchmark.result.items.map((item) => ({
-                  title: item.status,
-                  meta: `${item.citationsCount} citations · ${item.overlapScore.toFixed(2)} overlap`,
-                  body: item.semanticCoverageNote ?? item.error ?? item.prompt,
-                }))}
-                emptyLabel="No recall probe results."
-                maxHeight="min(28vh, 16rem)"
-                ariaLabel="Recall benchmark results"
+        </DetailInspector>
+        {view === "quality" ? (
+          <NativeCard
+            title="Evidence and write gate"
+            subtitle="Recent runtime envelopes and memory-write decisions without exposing secret payloads."
+            stats={[
+              { label: "Envelopes", value: String(evidence.items.length) },
+              { label: "Memory writes", value: String(memoryWriteEnvelopes.length) },
+            ]}
+          >
+            <div className="mc-next-approvals-risk-strip">
+              <StatusChip tone={evidence.error ? "warning" : "success"}>
+                {evidence.error ? "partial" : evidence.loading ? "loading" : "loaded"}
+              </StatusChip>
+              <StatusChip tone="muted">
+                {evidence.items.filter((item) => item.signatureStatus === "unsigned_local").length} unsigned local
+              </StatusChip>
+              <StatusChip tone="success">
+                {evidence.items.filter((item) => item.signatureStatus === "signed_hmac").length} signed
+              </StatusChip>
+            </div>
+            <SectionTruthNotice message={evidence.error ? `Evidence envelopes unavailable: ${evidence.error}` : null} />
+            {memoryWriteEnvelopes.length > 0 ? (
+              <ul className="mc-next-approvals-compact-list">
+                {memoryWriteEnvelopes.map((item) => {
+                  const decision = readMemoryWriteDecision(item);
+                  return (
+                    <li key={item.envelopeId}>
+                      <strong>{decision}</strong>
+                      {" · "}
+                      {formatShortDateTime(item.createdAt)}
+                      {" · "}
+                      {shortId(item.contentHash)}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <EmptyState
+                size="compact"
+                title={
+                  evidence.loading ? "Loading evidence envelopes." : "No memory write-gate envelopes recorded yet."
+                }
               />
-            </>
-          ) : (
-            <EmptyState
-              size="compact"
-              title={recallBenchmark.loading ? "Running recall probe." : "No recall probe has run yet."}
-            />
-          )}
-        </NativeCard> : null}
-        {view === "quality" ? <NativeCard
-          title="Trace candidates"
-          subtitle="Trace-derived memory stays proposed until promotion passes operator authority and write-gate checks."
-          stats={[
-            { label: "Candidates", value: String(traceMemoryCandidates.length) },
-            { label: "Proposed", value: String(proposedTraceCandidateCount) },
-          ]}
-        >
-          <SectionTruthNotice message={sectionErrors?.traceMemoryCandidates ?? null} />
-          {(traceMemoryCandidates.length ?? 0) > 0 ? (
-            <ul className="mc-next-approvals-compact-list">
-              {traceMemoryCandidates.map((item) => (
-                <li key={item.candidateId}>
-                  <strong>{item.candidateType}</strong>
-                  {" · "}
-                  {item.status}
-                  {" · "}
-                  {formatConfidence(item.confidence)}
-                  <div className="mc-next-approvals-chip-row">
-                    <StatusChip tone="default">
-                      {formatMemoryEngineeringKind(classifyTraceMemoryCandidateKind(item))}
-                    </StatusChip>
-                    <StatusChip tone="muted">{item.candidateType}</StatusChip>
-                  </div>
-                  <p>{item.proposedInsight}</p>
-                  <span>
-                    {formatSourceRefCount(item.sourceRefs.length)}
-                    {item.authority === "external_channel" ? " · external channel" : ""}
-                    {(item.sourceSessionId ?? readMetadataString(item.metadata, "sourceSessionId"))
-                      ? ` · session ${shortId(item.sourceSessionId ?? readMetadataString(item.metadata, "sourceSessionId") ?? "")}`
-                      : ""}
-                  </span>
-                  {item.status === "proposed" ? (
+            )}
+            <div className="mc-next-runtime-actions">
+              <NativeButton
+                variant="secondary"
+                aria-label="Refresh evidence envelopes"
+                onClick={() => {
+                  setEvidence((current) => ({ ...current, loading: true, error: null }));
+                  void fetchEvidenceEnvelopes({ workspaceId: activeWorkspaceId, limit: 12 })
+                    .then((result) => {
+                      if (isMounted()) {
+                        setEvidence({ loading: false, error: null, items: result.items });
+                      }
+                    })
+                    .catch((error: Error) => {
+                      if (isMounted()) {
+                        setEvidence({ loading: false, error: describeApiError(error).summary, items: [] });
+                      }
+                    });
+                }}
+              >
+                <ShieldCheck size={16} aria-hidden="true" />
+                Refresh evidence
+              </NativeButton>
+            </div>
+          </NativeCard>
+        ) : null}
+        {view === "quality" ? (
+          <NativeCard
+            title="Recall quality"
+            subtitle="Recent feedback on stale, missing, irrelevant, and useful memory selections."
+            stats={[
+              { label: "Feedback", value: String(memoryFeedback.length) },
+              { label: "Open", value: String(openFeedbackCount) },
+            ]}
+          >
+            <SectionTruthNotice message={sectionErrors?.memoryFeedback ?? null} />
+            <div className="mc-next-approvals-risk-strip">
+              <StatusChip tone="success">Useful {usefulFeedbackCount}</StatusChip>
+              <StatusChip tone={openFeedbackCount > 0 ? "warning" : "muted"}>Open {openFeedbackCount}</StatusChip>
+              <StatusChip tone="muted">Issues {Math.max(0, memoryFeedback.length - usefulFeedbackCount)}</StatusChip>
+            </div>
+            {memoryFeedback.length > 0 ? (
+              <ul className="mc-next-approvals-compact-list">
+                {memoryFeedback.map((item) => (
+                  <li key={item.feedbackId}>
+                    <strong>{item.kind}</strong>
+                    {" · "}
+                    {item.status}
+                    {" · "}
+                    {formatFeedbackTarget(item.targetKind, item.targetRef ?? item.contextId ?? item.citationId)}
+                    {item.note ? <p>{item.note}</p> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState size="compact" title="No recall feedback has been recorded yet." />
+            )}
+          </NativeCard>
+        ) : null}
+        {view === "quality" ? (
+          <NativeCard
+            title="Quality queue"
+            subtitle="Open memory quality findings from lifecycle scans, feedback, and learning staleness checks."
+            stats={[
+              { label: "Issues", value: String(memoryQualityIssues.length) },
+              { label: "Open", value: String(openQualityIssueCount) },
+              { label: "High", value: String(highQualityIssueCount) },
+            ]}
+          >
+            <SectionTruthNotice message={sectionErrors?.memoryQualityIssues ?? null} />
+            <div className="mc-next-runtime-actions" role="group" aria-label="Memory quality actions">
+              <NativeButton
+                variant="default"
+                disabled={!memoryCanMutate || memory.busyKey === "memory-quality:scan"}
+                aria-label="Run memory quality scan"
+                onClick={() => void memory.scanMemoryQuality()}
+              >
+                <SearchCheck size={16} aria-hidden="true" />
+                Scan quality
+              </NativeButton>
+              <NativeButton
+                variant="secondary"
+                aria-label="Refresh memory quality issues"
+                onClick={() => void memory.reload()}
+              >
+                <RefreshCw size={16} aria-hidden="true" />
+                Refresh
+              </NativeButton>
+            </div>
+            <div className="mc-next-approvals-risk-strip">
+              <StatusChip tone={highQualityIssueCount > 0 ? "critical" : "muted"}>
+                High {highQualityIssueCount}
+              </StatusChip>
+              <StatusChip tone={openQualityIssueCount > 0 ? "warning" : "success"}>
+                Open {openQualityIssueCount}
+              </StatusChip>
+              <StatusChip tone="muted">
+                Closed {memoryQualityIssues.filter((item) => item.status !== "open").length}
+              </StatusChip>
+            </div>
+            {memoryQualityIssues.length > 0 ? (
+              <ul className="mc-next-approvals-compact-list">
+                {memoryQualityIssues.map((issue) => (
+                  <li key={issue.issueId}>
+                    <strong>{formatMemoryQualityIssueKind(issue.kind)}</strong>
+                    {" · "}
+                    {issue.status}
+                    {" · "}
+                    {issue.severity}
+                    {" · "}
+                    {formatFeedbackTarget(issue.targetKind, issue.targetRef)}
+                    <p>{issue.summary}</p>
                     <div
                       className="mc-next-runtime-actions"
                       role="group"
-                      aria-label={`Review trace memory candidate ${item.candidateId}`}
+                      aria-label={`Resolve memory quality issue ${issue.summary}`}
                     >
                       <NativeButton
                         variant="secondary"
-                        disabled={!memoryCanMutate || memory.busyKey?.startsWith(`trace:${item.candidateId}:`) === true}
-                        onClick={() => void memory.resolveTraceMemoryCandidate(item.candidateId, "promote")}
+                        disabled={!memoryCanMutate || issue.status === "resolved"}
+                        aria-label={`Resolve memory quality issue ${issue.summary}`}
+                        onClick={() =>
+                          void memory.patchQualityIssue(
+                            issue.issueId,
+                            "resolved",
+                            "Resolved from Library memory queue.",
+                          )
+                        }
                       >
-                        Promote
+                        Resolve
                       </NativeButton>
                       <NativeButton
                         variant="secondary"
-                        disabled={!memoryCanMutate || memory.busyKey?.startsWith(`trace:${item.candidateId}:`) === true}
-                        onClick={() => void memory.resolveTraceMemoryCandidate(item.candidateId, "reject")}
+                        disabled={!memoryCanMutate || issue.status === "dismissed"}
+                        aria-label={`Dismiss memory quality issue ${issue.summary}`}
+                        onClick={() =>
+                          void memory.patchQualityIssue(
+                            issue.issueId,
+                            "dismissed",
+                            "Dismissed from Library memory queue.",
+                          )
+                        }
                       >
-                        Reject
+                        Dismiss
                       </NativeButton>
                     </div>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState size="compact" title="No trace-derived candidates are waiting for review." />
-          )}
-        </NativeCard> : null}
-      </NativeGrid>
-      <NativeGrid>
-        {view === "graph" ? <NativeCard
-          title="Graph projection"
-          subtitle="Read-only entity and relation projection from MemoryLifecycleService; no external graph store."
-          stats={[
-            { label: "Readiness", value: graphProjection.readiness },
-            { label: "Connected", value: String(graphProjection.connectedEntityCount) },
-            { label: "Orphans", value: String(graphProjection.orphanEntityCount) },
-            { label: "Degraded", value: String(graphProjection.degradedRelationCount) },
-          ]}
-        >
-          <SectionTruthNotice
-            message={
-              sectionErrors?.memoryEntities ?? sectionErrors?.memoryRelations ?? sectionErrors?.memoryDecisions ?? null
-            }
-          />
-          <p className="mc-next-runtime-card-copy">{graphProjection.summary}</p>
-          <div className="mc-next-approvals-chip-row">
-            <StatusChip tone={graphProjection.readiness === "connected" ? "success" : "warning"}>
-              {graphProjection.activeRelationCount} active relations
-            </StatusChip>
-            <StatusChip tone="muted">{graphProjection.decisionCount} linked decisions</StatusChip>
-            <StatusChip tone="muted">{graphProjection.provenanceSourceCount} provenance sources</StatusChip>
-          </div>
-          <NativeList
-            density="compact"
-            items={graphProjection.topRelationTypes.map((item) => ({
-              title: item.relationType,
-              meta: `${item.count} relation${item.count === 1 ? "" : "s"}`,
-              body: "Relationship type projected from stored memory relation records.",
-            }))}
-            emptyLabel="No relation types are available for graph projection."
-          />
-        </NativeCard> : null}
-        {view === "graph" ? <NativeCard
-          title="Provenance map"
-          subtitle="Typed relationship coverage from MemoryLifecycleService snapshots; no separate graph store."
-          stats={[
-            { label: "Types", value: String(provenanceCoverage.filter((item) => item.records > 0).length) },
-            { label: "Links", value: String(memory.data?.memoryRelations.length ?? 0) },
-          ]}
-        >
-          <SectionTruthNotice
-            message={
-              sectionErrors?.memoryEntities ?? sectionErrors?.memoryRelations ?? sectionErrors?.memoryDecisions ?? null
-            }
-          />
-          <div className="mc-next-provenance-coverage-grid">
-            {provenanceCoverage.map((item) => (
-              <div key={item.id} className={`mc-next-provenance-coverage-item is-${item.status}`}>
-                <div>
-                  <strong>{item.label}</strong>
-                  <span>{item.records} records</span>
-                </div>
-                <p>{item.detail}</p>
-              </div>
-            ))}
-          </div>
-        </NativeCard> : null}
-        {view === "graph" ? <NativeCard
-          title="Memory entities"
-          subtitle="Typed memory records owned by MemoryLifecycleService and governed by the write gate."
-          stats={[
-            { label: "Entities", value: String(memory.data?.memoryEntities.length ?? 0) },
-            {
-              label: "Active",
-              value: String(memory.data?.memoryEntities.filter((item) => item.status === "active").length ?? 0),
-            },
-          ]}
-        >
-          <SectionTruthNotice message={sectionErrors?.memoryEntities ?? null} />
-          {(memory.data?.memoryEntities.length ?? 0) > 0 ? (
-            <ul className="mc-next-approvals-compact-list">
-              {memory.data?.memoryEntities.map((entity) => (
-                <li key={entity.id}>
-                  <strong>{entity.title}</strong>
-                  {" · "}
-                  {entity.entityType ?? entity.scope}
-                  {" · "}
-                  {entity.status}
-                  <div className="mc-next-approvals-chip-row">
-                    <StatusChip tone="default">{formatMemoryEngineeringKind("semantic")}</StatusChip>
-                    <StatusChip tone="muted">{entity.authority}</StatusChip>
-                  </div>
-                  <p>{formatEntityProvenanceSummary(entity)}</p>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState
-              size="compact"
-              title={memoryCanMutate ? "No typed entities have been recorded yet." : "Entity truth is currently gated."}
-            />
-          )}
-        </NativeCard> : null}
-        {view === "graph" ? <NativeCard
-          title="Relations"
-          subtitle="Entity links degrade visibly when an endpoint is forgotten or superseded."
-          stats={[
-            { label: "Relations", value: String(memory.data?.memoryRelations.length ?? 0) },
-            {
-              label: "Degraded",
-              value: String(memory.data?.memoryRelations.filter((item) => item.status !== "active").length ?? 0),
-            },
-          ]}
-        >
-          <SectionTruthNotice message={sectionErrors?.memoryRelations ?? null} />
-          {(memory.data?.memoryRelations.length ?? 0) > 0 ? (
-            <ul className="mc-next-approvals-compact-list">
-              {memory.data?.memoryRelations.map((relation) => (
-                <li key={relation.id}>
-                  <strong>{relation.title}</strong>
-                  {" · "}
-                  {relation.relationType}
-                  {" · "}
-                  {relation.status}
-                  <div className="mc-next-approvals-chip-row">
-                    <StatusChip tone="default">{formatMemoryEngineeringKind("semantic")}</StatusChip>
-                    <StatusChip tone="muted">{relation.scope}</StatusChip>
-                  </div>
-                  <p>{formatRelationProvenanceSummary(relation)}</p>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState
-              size="compact"
-              title={
-                memoryCanMutate ? "No typed relations have been recorded yet." : "Relation truth is currently gated."
-              }
-            />
-          )}
-        </NativeCard> : null}
-        {view === "graph" ? <NativeCard
-          title="Decision journal"
-          subtitle="Decisions carry alternatives, rationale, review timing, and retrospective evidence."
-          stats={[
-            { label: "Decisions", value: String(memory.data?.memoryDecisions.length ?? 0) },
-            { label: "Due", value: String(reviewableDecisions.length) },
-          ]}
-        >
-          <SectionTruthNotice message={sectionErrors?.memoryDecisions ?? null} />
-          {(memory.data?.memoryDecisions.length ?? 0) > 0 ? (
-            <ul className="mc-next-approvals-compact-list">
-              {memory.data?.memoryDecisions.map((decision) => (
-                <li key={decision.id} className="mc-next-decision-journal-item">
-                  <strong>{decision.title}</strong>
-                  <span>
-                    {decision.status} · {decision.retrospective ? "reviewed" : formatMaybeDateTime(decision.reviewAt)}
-                    {" · "}
-                    {formatDecisionProvenanceSummary(decision)}
-                  </span>
-                  <div className="mc-next-approvals-chip-row">
-                    <StatusChip tone="default">{formatMemoryEngineeringKind("semantic")}</StatusChip>
-                    <StatusChip tone="muted">{decision.scope}</StatusChip>
-                  </div>
-                  <DecisionJournalFacts decision={decision} />
-                  {!decision.retrospective && decision.reviewAt ? (
-                    <NativeButton
-                      variant="secondary"
-                      disabled={!memoryCanMutate || memory.busyKey === `decision:${decision.id}:retrospective`}
-                      aria-label={`Record review for decision ${decision.title}`}
-                      onClick={() => void memory.reviewDecision(decision.id)}
-                    >
-                      Record review
-                    </NativeButton>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState
-              size="compact"
-              title={
-                memoryCanMutate ? "No decision records have been recorded yet." : "Decision truth is currently gated."
-              }
-            />
-          )}
-        </NativeCard> : null}
-      </NativeGrid>
-      <NativeGrid>
-        {view === "maintenance" ? <NativeCard
-          title="Maintenance posture"
-          subtitle="Policy, runs, recommendations, and durable linkage stay visible as operator truth."
-          stats={[
-            {
-              label: "Enabled",
-              value: memoryAdminTruthUnknown || !memory.data?.maintenanceStatus
-                ? "unavailable"
-                : memory.data?.maintenanceStatus?.policy.enabled
-                  ? "yes"
-                  : "no",
-            },
-            { label: "Durable ready", value: memoryAdminTruthUnknown ? "unavailable" : memory.data?.maintenanceDurableReady ? "yes" : "no" },
-          ]}
-        >
-          <SectionTruthNotice
-            message={
-              sectionErrors?.maintenanceStatus ??
-              sectionErrors?.maintenanceRuns ??
-              sectionErrors?.maintenanceRecommendations ??
-              (memoryAdminTruthUnknown ? "Maintenance state is unavailable until settings truth reloads." : null)
-            }
-          />
-          {memory.data?.maintenanceEnabled ? (
-            <>
-              <NativeButton variant="outline" aria-expanded={policyEditing} onClick={() => leave.request(() => setPolicyEditing((open) => !open), [policyEditor.key])}>{policyEditing ? "Close policy editor" : policyEditor.isDirty ? "Resume policy edit · Unsaved" : "Edit policy"}</NativeButton>
-              {policyEditing && policyEditor.value ? (
-                <div className="mc-next-settings-field-grid" role="group" aria-label="Memory maintenance policy">
-                  <label className="mc-next-settings-field" htmlFor={policyEnabledId}>
-                    <span>Enabled</span>
-                    <select
-                      id={policyEnabledId}
-                      className="mc-next-settings-input"
-                      value={policyEditor.value.enabled ? "true" : "false"}
-                      disabled={!maintenanceControlsReady}
-                      aria-label="Maintenance policy enabled state"
-                      onChange={(event) => {
-
-                        policyEditor.setValue((current) =>
-                          current ? { ...current, enabled: event.target.value === "true" } : current,
-                        );
-                      }}
-                    >
-                      <option value="true">Enabled</option>
-                      <option value="false">Disabled</option>
-                    </select>
-                  </label>
-                  <label className="mc-next-settings-field" htmlFor={policyRunModeId}>
-                    <span>Run mode</span>
-                    <select
-                      id={policyRunModeId}
-                      className="mc-next-settings-input"
-                      value={policyEditor.value.runMode}
-                      disabled={!maintenanceControlsReady}
-                      aria-label="Maintenance run mode"
-                      onChange={(event) => {
-
-                        policyEditor.setValue((current) =>
-                          current
-                            ? {
-                                ...current,
-                                runMode: event.target.value as typeof current.runMode,
-                              }
-                            : current,
-                        );
-                      }}
-                    >
-                      <option value="manual">manual</option>
-                      <option value="scheduled">scheduled</option>
-                      <option value="hybrid">hybrid</option>
-                    </select>
-                  </label>
-                  <label className="mc-next-settings-field" htmlFor={policyProviderId}>
-                    <span>Provider</span>
-                    <input
-                      id={policyProviderId}
-                      type="text"
-                      className="mc-next-settings-input"
-                      value={policyEditor.value.providerId}
-                      disabled={!maintenanceControlsReady}
-                      aria-label="Maintenance provider identifier"
-                      onChange={(event) => {
-
-                        policyEditor.setValue((current) =>
-                          current ? { ...current, providerId: event.target.value } : current,
-                        );
-                      }}
-                    />
-                  </label>
-                  <label className="mc-next-settings-field" htmlFor={policyModelId}>
-                    <span>Model</span>
-                    <input
-                      id={policyModelId}
-                      type="text"
-                      className="mc-next-settings-input"
-                      value={policyEditor.value.model}
-                      disabled={!maintenanceControlsReady}
-                      aria-label="Maintenance model identifier"
-                      onChange={(event) => {
-
-                        policyEditor.setValue((current) =>
-                          current ? { ...current, model: event.target.value } : current,
-                        );
-                      }}
-                    />
-                  </label>
-                </div>
-              ) : null}
-              {policyEditing && policyEditor.hasRemoteChanges ? <NoticeBanner tone="warning" message="The policy changed since editing began. Your draft is preserved." /> : null}
-              {policyEditing && policyEditor.hasRemoteChanges ? <details><summary>Review current policy</summary><dl>{canonicalPolicy ? Object.entries(toMemoryMaintenancePolicyDraft(canonicalPolicy)).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>) : null}</dl><NativeButton onClick={policyEditor.rebaseToCurrent}>Use this version and keep my draft</NativeButton></details> : null}
-              <div className="mc-next-runtime-actions" role="group" aria-label="Memory maintenance actions">
-                <NativeButton
-                  variant="default"
-                  disabled={!maintenanceControlsReady || memory.busyKey === "maintenance:run"}
-                  aria-label="Run memory maintenance now"
-                  onClick={() => void memory.runMaintenance()}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState size="compact" title="No memory quality issues are queued." />
+            )}
+          </NativeCard>
+        ) : null}
+        {view === "quality" ? (
+          <NativeCard
+            title="Recall workbench"
+            subtitle="Prompt-level retrieval benchmark for explicit memory recall."
+            stats={[
+              { label: "Runs", value: String(recallBenchmark.result?.itemCount ?? 0) },
+              {
+                label: "Overlap",
+                value: recallBenchmark.result ? recallBenchmark.result.avgOverlapScore.toFixed(2) : "n/a",
+              },
+            ]}
+          >
+            <div className="mc-next-settings-field-grid" role="group" aria-label="Recall benchmark prompt">
+              <label className="mc-next-settings-field span-2" htmlFor={recallPromptId}>
+                <span>Probe</span>
+                <select
+                  id={recallPromptId}
+                  className="mc-next-settings-input"
+                  value={recallPrompt}
+                  onChange={(event) => setRecallPrompt(event.target.value)}
+                  aria-label="Recall benchmark prompt"
                 >
-                  Run maintenance now
-                </NativeButton>
-                <NativeButton
-                  variant="default"
-                  hidden={!policyEditing}
-                  disabled={!maintenanceControlsReady || !policyEditor.isDirty || memory.busyKey === "maintenance:policy"}
-                  aria-label="Save memory maintenance policy"
-                  onClick={() => void savePolicyDraft()}
-                >
-                  Save policy
-                </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  aria-label="Refresh memory maintenance state"
-                  onClick={() => void memory.reload()}
-                >
-                  <RefreshCw size={16} aria-hidden="true" />
-                  Refresh
-                </NativeButton>
-              </div>
-              <div className="mc-next-runtime-metric-grid">
-                <div className="mc-next-runtime-metric">
-                  <span>Changed sessions</span>
-                  <strong>{memory.data?.maintenanceStatus ? String(memory.data.maintenanceStatus.state.changedSessionCount) : "Unavailable"}</strong>
-                  <p>waiting for next run</p>
-                </div>
-                <div className="mc-next-runtime-metric">
-                  <span>Next due</span>
-                  <strong>{formatMaybeDateTime(memory.data?.maintenanceStatus?.nextDueAt)}</strong>
-                  <p>{memory.data?.maintenanceStatus?.policy.timeZone ?? "No timezone"}</p>
-                </div>
-                <div className="mc-next-runtime-metric">
-                  <span>Last run</span>
-                  <strong>{memory.data?.maintenanceStatus ? memory.data.maintenanceStatus.lastRun?.status ?? "No recorded run" : "Unavailable"}</strong>
-                  <p>{formatMaybeDateTime(memory.data?.maintenanceStatus?.lastRun?.updatedAt)}</p>
-                </div>
-              </div>
-            </>
-          ) : (
-            <EmptyState
-              size="compact"
-              title={
-                memoryAdminTruthUnknown
-                  ? "Memory maintenance truth is unavailable until backend settings truth reloads."
-                  : "Memory maintenance is not enabled in this workspace."
-              }
-            />
-          )}
-        </NativeCard> : null}
-        {view === "maintenance" ? <NativeCard
-          title="Maintenance review"
-          subtitle="Review proposed memory changes before accepting them, with durable-run linkage kept alongside the queue."
-        >
-          <div className="mc-next-settings-grid">
-            <div className="mc-next-settings-stack">
-              <section className="mc-next-memory-review-queue" aria-label="Memory recommendation review queue">
-                <header>
-                  <div>
-                    <span>Review queue</span>
-                    <strong>{memory.data?.maintenanceRecommendations.length ?? 0} recommendations</strong>
-                  </div>
-                  <p>Accept or reject only after checking the rationale and proposed fields.</p>
-                </header>
-                {(memory.data?.maintenanceRecommendations.length ?? 0) > 0 ? (
-                  <ul>
-                    {memory.data?.maintenanceRecommendations.map((item) => (
-                      <li key={item.recommendationId}>
-                        <div className="mc-next-memory-review-head">
-                          <div>
-                            <span>{item.kind.replaceAll("_", " ")}</span>
-                            <strong>{item.summary}</strong>
-                          </div>
-                          <StatusChip tone={item.status === "queued" ? "warning" : "muted"}>{item.status}</StatusChip>
-                        </div>
-                        <p>{item.rationale ?? "No additional rationale was recorded for this recommendation."}</p>
-                        <dl>
-                          <div>
-                            <dt>Created</dt>
-                            <dd>{formatShortDateTime(item.createdAt)}</dd>
-                          </div>
-                          <div>
-                            <dt>Updated</dt>
-                            <dd>{formatShortDateTime(item.updatedAt)}</dd>
-                          </div>
-                        </dl>
-                        <details>
-                          <summary>Inspect proposed changes</summary>
-                          {Object.keys(item.proposedPatch).length > 0 ? (
-                            <ul className="mc-next-memory-review-patch">
-                              {Object.entries(item.proposedPatch).map(([field, value]) => (
-                                <li key={field}>
-                                  <span>{field.replace(/([a-z])([A-Z])/g, "$1 $2")}</span>
-                                  <strong>{formatRecommendationPatchValue(value)}</strong>
-                                </li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <p>No field-level patch was recorded.</p>
-                          )}
-                        </details>
-                        <div
-                          className="mc-next-runtime-actions"
-                          role="group"
-                          aria-label={`Resolve recommendation ${item.kind}`}
-                        >
-                          <NativeButton
-                            variant="default"
-                            disabled={!maintenanceControlsReady || item.status !== "queued"}
-                            aria-label={`Accept recommendation ${item.kind}: ${item.summary}`}
-                            onClick={() => void memory.resolveRecommendation(item.recommendationId, "accept")}
-                          >
-                            Accept
-                          </NativeButton>
-                          <NativeButton
-                            variant="secondary"
-                            disabled={!maintenanceControlsReady || item.status !== "queued"}
-                            aria-label={`Reject recommendation ${item.kind}: ${item.summary}`}
-                            onClick={() => void memory.resolveRecommendation(item.recommendationId, "reject")}
-                          >
-                            Reject
-                          </NativeButton>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <EmptyState size="compact" title="No maintenance recommendations." />
-                )}
-              </section>
-              <div className="mc-next-settings-code-block">
-                <span>Recent runs</span>
-                {(memory.data?.maintenanceRuns.length ?? 0) > 0 ? (
-                  <div
-                    className="mc-next-settings-selectable-list"
-                    role="listbox"
-                    aria-label="Recent maintenance runs"
-                    aria-activedescendant={
-                      memory.selectedRunId ? `memory-maintenance-run-${memory.selectedRunId}` : undefined
-                    }
-                  >
-                    {memory.data?.maintenanceRuns.map((run) => {
-                      const isSelected = memory.selectedRunId === run.runId;
-                      return (
-                        <button
-                          key={run.runId}
-                          id={`memory-maintenance-run-${run.runId}`}
-                          type="button"
-                          role="option"
-                          aria-selected={isSelected}
-                          aria-pressed={isSelected}
-                          aria-current={isSelected ? "true" : undefined}
-                          aria-label={`Maintenance run ${run.status}, updated ${formatShortDateTime(run.updatedAt)}, ${run.summary || run.triggerSource}`}
-                          className={`mc-next-settings-selectable${isSelected ? " active" : ""}`}
-                          onClick={() => memory.setSelectedRunId(run.runId)}
-                        >
-                          <div className="mc-next-settings-selectable-head">
-                            <strong>{run.status}</strong>
-                            <span>{formatShortDateTime(run.updatedAt)}</span>
-                          </div>
-                          <p>{run.summary || run.triggerSource}</p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <EmptyState size="compact" title="No maintenance runs yet." />
-                )}
-              </div>
+                  {RECALL_BENCHMARK_PROMPTS.map((item) => (
+                    <option key={item.label} value={item.prompt}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
-            <div className="mc-next-settings-stack">
-              <div className="mc-next-settings-code-block">
-                <span>Selected run detail</span>
-                <SectionTruthNotice
-                  message={
-                    sectionErrors?.selectedRunProvenance ??
-                    sectionErrors?.selectedDurableRun ??
-                    sectionErrors?.selectedDurableTimeline ??
-                    null
-                  }
+            <div className="mc-next-runtime-actions" role="group" aria-label="Recall benchmark actions">
+              <NativeButton
+                variant="default"
+                disabled={recallBenchmark.loading}
+                aria-label="Run recall benchmark"
+                onClick={runRecallProbe}
+              >
+                Run probe
+              </NativeButton>
+            </div>
+            <SectionTruthNotice message={recallBenchmark.error} />
+            {recallBenchmark.result ? (
+              <>
+                <div className="mc-next-runtime-metric-grid">
+                  <div className="mc-next-runtime-metric">
+                    <span>Latency</span>
+                    <strong>{Math.round(recallBenchmark.result.avgLatencyMs)}ms</strong>
+                    <p>{recallBenchmark.result.retrievalStrategies.join(", ") || "no strategy"}</p>
+                  </div>
+                  <div className="mc-next-runtime-metric">
+                    <span>Citations</span>
+                    <strong>{String(recallBenchmark.result.items[0]?.citationsCount ?? 0)}</strong>
+                    <p>{recallBenchmark.result.items[0]?.qmdStatus ?? "no qmd"}</p>
+                  </div>
+                </div>
+                <NativeList
+                  density="compact"
+                  items={recallBenchmark.result.items.map((item) => ({
+                    title: item.status,
+                    meta: `${item.citationsCount} citations · ${item.overlapScore.toFixed(2)} overlap`,
+                    body: item.semanticCoverageNote ?? item.error ?? item.prompt,
+                  }))}
+                  emptyLabel="No recall probe results."
+                  maxHeight="min(28vh, 16rem)"
+                  ariaLabel="Recall benchmark results"
                 />
-                {memory.selectedRun ? (
-                  <>
-                    <p>
-                      {memory.selectedRun.status} · {formatMaybeDateTime(memory.selectedRun.updatedAt)}
-                    </p>
-                    <p>Durable run: {memory.selectedRun.durableRunId ?? "none"}</p>
-                    {memory.selectedRun.durableRunId ? (
-                      <div className="mc-next-runtime-actions" role="group" aria-label="Memory run trace actions">
+              </>
+            ) : (
+              <EmptyState
+                size="compact"
+                title={recallBenchmark.loading ? "Running recall probe." : "No recall probe has run yet."}
+              />
+            )}
+          </NativeCard>
+        ) : null}
+        {view === "quality" ? (
+          <NativeCard
+            title="Trace candidates"
+            subtitle="Trace-derived memory stays proposed until promotion passes operator authority and write-gate checks."
+            stats={[
+              { label: "Candidates", value: String(traceMemoryCandidates.length) },
+              { label: "Proposed", value: String(proposedTraceCandidateCount) },
+            ]}
+          >
+            <SectionTruthNotice message={sectionErrors?.traceMemoryCandidates ?? null} />
+            {(traceMemoryCandidates.length ?? 0) > 0 ? (
+              <ul className="mc-next-approvals-compact-list">
+                {traceMemoryCandidates.map((item) => (
+                  <li key={item.candidateId}>
+                    <strong>{item.candidateType}</strong>
+                    {" · "}
+                    {item.status}
+                    {" · "}
+                    {formatConfidence(item.confidence)}
+                    <div className="mc-next-approvals-chip-row">
+                      <StatusChip tone="default">
+                        {formatMemoryEngineeringKind(classifyTraceMemoryCandidateKind(item))}
+                      </StatusChip>
+                      <StatusChip tone="muted">{item.candidateType}</StatusChip>
+                    </div>
+                    <p>{item.proposedInsight}</p>
+                    <span>
+                      {formatSourceRefCount(item.sourceRefs.length)}
+                      {item.authority === "external_channel" ? " · external channel" : ""}
+                      {(item.sourceSessionId ?? readMetadataString(item.metadata, "sourceSessionId"))
+                        ? ` · session ${shortId(item.sourceSessionId ?? readMetadataString(item.metadata, "sourceSessionId") ?? "")}`
+                        : ""}
+                    </span>
+                    {item.status === "proposed" ? (
+                      <div
+                        className="mc-next-runtime-actions"
+                        role="group"
+                        aria-label={`Review trace memory candidate ${item.candidateId}`}
+                      >
                         <NativeButton
                           variant="secondary"
-                          onClick={() =>
-                            navigate({
-                              area: "ops",
-                              section: "sessions",
-                              view: "run-detail",
-                              runId: memory.selectedRun?.durableRunId,
-                              theme: route.theme,
-                            })
+                          disabled={
+                            !memoryCanMutate || memory.busyKey?.startsWith(`trace:${item.candidateId}:`) === true
                           }
+                          onClick={() => void memory.resolveTraceMemoryCandidate(item.candidateId, "promote")}
                         >
-                          <Waypoints size={16} />
-                          Open Run Detail
+                          Promote
+                        </NativeButton>
+                        <NativeButton
+                          variant="secondary"
+                          disabled={
+                            !memoryCanMutate || memory.busyKey?.startsWith(`trace:${item.candidateId}:`) === true
+                          }
+                          onClick={() => void memory.resolveTraceMemoryCandidate(item.candidateId, "reject")}
+                        >
+                          Reject
                         </NativeButton>
                       </div>
                     ) : null}
-                    <p>
-                      Sources {memory.data?.selectedRunProvenance?.sources.length ?? 0} · Changes{" "}
-                      {memory.data?.selectedRunProvenance?.changes.length ?? 0}
-                    </p>
-                    {(memory.data?.selectedRunProvenance?.sources.length ?? 0) > 0 ? (
-                      <ul className="mc-next-approvals-compact-list">
-                        {memory.data?.selectedRunProvenance?.sources.map((source) => (
-                          <li key={source.sourceId}>
-                            <strong>{source.sourceKind}</strong>
-                            {" · "}
-                            {source.sourceRef}
-                            {source.excerpt ? <p>{source.excerpt}</p> : null}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    {(memory.data?.selectedRunProvenance?.changes.length ?? 0) > 0 ? (
-                      <ul className="mc-next-approvals-compact-list">
-                        {memory.data?.selectedRunProvenance?.changes.map((change) => (
-                          <li key={change.changeId}>
-                            <strong>{change.changeKind}</strong>
-                            {" · "}
-                            {change.targetKind}:{change.targetRef}
-                            <p>{change.summary}</p>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    {memory.data?.selectedDurableRun ? (
-                      <p>Durable status: {memory.data.selectedDurableRun.status}</p>
-                    ) : null}
-                  </>
-                ) : (
-                  <EmptyState size="compact" title="Select a maintenance run to inspect provenance." />
-                )}
-              </div>
-            </div>
-          </div>
-        </NativeCard> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState size="compact" title="No trace-derived candidates are waiting for review." />
+            )}
+          </NativeCard>
+        ) : null}
       </NativeGrid>
       <NativeGrid>
-        {view === "quality" ? <NativeCard
-          title="QMD and context posture"
-          subtitle="Recent context packs and efficiency stay visible, but secondary to memory item truth."
-          stats={[
-            { label: "Runs", value: String(memory.data?.qmdStats?.totalRuns ?? 0) },
-            { label: "Impact", value: memory.data?.qmdStats ? describeQmdImpact(memory.data.qmdStats) : "Stable" },
-          ]}
-        >
-          <SectionTruthNotice message={sectionErrors?.qmdStats ?? null} />
-          <div className="mc-next-runtime-metric-grid">
-            <div className="mc-next-runtime-metric">
-              <span>Original tokens</span>
-              <strong>{String(memory.data?.qmdStats?.originalTokenEstimate ?? 0)}</strong>
-              <p>{formatTokenDelta(memory.data?.qmdStats?.netTokenDelta ?? 0)}</p>
+        {view === "graph" ? (
+          <NativeCard
+            title="Graph projection"
+            subtitle="Read-only entity and relation projection from MemoryLifecycleService; no external graph store."
+            stats={[
+              { label: "Readiness", value: graphProjection.readiness },
+              { label: "Connected", value: String(graphProjection.connectedEntityCount) },
+              { label: "Orphans", value: String(graphProjection.orphanEntityCount) },
+              { label: "Degraded", value: String(graphProjection.degradedRelationCount) },
+            ]}
+          >
+            <SectionTruthNotice
+              message={
+                sectionErrors?.memoryEntities ??
+                sectionErrors?.memoryRelations ??
+                sectionErrors?.memoryDecisions ??
+                null
+              }
+            />
+            <p className="mc-next-runtime-card-copy">{graphProjection.summary}</p>
+            <div className="mc-next-approvals-chip-row">
+              <StatusChip tone={graphProjection.readiness === "connected" ? "success" : "warning"}>
+                {graphProjection.activeRelationCount} active relations
+              </StatusChip>
+              <StatusChip tone="muted">{graphProjection.decisionCount} linked decisions</StatusChip>
+              <StatusChip tone="muted">{graphProjection.provenanceSourceCount} provenance sources</StatusChip>
             </div>
-            <div className="mc-next-runtime-metric">
-              <span>Distilled tokens</span>
-              <strong>{String(memory.data?.qmdStats?.distilledTokenEstimate ?? 0)}</strong>
-              <p>{(memory.data?.qmdStats?.compressionPercent ?? 0).toFixed(1)}% compression</p>
-            </div>
-          </div>
-          {recentContextPacks.length > 0 ? (
-            <ul className="mc-next-approvals-compact-list">
-              {recentContextPacks.map((item) => (
-                <li key={item.contextId}>
-                  <strong>{item.scope}</strong>
-                  {" · "}
-                  {formatShortDateTime(item.createdAt)}
-                  {" · "}
-                  {formatKnowledgeCitationSummary(item.citations)}
-                  <div className="mc-next-approvals-chip-row">
-                    <StatusChip tone="default">{formatMemoryEngineeringKind("working")}</StatusChip>
-                    <StatusChip tone="muted">
-                      selected {item.quality.assembly?.selectedCandidateCount ?? item.citations.length}
-                    </StatusChip>
+            <NativeList
+              density="compact"
+              items={graphProjection.topRelationTypes.map((item) => ({
+                title: item.relationType,
+                meta: `${item.count} relation${item.count === 1 ? "" : "s"}`,
+                body: "Relationship type projected from stored memory relation records.",
+              }))}
+              emptyLabel="No relation types are available for graph projection."
+            />
+          </NativeCard>
+        ) : null}
+        {view === "graph" ? (
+          <NativeCard
+            title="Provenance map"
+            subtitle="Typed relationship coverage from MemoryLifecycleService snapshots; no separate graph store."
+            stats={[
+              { label: "Types", value: String(provenanceCoverage.filter((item) => item.records > 0).length) },
+              { label: "Links", value: String(memory.data?.memoryRelations.length ?? 0) },
+            ]}
+          >
+            <SectionTruthNotice
+              message={
+                sectionErrors?.memoryEntities ??
+                sectionErrors?.memoryRelations ??
+                sectionErrors?.memoryDecisions ??
+                null
+              }
+            />
+            <div className="mc-next-provenance-coverage-grid">
+              {provenanceCoverage.map((item) => (
+                <div key={item.id} className={`mc-next-provenance-coverage-item is-${item.status}`}>
+                  <div>
+                    <strong>{item.label}</strong>
+                    <span>{item.records} records</span>
                   </div>
-                </li>
+                  <p>{item.detail}</p>
+                </div>
               ))}
-            </ul>
-          ) : (
-            <EmptyState size="compact" title="No recent context packs." />
-          )}
-          <div className="mc-next-runtime-metric-grid">
-            <div className="mc-next-runtime-metric">
-              <span>Why-used citations</span>
-              <strong>{String(recentCitationCount)}</strong>
-              <p>Recent context-pack provenance</p>
             </div>
-          </div>
-          <NativeList
-            density="compact"
-            items={whyUsedRows.map((item) => ({
-              title: item.label,
-              meta: item.meta,
-              body: item.description,
-            }))}
-            emptyLabel="No citation-level why-used evidence is attached to recent context packs."
-            maxHeight="min(32vh, 18rem)"
-            ariaLabel="Memory why-used citations"
-          />
-        </NativeCard> : null}
-        {sourcesOpen ? <NativeCard
-          title="Memory files"
-          subtitle="File and QMD evidence stay available as secondary context, not the main memory story."
-        >
-          <SectionTruthNotice message={sectionErrors?.files ?? null} />
-          {(fileAreas.length ?? 0) > 0 ? (
-            <ul className="mc-next-approvals-compact-list">
-              {fileAreas.map((area) => (
-                <li key={area.area}>
-                  <strong>{area.area}</strong>
-                  {" · "}
-                  {area.files.length} files
-                  {" · "}
-                  {formatBytes(area.totalBytes)}
-                  {" · "}
-                  {formatMaybeDateTime(area.latestModifiedAt)}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState size="compact" title="No memory file subspaces discovered." />
-          )}
-        </NativeCard> : null}
+          </NativeCard>
+        ) : null}
+        {view === "graph" ? (
+          <NativeCard
+            title="Memory entities"
+            subtitle="Typed memory records owned by MemoryLifecycleService and governed by the write gate."
+            stats={[
+              { label: "Entities", value: String(memory.data?.memoryEntities.length ?? 0) },
+              {
+                label: "Active",
+                value: String(memory.data?.memoryEntities.filter((item) => item.status === "active").length ?? 0),
+              },
+            ]}
+          >
+            <SectionTruthNotice message={sectionErrors?.memoryEntities ?? null} />
+            {(memory.data?.memoryEntities.length ?? 0) > 0 ? (
+              <ul className="mc-next-approvals-compact-list">
+                {memory.data?.memoryEntities.map((entity) => (
+                  <li key={entity.id}>
+                    <strong>{entity.title}</strong>
+                    {" · "}
+                    {entity.entityType ?? entity.scope}
+                    {" · "}
+                    {entity.status}
+                    <div className="mc-next-approvals-chip-row">
+                      <StatusChip tone="default">{formatMemoryEngineeringKind("semantic")}</StatusChip>
+                      <StatusChip tone="muted">{entity.authority}</StatusChip>
+                    </div>
+                    <p>{formatEntityProvenanceSummary(entity)}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                size="compact"
+                title={
+                  memoryCanMutate ? "No typed entities have been recorded yet." : "Entity truth is currently gated."
+                }
+              />
+            )}
+          </NativeCard>
+        ) : null}
+        {view === "graph" ? (
+          <NativeCard
+            title="Relations"
+            subtitle="Entity links degrade visibly when an endpoint is forgotten or superseded."
+            stats={[
+              { label: "Relations", value: String(memory.data?.memoryRelations.length ?? 0) },
+              {
+                label: "Degraded",
+                value: String(memory.data?.memoryRelations.filter((item) => item.status !== "active").length ?? 0),
+              },
+            ]}
+          >
+            <SectionTruthNotice message={sectionErrors?.memoryRelations ?? null} />
+            {(memory.data?.memoryRelations.length ?? 0) > 0 ? (
+              <ul className="mc-next-approvals-compact-list">
+                {memory.data?.memoryRelations.map((relation) => (
+                  <li key={relation.id}>
+                    <strong>{relation.title}</strong>
+                    {" · "}
+                    {relation.relationType}
+                    {" · "}
+                    {relation.status}
+                    <div className="mc-next-approvals-chip-row">
+                      <StatusChip tone="default">{formatMemoryEngineeringKind("semantic")}</StatusChip>
+                      <StatusChip tone="muted">{relation.scope}</StatusChip>
+                    </div>
+                    <p>{formatRelationProvenanceSummary(relation)}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                size="compact"
+                title={
+                  memoryCanMutate ? "No typed relations have been recorded yet." : "Relation truth is currently gated."
+                }
+              />
+            )}
+          </NativeCard>
+        ) : null}
+        {view === "graph" ? (
+          <NativeCard
+            title="Decision journal"
+            subtitle="Decisions carry alternatives, rationale, review timing, and retrospective evidence."
+            stats={[
+              { label: "Decisions", value: String(memory.data?.memoryDecisions.length ?? 0) },
+              { label: "Due", value: String(reviewableDecisions.length) },
+            ]}
+          >
+            <SectionTruthNotice message={sectionErrors?.memoryDecisions ?? null} />
+            {(memory.data?.memoryDecisions.length ?? 0) > 0 ? (
+              <ul className="mc-next-approvals-compact-list">
+                {memory.data?.memoryDecisions.map((decision) => (
+                  <li key={decision.id} className="mc-next-decision-journal-item">
+                    <strong>{decision.title}</strong>
+                    <span>
+                      {decision.status} · {decision.retrospective ? "reviewed" : formatMaybeDateTime(decision.reviewAt)}
+                      {" · "}
+                      {formatDecisionProvenanceSummary(decision)}
+                    </span>
+                    <div className="mc-next-approvals-chip-row">
+                      <StatusChip tone="default">{formatMemoryEngineeringKind("semantic")}</StatusChip>
+                      <StatusChip tone="muted">{decision.scope}</StatusChip>
+                    </div>
+                    <DecisionJournalFacts decision={decision} />
+                    {!decision.retrospective && decision.reviewAt ? (
+                      <NativeButton
+                        variant="secondary"
+                        disabled={!memoryCanMutate || memory.busyKey === `decision:${decision.id}:retrospective`}
+                        aria-label={`Record review for decision ${decision.title}`}
+                        onClick={() => void memory.reviewDecision(decision.id)}
+                      >
+                        Record review
+                      </NativeButton>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                size="compact"
+                title={
+                  memoryCanMutate ? "No decision records have been recorded yet." : "Decision truth is currently gated."
+                }
+              />
+            )}
+          </NativeCard>
+        ) : null}
+      </NativeGrid>
+      <NativeGrid>
+        {view === "maintenance" ? (
+          <NativeCard
+            title="Maintenance posture"
+            subtitle="Policy, runs, recommendations, and durable linkage stay visible as operator truth."
+            stats={[
+              {
+                label: "Enabled",
+                value:
+                  memoryAdminTruthUnknown || !memory.data?.maintenanceStatus
+                    ? "unavailable"
+                    : memory.data?.maintenanceStatus?.policy.enabled
+                      ? "yes"
+                      : "no",
+              },
+              {
+                label: "Durable ready",
+                value: memoryAdminTruthUnknown ? "unavailable" : memory.data?.maintenanceDurableReady ? "yes" : "no",
+              },
+            ]}
+          >
+            <SectionTruthNotice
+              message={
+                sectionErrors?.maintenanceStatus ??
+                sectionErrors?.maintenanceRuns ??
+                sectionErrors?.maintenanceRecommendations ??
+                (memoryAdminTruthUnknown ? "Maintenance state is unavailable until settings truth reloads." : null)
+              }
+            />
+            {memory.data?.maintenanceEnabled ? (
+              <>
+                <NativeButton
+                  variant="outline"
+                  aria-expanded={policyEditing}
+                  onClick={() => leave.request(() => setPolicyEditing((open) => !open), [policyEditor.key])}
+                >
+                  {policyEditing
+                    ? "Close policy editor"
+                    : policyEditor.isDirty
+                      ? "Resume policy edit · Unsaved"
+                      : "Edit policy"}
+                </NativeButton>
+                {policyEditing && policyEditor.value ? (
+                  <div className="mc-next-settings-field-grid" role="group" aria-label="Memory maintenance policy">
+                    <label className="mc-next-settings-field" htmlFor={policyEnabledId}>
+                      <span>Enabled</span>
+                      <select
+                        id={policyEnabledId}
+                        className="mc-next-settings-input"
+                        value={policyEditor.value.enabled ? "true" : "false"}
+                        disabled={!maintenanceControlsReady}
+                        aria-label="Maintenance policy enabled state"
+                        onChange={(event) => {
+                          policyEditor.setValue((current) =>
+                            current ? { ...current, enabled: event.target.value === "true" } : current,
+                          );
+                        }}
+                      >
+                        <option value="true">Enabled</option>
+                        <option value="false">Disabled</option>
+                      </select>
+                    </label>
+                    <label className="mc-next-settings-field" htmlFor={policyRunModeId}>
+                      <span>Run mode</span>
+                      <select
+                        id={policyRunModeId}
+                        className="mc-next-settings-input"
+                        value={policyEditor.value.runMode}
+                        disabled={!maintenanceControlsReady}
+                        aria-label="Maintenance run mode"
+                        onChange={(event) => {
+                          policyEditor.setValue((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  runMode: event.target.value as typeof current.runMode,
+                                }
+                              : current,
+                          );
+                        }}
+                      >
+                        <option value="manual">manual</option>
+                        <option value="scheduled">scheduled</option>
+                        <option value="hybrid">hybrid</option>
+                      </select>
+                    </label>
+                    <label className="mc-next-settings-field" htmlFor={policyProviderId}>
+                      <span>Provider</span>
+                      <input
+                        id={policyProviderId}
+                        type="text"
+                        className="mc-next-settings-input"
+                        value={policyEditor.value.providerId}
+                        disabled={!maintenanceControlsReady}
+                        aria-label="Maintenance provider identifier"
+                        onChange={(event) => {
+                          policyEditor.setValue((current) =>
+                            current ? { ...current, providerId: event.target.value } : current,
+                          );
+                        }}
+                      />
+                    </label>
+                    <label className="mc-next-settings-field" htmlFor={policyModelId}>
+                      <span>Model</span>
+                      <input
+                        id={policyModelId}
+                        type="text"
+                        className="mc-next-settings-input"
+                        value={policyEditor.value.model}
+                        disabled={!maintenanceControlsReady}
+                        aria-label="Maintenance model identifier"
+                        onChange={(event) => {
+                          policyEditor.setValue((current) =>
+                            current ? { ...current, model: event.target.value } : current,
+                          );
+                        }}
+                      />
+                    </label>
+                  </div>
+                ) : null}
+                {policyEditing && policyEditor.hasRemoteChanges ? (
+                  <NoticeBanner
+                    tone="warning"
+                    message="The policy changed since editing began. Your draft is preserved."
+                  />
+                ) : null}
+                {policyEditing && policyEditor.hasRemoteChanges ? (
+                  <details>
+                    <summary>Review current policy</summary>
+                    <dl>
+                      {canonicalPolicy
+                        ? Object.entries(toMemoryMaintenancePolicyDraft(canonicalPolicy)).map(([key, value]) => (
+                            <div key={key}>
+                              <dt>{key}</dt>
+                              <dd>{String(value)}</dd>
+                            </div>
+                          ))
+                        : null}
+                    </dl>
+                    <NativeButton onClick={policyEditor.rebaseToCurrent}>
+                      Use this version and keep my draft
+                    </NativeButton>
+                  </details>
+                ) : null}
+                <div className="mc-next-runtime-actions" role="group" aria-label="Memory maintenance actions">
+                  <NativeButton
+                    variant="default"
+                    disabled={!maintenanceControlsReady || memory.busyKey === "maintenance:run"}
+                    aria-label="Run memory maintenance now"
+                    onClick={() => void memory.runMaintenance()}
+                  >
+                    Run maintenance now
+                  </NativeButton>
+                  <NativeButton
+                    variant="default"
+                    hidden={!policyEditing}
+                    disabled={
+                      !maintenanceControlsReady || !policyEditor.isDirty || memory.busyKey === "maintenance:policy"
+                    }
+                    aria-label="Save memory maintenance policy"
+                    onClick={() => void savePolicyDraft()}
+                  >
+                    Save policy
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    aria-label="Refresh memory maintenance state"
+                    onClick={() => void memory.reload()}
+                  >
+                    <RefreshCw size={16} aria-hidden="true" />
+                    Refresh
+                  </NativeButton>
+                </div>
+                <div className="mc-next-runtime-metric-grid">
+                  <div className="mc-next-runtime-metric">
+                    <span>Changed sessions</span>
+                    <strong>
+                      {memory.data?.maintenanceStatus
+                        ? String(memory.data.maintenanceStatus.state.changedSessionCount)
+                        : "Unavailable"}
+                    </strong>
+                    <p>waiting for next run</p>
+                  </div>
+                  <div className="mc-next-runtime-metric">
+                    <span>Next due</span>
+                    <strong>{formatMaybeDateTime(memory.data?.maintenanceStatus?.nextDueAt)}</strong>
+                    <p>{memory.data?.maintenanceStatus?.policy.timeZone ?? "No timezone"}</p>
+                  </div>
+                  <div className="mc-next-runtime-metric">
+                    <span>Last run</span>
+                    <strong>
+                      {memory.data?.maintenanceStatus
+                        ? (memory.data.maintenanceStatus.lastRun?.status ?? "No recorded run")
+                        : "Unavailable"}
+                    </strong>
+                    <p>{formatMaybeDateTime(memory.data?.maintenanceStatus?.lastRun?.updatedAt)}</p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <EmptyState
+                size="compact"
+                title={
+                  memoryAdminTruthUnknown
+                    ? "Memory maintenance truth is unavailable until backend settings truth reloads."
+                    : "Memory maintenance is not enabled in this workspace."
+                }
+              />
+            )}
+          </NativeCard>
+        ) : null}
+        {view === "maintenance" ? (
+          <NativeCard
+            title="Maintenance review"
+            subtitle="Review proposed memory changes before accepting them, with durable-run linkage kept alongside the queue."
+          >
+            <div className="mc-next-settings-grid">
+              <div className="mc-next-settings-stack">
+                <section className="mc-next-memory-review-queue" aria-label="Memory recommendation review queue">
+                  <header>
+                    <div>
+                      <span>Review queue</span>
+                      <strong>{memory.data?.maintenanceRecommendations.length ?? 0} recommendations</strong>
+                    </div>
+                    <p>Accept or reject only after checking the rationale and proposed fields.</p>
+                  </header>
+                  {(memory.data?.maintenanceRecommendations.length ?? 0) > 0 ? (
+                    <ul>
+                      {memory.data?.maintenanceRecommendations.map((item) => (
+                        <li key={item.recommendationId}>
+                          <div className="mc-next-memory-review-head">
+                            <div>
+                              <span>{item.kind.replaceAll("_", " ")}</span>
+                              <strong>{item.summary}</strong>
+                            </div>
+                            <StatusChip tone={item.status === "queued" ? "warning" : "muted"}>{item.status}</StatusChip>
+                          </div>
+                          <p>{item.rationale ?? "No additional rationale was recorded for this recommendation."}</p>
+                          <dl>
+                            <div>
+                              <dt>Created</dt>
+                              <dd>{formatShortDateTime(item.createdAt)}</dd>
+                            </div>
+                            <div>
+                              <dt>Updated</dt>
+                              <dd>{formatShortDateTime(item.updatedAt)}</dd>
+                            </div>
+                          </dl>
+                          <details>
+                            <summary>Inspect proposed changes</summary>
+                            {Object.keys(item.proposedPatch).length > 0 ? (
+                              <ul className="mc-next-memory-review-patch">
+                                {Object.entries(item.proposedPatch).map(([field, value]) => (
+                                  <li key={field}>
+                                    <span>{field.replace(/([a-z])([A-Z])/g, "$1 $2")}</span>
+                                    <strong>{formatRecommendationPatchValue(value)}</strong>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p>No field-level patch was recorded.</p>
+                            )}
+                          </details>
+                          <div
+                            className="mc-next-runtime-actions"
+                            role="group"
+                            aria-label={`Resolve recommendation ${item.kind}`}
+                          >
+                            <NativeButton
+                              variant="default"
+                              disabled={!maintenanceControlsReady || item.status !== "queued"}
+                              aria-label={`Accept recommendation ${item.kind}: ${item.summary}`}
+                              onClick={() => void memory.resolveRecommendation(item.recommendationId, "accept")}
+                            >
+                              Accept
+                            </NativeButton>
+                            <NativeButton
+                              variant="secondary"
+                              disabled={!maintenanceControlsReady || item.status !== "queued"}
+                              aria-label={`Reject recommendation ${item.kind}: ${item.summary}`}
+                              onClick={() => void memory.resolveRecommendation(item.recommendationId, "reject")}
+                            >
+                              Reject
+                            </NativeButton>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <EmptyState size="compact" title="No maintenance recommendations." />
+                  )}
+                </section>
+                <div className="mc-next-settings-code-block">
+                  <span>Recent runs</span>
+                  {(memory.data?.maintenanceRuns.length ?? 0) > 0 ? (
+                    <div
+                      className="mc-next-settings-selectable-list"
+                      role="listbox"
+                      aria-label="Recent maintenance runs"
+                      aria-activedescendant={
+                        memory.selectedRunId ? `memory-maintenance-run-${memory.selectedRunId}` : undefined
+                      }
+                    >
+                      {memory.data?.maintenanceRuns.map((run) => {
+                        const isSelected = memory.selectedRunId === run.runId;
+                        return (
+                          <button
+                            key={run.runId}
+                            id={`memory-maintenance-run-${run.runId}`}
+                            type="button"
+                            role="option"
+                            aria-selected={isSelected}
+                            aria-pressed={isSelected}
+                            aria-current={isSelected ? "true" : undefined}
+                            aria-label={`Maintenance run ${run.status}, updated ${formatShortDateTime(run.updatedAt)}, ${run.summary || run.triggerSource}`}
+                            className={`mc-next-settings-selectable${isSelected ? " active" : ""}`}
+                            onClick={() => memory.setSelectedRunId(run.runId)}
+                          >
+                            <div className="mc-next-settings-selectable-head">
+                              <strong>{run.status}</strong>
+                              <span>{formatShortDateTime(run.updatedAt)}</span>
+                            </div>
+                            <p>{run.summary || run.triggerSource}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <EmptyState size="compact" title="No maintenance runs yet." />
+                  )}
+                </div>
+              </div>
+              <div className="mc-next-settings-stack">
+                <div className="mc-next-settings-code-block">
+                  <span>Selected run detail</span>
+                  <SectionTruthNotice
+                    message={
+                      sectionErrors?.selectedRunProvenance ??
+                      sectionErrors?.selectedDurableRun ??
+                      sectionErrors?.selectedDurableTimeline ??
+                      null
+                    }
+                  />
+                  {memory.selectedRun ? (
+                    <>
+                      <p>
+                        {memory.selectedRun.status} · {formatMaybeDateTime(memory.selectedRun.updatedAt)}
+                      </p>
+                      <p>Durable run: {memory.selectedRun.durableRunId ?? "none"}</p>
+                      {memory.selectedRun.durableRunId ? (
+                        <div className="mc-next-runtime-actions" role="group" aria-label="Memory run trace actions">
+                          <NativeButton
+                            variant="secondary"
+                            onClick={() =>
+                              navigate({
+                                area: "ops",
+                                section: "sessions",
+                                view: "run-detail",
+                                runId: memory.selectedRun?.durableRunId,
+                                theme: route.theme,
+                              })
+                            }
+                          >
+                            <Waypoints size={16} />
+                            Open Run Detail
+                          </NativeButton>
+                        </div>
+                      ) : null}
+                      <p>
+                        Sources {memory.data?.selectedRunProvenance?.sources.length ?? 0} · Changes{" "}
+                        {memory.data?.selectedRunProvenance?.changes.length ?? 0}
+                      </p>
+                      {(memory.data?.selectedRunProvenance?.sources.length ?? 0) > 0 ? (
+                        <ul className="mc-next-approvals-compact-list">
+                          {memory.data?.selectedRunProvenance?.sources.map((source) => (
+                            <li key={source.sourceId}>
+                              <strong>{source.sourceKind}</strong>
+                              {" · "}
+                              {source.sourceRef}
+                              {source.excerpt ? <p>{source.excerpt}</p> : null}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {(memory.data?.selectedRunProvenance?.changes.length ?? 0) > 0 ? (
+                        <ul className="mc-next-approvals-compact-list">
+                          {memory.data?.selectedRunProvenance?.changes.map((change) => (
+                            <li key={change.changeId}>
+                              <strong>{change.changeKind}</strong>
+                              {" · "}
+                              {change.targetKind}:{change.targetRef}
+                              <p>{change.summary}</p>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {memory.data?.selectedDurableRun ? (
+                        <p>Durable status: {memory.data.selectedDurableRun.status}</p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <EmptyState size="compact" title="Select a maintenance run to inspect provenance." />
+                  )}
+                </div>
+              </div>
+            </div>
+          </NativeCard>
+        ) : null}
+      </NativeGrid>
+      <NativeGrid>
+        {view === "quality" ? (
+          <NativeCard
+            title="QMD and context posture"
+            subtitle="Recent context packs and efficiency stay visible, but secondary to memory item truth."
+            stats={[
+              { label: "Runs", value: String(memory.data?.qmdStats?.totalRuns ?? 0) },
+              { label: "Impact", value: memory.data?.qmdStats ? describeQmdImpact(memory.data.qmdStats) : "Stable" },
+            ]}
+          >
+            <SectionTruthNotice message={sectionErrors?.qmdStats ?? null} />
+            <div className="mc-next-runtime-metric-grid">
+              <div className="mc-next-runtime-metric">
+                <span>Original tokens</span>
+                <strong>{String(memory.data?.qmdStats?.originalTokenEstimate ?? 0)}</strong>
+                <p>{formatTokenDelta(memory.data?.qmdStats?.netTokenDelta ?? 0)}</p>
+              </div>
+              <div className="mc-next-runtime-metric">
+                <span>Distilled tokens</span>
+                <strong>{String(memory.data?.qmdStats?.distilledTokenEstimate ?? 0)}</strong>
+                <p>{(memory.data?.qmdStats?.compressionPercent ?? 0).toFixed(1)}% compression</p>
+              </div>
+            </div>
+            {recentContextPacks.length > 0 ? (
+              <ul className="mc-next-approvals-compact-list">
+                {recentContextPacks.map((item) => (
+                  <li key={item.contextId}>
+                    <strong>{item.scope}</strong>
+                    {" · "}
+                    {formatShortDateTime(item.createdAt)}
+                    {" · "}
+                    {formatKnowledgeCitationSummary(item.citations)}
+                    <div className="mc-next-approvals-chip-row">
+                      <StatusChip tone="default">{formatMemoryEngineeringKind("working")}</StatusChip>
+                      <StatusChip tone="muted">
+                        selected {item.quality.assembly?.selectedCandidateCount ?? item.citations.length}
+                      </StatusChip>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState size="compact" title="No recent context packs." />
+            )}
+            <div className="mc-next-runtime-metric-grid">
+              <div className="mc-next-runtime-metric">
+                <span>Why-used citations</span>
+                <strong>{String(recentCitationCount)}</strong>
+                <p>Recent context-pack provenance</p>
+              </div>
+            </div>
+            <NativeList
+              density="compact"
+              items={whyUsedRows.map((item) => ({
+                title: item.label,
+                meta: item.meta,
+                body: item.description,
+              }))}
+              emptyLabel="No citation-level why-used evidence is attached to recent context packs."
+              maxHeight="min(32vh, 18rem)"
+              ariaLabel="Memory why-used citations"
+            />
+          </NativeCard>
+        ) : null}
+        {sourcesOpen ? (
+          <NativeCard
+            title="Memory files"
+            subtitle="File and QMD evidence stay available as secondary context, not the main memory story."
+          >
+            <SectionTruthNotice message={sectionErrors?.files ?? null} />
+            {(fileAreas.length ?? 0) > 0 ? (
+              <ul className="mc-next-approvals-compact-list">
+                {fileAreas.map((area) => (
+                  <li key={area.area}>
+                    <strong>{area.area}</strong>
+                    {" · "}
+                    {area.files.length} files
+                    {" · "}
+                    {formatBytes(area.totalBytes)}
+                    {" · "}
+                    {formatMaybeDateTime(area.latestModifiedAt)}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState size="compact" title="No memory file subspaces discovered." />
+            )}
+          </NativeCard>
+        ) : null}
         <QuickJumpCard
           title="Related routes"
           subtitle="Move between memory, approvals, and runtime without losing context."

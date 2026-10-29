@@ -4,6 +4,7 @@ import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/cl
 import { fetchTask, fetchTaskDeliverables, updateTask } from "@goatcitadel/mission-control-shared/api/tasks";
 import { fetchAgents } from "@goatcitadel/mission-control-shared/api/operators-agents-files";
 import { acquireTaskMutations, taskMutationKey } from "./task-mutation-state";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export type TaskDetailChange =
   | { kind: "details"; title: string; description: string; priority: TaskRecord["priority"] }
@@ -101,7 +102,7 @@ export async function commitTaskDetailReview(review: {
     }
     return {
       kind: "blocked",
-      message: cause instanceof Error ? cause.message : "The task owner could not be checked.",
+      message: describeApiError(cause, "The task owner could not be checked.").summary,
     };
   } finally {
     admission.settle();

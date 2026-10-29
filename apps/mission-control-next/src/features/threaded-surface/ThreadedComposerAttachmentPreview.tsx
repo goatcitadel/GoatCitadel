@@ -1,6 +1,7 @@
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { buildGatewayUrl, readGatewayAuthHeaders } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useEffect, useRef, useState } from "react";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 type PendingAttachment = MissionThreadedActiveSessionSurfaceProps["pendingAttachments"][number];
 
@@ -71,7 +72,7 @@ export function PendingImagePreview({ attachment }: { attachment: PendingAttachm
         setBlobPreviewUrl(objectUrl);
       } catch (nextError) {
         if (active) {
-          setError((nextError as Error).message);
+          setError(describeApiError(nextError).summary);
           setBlobPreviewUrl(null);
         }
       }

@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { buildChannelConversation } from "../services/channel-conversation.js";
+import { dispatchSlackEvent, type SlackDispatchPayload } from "../services/slack-event-processor.js";
 import {
-  deriveSlackWebhookIdempotencyKey,
   normalizeSlackWebhookPayload,
   verifySlackWebhookConnectionBinding,
   verifySlackSignature,
@@ -13,18 +12,7 @@ import {
   readWebhookVoiceInboundEnabled,
 } from "./integration-webhooks-shared.js";
 import { asString } from "../services/webhook-json-helpers.js";
-import {
-  createIgnoredWebhookReply,
-  createWebhookHandler,
-  dispatchInboundVoiceWebhookMessage,
-  dispatchInboundWebhookMessage,
-  readHeaderValue,
-} from "./webhook-handler-factory.js";
-
-type SlackDispatchPayload = Exclude<
-  ReturnType<typeof normalizeSlackWebhookPayload>,
-  { kind: "ignore" } | { kind: "challenge" }
->;
+import { createIgnoredWebhookReply, createWebhookHandler, readHeaderValue } from "./webhook-handler-factory.js";
 
 export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
   const routeOptions = createWebhookRouteOptions("slackRawBody");
@@ -117,58 +105,12 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
           parsed: normalized,
         };
       },
-      dispatch: async ({ connectionId, connection, request, rawBody, parsed }) => {
-        const dispatchOptions = {
-          channel: "slack",
-          connectionId,
-          // Voice and text share the provider event-id key, so replays dedupe.
-          idempotencyKey: deriveSlackWebhookIdempotencyKey(connectionId, request.body, rawBody),
-          eventType: parsed.eventType,
-          bindingTarget: parsed.room ?? parsed.peer,
-          // Slack events carry ids but no names, so neither kind gets a title here.
-          conversation: buildChannelConversation(
-            parsed.metadata.channelType === "im"
-              ? { kind: "direct", counterpartActorId: parsed.actorId }
-              : { kind: "group" },
-          ),
-          inboundAccessConfig: connection.config,
-          acceptedConnectionRevision: connection.revision,
-          message: {
-            eventId: parsed.eventId,
-            account: parsed.account,
-            peer: parsed.peer,
-            room: parsed.room,
-            threadId: parsed.threadId,
-            actorId: parsed.actorId,
-            actorType: parsed.actorType,
-            content: parsed.content,
-            metadata: parsed.metadata,
-          },
-          responseOptions: {
-            deliveryReplyToMessageId: parsed.deliveryReplyToMessageId,
-          },
-        };
-        const voiceMedia = parsed.voiceMedia;
-        if (voiceMedia) {
-          // Accept the secret-free file reference before ACK; the durable worker
-          // resolves the current bot token and owns download/transcription.
-          return dispatchInboundVoiceWebhookMessage(fastify.services.integrationWebhooks, {
-            ...dispatchOptions,
-            voice: {
-              request: {
-                channel: "slack",
-                connectionConfig: {},
-                fileId: voiceMedia.fileId,
-                downloadUrl: voiceMedia.downloadUrl,
-                mimeType: voiceMedia.mimeType,
-              },
-              fallbackContent: parsed.content,
-              caption: parsed.voiceCaption,
-            },
-          });
-        }
-        return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, dispatchOptions);
-      },
+      dispatch: ({ connectionId, connection, request, rawBody, parsed }) =>
+        dispatchSlackEvent(
+          { webhooks: fastify.services.integrationWebhooks },
+          // The URL's connection id stays authoritative for the webhook, as before.
+          { connection: { ...connection, connectionId }, parsed, payload: request.body, rawBody },
+        ),
     }),
   );
 }

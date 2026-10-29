@@ -1,4 +1,8 @@
-import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
+import {
+  resolveChannelOwnerActorIds,
+  type ChannelSetupDefinition,
+  type ChannelSetupIssue,
+} from "@goatcitadel/contracts";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
@@ -19,6 +23,26 @@ import {
   requiredFieldIssue,
   malformedFieldIssue,
 } from "./common.js";
+
+/**
+ * How GoatCitadel hears new Slack messages. "socket" keeps a connection open to Slack (Socket Mode); "webhook" waits for
+ * Slack to post events to a public address. Connections saved before the choice existed receive by webhook.
+ */
+type SlackReceiveMode = "socket" | "webhook";
+
+function isSlackReceiveMode(value: string | undefined): value is SlackReceiveMode {
+  return value === "socket" || value === "webhook";
+}
+
+/** Slack app-level tokens start with xapp-; bot tokens start with xoxb-. */
+const SLACK_APP_TOKEN_PATTERN = /^xapp-/i;
+
+const WHEN_SOCKET_MODE = { fieldKey: "receiveMode", value: "socket" } as const;
+
+/** The mode an existing connection already behaves with: a stored "socket" wins; anything else receives by webhook. */
+function hydrateSlackReceiveMode(config: Record<string, unknown>): SlackReceiveMode {
+  return readString(config, "receiveMode") === "socket" ? "socket" : "webhook";
+}
 
 export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
   const catalog = requireCatalog("channel.slack");
@@ -210,6 +234,62 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
               canChangeLater: true,
             },
             {
+              key: "receiveMode",
+              label: "How GoatCitadel receives Slack messages",
+              type: "select",
+              required: false,
+              advanced: true,
+              defaultValue: "webhook",
+              explanation:
+                "Choose how new Slack messages reach GoatCitadel. Keeping a connection open to Slack needs no public web address.",
+              whyNeeded:
+                "Receiving messages lets you chat with GoatCitadel from Slack. Web-address delivery needs an OAuth install, a signing secret and a public HTTPS address.",
+              options: [
+                {
+                  value: "socket",
+                  label: "GoatCitadel keeps a connection open to Slack (no public web address needed)",
+                },
+                { value: "webhook", label: "Slack sends events to a public web address (needs an OAuth install)" },
+              ],
+              canChangeLater: true,
+            },
+            {
+              key: "appToken",
+              label: "App-level token",
+              type: "secret",
+              required: false,
+              visibleWhenFieldEquals: { ...WHEN_SOCKET_MODE },
+              explanation: PASTED_SECRET_EXPLANATION,
+              whyNeeded:
+                "Lets GoatCitadel keep a connection open to Slack so the bot can hear direct messages and mentions.",
+              whereToFind: [
+                paragraph(
+                  "From Basic Information › App-Level Tokens in your Slack app, with the connections:write scope.",
+                ),
+              ],
+              looksLike: "xapp-...",
+              commonMistakes: [
+                "Pasting the bot token (xoxb-) here instead of the app-level token (xapp-).",
+                "Making the token without the connections:write scope.",
+              ],
+              sensitive: true,
+              canChangeLater: true,
+              placeholder: "xapp-…",
+            },
+            {
+              key: "appTokenEnv",
+              label: "App-level token env var",
+              type: "text",
+              required: false,
+              advanced: true,
+              visibleWhenFieldEquals: { ...WHEN_SOCKET_MODE },
+              explanation: "Name of the env var that stores the Slack app-level token.",
+              looksLike: "SLACK_APP_TOKEN",
+              commonMistakes: ["Pasting the token value here instead of the variable name."],
+              canChangeLater: true,
+              placeholder: "SLACK_APP_TOKEN",
+            },
+            {
               key: "webhookUrl",
               label: "Incoming webhook URL (send-only)",
               type: "url",
@@ -298,7 +378,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
     },
     adapter: {
       adapterVersion: "2026.03.slack.v1",
-      secretFieldKeys: ["botToken", "webhookUrl", "signingSecret"],
+      secretFieldKeys: ["botToken", "webhookUrl", "signingSecret", "appToken"],
     },
     validation: {
       validationVersion: "2026.03.slack.v1",
@@ -343,8 +423,10 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
         ["botToken", "botTokenEnv", "token", "tokenEnv"],
         ["webhookUrl"],
         ["signingSecret", "signingSecretEnv"],
+        ["appToken", "appTokenEnv"],
       ]);
       const authMode = readString(config, "authMode");
+      const ownerActorIds = resolveChannelOwnerActorIds(config);
       return {
         draft: {
           // Kept so the signing-secret field, which only an OAuth install uses, stays on screen when that install is edited.
@@ -353,6 +435,10 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           targets: normalizeSlackTargets(config),
           defaultChannel: readString(config, "defaultChannel"),
           defaultThreadTs: readString(config, "defaultThreadTs"),
+          // A connection saved before the choice existed receives by webhook, so that is what it edits as.
+          receiveMode: hydrateSlackReceiveMode(config),
+          ownerActorIds,
+          appTokenEnv: readString(config, "appTokenEnv"),
         },
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
@@ -371,6 +457,10 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
             webhookUrl: readString(config, "webhookUrl") ? "configured" : "unknown",
             signingSecret:
               readString(config, "signingSecret") || readString(config, "signingSecretEnv") ? "configured" : "unknown",
+            receiveMode: "configured",
+            ownerActorIds: ownerActorIds.length > 0 ? "configured" : "unknown",
+            appToken: readString(config, "appToken") || readString(config, "appTokenEnv") ? "configured" : "unknown",
+            appTokenEnv: readString(config, "appTokenEnv") ? "configured" : "unknown",
           },
           warnings: hasConfiguredSecret
             ? [
@@ -387,8 +477,14 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       const preservedWebhookUrl = readLegacyString(draft, "webhookUrl");
       const preservedSigningSecret = readLegacyString(draft, "signingSecret");
       const preservedSigningSecretEnv = readLegacyString(draft, "signingSecretEnv");
+      const preservedAppToken = readLegacyString(draft, "appToken");
+      const preservedAppTokenEnv = readLegacyString(draft, "appTokenEnv");
       const targets = normalizeSlackTargets(draft.draft);
       const defaultTarget = targets.find((target) => target.default) ?? targets[0];
+      const receiveMode = readString(draft.draft, "receiveMode");
+      const ownerActorIds = resolveChannelOwnerActorIds(draft.draft);
+      // receiveMode and ownerActorIds are left out when the draft has none, so finalize keeps the saved
+      // connection's own values instead of overwriting them with a default.
       return compactRecord({
         authMode: readString(draft.draft, "authMode") ?? readLegacyString(draft, "authMode"),
         slackInstallerUserId:
@@ -408,6 +504,10 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
         webhookUrl: readString(draft.draft, "webhookUrl") ?? preservedWebhookUrl,
         signingSecret: readString(draft.draft, "signingSecret") ?? preservedSigningSecret,
         signingSecretEnv: readString(draft.draft, "signingSecretEnv") ?? preservedSigningSecretEnv,
+        appToken: readString(draft.draft, "appToken") ?? preservedAppToken,
+        appTokenEnv: readString(draft.draft, "appTokenEnv") ?? preservedAppTokenEnv,
+        receiveMode: isSlackReceiveMode(receiveMode) ? receiveMode : undefined,
+        ownerActorIds: ownerActorIds.length > 0 ? ownerActorIds : undefined,
       });
     },
     validate(draft) {
@@ -441,6 +541,22 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       }
       if (signingSecret && /^xox[baprs]-/i.test(signingSecret)) {
         issues.push(malformedFieldIssue("signingSecret", "Signing secret should not look like a Slack OAuth token."));
+      }
+      const receiveMode = readString(draft.draft, "receiveMode");
+      if (receiveMode && !isSlackReceiveMode(receiveMode)) {
+        issues.push(malformedFieldIssue("receiveMode", "Choose how Slack messages are received."));
+      }
+      if (receiveMode === "socket") {
+        const appToken = readString(draft.draft, "appToken");
+        const hasConfiguredAppToken = Boolean(
+          appToken || readString(draft.draft, "appTokenEnv") || draft.hydration?.fieldState.appToken === "configured",
+        );
+        if (!hasConfiguredAppToken) {
+          issues.push(requiredFieldIssue("appToken", "Socket Mode needs the app-level token."));
+        } else if (appToken && !SLACK_APP_TOKEN_PATTERN.test(appToken)) {
+          // The message never repeats the value: a mistyped token is still a secret.
+          issues.push(malformedFieldIssue("appToken", "App-level tokens start with xapp-."));
+        }
       }
       // An incoming webhook is bound to one channel already, so a webhook-only setup needs no target of its own.
       const webhookOnly = hasConfiguredWebhook && !hasConfiguredToken;

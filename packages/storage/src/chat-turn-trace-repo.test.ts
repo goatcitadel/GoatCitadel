@@ -138,6 +138,25 @@ function setRawField(db: DatabaseClient, turnId: string, field: string, value: u
 }
 
 describe("ChatTurnTraceRepository", () => {
+  it("saves a turn's reasoning through patches and keeps it when later patches leave it out", () => {
+    const { db, repo } = createStore();
+    try {
+      assert.equal(repo.create(baseTrace()).reasoning, undefined);
+      assert.equal(
+        repo.patch("turn-a", { reasoning: "First I check the dates." }).reasoning,
+        "First I check the dates.",
+      );
+      const completed = repo.patchIfStatus("turn-a", ["running"], {
+        status: "completed",
+        completion: { status: "complete", repaired: false },
+      });
+      assert.equal(completed?.reasoning, "First I check the dates.");
+      assert.equal(repo.get("turn-a").reasoning, "First I check the dates.");
+    } finally {
+      db.close();
+    }
+  });
+
   it("pages completed traces without losing equal-timestamp turns", () => {
     const { db, repo } = createStore();
     try {

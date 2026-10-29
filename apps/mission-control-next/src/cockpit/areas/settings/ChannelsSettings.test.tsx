@@ -187,6 +187,52 @@ describe("Telegram is set up in Chat, not here", () => {
     expect(linkNamed("Set up Telegram in Chat")).toBeUndefined();
   });
 
+  it("keeps Settings' create button for Discord and Slack, which have a quicker Chat page of their own", async () => {
+    api.fetchChannelSetupDefinitions.mockResolvedValue({
+      items: [definition("telegram", "Telegram"), definition("discord", "Discord"), definition("slack", "Slack")],
+    });
+    for (const channel of ["discord", "slack"]) {
+      await act(async () => root.unmount());
+      root = createRoot(container);
+      await mount(`?channel=channel.${channel}`);
+      expect(picker()?.value).toBe(`channel.${channel}`);
+      expect(buttonNamed("Start guided setup")?.disabled, channel).toBe(false);
+      expect(
+        [...container.querySelectorAll("a")].filter((candidate) => candidate.textContent?.endsWith("in Chat")),
+        channel,
+      ).toHaveLength(0);
+    }
+  });
+
+  it("continues a Discord or Slack setup in Chat only when it was made on the Chat page", async () => {
+    api.fetchChannelSetupDefinitions.mockResolvedValue({
+      items: [definition("telegram", "Telegram"), definition("discord", "Discord"), definition("slack", "Slack")],
+    });
+    api.fetchChannelSetupDrafts.mockResolvedValue({
+      items: [
+        draft("channel.slack", "Chat bot", { draft: { setupPage: "messaging" } }),
+        draft("channel.discord", "Chat server", { draft: { setupPage: "messaging" } }),
+        draft("channel.slack", "Settings bot", { draft: {} }),
+        draft("channel.slack", "Saved bot", {
+          draft: { setupPage: "messaging" },
+          lifecycleMode: "edit",
+          connectionId: "conn-1",
+        }),
+      ],
+    });
+    await mount("");
+    const slack = linkNamed("Continue Chat bot in Chat");
+    expect(pathOf(slack)).toBe("/chat/messaging/add/slack");
+    expect(new URL(slack!.getAttribute("href")!, "http://cockpit.invalid").searchParams.get("draft")).toBe(
+      "channel.slack:Chat bot",
+    );
+    expect(pathOf(linkNamed("Continue Chat server in Chat"))).toBe("/chat/messaging/add/discord");
+    expect(buttonNamed("Edit Chat bot")).toBeUndefined();
+    // The rest go on in Settings, where they were made or where a saved channel is changed.
+    expect(buttonNamed("Edit Settings bot")).toBeDefined();
+    expect(buttonNamed("Edit Saved bot")).toBeDefined();
+  });
+
   it("continues an unfinished Telegram setup in Chat, and edits the rest here", async () => {
     api.fetchChannelSetupDrafts.mockResolvedValue({
       items: [

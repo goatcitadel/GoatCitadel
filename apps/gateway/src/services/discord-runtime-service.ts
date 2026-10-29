@@ -17,15 +17,16 @@ import {
   SharedHostAdmissionClosedError,
   type SharedHostLifecycleAdmissionPort,
 } from "./shared-host-lifecycle-service.js";
-import type {
-  ChannelTypingResult,
-  ChatChannelConversation,
-  DiscordGuildAccessRule,
-  DiscordInboundDmPolicy,
-  DiscordPairingRecord,
-  DiscordRuntimeMode,
-  DiscordRuntimeStatus,
-  IntegrationConnection,
+import {
+  resolveAllowedSenders,
+  type ChannelTypingResult,
+  type ChatChannelConversation,
+  type DiscordGuildAccessRule,
+  type DiscordInboundDmPolicy,
+  type DiscordPairingRecord,
+  type DiscordRuntimeMode,
+  type DiscordRuntimeStatus,
+  type IntegrationConnection,
 } from "@goatcitadel/contracts";
 import {
   SHARED_CHANNEL_COMMANDS,
@@ -33,6 +34,7 @@ import {
   normalizeChannelApprovalToken,
 } from "./channel-command-contract.js";
 import { buildChannelConversation } from "./channel-conversation.js";
+import { isAllowlistedChannelOwner } from "./channel-owner-access.js";
 import {
   createConnectionSecretReferenceResolver,
   isSecureStorageReference,
@@ -972,9 +974,16 @@ export class DiscordRuntimeService {
     }
     const voiceAttachment = readDiscordVoiceAttachment(message);
     const conversation = buildDiscordDirectConversation(message.author);
-    const approved = await this.callbacks.findApprovedPairing(connection.connectionId, message.author.id);
-    if (approved) {
-      await this.callbacks.touchPairing(approved.pairingId);
+    // The person who made the bot (an owner who is also on the allowlist) is let in the way an approved pairing is,
+    // but with no pairing to find or touch.
+    const botMaker = isAllowlistedChannelOwner(connection.config, message.author.id);
+    const approved = botMaker
+      ? undefined
+      : await this.callbacks.findApprovedPairing(connection.connectionId, message.author.id);
+    if (botMaker || approved) {
+      if (approved) {
+        await this.callbacks.touchPairing(approved.pairingId);
+      }
       await this.handleAcceptedMessage(message, async () => {
         return await this.callbacks.onInboundMessage({
           connectionId: connection.connectionId,
@@ -1041,11 +1050,17 @@ export class DiscordRuntimeService {
     if (dmPolicy === "disabled") {
       return false;
     }
-    const approved = await this.callbacks.findApprovedPairing(connection.connectionId, interaction.user.id);
+    // A DM slash command is let in the same way as a DM message, so the person who made the bot is not asked to pair.
+    const botMaker = isAllowlistedChannelOwner(connection.config, interaction.user.id);
+    const approved = botMaker
+      ? undefined
+      : await this.callbacks.findApprovedPairing(connection.connectionId, interaction.user.id);
     const commandText = buildCommandTextFromInteraction(interaction);
     const conversation = buildDiscordDirectConversation(interaction.user);
-    if (approved) {
-      await this.callbacks.touchPairing(approved.pairingId);
+    if (botMaker || approved) {
+      if (approved) {
+        await this.callbacks.touchPairing(approved.pairingId);
+      }
       await this.handleAcceptedCommand(interaction, {
         connectionId: connection.connectionId,
         acceptedConnectionRevision: connection.revision,
@@ -1295,12 +1310,27 @@ function resolveDiscordGuildRule(
   const defaultGuildId = readConfigString(config, "defaultGuildId");
   if (defaultGuildId && defaultGuildId === guildId) {
     const defaultChannelId = readConfigString(config, "defaultChannelId");
+    const allowlistedSenderIds = resolveDefaultChannelUsers(config);
     return {
       requireMention: true,
+      ...(allowlistedSenderIds.length > 0 ? { users: allowlistedSenderIds } : {}),
       channels: defaultChannelId ? [defaultChannelId] : undefined,
     };
   }
   return undefined;
+}
+
+/**
+ * Who the default channel answers: the connection's allowlisted senders, on a connection that lets only allowlisted
+ * senders in, read (trimmed, lowercased, de-duplicated) the way the inbound allowlist reads them. The owner mark plays
+ * no part here: it only decides whether the maker skips pairing in direct messages, so clearing it never reopens the
+ * channel. A connection with no allowlist, or not in allowlist mode, keeps the open default rule.
+ */
+function resolveDefaultChannelUsers(config: Record<string, unknown>): string[] {
+  if (config.inboundAccessMode !== "allowlist") {
+    return [];
+  }
+  return [...resolveAllowedSenders(config)];
 }
 
 function readGuildRuleMap(config: Record<string, unknown>): Record<string, DiscordGuildAccessRule> {

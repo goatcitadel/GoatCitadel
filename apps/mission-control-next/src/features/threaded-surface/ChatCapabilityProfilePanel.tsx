@@ -15,6 +15,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/work-passport";
 import { useEffect, useId, useState } from "react";
 import { StatusChip } from "../native-routes/primitives";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 function shortHash(value: string | undefined, size = 12): string {
   if (!value) {
@@ -141,10 +142,17 @@ export function ChatCapabilityProfileRunDetail({ inspection }: { inspection?: Ch
     return null;
   }
   if (inspection.status === "admission_verified" && inspection.routedContext) {
-    return <section className="mc-next-context-card" aria-label="Admitted routed context" data-integrity-status="admission_verified">
-      <h4>Recorded context</h4><p>{inspection.message}</p>
-      <RoutedContextReceipt routedContext={inspection.routedContext} />
-    </section>;
+    return (
+      <section
+        className="mc-next-context-card"
+        aria-label="Admitted routed context"
+        data-integrity-status="admission_verified"
+      >
+        <h4>Recorded context</h4>
+        <p>{inspection.message}</p>
+        <RoutedContextReceipt routedContext={inspection.routedContext} />
+      </section>
+    );
   }
   if (inspection.status !== "verified" || !inspection.profile) {
     const tone = inspection.status === "legacy_missing" || inspection.status === "not_found" ? "muted" : "warning";
@@ -164,7 +172,9 @@ export function ChatCapabilityProfileRunDetail({ inspection }: { inspection?: Ch
           </StatusChip>
         </div>
         <p role={inspection.status === "invalid" || inspection.status === "forbidden" ? "alert" : "status"}>
-          {inspection.status === "loading" ? inspection.message ?? "Checking the scoped persisted profile…" : inspection.message}
+          {inspection.status === "loading"
+            ? (inspection.message ?? "Checking the scoped persisted profile…")
+            : inspection.message}
         </p>
         {inspection.mismatchFields.length > 0 ? (
           <p className="mc-next-capability-profile-warning">
@@ -456,7 +466,7 @@ function WorkPassportPanel({
       await onBaselineUpdated?.();
       setMessage("Baseline saved. The turn profile was refreshed.");
     } catch (cause) {
-      const detail = cause instanceof Error ? cause.message : String(cause);
+      const detail = describeApiError(cause).summary;
       setMessage(saved ? `Baseline saved, but the turn profile refresh failed: ${detail}` : detail);
     } finally {
       setBusy(false);

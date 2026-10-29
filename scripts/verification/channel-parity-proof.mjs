@@ -86,6 +86,7 @@ const checks = [
       "src/services/channel-stream-adapters/ntfy-stream-adapter.test.ts",
       "src/services/channel-stream-adapters/mattermost-stream-adapter.test.ts",
       "src/services/channel-stream-adapters/matrix-stream-adapter.test.ts",
+      "src/services/channel-stream-adapters/slack-socket-stream-adapter.test.ts",
       "src/services/channel-stream-runtime-service.test.ts",
       "src/services/channel-webhook-probes.test.ts",
       "src/services/google-chat-webhook.test.ts",

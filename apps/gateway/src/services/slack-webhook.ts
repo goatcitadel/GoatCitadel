@@ -110,8 +110,20 @@ export function verifySlackWebhookConnectionBinding(input: {
   return { ok: true };
 }
 
+/**
+ * One Slack message can reach an app twice: as a `message` event and as an `app_mention` for the same post, each
+ * with its own `event_id`. The post itself is named by its channel and `ts`, so that names the key; a replay of
+ * either event still lands on the same key. An event without a channel or a ts has no such name and keeps its
+ * `event_id`.
+ */
 export function deriveSlackWebhookIdempotencyKey(connectionId: string, payload: unknown, rawBody: Buffer): string {
   const root = asRecord(payload);
+  const event = asRecord(root.event);
+  const channel = asString(event.channel);
+  const ts = asString(event.ts);
+  if (channel && ts) {
+    return `slack:${connectionId}:message:${channel}:${ts}`;
+  }
   const eventId = asString(root.event_id);
   if (eventId) {
     return `slack:${connectionId}:${eventId}`;
@@ -156,7 +168,8 @@ export function normalizeSlackWebhookPayload(input: {
 
   const event = asRecord(root.event);
   const eventType = asString(event.type);
-  if (eventType !== "message") {
+  // An `app_mention` is a post that names this bot in a channel it was added to. It is read as a room message.
+  if (eventType !== "message" && eventType !== "app_mention") {
     return {
       kind: "ignore",
       eventType,
@@ -168,7 +181,9 @@ export function normalizeSlackWebhookPayload(input: {
   // `file_share` is the subtype Slack uses for a message carrying uploaded
   // files. It stays ignored exactly as before unless voice inbound is enabled
   // AND the share carries an audio file; image/PDF shares are never routed.
-  const voiceMedia = input.voiceInboundEnabled === true ? readSlackVoiceMedia(event) : undefined;
+  // A mention never carries voice: audio is read from plain messages only.
+  const voiceMedia =
+    input.voiceInboundEnabled === true && eventType === "message" ? readSlackVoiceMedia(event) : undefined;
   if (subtype && !(subtype === SLACK_FILE_SHARE_SUBTYPE && voiceMedia)) {
     return {
       kind: "ignore",
@@ -207,7 +222,8 @@ export function normalizeSlackWebhookPayload(input: {
     };
   }
 
-  const text = asString(event.text);
+  const rawText = asString(event.text);
+  const text = eventType === "app_mention" ? stripLeadingSlackMention(rawText, input.botUserId) : rawText;
   const content = voiceMedia ? buildSlackVoiceFallbackContent(text) : text;
   const channel = asString(event.channel);
   const channelType = asString(event.channel_type);
@@ -247,6 +263,20 @@ export function normalizeSlackWebhookPayload(input: {
       eventTime: root.event_time,
     },
   };
+}
+
+/**
+ * Removes a mention of this bot from the start of an `app_mention`'s text, with the whitespace around it. Slack
+ * writes a mention as `<@U123>` or, in older payloads, `<@U123|name>`. A mention anywhere else, or of anyone else,
+ * is part of what the person said and stays.
+ */
+function stripLeadingSlackMention(text: string | undefined, botUserId: string | undefined): string | undefined {
+  if (!text || !botUserId) {
+    return text;
+  }
+  const escapedBotUserId = botUserId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stripped = text.replace(new RegExp(`^\\s*<@${escapedBotUserId}(?:\\|[^>]*)?>\\s*`), "");
+  return stripped.length > 0 ? stripped : undefined;
 }
 
 /**

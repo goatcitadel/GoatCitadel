@@ -1777,6 +1777,29 @@ describe("bound channel setup operations", () => {
     renderer.unmount();
   });
 
+  it("says Discord and Slack have a quicker page in Chat, and still starts them here", async () => {
+    const slack = {
+      ...discordDefinition,
+      catalog: { ...discordDefinition.catalog, catalogId: "channel.slack", key: "slack", label: "Slack" },
+    };
+    const unfinished = { ...discordDraft, draftId: "slack-draft", catalogId: "channel.slack", label: "Slack sandbox" };
+    channelApiMocks.fetchChannelSetupDefinitions.mockResolvedValue({ items: [discordDefinition, slack] });
+    channelApiMocks.fetchChannelSetupDrafts.mockResolvedValue({ items: [unfinished] });
+    const renderer = await renderChannelsSection(null);
+    // A Slack setup made here carries no Chat mark, so it stays a draft row that opens the guide.
+    expect(() => findDraftButton(renderer.root, "Slack sandbox")).not.toThrow();
+    await click(findButton(renderer.root, "Connect channel"));
+    await changeValue(renderer.root.findByType("select"), "channel.slack");
+    expect(textOf(renderer.root)).toContain(
+      "Choose a channel, start its guided setup, then save, validate, test, and finalize before runtime use. " +
+        "Telegram is set up on its own page in Chat. Discord and Slack have a quicker page there too.",
+    );
+    expect(textOf(renderer.root)).not.toContain("Slack uses OAuth");
+    expect(findButton(renderer.root, "Start Slack setup").props.disabled).toBe(false);
+    expect(renderer.root.findAllByType("a").some((node) => textOf(node) === "Set up Slack in Chat")).toBe(false);
+    renderer.unmount();
+  });
+
   it("withholds a staged OAuth mutation if draft input changes during canonical preflight", async () => {
     const slack = {
       ...discordDefinition,

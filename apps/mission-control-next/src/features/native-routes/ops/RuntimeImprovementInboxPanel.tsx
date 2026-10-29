@@ -5,6 +5,7 @@ import { fetchCuratorReviewItems, type CuratorReviewItem } from "@goatcitadel/mi
 import { NativeCard } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function ImprovementInboxPanel({
   workspaceId,
@@ -28,7 +29,7 @@ export function ImprovementInboxPanel({
       if (isMounted()) setItems(response.items);
     } catch (loadError) {
       if (isMounted()) {
-        setError(loadError instanceof Error ? loadError.message : "Could not load the improvement inbox.");
+        setError(describeApiError(loadError, "Could not load the improvement inbox.").summary);
       }
     } finally {
       if (isMounted()) setLoading(false);

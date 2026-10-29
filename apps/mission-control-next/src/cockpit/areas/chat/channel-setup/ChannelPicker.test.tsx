@@ -113,11 +113,12 @@ describe("ChannelPicker", () => {
     expect(tile("Telegram").textContent).not.toContain("public web address");
   });
 
-  it("opens Telegram's own setup page and sends the rest to Settings", async () => {
+  it("opens Telegram's and Slack's own setup pages and sends the rest to Settings", async () => {
     api.fetchChannelSetupDefinitions.mockResolvedValue({ items: DEFINITIONS });
     await mount();
     expect(pathOf(tile("Telegram"))).toMatch(/^\/chat\/messaging\/add\/telegram\?/);
-    expect(pathOf(tile("Slack"))).toBe("/settings/connections?channel=channel.slack&shell=cockpit#channels");
+    expect(pathOf(tile("Slack"))).toMatch(/^\/chat\/messaging\/add\/slack\?/);
+    expect(pathOf(tile("Matrix"))).toBe("/settings/connections?channel=channel.matrix&shell=cockpit#channels");
   });
 
   it("reads the definitions once and keeps them for the session", async () => {

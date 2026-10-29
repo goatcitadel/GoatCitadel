@@ -52,6 +52,7 @@ import type { ChatDurableFanoutService } from "./chat-durable-fanout-service.js"
 import { readDurableFanoutWaitInvocationId } from "./chat-durable-run-service.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
+import { ChatTurnReasoningRecorder } from "./chat-turn-reasoning.js";
 import {
   buildDelegationFailureGuidance,
   buildEmptyAssistantTurnFallbackText,
@@ -2236,6 +2237,8 @@ export async function* streamPreparedAgentChatTurn(
     let userInputRequired = false;
     let pendingUserInput = undefined as ChatTurnTraceRecord["pendingUserInput"];
     const streamCitations: ChatCitationRecord[] = [...(prepared.threadKnowledgeCitations ?? [])];
+    const streamReasoning = new ChatTurnReasoningRecorder();
+    const readSavedReasoning = async () => (await host.storage.chatTurnTraces.get(turnId)).reasoning;
     const drainedSteers = options?.remoteWorkerExecution
       ? []
       : host.steerService.drainPending({ sessionId, turnId: prepared.turnId });
@@ -2451,6 +2454,7 @@ export async function* streamPreparedAgentChatTurn(
         yield chunk;
       }
       if (chunk.type === "thinking_delta") {
+        streamReasoning.append(chunk.delta);
         yield chunk;
       }
       if (chunk.type === "message_done") {
@@ -2540,8 +2544,10 @@ export async function* streamPreparedAgentChatTurn(
     await assertChatStreamCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
 
     if (approvalRequired) {
+      const reasoningPatch = await streamReasoning.tracePatch(readSavedReasoning);
       const traceWithMeta = await canonicalWriteFence(async () => {
         const trace = await host.storage.chatTurnTraces.patch(turnId, {
+          ...reasoningPatch,
           retrieval: prepared.retrievalTrace,
           reflection: {
             attempted: false,
@@ -2646,8 +2652,10 @@ export async function* streamPreparedAgentChatTurn(
     }
 
     if ((userInputRequired && pendingUserInput) || delegationWaiting) {
+      const reasoningPatch = await streamReasoning.tracePatch(readSavedReasoning);
       const traceWithMeta = await canonicalWriteFence(async () => {
         const trace = await host.storage.chatTurnTraces.patch(turnId, {
+          ...reasoningPatch,
           // A confirmed delegation parks through its keyed durable wake event.
           // Ordinary waiting_for_tool traces remain transient and cannot settle.
           status: delegationWaiting ? "waiting_for_tool" : "waiting_for_user_input",
@@ -2775,6 +2783,7 @@ export async function* streamPreparedAgentChatTurn(
           truncated: prepared.resolvedGuidance.truncated,
         },
         citations: dedupeChatCitations(streamCitations),
+        ...(await streamReasoning.tracePatch(async () => currentTraceBeforeWrite.reasoning)),
       };
       let committedTrace: ChatTurnTraceRecord | undefined;
       await host.ingestEvent(

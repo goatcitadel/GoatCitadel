@@ -8,6 +8,7 @@ import {
   grantsEqual,
   readAutonomousGrants,
 } from "./autonomous-grant-binding";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 type Attempt = { phase: "checking" | "submitted" | "recorded" | "uncertain"; message: string };
 const attempts = new Map<string, Attempt>(),
@@ -81,8 +82,7 @@ export function useAutonomousGrantRevocation({ scope, reload }: { scope: string;
         throw new Error("This grant changed. Refresh and review its current record.");
       setReview({ generation, grant: structuredClone(saved) });
     } catch (error) {
-      if (owns())
-        setFeedback({ generation, message: error instanceof Error ? error.message : "Grant review unavailable." });
+      if (owns()) setFeedback({ generation, message: describeApiError(error, "Grant review unavailable.").summary });
     } finally {
       if (owns()) setChecking(undefined);
     }
@@ -127,8 +127,7 @@ export function useAutonomousGrantRevocation({ scope, reload }: { scope: string;
         });
       else {
         publish(key);
-        if (owns())
-          setFeedback({ generation, message: error instanceof Error ? error.message : "Grant preflight failed." });
+        if (owns()) setFeedback({ generation, message: describeApiError(error, "Grant preflight failed.").summary });
       }
     } finally {
       if (!dispatched) publish(key);

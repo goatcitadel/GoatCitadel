@@ -9,6 +9,7 @@ import {
   matchRoutePattern,
   type MutationAttemptVerdict,
 } from "@goatcitadel/mission-control-shared/api/mutation-attempts";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 /**
  * `checkable`: the lost attempt is identified, so its outcome can be read from the Gateway's own record.
@@ -160,7 +161,7 @@ export async function checkProviderMutationOutcome(reload: () => Promise<unknown
         checking: false,
         outcome:
           "The outcome check failed, so provider changes stay locked: " +
-          (error instanceof Error ? error.message : "the Gateway did not answer."),
+          describeApiError(error, "the Gateway did not answer.").summary,
       });
   }
 }

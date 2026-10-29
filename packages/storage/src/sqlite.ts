@@ -7517,6 +7517,14 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
       },
       // Capabilities installs record their own plans: 'capabilities' origin and 'connector_install' kind.
       { version: 271, name: "connector_install_change_plans", up: upgradeChangePlanConnectorInstallSchema },
+      // A turn's streamed model reasoning is saved with its trace so a reloaded thread still shows it.
+      {
+        version: 272,
+        name: "chat_turn_traces_reasoning_text",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_turn_traces", "reasoning_text", "TEXT");
+        },
+      },
     ],
   },
 ];

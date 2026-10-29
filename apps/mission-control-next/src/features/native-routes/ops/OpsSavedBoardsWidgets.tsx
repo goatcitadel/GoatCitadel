@@ -9,6 +9,7 @@ import { projectUsageCostSummary } from "@goatcitadel/mission-control-shared/con
 import type { AppRoute } from "@next/app/route-model";
 import { NativeButton } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export { projectUsageCostSummary } from "@goatcitadel/mission-control-shared/content/cost-summary";
 
@@ -385,7 +386,7 @@ function useWidgetData<T>(workspaceId: string, boardGeneration: number, loader: 
           setState({
             status: "error",
             data: null,
-            error: error instanceof Error ? error.message : "This canonical source could not be loaded.",
+            error: describeApiError(error, "This canonical source could not be loaded.").summary,
           });
         }
       });

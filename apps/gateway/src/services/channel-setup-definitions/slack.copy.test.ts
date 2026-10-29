@@ -15,6 +15,7 @@ import {
   buildIntegrationConnectionChecks,
   type IntegrationDiagnosticsPort,
 } from "../integration-diagnostics-service.js";
+import { GUIDED_CONTENT_VERSION_SUFFIX } from "./guided-journey.js";
 import * as slackModule from "./slack.js";
 
 function guide() {
@@ -125,16 +126,22 @@ describe("Slack setup guide: what it says up front (items 4 and 5)", () => {
     const wizard = guide().definition.wizard;
 
     expect(wizard.introSummary).toBe(
-      "Send messages from your own Slack app into the channels you choose. Receiving messages needs an app installed with OAuth and a public HTTPS address.",
+      "Send messages from your own Slack app into the channels you choose. To receive messages, use Socket Mode, which needs no public web address and is quickest to set up from Messaging in Chat, or an app installed with OAuth and a public HTTPS address.",
     );
     expect(wizard.prerequisites).toEqual([
       "Your own Slack app with the chat:write scope, installed to your workspace.",
       "The bot invited to each private channel (/invite @your-app).",
-      "To receive messages: an OAuth install from here with message history scopes, and a public HTTPS address for this Gateway.",
+      "To receive messages: Socket Mode with an app-level token (no public web address needed), or an OAuth install from here with message history scopes and a public HTTPS address for this Gateway.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. To receive messages (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a Slack message from …\", and add that id under Who may message this bot with Edit setup.",
+      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. With Socket Mode, send your bot a direct message and check the reply. To receive on a web address instead (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a Slack message from …\", and add that id under Who may message this bot with Edit setup.",
     ]);
+  });
+
+  it("carries the new guide-text version, so setup tests that passed on the old text run again", () => {
+    // Setup evidence records this version. The posture text above changed, so the shared suffix moved on.
+    expect(GUIDED_CONTENT_VERSION_SUFFIX).not.toBe(".guided-2026-10-28");
+    expect(guide().definition.wizard.contentVersion).toBe(`2026.03.slack.v1${GUIDED_CONTENT_VERSION_SUFFIX}`);
   });
 
   it("says in the overview that a pasted bot token is the main path and OAuth is advanced", () => {

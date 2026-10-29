@@ -83,6 +83,7 @@ import {
   loadPromptLabRunVariableSession,
   savePromptLabRunVariableSession,
 } from "./prompt-run-variable-session";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export interface UsePromptPacksWorkbenchStateOptions {
   variant: "library" | "ops";
@@ -262,7 +263,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       focusedRunIdRef.current = null;
       setFocusedRunId(null);
       setSelectedPackId(packId);
-      void loadPack(packId).catch((err: Error) => setError(err.message));
+      void loadPack(packId).catch((err: unknown) => setError(describeApiError(err).summary));
     },
     [loadPack],
   );
@@ -326,7 +327,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         }
         setError(null);
       } catch (err) {
-        setError((err as Error).message);
+        setError(describeApiError(err).summary);
       } finally {
         if (background) {
           setIsRefreshing(false);
@@ -655,14 +656,14 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
             });
             autoScoreSummary = ` Auto-scored ${formatWeightedScore(auto.score.weightedScore)} (${auto.score.autoVerdict}).`;
           } catch (err) {
-            autoScoreError = (err as Error).message;
+            autoScoreError = describeApiError(err).summary;
           }
         }
         try {
           const exportRecord = await savePromptPackSnapshot(selectedPackId);
           savedLogPath = exportRecord.latestSnapshotPath ?? exportRecord.path;
         } catch (err) {
-          exportError = (err as Error).message;
+          exportError = describeApiError(err).summary;
         }
         await loadPack(selectedPackId);
         setSelectedTestId(test.testId);
@@ -678,7 +679,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
           setSuccess(`Ran ${test.code}.${autoScoreSummary}${savedLogPath ? ` Saved log to ${savedLogPath}.` : ""}`);
         }
       } catch (err) {
-        setError((err as Error).message);
+        setError(describeApiError(err).summary);
       } finally {
         setActiveRun(null);
       }
@@ -703,7 +704,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
               `Benchmark ${status.run.status}: ${status.run.benchmarkRunId}. Saved log to ${exportRecord.latestSnapshotPath ?? exportRecord.path}.`,
             );
           } catch (err) {
-            setError(`Benchmark ${status.run.status}, but saving the run log failed: ${(err as Error).message}`);
+            setError(`Benchmark ${status.run.status}, but saving the run log failed: ${describeApiError(err).summary}`);
           }
         }
       } else {
@@ -747,7 +748,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       );
     } catch (err) {
       setBenchmarkPending(false);
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     }
   }, [buildRunInput, executionStyle, loadBenchmarkStatus, selectedModel, selectedPackId, selectedRunModel, tests]);
 
@@ -773,7 +774,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       const info = await savePromptPackSnapshot(selectedPackId);
       setSuccess(`Saved prompt-pack log to ${info.latestSnapshotPath ?? info.path}`);
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setExporting(false);
     }
@@ -798,7 +799,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       setSuccess(`Reset complete: removed ${result.deletedRuns} run(s) and ${result.deletedScores} score(s).`);
       setConfirmResetArmed(false);
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setResetting(false);
     }
@@ -863,7 +864,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       setSuccess(`Saved review for ${selectedTest.code}.`);
       return clean;
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
       return false;
     } finally {
       setSavingScore(false);
@@ -886,7 +887,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         `Auto-scored ${selectedTest.code}: ${formatWeightedScore(result.score.weightedScore)} (${result.score.autoVerdict}).`,
       );
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setAutoScoring(false);
     }
@@ -905,7 +906,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       await loadPack(selectedPackId);
       setSuccess(`Auto-scored ${result.items.length} run(s); skipped ${result.skipped}.`);
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setAutoScoring(false);
     }
@@ -934,7 +935,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       setSuccess(`Benchmark started: ${started.benchmarkRunId}`);
     } catch (err) {
       setBenchmarkPending(false);
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     }
   }, [benchmarkProvidersInput, benchmarkTestCodes, executionStyle, loadBenchmarkStatus, selectedPackId]);
 
@@ -958,7 +959,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
             );
           } catch (err) {
             setError(
-              `Replay regression ${status.run.status}, but saving the run log failed: ${(err as Error).message}`,
+              `Replay regression ${status.run.status}, but saving the run log failed: ${describeApiError(err).summary}`,
             );
           }
         }
@@ -988,7 +989,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       setSuccess(`Replay regression started: ${started.regressionRunId}`);
     } catch (err) {
       setRegressionPending(false);
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     }
   }, [benchmarkRunId, benchmarkTestCodes, loadRegressionStatus, selectedPackId]);
 
@@ -996,7 +997,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     if (!benchmarkRunId) {
       return;
     }
-    void loadBenchmarkStatus(benchmarkRunId).catch((err: Error) => setError(err.message));
+    void loadBenchmarkStatus(benchmarkRunId).catch((err: unknown) => setError(describeApiError(err).summary));
   }, [benchmarkRunId, loadBenchmarkStatus]);
 
   const stopBenchmark = useCallback(async () => {
@@ -1012,7 +1013,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       await loadPack(status.run.packId);
       setSuccess(`Benchmark stopped: ${status.run.benchmarkRunId}`);
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setBenchmarkStopping(false);
     }
@@ -1022,7 +1023,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     if (!regressionRunId) {
       return;
     }
-    void loadRegressionStatus(regressionRunId).catch((err: Error) => setError(err.message));
+    void loadRegressionStatus(regressionRunId).catch((err: unknown) => setError(describeApiError(err).summary));
   }, [loadRegressionStatus, regressionRunId]);
 
   const createRetuneCampaign = useCallback(async () => {
@@ -1046,7 +1047,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       setRetuneCampaign(campaign);
       setSuccess(`Retune campaign ${campaign.campaignId} created with frozen inputs.`);
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setRetunePending(false);
     }
@@ -1059,7 +1060,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     try {
       setRetuneCampaign(await fetchPromptRetuneCampaign(retuneCampaign.campaignId));
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setRetunePending(false);
     }
@@ -1073,7 +1074,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       setRetuneCampaign(await startPromptRetuneNoise(retuneCampaign.campaignId));
       setSuccess("A/A measurement started against identical frozen prompt bytes.");
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setRetunePending(false);
     }
@@ -1090,7 +1091,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       setRetuneHypothesis("");
       setSuccess("Candidate measurement started. Prompt promotion remains a manual decision.");
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setRetunePending(false);
     }
@@ -1104,7 +1105,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       setRetuneCampaign(await cancelPromptRetuneCampaign(retuneCampaign.campaignId));
       setSuccess("Retune campaign cancelled.");
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setRetunePending(false);
     }
@@ -1119,7 +1120,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         setRetuneCampaign(await dispositionPromptRetunePass(retuneCampaign.campaignId, passId, { disposition }));
         setSuccess(`Candidate marked ${disposition}. Prompt content was not changed.`);
       } catch (err) {
-        setError((err as Error).message);
+        setError(describeApiError(err).summary);
       } finally {
         setRetunePending(false);
       }
@@ -1134,7 +1135,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     }
     void loadTrends(selectedPackId).catch((err: Error) => {
       setTrendSeries([]);
-      setError(err.message || "Failed to load capability trend series.");
+      setError(describeApiError(err, "Failed to load capability trend series.").summary);
     });
   }, [loadTrends, selectedPackId]);
 
@@ -1156,7 +1157,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       selectPack(imported.pack.packId);
       setSuccess(`Imported ${imported.tests.length} tests.`);
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setImporting(false);
     }

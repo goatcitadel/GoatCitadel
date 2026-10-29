@@ -726,6 +726,16 @@ describe("ProjectsRoutePage", () => {
     expect(renderedText(renderer)).not.toContain("No active projects found in this workspace.");
   });
 
+  it("shows a plain sentence when the first load fails with a non-Error or technical value", async () => {
+    mockedFetchChatProjects.mockRejectedValueOnce("offline");
+    const offline = await renderPage(defaultProps());
+    expect(renderedText(offline)).toContain("offline");
+
+    mockedFetchChatProjects.mockRejectedValueOnce(new Error('API error 503: {"error":"upstream"}'));
+    const technical = await renderPage(defaultProps());
+    expect(renderedText(technical)).not.toContain("API error 503");
+  });
+
   it("keeps project pins best-effort when localStorage access is blocked", async () => {
     const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
     const blockedWindow = {} as Window;
