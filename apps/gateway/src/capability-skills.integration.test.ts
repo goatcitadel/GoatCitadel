@@ -232,7 +232,6 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
       state: "on",
       callable: true,
       lifecycleState: "approved",
-      hiddenInWorkspace: false,
       // The skill state owner looks skills up without a workspace, so the switch can't reach this one.
       switchable: false,
     });
@@ -280,9 +279,9 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
       origin: "built_in",
       category: "research",
       state: "on",
-      hiddenInWorkspace: false,
       switchable: true,
     });
+    expect(research).not.toHaveProperty("hiddenInWorkspace");
     expect(listed.items.every((item) => item.switchable)).toBe(true);
     // A revision that moved on is refused before any approval exists, in plain words with its own code.
     const stale = await inject("POST", `${SKILLS_URL}/state`, {

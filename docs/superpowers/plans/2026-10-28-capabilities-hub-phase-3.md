@@ -7,7 +7,7 @@
 **Architecture:**
 - A category map in `@goatcitadel/contracts` gives every skill one of 11 plain categories: a fixed entry for each of the 18 shipped skills, and a tag rule for every other skill. Nothing changes in any `SKILL.md`, so the bundled skills lock stays as it is.
 - New Gateway routes under `/api/v1/capabilities/skills` serve the tab, and the cockpit renders them without joining sources:
-  - the installed list, workspace-aware, with hidden-in-workspace and waiting-approval facts
+  - the installed list, workspace-aware, with waiting-approval facts (no hidden-in-workspace marker: the operator dropped it on 2026-10-28, because Chat doesn't filter by a workspace's skill choices)
   - use counts over 365 days, counted from the chat turn records that list the skills each turn loaded, cached for 10 minutes
   - one skill's details, including its `SKILL.md` text
   - in PR 3c: the Discover list, a source check, and the install steps
@@ -78,7 +78,7 @@ Each PR is cut from a freshly fetched `origin/main` in its own worktree (superpo
   - Skill ids, URLs, commit hashes, paths and raw codes appear only inside `TechnicalDetails`.
   - Counts use `plural()`.
 - **A count is never made up.** When use counts can't be read, rows say "Uses unknown", never "Not used yet" and never 0. When the candidate count can't be read, the link is absent rather than showing 0.
-- **A row never shows plain "On" when the AI can't use the skill:** hidden in this workspace, not reviewed yet, or waiting on an approval.
+- **A row never shows plain "On" when the AI can't use the skill:** not reviewed yet, or waiting on an approval.
 - **No `SKILL.md` byte changes.** If a task must change a bundled one, run `pnpm update:skills:lock` in the same commit.
 - **Skill text renders as safe markdown,** with no raw HTML (the Chat renderer).
 - **GatewayService stays at or under 13132 counted lines.** It is 13129 on `7f1caaf70`.
@@ -288,7 +288,6 @@ export interface CapabilitySkillItem {
   pinned: boolean;
   lifecycleState?: SkillLifecycleState;
   tags: string[];
-  hiddenInWorkspace: boolean;
   pendingApprovalId?: string;  // a skill.lifecycle approval for this skill still waiting
 }
 export interface CapabilitySkillsResponse {
@@ -326,7 +325,7 @@ export class CapabilitySkillsService {
   Find what writes `.assistant/skills` (`managed`); it stays `imported` unless that shows it is shipped.
 - **State** maps `enabled` → on, `sleep` → paused and `disabled` → off.
 - **`callable`** comes from the item as it is, never recomputed.
-- **Hidden in this workspace** follows Phase 1's rule. A known skill id missing from the selection's `effectiveRefs` is hidden. An unreadable selection hides nothing and adds the issue "Workspace skill choices couldn't be read right now."
+- **No hidden-in-workspace marker** (operator, 2026-10-28). Chat resolves skills from the full set, so a workspace's skill choices don't stop use, and the list doesn't read them.
 - **`candidatesWaiting`** counts the catalog's `candidate_skill` entries whose `lifecycleState` is `candidate`, counted once per candidate id (entries are per version: `candidate:<candidateId>:<versionId>`). An unreadable catalog leaves it absent.
 - **`pendingApprovalId`** is set from pending `skill.lifecycle` approvals whose subject is the skill. An unreadable approval list leaves it unset and adds the issue "Waiting approvals couldn't be read right now."
 - **Sort** by name with a locale-independent compare (not `localeCompare`).
@@ -608,7 +607,6 @@ export function skillSearchSuggestion(items: readonly CapabilitySkillItem[]): st
 | Condition (first match) | State word | Reason line |
 |---|---|---|
 | waiting | Waiting on you in Inbox | "Open in Inbox" link (`inboxApprovalLink`) |
-| hiddenInWorkspace | Hidden in this workspace | "Change it in Settings" → `/settings/citadel#workspace-capabilities` |
 | off | Off | The AI can't use it |
 | paused | Paused | Used only when you name it |
 | on, not callable | Not usable yet | It hasn't been reviewed, so the AI can't use it |
@@ -1073,7 +1071,7 @@ Only an `https` URL is accepted in the browser (a plain message otherwise). The 
 | `/library/skills` redirects with the Skills tab; `/library/capabilities` once both have shipped | 7 |
 | Slimmed Library view for candidates, proposals and mesh entries | 7 |
 | Command palette opens the Capabilities item | 7 |
-| Hidden in this workspace never shows plain On | 4, 9 |
+| Hidden in this workspace never shows plain On | dropped by the operator on 2026-10-28: Chat ignores workspace skill choices; follow-up |
 | #572 skip covers Capabilities actions; setting off keeps today's approvals; `remote_hardened` always asks; AI actions keep every approval | 5, 12 |
 | Cached instant paint, "Takes effect in new chats", empty and error states with a next action | 6, 9, 10, 14 |
 
@@ -1081,7 +1079,7 @@ Only an `https` URL is accepted in the browser (a plain message otherwise). The 
 - **Uses count chat turns that loaded the skill.** That covers Chat, scheduled and remote-worker turns. The spec's `usageCount` only moves on the resolve-activation route, so it would read "Not used yet" for skills used daily.
 - **No index for the use counts.** The 10-minute cache bounds the scan, and an index would bring the Postgres dual-lineage migration work. Revisit if a large install shows a slow first read.
 - **Code Mode has no Library entries today** (the Gateway lists none), so the slimmed Library holds candidates, proposals and mesh entries.
-- **Switches are install-wide,** like the skill state they change. Hidden-in-workspace and self-authored skills follow the active workspace.
+- **Switches are install-wide,** like the skill state they change. Self-authored skills follow the active workspace.
 - **Discover's marketplaces are searched with the existing fetch,** which predates the network allowlist and reaches two fixed sites. Opening Discover doesn't use it.
 
 **Found on the way (follow-ups, not in this plan):**

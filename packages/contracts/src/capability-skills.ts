@@ -58,11 +58,6 @@ export interface CapabilitySkillItem {
   pinned: boolean;
   lifecycleState?: SkillLifecycleState;
   tags: string[];
-  /**
-   * This workspace's skill choices leave it out of its skill list. It is a fact about those choices; today it does not
-   * by itself stop Chat from using the skill.
-   */
-  hiddenInWorkspace: boolean;
   /** A `skill.lifecycle` approval for this skill that is still waiting. */
   pendingApprovalId?: string;
 }

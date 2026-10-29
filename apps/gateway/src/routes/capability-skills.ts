@@ -50,9 +50,8 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
-   * Every skill loaded for a workspace, with its category, origin, state, whether it is callable, whether the
-   * workspace's skill choices leave it out, and any approval it waits on. It reads local state only and publishes no
-   * events.
+   * Every skill loaded for a workspace, with its category, origin, state, whether it is callable, whether it can be
+   * switched, and any approval it waits on. It reads local state only and publishes no events.
    */
   fastify.get("/api/v1/capabilities/skills", { config: { rateLimit: LIST_RATE_LIMIT } }, async (request, reply) => {
     const query = listQuerySchema.safeParse(request.query);

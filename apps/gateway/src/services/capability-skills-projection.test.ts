@@ -11,7 +11,6 @@ import {
   buildCapabilitySkillItems,
   CATALOG_CANDIDATE_VERSION_LIMIT,
   countWaitingCandidates,
-  hiddenSkillIds,
   pendingSkillApprovalIds,
   skillOriginFor,
   type ShippedSkillDirs,
@@ -86,7 +85,6 @@ const SHIPPED: ShippedSkillDirs = {
 };
 
 const ITEMS_INPUT = {
-  hiddenSkillIds: new Set<string>(),
   pendingApprovalIds: new Map<string, string>(),
   switchableSkillIds: new Set<string>(),
   shippedSkillDirs: SHIPPED,
@@ -213,7 +211,6 @@ describe("buildCapabilitySkillItems", () => {
 
   it("projects every field the tab shows, sorted by name in a locale-independent order", () => {
     const items = buildCapabilitySkillItems({
-      hiddenSkillIds: new Set(["extra:pdf-tools"]),
       pendingApprovalIds: new Map([["bundled:research", "approval-1"]]),
       switchableSkillIds: new Set(["bundled:research", "extra:pdf-tools"]),
       shippedSkillDirs: SHIPPED,
@@ -247,14 +244,12 @@ describe("buildCapabilitySkillItems", () => {
       switchable: true,
       pinned: false,
       tags: [],
-      hiddenInWorkspace: false,
       pendingApprovalId: "approval-1",
     });
     // Not in the skill state owner's lookup, so the switch would refuse it.
     expect(items[1]).toMatchObject({
       category: "email",
       origin: "workspace",
-      hiddenInWorkspace: false,
       switchable: false,
     });
     expect(items[1]).not.toHaveProperty("pendingApprovalId");
@@ -267,22 +262,7 @@ describe("buildCapabilitySkillItems", () => {
       revision: 4,
       lifecycleState: "approved",
       tags: ["docs"],
-      hiddenInWorkspace: true,
     });
-  });
-});
-
-describe("hiddenSkillIds", () => {
-  it("hides a skill the workspace left out, and hides nothing when the choices can't be read", () => {
-    const known = ["bundled:research", "extra:pdf-tools", "extra:reviewed-0123456789ab"];
-
-    expect([...hiddenSkillIds(known, new Set(["bundled:research"]))]).toEqual([
-      "extra:pdf-tools",
-      "extra:reviewed-0123456789ab",
-    ]);
-    // A workspace that keeps its Citadel's full set hides nothing, self-authored skills included.
-    expect([...hiddenSkillIds(known, "ALL")]).toEqual([]);
-    expect([...hiddenSkillIds(known, undefined)]).toEqual([]);
   });
 });
 

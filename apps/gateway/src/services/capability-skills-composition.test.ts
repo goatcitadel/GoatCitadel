@@ -77,7 +77,6 @@ function owners(overrides: Partial<CapabilitySkillsOwners> = {}): CapabilitySkil
       setSkillState: vi.fn(async (): Promise<SkillStateMutationOutcome> => WAITING),
     },
     loadedSkills: vi.fn(() => [{ skillId: "bundled:research" }]),
-    capabilityScope: { resolveEffectiveSkills: vi.fn(async () => "ALL" as const) },
     capabilities: { listCapabilityCatalog: vi.fn(async () => []) },
     approvals: {
       listApprovalsPage: vi.fn(async (): Promise<ApprovalListResponse> => ({ items: [] })),
@@ -151,15 +150,14 @@ describe("composeCapabilitySkills", () => {
     await expect(usage.read({ refresh: false })).rejects.toThrow("malformed JSON");
   });
 
-  it("reads the workspace's skills, its choices and the whole inspectable catalog through their owners", async () => {
+  it("reads the workspace's skills and the whole inspectable catalog through their owners", async () => {
     const parts = owners();
 
     const response = await composeCapabilitySkills(parts).skills.list("workspace-a");
 
     // Every skill whatever the workspace's choices, with that workspace's approved self-authored skills.
     expect(parts.skills.listSkills).toHaveBeenCalledWith("ALL", "workspace-a");
-    expect(parts.capabilityScope.resolveEffectiveSkills).toHaveBeenCalledWith("workspace-a");
-    // Every skill, hidden ones included, so a hidden skill's details still have their catalog entry.
+    // Every skill whatever the workspace's choices, so each skill's details have their catalog entry.
     expect(parts.capabilities.listCapabilityCatalog).toHaveBeenCalledWith("inspectable", "ALL", "workspace-a");
     expect(parts.features.isFeatureEnabled).toHaveBeenCalledWith("settingsApprovalSkipEnabled");
     expect(response.items.map((item) => item.skillId)).toEqual(["bundled:research"]);
@@ -288,13 +286,11 @@ describe("composeCapabilitySkills", () => {
   it("writes a failed read to the server log with secrets redacted, and shows only plain wording", async () => {
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
-      const resolveEffectiveSkills = vi.fn(async (): Promise<"ALL"> => {
+      const loadedSkills = vi.fn((): readonly Pick<SkillListItem, "skillId">[] => {
         throw new Error("upstream rejected Authorization: Bearer sk-live-abcdefghijklmnopqrstuvwxyz0123456789");
       });
 
-      const response = await composeCapabilitySkills(
-        owners({ capabilityScope: { resolveEffectiveSkills } }),
-      ).skills.list("workspace-a");
+      const response = await composeCapabilitySkills(owners({ loadedSkills })).skills.list("workspace-a");
 
       const logged = stderr.mock.calls
         .map(([chunk]) => String(chunk))
@@ -303,7 +299,7 @@ describe("composeCapabilitySkills", () => {
       expect(logged[0]).toContain("upstream rejected");
       expect(logged[0]).not.toContain("sk-live-abcdefghijklmnopqrstuvwxyz0123456789");
       expect(JSON.stringify(response)).not.toContain("upstream rejected");
-      expect(response.issues).toEqual(["Workspace skill choices couldn't be read right now."]);
+      expect(response.issues).toEqual(["Which skills can be switched couldn't be read right now."]);
     } finally {
       stderr.mockRestore();
     }

@@ -132,7 +132,6 @@ const LIST: CapabilitySkillsResponse = {
       pinned: false,
       lifecycleState: "trusted",
       tags: [],
-      hiddenInWorkspace: false,
     },
   ],
   candidatesWaiting: 1,

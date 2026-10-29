@@ -11,7 +11,6 @@ import {
   type SkillOrigin,
   type SkillRuntimeState,
 } from "@goatcitadel/contracts";
-import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import { parseSkillLifecycleApprovalBinding } from "./skill-governance-journey-producer.js";
 
 const STATE_BY_RUNTIME_STATE: Readonly<Record<SkillRuntimeState, CapabilitySkillState>> = {
@@ -64,18 +63,6 @@ function cameFromGoatCitadel(skill: OriginFacts, shipped: ShippedSkillDirs): boo
 }
 
 /**
- * The skills the workspace's choices leave out. "ALL" keeps every skill, approved self-authored ones included, which is
- * the same rule the skill list and catalog routes filter by. An unreadable choice (`undefined`) hides nothing.
- */
-export function hiddenSkillIds(
-  knownSkillIds: readonly string[],
-  effective: EffectiveCapabilitySet | undefined,
-): Set<string> {
-  if (effective === undefined || effective === "ALL") return new Set();
-  return new Set(knownSkillIds.filter((skillId) => !effective.has(skillId)));
-}
-
-/**
  * The waiting `skill.lifecycle` approval for each skill whose single-skill change it would apply, keyed by skill id.
  * Batch and activation-policy approvals name no one skill, and a payload that doesn't parse is ignored. The newest
  * approval wins when a skill has two.
@@ -122,7 +109,6 @@ export function countWaitingCandidates(catalog: readonly CapabilityCatalogEntry[
  */
 export function buildCapabilitySkillItems(input: {
   skills: readonly SkillListItem[];
-  hiddenSkillIds: ReadonlySet<string>;
   pendingApprovalIds: ReadonlyMap<string, string>;
   switchableSkillIds: ReadonlySet<string>;
   shippedSkillDirs: ShippedSkillDirs;
@@ -144,7 +130,6 @@ export function buildCapabilitySkillItems(input: {
         pinned: skill.pinned === true,
         ...(skill.lifecycleState ? { lifecycleState: skill.lifecycleState } : {}),
         tags: [...(skill.tags ?? [])],
-        hiddenInWorkspace: input.hiddenSkillIds.has(skill.skillId),
         ...(pendingApprovalId ? { pendingApprovalId } : {}),
       };
     })

@@ -82,7 +82,6 @@ function candidate(candidateId: string, versionId: string): CapabilityCatalogEnt
 function sources(overrides: Partial<CapabilitySkillsSources> = {}): CapabilitySkillsSources {
   return {
     listSkills: vi.fn(async () => SKILLS),
-    resolveEffectiveSkills: vi.fn(async () => "ALL" as const),
     listInspectableCatalog: vi.fn(async () => []),
     listPendingApprovals: vi.fn(async () => []),
     // The skill state owner's lookup: the loaded skills, without the workspace's self-authored one.
@@ -100,46 +99,21 @@ const failing = (message: string) =>
   });
 
 describe("CapabilitySkillsService.list", () => {
-  it("lists every skill the workspace loaded, with nothing hidden and no issues", async () => {
+  it("lists every skill the workspace loaded, with no issues", async () => {
     const reads = sources();
     const response = await new CapabilitySkillsService(reads).list(WORKSPACE_ID);
 
     expect(reads.listSkills).toHaveBeenCalledWith(WORKSPACE_ID);
-    expect(reads.resolveEffectiveSkills).toHaveBeenCalledWith(WORKSPACE_ID);
     expect(reads.listInspectableCatalog).toHaveBeenCalledWith(WORKSPACE_ID);
     expect(response).toMatchObject({ workspaceId: WORKSPACE_ID, candidatesWaiting: 0, issues: [] });
-    expect(response.items.map((item) => [item.skillId, item.origin, item.hiddenInWorkspace])).toEqual([
-      ["extra:reviewed-0123456789ab", "self_authored", false],
-      ["extra:pdf-tools", "imported", false],
-      ["bundled:research", "built_in", false],
+    expect(response.items.map((item) => [item.skillId, item.origin])).toEqual([
+      ["extra:reviewed-0123456789ab", "self_authored"],
+      ["extra:pdf-tools", "imported"],
+      ["bundled:research", "built_in"],
     ]);
+    // Chat doesn't filter by the workspace's skill choices, so no row claims a skill is hidden there.
+    expect(response.items.some((item) => "hiddenInWorkspace" in item)).toBe(false);
     expect(Number.isNaN(Date.parse(response.generatedAt))).toBe(false);
-  });
-
-  it("hides a skill the workspace left out, and hides nothing when the choices can't be read", async () => {
-    const reportFailure = vi.fn();
-    const curated = await new CapabilitySkillsService(
-      sources({ resolveEffectiveSkills: vi.fn(async () => new Set(["bundled:research"])) }),
-    ).list(WORKSPACE_ID);
-
-    expect(curated.items.filter((item) => item.hiddenInWorkspace).map((item) => item.skillId)).toEqual([
-      "extra:reviewed-0123456789ab",
-      "extra:pdf-tools",
-    ]);
-    expect(curated.issues).toEqual([]);
-
-    const unreadable = await new CapabilitySkillsService(
-      sources({ resolveEffectiveSkills: failing("scope table is locked") }),
-      reportFailure,
-    ).list(WORKSPACE_ID);
-
-    expect(unreadable.items.some((item) => item.hiddenInWorkspace)).toBe(false);
-    expect(unreadable.items).toHaveLength(3);
-    expect(unreadable.issues).toEqual(["Workspace skill choices couldn't be read right now."]);
-    expect(reportFailure).toHaveBeenCalledWith(
-      "workspace",
-      expect.objectContaining({ message: "scope table is locked" }),
-    );
   });
 
   it("counts each waiting candidate once across its versions", async () => {
@@ -232,12 +206,10 @@ describe("CapabilitySkillsService.list", () => {
       sources({
         listSwitchableSkillIds: failing("skills not loaded"),
         listPendingApprovals: failing("approvals unreadable"),
-        resolveEffectiveSkills: failing("scope unreadable"),
       }),
     ).list(WORKSPACE_ID);
 
     expect(response.issues).toEqual([
-      "Workspace skill choices couldn't be read right now.",
       "Waiting approvals couldn't be read right now.",
       "Which skills can be switched couldn't be read right now.",
     ]);
@@ -324,14 +296,6 @@ describe("CapabilitySkillsService.detail", () => {
     expect(JSON.stringify(detail)).not.toContain("hunter2");
     // The skill's own text is sent as written, as GET /api/v1/skills sends it.
     expect(detail.instructionBody).toBe(instructionBody);
-  });
-
-  it("serves a skill the workspace hides, since the list shows it", async () => {
-    const detail = await new CapabilitySkillsService(
-      sources({ resolveEffectiveSkills: vi.fn(async () => new Set<string>()) }),
-    ).detail(WORKSPACE_ID, "extra:reviewed-0123456789ab");
-
-    expect(detail.skillId).toBe("extra:reviewed-0123456789ab");
   });
 
   it("throws NotFoundError for an unknown skill", async () => {

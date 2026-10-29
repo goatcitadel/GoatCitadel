@@ -12,7 +12,6 @@ import {
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { SkillUseCount } from "@goatcitadel/storage";
-import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import { CapabilitySkillActionsService, type CapabilitySkillActionStep } from "./capability-skill-actions-service.js";
 import { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
 import type { ShippedSkillDirs } from "./capability-skills-projection.js";
@@ -49,8 +48,6 @@ export interface CapabilitySkillsOwners {
    * the switch can reach exactly these. A workspace's self-authored skills are not in it.
    */
   loadedSkills(): readonly Pick<SkillListItem, "skillId">[];
-  /** The workspace skill choices, as the skill list and catalog routes resolve them. */
-  capabilityScope: { resolveEffectiveSkills(workspaceId: string): Promise<EffectiveCapabilitySet> };
   /** The catalog route's owner. */
   capabilities: {
     listCapabilityCatalog(
@@ -92,7 +89,6 @@ export function composeCapabilitySkills({
   chatTurnCapabilityProfiles,
   skills,
   loadedSkills,
-  capabilityScope,
   capabilities,
   approvals,
   audit,
@@ -106,9 +102,8 @@ export function composeCapabilitySkills({
     usage: new CapabilitySkillUsageService((sinceIso) => chatTurnCapabilityProfiles.countSkillUsesSince(sinceIso)),
     skills: new CapabilitySkillsService(
       {
-        // Every skill, whatever the workspace's choices; the list marks the hidden ones instead of dropping them.
+        // Every skill, whatever the workspace's choices: Chat doesn't filter by them, so the tab doesn't either.
         listSkills: (workspaceId) => skills.listSkills("ALL", workspaceId),
-        resolveEffectiveSkills: (workspaceId) => capabilityScope.resolveEffectiveSkills(workspaceId),
         listInspectableCatalog: (workspaceId) => capabilities.listCapabilityCatalog("inspectable", "ALL", workspaceId),
         listPendingApprovals: () => readAllPendingApprovals((input) => approvals.listApprovalsPage(input)),
         listSwitchableSkillIds: async () => loadedSkills().map((skill) => skill.skillId),

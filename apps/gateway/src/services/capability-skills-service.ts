@@ -9,12 +9,10 @@ import {
   type SkillListItem,
 } from "@goatcitadel/contracts";
 import { projectCapabilityPublicValue } from "./capability-public-projection.js";
-import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import {
   buildCapabilitySkillDetail,
   buildCapabilitySkillItems,
   countWaitingCandidates,
-  hiddenSkillIds,
   pendingSkillApprovalIds,
   type ShippedSkillDirs,
 } from "./capability-skills-projection.js";
@@ -24,8 +22,6 @@ import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 export interface CapabilitySkillsSources {
   /** Every skill loaded for the workspace, its approved self-authored skills included, whatever its choices. */
   listSkills(workspaceId: string): Promise<readonly SkillListItem[]>;
-  /** The workspace's effective skill set: "ALL", or the ids its choices (and its Citadel's) keep. */
-  resolveEffectiveSkills(workspaceId: string): Promise<EffectiveCapabilitySet>;
   /** The inspectable catalog for the workspace, with every skill in it. */
   listInspectableCatalog(workspaceId: string): Promise<readonly CapabilityCatalogEntry[]>;
   /** Every approval still waiting, of any kind and in any workspace. Skill approvals have no workspace. */
@@ -43,14 +39,13 @@ export interface CapabilitySkillsSources {
   readApprovalSkipSetting(): Promise<boolean>;
 }
 
-export type CapabilitySkillsSource = "skills" | "workspace" | "catalog" | "approvals" | "switchable" | "approval_skip";
+export type CapabilitySkillsSource = "skills" | "catalog" | "approvals" | "switchable" | "approval_skip";
 
 /** Called with the real error of a failed read, so the response can carry plain wording only. */
 export type CapabilitySkillsFailureReporter = (source: CapabilitySkillsSource, error: unknown) => void;
 
 const UNREADABLE_SKILLS = "Skills can't be read right now.";
 const ISSUE_MESSAGES = {
-  workspace: "Workspace skill choices couldn't be read right now.",
   approvals: "Waiting approvals couldn't be read right now.",
   switchable: "Which skills can be switched couldn't be read right now.",
 } as const;
@@ -66,9 +61,8 @@ export class CapabilitySkillsService {
   ) {}
 
   public async list(workspaceId: string): Promise<CapabilitySkillsResponse> {
-    const [skills, effective, catalog, approvals, switchable, operatorApprovalSkip] = await Promise.all([
+    const [skills, catalog, approvals, switchable, operatorApprovalSkip] = await Promise.all([
       this.readSkills(workspaceId),
-      this.attempt("workspace", () => this.sources.resolveEffectiveSkills(workspaceId)),
       this.attempt("catalog", () => this.sources.listInspectableCatalog(workspaceId)),
       this.attempt("approvals", () => this.sources.listPendingApprovals()),
       this.attempt("switchable", () => this.sources.listSwitchableSkillIds()),
@@ -77,7 +71,6 @@ export class CapabilitySkillsService {
 
     // Fixed order, whatever order the reads finish in.
     const issues = [
-      ...(effective.ok ? [] : [ISSUE_MESSAGES.workspace]),
       ...(approvals.ok ? [] : [ISSUE_MESSAGES.approvals]),
       ...(switchable.ok ? [] : [ISSUE_MESSAGES.switchable]),
     ];
@@ -86,10 +79,6 @@ export class CapabilitySkillsService {
       workspaceId,
       items: buildCapabilitySkillItems({
         skills,
-        hiddenSkillIds: hiddenSkillIds(
-          skills.map((skill) => skill.skillId),
-          effective.ok ? effective.value : undefined,
-        ),
         pendingApprovalIds: approvals.ok ? pendingSkillApprovalIds(approvals.value) : new Map(),
         // A lookup that can't be read offers no switch, rather than one the owner might refuse.
         switchableSkillIds: new Set(switchable.ok ? switchable.value : []),
@@ -103,7 +92,7 @@ export class CapabilitySkillsService {
     };
   }
 
-  /** One skill the workspace loaded, hidden or not. An id the workspace doesn't load is not found. */
+  /** One skill the workspace loaded, whatever its choices. An id the workspace doesn't load is not found. */
   public async detail(workspaceId: string, skillId: string): Promise<CapabilitySkillDetail> {
     const [skills, catalog] = await Promise.all([
       this.readSkills(workspaceId),
