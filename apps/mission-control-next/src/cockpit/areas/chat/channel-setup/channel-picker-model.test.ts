@@ -160,7 +160,7 @@ describe("where a channel is set up", () => {
   it("lists the channels with a Chat page, the ones Settings hands over, and the ones with a key page", () => {
     expect([...CONVERTED_SETUP_CHANNELS].sort()).toEqual(["discord", "slack", "telegram", "whatsapp"]);
     expect([...CHAT_ONLY_SETUP_CHANNELS]).toEqual(["telegram"]);
-    expect([...KEY_CHANGE_CHANNELS]).toEqual(["telegram", "discord", "slack"]);
+    expect([...KEY_CHANGE_CHANNELS]).toEqual(["telegram", "discord", "slack", "whatsapp"]);
   });
 
   it("names a converted channel's Chat page for the picker, and nothing for the rest", () => {
@@ -308,5 +308,39 @@ describe("which connections change their key on a page in Chat", () => {
     ])("is false for %s: it has no app-level token to change", (_name, config) => {
       expect(hasChatKeyChangePage(connection("slack", config))).toBe(false);
     });
+  });
+
+  describe("WhatsApp, only when the page can check the new token against what is saved", () => {
+    // What a connection made on WhatsApp's page in Chat keeps: the three IDs, and the app secret as a marker.
+    const complete = {
+      phoneNumberId: "106540352242922",
+      businessAccountId: "102290129340398",
+      appId: "670843887433847",
+      appSecret: "[REDACTED]",
+    };
+
+    it.each([
+      ["a connection made on WhatsApp's page", complete],
+      ["an app secret kept in a variable", { ...complete, appSecret: undefined, appSecretEnv: "WHATSAPP_APP_SECRET" }],
+      ["IDs with stray spaces", { ...complete, appId: " 670843887433847 " }],
+    ])("is true for %s", (_name, config) => {
+      expect(hasChatKeyChangePage(connection("whatsapp", config))).toBe(true);
+    });
+
+    it.each([
+      ["no App ID", { ...complete, appId: undefined }],
+      ["no WhatsApp Business Account ID", { ...complete, businessAccountId: undefined }],
+      ["no Phone number ID", { ...complete, phoneNumberId: undefined }],
+      ["no app secret", { ...complete, appSecret: undefined }],
+      ["blank IDs and a blank app secret", { phoneNumberId: " ", businessAccountId: "", appId: " ", appSecret: "  " }],
+      ["a send-only connection from Settings", { phoneNumberId: complete.phoneNumberId, accessToken: "[REDACTED]" }],
+      ["IDs that are not text", { ...complete, appId: 670843887433847 }],
+      ["nothing saved", {}],
+    ])(
+      "is false for %s: the check would have nothing to ask Meta with, so Settings keeps the change",
+      (_name, config) => {
+        expect(hasChatKeyChangePage(connection("whatsapp", config))).toBe(false);
+      },
+    );
   });
 });

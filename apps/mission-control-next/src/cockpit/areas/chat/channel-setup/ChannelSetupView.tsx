@@ -56,6 +56,7 @@ export const KEY_CHANGE_PAGES: ReadonlyMap<string, ComponentType<KeyChangePagePr
   ["telegram", TelegramKeyChange],
   ["discord", ChannelTokenChange],
   ["slack", ChannelTokenChange],
+  ["whatsapp", ChannelTokenChange],
 ]);
 
 /**
