@@ -1,9 +1,14 @@
-import type { CapabilitySkillItem, CapabilitySkillUsageEntry, SkillLifecycleState } from "@goatcitadel/contracts";
+import type {
+  CapabilitySkillItem,
+  CapabilitySkillState,
+  CapabilitySkillUsageEntry,
+  SkillLifecycleState,
+} from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
-import { inboxApprovalHref } from "../capability-links";
 import { WORKSPACE_CAPABILITIES_HREF } from "../connectors/connector-links";
 import {
   filterSkills,
+  presentSkillChange,
   presentSkillState,
   presentSkillUses,
   skillCategoryOptions,
@@ -45,15 +50,14 @@ describe("presentSkillState", () => {
     {
       name: "waiting on an approval",
       wait: { waiting: true, waitingApprovalId: "approval-1" },
-      label: "Waiting on you in Inbox",
+      label: "Waiting for your approval",
       tone: "waiting",
       reason: "The change applies once you approve it.",
-      link: { label: "Open in Inbox", href: inboxApprovalHref("approval-1") },
     },
     {
       name: "waiting before the approval is known",
       wait: { waiting: true },
-      label: "Waiting on you in Inbox",
+      label: "Waiting for your approval",
       tone: "waiting",
       reason: "The change applies once you approve it.",
     },
@@ -61,10 +65,9 @@ describe("presentSkillState", () => {
       name: "waiting beats off",
       item: { state: "off", callable: false },
       wait: { waiting: true, waitingApprovalId: "approval-1" },
-      label: "Waiting on you in Inbox",
+      label: "Waiting for your approval",
       tone: "waiting",
       reason: "The change applies once you approve it.",
-      link: { label: "Open in Inbox", href: inboxApprovalHref("approval-1") },
     },
     {
       name: "off",
@@ -161,6 +164,13 @@ describe("presentSkillState", () => {
     expect(present.link).toEqual(link);
   });
 
+  it("gives a wait no link: a skill approval is decided in the skill's panel, not in Inbox", () => {
+    const wait = { waiting: true, waitingApprovalId: "approval-1" };
+    const present = presentSkillState(skill(), wait, USES);
+    expect(present.link).toBeUndefined();
+    expect([present.label, present.reason].join("\n")).not.toContain("Inbox");
+  });
+
   it("leaves the reason of an On skill to the uses line it is given", () => {
     expect(presentSkillState(skill(), IDLE, "Uses unknown").reason).toBe("Uses unknown");
     expect(presentSkillState(skill(), IDLE).reason).toBe("");
@@ -188,6 +198,23 @@ describe("presentSkillState", () => {
     for (const lifecycleState of states) {
       expect(presentSkillState(skill({ callable: false, lifecycleState }), IDLE).reason).toMatch(/can't use it/);
     }
+  });
+});
+
+describe("presentSkillChange", () => {
+  it.each<[CapabilitySkillState, CapabilitySkillState, string]>([
+    ["on", "off", "Turn Planner on"],
+    ["on", "paused", "Resume Planner"],
+    ["off", "on", "Turn Planner off"],
+    ["off", "paused", "Turn Planner off"],
+    ["paused", "on", "Pause Planner"],
+    ["paused", "off", "Pause Planner"],
+  ])("words a change to %s from %s as %j", (target, from, words) => {
+    expect(presentSkillChange("Planner", target, from)).toBe(words);
+  });
+
+  it("names the skill alone when the change asked for isn't known (a wait found on load)", () => {
+    expect(presentSkillChange("Planner", undefined, "off")).toBe("Change Planner");
   });
 });
 

@@ -18,7 +18,7 @@ export interface SkillChange {
 export type SkillSwitchEntry =
   /** The switch's request is on its way. */
   | { readonly phase: "saving" }
-  /** The change waits on its approval in Inbox. The switch keeps the list's state until the approval lands. */
+  /** The change waits on its approval. The switch keeps the list's state until the approval lands. */
   | ({
       readonly phase: "waiting";
       readonly skillId: string;
@@ -61,7 +61,7 @@ export function isFollowing(entry: SkillSwitchEntry | undefined): entry is Follo
 }
 
 // One timer per skill while its entry follows a change, and the reads it started. They don't depend on a mounted
-// hook, so closing the panel or following "Open in Inbox" doesn't stall the wait, and both stop as soon as the entry
+// hook, so closing the panel or leaving the tab doesn't stall the wait, and both stop as soon as the entry
 // stops following or leaves the store. What a timer runs belongs to the hook's module, which registers it.
 const timers = new Map<string, ReturnType<typeof globalThis.setTimeout>>();
 const controllers = new Map<string, AbortController>();

@@ -16,7 +16,8 @@ export function ToolPolicyCheck({ group }: { group: CapabilityToolGroupItem }) {
   const toolName = group.tools.find((tool) => tool.toolName === chosen)?.toolName ?? group.tools[0]?.toolName;
   if (!toolName) return null;
   return (
-    <div className="mt-3 border-t border-line-subtle pt-3">
+    // No divider of its own: the inspector below draws one.
+    <div className="mt-3">
       <label className="block text-xs text-fg-muted">
         Check a tool&apos;s policy
         <select className={FIELD} value={toolName} onChange={(event) => setChosen(event.target.value)}>

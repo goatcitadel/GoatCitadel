@@ -587,6 +587,8 @@ describe("Tool group panel", () => {
     );
     const select = picker?.querySelector("select");
     expect([...(select?.options ?? [])].map((option) => option.value)).toEqual(["fs.read", "fs.write", "fs.delete"]);
+    // One divider: the inspector draws its own, so the picker adds none.
+    expect(picker?.parentElement?.className ?? "").not.toContain("border-t");
     // The first tool is checked until another is chosen, in the workspace the panel reads.
     expect(details.querySelector("[data-policy-inspector]")?.getAttribute("data-policy-inspector")).toBe(
       "ws-1|fs.read",

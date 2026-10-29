@@ -295,7 +295,7 @@ describe("Skills tab", () => {
       expect(link?.getAttribute("href")).toContain("#workspace-capabilities");
     });
 
-    it("shows the wait with an Inbox link", async () => {
+    it("shows the wait with a Review button that opens the skill's panel", async () => {
       api.fetchCapabilitySkills.mockResolvedValue(
         listOf(
           ITEMS.map((entry) => (entry.skillId === "planner" ? { ...entry, pendingApprovalId: "approval-9" } : entry)),
@@ -303,11 +303,17 @@ describe("Skills tab", () => {
       );
       await render();
 
-      expect(wordOf("Planner")).toBe("Waiting on you in Inbox");
-      const link = linkIn(rowOf("Planner"), "Open in Inbox");
-      const target = new URL(link?.getAttribute("href") ?? "", "http://localhost");
-      expect(target.pathname).toBe("/inbox");
-      expect(target.searchParams.get("approvalId")).toBe("approval-9");
+      expect(wordOf("Planner")).toBe("Waiting for your approval");
+      // The approval is decided in the panel; the Inbox can't show a skill approval, so nothing points there.
+      expect(rowOf("Planner").querySelector("a")).toBeNull();
+      expect(rowOf("Planner").textContent).not.toContain("Inbox");
+      const review = button("Review Planner", rowOf("Planner"));
+      expect(review?.textContent).toBe("Review");
+      expect(review?.getAttribute("aria-label")?.startsWith(review?.textContent ?? "?")).toBe(true);
+      await click(review);
+      expect(route.navigate).toHaveBeenLastCalledWith("/capabilities/skills?item=skill%3Aplanner");
+      // A row that isn't waiting has no Review button.
+      expect(button("Review Writer", rowOf("Writer"))).toBeUndefined();
       // It keeps its old state until the approval lands, and ignores toggles meanwhile.
       expect(switchNamed("Planner")?.getAttribute("aria-checked")).toBe("false");
       expect(switchNamed("Planner")?.getAttribute("aria-busy")).toBe("true");
@@ -322,7 +328,7 @@ describe("Skills tab", () => {
       await render();
 
       // The row shows the wait, but nobody just asked for it, so nothing is read out.
-      expect(wordOf("Planner")).toBe("Waiting on you in Inbox");
+      expect(wordOf("Planner")).toBe("Waiting for your approval");
       expect(rowOf("Planner").querySelector('[role="status"]')?.textContent).toBe("");
       expect(rowOf("Writer").querySelector('[role="status"]')?.textContent).toBe("");
     });
@@ -332,10 +338,10 @@ describe("Skills tab", () => {
       await render();
       await click(switchNamed("Planner"));
 
-      expect(wordOf("Planner")).toBe("Waiting on you in Inbox");
+      expect(wordOf("Planner")).toBe("Waiting for your approval");
       // One status line reads the wait out, in words of its own beside the visible ones, naming the skill.
       expect(rowOf("Planner").querySelector('[role="status"]')?.textContent).toBe(
-        "Planner: waiting for your approval in Inbox.",
+        "Planner: waiting for your approval.",
       );
       // A row that isn't waiting has the same line, empty.
       expect(rowOf("Writer").querySelector('[role="status"]')?.textContent).toBe("");
@@ -349,7 +355,9 @@ describe("Skills tab", () => {
       const reasonOf = (name: string) =>
         rowOf(name).querySelector(`[id="${switchNamed(name)?.getAttribute("aria-describedby")}"] p`);
 
-      expect(reasonOf("Writer")?.className).toContain("text-status-done");
+      // Only the states that warn take a colour: On's uses line stays neutral.
+      expect(reasonOf("Writer")?.className).toContain("text-fg-secondary");
+      expect(reasonOf("Writer")?.className).not.toContain("text-status-done");
       expect(reasonOf("Mailer")?.className).toContain("text-status-waiting");
       expect(reasonOf("Fresh import")?.className).toContain("text-status-waiting");
       expect(reasonOf("Gone")?.className).toContain("text-status-failed");
@@ -360,7 +368,7 @@ describe("Skills tab", () => {
       expect(reasonOf("Mailer")?.className).not.toBe(reasonOf("Notes")?.className);
     });
 
-    it("keeps the Inbox link beside the line that says the wait can't be checked", async () => {
+    it("says a wait that can't be checked will be checked again, and keeps Review", async () => {
       await render();
       act(() =>
         setSkillSwitch("planner", {
@@ -373,9 +381,10 @@ describe("Skills tab", () => {
       );
       await settle();
 
-      expect(wordOf("Planner")).toBe("Waiting on you in Inbox");
-      expect(rowOf("Planner").textContent).toContain("Can't check the approval right now. Open it in Inbox.");
-      expect(linkIn(rowOf("Planner"), "Open in Inbox")).toBeDefined();
+      expect(wordOf("Planner")).toBe("Waiting for your approval");
+      expect(rowOf("Planner").textContent).toContain("Can't check the approval right now. It will try again.");
+      expect(rowOf("Planner").textContent).not.toContain("Inbox");
+      expect(button("Review Planner", rowOf("Planner"))).toBeDefined();
     });
   });
 

@@ -118,7 +118,7 @@ const skillApproval: ApprovalRequest = {
       expectedStateSha256: "b".repeat(64),
     },
     request: {
-      schemaVersion: "goatcitadel.skill-lifecycle-request.v1",
+      schemaVersion: "goatcitadel.skill-lifecycle-request-envelope.v1",
       requesterId: "operator",
       mutation: { skillId: "planner", state: "enabled", note: null },
     },

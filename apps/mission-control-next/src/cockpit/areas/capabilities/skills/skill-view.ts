@@ -2,6 +2,7 @@ import {
   SKILL_CATEGORIES,
   SKILL_ORIGIN_LABELS,
   type CapabilitySkillItem,
+  type CapabilitySkillState,
   type CapabilitySkillUsageEntry,
   type SkillCategoryId,
   type SkillLifecycleState,
@@ -9,7 +10,6 @@ import {
 } from "@goatcitadel/contracts";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { StatusPresentation, StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
-import { inboxApprovalLink } from "../capability-links";
 import type { CategoryOption } from "../CategoryFilter";
 import { WORKSPACE_CAPABILITIES_HREF } from "../connectors/connector-links";
 import type { SkillSwitch } from "./use-skill-switch";
@@ -44,14 +44,15 @@ export interface SkillStateLink {
 export type SkillStatePresentation = StatusPresentation & { reason: string; link?: SkillStateLink };
 
 /**
- * The colour of the line that says why a skill reads as it does: the text colour `StatusBadge` gives each tone, so a
- * revoked or left-out skill reads apart from a paused one without leaning on the words alone. Neutral keeps the
- * secondary text colour the line has anyway.
+ * The colour of the line that says why a skill reads as it does. Only the states that warn take a colour, the text
+ * colour `StatusBadge` gives their tone, so a revoked or left-out skill reads apart from a paused one without leaning
+ * on the words alone. Every other line keeps the secondary text colour, an On skill's uses line included: how often a
+ * skill was used is not a success to celebrate.
  */
 export const SKILL_TONE_TEXT: Readonly<Record<StatusTone, string>> = {
-  running: "text-status-running",
+  running: "text-fg-secondary",
   waiting: "text-status-waiting",
-  done: "text-status-done",
+  done: "text-fg-secondary",
   failed: "text-status-failed",
   neutral: "text-fg-secondary",
 };
@@ -70,24 +71,22 @@ const NOT_USABLE_OTHERWISE: SkillStatePresentation = {
 };
 
 /**
- * What one skill reads as, the first match winning: a change waiting on its approval, off, left out of this workspace
+ * What one skill reads as, the first match winning: a change waiting on your approval, off, left out of this workspace
  * by its skill choices, not usable (said by its review state), paused, and on. A paused skill is usable when it is
  * approved or trusted, which is why the not-usable rows come before Paused.
  *
  * `uses` is the uses line. It is the reason of a skill that is on and usable, the only row that has no other reason.
+ *
+ * A wait has no link: a skill approval belongs to no workspace, so the Inbox, which lists a workspace's approvals,
+ * never shows it. It is decided in the skill's panel instead.
  */
 export function presentSkillState(
   item: CapabilitySkillItem,
-  sw: Pick<SkillSwitch, "waiting" | "waitingApprovalId">,
+  sw: Pick<SkillSwitch, "waiting">,
   uses = "",
 ): SkillStatePresentation {
   if (sw.waiting) {
-    return {
-      label: "Waiting on you in Inbox",
-      tone: "waiting",
-      reason: "The change applies once you approve it.",
-      ...(sw.waitingApprovalId ? { link: inboxApprovalLink(sw.waitingApprovalId) } : {}),
-    };
+    return { label: "Waiting for your approval", tone: "waiting", reason: "The change applies once you approve it." };
   }
   if (item.state === "off") return { label: "Off", tone: "neutral", reason: "The AI can't use it" };
   if (item.leftOutOfWorkspace === true) {
@@ -101,6 +100,22 @@ export function presentSkillState(
   if (!item.callable) return (item.lifecycleState && NOT_USABLE[item.lifecycleState]) || NOT_USABLE_OTHERWISE;
   if (item.state === "paused") return { label: "Paused", tone: "neutral", reason: "Used only when you name it" };
   return { label: "On", tone: "done", reason: uses };
+}
+
+/**
+ * The change a skill's approval asks for, in the words of the click that asked: "Turn Planner on", "Resume Planner",
+ * "Turn Planner off", "Pause Planner". It only names the change for the operator; the approval's own review says
+ * exactly what it applies. `target` is unknown for a wait found when the list loaded, which reads "Change Planner".
+ */
+export function presentSkillChange(
+  name: string,
+  target: CapabilitySkillState | undefined,
+  from: CapabilitySkillState,
+): string {
+  if (target === "on") return from === "paused" ? `Resume ${name}` : `Turn ${name} on`;
+  if (target === "off") return `Turn ${name} off`;
+  if (target === "paused") return `Pause ${name}`;
+  return `Change ${name}`;
 }
 
 const CATEGORY_LABELS: ReadonlyMap<SkillCategoryId, string> = new Map(

@@ -30,7 +30,7 @@ import {
 
 /** Waits between list reads after a change is approved: the reads come 1, 3, 7 and 15 seconds in, then it gives up. */
 const LIST_CHECKS_MS = [1_000, 2_000, 4_000, 8_000] as const;
-/** Waits between reads of an approval in Inbox: every 5 seconds at first, then less often, at most every 30. */
+/** Waits between reads of a waiting approval: every 5 seconds at first, then less often, at most every 30. */
 const APPROVAL_CHECKS_MS = [5_000, 5_000, 5_000, 10_000, 20_000, 30_000] as const;
 /** Failed approval reads in a row before the switch says it can't check. */
 const MISSED_READS_LIMIT = 3;
@@ -45,7 +45,7 @@ const REQUEST_STATE: Record<CapabilitySkillState, SkillRuntimeState> = {
 const DECLINED = "Not changed. The change was declined.";
 const EXPIRED = "Not changed. The request expired.";
 const STILL_APPLYING = "Still applying. Refresh to check.";
-const CANT_CHECK = "Can't check the approval right now. Open it in Inbox.";
+const CANT_CHECK = "Can't check the approval right now. It will try again.";
 
 export interface SkillSwitch {
   /** What the switch shows: the skill's state in the list. Never ahead of it; on or paused both count. */
@@ -53,10 +53,15 @@ export interface SkillSwitch {
   paused: boolean;
   /** The request is on its way, or an approved change is being applied and the list doesn't show it yet. */
   pending: boolean;
-  /** The change waits on an approval in Inbox. The switch keeps its old state until the approval lands. */
+  /** The change waits on your approval. The switch keeps its old state until the approval lands. */
   waiting: boolean;
-  /** The approval the change waits on: for the in-place approval and the Inbox link. */
+  /** The approval the change waits on, for the approval in the skill's panel. */
   waitingApprovalId?: string;
+  /**
+   * The state the waiting change asks for, when a click in this tab asked for it; unknown for a wait picked up from the
+   * list after a load. It only words the change for the operator.
+   */
+  waitingTarget?: CapabilitySkillState;
   /**
    * The wait began with a click in this tab, not picked up from the list after a load. Only such a wait is read out:
    * nobody just asked for one found on load.
@@ -379,6 +384,7 @@ export function useSkillSwitch(item: CapabilitySkillItem): SkillSwitch {
     pending: entry?.phase === "saving" || entry?.phase === "applying",
     waiting: entry?.phase === "waiting",
     ...(entry?.phase === "waiting" ? { waitingApprovalId: entry.approvalId } : {}),
+    ...(entry?.phase === "waiting" && entry.target ? { waitingTarget: entry.target } : {}),
     waitStartedHere: entry?.phase === "waiting" && !entry.recovered,
     ...(failure ? { failure } : {}),
     setOn: (next) => void send(item, next ? "on" : "off", workspaceId, context),

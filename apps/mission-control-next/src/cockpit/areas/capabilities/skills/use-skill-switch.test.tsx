@@ -174,7 +174,7 @@ async function waitOnPlanner() {
   skills.setCapabilitySkillState.mockResolvedValueOnce(WAITING);
   await act(async () => sw("planner").setOn(true));
   await settle();
-  expect(sw("planner")).toMatchObject({ waiting: true, waitingApprovalId: "approval-1" });
+  expect(sw("planner")).toMatchObject({ waiting: true, waitingApprovalId: "approval-1", waitingTarget: "on" });
 }
 
 beforeEach(() => {
@@ -466,7 +466,7 @@ describe("useSkillSwitch", () => {
     expect(sw("planner").failure).toBeUndefined();
     await beat(5_000);
     const failure = sw("planner").failure;
-    expect(failure).toEqual({ message: "Can't check the approval right now. Open it in Inbox.", conflict: false });
+    expect(failure).toEqual({ message: "Can't check the approval right now. It will try again.", conflict: false });
     expect(sw("planner")).toMatchObject({ waiting: true, waitingApprovalId: "approval-1" });
 
     // Another failed read keeps the same line (the same object), and a read that works clears it.
@@ -510,7 +510,10 @@ describe("useSkillSwitch", () => {
       pending: false,
       waiting: true,
       waitingApprovalId: "approval-9",
+      waitStartedHere: false,
     });
+    // Nobody here asked for it, so what it asks for is unknown.
+    expect(sw("planner").waitingTarget).toBeUndefined();
     expect(sw("writer").waiting).toBe(false);
 
     // A click while it waits sends nothing.

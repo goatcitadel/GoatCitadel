@@ -22,7 +22,7 @@ const approval: ApprovalRequest = {
       expectedStateSha256: "b".repeat(64),
     },
     request: {
-      schemaVersion: "goatcitadel.skill-lifecycle-request.v1",
+      schemaVersion: "goatcitadel.skill-lifecycle-request-envelope.v1",
       requesterId: "operator",
       mutation: { skillId: "planner", state: "enabled", note: null },
     },
@@ -43,7 +43,7 @@ const CONSEQUENCE =
 
 interface StoredPayload {
   skillLifecycle: Record<string, unknown>;
-  request?: { mutation: Record<string, unknown> };
+  request?: Record<string, unknown> & { mutation: Record<string, unknown> };
 }
 
 /** The approval with a copy of its payload changed by `change`. */
@@ -72,7 +72,7 @@ describe("skill switch approval evidence", () => {
 
   it("says Paused for a pause, and lists a note the change sets", () => {
     const pause = withPayload((payload) => {
-      payload.request = { mutation: { skillId: "planner", state: "sleep", note: "Quiet for a week." } };
+      payload.request!.mutation = { skillId: "planner", state: "sleep", note: "Quiet for a week." };
     });
     const model = buildApprovalRequestReviewEvidenceModel({
       ...pause,
@@ -102,11 +102,26 @@ describe("skill switch approval evidence", () => {
     [
       "a state the switch doesn't have",
       {
-        ...withPayload((payload) => (payload.request = { mutation: { skillId: "planner", state: "constructor" } })),
+        ...withPayload(
+          (payload) => (payload.request!.mutation = { skillId: "planner", state: "constructor", note: null }),
+        ),
         preview: { ...(approval.preview as object), state: "constructor" },
       },
     ],
     ["no stored request", withPayload((payload) => delete payload.request)],
+    // The shapes the Gateway's own parse refuses (skill-governance-journey-producer.ts, skill-state-service.ts).
+    [
+      "a mutation with a key the switch never sends",
+      withPayload((payload) => (payload.request!.mutation = { ...payload.request!.mutation, enabled: true })),
+    ],
+    ["a mutation without its note", withPayload((payload) => delete payload.request!.mutation.note)],
+    ["a note that is not text", withPayload((payload) => (payload.request!.mutation.note = 3))],
+    ["another binding version", withPayload((payload) => (payload.skillLifecycle.schemaVersion = "v2"))],
+    ["a binding with an unknown key", withPayload((payload) => (payload.skillLifecycle.extra = "x"))],
+    ["a binding without its request hash", withPayload((payload) => delete payload.skillLifecycle.requestSha256)],
+    ["another request version", withPayload((payload) => (payload.request!.schemaVersion = "v2"))],
+    ["a request with an unknown key", withPayload((payload) => (payload.request!.extra = "x"))],
+    ["a request without its requester", withPayload((payload) => delete payload.request!.requesterId)],
     ["a preview for another skill", { ...approval, preview: { ...(approval.preview as object), skillId: "writer" } }],
     ["a preview for another state", { ...approval, preview: { ...(approval.preview as object), state: "disabled" } }],
   ])("lists nothing exact for %s", (_what, record) => {

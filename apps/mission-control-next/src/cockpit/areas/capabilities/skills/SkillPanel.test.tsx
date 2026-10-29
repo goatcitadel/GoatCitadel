@@ -147,7 +147,7 @@ function skillApproval(): ApprovalRequest {
         expectedStateSha256: "b".repeat(64),
       },
       request: {
-        schemaVersion: "goatcitadel.skill-lifecycle-request.v1",
+        schemaVersion: "goatcitadel.skill-lifecycle-request-envelope.v1",
         requesterId: "operator",
         mutation: { skillId: "planner", state: "enabled", note: null },
       },
@@ -192,8 +192,6 @@ const buttonIn = (parent: ParentNode | null | undefined, name: string) =>
   [...(parent?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
     (entry) => entry.textContent?.trim() === name || entry.getAttribute("aria-label") === name,
   );
-const linkIn = (parent: ParentNode | null | undefined, name: string) =>
-  [...(parent?.querySelectorAll("a") ?? [])].find((entry) => entry.textContent === name);
 const rowOf = (name: string) =>
   [
     ...([...container.querySelectorAll("section")]
@@ -513,34 +511,107 @@ describe("Skill panel switch", () => {
     expect(panelText()).toContain("Pinned. Change it through a proposal in Library.");
   });
 
-  it("opens the approval in place once, and keeps Open in Inbox", async () => {
+  it("opens the approval in place once, naming the skill under its own title", async () => {
     await renderTab();
     await openPanel("Planner");
     waitOnPlanner();
     await settle();
 
     await vi.waitFor(() => expect(dialog()).toBeDefined());
-    expect(dialog()?.textContent).toContain("Approve skill state change");
+    // The approval's own title stays; the panel's line says which skill and what change, from the click that asked.
+    expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve skill state change");
+    expect(dialog()?.textContent).toContain("Turn Planner on");
     // The approval belongs to no workspace, so it is read without one.
     expect(approvals.fetchApproval).toHaveBeenCalled();
     for (const [, options] of approvals.fetchApproval.mock.calls) {
       expect(options === undefined || !("workspaceId" in (options as object))).toBe(true);
     }
-    // Inbox stays one link away, beside the line that says the change waits.
-    const link = linkIn(body(), "Open in Inbox");
-    const target = new URL(link?.getAttribute("href") ?? "", "http://cockpit.invalid");
-    expect(target.pathname).toBe("/inbox");
-    expect(target.searchParams.get("approvalId")).toBe(APPROVAL_ID);
+    // The way back to it stands beside the line that says the change waits.
+    expect(panelText()).toContain("The change applies once you approve it.");
+    expect(buttonIn(body(), "Review the change")).toBeDefined();
 
-    // Closed, it doesn't open on its own again, even when the panel opens again; Review approval brings it back.
+    // Closed, it doesn't open on its own again when View opens the panel again.
     await press(buttonIn(dialog(), "Close dialog"));
     expect(dialog()).toBeUndefined();
     await press(buttonIn(document.body, "Close inspector"));
     await openPanel("Planner");
     expect(dialog()).toBeUndefined();
-    expect(linkIn(body(), "Open in Inbox")).toBeDefined();
-    await press(buttonIn(body(), "Review approval"));
-    expect(dialog()).toBeDefined();
+  });
+
+  it("reopens the approval from the panel", async () => {
+    await renderTab();
+    await openPanel("Planner");
+    waitOnPlanner();
+    await vi.waitFor(() => expect(dialog()).toBeDefined());
+    await press(buttonIn(dialog(), "Close dialog"));
+    expect(dialog()).toBeUndefined();
+
+    await press(buttonIn(body(), "Review the change"));
+    expect(dialog()?.textContent).toContain("Turn Planner on");
+    await press(buttonIn(dialog(), "Close dialog"));
+
+    // The row's Review button, with the panel open: the approval opens again in place.
+    await press(buttonIn(rowOf("Planner"), "Review Planner"));
+    await vi.waitFor(() => expect(dialog()).toBeDefined());
+    await press(buttonIn(dialog(), "Close dialog"));
+
+    // And with the panel closed: it opens the panel, and the approval in it.
+    await press(buttonIn(document.body, "Close inspector"));
+    expect(body()).toBeNull();
+    await press(buttonIn(rowOf("Planner"), "Review Planner"));
+    await vi.waitFor(() => expect(inspectorNamed("Planner")).not.toBeNull());
+    await vi.waitFor(() => expect(dialog()).toBeDefined());
+  });
+
+  it("names a wait found on load without guessing what it asks for", async () => {
+    api.fetchCapabilitySkills.mockResolvedValue(
+      listOf(
+        ITEMS.map((entry) => (entry.skillId === "planner" ? { ...entry, pendingApprovalId: APPROVAL_ID } : entry)),
+      ),
+    );
+    await renderTab();
+    await openPanel("Planner");
+    await vi.waitFor(() => expect(dialog()).toBeDefined());
+    expect(dialog()?.textContent).toContain("Change Planner");
+    expect(dialog()?.textContent).not.toContain("Turn Planner on");
+  });
+
+  it("never points a skill approval at the Inbox", async () => {
+    await renderTab();
+    waitOnPlanner();
+    await settle();
+    const noInbox = (where: Element | null | undefined) => {
+      expect(where).toBeTruthy();
+      expect(where?.querySelector('a[href*="inbox"]')).toBeNull();
+      expect(where?.textContent).not.toContain("Inbox");
+    };
+    noInbox(rowOf("Planner"));
+    await openPanel("Planner");
+    await vi.waitFor(() => expect(dialog()).toBeDefined());
+    noInbox(body());
+    noInbox(dialog());
+    await press(buttonIn(dialog(), "Close dialog"));
+
+    // Nor when the approval can't be read: the panel says it will try again, and reloading is the way forward.
+    await press(buttonIn(document.body, "Close inspector"));
+    __resetSettingsApprovalDialogsForTests();
+    client.removeQueries({ queryKey: ["approvals", "record"] });
+    approvals.fetchApproval.mockRejectedValue(new Error("offline"));
+    act(() =>
+      setSkillSwitch("planner", {
+        phase: "waiting",
+        skillId: "planner",
+        approvalId: APPROVAL_ID,
+        target: "on",
+        from: "off",
+        unreadable: true,
+      }),
+    );
+    await openPanel("Planner");
+    await vi.waitFor(() => expect(panelText()).toContain("Reload to try again."));
+    expect(panelText()).toContain("Can't check the approval right now. It will try again.");
+    noInbox(body());
+    noInbox(rowOf("Planner"));
   });
 
   it("reads a skill approval without a workspace and approves it in one click", async () => {
@@ -567,7 +638,7 @@ describe("Skill panel switch", () => {
     expect(decisions.resolveApproval).toHaveBeenCalledExactlyOnceWith(APPROVAL_ID, "reject");
     // The switch reads the approval at once, without waiting for its next check.
     await vi.waitFor(() => expect(panelText()).toContain("Not changed. The change was declined."));
-    expect(linkIn(body(), "Open in Inbox")).toBeUndefined();
+    expect(buttonIn(body(), "Review the change")).toBeUndefined();
   });
 });
 

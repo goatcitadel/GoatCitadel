@@ -4,6 +4,7 @@ import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { Switch } from "../../../ui/Switch";
+import { reopenSettingsApproval } from "../../settings/SettingsApprovalDialog";
 import { LetterIcon } from "../LetterIcon";
 import { CANT_SWITCH_NOTE, PINNED_NOTE, presentSkillState, SKILL_TONE_TEXT } from "./skill-view";
 import { useSkillSwitch } from "./use-skill-switch";
@@ -12,7 +13,7 @@ import { useSkillSwitch } from "./use-skill-switch";
  * Read out when a click starts a wait for the change's approval, naming the skill, since several rows can wait at
  * once. The visible words stay in the row's own line.
  */
-const waitingAnnouncement = (name: string) => `${name}: waiting for your approval in Inbox.`;
+const waitingAnnouncement = (name: string) => `${name}: waiting for your approval.`;
 
 export interface SkillRowProps {
   /** The live row from the cached list. */
@@ -31,8 +32,11 @@ export interface SkillRowProps {
  * The switch prints the state word beside itself, once: "On" only when the skill is on and the AI can use it here, and
  * otherwise Paused, Not usable yet, Left out of this workspace and the rest of `presentSkillState`. A skill whose switch
  * can't reach it has no switch to print the word, so a badge does. Every view of a skill reads one switch state
- * (`useSkillSwitch`), so a request, a wait in Inbox or a failure shows on all of them. `item` should be the live row
- * from the cached list.
+ * (`useSkillSwitch`), so a request, a wait for approval or a failure shows on all of them. `item` should be the live
+ * row from the cached list.
+ *
+ * A change that waits is approved in the skill's panel, never in Inbox, which can't show a skill approval: the row's
+ * Review button opens the panel with the approval open in it.
  */
 export function SkillRow({ item, uses, onView }: SkillRowProps) {
   const sw = useSkillSwitch(item);
@@ -71,6 +75,20 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
                 <span className="text-sm text-fg-secondary">{CANT_SWITCH_NOTE}</span>
               </>
             )}
+            {sw.waitingApprovalId ? (
+              // The name comes last so the accessible name starts with the visible word.
+              <Button
+                size="sm"
+                aria-label={`Review ${item.name}`}
+                onClick={() => {
+                  // The approval may have been offered and closed already: ask for it to open again in the panel.
+                  if (sw.waitingApprovalId) reopenSettingsApproval(sw.waitingApprovalId);
+                  onView(item.skillId);
+                }}
+              >
+                Review
+              </Button>
+            ) : null}
           </div>
           <div id={noteId} className="mt-1 space-y-1 text-sm text-fg-secondary">
             {state.reason || state.link ? (

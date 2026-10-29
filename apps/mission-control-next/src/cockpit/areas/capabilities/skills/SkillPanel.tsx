@@ -53,7 +53,7 @@ function SkillDetails({
           <span className="text-sm text-fg-secondary">{SKILL_ORIGIN_LABELS[item.origin]}</span>
           <span className="text-sm text-fg-secondary">{skillCategoryLabel(item.category)}</span>
         </div>
-        {/* A wait's reason stands under the switch, beside its Inbox link. */}
+        {/* A wait's reason stands under the switch, beside the way to review the change. */}
         {!sw.waiting && (state.reason || state.link) ? (
           <p className={cn("text-sm", SKILL_TONE_TEXT[state.tone])}>
             {state.reason}
