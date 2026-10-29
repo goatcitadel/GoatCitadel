@@ -8,7 +8,7 @@ import {
   type SkillOrigin,
 } from "@goatcitadel/contracts";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
-import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import type { StatusPresentation, StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { inboxApprovalLink } from "../capability-links";
 import type { CategoryOption } from "../CategoryFilter";
 import { WORKSPACE_CAPABILITIES_HREF } from "../connectors/connector-links";
@@ -42,6 +42,19 @@ export interface SkillStateLink {
 
 /** The state word of a skill, the tone it reads in, and the line that says why, with the link that goes with it. */
 export type SkillStatePresentation = StatusPresentation & { reason: string; link?: SkillStateLink };
+
+/**
+ * The colour of the line that says why a skill reads as it does: the text colour `StatusBadge` gives each tone, so a
+ * revoked or left-out skill reads apart from a paused one without leaning on the words alone. Neutral keeps the
+ * secondary text colour the line has anyway.
+ */
+export const SKILL_TONE_TEXT: Readonly<Record<StatusTone, string>> = {
+  running: "text-status-running",
+  waiting: "text-status-waiting",
+  done: "text-status-done",
+  failed: "text-status-failed",
+  neutral: "text-fg-secondary",
+};
 
 const NOT_USABLE: Readonly<Partial<Record<SkillLifecycleState, SkillStatePresentation>>> = {
   candidate: { label: "Not usable yet", tone: "waiting", reason: "It hasn't been reviewed, so the AI can't use it" },

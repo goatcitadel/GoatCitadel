@@ -58,6 +58,11 @@ export interface SkillSwitch {
   /** The approval the change waits on: for the in-place approval and the Inbox link. */
   waitingApprovalId?: string;
   /**
+   * The wait began with a click in this tab, not picked up from the list after a load. Only such a wait is read out:
+   * nobody just asked for one found on load.
+   */
+  waitStartedHere: boolean;
+  /**
    * Why the last change didn't happen, or why its wait can't be checked, in plain words. `conflict` means `reload` is
    * the way forward. It is the same object for as long as that failure stands, in every view, so a view can tell a
    * failure it was already showing from a new one.
@@ -69,6 +74,11 @@ export interface SkillSwitch {
   setPaused(next: boolean): void;
   /** Reads the list again and drops the last failure. */
   reload(): void;
+  /**
+   * Reads the waiting approval now and starts its back-off again, for a decision made where the switch can't hear it
+   * (a decline sends no skill event). Does nothing when nothing waits.
+   */
+  checkApproval(): void;
 }
 
 type Failure = NonNullable<SkillSwitch["failure"]>;
@@ -246,6 +256,13 @@ async function checkApproval(skillId: string) {
   if (sameWait(current, approvalId)) approvalSettled(skillId, current, approval);
 }
 
+/** A decision made elsewhere: the approval is read now, and the reads after it start again at their first pace. */
+function checkApprovalNow(skillId: string) {
+  if (readSkillSwitch(skillId)?.phase !== "waiting") return;
+  beats.delete(skillId);
+  void checkApproval(skillId);
+}
+
 setSkillSwitchTicker((skillId) => {
   const phase = readSkillSwitch(skillId)?.phase;
   if (phase === "waiting") return checkApproval(skillId);
@@ -362,6 +379,7 @@ export function useSkillSwitch(item: CapabilitySkillItem): SkillSwitch {
     pending: entry?.phase === "saving" || entry?.phase === "applying",
     waiting: entry?.phase === "waiting",
     ...(entry?.phase === "waiting" ? { waitingApprovalId: entry.approvalId } : {}),
+    waitStartedHere: entry?.phase === "waiting" && !entry.recovered,
     ...(failure ? { failure } : {}),
     setOn: (next) => void send(item, next ? "on" : "off", workspaceId, context),
     setPaused: (next) => void send(item, next ? "paused" : "on", workspaceId, context),
@@ -369,6 +387,7 @@ export function useSkillSwitch(item: CapabilitySkillItem): SkillSwitch {
       if (readSkillSwitch(item.skillId)?.phase === "failed") setSkillSwitch(item.skillId, undefined);
       void readList(context);
     },
+    checkApproval: () => checkApprovalNow(item.skillId),
   };
 }
 

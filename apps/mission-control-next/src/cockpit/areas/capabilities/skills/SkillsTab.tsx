@@ -14,20 +14,18 @@ import { CategoryFilter } from "../CategoryFilter";
 import { NoticeLine } from "../NoticeLine";
 import { SkillRow } from "./SkillRow";
 import { filterSkills, skillCategoryOptions, skillOriginOptions, skillSearchSuggestion } from "./skill-view";
+import { useSkillPanel } from "./use-skill-panel";
 import { useSkillUsage } from "./use-skill-usage";
 
 /** The candidate skills waiting for review, in Library. */
 const CANDIDATE_SKILLS_HREF = "/library?type=candidate_skill";
 
-/** What View does until the skill panel is added in the next change: nothing to open yet. */
-const NO_PANEL_YET = (): void => undefined;
-
 /**
  * The Skills tab: every installed skill with its category, where it came from, how often the AI used it in the last
  * year, why it can or can't be used, and an on/off switch. The tab only lists and words what the Gateway returned; it
  * never decides whether a skill is usable, left out of the workspace or reviewed. Search and the two sets of buttons
- * narrow the list. Its list read stays enabled for as long as the tab is mounted, because the switches read the list
- * again through it after a change.
+ * narrow the list, and a tag pressed in a skill's panel searches it. Its list read stays enabled for as long as the tab
+ * is mounted, because the switches and the open panel read the list again through it after a change.
  */
 export function SkillsTab() {
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
@@ -40,6 +38,7 @@ export function SkillsTab() {
   const [chosenCategories, setChosenCategories] = useState<string[]>([]);
   const [chosenOrigins, setChosenOrigins] = useState<string[]>([]);
   const filtersRegion = useRef<HTMLDivElement>(null);
+  const panel = useSkillPanel(view.record?.items, setSearch);
 
   const response = view.record;
   if (!response) {
@@ -174,7 +173,7 @@ export function SkillsTab() {
         >
           <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {shown.map((item) => (
-              <SkillRow key={item.skillId} item={item} uses={counts.usesFor(item.skillId)} onView={NO_PANEL_YET} />
+              <SkillRow key={item.skillId} item={item} uses={counts.usesFor(item.skillId)} onView={panel.open} />
             ))}
           </ul>
         </Section>

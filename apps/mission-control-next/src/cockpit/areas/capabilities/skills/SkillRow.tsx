@@ -5,11 +5,14 @@ import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { Switch } from "../../../ui/Switch";
 import { LetterIcon } from "../LetterIcon";
-import { CANT_SWITCH_NOTE, PINNED_NOTE, presentSkillState } from "./skill-view";
+import { CANT_SWITCH_NOTE, PINNED_NOTE, presentSkillState, SKILL_TONE_TEXT } from "./skill-view";
 import { useSkillSwitch } from "./use-skill-switch";
 
-/** Read out when a change starts waiting on its approval. The visible words stay in the row's own line. */
-const WAITING_ANNOUNCEMENT = "Waiting for your approval in Inbox.";
+/**
+ * Read out when a click starts a wait for the change's approval, naming the skill, since several rows can wait at
+ * once. The visible words stay in the row's own line.
+ */
+const waitingAnnouncement = (name: string) => `${name}: waiting for your approval in Inbox.`;
 
 export interface SkillRowProps {
   /** The live row from the cached list. */
@@ -71,7 +74,8 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
           </div>
           <div id={noteId} className="mt-1 space-y-1 text-sm text-fg-secondary">
             {state.reason || state.link ? (
-              <p>
+              // A row with a switch prints its state word in plain text, so the line takes the state's colour.
+              <p className={item.switchable ? SKILL_TONE_TEXT[state.tone] : undefined}>
                 {state.reason}
                 {state.link ? (
                   <>
@@ -86,8 +90,9 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
             {item.switchable && item.pinned ? <p>{PINNED_NOTE}</p> : null}
           </div>
           {item.switchable ? (
+            // A wait found when the list loads is shown but not read out: nobody just asked for it.
             <p role="status" className="sr-only">
-              {sw.waiting ? WAITING_ANNOUNCEMENT : ""}
+              {sw.waiting && sw.waitStartedHere ? waitingAnnouncement(item.name) : ""}
             </p>
           ) : null}
           {sw.failure ? (

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { queryKeys } from "../../data/query-keys";
 import { ApprovalDecisionBar } from "../inbox/ApprovalDecisionBar";
@@ -16,26 +17,41 @@ import { StatusBadge } from "../../ui/StatusBadge";
 const offered = new Set<string>();
 
 /**
- * The approval for a Settings save, decided where the operator saved it. It opens on its own once, shows the change
- * in one line with the full review behind "Show details", and approves in one click at any level below nuclear. It
- * mounts the shared decision bar, so the pre-dispatch re-read, risk gate and idempotency lock match the Inbox.
+ * The approval for a change, decided where the operator asked for it: a Settings save, or a skill switched in its
+ * panel. It opens on its own once, shows the change in one line with the full review behind "Show details", and
+ * approves in one click at any level below nuclear. It mounts the shared decision bar, so the pre-dispatch re-read,
+ * risk gate and idempotency lock match the Inbox.
+ *
+ * A Settings change belongs to its workspace and is read there. A skill change belongs to no workspace
+ * (`workspaceId={null}`), so every read of it is unscoped: scoped to any workspace, it would not be found.
  */
 export function SettingsApprovalDialog({
   approvalId,
   workspaceId = "default",
+  title = "Approve this Settings change?",
+  loadFailureHint = "Use Refresh change status, or decide it in Inbox.",
   onResolved,
 }: {
   approvalId: string;
-  workspaceId?: string;
+  /** The approval's workspace, or `null` for one that belongs to none (a skill change). */
+  workspaceId?: string | null;
+  /** The title when the approval's own preview has none. */
+  title?: string;
+  /** What to do when the approval can't be read, after the sentence that says so. */
+  loadFailureHint?: string;
   /** Called after a decision with the approval's re-read status, so the owner can report a denial as a denial. */
   onResolved: (status: ApprovalRequest["status"] | undefined) => Promise<unknown> | void;
 }) {
-  const access = useProjectAccess(workspaceId);
+  const { activeWorkspaceId } = useUiPreferences();
+  // Where a detached approval is shown from: the workspace on screen names the review and the Inbox it lands in.
+  const scope = workspaceId ?? activeWorkspaceId ?? "default";
+  const readScope = workspaceId === null ? {} : { workspaceId };
+  const access = useProjectAccess(scope);
   const queryClient = useQueryClient();
   const queryKey = ["approvals", "record", workspaceId, approvalId, access.identity];
   const query = useQuery({
     queryKey,
-    queryFn: ({ signal }) => nullWhenMissing(fetchApproval(approvalId, { workspaceId, signal })),
+    queryFn: ({ signal }) => nullWhenMissing(fetchApproval(approvalId, { ...readScope, signal })),
     staleTime: 15_000,
   });
   const approval = query.data;
@@ -52,15 +68,13 @@ export function SettingsApprovalDialog({
   const settle = (text?: string) => {
     setMessage(text);
     void queryClient.resetQueries({ queryKey, exact: true });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(scope) });
   };
 
   // Not a live region: the cockpit live-region budget only goes down, and this sits under the change's own status.
   if (query.isError)
     return (
-      <p className="text-sm text-status-failed">
-        The approval for this change could not be loaded. Use Refresh change status, or decide it in Inbox.
-      </p>
+      <p className="text-sm text-status-failed">The approval for this change could not be loaded. {loadFailureHint}</p>
     );
   // Once decided, the change's own status line reports the result; the decision wording is not repeated here.
   if (!pending) return null;
@@ -74,7 +88,7 @@ export function SettingsApprovalDialog({
       <Dialog
         open={open}
         onOpenChange={setOpen}
-        title={line(preview?.title) ?? "Approve this Settings change?"}
+        title={line(preview?.title) ?? title}
         description={line(preview?.summary)}
       >
         <div className="space-y-3 text-sm text-fg-secondary">
@@ -85,7 +99,7 @@ export function SettingsApprovalDialog({
           <details>
             <summary className="cursor-pointer font-medium text-fg">Show details</summary>
             <div className="mt-2 max-h-72 overflow-y-auto">
-              <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} />
+              <ApprovalReviewSummary approval={approval} workspaceId={scope} />
             </div>
           </details>
           <ApprovalDecisionBar
@@ -96,7 +110,7 @@ export function SettingsApprovalDialog({
             onResolved={() => {
               setOpen(false);
               settle();
-              void fetchApproval(approvalId, { workspaceId })
+              void fetchApproval(approvalId, readScope)
                 .then((record) => record.status)
                 .catch(() => undefined)
                 .then((status) => onResolved(status));

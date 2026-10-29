@@ -31,6 +31,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (original) =>
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeCitadelId: "default", activeWorkspaceId: "ws-1" }),
 }));
+// The panel and the address have their own tests (SkillPanel.test.tsx); here only the hand-off is checked.
+const route = vi.hoisted(() => ({ search: "", navigate: vi.fn() }));
+vi.mock("../../../app/use-cockpit-route", () => ({ useCockpitRoute: () => route }));
+const inspector = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), content: null as null | { source?: string } }));
+vi.mock("../../../app/inspector", () => ({ useInspector: () => inspector }));
 
 const LIST_KEY = skillListQuery("ws-1").queryKey;
 const USAGE_KEY = skillUsageQuery().queryKey;
@@ -188,6 +193,11 @@ beforeEach(() => {
   api.fetchCapabilitySkillUsage.mockReset().mockResolvedValue(USAGE);
   api.setCapabilitySkillState.mockReset();
   approvals.fetchApproval.mockReset().mockResolvedValue({ approvalId: "approval-9", status: "pending" });
+  route.search = "";
+  route.navigate.mockReset();
+  inspector.open.mockReset();
+  inspector.close.mockReset();
+  inspector.content = null;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.append(container);
@@ -301,12 +311,53 @@ describe("Skills tab", () => {
       // It keeps its old state until the approval lands, and ignores toggles meanwhile.
       expect(switchNamed("Planner")?.getAttribute("aria-checked")).toBe("false");
       expect(switchNamed("Planner")?.getAttribute("aria-busy")).toBe("true");
-      // One status line reads the wait out, in words of its own beside the visible ones.
+    });
+
+    it("doesn't announce a wait found when the list loads", async () => {
+      api.fetchCapabilitySkills.mockResolvedValue(
+        listOf(
+          ITEMS.map((entry) => (entry.skillId === "planner" ? { ...entry, pendingApprovalId: "approval-9" } : entry)),
+        ),
+      );
+      await render();
+
+      // The row shows the wait, but nobody just asked for it, so nothing is read out.
+      expect(wordOf("Planner")).toBe("Waiting on you in Inbox");
+      expect(rowOf("Planner").querySelector('[role="status"]')?.textContent).toBe("");
+      expect(rowOf("Writer").querySelector('[role="status"]')?.textContent).toBe("");
+    });
+
+    it("names the skill when a click of its switch starts a wait", async () => {
+      api.setCapabilitySkillState.mockResolvedValueOnce({ status: "waiting", approvalId: "approval-9" });
+      await render();
+      await click(switchNamed("Planner"));
+
+      expect(wordOf("Planner")).toBe("Waiting on you in Inbox");
+      // One status line reads the wait out, in words of its own beside the visible ones, naming the skill.
       expect(rowOf("Planner").querySelector('[role="status"]')?.textContent).toBe(
-        "Waiting for your approval in Inbox.",
+        "Planner: waiting for your approval in Inbox.",
       );
       // A row that isn't waiting has the same line, empty.
       expect(rowOf("Writer").querySelector('[role="status"]')?.textContent).toBe("");
+    });
+
+    it("colours the line under each switch by the state it explains", async () => {
+      api.fetchCapabilitySkills.mockResolvedValue(
+        listOf([...ITEMS, skill({ skillId: "gone", name: "Gone", callable: false, lifecycleState: "revoked" })]),
+      );
+      await render();
+      const reasonOf = (name: string) =>
+        rowOf(name).querySelector(`[id="${switchNamed(name)?.getAttribute("aria-describedby")}"] p`);
+
+      expect(reasonOf("Writer")?.className).toContain("text-status-done");
+      expect(reasonOf("Mailer")?.className).toContain("text-status-waiting");
+      expect(reasonOf("Fresh import")?.className).toContain("text-status-waiting");
+      expect(reasonOf("Gone")?.className).toContain("text-status-failed");
+      expect(reasonOf("Planner")?.className).toContain("text-fg-secondary");
+      expect(reasonOf("Notes")?.className).toContain("text-fg-secondary");
+      // Revoked and left out read differently from paused, not only in their words.
+      expect(reasonOf("Gone")?.className).not.toBe(reasonOf("Notes")?.className);
+      expect(reasonOf("Mailer")?.className).not.toBe(reasonOf("Notes")?.className);
     });
 
     it("keeps the Inbox link beside the line that says the wait can't be checked", async () => {
@@ -681,6 +732,16 @@ describe("Skills tab", () => {
         entry.getAttribute("aria-label"),
       );
       expect(labels).toEqual(ITEMS.map((entry) => `View ${entry.name}`));
+    });
+
+    it("opens the skill's panel by putting it in the address", async () => {
+      await render();
+      expect(route.navigate).not.toHaveBeenCalled();
+
+      await click(button("View Writer"));
+      expect(route.navigate).toHaveBeenLastCalledWith("/capabilities/skills?item=skill%3Awriter");
+      await click(button("View House style"));
+      expect(route.navigate).toHaveBeenLastCalledWith("/capabilities/skills?item=skill%3Ahouse-style-id");
     });
   });
 });

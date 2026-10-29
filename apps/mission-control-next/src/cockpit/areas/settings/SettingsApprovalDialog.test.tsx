@@ -50,11 +50,13 @@ const button = (label: string) =>
   [...document.body.querySelectorAll("button")].find((element) => element.textContent?.trim() === label);
 const dialog = () => document.body.querySelector('[role="dialog"]');
 
-async function render(onResolved = vi.fn()) {
+type DialogProps = Partial<Parameters<typeof SettingsApprovalDialog>[0]>;
+
+async function render(onResolved = vi.fn(), props: DialogProps = {}) {
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
-        <SettingsApprovalDialog approvalId="approval-1" onResolved={onResolved} />
+        <SettingsApprovalDialog approvalId="approval-1" onResolved={onResolved} {...props} />
       </QueryClientProvider>,
     ),
   );
@@ -116,4 +118,62 @@ it("offers nothing to approve once the approval is no longer pending", async () 
   await render();
   expect(dialog()).toBeNull();
   expect(button("Review approval")).toBeUndefined();
+});
+
+/** Every option object `fetchApproval` was read with. */
+const readOptions = () => fetchApproval.mock.calls.map(([, options]) => (options ?? {}) as Record<string, unknown>);
+
+it("leaves Settings approvals scoped to their workspace", async () => {
+  const onResolved = await render();
+  expect(fetchApproval).toHaveBeenCalledWith("approval-1", { workspaceId: "default", signal: expect.any(AbortSignal) });
+  expect(decisionBar).toHaveBeenLastCalledWith(expect.objectContaining({ workspaceId: "default" }));
+  await act(async () => button("Approve once")!.click());
+  // The status after the decision is read in the same workspace.
+  expect(readOptions().every((options) => options.workspaceId === "default")).toBe(true);
+  expect(onResolved).toHaveBeenCalledTimes(1);
+
+  // Settings keeps its own words: the title for a change without one, and how to recover from a failed read.
+  act(() => root.unmount());
+  root = createRoot(container);
+  __resetSettingsApprovalDialogsForTests();
+  client.clear();
+  fetchApproval.mockResolvedValue({ ...approval, approvalId: "approval-1", preview: {} });
+  await render();
+  expect(dialog()?.textContent).toContain("Approve this Settings change?");
+  act(() => root.unmount());
+  root = createRoot(container);
+  client.clear();
+  fetchApproval.mockRejectedValue(new Error("offline"));
+  await render();
+  expect(container.textContent).toBe(
+    "The approval for this change could not be loaded. Use Refresh change status, or decide it in Inbox.",
+  );
+});
+
+it("reads a skill approval without a workspace and approves it in one click", async () => {
+  fetchApproval.mockResolvedValue({ ...approval, kind: "skill.lifecycle", preview: {} });
+  const onResolved = await render(vi.fn(), {
+    workspaceId: null,
+    title: "Approve this skill change?",
+    loadFailureHint: "Decide it in Inbox.",
+  });
+  // A skill approval belongs to no workspace, so a read scoped to one would find nothing.
+  expect(fetchApproval).toHaveBeenCalledWith("approval-1", { signal: expect.any(AbortSignal) });
+  expect(dialog()?.textContent).toContain("Approve this skill change?");
+  expect(decisionBar).toHaveBeenLastCalledWith(
+    expect.objectContaining({ workspaceId: null, reviewedInPlace: true, compact: true }),
+  );
+
+  await act(async () => button("Approve once")!.click());
+  expect(onResolved).toHaveBeenCalledTimes(1);
+  expect(dialog()).toBeNull();
+  // Every read, the one after the decision included, was without a workspace.
+  expect(fetchApproval.mock.calls.length).toBeGreaterThan(1);
+  expect(readOptions().every((options) => !("workspaceId" in options))).toBe(true);
+});
+
+it("says a skill approval that can't be read is decided in Inbox", async () => {
+  fetchApproval.mockRejectedValue(new Error("offline"));
+  await render(vi.fn(), { workspaceId: null, loadFailureHint: "Decide it in Inbox." });
+  expect(container.textContent).toBe("The approval for this change could not be loaded. Decide it in Inbox.");
 });

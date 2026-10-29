@@ -413,6 +413,49 @@ describe("useSkillSwitch", () => {
     expect(listReads()).toBe(1);
   });
 
+  it("takes a decline on at once when asked to check", async () => {
+    await render();
+    await waitOnPlanner();
+    expect(approvals.fetchApproval).not.toHaveBeenCalled();
+
+    // Declined where the panel showed it: no skill event follows, so the panel asks the switch to look now.
+    approvals.fetchApproval.mockResolvedValue(approval("rejected"));
+    await act(async () => sw("planner").checkApproval());
+    await settle();
+    expect(approvals.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-1", {
+      signal: expect.any(AbortSignal),
+    });
+    expect(sw("planner")).toMatchObject({
+      waiting: false,
+      failure: { message: "Not changed. The change was declined.", conflict: false },
+    });
+  });
+
+  it("reads the approval at once when asked, and starts its back-off again", async () => {
+    await render();
+    await waitOnPlanner();
+    // The reads have slowed down: 5, 10, 15 and 25 seconds in, the next one 20 seconds later.
+    for (const wait of [5_000, 5_000, 5_000, 10_000]) await beat(wait);
+    expect(approvals.fetchApproval).toHaveBeenCalledTimes(4);
+
+    await act(async () => sw("planner").checkApproval());
+    await settle();
+    expect(approvals.fetchApproval).toHaveBeenCalledTimes(5);
+    // Still waiting, so the reads start again at their first pace.
+    await beat(5_000);
+    expect(approvals.fetchApproval).toHaveBeenCalledTimes(6);
+    expect(sw("planner")).toMatchObject({ waiting: true, waitingApprovalId: "approval-1" });
+  });
+
+  it("reads nothing when asked to check a skill that waits on nothing", async () => {
+    await render();
+    await act(async () => sw("writer").checkApproval());
+    await settle();
+    expect(approvals.fetchApproval).not.toHaveBeenCalled();
+    expect(sw("writer")).toMatchObject({ waiting: false });
+    expect(sw("writer").failure).toBeUndefined();
+  });
+
   it("says it can't check the approval after repeated failed reads, and keeps waiting", async () => {
     await render();
     await waitOnPlanner();

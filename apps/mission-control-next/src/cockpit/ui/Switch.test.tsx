@@ -118,6 +118,13 @@ describe("cockpit Switch", () => {
     expect(findSwitch().getAttribute("aria-describedby")).toBe("linear-hint");
   });
 
+  it("prints no state word when a view states it once elsewhere", () => {
+    renderSwitch({ checked: true, onText: "", offText: "" });
+    expect(container.querySelector('span[aria-hidden="true"]')).toBeNull();
+    expect(findSwitch().parentElement?.firstElementChild).toBe(findSwitch());
+    expect(container.textContent).toBe("");
+  });
+
   it("uses the primary accent when on and the raised surface with a control border when off", () => {
     renderSwitch({ checked: true });
     const onTrack = findSwitch().firstElementChild as HTMLElement;
