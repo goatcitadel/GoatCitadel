@@ -2,6 +2,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { buildChannelConversation } from "../services/channel-conversation.js";
 import {
+  createAcceptedWebhookRateLimit,
+  enforceAcceptedWebhookRateLimit,
+  type AcceptedWebhookRateLimit,
+} from "../services/webhook-rate-limit.js";
+import {
   deriveWhatsAppWebhookEventIdempotencyKey,
   normalizeWhatsAppWebhookPayloads,
   verifyWhatsAppWebhookConnectionBinding,
@@ -43,6 +48,10 @@ const SETUP_DELIVERY_REFUSALS = {
 
 export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
   const routeOptions = createWebhookRouteOptions("whatsappRawBody");
+  // The accepted-delivery limit for a setup draft's address, made with the helper the saved-connection handler uses
+  // (same limit, window and key). Like every limiter made that way it has its own store; an id is never both a saved
+  // connection and a setup draft, so no address is counted in two places.
+  const setupDeliveryRateLimit = createAcceptedWebhookRateLimit(fastify, "whatsapp");
   fastify.get(
     "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
     {
@@ -103,7 +112,7 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
     {
       ...routeOptions,
       // Ahead of the saved-connection handler: an address that is no saved connection may be a setup draft's.
-      preHandler: (request, reply) => answerSetupDelivery(fastify, request, reply),
+      preHandler: (request, reply) => answerSetupDelivery(fastify, setupDeliveryRateLimit, request, reply),
       config: {
         ...routeOptions.config,
         rateLimit: {
@@ -294,12 +303,16 @@ async function answerSetupCheck(
  * A delivery for an address that is no saved connection. When it is a setup draft made on the Messaging page, the
  * listener checks the signature and hears the setup code; the delivery is answered as ignored and never reaches a
  * conversation. The size limit, the raw body and the ingress rate limit are the route's own, so they apply here as they do
- * to a saved connection; the accepted-delivery limit guards a dispatch, and nothing is dispatched. Returns the reply once
- * it has answered, and nothing when the saved-connection handler is to answer: a saved connection, a bad address or Host
- * header, a missing body, an address that is no setup draft, and any lookup that failed for a reason other than "not found".
+ * to a saved connection. The accepted-delivery limit applies where the saved-connection handler applies it, once the
+ * signature has passed: a 200 from the listener means a setup draft, a valid signature and the draft's phone number, so
+ * only then is the limit spent (and 429 answered when it is used up). Unsigned, wrongly signed and unknown addresses never
+ * spend it. Returns the reply once it has answered, and nothing when the saved-connection handler is to answer: a saved
+ * connection, a bad address or Host header, a missing body, an address that is no setup draft, and any lookup that failed
+ * for a reason other than "not found".
  */
 async function answerSetupDelivery(
   fastify: FastifyInstance,
+  rateLimit: AcceptedWebhookRateLimit | undefined,
   request: WhatsAppWebhookRequest,
   reply: FastifyReply,
 ): Promise<FastifyReply | undefined> {
@@ -323,6 +336,9 @@ async function answerSetupDelivery(
     readHeaderValue(request.headers["x-hub-signature-256"]),
   )) as { status?: unknown } | undefined;
   if (heard?.status === 200) {
+    if (await enforceAcceptedWebhookRateLimit(rateLimit, request, reply)) {
+      return reply;
+    }
     return reply.send(createIgnoredWebhookReply(undefined, "setup_listening"));
   }
   if (heard?.status === 400 || heard?.status === 401 || heard?.status === 403) {
