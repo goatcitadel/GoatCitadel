@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { ChannelStreamAuthError, type ChannelStreamRunContext } from "../channel-stream-runtime-service.js";
 import {
+  HELLO_TIMEOUT_MS,
   OPEN_TIMEOUT_MS,
   QUIET_RECONNECT_MS,
   createSlackSocketStreamAdapter,
@@ -453,6 +454,79 @@ describe("slack socket stream adapter", () => {
     await run.done;
     expect(run.state.value).toBe("resolved");
     // The new socket's timer is gone with the run.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ends the run when Slack sends no hello within 30 seconds", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const h = harness();
+    const run = h.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await until(() => h.sockets.length === 1, "the first socket");
+    expect(HELLO_TIMEOUT_MS).toBe(30_000);
+
+    // A frame that is not hello does not count.
+    await vi.advanceTimersByTimeAsync(10_000);
+    h.sockets[0]!.frame({ type: "something_else" });
+    await vi.advanceTimersByTimeAsync(HELLO_TIMEOUT_MS - 10_001);
+    expect(run.state.value).toBe("running");
+    expect(h.sockets[0]!.closeCalls).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await run.done;
+    expect(run.state.value).toBe("rejected");
+    expect(run.state.error).toBeInstanceOf(Error);
+    expect(run.state.error).not.toBeInstanceOf(ChannelStreamAuthError);
+    expect((run.state.error as Error).message).toBe(CLOSED);
+    expect(h.sockets[0]!.closeCalls).toBeGreaterThan(0);
+    expect(h.opens).toHaveLength(1);
+    expect(h.markReady).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps a socket whose hello arrives in time", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const h = harness();
+    const run = h.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await until(() => h.sockets.length === 1, "the first socket");
+
+    await vi.advanceTimersByTimeAsync(HELLO_TIMEOUT_MS - 1);
+    h.sockets[0]!.frame({ type: "hello" });
+    await vi.advanceTimersByTimeAsync(HELLO_TIMEOUT_MS * 2);
+
+    expect(run.state.value).toBe("running");
+    expect(h.sockets[0]!.closeCalls).toBe(0);
+    expect(h.opens).toHaveLength(1);
+    expect(h.markReady).toHaveBeenCalledTimes(1);
+
+    h.abort();
+    await run.done;
+    expect(run.state.value).toBe("resolved");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("gives a socket opened for a refresh its own hello deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const h = harness({ opens: [() => opened(SOCKET_URL), () => opened(SECOND_SOCKET_URL)] });
+    const run = h.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await until(() => h.sockets.length === 1, "the first socket");
+    h.sockets[0]!.frame({ type: "hello" });
+    await vi.advanceTimersByTimeAsync(HELLO_TIMEOUT_MS * 2);
+
+    h.sockets[0]!.frame({ type: "disconnect", reason: "refresh_requested" });
+    await until(() => h.sockets.length === 2, "the second socket");
+    await vi.advanceTimersByTimeAsync(HELLO_TIMEOUT_MS - 1);
+    expect(run.state.value).toBe("running");
+    expect(h.sockets[1]!.closeCalls).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await run.done;
+    expect(run.state.value).toBe("rejected");
+    expect((run.state.error as Error).message).toBe(CLOSED);
+    expect(h.sockets[1]!.closeCalls).toBeGreaterThan(0);
+    expect(h.opens).toHaveLength(2);
     expect(vi.getTimerCount()).toBe(0);
   });
 

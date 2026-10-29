@@ -260,7 +260,9 @@ lists Slack at "About 5 min".
   Slack sends a `disconnect` with reason `warning` or `refresh_requested`, and
   also when an hour passes with no frame at all. A `link_disabled` reason stops
   it with "Slack turned Socket Mode off for this app." and the runtime backs off
-  before trying again. An event is acknowledged only after GoatCitadel has
+  before trying again. A new connection, the first or one opened for a refresh,
+  that sends no `hello` within 30 seconds is closed with "The connection to Slack
+  closed.", and the runtime backs off too. An event is acknowledged only after GoatCitadel has
   handled it, so one that failed stays unacknowledged for Slack to send again;
   GoatCitadel does not fetch Slack's history, so messages sent while it is
   disconnected are not read later.

@@ -18,7 +18,8 @@ import {
  *
  * Slack refreshes a socket every few hours and says so with a `disconnect` envelope. The adapter then opens the next
  * socket itself, inside `run`, because a `run` that ends (resolves or rejects) makes the runtime back off. A socket
- * that has been silent for an hour is replaced the same way. Anything else that ends a socket rejects `run`.
+ * that has been silent for an hour is replaced the same way. Anything else that ends a socket rejects `run`, including
+ * a new socket that sends no `hello` within 30 seconds.
  *
  * The app-level token and the socket address (which carries a connection ticket) never reach an error or a
  * diagnostic: errors are fixed sentences, never a fetch error message, a URL, a response body or a socket event.
@@ -26,6 +27,8 @@ import {
 
 /** A socket that has received no frame for this long is replaced; nothing else would notice a silently dead link. */
 export const QUIET_RECONNECT_MS = 3_600_000;
+/** How long a new socket gets to say hello; one that never does is closed and the run ends, so the runtime backs off. */
+export const HELLO_TIMEOUT_MS = 30_000;
 /** How long Slack gets to answer `apps.connections.open`. */
 export const OPEN_TIMEOUT_MS = 15_000;
 const OPEN_MAX_BYTES = 64 * 1024;
@@ -186,11 +189,15 @@ export function createSlackSocketStreamAdapter(deps: SlackSocketStreamAdapterDep
       // Envelopes are handled one at a time, in arrival order. The chain never rejects: a failure ends the socket.
       let chain: Promise<void> = Promise.resolve();
       let quietTimer: ReturnType<typeof setTimeout> | undefined;
+      // Every socket, the first and each one opened for a refresh, must say hello in time. The timer only fires
+      // after `finish` below exists.
+      const helloTimer = setTimeout(() => finish(new Error(CLOSED)), HELLO_TIMEOUT_MS);
 
       const finish = (outcome: SocketEnd | Error) => {
         if (ended) return;
         ended = true;
         clearTimeout(quietTimer);
+        clearTimeout(helloTimer);
         ctx.signal.removeEventListener("abort", onAbort);
         try {
           socket.close();
@@ -247,6 +254,7 @@ export function createSlackSocketStreamAdapter(deps: SlackSocketStreamAdapterDep
         const frame = readFrame(event.data);
         if (!frame) return;
         if (frame.type === "hello") {
+          clearTimeout(helloTimer);
           ctx.markReady();
           return;
         }
