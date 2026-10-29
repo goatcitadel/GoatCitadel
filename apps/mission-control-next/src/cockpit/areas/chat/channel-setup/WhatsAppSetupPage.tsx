@@ -24,6 +24,7 @@ import { NO_WHATSAPP_IDS, WhatsAppDetailsStep, type WhatsAppIds } from "./WhatsA
 import { WhatsAppSayHiStep } from "./WhatsAppSayHiStep";
 import {
   WHATSAPP_ADDRESS_CHECKED,
+  WHATSAPP_ADDRESS_CHECKED_EARLIER,
   WHATSAPP_ADDRESS_NOT_CHECKED,
   WHATSAPP_ADDRESS_WAITING,
   WHATSAPP_CATALOG_ID,
@@ -96,8 +97,11 @@ function statusLine(setup: WhatsAppSetupState, checking: boolean, turnOn: TurnOn
   if (setup.sender) return whatsAppSaidHi(whatsAppSenderName(setup.sender));
   if (setup.codeExpired) return WHATSAPP_CODE_EXPIRED;
   if (setup.code) return WHATSAPP_WAITING_FOR_HI;
-  if (setup.number) return setup.addressCheckedAt ? WHATSAPP_ADDRESS_CHECKED : WHATSAPP_ADDRESS_WAITING;
-  return undefined;
+  if (!setup.number) return undefined;
+  if (!setup.addressCheckedAt) return WHATSAPP_ADDRESS_WAITING;
+  // "Just now" only for a check this page session saw arrive; read back from the draft, or after the details were
+  // checked anew, it is the same fact with no time in it.
+  return setup.addressCheckedHere ? WHATSAPP_ADDRESS_CHECKED : WHATSAPP_ADDRESS_CHECKED_EARLIER;
 }
 
 /**
@@ -273,7 +277,8 @@ export function WhatsAppSetupPage({
       place: "In Meta",
       waitsFor: "Opens when Meta accepts your details.",
       state: addressState,
-      result: addressDone ? WHATSAPP_ADDRESS_CHECKED : undefined,
+      // What stays on screen carries no time: it would be wrong an hour from now.
+      result: addressDone ? WHATSAPP_ADDRESS_CHECKED_EARLIER : undefined,
       children: callbackUrl ? (
         <WhatsAppAddressStep
           callbackUrl={callbackUrl}

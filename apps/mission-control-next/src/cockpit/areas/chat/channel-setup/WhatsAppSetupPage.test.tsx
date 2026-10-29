@@ -15,6 +15,7 @@ import { CockpitNavigationProvider } from "../../../app/CockpitNavigationProvide
 import { SETUP_CODE_TTL_MS } from "./setup-code";
 import {
   WHATSAPP_ADDRESS_CHECKED,
+  WHATSAPP_ADDRESS_CHECKED_EARLIER,
   WHATSAPP_ADDRESS_NOT_CHECKED,
   WHATSAPP_ADDRESS_WAITING,
   WHATSAPP_CHECK_FAILED,
@@ -476,7 +477,7 @@ describe("WhatsAppSetupPage, the steps before Meta checks the address", () => {
     await mountAtAddress({ tokenExpiresAt: "2026-10-29T13:00:00.000Z" });
     const third = steps()[2]!;
     expect(third.textContent).toContain(
-      "This token stops working in 3 hours. Make a system user's token in Business Settings so WhatsApp keeps working, then paste it here.",
+      "This token stops working in 3 hours. Make a system user's token in Business Settings so WhatsApp keeps working, then change the key from WhatsApp's page once it's on.",
     );
     expect(third.querySelector("time")?.getAttribute("datetime")).toBe("2026-10-29T13:00:00.000Z");
     const note = third.querySelector("[data-tone]");
@@ -555,8 +556,23 @@ describe("WhatsAppSetupPage, pointing Meta at GoatCitadel", () => {
     await metaChecksAddress();
     // The app is subscribed, so the step is done and the next one has asked for its code.
     expect(states()).toEqual(["done", "done", "done", "done", "current", "locked"]);
-    expect(steps()[3]!.textContent).toContain(WHATSAPP_ADDRESS_CHECKED);
+    // What stays on screen carries no time, because it stays.
+    expect(steps()[3]!.textContent).toContain(WHATSAPP_ADDRESS_CHECKED_EARLIER);
+    expect(steps()[3]!.textContent).not.toContain("just now");
     expect(steps()[3]!.textContent).not.toContain(WHATSAPP_ADDRESS_WAITING);
+  });
+
+  it("announces a check it saw arrive as just now, and shows it with no time on screen", async () => {
+    await mountAtAddress({ appSubscribed: false });
+    expect(status()).toBe(WHATSAPP_ADDRESS_WAITING);
+
+    await metaChecksAddress();
+    // The app still has to be subscribed, so nothing else has taken the status line yet.
+    expect(status()).toBe(WHATSAPP_ADDRESS_CHECKED);
+    expect(WHATSAPP_ADDRESS_CHECKED).toBe("Meta checked your address just now.");
+    expect(steps()[3]!.textContent).toContain(WHATSAPP_ADDRESS_CHECKED_EARLIER);
+    expect(steps()[3]!.textContent).not.toContain("just now");
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 
   it("offers to subscribe the app only when Meta says it isn't", async () => {
@@ -583,7 +599,7 @@ describe("WhatsAppSetupPage, pointing Meta at GoatCitadel", () => {
     await mountAtAddress({ appSubscribed: false });
     await metaChecksAddress();
     expect(states()).toEqual(["done", "done", "done", "current", "locked", "locked"]);
-    expect(steps()[3]!.textContent).toContain(WHATSAPP_ADDRESS_CHECKED);
+    expect(steps()[3]!.textContent).toContain(WHATSAPP_ADDRESS_CHECKED_EARLIER);
     // No code is asked for before the step is done.
     expect(api.updateChannelSetupDraft.mock.calls.some(([, input]) => input.draft.setupCode)).toBe(false);
 
@@ -903,6 +919,26 @@ describe("WhatsAppSetupPage, coming back to a setup", () => {
     expect(states()).toEqual(["done", "done", "done", "done", "current", "locked"]);
     expect(sentCode()).toMatch(/^[A-Za-z0-9]{10}$/);
     expect(status()).toBe(WHATSAPP_WAITING_FOR_HI);
+    expect(steps()[3]!.textContent).toContain(WHATSAPP_ADDRESS_CHECKED_EARLIER);
+    expect(container.textContent).not.toContain("just now");
+  });
+
+  it("says Meta has checked the address, never just now, when the check was noted on an earlier visit", async () => {
+    meta = { number: NUMBER, appSubscribed: false };
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [savedSetup({ webhookCheckedAt: CHECKED_AT })] });
+    await mount();
+
+    // Step 4 is still open for the subscription, so the status line is the address's own.
+    expect(states()).toEqual(["done", "done", "done", "current", "locked", "locked"]);
+    expect(status()).toBe(WHATSAPP_ADDRESS_CHECKED_EARLIER);
+    expect(status()).toBe("Meta has checked your address.");
+    expect(steps()[3]!.textContent).toContain(WHATSAPP_ADDRESS_CHECKED_EARLIER);
+    expect(container.textContent).not.toContain("just now");
+
+    await click(button("Let this app receive your number's messages"));
+    expect(steps()[3]!.getAttribute("data-state")).toBe("done");
+    expect(steps()[3]!.textContent).toContain(WHATSAPP_ADDRESS_CHECKED_EARLIER);
+    expect(container.textContent).not.toContain("just now");
   });
 
   it("shows the fields again when a saved token has stopped working", async () => {

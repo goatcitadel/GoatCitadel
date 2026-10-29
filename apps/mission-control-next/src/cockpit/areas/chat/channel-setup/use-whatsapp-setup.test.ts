@@ -224,6 +224,7 @@ describe("useWhatsAppSetup, checking the details", () => {
       code: null,
       codeExpired: false,
       addressExpired: false,
+      addressCheckedHere: false,
       busy: false,
     });
     expect(current.tokenExpiresAt).toBeUndefined();
@@ -502,6 +503,7 @@ describe("useWhatsAppSetup, checking the details", () => {
     api.checkWhatsAppSetup.mockResolvedValue({ codeSender: SHEENA });
     await advance(WHATSAPP_LISTEN_POLL_MS);
     expect(current.sender).toEqual(SHEENA);
+    expect(current.addressCheckedHere).toBe(true);
     const token = current.verifyToken;
 
     api.checkWhatsAppSetup.mockResolvedValue(
@@ -513,8 +515,10 @@ describe("useWhatsAppSetup, checking the details", () => {
     expect(current.code).toBeNull();
     expect(current.codeExpired).toBe(false);
     expect(current.verifyToken).toBe(token);
-    // Meta has checked the address; that does not depend on the details, so it is not asked for again.
+    // Meta has checked the address; that does not depend on the details, so it is not asked for again. It was not seen
+    // arriving in this check, so a page must not call it new.
     expect(current.addressCheckedAt).toBe(CHECKED_AT);
+    expect(current.addressCheckedHere).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
 });
@@ -535,6 +539,7 @@ describe("useWhatsAppSetup, waiting for Meta to check the address", () => {
       expect(input).not.toHaveProperty("setupCode");
     }
     expect(current.addressCheckedAt).toBeUndefined();
+    expect(current.addressCheckedHere).toBe(false);
     expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
 
     api.checkWhatsAppSetup.mockResolvedValue({ addressCheckedAt: CHECKED_AT });
@@ -545,6 +550,8 @@ describe("useWhatsAppSetup, waiting for Meta to check the address", () => {
       draft: { label: "kept", setupPage: "messaging", ...IDS, webhookCheckedAt: CHECKED_AT },
     });
     expect(current.addressCheckedAt).toBe(CHECKED_AT);
+    // This page session saw the check arrive, so it may say so.
+    expect(current.addressCheckedHere).toBe(true);
     expect(current.draft?.revision).toBe(5);
     expect(current.error).toBeUndefined();
 
@@ -567,6 +574,7 @@ describe("useWhatsAppSetup, waiting for Meta to check the address", () => {
       draft: expect.objectContaining({ webhookCheckedAt: CHECKED_AT }),
     });
     expect(current.addressCheckedAt).toBe(CHECKED_AT);
+    expect(current.addressCheckedHere).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -1151,6 +1159,8 @@ describe("useWhatsAppSetup, coming back to a setup", () => {
     await mount();
 
     expect(current.addressCheckedAt).toBe(CHECKED_AT);
+    // Read back from the draft, not seen arriving: a page may not call it new.
+    expect(current.addressCheckedHere).toBe(false);
     expect(current.verifyToken).toBeNull();
     expect(current.sender).toBeNull();
     expect(current.code).toBeNull();
@@ -1179,6 +1189,7 @@ describe("useWhatsAppSetup, coming back to a setup", () => {
     await mount();
     expect(current.sender).toEqual({ actorId: "16505551234" });
     expect(current.addressCheckedAt).toBe(CHECKED_AT);
+    expect(current.addressCheckedHere).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
     expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
   });
@@ -1315,6 +1326,7 @@ describe("useWhatsAppSetup, starting over", () => {
       verifyToken: null,
       sender: null,
       code: null,
+      addressCheckedHere: false,
       busy: false,
     });
     expect(current.addressCheckedAt).toBeUndefined();

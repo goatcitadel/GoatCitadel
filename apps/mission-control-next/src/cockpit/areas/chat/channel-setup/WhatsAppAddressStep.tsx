@@ -5,7 +5,7 @@ import { Callout } from "../../../ui/Callout";
 import { Field } from "../../../ui/Field";
 import { cockpitInputClass } from "../../../ui/input-class";
 import {
-  WHATSAPP_ADDRESS_CHECKED,
+  WHATSAPP_ADDRESS_CHECKED_EARLIER,
   WHATSAPP_ADDRESS_NOT_CHECKED,
   WHATSAPP_ADDRESS_WAITING,
   WHATSAPP_NOT_SUBSCRIBED,
@@ -61,7 +61,8 @@ function CopyField({ label, value }: { label: string; value: string }) {
 
 /**
  * Step 4: what the operator gives Meta (the Callback URL and the Verify token), and where GoatCitadel is in hearing back
- * from Meta. Nothing here is a live region: the page's status line says the same. The verify token is shown only while
+ * from Meta. Nothing here is a live region: the page's status line announces what happens, and this step keeps it on
+ * screen with no time in it, since it stays. The verify token is shown only while
  * the page holds the one it made; after a reload a new one is a click away, until Meta has checked the address. Ten
  * minutes without Meta's check say so here, with the button that waits again. The app is subscribed with a button, but
  * only when Meta says it isn't.
@@ -113,7 +114,7 @@ export function WhatsAppAddressStep({
         </Callout>
       ) : (
         <p className="text-sm text-fg-secondary">
-          {addressCheckedAt ? WHATSAPP_ADDRESS_CHECKED : WHATSAPP_ADDRESS_WAITING}
+          {addressCheckedAt ? WHATSAPP_ADDRESS_CHECKED_EARLIER : WHATSAPP_ADDRESS_WAITING}
         </p>
       )}
       {appSubscribed ? null : (

@@ -44,6 +44,12 @@ export interface WhatsAppSetupState {
   verifyToken: string | null;
   /** When Meta checked the address: heard while the page waited, or noted on the draft by an earlier visit. */
   addressCheckedAt?: string;
+  /**
+   * This page session saw Meta's check arrive (while it waited, or with the details' own check): the one moment the page
+   * may say it came "just now". False when the check was read back from the draft, as on a later visit, and after the
+   * details are checked anew, so a page never calls an old check new.
+   */
+  addressCheckedHere: boolean;
   /** Ten minutes passed without Meta's check. `error` also says so, until the wait starts again. */
   addressExpired: boolean;
   /** Meta delivers the account's messages to this app. */
@@ -89,6 +95,7 @@ const EMPTY: Core = {
   tokenExpiresAt: undefined,
   verifyToken: null,
   addressCheckedAt: undefined,
+  addressCheckedHere: false,
   addressExpired: false,
   appSubscribed: false,
   busy: false,
@@ -152,7 +159,13 @@ export function useWhatsAppSetup(workspaceId: string, resumeDraftId?: string): W
         return;
       }
       invalidate();
-      set({ draft: outcome.draft, addressCheckedAt: checkedAt, addressExpired: false, error: undefined });
+      set({
+        draft: outcome.draft,
+        addressCheckedAt: checkedAt,
+        addressCheckedHere: true,
+        addressExpired: false,
+        error: undefined,
+      });
     },
     [current, invalidate],
   );
@@ -312,6 +325,7 @@ export function useWhatsAppSetup(workspaceId: string, resumeDraftId?: string): W
         number: null,
         tokenExpiresAt: undefined,
         appSubscribed: false,
+        addressCheckedHere: false,
         addressExpired: false,
         ...NO_HI,
         busy: true,

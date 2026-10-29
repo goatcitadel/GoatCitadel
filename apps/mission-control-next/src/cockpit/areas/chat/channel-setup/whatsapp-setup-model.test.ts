@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { SETUP_CODE_ALPHABET } from "./setup-code";
 import {
   WHATSAPP_ADDRESS_CHECKED,
+  WHATSAPP_ADDRESS_CHECKED_EARLIER,
   WHATSAPP_ADDRESS_NOT_CHECKED,
   WHATSAPP_ADDRESS_WAITING,
   WHATSAPP_CATALOG_ID,
@@ -14,6 +15,8 @@ import {
   WHATSAPP_POINT_META_TEXT,
   WHATSAPP_PUBLIC_ADDRESS_TEXT,
   WHATSAPP_SAY_HI_TEXT,
+  WHATSAPP_TOKEN_ENDS,
+  WHATSAPP_TOKEN_ENDS_ADVICE,
   WHATSAPP_TURN_ON_WORDING,
   WHATSAPP_WAITING_FOR_HI,
   createVerifyToken,
@@ -51,6 +54,8 @@ describe("the words", () => {
     expect(WHATSAPP_CHECK_FAILED).toBe("GoatCitadel couldn't check those details with Meta.");
     expect(WHATSAPP_ADDRESS_WAITING).toBe("Waiting for Meta to check your address…");
     expect(WHATSAPP_ADDRESS_CHECKED).toBe("Meta checked your address just now.");
+    // The same fact with no time in it, for everywhere it stays on screen or was learned on an earlier visit.
+    expect(WHATSAPP_ADDRESS_CHECKED_EARLIER).toBe("Meta has checked your address.");
     expect(WHATSAPP_ADDRESS_NOT_CHECKED).toBe(
       "Meta hasn't checked your address yet. Choose Verify and save in Meta, then check again.",
     );
@@ -258,6 +263,14 @@ describe("the words of the page's steps", () => {
     expect(WHATSAPP_SAY_HI_TEXT).toBe(
       "Open the link on your phone and send the message as it is. With Meta's test number, your phone may first need to be added under API Setup › To.",
     );
+  });
+
+  it("says a token's end with advice the page can follow: the key is changed from WhatsApp's page once it's on", () => {
+    expect(WHATSAPP_TOKEN_ENDS).toBe("This token stops working");
+    expect(WHATSAPP_TOKEN_ENDS_ADVICE).toBe(
+      "Make a system user's token in Business Settings so WhatsApp keeps working, then change the key from WhatsApp's page once it's on.",
+    );
+    expect(WHATSAPP_TOKEN_ENDS_ADVICE).not.toContain("paste it here");
   });
 
   it("says what the check found, naming the number and the name Meta verified", () => {

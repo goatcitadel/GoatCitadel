@@ -14,7 +14,10 @@ export const WHATSAPP_CATALOG_ID = "channel.whatsapp";
 export const WHATSAPP_CHECK_FAILED = "GoatCitadel couldn't check those details with Meta.";
 
 export const WHATSAPP_ADDRESS_WAITING = "Waiting for Meta to check your address…";
+/** The moment a page session first sees Meta's check arrive: said once, by the status line, and nowhere it would stay. */
 export const WHATSAPP_ADDRESS_CHECKED = "Meta checked your address just now.";
+/** The same fact with no time in it, for what stays on screen and for a check noted on an earlier visit. */
+export const WHATSAPP_ADDRESS_CHECKED_EARLIER = "Meta has checked your address.";
 /** What the wait for Meta's check comes to when its ten minutes run out. */
 export const WHATSAPP_ADDRESS_NOT_CHECKED =
   "Meta hasn't checked your address yet. Choose Verify and save in Meta, then check again.";
@@ -141,10 +144,14 @@ export const WHATSAPP_META_APP_STEPS = [
 export const whatsAppWorks = (number: { displayNumber: string; verifiedName: string }) =>
   `Works. Your number is ${number.displayNumber} (${number.verifiedName}).`;
 
-/** The note on a token that stops working: this, the time it stops, then the advice. */
+/**
+ * The note on a token that stops working: this, the time it stops, then the advice. The details are done by then and
+ * their fields are gone, and Start over would give Meta's Callback URL a new draft, so the advice sends the operator to
+ * where a key is changed: the channel's page, once it is on.
+ */
 export const WHATSAPP_TOKEN_ENDS = "This token stops working";
 export const WHATSAPP_TOKEN_ENDS_ADVICE =
-  "Make a system user's token in Business Settings so WhatsApp keeps working, then paste it here.";
+  "Make a system user's token in Business Settings so WhatsApp keeps working, then change the key from WhatsApp's page once it's on.";
 
 export const WHATSAPP_POINT_META_TEXT =
   "In your Meta app, open WhatsApp › Configuration. Paste these into Callback URL and Verify token, choose Verify and save, then subscribe to messages.";
