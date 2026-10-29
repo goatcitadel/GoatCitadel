@@ -10,8 +10,10 @@ import { createSystemSettingsChannelStreamCursorStore } from "./channel-stream-c
 import { createMatrixStreamAdapter } from "./channel-stream-adapters/matrix-stream-adapter.js";
 import { createMattermostStreamAdapter } from "./channel-stream-adapters/mattermost-stream-adapter.js";
 import { createNtfyStreamAdapter } from "./channel-stream-adapters/ntfy-stream-adapter.js";
+import { createSlackSocketStreamAdapter } from "./channel-stream-adapters/slack-socket-stream-adapter.js";
 import { createTelegramStreamAdapter } from "./channel-stream-adapters/telegram-stream-adapter.js";
 import { ChannelStreamRuntimeService, type ChannelStreamEvent } from "./channel-stream-runtime-service.js";
+import { runSlackEvent } from "./slack-event-processor.js";
 import { runTelegramUpdate, type TelegramUpdateDeps } from "./telegram-update-processor.js";
 
 /** The narrow Gateway surface the stream runtime needs. All members are read lazily, at call time. */
@@ -40,7 +42,7 @@ export interface ChannelStreamRuntimeHost {
 
 const runtimes = new WeakMap<object, ChannelStreamRuntimeService>();
 // Keyed by storage: it is the one object the Gateway and its route-composition port share.
-const telegramUpdateHandlers = new WeakMap<object, TelegramUpdateDeps>();
+const channelUpdateHandlers = new WeakMap<object, TelegramUpdateDeps>();
 
 /**
  * Returns the one channel stream runtime for a Gateway host, creating it with
@@ -60,14 +62,15 @@ export function getChannelStreamRuntime(host: ChannelStreamRuntimeHost): Channel
 }
 
 /**
- * Hands the Telegram poller the update handler the webhook route uses. The route composition owns the
- * integration-webhook port, so it provides it here; polled updates wait (and are retried) until it has.
+ * Hands the Telegram poller and the Slack Socket Mode reader the update handlers the webhook routes use. The route
+ * composition owns the integration-webhook port, so it provides it here; polled updates and socket events wait (and
+ * are retried) until it has.
  */
-export function provideTelegramUpdateDeps(
+export function provideChannelUpdateDeps(
   host: Pick<ChannelStreamRuntimeHost, "storage">,
   deps: TelegramUpdateDeps,
 ): void {
-  telegramUpdateHandlers.set(host.storage, deps);
+  channelUpdateHandlers.set(host.storage, deps);
 }
 
 function createStreamRuntime(host: ChannelStreamRuntimeHost, runtimeKey: object): ChannelStreamRuntimeService {
@@ -122,9 +125,19 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost, runtimeKey: object)
         cursorStore,
         // Looked up per update: the route composition provides the handler after this runtime may have started.
         processUpdate: async (connectionId, update) => {
-          const deps = telegramUpdateHandlers.get(runtimeKey);
+          const deps = channelUpdateHandlers.get(runtimeKey);
           if (!deps) throw new Error("Telegram receiving isn't ready yet.");
           return await runTelegramUpdate(deps, connectionId, update);
+        },
+      }),
+      createSlackSocketStreamAdapter({
+        ...sharedDeps,
+        createWebSocket: (url) => new WebSocket(url),
+        // Looked up per event, like Telegram's: the route composition provides the handler after the runtime may start.
+        processEvent: async (connectionId, payload) => {
+          const deps = channelUpdateHandlers.get(runtimeKey);
+          if (!deps) throw new Error("Slack receiving isn't ready yet.");
+          return await runSlackEvent({ webhooks: deps.webhooks }, connectionId, payload);
         },
       }),
     ],
