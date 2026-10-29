@@ -1135,3 +1135,107 @@ describe("ApprovalRepository.listPendingBySession", () => {
     );
   });
 });
+
+describe("ApprovalRepository.listPage install-wide", () => {
+  let created = 0;
+
+  function linkedApproval(repo: ApprovalRepository, db: DatabaseClient, linkage: Record<string, string>): string {
+    const approval = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: `command-${created}` },
+      preview: { command: `command-${created}` },
+      linkage,
+    });
+    return stampCreationOrder(db, approval.approvalId);
+  }
+
+  function installWideSkillApproval(repo: ApprovalRepository, db: DatabaseClient): string {
+    const approvalId = `skill-lifecycle:${(created + 1).toString(16).padStart(64, "0")}`;
+    const { approval } = repo.createDeterministicDetachedWithTtlDuration(
+      {
+        approvalId,
+        kind: "skill.lifecycle",
+        riskLevel: "caution",
+        payload: { skillId: `skill-${created}`, change: "enable" },
+        preview: { title: "Switch a skill on" },
+      },
+      15 * 60_000,
+    );
+    assert.equal(approval.linkage, undefined);
+    return stampCreationOrder(db, approval.approvalId);
+  }
+
+  // Creation order stays the page order even when two rows are written inside one millisecond.
+  function stampCreationOrder(db: DatabaseClient, approvalId: string): string {
+    created += 1;
+    db.prepare("UPDATE approvals SET created_at = @createdAt WHERE approval_id = @approvalId").run({
+      createdAt: `2026-10-29T10:00:${String(created).padStart(2, "0")}.000Z`,
+      approvalId,
+    });
+    return approvalId;
+  }
+
+  const pendingPage = (repo: ApprovalRepository, workspaceId: string, includeInstallWide?: boolean) =>
+    repo.listPage({ status: "pending", workspaceId, includeInstallWide }).items.map((item) => item.approvalId);
+
+  it("keeps install-wide approvals in a workspace page only when asked", () => {
+    created = 0;
+    const { db, repo } = createInMemoryHarness();
+    const a1 = linkedApproval(repo, db, { workspaceId: "workspace-a" });
+    linkedApproval(repo, db, { workspaceId: "workspace-b" });
+    const skill = installWideSkillApproval(repo, db);
+    linkedApproval(repo, db, { toolName: "fs.write" });
+    const a2 = linkedApproval(repo, db, { workspaceId: "workspace-a" });
+
+    assert.deepEqual(pendingPage(repo, "workspace-a", true), [a2, skill, a1]);
+    assert.deepEqual(pendingPage(repo, "workspace-a"), [a2, a1]);
+    assert.deepEqual(pendingPage(repo, "workspace-a", false), [a2, a1]);
+  });
+
+  it("treats a row with legacy payload linkage as linked, not install-wide", () => {
+    created = 0;
+    const { db, repo } = createInMemoryHarness();
+    const legacy = linkedApproval(repo, db, { workspaceId: "workspace-b" });
+    db.prepare("UPDATE approvals SET linkage_json = NULL, payload_json = ? WHERE approval_id = ?").run(
+      JSON.stringify({ command: "dir", __gcApprovalLinkage: { workspaceId: "workspace-b" } }),
+      legacy,
+    );
+    assert.deepEqual(repo.get(legacy).linkage, { workspaceId: "workspace-b" });
+
+    assert.deepEqual(pendingPage(repo, "workspace-a", true), []);
+    assert.deepEqual(pendingPage(repo, "workspace-b", true), [legacy]);
+  });
+
+  it("pages install-wide and linked approvals with the cursor without loss or repeats", () => {
+    created = 0;
+    const { db, repo } = createInMemoryHarness();
+    const expected: string[] = [];
+    linkedApproval(repo, db, { workspaceId: "workspace-b" });
+    for (let index = 0; index < 3; index += 1) {
+      expected.push(linkedApproval(repo, db, { workspaceId: "workspace-a" }));
+      if (index === 1) linkedApproval(repo, db, { workspaceId: "workspace-b" });
+      expected.push(installWideSkillApproval(repo, db));
+    }
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = repo.listPage({
+        status: "pending",
+        workspaceId: "workspace-a",
+        includeInstallWide: true,
+        limit: 2,
+        cursor,
+      });
+      seen.push(...page.items.map((item) => item.approvalId));
+      cursor = page.nextCursor;
+      pages += 1;
+      assert.ok(pages <= 6, "the cursor walk must terminate");
+    } while (cursor);
+
+    assert.deepEqual(seen, expected.reverse());
+    assert.equal(new Set(seen).size, seen.length);
+  });
+});
