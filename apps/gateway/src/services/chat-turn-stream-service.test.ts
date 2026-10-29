@@ -1167,6 +1167,8 @@ describe("streamPreparedAgentChatTurn", () => {
     const persistedContent = (assistantIngestCall?.[1] as { message: { content: string } }).message.content;
     expect(persistedContent).toBe("Here is the answer.");
     expect(persistedContent).not.toContain("Reasoning about the answer.");
+    // The reasoning is saved on the turn's trace instead, so a reloaded thread can still show it.
+    expect(host.storage.chatTurnTraces.get("turn-1").reasoning).toBe("Reasoning about the answer.");
   });
 
   it("forwards retained tool-activity evidence through the durable stream sink exactly once", async () => {
@@ -1268,6 +1270,7 @@ describe("streamPreparedAgentChatTurn", () => {
 
     const thinkingCalls = persistChatStreamChunk.mock.calls.filter(([chunk]) => chunk.type === "thinking_delta");
     expect(thinkingCalls).toHaveLength(0);
+    expect(host.storage.chatTurnTraces.get("turn-1").reasoning).toBeUndefined();
   });
 
   it("forces a complex routed turn through the exact frozen direct path with hash-only usage attribution", async () => {
@@ -1673,6 +1676,32 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(host.storage.chatExecutionPlans.create).not.toHaveBeenCalled();
     expect(host.createChatCompletion).not.toHaveBeenCalled();
     expect(host.agentSendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("saves the reasoning streamed before an approval wait, and a resumed pass appends to it", async () => {
+    const host = createHost();
+    const runPass = async (delta: string) => {
+      host.turnRuntime.runStream = vi.fn(async function* () {
+        yield { type: "thinking_delta", sessionId: "session-1", turnId: "turn-1", delta };
+        yield { type: "approval_required", sessionId: "session-1", turnId: "turn-1", approvalId: "approval-1" };
+      }) as never;
+      for await (const _chunk of streamPreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "run command", mode: "code" } as never,
+        createPreparedTurn({ mode: "code" }),
+        "chat_thread_turn_appended",
+      )) {
+        // drain
+      }
+    };
+
+    await runPass("I need to run the command.");
+    expect(host.storage.chatTurnTraces.get("turn-1").reasoning).toBe("I need to run the command.");
+    await runPass("Approved, so I run it.");
+    expect(host.storage.chatTurnTraces.get("turn-1").reasoning).toBe(
+      "I need to run the command.\n\nApproved, so I run it.",
+    );
   });
 
   it("finalizes approval-required streams without writing an assistant message", async () => {
