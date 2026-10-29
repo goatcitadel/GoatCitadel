@@ -38,7 +38,8 @@ const ACCESS_TOKEN = "EAAG-NEW-SECRET-ACCESS-TOKEN";
 const PHONE_NUMBER_ID = "106540352242922";
 const CONNECTION_REVISION = "a".repeat(64);
 const STORED = { accessToken: { configured: true, custody: "temporary" as const } };
-const TEST_MESSAGE = "GoatCitadel sends a test message where your bot posts. WhatsApp can't remove it afterwards.";
+const TEST_MESSAGE =
+  "GoatCitadel sends a test message where your bot posts. WhatsApp delivers it only within 24 hours of that person's last message to your number, so have them message it first. WhatsApp can't remove it afterwards.";
 const WORKS = "Token works for +1 555-078-3881 (Goat Shop).";
 
 function connection(config: Record<string, unknown> = {}): IntegrationConnection {

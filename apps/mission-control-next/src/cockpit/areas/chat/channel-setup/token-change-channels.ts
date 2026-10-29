@@ -129,9 +129,13 @@ const SLACK: TokenChangeChannel = {
   Fields: SlackTokenFields,
 };
 
-/** WhatsApp cannot take a test message back, so the save step does not say it will. */
+/**
+ * What saving does on WhatsApp's page, in the one line the save step lists. The test message is plain text, which
+ * WhatsApp delivers only within 24 hours of the recipient's last message, so the line says to have them write first. It
+ * cannot be taken back, so the line does not say it will be.
+ */
 const WHATSAPP_KEY_CHANGE_TEST_MESSAGE =
-  "GoatCitadel sends a test message where your bot posts. WhatsApp can't remove it afterwards.";
+  "GoatCitadel sends a test message where your bot posts. WhatsApp delivers it only within 24 hours of that person's last message to your number, so have them message it first. WhatsApp can't remove it afterwards.";
 
 const whatsAppTokenWorks = ({ displayNumber, verifiedName }: { displayNumber: string; verifiedName: string }) =>
   `Token works for ${displayNumber} (${verifiedName}).`;

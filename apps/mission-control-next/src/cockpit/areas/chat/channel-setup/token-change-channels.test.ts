@@ -87,9 +87,9 @@ describe("the WhatsApp entry", () => {
     });
   });
 
-  it("lists the test message truthfully: WhatsApp cannot remove it", () => {
+  it("lists the test message truthfully: the 24-hour window, and that WhatsApp cannot remove it", () => {
     expect(WHATSAPP.testMessage).toBe(
-      "GoatCitadel sends a test message where your bot posts. WhatsApp can't remove it afterwards.",
+      "GoatCitadel sends a test message where your bot posts. WhatsApp delivers it only within 24 hours of that person's last message to your number, so have them message it first. WhatsApp can't remove it afterwards.",
     );
     expect(WHATSAPP.testMessage).not.toContain("removes it");
     // The other channels keep the line the key pages share.
