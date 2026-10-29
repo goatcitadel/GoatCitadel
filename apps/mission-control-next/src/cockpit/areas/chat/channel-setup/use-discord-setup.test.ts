@@ -97,11 +97,18 @@ async function run(action: () => Promise<void>) {
   });
 }
 
-/** The calls a successful first check makes: a new draft at version 1, the token stored at 2, the bot named at 3. */
+/**
+ * The calls a successful first check makes: a new draft at version 1, marked as made here at 2, the token stored at 3,
+ * the bot named at 4.
+ */
 function arrangeCheck(result: DiscordSetupCheckResult = checkResult()) {
   api.createChannelSetupDraft.mockResolvedValue(draft({ revision: 1, draft: { label: "kept" } }));
-  api.submitChannelSetupDraftSecrets.mockResolvedValue(
-    draft({ revision: 2, draft: { label: "kept" }, secretState: TOKEN_STORED }),
+  api.submitChannelSetupDraftSecrets.mockImplementation(async (_id: string, input: { expectedRevision: number }) =>
+    draft({
+      revision: input.expectedRevision + 1,
+      draft: { label: "kept", setupPage: "messaging" },
+      secretState: TOKEN_STORED,
+    }),
   );
   api.checkDiscordSetup.mockResolvedValue(result);
   api.updateChannelSetupDraft.mockImplementation(
@@ -144,17 +151,22 @@ describe("useDiscordSetup", () => {
       catalogId: "channel.discord",
       lifecycleMode: "create",
     });
+    // The new draft is marked as made here before the token is stored on it.
+    expect(api.updateChannelSetupDraft).toHaveBeenNthCalledWith(1, "draft-1", {
+      expectedRevision: 1,
+      draft: { label: "kept", setupPage: "messaging" },
+    });
     expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledTimes(1);
     expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledWith("draft-1", {
-      expectedRevision: 1,
+      expectedRevision: 2,
       values: { botToken: TOKEN },
     });
     expect(api.checkDiscordSetup).toHaveBeenCalledTimes(1);
-    expect(api.checkDiscordSetup).toHaveBeenCalledWith({ draftId: "draft-1", expectedRevision: 2 });
+    expect(api.checkDiscordSetup).toHaveBeenCalledWith({ draftId: "draft-1", expectedRevision: 3 });
     // The last write merges into the draft's own values, with the version the token write returned.
-    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
-    expect(api.updateChannelSetupDraft).toHaveBeenCalledWith("draft-1", {
-      expectedRevision: 2,
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+    expect(api.updateChannelSetupDraft).toHaveBeenNthCalledWith(2, "draft-1", {
+      expectedRevision: 3,
       draft: {
         label: "kept",
         setupPage: "messaging",
@@ -163,7 +175,7 @@ describe("useDiscordSetup", () => {
         inboundDmPolicy: "pairing",
       },
     });
-    expect(current.draft?.revision).toBe(3);
+    expect(current.draft?.revision).toBe(4);
     expect(current.draft?.draft).toMatchObject({ applicationId: "222", setupPage: "messaging" });
     expect(current.check).toEqual(checkResult());
     expect(current.busy).toBe(false);
@@ -176,7 +188,7 @@ describe("useDiscordSetup", () => {
     await run(() => current.checkToken(`  ${TOKEN}  `));
     // Trimmed on the way in, and gone from everything the page can read.
     expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledWith("draft-1", {
-      expectedRevision: 1,
+      expectedRevision: 2,
       values: { botToken: TOKEN },
     });
     expect(JSON.stringify(current)).not.toContain("SECRET");
@@ -236,22 +248,71 @@ describe("useDiscordSetup", () => {
   it("goes on with the same draft after a failure, and clears the sentence when it works", async () => {
     arrangeCheck();
     api.checkDiscordSetup.mockRejectedValueOnce(new Error("offline"));
-    // The draft as the gateway has it after the failed try: the token was stored, which moved its version on.
-    api.fetchChannelSetupDraft.mockResolvedValue(draft({ revision: 2, secretState: TOKEN_STORED }));
+    // The draft as the gateway has it after the failed try: marked, then the token stored, which moved it on twice.
+    api.fetchChannelSetupDraft.mockResolvedValue(
+      draft({ revision: 3, draft: { label: "kept", setupPage: "messaging" }, secretState: TOKEN_STORED }),
+    );
     await mount();
     await run(() => current.checkToken(TOKEN));
     expect(current.error).toBe(DISCORD_TOKEN_FAILED);
-    expect(current.draft?.revision).toBe(2);
+    expect(current.draft?.revision).toBe(3);
 
     await run(() => current.checkToken(TOKEN));
-    // No second draft, and the write carries the version the failed try left behind.
+    // No second draft and no second mark, and the write carries the version the failed try left behind.
     expect(api.createChannelSetupDraft).toHaveBeenCalledTimes(1);
     expect(api.submitChannelSetupDraftSecrets).toHaveBeenLastCalledWith("draft-1", {
-      expectedRevision: 2,
+      expectedRevision: 3,
       values: { botToken: TOKEN },
     });
     expect(current.error).toBeUndefined();
     expect(current.check).toEqual(checkResult());
+  });
+
+  it("marks a new draft as made here before storing the token, so a failed first check resumes here", async () => {
+    // A gateway that keeps the one draft it holds, one version on with each write.
+    let held = draft({ revision: 1 });
+    api.createChannelSetupDraft.mockImplementation(async () => held);
+    api.updateChannelSetupDraft.mockImplementation(
+      async (_id: string, input: { expectedRevision: number; draft: Record<string, unknown> }) =>
+        (held = { ...held, revision: input.expectedRevision + 1, draft: input.draft }),
+    );
+    api.submitChannelSetupDraftSecrets.mockImplementation(
+      async (_id: string, input: { expectedRevision: number }) =>
+        (held = { ...held, revision: input.expectedRevision + 1, secretState: TOKEN_STORED }),
+    );
+    api.fetchChannelSetupDraft.mockImplementation(async () => held);
+    api.checkDiscordSetup.mockRejectedValueOnce(new Error("offline"));
+    await mount();
+    await run(() => current.checkToken(TOKEN));
+
+    expect(current.error).toBe(DISCORD_TOKEN_FAILED);
+    // Made, then marked, then the token stored, in that order, each write carrying the version the last returned.
+    const [created] = api.createChannelSetupDraft.mock.invocationCallOrder;
+    const [marked] = api.updateChannelSetupDraft.mock.invocationCallOrder;
+    const [stored] = api.submitChannelSetupDraftSecrets.mock.invocationCallOrder;
+    expect(created).toBeLessThan(marked!);
+    expect(marked).toBeLessThan(stored!);
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", {
+      expectedRevision: 1,
+      draft: { setupPage: "messaging" },
+    });
+    expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledExactlyOnceWith("draft-1", {
+      expectedRevision: 2,
+      values: { botToken: TOKEN },
+    });
+    expect(held.draft).toEqual({ setupPage: "messaging" });
+    expect(current.draft?.revision).toBe(3);
+
+    // A reload finds the draft that holds the token, and goes on with it here.
+    act(() => root.unmount());
+    root = createRoot(container);
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [held] });
+    api.checkDiscordSetup.mockResolvedValue(checkResult());
+    await mount();
+    expect(current.draft?.draftId).toBe("draft-1");
+    expect(api.checkDiscordSetup).toHaveBeenLastCalledWith({ draftId: "draft-1", expectedRevision: 3 });
+    expect(current.check).toEqual(checkResult());
+    expect(api.createChannelSetupDraft).toHaveBeenCalledTimes(1);
   });
 
   it("resumes only a setup made on this page", async () => {
@@ -375,7 +436,7 @@ describe("useDiscordSetup", () => {
     await mount();
     await run(() => current.checkToken(TOKEN));
     await run(() => current.startOver());
-    expect(api.discardChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", 3);
+    expect(api.discardChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", 4);
     expect(current).toMatchObject({ draft: null, check: null, busy: false });
     expect(current.error).toBeUndefined();
 
@@ -941,8 +1002,8 @@ describe("useDiscordSetup, choosing where the bot posts", () => {
     await run(() => current.checkToken(TOKEN));
     expect(current.check?.servers).toEqual([SERVER]);
     expect(current).toMatchObject({ makerId: "333", posting: { kind: "direct" }, busy: false });
-    // The bot was named at revision 3, and the default came after it.
-    expect(lastUpdate()[1].expectedRevision).toBe(3);
+    // The bot was named at revision 4, and the default came after it.
+    expect(lastUpdate()[1].expectedRevision).toBe(4);
     expect(lastUpdate()[1].draft).toMatchObject({ ownerActorIds: ["333"], guildPolicy: "off" });
   });
 

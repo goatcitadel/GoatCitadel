@@ -1,5 +1,5 @@
 import type { ChannelSetupDraft } from "@goatcitadel/contracts";
-import { fetchChannelSetupDraft } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchChannelSetupDraft, updateChannelSetupDraft } from "@goatcitadel/mission-control-shared/api/client";
 
 /** The mark a setup made on a page in Chat leaves on its draft (`setupPage`), so that page is where it goes on. */
 export const CHAT_SETUP_PAGE = "messaging";
@@ -36,6 +36,20 @@ export function chatSetupToResume(
     (newest, draft) => (!newest || updated(draft) > updated(newest) ? draft : newest),
     null,
   );
+}
+
+/**
+ * The draft marked as made on a Chat page, written before any secret is stored on it: a draft that holds a token is
+ * then always one the page goes on with, even when the first check fails, and never one Settings lists as its own.
+ * Returns the marked draft, whose version the next write carries. A draft already marked is returned as it is, and a
+ * write that fails is left to fail.
+ */
+export async function markedChatSetupDraft(draft: ChannelSetupDraft): Promise<ChannelSetupDraft> {
+  if (isChatSetupDraft(draft)) return draft;
+  return await updateChannelSetupDraft(draft.draftId, {
+    expectedRevision: draft.revision,
+    draft: { ...draft.draft, setupPage: CHAT_SETUP_PAGE },
+  });
 }
 
 /** The draft as the gateway has it now, or null when it cannot be read. */

@@ -1,8 +1,14 @@
 import type { ChannelSetupDraft } from "@goatcitadel/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CHAT_SETUP_PAGE, chatSetupToResume, isChatSetupDraft, latestDraft } from "./setup-draft-session";
+import {
+  CHAT_SETUP_PAGE,
+  chatSetupToResume,
+  isChatSetupDraft,
+  latestDraft,
+  markedChatSetupDraft,
+} from "./setup-draft-session";
 
-const api = vi.hoisted(() => ({ fetchChannelSetupDraft: vi.fn() }));
+const api = vi.hoisted(() => ({ fetchChannelSetupDraft: vi.fn(), updateChannelSetupDraft: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
 
 function draft(overrides: Partial<ChannelSetupDraft> = {}): ChannelSetupDraft {
@@ -26,6 +32,7 @@ function draft(overrides: Partial<ChannelSetupDraft> = {}): ChannelSetupDraft {
 
 beforeEach(() => {
   api.fetchChannelSetupDraft.mockReset();
+  api.updateChannelSetupDraft.mockReset();
 });
 
 describe("isChatSetupDraft", () => {
@@ -117,5 +124,31 @@ describe("latestDraft", () => {
   it("returns null when it cannot be read", async () => {
     api.fetchChannelSetupDraft.mockRejectedValue(new Error("offline"));
     await expect(latestDraft("draft-1")).resolves.toBeNull();
+  });
+});
+
+describe("markedChatSetupDraft", () => {
+  it("marks a new draft as made on a Chat page in one write, keeping its values and carrying its version", async () => {
+    const created = Object.freeze(draft({ revision: 1, draft: Object.freeze({ label: "kept" }) }));
+    const marked = draft({ revision: 2, draft: { label: "kept", setupPage: CHAT_SETUP_PAGE } });
+    api.updateChannelSetupDraft.mockResolvedValue(marked);
+
+    await expect(markedChatSetupDraft(created)).resolves.toBe(marked);
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", {
+      expectedRevision: 1,
+      draft: { label: "kept", setupPage: CHAT_SETUP_PAGE },
+    });
+    expect(created.draft).toEqual({ label: "kept" });
+  });
+
+  it("writes nothing for a draft that is already marked", async () => {
+    const already = draft({ revision: 3 });
+    await expect(markedChatSetupDraft(already)).resolves.toBe(already);
+    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+  });
+
+  it("lets a failed write fail, so no secret is stored on a draft without the mark", async () => {
+    api.updateChannelSetupDraft.mockRejectedValue(new Error("conflict"));
+    await expect(markedChatSetupDraft(draft({ draft: {} }))).rejects.toThrow("conflict");
   });
 });

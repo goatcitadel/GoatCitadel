@@ -69,9 +69,12 @@ function checkResult(overrides: Partial<SlackSetupCheckResult> = {}): SlackSetup
   };
 }
 
+/** A new draft at version 1, marked as made here at 2 before the tokens are stored; the page counts no further. */
 function arrangeCheck(result: SlackSetupCheckResult = checkResult()) {
   api.createChannelSetupDraft.mockResolvedValue(draft({ revision: 1 }));
-  api.submitChannelSetupDraftSecrets.mockResolvedValue(draft({ revision: 2, secretState: TOKENS_STORED }));
+  api.submitChannelSetupDraftSecrets.mockResolvedValue(
+    draft({ revision: 2, draft: { setupPage: "messaging" }, secretState: TOKENS_STORED }),
+  );
   api.checkSlackSetup.mockResolvedValue(result);
 }
 
@@ -281,8 +284,13 @@ describe("SlackSetupPage", () => {
     await mount();
     await checkTokens();
 
-    expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledExactlyOnceWith("draft-1", {
+    // Stored after the page marked the new draft as its own, with the version the mark returned.
+    expect(api.updateChannelSetupDraft).toHaveBeenNthCalledWith(1, "draft-1", {
       expectedRevision: 1,
+      draft: { setupPage: "messaging" },
+    });
+    expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledExactlyOnceWith("draft-1", {
+      expectedRevision: 2,
       values: { botToken: BOT_TOKEN, appToken: APP_TOKEN },
     });
     expect(steps()[1]!.getAttribute("data-state")).toBe("done");
@@ -364,9 +372,9 @@ describe("SlackSetupPage", () => {
     expect(SLACK_APP_TOKEN_FAILED).toBe(
       "Slack didn't accept the app-level token. Check that it has the connections:write scope.",
     );
-    // The bot is not announced, and the draft is not marked as this page's.
+    // The bot is not announced, and nothing is written after the page's mark on the new draft.
     expect(container.textContent).not.toContain("Tokens work");
-    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
     expect(states()).toEqual(["current", "current", "locked", "locked", "locked"]);
     expect(status()).toBe(SLACK_APP_TOKEN_FAILED);
     expect(container.querySelectorAll('[data-tone="error"]')).toHaveLength(1);
@@ -559,8 +567,9 @@ describe("SlackSetupPage, saying hi", () => {
     expect(step.textContent).toContain(`In Slack, find @goatcitadel under Apps and send it this code: ${code}`);
     expect(step.textContent).toContain("Waiting for your hi…");
     expect(status()).toBe("Waiting for your hi…");
-    // The code is asked for once however often the page draws: one write named the workspace, one saved the code.
-    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+    // The code is asked for once however often the page draws: one write marked the new draft as this page's, one
+    // named the workspace, one saved the code.
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(3);
     expect(container.innerHTML).not.toContain("SECRET");
   });
 
@@ -643,11 +652,12 @@ describe("SlackSetupPage, saying hi", () => {
     await mount();
     await type("Bot token", BOT_TOKEN);
     await type("App-level token", APP_TOKEN);
+    const kept = async (_id: string, input: { expectedRevision: number; draft: Record<string, unknown> }) =>
+      draft({ revision: input.expectedRevision + 1, draft: input.draft, secretState: TOKENS_STORED });
+    // The page's mark and the workspace are saved; the code is not.
     api.updateChannelSetupDraft
-      .mockImplementationOnce(
-        async (_id: string, input: { expectedRevision: number; draft: Record<string, unknown> }) =>
-          draft({ revision: input.expectedRevision + 1, draft: input.draft, secretState: TOKENS_STORED }),
-      )
+      .mockImplementationOnce(kept)
+      .mockImplementationOnce(kept)
       .mockRejectedValueOnce(new Error("This changed somewhere else."));
     api.fetchChannelSetupDraft.mockResolvedValue(draft({ revision: 3, secretState: TOKENS_STORED }));
     await click(button("Check tokens"));
@@ -658,7 +668,7 @@ describe("SlackSetupPage, saying hi", () => {
     expect(container.querySelectorAll('[data-tone="error"]')).toHaveLength(1);
     expect(status()).toBe("This changed somewhere else.");
     await advance(SLACK_SAY_HI_POLL_MS * 2);
-    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(3);
 
     await click(button("Get a new code"));
     expect(steps()[2]!.textContent).toContain("Waiting for your hi…");

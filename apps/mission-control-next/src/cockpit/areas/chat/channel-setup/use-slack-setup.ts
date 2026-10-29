@@ -25,7 +25,7 @@ import {
 } from "./slack-setup-model";
 import { listenForHi } from "./listen-for-hi";
 import { createSetupCode } from "./setup-code";
-import { CHAT_SETUP_PAGE, chatSetupToResume, latestDraft } from "./setup-draft-session";
+import { CHAT_SETUP_PAGE, chatSetupToResume, latestDraft, markedChatSetupDraft } from "./setup-draft-session";
 import { useSetupState } from "./use-setup-state";
 
 export { SLACK_CATALOG_ID } from "./slack-setup-model";
@@ -53,8 +53,8 @@ export interface SlackSetupState {
   posting: SlackPosting | null;
   /**
    * Stores both tokens on the draft in one write, then asks Slack whether each is accepted. Starts the draft when there
-   * is none. Once both are, the draft is marked as made on this page. The workspace and the bot come from the check's
-   * answer and are held here, never written to the draft.
+   * is none, marked as made on this page before any token is stored. Once both are accepted, the draft receives over a
+   * socket. The workspace and the bot come from the check's answer and are held here, never written to the draft.
    */
   checkTokens(botToken: string, appToken: string): Promise<void>;
   /** Discards the draft and its stored tokens. */
@@ -273,6 +273,9 @@ export function useSlackSetup(workspaceId: string, resumeDraftId?: string): Slac
       try {
         draft ??= await createChannelSetupDraft({ catalogId: SLACK_CATALOG_ID, lifecycleMode: "create" });
         // Kept at once, so a try after a failure goes on with this draft instead of making another.
+        set({ draft });
+        // Marked as made here before the tokens are stored, so a draft holding a token is always this page's.
+        draft = await markedChatSetupDraft(draft);
         set({ draft });
         const stored = await submitChannelSetupDraftSecrets(draft.draftId, {
           expectedRevision: draft.revision,

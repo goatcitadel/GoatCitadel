@@ -61,9 +61,12 @@ function checkResult(overrides: Partial<DiscordSetupCheckResult> = {}): DiscordS
   };
 }
 
+/** A new draft at version 1, marked as made here at 2 before the token is stored; the page counts no further. */
 function arrangeCheck(result: DiscordSetupCheckResult = checkResult()) {
   api.createChannelSetupDraft.mockResolvedValue(draft({ revision: 1 }));
-  api.submitChannelSetupDraftSecrets.mockResolvedValue(draft({ revision: 2, secretState: TOKEN_STORED }));
+  api.submitChannelSetupDraftSecrets.mockResolvedValue(
+    draft({ revision: 2, draft: { setupPage: "messaging" }, secretState: TOKEN_STORED }),
+  );
   api.checkDiscordSetup.mockResolvedValue(result);
 }
 
@@ -283,8 +286,13 @@ describe("DiscordSetupPage", () => {
     await mount();
     await checkToken();
 
-    expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledWith("draft-1", {
+    // Stored after the page marked the new draft as its own, with the version the mark returned.
+    expect(api.updateChannelSetupDraft).toHaveBeenNthCalledWith(1, "draft-1", {
       expectedRevision: 1,
+      draft: { setupPage: "messaging" },
+    });
+    expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledWith("draft-1", {
+      expectedRevision: 2,
       values: { botToken: TOKEN },
     });
     expect(steps()[1]!.getAttribute("data-state")).toBe("done");

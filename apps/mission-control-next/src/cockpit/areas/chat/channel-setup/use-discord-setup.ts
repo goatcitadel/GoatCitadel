@@ -18,7 +18,7 @@ import {
   type DiscordPosting,
 } from "./discord-setup-model";
 import { listenForHi } from "./listen-for-hi";
-import { CHAT_SETUP_PAGE, chatSetupToResume, latestDraft } from "./setup-draft-session";
+import { CHAT_SETUP_PAGE, chatSetupToResume, latestDraft, markedChatSetupDraft } from "./setup-draft-session";
 import { useSetupState } from "./use-setup-state";
 
 // The page's words live with the rest of Discord's pure helpers; the hook's callers find them here too.
@@ -225,6 +225,9 @@ export function useDiscordSetup(workspaceId: string, resumeDraftId?: string): Di
       try {
         draft ??= await createChannelSetupDraft({ catalogId: DISCORD_CATALOG_ID, lifecycleMode: "create" });
         // Kept at once, so a try after a failure goes on with this draft instead of making another.
+        set({ draft });
+        // Marked as made here before the token is stored, so a draft holding a token is always this page's.
+        draft = await markedChatSetupDraft(draft);
         set({ draft });
         const stored = await submitChannelSetupDraftSecrets(draft.draftId, {
           expectedRevision: draft.revision,

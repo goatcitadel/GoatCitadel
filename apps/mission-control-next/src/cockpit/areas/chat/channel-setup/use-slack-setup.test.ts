@@ -131,11 +131,18 @@ async function run(action: () => Promise<void>) {
   });
 }
 
-/** The calls a successful first check makes: a new draft at version 1, both tokens stored at 2, the workspace named at 3. */
+/**
+ * The calls a successful first check makes: a new draft at version 1, marked as made here at 2, both tokens stored at 3,
+ * the workspace named at 4.
+ */
 function arrangeCheck(result: SlackSetupCheckResult = checkResult()) {
   api.createChannelSetupDraft.mockResolvedValue(draft({ revision: 1, draft: { label: "kept" } }));
-  api.submitChannelSetupDraftSecrets.mockResolvedValue(
-    draft({ revision: 2, draft: { label: "kept" }, secretState: TOKENS_STORED }),
+  api.submitChannelSetupDraftSecrets.mockImplementation(async (_id: string, input: { expectedRevision: number }) =>
+    draft({
+      revision: input.expectedRevision + 1,
+      draft: { label: "kept", setupPage: "messaging" },
+      secretState: TOKENS_STORED,
+    }),
   );
   api.checkSlackSetup.mockResolvedValue(result);
   api.updateChannelSetupDraft.mockImplementation(
@@ -179,23 +186,29 @@ describe("useSlackSetup", () => {
       catalogId: "channel.slack",
       lifecycleMode: "create",
     });
+    // The new draft is marked as made here before any token is stored on it.
+    expect(api.updateChannelSetupDraft).toHaveBeenNthCalledWith(1, "draft-1", {
+      expectedRevision: 1,
+      draft: { label: "kept", setupPage: "messaging" },
+    });
     // One write holds both secrets, so one version moves on.
     expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledExactlyOnceWith("draft-1", {
-      expectedRevision: 1,
+      expectedRevision: 2,
       values: { botToken: BOT_TOKEN, appToken: APP_TOKEN },
     });
     expect(api.checkSlackSetup).toHaveBeenCalledExactlyOnceWith({
       draftId: "draft-1",
-      expectedRevision: 2,
+      expectedRevision: 3,
       checkAppToken: true,
     });
     // The last write merges only the page mark and socket mode into the draft's own values, with the version the
     // secret write returned. The workspace and the bot are never written: the gateway owns installation identity.
-    expect(api.updateChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", {
-      expectedRevision: 2,
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+    expect(api.updateChannelSetupDraft).toHaveBeenNthCalledWith(2, "draft-1", {
+      expectedRevision: 3,
       draft: { label: "kept", setupPage: "messaging", receiveMode: "socket" },
     });
-    expect(current.draft?.revision).toBe(3);
+    expect(current.draft?.revision).toBe(4);
     expect(current.draft?.draft).toEqual({ label: "kept", setupPage: "messaging", receiveMode: "socket" });
     // They are held in the page's state, from the check's answer.
     expect(current.workspace).toEqual({ id: "T1", name: "Goat Team" });
@@ -210,7 +223,7 @@ describe("useSlackSetup", () => {
     await run(() => current.checkTokens(`  ${BOT_TOKEN}  `, `\n${APP_TOKEN}\t`));
     // Trimmed on the way in, and gone from everything the page can read.
     expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledWith("draft-1", {
-      expectedRevision: 1,
+      expectedRevision: 2,
       values: { botToken: BOT_TOKEN, appToken: APP_TOKEN },
     });
     expect(JSON.stringify(current)).not.toContain("SECRET");
@@ -243,13 +256,16 @@ describe("useSlackSetup", () => {
     await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
 
     expect(current.error).toBe(SLACK_APP_TOKEN_FAILED);
-    // The bot is not announced and nothing more is saved: no draft update follows.
-    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+    // The bot is not announced and nothing more is saved: no draft update follows the page's mark.
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", {
+      expectedRevision: 1,
+      draft: { label: "kept", setupPage: "messaging" },
+    });
     expect(current.workspace).toBeNull();
     expect(current.bot).toBeNull();
     expect(current.busy).toBe(false);
     // Both tokens are stored, which moved the draft's version on; the next try carries it.
-    expect(current.draft?.revision).toBe(2);
+    expect(current.draft?.revision).toBe(3);
     expect(JSON.stringify(current)).not.toContain("SECRET");
   });
 
@@ -258,13 +274,15 @@ describe("useSlackSetup", () => {
     await mount();
     await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
     expect(current.error).toBe(SLACK_APP_TOKEN_FAILED);
-    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+    // Only the page's mark, made before the tokens were stored.
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
 
     // A check that comes back with no answer about the app-level token is not a pass either.
     api.checkSlackSetup.mockResolvedValue(checkResult({ appToken: undefined }));
     await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
     expect(current.error).toBe(SLACK_APP_TOKEN_FAILED);
-    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+    // The draft is already marked, so the next try writes no mark again.
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
   });
 
   it("sends both tokens again on the same draft once the app-level token is fixed", async () => {
@@ -273,22 +291,20 @@ describe("useSlackSetup", () => {
     await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
     expect(current.error).toBe(SLACK_APP_TOKEN_FAILED);
 
-    api.submitChannelSetupDraftSecrets.mockResolvedValue(
-      draft({ revision: 3, draft: { label: "kept" }, secretState: TOKENS_STORED }),
-    );
     api.checkSlackSetup.mockResolvedValue(checkResult());
     await run(() => current.checkTokens(BOT_TOKEN, "xapp-1-SECRET-FIXED"));
 
-    // No second draft; the write carries the version the first try left; both secrets go again.
+    // No second draft and no second mark; the write carries the version the first try left; both secrets go again.
     expect(api.createChannelSetupDraft).toHaveBeenCalledTimes(1);
     expect(api.submitChannelSetupDraftSecrets).toHaveBeenLastCalledWith("draft-1", {
-      expectedRevision: 2,
+      expectedRevision: 3,
       values: { botToken: BOT_TOKEN, appToken: "xapp-1-SECRET-FIXED" },
     });
-    expect(api.updateChannelSetupDraft).toHaveBeenCalledExactlyOnceWith(
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
+    expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith(
       "draft-1",
       expect.objectContaining({
-        expectedRevision: 3,
+        expectedRevision: 4,
       }),
     );
     expect(current.error).toBeUndefined();
@@ -306,7 +322,8 @@ describe("useSlackSetup", () => {
     expect(JSON.stringify(current)).not.toContain("SECRET");
     expect(current.workspace).toBeNull();
     expect(current.busy).toBe(false);
-    expect(api.updateChannelSetupDraft).not.toHaveBeenCalled();
+    // Only the page's mark, made before the tokens were stored.
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
     // The tokens were stored before the failure, which moved the draft on: the next try carries the latest version.
     expect(current.draft?.draftId).toBe("draft-1");
     expect(api.fetchChannelSetupDraft).toHaveBeenCalledWith("draft-1");
@@ -329,20 +346,74 @@ describe("useSlackSetup", () => {
   it("goes on with the same draft after a failure, and clears the sentence when it works", async () => {
     arrangeCheck();
     api.checkSlackSetup.mockRejectedValueOnce(new Error("offline"));
-    api.fetchChannelSetupDraft.mockResolvedValue(draft({ revision: 2, secretState: TOKENS_STORED }));
+    // The draft as the gateway has it after the failed try: marked, then the tokens stored, which moved it on twice.
+    api.fetchChannelSetupDraft.mockResolvedValue(
+      draft({ revision: 3, draft: { label: "kept", setupPage: "messaging" }, secretState: TOKENS_STORED }),
+    );
     await mount();
     await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
     expect(current.error).toBe(SLACK_BOT_TOKEN_FAILED);
-    expect(current.draft?.revision).toBe(2);
+    expect(current.draft?.revision).toBe(3);
 
     await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
     expect(api.createChannelSetupDraft).toHaveBeenCalledTimes(1);
     expect(api.submitChannelSetupDraftSecrets).toHaveBeenLastCalledWith("draft-1", {
-      expectedRevision: 2,
+      expectedRevision: 3,
       values: { botToken: BOT_TOKEN, appToken: APP_TOKEN },
     });
     expect(current.error).toBeUndefined();
     expect(current.workspace).toEqual({ id: "T1", name: "Goat Team" });
+  });
+
+  it("marks a new draft as made here before storing the tokens, so a failed first check resumes here", async () => {
+    // A gateway that keeps the one draft it holds, one version on with each write.
+    let held = draft({ revision: 1 });
+    api.createChannelSetupDraft.mockImplementation(async () => held);
+    api.updateChannelSetupDraft.mockImplementation(
+      async (_id: string, input: { expectedRevision: number; draft: Record<string, unknown> }) =>
+        (held = { ...held, revision: input.expectedRevision + 1, draft: input.draft }),
+    );
+    api.submitChannelSetupDraftSecrets.mockImplementation(
+      async (_id: string, input: { expectedRevision: number }) =>
+        (held = { ...held, revision: input.expectedRevision + 1, secretState: TOKENS_STORED }),
+    );
+    api.fetchChannelSetupDraft.mockImplementation(async () => held);
+    api.checkSlackSetup.mockRejectedValueOnce(new Error("offline"));
+    await mount();
+    await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
+
+    expect(current.error).toBe(SLACK_BOT_TOKEN_FAILED);
+    // Made, then marked, then both tokens stored, in that order, each write carrying the version the last returned.
+    const [created] = api.createChannelSetupDraft.mock.invocationCallOrder;
+    const [marked] = api.updateChannelSetupDraft.mock.invocationCallOrder;
+    const [stored] = api.submitChannelSetupDraftSecrets.mock.invocationCallOrder;
+    expect(created).toBeLessThan(marked!);
+    expect(marked).toBeLessThan(stored!);
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", {
+      expectedRevision: 1,
+      draft: { setupPage: "messaging" },
+    });
+    expect(api.submitChannelSetupDraftSecrets).toHaveBeenCalledExactlyOnceWith("draft-1", {
+      expectedRevision: 2,
+      values: { botToken: BOT_TOKEN, appToken: APP_TOKEN },
+    });
+    expect(held.draft).toEqual({ setupPage: "messaging" });
+    expect(current.draft?.revision).toBe(3);
+
+    // A reload finds the draft that holds the tokens, and goes on with it here.
+    act(() => root.unmount());
+    root = createRoot(container);
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [held] });
+    api.checkSlackSetup.mockResolvedValue(checkResult());
+    await mount();
+    expect(current.draft?.draftId).toBe("draft-1");
+    expect(api.checkSlackSetup).toHaveBeenLastCalledWith({
+      draftId: "draft-1",
+      expectedRevision: 3,
+      checkAppToken: true,
+    });
+    expect(current.workspace).toEqual({ id: "T1", name: "Goat Team" });
+    expect(api.createChannelSetupDraft).toHaveBeenCalledTimes(1);
   });
 
   it("resumes only a setup made on this page", async () => {
@@ -433,7 +504,7 @@ describe("useSlackSetup", () => {
     await mount();
     await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
     await run(() => current.startOver());
-    expect(api.discardChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", 3);
+    expect(api.discardChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", 4);
     expect(current).toMatchObject({ draft: null, workspace: null, bot: null, busy: false });
     expect(current.error).toBeUndefined();
 
@@ -487,7 +558,7 @@ const CHANNELS = [
   { id: "G200", name: "secret", private: true },
 ];
 
-/** A page whose two tokens have checked out, on a draft at version 3, under fake time. */
+/** A page whose two tokens have checked out, on a draft at version 4, under fake time. */
 async function mountReady() {
   vi.useFakeTimers();
   arrangeCheck();
@@ -497,7 +568,7 @@ async function mountReady() {
   api.checkSlackSetup.mockResolvedValue(checkResult());
 }
 
-/** Gets a code, lets the first question be asked, and has Ada say hi in answer to it. The draft is then at version 5. */
+/** Gets a code, lets the first question be asked, and has Ada say hi in answer to it. The draft is then at version 6. */
 async function sayHi() {
   await run(() => current.newCode());
   api.checkSlackSetup.mockResolvedValue(checkResult({ codeSender: ADA }));
@@ -513,10 +584,10 @@ describe("useSlackSetup, saying hi", () => {
     const code = current.code!;
     expect(code).toMatch(/^[A-Za-z0-9]{10}$/);
     expect(api.updateChannelSetupDraft).toHaveBeenLastCalledWith("draft-1", {
-      expectedRevision: 3,
+      expectedRevision: 4,
       draft: expect.objectContaining({ setupCode: code, setupPage: "messaging", receiveMode: "socket" }),
     });
-    expect(current.draft?.revision).toBe(4);
+    expect(current.draft?.revision).toBe(5);
     expect(current.codeExpired).toBe(false);
     expect(current.sender).toBeNull();
 
@@ -527,7 +598,7 @@ describe("useSlackSetup, saying hi", () => {
     // Only the code is asked about: the channel list shares conversations.list's budget and waits for step 4.
     expect(api.checkSlackSetup).toHaveBeenCalledExactlyOnceWith({
       draftId: "draft-1",
-      expectedRevision: 4,
+      expectedRevision: 5,
       setupCode: code,
     });
     await advance(SLACK_SAY_HI_POLL_MS * 2);
@@ -768,7 +839,7 @@ describe("useSlackSetup, where it posts", () => {
     expect(api.checkSlackSetup).toHaveBeenCalledTimes(asked + 1);
     expect(api.checkSlackSetup).toHaveBeenLastCalledWith({
       draftId: "draft-1",
-      expectedRevision: 5,
+      expectedRevision: 6,
       listChannels: true,
     });
     expect(current.channels).toEqual(CHANNELS);
@@ -933,8 +1004,8 @@ describe("useSlackSetup, coming back to a setup", () => {
 describe("useSlackSetup, installation identity", () => {
   it("writes none of the keys the gateway reserves for OAuth adoption, at any step", async () => {
     await mountReady();
-    // Token check: the page mark and socket mode only.
-    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    // Token check: the page mark before the tokens, then the mark and socket mode only.
+    expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(2);
     await sayHi();
     api.checkSlackSetup.mockResolvedValue(checkResult({ channels: CHANNELS }));
     await run(() => current.refreshChannels());
