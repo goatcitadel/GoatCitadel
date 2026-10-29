@@ -50,6 +50,30 @@ export interface WhatsAppSetupCodeSender {
   displayName?: string;
 }
 
+export interface WhatsAppSetupCheckInput extends ChannelSetupCheckDraftRef {
+  /** Ask Meta about the number, the token, the app and the account. Without it, only what GoatCitadel heard is returned. */
+  askMeta?: boolean;
+  /** The code the page is listening for. */
+  setupCode?: string;
+}
+
+export interface WhatsAppSetupCheckResult {
+  /** With askMeta: the business number as Meta shows it, and the name Meta verified. */
+  number?: { displayNumber: string; verifiedName: string };
+  /** With askMeta: when the access token stops working. Absent when it never does. */
+  tokenExpiresAt?: string;
+  /** With askMeta: the app gets the account's messages. */
+  appSubscribed?: boolean;
+  /** When Meta last checked this setup's web address with its verify token, in the last 15 minutes. */
+  addressCheckedAt?: string;
+  /** Who sent `setupCode`, when it is the code the listener heard. */
+  codeSender?: WhatsAppSetupCodeSender;
+}
+
+export interface WhatsAppSetupSubscribeResult {
+  appSubscribed: true;
+}
+
 /** Who sent the setup code to the bot, and the direct-message conversation it arrived in. */
 export interface SlackSetupCodeSender {
   actorId: string;

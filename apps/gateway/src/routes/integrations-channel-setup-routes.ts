@@ -40,6 +40,24 @@ const slackSetupCheckSchema = z
   })
   .strict();
 
+const whatsAppSetupCheckSchema = z
+  .object({
+    draftId: z.guid(),
+    expectedRevision: z.number().int().positive(),
+    askMeta: z.boolean().optional(),
+    setupCode: z
+      .string()
+      .regex(/^[A-Za-z0-9]{6,32}$/)
+      .optional(),
+  })
+  .strict();
+const whatsAppSetupSubscribeSchema = z
+  .object({
+    draftId: z.guid(),
+    expectedRevision: z.number().int().positive(),
+  })
+  .strict();
+
 export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance): void {
   fastify.addHook("preHandler", async (request, reply) => {
     if (request.url.split("?", 1)[0]?.startsWith("/api/v1/channels/drafts")) {
@@ -113,6 +131,43 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
         });
       try {
         return reply.send(await fastify.services.channelSetup.checkSlackSetup(parsed.data));
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+  // Reads Meta with a draft's saved access token and app secret and answers with names and facts only. Never logged,
+  // never cached.
+  fastify.post(
+    "/api/v1/channels/whatsapp/setup-check",
+    { logLevel: "silent", config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsed = whatsAppSetupCheckSchema.safeParse(request.body);
+      reply.header("cache-control", "no-store");
+      if (!parsed.success)
+        return reply.code(400).send({
+          error:
+            "A WhatsApp setup check needs a draft and its current revision, and takes only a setup code of 6 to 32 letters and digits.",
+        });
+      try {
+        return reply.send(await fastify.services.channelSetup.checkWhatsAppSetup(parsed.data));
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+  // The one write to Meta a setup makes: it subscribes the draft's app to the account's messages, on request. Never
+  // logged, never cached.
+  fastify.post(
+    "/api/v1/channels/whatsapp/setup-subscribe",
+    { logLevel: "silent", config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsed = whatsAppSetupSubscribeSchema.safeParse(request.body);
+      reply.header("cache-control", "no-store");
+      if (!parsed.success)
+        return reply.code(400).send({ error: "A WhatsApp subscribe needs a draft and its current revision." });
+      try {
+        return reply.send(await fastify.services.channelSetup.subscribeWhatsAppSetupApp(parsed.data));
       } catch (error) {
         return sendRouteError(reply, error, request.log);
       }

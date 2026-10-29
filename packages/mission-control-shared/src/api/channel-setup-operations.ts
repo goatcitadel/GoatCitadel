@@ -5,6 +5,10 @@ import type {
   DiscordSetupCheckResult,
   SlackSetupCheckInput,
   SlackSetupCheckResult,
+  WhatsAppSetupCheckInput,
+  WhatsAppSetupCheckResult,
+  WhatsAppSetupSubscribeResult,
+  ChannelSetupCheckDraftRef,
   TelegramChannelPairingList,
   TelegramChannelPairingApproveInput,
   TelegramChannelPairingRevokeInput,
@@ -23,6 +27,12 @@ export function checkDiscordSetup(input: DiscordSetupCheckInput): Promise<Discor
 }
 export function checkSlackSetup(input: SlackSetupCheckInput): Promise<SlackSetupCheckResult> {
   return request("/api/v1/channels/slack/setup-check", { method: "POST", body: JSON.stringify(input) });
+}
+export function checkWhatsAppSetup(input: WhatsAppSetupCheckInput): Promise<WhatsAppSetupCheckResult> {
+  return request("/api/v1/channels/whatsapp/setup-check", { method: "POST", body: JSON.stringify(input) });
+}
+export function subscribeWhatsAppSetupApp(input: ChannelSetupCheckDraftRef): Promise<WhatsAppSetupSubscribeResult> {
+  return request("/api/v1/channels/whatsapp/setup-subscribe", { method: "POST", body: JSON.stringify(input) });
 }
 export function fetchTelegramChannelPairings(connectionId: string): Promise<TelegramChannelPairingList> {
   return request(`${connectionPath(connectionId)}/telegram/pairings`, { cache: "no-store" });

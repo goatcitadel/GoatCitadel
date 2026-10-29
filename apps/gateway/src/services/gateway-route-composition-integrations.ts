@@ -141,6 +141,9 @@ export function composeIntegrationChannelRouteDependencies(
       channelSetupService.discoverChannelSetupTelegramTargets(channelSetupDeps, input),
     checkDiscordSetup: (input) => channelSetupService.checkDiscordSetup(channelSetupDeps, input),
     checkSlackSetup: (input) => channelSetupService.checkSlackSetup(channelSetupDeps, input),
+    checkWhatsAppSetup: (input) =>
+      channelSetupService.checkWhatsAppSetup(channelSetupDeps, whatsAppSetupListener, input),
+    subscribeWhatsAppSetupApp: (input) => channelSetupService.subscribeWhatsAppSetupApp(channelSetupDeps, input),
     acknowledgeChannelSetupTest: (draftId, input, actorId) =>
       channelSetupService.acknowledgeChannelSetupTest(channelSetupDeps, draftId, input, actorId),
     getChannelSetupJourney: (connectionId) =>
