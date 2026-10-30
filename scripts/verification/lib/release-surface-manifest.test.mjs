@@ -74,7 +74,6 @@ test("native manifest covers cockpit destinations and binds fixture, theme and e
       "cockpit-system-spend-details",
       "cockpit-settings-general",
       "cockpit-settings-models",
-      "cockpit-settings-connections",
       "cockpit-settings-safety",
       "cockpit-settings-citadel",
       "cockpit-settings-access",
@@ -109,8 +108,8 @@ test("native manifest covers cockpit destinations and binds fixture, theme and e
   assert.equal(gallery.href, "/__gallery");
   assert.equal(gallery.readySelector, '[data-cockpit-gallery="true"]');
   assert.equal(gallery.readyText, "Cockpit components");
-  assert.equal(COCKPIT_VISUAL_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 216);
-  assert.equal(NEXT_VISUAL_REGRESSION_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 640);
+  assert.equal(COCKPIT_VISUAL_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 208);
+  assert.equal(NEXT_VISUAL_REGRESSION_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 632);
 });
 
 test("desktop-narrow visual proof renders inside the less-than-1180 compact boundary", () => {

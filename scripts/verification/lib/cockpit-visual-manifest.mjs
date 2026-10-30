@@ -71,7 +71,8 @@ export const COCKPIT_VISUAL_MANIFEST = [
     readyText: "Spend details",
     readySelector: '#main-content [role="group"][aria-label="Time window"]',
   },
-  ...["General", "Models", "Connections", "Safety", "Citadel", "Access", "Advanced"].map((label) => ({
+  // Connections is not here: #655 retired that page and redirects its address to Capabilities.
+  ...["General", "Models", "Safety", "Citadel", "Access", "Advanced"].map((label) => ({
     slug: `cockpit-settings-${label.toLowerCase()}`,
     href: `/settings/${label.toLowerCase()}`,
     shell: "cockpit",
