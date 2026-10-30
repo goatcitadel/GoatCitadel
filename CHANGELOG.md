@@ -39,7 +39,7 @@ All notable changes to GoatCitadel are documented in this file.
 - Editing a channel keeps its saved key. Google Chat and the webhook channels asked for it again.
 - The Discord bot logs in with its saved token, not its secure-storage reference.
 - Retired channels (Signal, iMessage, Zalo Personal) show as retired everywhere, and deliveries to them fail with the retired reason.
-- A key pasted on a channel's page in Chat › Messaging (Telegram, Discord, Slack, WhatsApp) is stored in the computer's secure storage. Before, GoatCitadel never handed channel setup its key store, so every pasted key was refused with "Secure channel credential storage is unavailable." Only channel keys get the key store this way; nothing else changes how it stores keys.
+- A key pasted on a channel's page in Chat › Messaging (Telegram, Discord, Slack, WhatsApp) is stored in the computer's secure storage. Before, GoatCitadel never handed channel setup its key store, so every pasted key was refused with "Secure channel credential storage is unavailable." Without secure storage (no OS keychain), a pasted key is still refused with that sentence, and WhatsApp's page says to use WhatsApp's guide in Settings with environment variables. Only channel keys get the key store this way; nothing else changes how it stores keys.
 
 ### Security
 
