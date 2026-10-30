@@ -18,9 +18,9 @@
 
 **Measured facts:** `.superpowers/sdd/2026-10-30-capabilities-hub-phase-4/phase4-facts.md` (gitignored, in the planning worktree), with three survey files beside it holding file:line evidence for every claim below. All were measured on `main` at `12a238ea2`.
 
-## Questions for the operator
+## Questions the operator answered
 
-Each question has a recommendation. Approving the plan as recommended answers all six.
+On 2026-10-30 the operator approved the plan with the recommended answer to all six questions: Q1 A, Q2 A, Q3 A, Q4 A, Q5 "Integrations", Q6 A. The tasks below implement those answers. The build follows the subagent-driven method used in Phases 1 to 3.
 
 **Q1. Which plugins ship built in?**
 - **Recommended (A):** one, "Browser checks". It holds the Playwright connector and the browser-QA skill, the only pieces of the old `browser-qa-operator` pack that aren't feature flags. The two Cowork-era packs don't come back.
