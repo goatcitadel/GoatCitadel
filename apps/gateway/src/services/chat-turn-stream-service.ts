@@ -2238,7 +2238,8 @@ export async function* streamPreparedAgentChatTurn(
     let pendingUserInput = undefined as ChatTurnTraceRecord["pendingUserInput"];
     const streamCitations: ChatCitationRecord[] = [...(prepared.threadKnowledgeCitations ?? [])];
     const streamReasoning = new ChatTurnReasoningRecorder();
-    const readSavedReasoning = async () => (await host.storage.chatTurnTraces.get(turnId)).reasoning;
+    const readTurnTrace = () => host.storage.chatTurnTraces.get(turnId);
+    const readSavedReasoning = async () => (await readTurnTrace()).reasoning;
     const drainedSteers = options?.remoteWorkerExecution
       ? []
       : host.steerService.drainPending({ sessionId, turnId: prepared.turnId });
@@ -2726,7 +2727,7 @@ export async function* streamPreparedAgentChatTurn(
 
     if (finalText.trim()) {
       await assertChatStreamCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
-      const currentTraceBeforeWrite = await host.storage.chatTurnTraces.get(turnId);
+      const currentTraceBeforeWrite = await readTurnTrace();
       await observeBeforeAssistantMessageWrite(host, {
         workspaceId: prepared.workspaceId,
         sessionId,
