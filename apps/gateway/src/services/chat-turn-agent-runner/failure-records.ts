@@ -16,6 +16,21 @@ const PROVIDER_FAILURE_CLASSES: Partial<Record<ProviderFailureClass, ChatTurnFai
   business_denial: "provider_billing",
 };
 
+/**
+ * A 429 whose quota is per period ("requests per minute", "TPM") is a rate limit the operator waits out. The shared
+ * classifier reads any "quota" as an account refusal, which suits failover but would send Chat to the billing page.
+ */
+const HTTP_429 = /\(429(?=[)\s:])/;
+const PERIOD_QUOTA = /\b(per\s+(second|minute|hour|day)|(requests|tokens)\s+per|rpm|tpm|rpd|tpd)\b/i;
+
+function classifyChatProviderFailure(error: Error): ChatTurnFailureClass | undefined {
+  const providerClass = classifyProviderFailure(error);
+  if (providerClass === "business_denial" && HTTP_429.test(error.message) && PERIOD_QUOTA.test(error.message)) {
+    return "provider_rate_limited";
+  }
+  return PROVIDER_FAILURE_CLASSES[providerClass];
+}
+
 export function buildChatTurnFailureRecord(
   failureClass: ChatTurnFailureClass,
   message: string,
@@ -100,8 +115,7 @@ export function classifyChatTurnFailure(input: {
     return errorFailureClass;
   }
   // The provider's own refusal ended the turn, so it outranks an earlier tool failure the model may have worked past.
-  const providerFailureClass =
-    input.error instanceof Error ? PROVIDER_FAILURE_CLASSES[classifyProviderFailure(input.error)] : undefined;
+  const providerFailureClass = input.error instanceof Error ? classifyChatProviderFailure(input.error) : undefined;
   if (providerFailureClass) {
     return providerFailureClass;
   }

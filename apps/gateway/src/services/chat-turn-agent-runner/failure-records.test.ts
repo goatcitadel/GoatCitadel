@@ -97,6 +97,18 @@ describe("chat turn provider failure classes", () => {
       true,
     ],
     ["Provider request failed (402): insufficient credit balance", "provider_billing", "check_provider_plan", false],
+    [
+      "Provider request failed (429): requests per minute quota exceeded",
+      "provider_rate_limited",
+      "wait_and_retry",
+      true,
+    ],
+    [
+      "Provider request failed (429): You exceeded your current quota, please check your plan and billing details",
+      "provider_billing",
+      "check_provider_plan",
+      false,
+    ],
   ] as const)("names %s on its own, ahead of an earlier tool failure", (message, failureClass, action, retryable) => {
     const classified = classifyChatTurnFailure({ error: new Error(message), toolRuns: [failedToolRun] });
     expect(classified).toBe(failureClass);

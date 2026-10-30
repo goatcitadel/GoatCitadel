@@ -246,7 +246,9 @@ export function ChatTranscript({
     gestureUntil.current = performance.now() + READING_GESTURE_TAIL_MS;
   }, []);
   const newConversation = useRef(onNewConversation);
-  newConversation.current = onNewConversation;
+  useEffect(() => {
+    newConversation.current = onNewConversation;
+  }, [onNewConversation]);
   const startNewConversation = useCallback(() => newConversation.current?.(), []);
   const offerNewConversation = onNewConversation ? startNewConversation : undefined;
 
