@@ -262,7 +262,7 @@ export interface CapabilitySkillSourceRefusal {
  * or `done`, newest first, so an install left between its steps is found again after a reload. Read from the newest 100
  * checks of the workspace.
  *
- * `GET /api/v1/capabilities/skills/installs?workspaceId=&snapshotId=`: with the optional `snapshotId` (1 to 200
+ * `GET /api/v1/capabilities/skills/installs?workspaceId=&snapshotId=`: with the optional `snapshotId` (1 to 256
  * characters), `installs` holds just that check at whatever step it is on, `done`, `check_passed` and `blocked` included,
  * or nothing when the workspace's checks don't hold it. An install flow reads it to tell a finished install from a
  * declined one, since both leave the in-progress list.
