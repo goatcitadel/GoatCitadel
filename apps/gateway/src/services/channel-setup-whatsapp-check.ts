@@ -22,6 +22,8 @@ export const WHATSAPP_ACCOUNT_NOT_FOUND = "Meta couldn't find that WhatsApp Busi
 export const WHATSAPP_NUMBER_NOT_IN_ACCOUNT = "That phone number isn't in that WhatsApp Business Account.";
 export const WHATSAPP_SUBSCRIBE_REFUSED =
   "Meta didn't let this app receive the account's messages. Check that the access token can manage the account.";
+export const WHATSAPP_META_REFUSED =
+  "Meta refused the request. Check that the access token has the whatsapp_business_management and whatsapp_business_messaging permissions.";
 export const WHATSAPP_UNREACHABLE = "GoatCitadel couldn't reach Meta.";
 export const WHATSAPP_DETAILS_MISSING = "Paste all five WhatsApp details first.";
 export const WHATSAPP_DRAFT_ONLY = "Choose a WhatsApp setup draft to check.";
@@ -131,11 +133,8 @@ export async function subscribeWhatsAppSetupApp(
     post: true,
   });
   if (!answer.ok) {
-    throw fail(
-      answer.status === 400 || answer.status === 401 || answer.status === 403
-        ? WHATSAPP_SUBSCRIBE_REFUSED
-        : WHATSAPP_UNREACHABLE,
-    );
+    if (answer.status === 400 || answer.status === 401 || answer.status === 403) throw fail(WHATSAPP_SUBSCRIBE_REFUSED);
+    return refusedOrUnreachable(answer);
   }
   if (!answer.body) return unreachable();
   if (answer.body.success !== true) throw fail(WHATSAPP_SUBSCRIBE_REFUSED);
@@ -308,9 +307,19 @@ function errorCodeOf(body: Graph | undefined): number | undefined {
   return typeof code === "number" ? code : undefined;
 }
 
-/** Meta's JSON for an answer that said yes; anything else is a Meta that cannot be used. */
+/** Meta's JSON for an answer that said yes; a refusal no caller named is Meta's refusal, or a Meta that cannot be used. */
 function readable(answer: GraphAnswer): Graph {
-  return answer.ok && answer.body ? answer.body : unreachable();
+  return answer.ok && answer.body ? answer.body : refusedOrUnreachable(answer);
+}
+
+/**
+ * An answer that said no and has no sentence of its own. Meta refused when it answered with its own error code (a 403,
+ * a 429, a code no sentence names); a Meta that is down (5xx) and an answer that doesn't carry Meta's error code read
+ * as Meta out of reach. Only the code is read, never Meta's text.
+ */
+function refusedOrUnreachable(answer: GraphAnswer): never {
+  if (!answer.ok && answer.status < 500 && errorCodeOf(answer.body) !== undefined) throw fail(WHATSAPP_META_REFUSED);
+  return unreachable();
 }
 
 function listOf(value: unknown): unknown[] {

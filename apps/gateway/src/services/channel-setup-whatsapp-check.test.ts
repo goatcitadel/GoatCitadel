@@ -7,6 +7,7 @@ import {
   WHATSAPP_APP_REJECTED,
   WHATSAPP_DETAILS_MISSING,
   WHATSAPP_DRAFT_ONLY,
+  WHATSAPP_META_REFUSED,
   WHATSAPP_NUMBER_NOT_FOUND,
   WHATSAPP_NUMBER_NOT_IN_ACCOUNT,
   WHATSAPP_OTHER_APP,
@@ -406,13 +407,48 @@ describe("WhatsApp setup check", () => {
       }
     });
 
-    it("says Meta was unreachable for any other trouble, without quoting the answer", async () => {
+    it("says Meta refused the request for any other refusal Meta answered, reading only its code", async () => {
+      const refusals: Array<[string, Script, number]> = [
+        ["a 403 on the number", { ...happy(), [`GET ${PHONE_NUMBER_ID}`]: leaky(403, 200) }, 1],
+        ["a rate limit on the number", { ...happy(), [`GET ${PHONE_NUMBER_ID}`]: leaky(429, 4) }, 1],
+        ["a 404 on the number", { ...happy(), [`GET ${PHONE_NUMBER_ID}`]: leaky(404, 803) }, 1],
+        ["a 400 that is not a missing number", { ...happy(), [`GET ${PHONE_NUMBER_ID}`]: leaky(400, 10) }, 1],
+        ["a 401 on debug_token", { ...happy(), "GET debug_token": leaky(401, 102) }, 2],
+        [
+          "a 429 on the account's numbers",
+          { ...happy(), [`GET ${BUSINESS_ACCOUNT_ID}/phone_numbers`]: leaky(429, 4) },
+          3,
+        ],
+        [
+          "a 403 on the account's numbers",
+          { ...happy(), [`GET ${BUSINESS_ACCOUNT_ID}/phone_numbers`]: leaky(403, 200) },
+          3,
+        ],
+        [
+          "a 400 with code 10 on the account's subscribed apps",
+          { ...happy(), [`GET ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: leaky(400, 10) },
+          4,
+        ],
+        [
+          "a 403 on the account's subscribed apps",
+          { ...happy(), [`GET ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: leaky(403, 200) },
+          4,
+        ],
+      ];
+      for (const [name, script, asked] of refusals) {
+        const fake = fakeHost(script);
+        expectOnlyThe(await failure(ask(fake)), WHATSAPP_META_REFUSED);
+        // It stops at the refusal.
+        expect(fake.calls, name).toHaveLength(asked);
+      }
+    });
+
+    it("says Meta was unreachable when it is down or its answer can't be read, without quoting the answer", async () => {
       const unusable: Array<[string, Reply]> = [
         ["a busy Meta", leaky(500)],
-        ["a rate limit", leaky(429, 4)],
-        ["a missing number", leaky(404)],
-        ["a 400 that is not a missing number", leaky(400, 10)],
+        ["a Meta that is down", leaky(503, 2)],
         ["a 400 with no reason", { status: 400, body: {} }],
+        ["a 404 without Meta's error code", leaky(404)],
         ["an answer with no number", { body: { id: PHONE_NUMBER_ID } }],
         ["an answer with no name", { body: { display_phone_number: "+1 555-078-3881" } }],
         ["an answer that is a list", { body: [] }],
@@ -424,12 +460,15 @@ describe("WhatsApp setup check", () => {
       const garbled = fakeHost(happy());
       garbled.fetchWithTimeout.mockResolvedValue(new Response(`not json ${ACCESS_TOKEN}`, { status: 200 }));
       expectOnlyThe(await failure(ask(garbled)), WHATSAPP_UNREACHABLE);
+      // A refusal that is not Meta's JSON (a proxy's page, say) can't be read, so it is not taken as Meta's.
+      const blocked = fakeHost(happy());
+      blocked.fetchWithTimeout.mockResolvedValue(new Response(`<html>${ACCESS_TOKEN}</html>`, { status: 403 }));
+      expectOnlyThe(await failure(ask(blocked)), WHATSAPP_UNREACHABLE);
     });
 
     it("says Meta was unreachable for a token check it cannot read", async () => {
       const unusable: Array<[string, Reply]> = [
         ["a 500", leaky(500)],
-        ["a 401", leaky(401)],
         ["no data", { body: {} }],
         ["data that is not a record", { body: { data: "valid" } }],
         ["no verdict", { body: { data: { app_id: APP_ID, expires_at: 0 } } }],
@@ -448,7 +487,7 @@ describe("WhatsApp setup check", () => {
 
     it("says Meta was unreachable for lists it cannot read", async () => {
       for (const path of ["phone_numbers", "subscribed_apps"]) {
-        for (const reply of [leaky(500), leaky(403), { body: {} }, { body: { data: "x" } }] as Reply[]) {
+        for (const reply of [leaky(500), { body: {} }, { body: { data: "x" } }] as Reply[]) {
           const fake = fakeHost({ ...happy(), [`GET ${BUSINESS_ACCOUNT_ID}/${path}`]: reply });
           expectOnlyThe(await failure(ask(fake)), WHATSAPP_UNREACHABLE);
         }
@@ -629,8 +668,16 @@ describe("WhatsApp setup subscribe", () => {
     expectOnlyThe(await failure(subscribe(other)), WHATSAPP_SUBSCRIBE_REFUSED);
   });
 
+  it("says Meta refused the request for any other refusal Meta answered", async () => {
+    for (const reply of [leaky(429, 4), leaky(404, 803)]) {
+      const fake = fakeHost({ ...happy(), [`POST ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: reply });
+      expectOnlyThe(await failure(subscribe(fake)), WHATSAPP_META_REFUSED);
+      expect(fake.calls).toHaveLength(1);
+    }
+  });
+
   it("says Meta was unreachable for any other trouble, without quoting anything", async () => {
-    for (const reply of [leaky(500), leaky(429, 4), leaky(404)]) {
+    for (const reply of [leaky(500), leaky(503, 2), leaky(404)]) {
       const fake = fakeHost({ ...happy(), [`POST ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: reply });
       expectOnlyThe(await failure(subscribe(fake)), WHATSAPP_UNREACHABLE);
     }
