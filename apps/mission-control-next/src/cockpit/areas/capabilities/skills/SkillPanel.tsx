@@ -118,15 +118,24 @@ function SkillPanelBody({
  * read for the panel.
  *
  * Beside the page the skill's row announces its switch, so the docked panel stays quiet; a modal inspector (the phone
- * sheet, the expanded panel) hides the page from screen readers, so there the panel announces itself.
+ * sheet, the expanded panel) hides the page from screen readers, so there the panel announces itself. A panel opened
+ * from a page with no row for the skill (Discover) passes `announce`, because nothing else would.
  */
-export function SkillPanel({ skillId, onTag }: { skillId: string; onTag: (tag: string) => void }) {
+export function SkillPanel({
+  skillId,
+  onTag,
+  announce = false,
+}: {
+  skillId: string;
+  onTag: (tag: string) => void;
+  announce?: boolean;
+}) {
   const root = useRef<HTMLDivElement>(null);
   const [modal, setModal] = useState(false);
   useLayoutEffect(() => setModal(Boolean(root.current?.closest('[role="dialog"]'))), []);
   return (
     <div ref={root}>
-      <SkillPanelBody skillId={skillId} announce={modal} onTag={onTag} />
+      <SkillPanelBody skillId={skillId} announce={modal || announce} onTag={onTag} />
     </div>
   );
 }

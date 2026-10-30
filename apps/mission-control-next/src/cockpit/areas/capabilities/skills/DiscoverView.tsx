@@ -50,6 +50,11 @@ export function DiscoverView({ workspaceId, filters, onInstall, onContinue, onVi
   const providers = filters.providers.filter((id) => providerOptions.some((option) => option.id === id));
   const shown = filterDiscoverItems(items, { categories, providers });
   const focusSearch = () => filtersRegion.current?.querySelector("input")?.focus();
+  const retry = (
+    <Button size="sm" loading={query.isFetching} loadingLabel="Trying…" onClick={() => void query.refetch()}>
+      Try again
+    </Button>
+  );
   const bar = (
     <SkillsFilterBar
       regionRef={filtersRegion}
@@ -78,9 +83,7 @@ export function DiscoverView({ workspaceId, filters, onInstall, onContinue, onVi
               {term ? "The search didn't finish." : "Skills to install couldn't load."}
               {query.error ? ` ${describeApiError(query.error).summary}` : ""}
             </p>
-            <Button size="sm" loading={query.isFetching} loadingLabel="Trying…" onClick={() => void query.refetch()}>
-              Try again
-            </Button>
+            {retry}
           </div>
         ) : (
           <p className="text-sm text-fg-muted">{term ? "Searching…" : CHECKING_FOR_CHANGES}</p>
@@ -91,6 +94,9 @@ export function DiscoverView({ workspaceId, filters, onInstall, onContinue, onVi
 
   const lastVersion = lastVersionNote(view);
   const unavailable = unavailableProvidersLine(response.unavailableProviders);
+  // Nothing found while a site couldn't be searched is not "no match": the site that was down may have had one. The
+  // response doesn't say how many sites were asked, so any site that couldn't be searched makes an empty answer open.
+  const inconclusive = items.length === 0 && unavailable !== undefined;
   return (
     <div className="space-y-4">
       {bar}
@@ -100,9 +106,14 @@ export function DiscoverView({ workspaceId, filters, onInstall, onContinue, onVi
           {lastVersion}
         </NoticeLine>
       ) : null}
-      {unavailable ? <NoticeLine>{unavailable}</NoticeLine> : null}
+      {unavailable && !inconclusive ? <NoticeLine>{unavailable}</NoticeLine> : null}
       {view.phase === "checking" ? <p className="text-sm text-fg-muted">{CHECKING_FOR_CHANGES}</p> : null}
-      {items.length === 0 ? (
+      {inconclusive ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <NoticeLine>{unavailable}</NoticeLine>
+          {retry}
+        </div>
+      ) : items.length === 0 ? (
         term ? (
           <EmptyState
             title={`No skills match ${term}`}

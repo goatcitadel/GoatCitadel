@@ -53,9 +53,17 @@ export function useSkillPanel(
   const show = useCallback(
     (id: string, name: string) => {
       asked.current = { id, inspectorOpen: openInspector };
-      openInspector({ source: skillPanelSource(id), title: name, body: <SkillPanel skillId={id} onTag={searchTag} /> });
+      // Beside the Installed list the skill's row announces its switch, so the docked panel stays quiet. Discover has no
+      // row for it, so a panel opened from there announces its own notes. A change of view closes the panel, so the view
+      // seen here is the one the panel lives in.
+      const announce = view === "discover";
+      openInspector({
+        source: skillPanelSource(id),
+        title: name,
+        body: <SkillPanel skillId={id} onTag={searchTag} announce={announce} />,
+      });
     },
-    [openInspector, searchTag],
+    [openInspector, searchTag, view],
   );
 
   useEffect(() => {

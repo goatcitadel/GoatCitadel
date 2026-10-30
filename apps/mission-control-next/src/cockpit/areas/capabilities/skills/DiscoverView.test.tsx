@@ -12,6 +12,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscoverView } from "./DiscoverView";
+import { setSkillSwitch } from "./skill-switch-store";
 import { SkillsTab } from "./SkillsTab";
 import { useSkillFilters } from "./use-skill-filters";
 import { __resetSkillSwitchesForTests } from "./use-skill-switch";
@@ -123,7 +124,7 @@ function skill(
 }
 
 const INSTALLED = [
-  skill({ skillId: "extra:github-cli", name: "GitHub CLI", category: "coding" }),
+  skill({ skillId: "extra:github-cli", name: "GitHub CLI", category: "coding", tags: ["pull-request"] }),
   skill({ skillId: "writer", name: "Writer", category: "writing" }),
 ];
 
@@ -215,7 +216,13 @@ async function activate(label: string) {
 beforeEach(() => {
   api.fetchCapabilitySkills.mockReset().mockResolvedValue(installedOf());
   api.fetchCapabilitySkillUsage.mockReset().mockResolvedValue({ since: "", generatedAt: "", skills: [] });
-  api.fetchCapabilitySkillDetail.mockReset();
+  api.fetchCapabilitySkillDetail.mockReset().mockResolvedValue({
+    skillId: "extra:github-cli",
+    instructionBody: "Keep each sentence short.",
+    keywords: [],
+    declaredTools: [],
+    requires: [],
+  });
   api.setCapabilitySkillState.mockReset();
   api.fetchCapabilitySkillDiscover.mockReset().mockResolvedValue(discoverOf());
   approvals.fetchApproval.mockReset();
@@ -363,6 +370,30 @@ describe("Discover", () => {
     expect(names()).toEqual(PLAIN.map((entry) => entry.name));
     // The button that was pressed left, so focus goes to the search box.
     expect(document.activeElement).toBe(searchBox());
+  });
+
+  it("doesn't say No skills match when a site couldn't be searched and nothing else matched", async () => {
+    api.fetchCapabilitySkillDiscover.mockImplementation(async (_workspaceId: string, options: { q?: string }) =>
+      options.q ? discoverOf([], { unavailableProviders: ["AgentSkill", "SkillsMP"] }) : discoverOf(),
+    );
+    await render();
+    await type("pdf");
+    await vi.waitFor(() => expect(text()).toContain("AgentSkill and SkillsMP couldn't be searched right now."), {
+      timeout: 3_000,
+    });
+
+    // The sites that were down may have had a match, so nothing is claimed about them. The line stands once, with Try again.
+    expect(text()).not.toContain("No skills match");
+    expect(text().split("couldn't be searched right now.")).toHaveLength(2);
+    expect(names()).toEqual([]);
+    expect(alerts()).toHaveLength(0);
+
+    // Try again asks again; when the sites answer and nothing matches, that is a real no match.
+    api.fetchCapabilitySkillDiscover.mockImplementation(async () => discoverOf([]));
+    await click(button("Try again"));
+    expect(text()).toContain("No skills match pdf");
+    expect(text()).not.toContain("couldn't be searched right now.");
+    expect(button("Try again")).toBeUndefined();
   });
 
   it("never says No skills match when the search failed", async () => {
@@ -667,5 +698,86 @@ describe("View on an installed source", () => {
     expect(host.querySelector('[role="switch"]')).toBeNull();
     act(() => panelRoot.unmount());
     host.remove();
+  });
+});
+
+describe("a skill's panel opened from Discover", () => {
+  const ITEM_ADDRESS = "?item=skill%3Aextra%3Agithub-cli";
+  let panelRoot: Root | undefined;
+  let host: HTMLDivElement | undefined;
+
+  /** Opens the panel the address names and renders what the tab handed the inspector, as the inspector would. */
+  async function openPanel(search: string) {
+    route.search = search;
+    await render();
+    expect(inspector.open).toHaveBeenCalledTimes(1);
+    const panel = inspector.open.mock.calls[0]?.[0] as { body: ReactNode };
+    host = document.createElement("div");
+    document.body.append(host);
+    panelRoot = createRoot(host);
+    await act(async () => panelRoot!.render(<QueryClientProvider client={client}>{panel.body}</QueryClientProvider>));
+    await settle();
+    return host;
+  }
+
+  afterEach(() => {
+    if (panelRoot) act(() => panelRoot!.unmount());
+    host?.remove();
+    panelRoot = undefined;
+    host = undefined;
+  });
+
+  it("announces its note, because no row on the page does", async () => {
+    const panel = await openPanel(`${ITEM_ADDRESS}&view=discover`);
+
+    const note = panel.querySelector('[role="status"]');
+    expect(note?.textContent).toContain("Takes effect in new chats.");
+    // Discover lists no installed row for the skill, so the panel is the only place that can say it.
+    expect(container.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it("announces why a change didn't happen", async () => {
+    const panel = await openPanel(`${ITEM_ADDRESS}&view=discover`);
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
+
+    const message = "This skill changed since you opened it. Reload and try again.";
+    act(() => setSkillSwitch("extra:github-cli", { phase: "failed", message, conflict: true }));
+    expect(panel.querySelector('[role="alert"]')?.textContent).toContain(message);
+  });
+
+  it("stays quiet beside the Installed list, where the skill's row announces", async () => {
+    const panel = await openPanel(ITEM_ADDRESS);
+
+    expect(panel.textContent).toContain("Takes effect in new chats.");
+    expect(panel.querySelector('[role="status"]')).toBeNull();
+    act(() =>
+      setSkillSwitch("extra:github-cli", {
+        phase: "failed",
+        message: "This skill changed since you opened it. Reload and try again.",
+        conflict: true,
+      }),
+    );
+    expect(panel.textContent).toContain("This skill changed since you opened it.");
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("puts a pressed tag in the shared search box and searches Discover for it", async () => {
+    api.fetchCapabilitySkillDiscover.mockImplementation(async (_workspaceId: string, options: { q?: string }) =>
+      options.q ? discoverOf([HIMALAYA], { query: options.q }) : discoverOf(),
+    );
+    const panel = await openPanel(`${ITEM_ADDRESS}&view=discover`);
+    expect(searchBox().value).toBe("");
+
+    await click(button("pull-request", panel));
+    // The tag searches the tab the panel was opened from, and the panel closes.
+    expect(inspector.close).toHaveBeenCalledTimes(1);
+    expect(tab("Discover").getAttribute("aria-selected")).toBe("true");
+    expect(searchBox().value).toBe("pull-request");
+    await vi.waitFor(() => expect(discoverCalls().some(([, options]) => options.q === "pull-request")).toBe(true), {
+      timeout: 3_000,
+    });
+    expect(names()).toEqual(["Himalaya"]);
+    // Installed was not asked for it.
+    expect(api.fetchCapabilitySkills).toHaveBeenCalledTimes(1);
   });
 });
