@@ -13,14 +13,14 @@ export function composeChannelSetupHost(
   integrationDiagnostics: IntegrationDiagnosticsService,
   integrationChannel: IntegrationChannelService,
 ): ChannelSetupHost {
+  // Read once: the port gives it only while the key store can be used.
+  const channelSecretStore = gateway.channelSecretStore;
   return {
     storage: gateway.storage,
     recentChannelSetupTests: gateway.recentChannelSetupTests,
     commitChannelSetupConnection: (draftId, expectedRevision, input, onCommitted) =>
       integrationChannel.finalizeChannelSetupConnection(draftId, expectedRevision, input, onCommitted),
-    ...(gateway.channelSecretStore
-      ? { channelSecrets: new ChannelSecretCustodyService(gateway.channelSecretStore) }
-      : {}),
+    ...(channelSecretStore ? { channelSecrets: new ChannelSecretCustodyService(channelSecretStore) } : {}),
     buildIntegrationConnectionChecks: (connection) =>
       integrationDiagnostics.buildIntegrationConnectionChecks(connection),
     createIntegrationConnection: (input) => integrationChannel.createIntegrationConnection(input),
