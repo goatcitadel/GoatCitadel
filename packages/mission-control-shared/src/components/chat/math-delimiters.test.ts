@@ -44,6 +44,14 @@ describe("math in reply text", () => {
     expect(normalizeAssistantDisplayText("```\nprintf '$x$'\n```")).toBe("```\nprintf '$x$'\n```");
   });
 
+  it.each([
+    ["an indented block", "Example:\n\n    \\[x^2\\] and $y$\n\nThen $z$."],
+    ["a fence in a quote", "> ```latex\n> \\[x^2\\]\n> ```\n\nThen $z$."],
+    ["a fence in a list", "- step\n\n  ```\n  echo $a$ \\(b\\)\n  ```\n\nThen $z$."],
+  ])("leaves %s as written", (_label, input) => {
+    expect(normalizeAssistantDisplayText(input)).toBe(input.replace("Then $z$.", () => "Then $$z$$."));
+  });
+
   it("keeps citation snippets as written", () => {
     expect(normalizeCitationDisplayText("costs $x$ per unit")).toBe("costs $x$ per unit");
   });

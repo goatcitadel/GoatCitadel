@@ -15,7 +15,7 @@ const LONE_DISPLAY_BRACKET = /^(\s*)\\[[\]](\s*)$/u;
 const WHOLE_LINE_DISPLAY = /^(\s*)\\\[(.+)\\\](\s*)$/u;
 const BRACKET_PAIR = /\\\[(.+?)\\\]|\\\((.+?)\\\)/gu;
 const WORD_CHARACTER = /[\p{L}\p{N}]/u;
-/** Marks a shielded code span (see stripHtmlNoise); math never runs across one. */
+/** Marks a shielded code span (see normalizeMathOutsideCode); math never runs across one. */
 const SHIELD = "\u0000";
 
 function normalizeMathLine(line: string): string {

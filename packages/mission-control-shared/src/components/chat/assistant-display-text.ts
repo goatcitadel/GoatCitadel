@@ -1,6 +1,6 @@
 import type { ChatCitationRecord, MemoryCitationProvenance, MemoryRetrievalMatchSignals } from "@goatcitadel/contracts";
 import { normalizeMathDelimiters } from "./math-delimiters";
-import { readInlineCodeRanges } from "./streaming-markdown";
+import { readCodeRanges, readInlineCodeRanges } from "./streaming-markdown";
 
 const RAW_HTML_BLOCK_RE = /<(script|style|svg|math|canvas)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 const RAW_HTML_TAG_RE = /<\/?[A-Za-z][^>\n]{0,1000}>/g;
@@ -123,9 +123,39 @@ function stripHtmlNoiseOutsideCode(content: string, math = true): string {
 
 /** `math` also turns the math delimiters models write into the `$$` form Chat renders (see normalizeMathDelimiters). */
 function stripHtmlNoise(content: string, math = true): string {
-  const delimit = math ? normalizeMathDelimiters : (text: string) => text;
+  const stripped = stripHtmlNoiseOutsideInlineCode(content);
+  return math ? normalizeMathOutsideCode(stripped) : stripped;
+}
+
+/**
+ * Math delimiters rewritten in prose only. Every code node the parser finds stays as written, inline or block: an
+ * indented block or a fence inside a quote or list (top-level fences never reach here), so the code and its Copy
+ * button keep `\[x\]` and `$x$` intact.
+ */
+function normalizeMathOutsideCode(text: string): string {
+  if (!text.includes("$") && !text.includes("\\")) return text;
+  const ranges = readCodeRanges(text);
+  if (ranges.length === 0) return normalizeMathDelimiters(text);
+  let marker = "\u0000goat-math-code";
+  while (text.includes(marker)) marker += "_";
+  const code: string[] = [];
+  let shielded = "";
+  let cursor = 0;
+  for (const range of ranges) {
+    shielded += `${text.slice(cursor, range.start)}${marker}:${code.length}\u0000`;
+    code.push(text.slice(range.start, range.end));
+    cursor = range.end;
+  }
+  shielded += text.slice(cursor);
+  return normalizeMathDelimiters(shielded).replace(
+    new RegExp(`${marker}:(\\d+)\\x00`, "g"),
+    (token, index: string) => code[Number(index)] ?? token,
+  );
+}
+
+function stripHtmlNoiseOutsideInlineCode(content: string): string {
   const ranges = readInlineCodeRanges(content);
-  if (ranges.length === 0) return delimit(stripHtmlNoiseProse(content));
+  if (ranges.length === 0) return stripHtmlNoiseProse(content);
 
   // Shield literal code before the prose-only HTML cleanup. Whole HTML blocks
   // surrounding a span still disappear, and collision checks include decoded
@@ -142,7 +172,7 @@ function stripHtmlNoise(content: string, math = true): string {
     cursor = range.end;
   }
   parts.push(content.slice(cursor));
-  return delimit(stripHtmlNoiseProse(parts.join(""))).replace(
+  return stripHtmlNoiseProse(parts.join("")).replace(
     new RegExp(`${marker}:(\\d+)\\x00`, "g"),
     (token, index: string) => code[Number(index)] ?? token,
   );

@@ -65,6 +65,22 @@ export function readInlineCodeRanges(source: string): Array<{ start: number; end
   return ranges;
 }
 
+/** A sign the source may hold code: a backtick or tilde fence, or a line indented as code. */
+const MAY_HOLD_CODE = /[`~]|^(?: {4}|\t)|\n(?:[ >]*)(?: {4}|\t)/u;
+
+/** Source ranges of every code node, inline spans and blocks alike (indented, or fenced inside a quote or list). */
+export function readCodeRanges(source: string): Array<{ start: number; end: number }> {
+  if (!MAY_HOLD_CODE.test(source)) return [];
+  const ranges: Array<{ start: number; end: number }> = [];
+  walk(parser.parse(source), (node) => {
+    if (node.type !== "inlineCode" && node.type !== "code") return;
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start !== undefined && end !== undefined) ranges.push({ start, end });
+  });
+  return ranges;
+}
+
 // These are candidate labels, not Markdown syntax decisions. The installed parser
 // validates every candidate and tells us which reference identifiers this block
 // really depends on (including presently unresolved, collapsed and shortcut links).
