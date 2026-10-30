@@ -1729,6 +1729,47 @@ describe("approval-resolution-effects-service", () => {
     expect(completeEffect).toHaveBeenCalledOnce();
   });
 
+  // Ruling R56: a Skill Hub lifecycle approval's linkage is sealed by its own binding, so it never carries its wait
+  // run's id; the reservation does, and the crash-safe materialization still targets it.
+  it.each([
+    ["a sealed-linkage approval, from its reservation", "skill_hub.lifecycle", {}, "reserved-run-1"],
+    ["any other approval, from its linkage", "shell.exec", { durableRunId: "linked-run-1" }, "linked-run-1"],
+    ["any other approval without one, not at all", "shell.exec", {}, undefined],
+  ] as const)("enqueues wait-run materialization for %s", async (_label, kind, linkage, expectedRunId) => {
+    const upsert = vi.fn((input: Record<string, unknown>) => ({ effectId: "effect-1", ...input }));
+    const storage = {
+      approvalEffects: { upsert },
+      approvalWaitRuns: { getRunId: vi.fn(() => "reserved-run-1") },
+    };
+    const service = new ApprovalEffectsService(
+      { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+      createApprovalEffectDeps() as never,
+    );
+
+    await service.enqueueApprovalWaitMaterialization(
+      {
+        approvalId: "approval-1",
+        kind,
+        riskLevel: "danger",
+        status: "pending",
+        payload: {},
+        preview: {},
+        linkage: { workspaceId: "workspace-1", ...linkage },
+        createdAt: "2026-10-30T00:00:00.000Z",
+        explanationStatus: "not_requested",
+      },
+      { deferProcessing: true },
+    );
+
+    if (expectedRunId) {
+      expect(upsert).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ effectKind: "approval_wait_materialize", targetId: expectedRunId }),
+      );
+    } else {
+      expect(upsert).not.toHaveBeenCalled();
+    }
+  });
+
   it("defers an approval wait wake while its reserved durable run is not materialized", async () => {
     const effect = createEffect({
       effectKind: "approval_wait_wake",

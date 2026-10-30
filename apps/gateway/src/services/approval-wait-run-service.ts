@@ -1,5 +1,6 @@
 import {
   NotFoundError,
+  hasSealedApprovalLinkage,
   type ApprovalLinkage,
   type ApprovalRequest,
   type ApprovalWaitWorkflowPayload,
@@ -38,7 +39,13 @@ export class ApprovalWaitRunService {
     private readonly deps: ApprovalWaitRunServiceDeps,
   ) {}
 
-  public buildApprovalLinkage(linkage?: ApprovalLinkage): ApprovalLinkage | undefined {
+  /**
+   * The linkage an approval is created with: the given one plus the request's correlation and trace ids. An approval
+   * whose own binding seals its linkage (`hasSealedApprovalLinkage`, the Skill Hub lifecycle approval) keeps it exactly as
+   * given, since its operation intent is bound to that exact linkage in TypeScript and in the database (Ruling R56).
+   */
+  public buildApprovalLinkage(linkage?: ApprovalLinkage, kind?: string): ApprovalLinkage | undefined {
+    if (kind !== undefined && hasSealedApprovalLinkage(kind)) return linkage;
     const requestAttribution = this.getCurrentRequestAttribution();
     const normalized = Object.fromEntries(
       Object.entries({
@@ -56,7 +63,9 @@ export class ApprovalWaitRunService {
 
   public async primeApprovalLifecycle(approvalId: string, linkage?: ApprovalLinkage): Promise<ApprovalRequest> {
     let approval = await this.ctx.storage.approvals.get(approvalId);
-    if (linkage) {
+    // A sealed linkage keeps exactly what it was created with; its wait run is found through the reservation.
+    const sealed = hasSealedApprovalLinkage(approval.kind);
+    if (linkage && !sealed) {
       approval = await this.ctx.storage.approvals.mergeLinkage(approvalId, linkage);
     }
     const existingReservation = await this.ctx.storage.approvalWaitRuns.get(approval.approvalId);
@@ -67,7 +76,12 @@ export class ApprovalWaitRunService {
       approval = await this.reserveApprovalWaitRun(approval);
     }
     const waitRun = await this.ensureApprovalWaitDurableRun(approval);
-    if (!isNativeExecutionApproval(approval) && waitRun?.runId && approval.linkage?.durableRunId !== waitRun.runId) {
+    if (
+      !sealed &&
+      !isNativeExecutionApproval(approval) &&
+      waitRun?.runId &&
+      approval.linkage?.durableRunId !== waitRun.runId
+    ) {
       approval = await this.ctx.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: waitRun.runId });
     }
     return approval;
@@ -83,8 +97,12 @@ export class ApprovalWaitRunService {
       return approval;
     }
     const nativeParent = isNativeExecutionApproval(approval)
-      ? await requireNativeApprovalParent(this.deps, approval) : undefined;
-    const preferredRunId = (!nativeParent && approval.linkage?.durableRunId?.trim()) || this.deps.createApprovalWaitRunId?.() || randomUUID();
+      ? await requireNativeApprovalParent(this.deps, approval)
+      : undefined;
+    const preferredRunId =
+      (!nativeParent && approval.linkage?.durableRunId?.trim()) ||
+      this.deps.createApprovalWaitRunId?.() ||
+      randomUUID();
     if (nativeParent?.runId === preferredRunId) {
       throw new Error("Native runtime approval requires a separate wait run.");
     }
@@ -93,9 +111,16 @@ export class ApprovalWaitRunService {
       runId: preferredRunId,
     });
     if (nativeParent) {
-      if (reservation.runId === nativeParent.runId) throw new Error("Native runtime approval requires a separate wait run.");
+      if (reservation.runId === nativeParent.runId)
+        throw new Error("Native runtime approval requires a separate wait run.");
       // Native linkage names the immutable execution parent. The approval's
       // separate wait identity belongs exclusively to approvalWaitRuns.
+      return approval;
+    }
+    // A sealed linkage (the Skill Hub lifecycle approval) is bound exactly by the
+    // approval's own operation intent, so its wait identity, like a native
+    // review's, belongs exclusively to approvalWaitRuns (Ruling R56).
+    if (hasSealedApprovalLinkage(approval.kind)) {
       return approval;
     }
     if (approval.linkage?.durableRunId === reservation.runId) {
@@ -121,9 +146,13 @@ export class ApprovalWaitRunService {
       if (parent.runId === reservation.runId) throw new Error("Native runtime approval requires a separate wait run.");
     }
     const validateWait = (run: DurableRunRecord) => {
-      if (isNativeExecutionApproval(approval) &&
-          (run.runId !== reservation.runId || run.workflowKey !== "approval.wait" ||
-            run.payload.approvalId !== approval.approvalId || run.payload.approvalKind !== approval.kind)) {
+      if (
+        isNativeExecutionApproval(approval) &&
+        (run.runId !== reservation.runId ||
+          run.workflowKey !== "approval.wait" ||
+          run.payload.approvalId !== approval.approvalId ||
+          run.payload.approvalKind !== approval.kind)
+      ) {
         throw new Error("Native runtime approval wait belongs to another review.");
       }
       return run;
@@ -140,27 +169,29 @@ export class ApprovalWaitRunService {
     }
     const requestAttribution = this.getCurrentRequestAttribution();
     try {
-      return validateWait(await this.deps.createDurableRun({
-        runId: reservation.runId,
-        workflowKey: "approval.wait",
-        payload: approvalWaitPayloadToRecord({
-          version: "approval.wait.v1",
-          approvalId: approval.approvalId,
-          approvalKind: approval.kind,
-          createdAt: approval.createdAt,
-          correlationId: requestAttribution.correlationId,
-          traceId: requestAttribution.traceId,
-          originSurface: requestAttribution.originSurface,
+      return validateWait(
+        await this.deps.createDurableRun({
+          runId: reservation.runId,
+          workflowKey: "approval.wait",
+          payload: approvalWaitPayloadToRecord({
+            version: "approval.wait.v1",
+            approvalId: approval.approvalId,
+            approvalKind: approval.kind,
+            createdAt: approval.createdAt,
+            correlationId: requestAttribution.correlationId,
+            traceId: requestAttribution.traceId,
+            originSurface: requestAttribution.originSurface,
+          }),
+          metadata: {
+            approvalId: approval.approvalId,
+            approvalKind: approval.kind,
+          },
+          waitForEvent: {
+            eventKey: "approval.resolved",
+            correlationId: approval.approvalId,
+          },
         }),
-        metadata: {
-          approvalId: approval.approvalId,
-          approvalKind: approval.kind,
-        },
-        waitForEvent: {
-          eventKey: "approval.resolved",
-          correlationId: approval.approvalId,
-        },
-      }));
+      );
     } catch (error) {
       try {
         return validateWait(await this.deps.getDurableRun(reservation.runId));

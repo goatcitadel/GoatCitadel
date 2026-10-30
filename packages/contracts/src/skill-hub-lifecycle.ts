@@ -28,6 +28,18 @@ export type SkillHubOperationKind = (typeof SKILL_HUB_OPERATION_KINDS)[number];
 export type SkillHubOperationSettlementDisposition = (typeof SKILL_HUB_OPERATION_SETTLEMENT_DISPOSITIONS)[number];
 
 /**
+ * Whether an approval's linkage is sealed by its own binding, so the approvals owner must store it exactly as given:
+ * no request attribution (`correlationId`, `traceId`) and no wait-run id (`durableRunId`) merged in. Today that is the
+ * Skill Hub lifecycle approval: its operation intent is bound to the approval's exact linkage (`workspaceId`, plus
+ * `sessionId`/`turnId` when given), both in TypeScript (the operator's creation check and the operation repository's
+ * approval binding) and in the database (the SQLite intent trigger and Postgres `gc_validate_skill_hub_intent_approval`).
+ * Its wait run is still reserved, and found through the wait-run mapping instead (Ruling R56).
+ */
+export function hasSealedApprovalLinkage(kind: string): boolean {
+  return kind === SKILL_HUB_LIFECYCLE_APPROVAL_KIND;
+}
+
+/**
  * Immutable database linkage from an upstream review snapshot to the exact,
  * content-addressed bytes retained by the Gateway artifact store.
  */
