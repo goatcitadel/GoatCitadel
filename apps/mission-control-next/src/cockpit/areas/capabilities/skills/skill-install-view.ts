@@ -11,8 +11,11 @@ import type { SkillInstallState, SkillInstallStepKind } from "./skill-install-st
 export const NOTHING_ASKED = "Nothing beyond its instructions";
 export const SCRIPTS_LINE = "Includes scripts. Installing it doesn't run them.";
 export const INSTALLED_NOT_ON = "Installed, not switched on";
-/** After switching on stopped: the install itself finished, and nothing here can switch it on. */
-export const INSTALLED_CANT_SWITCH_ON = "It's installed and switched off. It can't be switched on from here yet.";
+/**
+ * After switching on stopped: the install itself finished, and nothing here can switch it on. Whether it is off isn't
+ * said: after a stop that needs a manual fix, that isn't known.
+ */
+export const INSTALLED_CANT_SWITCH_ON = "It's installed. It can't be switched on from here yet.";
 export const SKIP_ON_NEXT =
   "Installs and switches on at once, because your setting to skip approvals for your own changes is on.";
 export const SKIP_OFF_NEXT = "Asks you twice: once to install it and once to switch it on.";
@@ -22,12 +25,13 @@ const TOOL_PREFIX = /^tool:/u;
 
 /**
  * What the skill asks for, one line each, only the lines that apply: each tool by its label (once, however many ids
- * share it), the hosts it reaches, the settings it reads, the files it reads and writes, the programs it needs and
- * whether it includes scripts. A skill that asks for none of these says so.
+ * share it), the hosts it may reach, the settings it reads, the files it reads and writes, the programs it needs and
+ * whether it includes scripts. A skill that asks for none of these says so. The hosts are the addresses the check found
+ * in files it flagged for network use (an install link counts), so they are what the skill may reach, not what it does.
  */
 export function asksForLines(asks: CapabilitySkillInstallAsks): string[] {
   const lines = [...new Set(asks.tools.map((id) => toolLabel(id.replace(TOOL_PREFIX, ""))))];
-  if (asks.networkHosts.length > 0) lines.push(`Reaches ${joinLabels(asks.networkHosts)}`);
+  if (asks.networkHosts.length > 0) lines.push(`May reach ${joinLabels(asks.networkHosts)}`);
   if (asks.envVars.length > 0) lines.push(`Needs settings: ${asks.envVars.join(", ")}`);
   if (asks.readsFiles.length > 0) lines.push(`Reads ${joinLabels(asks.readsFiles)}`);
   if (asks.writesFiles.length > 0) lines.push(`Writes ${joinLabels(asks.writesFiles)}`);

@@ -1126,7 +1126,10 @@ Only an `https` URL is accepted in the browser (a plain message otherwise). The 
 - Deleting `LibrarySkillPacks` removed one live region, so the live-region budget moved by exactly the new regions minus one (R49).
 - The browser still drives `activate` after `install_inactive`. With the tab closed between the two, the install stays at `installed_off`. Discover shows the row as "Install not finished" with "Continue", which opens the panel, and the panel offers "Switch on" (R50).
 - "Continue" opens the install named by the Discover item's `installSnapshotId`; the browser no longer matches a source to an install itself (R60).
-- The flow polls the installs read: every second for the first 30 reads while a step applies and every 3 seconds after, and every 5 to 30 seconds while a step waits, to stay under the route's rate limit.
+- The flow polls the installs read: every second for the first 30 reads while a step applies and every 3 seconds after, and every 5 to 30 seconds while a step waits, to stay under the route's rate limit. A new request starts that count again.
+- Discover and the installs list are read again whenever an install's step changes (on its way, declined back to the step before, stopped or done) and whenever a step's request answers, so a waiting or declined install shows as "Install not finished" with "Continue" at once; the installed list is read again only once switching on is done (final review I1).
+- The hosts line reads "May reach `<hosts>`": the hosts are the addresses the check found in files it flagged for network use, not traffic it saw (final review M7).
+- A decline is a note in the plain colour; a request that didn't go through (refused, or never answered) keeps the failure colour. After switching on stopped, the panel says "It's installed. It can't be switched on from here yet.", because whether a stop that needs a manual fix left the skill off isn't known.
 
 ### Task 16: Public truth, checks and proof (PR 3c)
 

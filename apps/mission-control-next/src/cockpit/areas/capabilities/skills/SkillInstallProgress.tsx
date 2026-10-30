@@ -56,8 +56,8 @@ const switchOnStopped = (flow: SkillInstall) => flow.state.phase === "failed" &&
 
 /**
  * Why the flow stopped or what the last request met, in plain words; none while all is well. A stop has one failure
- * line: the Gateway's own, which names the step, or the panel's when there is none. A decline or a refused request is
- * a note, not a failure: declining is the operator's own choice.
+ * line: the Gateway's own, which names the step, or the panel's when there is none. A decline is a note, not a failure:
+ * declining is the operator's own choice. A request that didn't go through (refused, or never answered) is a failure.
  */
 function stopLines(flow: SkillInstall): StopLine[] {
   const { state } = flow;
@@ -67,7 +67,7 @@ function stopLines(flow: SkillInstall): StopLine[] {
     return switchOnStopped(flow) ? [failure, { text: INSTALLED_CANT_SWITCH_ON, failure: false }] : [failure];
   }
   return [
-    ...(flow.notice ? [{ text: flow.notice, failure: false }] : []),
+    ...(flow.notice ? [{ text: flow.notice, failure: !flow.declined }] : []),
     ...(flow.unreadable ? [{ text: CANT_CHECK, failure: false }] : []),
   ];
 }

@@ -200,6 +200,63 @@ describe("useSkillInstall", () => {
     expect(reads()).toBe(before);
   });
 
+  it("refreshes Discover and the installs at every step and every answered request, the installed list only when done", async () => {
+    answerSteps({ install_inactive: "waiting", activate: "waiting" });
+    const refreshed = vi.spyOn(client, "invalidateQueries");
+    const refreshes = () => refreshed.mock.calls.map(([filters]) => JSON.stringify(filters?.queryKey));
+    const DISCOVER = JSON.stringify(["skills", "capability-skill-discover"]);
+    const INSTALLS = JSON.stringify(["skills", "capability-skill-installs"]);
+    const INSTALLED = JSON.stringify(["skills", "capability-skills"]);
+    await render();
+    await checkPack();
+    expect(refreshes()).toEqual([]);
+
+    // The request answered and the install now waits: Discover's row and the installs read it at once.
+    await confirm();
+    expect(shown.state).toMatchObject({ install: { step: "waiting_install" } });
+    expect(refreshes()).toContain(DISCOVER);
+    expect(refreshes()).toContain(INSTALLS);
+    expect(refreshes()).not.toContain(INSTALLED);
+
+    // A read that finds the same step changes nothing anywhere.
+    refreshed.mockClear();
+    await beat(5_000);
+    expect(reads()).toBe(2);
+    expect(refreshes()).toEqual([]);
+
+    // Declined: back at the passed check, which Discover offers to install again.
+    server = checked({ step: "check_passed" });
+    await beat(5_000);
+    expect(shown.notice).toBe("Not installed. The request was declined.");
+    expect(refreshes()).toEqual([DISCOVER, INSTALLS]);
+
+    // A request the checks refuse answers too.
+    refreshed.mockClear();
+    api.requestCapabilitySkillOperation.mockRejectedValueOnce(
+      new ApiRequestError("blocked", {
+        kind: "http",
+        method: "POST",
+        path: "/api/v1/capabilities/skills/operations",
+        status: 409,
+        body: { error: "GoatCitadel's checks don't allow this step right now.", code: "STATE_CONFLICT" },
+      }),
+    );
+    await confirm();
+    expect(refreshes()).toContain(DISCOVER);
+    expect(refreshes()).toContain(INSTALLS);
+    expect(refreshes()).not.toContain(INSTALLED);
+
+    // A stop is a step too.
+    refreshed.mockClear();
+    answerSteps({ install_inactive: "approved", activate: "approved" });
+    await confirm();
+    refreshed.mockClear();
+    server = checked({ step: "failed", failure: "GoatCitadel's checks stopped the install." });
+    await beat(1_000);
+    expect(shown.state).toMatchObject({ phase: "failed" });
+    expect(refreshes()).toEqual([DISCOVER, INSTALLS]);
+  });
+
   it("waits for each step's approval, reading every 5 seconds, and asks for nothing more meanwhile", async () => {
     answerSteps({ install_inactive: "waiting", activate: "waiting" });
     await render();
@@ -269,6 +326,7 @@ describe("useSkillInstall", () => {
 
     expect(shown.state).toMatchObject({ phase: "ready", install: { step: "check_passed" } });
     expect(shown.notice).toBe("Not installed. The request was declined.");
+    expect(shown.declined).toBe(true);
     await confirm();
     expect(calls.filter((call) => call === "install_inactive")).toHaveLength(2);
   });
@@ -324,6 +382,74 @@ describe("useSkillInstall", () => {
     expect(reads()).toBe(32);
     await beat(3_000);
     expect(reads()).toBe(33);
+  });
+
+  it("reads an approval asked for again at the first pace, however long the last one waited", async () => {
+    answerSteps({ install_inactive: "waiting", activate: "waiting" });
+    await render();
+    await checkPack();
+    await confirm();
+    const readAt = async (seconds: number) => {
+      const at: number[] = [];
+      for (let second = 1; second <= seconds; second += 1) {
+        const before = reads();
+        await beat(1_000);
+        if (reads() > before) at.push(second);
+      }
+      return at;
+    };
+    // Waited long enough to be read every 30 seconds.
+    expect(await readAt(75)).toEqual([5, 10, 15, 25, 45, 75]);
+
+    // Declined somewhere else: the next read finds the passed check, and nothing more is read.
+    server = checked({ step: "check_passed" });
+    expect(await readAt(30)).toEqual([30]);
+    expect(shown.notice).toBe("Not installed. The request was declined.");
+
+    // Asked again: read at once, then 5 seconds later, not 30.
+    const before = reads();
+    await confirm();
+    expect(reads()).toBe(before + 1);
+    expect(await readAt(10)).toEqual([5, 10]);
+
+    // Approved somewhere else at the slow pace of a long wait: once it is being installed, it is read every second.
+    expect(await readAt(35)).toEqual([5, 15, 35]);
+    server = checked({ step: "installing" });
+    expect(await readAt(32)).toEqual([30, 31, 32]);
+  });
+
+  it("retries a failed read at a step that is not read on its own every 5 seconds", async () => {
+    answerSteps({ install_inactive: "approved", activate: "waiting" });
+    await render();
+    await checkPack();
+    await confirm();
+    server = checked({ step: "installed_off" });
+    await beat(1_000);
+    // Declined: installed, not switched on, and nothing is read on its own.
+    server = checked({ step: "installed_off" });
+    await beat(5_000);
+    expect(shown.notice).toBe("Installed, not switched on. The request to switch it on was declined.");
+
+    // Switch on is refused, and the read that would say why fails.
+    api.requestCapabilitySkillOperation.mockRejectedValueOnce(
+      new ApiRequestError("blocked", {
+        kind: "http",
+        method: "POST",
+        path: "/api/v1/capabilities/skills/operations",
+        status: 409,
+        body: { error: "GoatCitadel's checks don't allow this step right now.", code: "STATE_CONFLICT" },
+      }),
+    );
+    api.fetchCapabilitySkillInstalls.mockRejectedValue(new Error("offline"));
+    const before = reads();
+    await confirm();
+    expect(reads()).toBe(before + 1);
+    await beat(4_000);
+    expect(reads()).toBe(before + 1);
+    await beat(1_000);
+    expect(reads()).toBe(before + 2);
+    await beat(5_000);
+    expect(reads()).toBe(before + 3);
   });
 
   it("counts failed reads toward the slower pace, and says when it can't check", async () => {
@@ -415,6 +541,8 @@ describe("useSkillInstall", () => {
     await confirm();
 
     expect(shown.notice).toBe("GoatCitadel's checks don't allow this step right now.");
+    // A refusal is not the operator's own decline.
+    expect(shown.declined).toBe(false);
     expect(shown.state).toMatchObject({ phase: "ready", install: { step: "blocked" } });
   });
 });

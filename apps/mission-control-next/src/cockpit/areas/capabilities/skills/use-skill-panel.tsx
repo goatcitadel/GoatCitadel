@@ -77,14 +77,16 @@ export function useSkillPanel(
       return;
     }
     if (shown.current === linkedId) {
-      // The panel the address asked for was on screen and is gone: it was closed.
       shown.current = null;
-      navigate(skillsHref(view), { replace: true });
+      // The panel the address asked for was on screen and is gone: it was closed. When another panel took its place
+      // without moving the address (an install, or Import from Git), it wasn't closed: the address is left alone, and
+      // once that panel goes, the skill's doesn't come back.
+      if (!content) navigate(skillsHref(view), { replace: true });
       return;
     }
     const alreadyAsked = asked.current?.id === linkedId && asked.current.inspectorOpen === openInspector;
     if (linked && !alreadyAsked) show(linkedId, linked.name);
-  }, [openId, linkedId, linked, show, openInspector, navigate, view]);
+  }, [openId, content, linkedId, linked, show, openInspector, navigate, view]);
 
   return {
     // `fallbackName` is for a caller that names a skill the loaded list may not hold (Discover names an installed skill by

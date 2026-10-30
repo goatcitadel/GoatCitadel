@@ -38,11 +38,15 @@ const APPLYING_SLOW_MS = 3_000;
  * at most every 30, as the skill switch reads its own approval.
  */
 const WAITING_MS = [5_000, 5_000, 5_000, 10_000, 20_000, 30_000] as const;
+/** The wait before a failed read is tried again at a step that is not read on its own (a read after a refusal). */
+const UNPACED_RETRY_MS = 5_000;
 /** Failed reads in a row before the panel says it can't check. */
 const MISSED_READS_LIMIT = 3;
 
 const DECLINED_INSTALL = "Not installed. The request was declined.";
 const DECLINED_SWITCH_ON = "Installed, not switched on. The request to switch it on was declined.";
+/** The notices that say a request was declined: the operator's own choice, unlike a request that didn't go through. */
+const DECLINES: ReadonlySet<string> = new Set([DECLINED_INSTALL, DECLINED_SWITCH_ON]);
 const NOT_FOUND = "This install can't be found anymore. Check it again to start over.";
 const FAILED_STEP: Readonly<Record<SkillInstallStepKind, string>> = {
   install_inactive: "Installing didn't finish.",
@@ -51,12 +55,16 @@ const FAILED_STEP: Readonly<Record<SkillInstallStepKind, string>> = {
 /** A stop whose step isn't known here and that comes without the Gateway's own line, which names the step. */
 const FAILED_UNKNOWN = "It didn't finish.";
 
-/** What a finished install changes: Discover's marks, the installed list and the installs. Hub installs send no event. */
-const DONE_KEYS: readonly QueryKey[] = [
+/**
+ * What an install's step changes: Discover's marks ("Install not finished" with Continue) and the installs. Hub installs
+ * send no event, so these are read again whenever a step changes or a step's request answers.
+ */
+const STEP_KEYS: readonly QueryKey[] = [
   ["skills", "capability-skill-discover"],
-  ["skills", "capability-skills"],
   ["skills", "capability-skill-installs"],
 ];
+/** What only a finished install changes too: the installed list. */
+const DONE_KEY: QueryKey = ["skills", "capability-skills"];
 
 /** Where a check's install is read and what a finished one refreshes. */
 export interface SkillInstallContext {
@@ -126,16 +134,33 @@ function schedule(key: string, step: CapabilitySkillInstallStep) {
 const isFollowing = (entry: SkillInstallEntry | undefined) =>
   entry?.state.phase === "following" || entry?.asking === true;
 
-/** Takes on an install read from the Gateway, after a request of this panel or on its own. */
+/** Reads Discover and the installs again, and the installed list too once an install is done. */
+function refreshInstalls(key: string, done = false) {
+  const client = contexts.get(key)?.client;
+  for (const queryKey of done ? [...STEP_KEYS, DONE_KEY] : STEP_KEYS) void client?.invalidateQueries({ queryKey });
+}
+
+/**
+ * Takes on an install read from the Gateway, after a request of this panel or on its own. A step that changed (on its
+ * way, declined back to the step before, stopped or done) is shown in Discover and the installs at once.
+ */
 function receive(key: string, install: CapabilitySkillInstall | undefined) {
   const entry = readSkillInstall(key);
   if (!entry) return;
-  if (!install) return setSkillInstall(key, { ...keep(entry), state: { phase: "failed", message: NOT_FOUND } });
+  if (!install) {
+    setSkillInstall(key, { ...keep(entry), state: { phase: "failed", message: NOT_FOUND } });
+    return refreshInstalls(key);
+  }
+  const changed = installOf(entry.state)?.step !== install.step;
+  take(key, entry, install);
+  if (changed) refreshInstalls(key, install.step === "done");
+}
+
+function take(key: string, entry: SkillInstallEntry, install: CapabilitySkillInstall) {
   const { asked } = entry;
   switch (install.step) {
     case "done":
-      setSkillInstall(key, { ...keep(entry), state: stateFor(install) });
-      return refreshAfterDone(key);
+      return setSkillInstall(key, { ...keep(entry), state: stateFor(install) });
     case "failed":
       return setSkillInstall(key, {
         ...keep(entry),
@@ -167,11 +192,6 @@ function receive(key: string, install: CapabilitySkillInstall | undefined) {
   }
 }
 
-function refreshAfterDone(key: string) {
-  const context = contexts.get(key);
-  for (const queryKey of DONE_KEYS) void context?.client.invalidateQueries({ queryKey });
-}
-
 function missedRead(key: string) {
   const entry = readSkillInstall(key);
   if (!isFollowing(entry) || !entry) return;
@@ -179,7 +199,8 @@ function missedRead(key: string) {
   misses.set(key, missed);
   if (missed >= MISSED_READS_LIMIT && !entry.unreadable) setSkillInstall(key, { ...entry, unreadable: true });
   const step = installOf(entry.state)?.step ?? "check_passed";
-  scheduleSkillInstallTick(key, nextWait(key, step, paceOf(step, entry.asking === true) ?? "applying"));
+  const pace = paceOf(step, entry.asking === true);
+  scheduleSkillInstallTick(key, pace ? nextWait(key, step, pace) : UNPACED_RETRY_MS);
 }
 
 /** Reads the check's install once. `force` reads it although nothing is followed (a refusal may have changed it). */
@@ -230,7 +251,9 @@ async function request(key: string, kind: SkillInstallStepKind, chain: boolean) 
   if (!entry || !context || !install || entry.asking) return;
   bump(key);
   cancelSkillInstallTick(key);
+  // A new request is read at the first pace, however long the step it comes back to waited before.
   misses.delete(key);
+  beats.delete(key);
   setSkillInstall(key, {
     state: { phase: "following", install },
     source: entry.source,
@@ -244,6 +267,7 @@ async function request(key: string, kind: SkillInstallStepKind, chain: boolean) 
     await requestCapabilitySkillOperation({ workspaceId: context.workspaceId, snapshotId: key, operationKind: kind });
   } catch (error) {
     sending.delete(key);
+    refreshInstalls(key);
     const current = readSkillInstall(key);
     if (!current?.asking || current.asked !== kind) return;
     bump(key);
@@ -257,6 +281,8 @@ async function request(key: string, kind: SkillInstallStepKind, chain: boolean) 
     return;
   }
   sending.delete(key);
+  // Whatever the answer, the request may have made an approval or moved a step: Discover and the installs say so.
+  refreshInstalls(key);
   const current = readSkillInstall(key);
   if (!current?.asking || current.asked !== kind) return;
   // Approved or waiting: the install is read at once and says which.
@@ -378,6 +404,8 @@ export interface SkillInstall {
   chain: boolean;
   /** A decline, or why the last request didn't go through. */
   notice?: string;
+  /** The notice is a decline rather than a request that didn't go through. */
+  declined: boolean;
   /** The install couldn't be read several times in a row; the reads go on. */
   unreadable: boolean;
   /** The source the panel checks again. */
@@ -420,6 +448,7 @@ export function useSkillInstall(key: string, seed?: CapabilitySkillInstall | nul
     asking: entry?.asking === true,
     chain: entry?.chain === true,
     notice: entry?.notice,
+    declined: entry?.notice !== undefined && DECLINES.has(entry.notice),
     unreadable: entry?.unreadable === true,
     source: entry?.source ?? (install ? checkSourceOf(install) : undefined),
     movedTo: entry?.movedTo,

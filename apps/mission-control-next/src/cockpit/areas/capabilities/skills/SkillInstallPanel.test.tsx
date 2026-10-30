@@ -8,6 +8,7 @@ import type {
   CapabilitySkillInstall,
   CapabilitySkillOperationRequest,
 } from "@goatcitadel/contracts";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CockpitNavigationProvider } from "../../../app/CockpitNavigationProvider";
 import { InspectorProvider } from "../../../app/inspector";
@@ -252,7 +253,8 @@ describe("Install panel: what the operator judges", () => {
     expect(lines("What it asks for")).toEqual([
       "Run a shell command",
       "Search the web",
-      "Reaches api.github.com and uploads.github.com",
+      // The hosts are the addresses the check found in its files, so they are what it may reach, not what it does.
+      "May reach api.github.com and uploads.github.com",
       "Needs settings: GH_TOKEN, GH_HOST",
       "Reads ~/.config/gh",
       "Writes ~/.cache/gh",
@@ -508,11 +510,64 @@ describe("Install panel: installing", () => {
     const alert = container.querySelector('[role="alert"]')!;
     expect([...alert.querySelectorAll("p")].map((line) => [line.textContent, line.className])).toEqual([
       ["GoatCitadel's checks stopped switching it on.", "text-status-failed"],
-      ["It's installed and switched off. It can't be switched on from here yet.", "text-fg"],
+      ["It's installed. It can't be switched on from here yet.", "text-fg"],
     ]);
     // A new check would only find it installed, and nothing here can switch it on: nothing is offered.
     for (const name of ["Check again", "Switch on", "Install and switch on"]) expect(button(name)).toBeUndefined();
     expect(text()).not.toMatch(/didn't pass|not installed/iu);
+  });
+
+  it("claims nothing about whether a skill is on when switching it on needs a manual fix", async () => {
+    skip = true;
+    answerSteps("approved");
+    await render();
+    await press(button("Install and switch on"));
+    server = checked({ step: "installed_off" });
+    await beat(1_000);
+    server = checked({
+      step: "failed",
+      failure: "Switching it on didn't finish and needs a manual fix.",
+    });
+    await beat(1_000);
+
+    // Whether it is on isn't known: only the Gateway's line, that it is installed, and that it can't be switched on here.
+    expect([...container.querySelectorAll('[role="alert"] p')].map((line) => line.textContent)).toEqual([
+      "Switching it on didn't finish and needs a manual fix.",
+      "It's installed. It can't be switched on from here yet.",
+    ]);
+    expect(text()).not.toMatch(/switched off/iu);
+  });
+
+  it("shows a request that didn't go through in the failure colour", async () => {
+    await render();
+    api.requestCapabilitySkillOperation.mockRejectedValueOnce(
+      new ApiRequestError("blocked", {
+        kind: "http",
+        method: "POST",
+        path: "/api/v1/capabilities/skills/operations",
+        status: 409,
+        body: { error: "GoatCitadel's checks don't allow this step right now.", code: "STATE_CONFLICT" },
+      }),
+    );
+    await press(button("Install and switch on"));
+
+    const refused = container.querySelector('[role="alert"] p');
+    expect(refused?.textContent).toBe("GoatCitadel's checks don't allow this step right now.");
+    expect(refused?.className).toBe("text-status-failed");
+
+    // A request that never reached the Gateway is a failure too, not a note.
+    api.requestCapabilitySkillOperation.mockRejectedValueOnce(
+      new ApiRequestError("offline", {
+        kind: "network",
+        method: "POST",
+        path: "/api/v1/capabilities/skills/operations",
+      }),
+    );
+    await press(button("Install and switch on"));
+    const lines = [...container.querySelectorAll('[role="alert"] p')];
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.textContent).not.toBe("GoatCitadel's checks don't allow this step right now.");
+    expect(lines[0]?.className).toBe("text-status-failed");
   });
 
   it("leads with the Gateway's own line for a stop found after a reload", async () => {

@@ -3,9 +3,12 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
+  ApprovalRequest,
+  CapabilitySkillActionOutcome,
   CapabilitySkillDiscoverItem,
   CapabilitySkillInstall,
   CapabilitySkillItem,
+  CapabilitySkillOperationRequest,
   CapabilitySkillsResponse,
 } from "@goatcitadel/contracts";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
@@ -39,6 +42,11 @@ const approvals = vi.hoisted(() => ({ fetchApproval: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (original) => ({
   ...(await original<object>()),
   ...approvals,
+}));
+const decisions = vi.hoisted(() => ({ resolveApproval: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
+  ...(await original<object>()),
+  ...decisions,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
   fetchWorkspaces: vi.fn(async () => ({ items: [] })),
@@ -363,5 +371,171 @@ describe("Import from Git", () => {
     // The address stays for the operator to correct.
     expect(field()?.value).toBe("https://git.example.com/acme/skills");
     expect(address()).toBe("/capabilities/skills?shell=cockpit");
+  });
+});
+
+describe("Over an open skill panel", () => {
+  const SKILL_ADDRESS = "/capabilities/skills?item=skill%3Aextra%3Ahimalaya&view=discover&shell=cockpit";
+
+  beforeEach(() => {
+    api.fetchCapabilitySkills.mockResolvedValue(installedOf([MAIL_SKILL]));
+  });
+
+  it("shows the install panel when Install is pressed, and makes one check", async () => {
+    let answer!: (install: CapabilitySkillInstall) => void;
+    api.reviewCapabilitySkill.mockImplementation(
+      () =>
+        new Promise<CapabilitySkillInstall>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    await renderTab(SKILL_ADDRESS);
+    expect(inspectorNamed("Mail through Himalaya")).not.toBeNull();
+
+    await press(button("Install Himalaya"));
+    // The install panel takes the skill panel's place and stays: nothing closes it while its check runs.
+    expect(inspectorNamed("Himalaya")).not.toBeNull();
+    expect(body()?.textContent).toContain("Checking it…");
+    expect(address()).toBe(SKILL_ADDRESS);
+
+    installs = [checked()];
+    await act(async () => answer(checked()));
+    await settle();
+    expect(address()).toBe("/capabilities/skills?item=install%3Asnap-1&view=discover&shell=cockpit");
+    expect(button("Install and switch on", body())).toBeDefined();
+    expect(api.reviewCapabilitySkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the Git address field when Import from Git is pressed", async () => {
+    await renderTab(SKILL_ADDRESS);
+    expect(inspectorNamed("Mail through Himalaya")).not.toBeNull();
+
+    await press(button("Import from Git"));
+    expect(inspectorNamed("Import from Git")).not.toBeNull();
+    expect(field()).not.toBeNull();
+  });
+});
+
+describe("Discover while an install is on its way in", () => {
+  let stored: Record<string, ApprovalRequest>;
+
+  /** A Skill Hub step's approval as the Gateway makes it: danger, never expiring, linked to the workspace that asked. */
+  function hubApproval(approvalId: string, operationKind: "install_inactive" | "activate"): ApprovalRequest {
+    const intent = {
+      operationId: `operation-${operationKind}`,
+      idempotencyKey: "key-1",
+      workspaceId: "ws-1",
+      operationKind,
+      snapshotId: "snap-1",
+      contentTreeSha256: "b".repeat(64),
+      skillId: "extra:himalaya",
+      targetCandidateId: "skill-hub-candidate-1",
+      targetVersionId: "skill-hub-version-1",
+      expectedCandidateAbsent: true,
+      expectedRuntimeAbsent: true,
+      actorId: "operator",
+      createdAt: "2026-10-30T10:00:00.000Z",
+    };
+    return {
+      approvalId,
+      kind: "skill_hub.lifecycle",
+      riskLevel: "danger",
+      status: "pending",
+      payload: { ...intent, requestSha256: "a".repeat(64) },
+      preview: { schemaVersion: "goatcitadel.skill-hub-operation-intent.v1", intent },
+      linkage: { workspaceId: "ws-1" },
+      createdAt: "2026-10-30T10:00:00.000Z",
+      explanationStatus: "not_requested",
+    } as unknown as ApprovalRequest;
+  }
+
+  /** Himalaya's row as the Gateway words it from the installs it holds: one on its way in names its check. */
+  function himalayaRow(): CapabilitySkillDiscoverItem {
+    const unfinished = installs.find(
+      (install) =>
+        install.source.kind === "pack" &&
+        install.source.packId === "himalaya" &&
+        !["check_passed", "blocked", "done"].includes(install.step),
+    );
+    return unfinished ? { ...HIMALAYA, state: "installing", installSnapshotId: unfinished.snapshotId } : HIMALAYA;
+  }
+
+  const discoverRow = (name: string) =>
+    [...document.body.querySelectorAll("li")].find(
+      (row) => row.querySelector("h3")?.textContent === name && !row.closest('[data-inspector-body="true"]'),
+    );
+  const approvalDialog = (title: string) =>
+    [...document.body.querySelectorAll<HTMLElement>('[role="dialog"]')].find(
+      (entry) => entry.querySelector("h2")?.textContent === title,
+    );
+
+  beforeEach(() => {
+    // The app keeps a read fresh for 30 seconds and doesn't read again on focus: only a refresh reads Discover again.
+    client.setDefaultOptions({ queries: { retry: false, staleTime: 30_000, refetchOnWindowFocus: false } });
+    stored = {};
+    api.fetchCapabilitySkillDiscover.mockImplementation(async () => ({
+      items: [himalayaRow(), STAGED],
+      unavailableProviders: [],
+      generatedAt: "",
+    }));
+    // The skip is off: each step waits for its approval.
+    api.requestCapabilitySkillOperation.mockImplementation(
+      async ({ operationKind }: CapabilitySkillOperationRequest): Promise<CapabilitySkillActionOutcome> => {
+        const approvalId = operationKind === "install_inactive" ? "approval-install" : "approval-on";
+        stored[approvalId] = hubApproval(approvalId, operationKind);
+        const step = operationKind === "install_inactive" ? "waiting_install" : "waiting_switch_on";
+        installs = [checked({ step, approvalId })];
+        return { status: "waiting", approvalId };
+      },
+    );
+    approvals.fetchApproval.mockImplementation(async (approvalId: string) => stored[approvalId]);
+    decisions.resolveApproval.mockReset().mockImplementation(async (approvalId: string, decision: string) => {
+      stored[approvalId] = {
+        ...stored[approvalId]!,
+        status: decision === "approve" ? "approved" : "rejected",
+        resolvedBy: "operator",
+        resolvedAt: "2026-10-30T10:01:00.000Z",
+      };
+      return { approval: stored[approvalId], effects: [] };
+    });
+  });
+
+  it("marks a waiting install's row Install not finished, with Continue, at once", async () => {
+    await renderTab("/capabilities/skills?view=discover&shell=cockpit");
+    await press(button("Install Himalaya"));
+    expect(button("Install and switch on", body())).toBeDefined();
+    expect(discoverRow("Himalaya")?.textContent).toContain("Not installed");
+
+    await press(button("Install and switch on", body()));
+    await vi.waitFor(() => expect(approvalDialog("Approve installing Himalaya?")).toBeDefined());
+
+    // Without waiting for the list to go stale, the row says the install isn't finished and offers to continue it.
+    await vi.waitFor(() => expect(discoverRow("Himalaya")?.textContent).toContain("Install not finished"));
+    expect(button("Continue Himalaya")).toBeDefined();
+    expect(button("Install Himalaya")).toBeUndefined();
+  });
+
+  it("continues a declined switch-on at Switch on, never with a second check", async () => {
+    await renderTab("/capabilities/skills?view=discover&shell=cockpit");
+    await press(button("Install Himalaya"));
+    await press(button("Install and switch on", body()));
+    await vi.waitFor(() => expect(approvalDialog("Approve installing Himalaya?")).toBeDefined());
+
+    // Installed once approved, it asks to switch on, which is declined in place.
+    installs = [checked({ step: "installed_off" })];
+    await press(button("Approve once", approvalDialog("Approve installing Himalaya?")));
+    await vi.waitFor(() => expect(approvalDialog("Approve switching on Himalaya?")).toBeDefined());
+    installs = [checked({ step: "installed_off" })];
+    await press(button("Deny", approvalDialog("Approve switching on Himalaya?")));
+    await vi.waitFor(() => expect(body()?.textContent).toContain("The request to switch it on was declined."));
+    await vi.waitFor(() => expect(discoverRow("Himalaya")?.textContent).toContain("Install not finished"));
+
+    await press(button("Close inspector"));
+    expect(address()).toBe("/capabilities/skills?view=discover&shell=cockpit");
+    await press(button("Continue Himalaya"));
+
+    expect(address()).toBe("/capabilities/skills?item=install%3Asnap-1&view=discover&shell=cockpit");
+    expect(button("Switch on", body())).toBeDefined();
+    expect(api.reviewCapabilitySkill).toHaveBeenCalledTimes(1);
   });
 });
