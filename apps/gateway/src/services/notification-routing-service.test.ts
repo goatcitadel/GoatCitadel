@@ -201,10 +201,44 @@ describe("NotificationRoutingService", () => {
   });
 
   it("accepts only opaque GoatCitadel keychain references", () => {
-    expect(accountFromNotificationSecretRef("keychain:goatcitadel:notification-webhook:primary")).toBe(
-      "notification-webhook:primary",
+    expect(
+      accountFromNotificationSecretRef("keychain:goatcitadel:notification-webhook:primary", "webhookUrlSecretRef"),
+    ).toBe("notification-webhook:primary");
+    expect(
+      accountFromNotificationSecretRef("keychain:goatcitadel:notification-token:primary", "credentialSecretRef"),
+    ).toBe("notification-token:primary");
+    expect(() => accountFromNotificationSecretRef("https://example.test/raw-secret", "webhookUrlSecretRef")).toThrow(
+      /keychain/i,
     );
-    expect(() => accountFromNotificationSecretRef("https://example.test/raw-secret")).toThrow(/keychain/i);
+  });
+
+  it("refuses references to keychain entries that notifications do not own", () => {
+    for (const foreign of [
+      "keychain:goatcitadel:provider:anthropic",
+      "keychain:goatcitadel:citadel:default:vault_master_key",
+      "keychain:goatcitadel:external-side-effect-replay:master_key",
+      "keychain:goatcitadel:notification-token:primary",
+      "keychain:goatcitadel:notification-webhook:",
+    ]) {
+      expect(() => accountFromNotificationSecretRef(foreign, "webhookUrlSecretRef")).toThrow(
+        /notification keychain entry/i,
+      );
+    }
+    expect(() =>
+      accountFromNotificationSecretRef("keychain:goatcitadel:notification-webhook:primary", "credentialSecretRef"),
+    ).toThrow(/notification keychain entry/i);
+  });
+
+  it("refuses a webhook target whose credential names a non-notification keychain entry", async () => {
+    const { service } = harness();
+    await expect(
+      service.createTarget("workspace-1", {
+        label: "Ops webhook",
+        kind: "https_webhook",
+        webhookUrlSecretRef: "keychain:goatcitadel:notification-webhook:ops",
+        credentialSecretRef: "keychain:goatcitadel:provider:anthropic",
+      }),
+    ).rejects.toThrow(/notification keychain entry/i);
   });
 
   it("rejects SSRF destinations before network transport", () => {

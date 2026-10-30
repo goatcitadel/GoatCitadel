@@ -133,6 +133,7 @@ export interface GatewayRouteCompositionPort {
   readonly recentChannelSetupTests: Map<string, ChannelSetupRecentTestCacheEntry>;
   readonly researchService: ResearchService;
   readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
+  /** The OS key store, present only while it can be used. Each reader decides whether it may write keys. */
   readonly secretStore?: SecretStoreService;
   readonly deviceTokenVault: DeviceTokenVault;
   readonly storage: Storage;
@@ -373,6 +374,11 @@ export function createGatewayRouteCompositionPort(
     personalityCatalogService: gateway.personalityCatalogService,
     policyEngine: gateway.policyEngine,
     recentChannelSetupTests: gateway.recentChannelSetupTests,
+    // Read when composed, never at construction. Without a usable OS keychain every reader sees none and says so.
+    get secretStore() {
+      const store = gateway.secretStore;
+      return store?.isAvailable() ? store : undefined;
+    },
     deviceTokenVault: gateway.deviceTokenVault,
     steerService: gateway.steerService,
     storage: gateway.storage,

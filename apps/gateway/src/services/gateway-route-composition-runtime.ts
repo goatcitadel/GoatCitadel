@@ -1,6 +1,5 @@
 import { ModelComparisonRunRepository } from "@goatcitadel/storage";
 import { logger } from "@goatcitadel/gateway-core";
-import { generateVaultKey } from "@goatcitadel/contracts/citadel-vault-node";
 import { DEFAULT_CITADEL_ID } from "@goatcitadel/contracts";
 import { getStartupPhaseRecorder } from "../diagnostics/startup-phases.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
@@ -263,26 +262,18 @@ export function composeRuntimeAdminRouteDependencies(
         return "";
       }
     },
-    vaultKey: (citadelId: string): Buffer | undefined => {
+    vaultKey: (): Buffer | undefined => {
       // The deterministic key is accepted only while the private dev-verification
       // surface is enabled. It keeps exact usability proof hermetic without
       // reading or writing the operator's OS keychain.
       if (devVerificationVaultKey) {
         return Buffer.from(devVerificationVaultKey);
       }
-      // The per-Citadel master key lives in the OS keychain. If the secret store
-      // is unavailable, the Vault fails closed (never a plaintext fallback).
-      const store = gateway.secretStore;
-      if (!store || !store.isAvailable()) {
-        return undefined;
-      }
-      const account = `citadel:${citadelId}:vault_master_key`;
-      let keyBase64 = store.getSecret(account);
-      if (!keyBase64) {
-        keyBase64 = generateVaultKey().toString("base64");
-        store.setSecret(account, keyBase64);
-      }
-      return Buffer.from(keyBase64, "base64");
+      // Keychain-held per-Citadel master keys wait for the operator's approval:
+      // a lookup miss would mint a replacement key and orphan every sealed
+      // secret, and the macOS adapter would put the key on argv. Until then the
+      // Vault fails closed (never a plaintext fallback).
+      return undefined;
     },
     cron: createCronRoutePort(gateway.cronAutomationService),
     dashboard: createDashboardRoutePort({
