@@ -185,6 +185,7 @@ beforeEach(() => {
     removeEventListener: vi.fn(),
   }));
   prefs.showTechnicalDetails = false;
+  prefs.activeWorkspaceId = "ws-1";
   server = checked();
   skip = false;
   stored = {};
@@ -334,9 +335,13 @@ describe("Install panel: what the operator judges", () => {
   });
 
   it("says only that a skill is installed already when that is why", async () => {
-    server = checked({ step: "blocked", blockers: ["SOURCE_ALREADY_INSTALLED"] });
+    server = checked({ step: "blocked", blockers: ["SOURCE_ALREADY_INSTALLED", "CANDIDATE_ALREADY_EXISTS"] });
     await render();
     expect(lines("Checks")).toEqual(["It's already installed."]);
+    // Nothing failed and nothing is left to do: no "Didn't pass", no steps that never start.
+    expect(steps()).toEqual(["Check Already installed"]);
+    expect(section("Progress")?.querySelector("[data-tone]")?.getAttribute("data-tone")).toBe("neutral");
+    expect(button("Install and switch on")).toBeUndefined();
   });
 
   it("says what happens next from the skip setting, and nothing when it can't be read", async () => {
@@ -455,7 +460,11 @@ describe("Install panel: installing", () => {
     // Declined in the Inbox: the next read finds the check as it was.
     server = checked();
     await beat(5_000);
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Not installed. The request was declined.");
+    const declined = container.querySelector('[role="alert"]');
+    expect(declined?.textContent).toBe("Not installed. The request was declined.");
+    // Declining is the operator's own choice: told plainly, not in the failure colour.
+    expect(declined?.querySelector(".text-status-failed")).toBeNull();
+    expect(declined?.className).not.toContain("text-status-failed");
     expect(button("Install and switch on")?.disabled).toBe(false);
     expect(button("Review the change")).toBeUndefined();
   });
@@ -468,9 +477,8 @@ describe("Install panel: installing", () => {
     server = checked({ step: "failed", failure: "GoatCitadel's checks stopped the install." });
     await beat(1_000);
 
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      "Installing didn't finish.GoatCitadel's checks stopped the install.",
-    );
+    // One failure line: the Gateway's own, which names the step.
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("GoatCitadel's checks stopped the install.");
     expect(steps()[1]).toContain("Didn't finish");
     // Asking for the same step again would hand back the same approval and run nothing, so a new check is offered.
     expect(button("Install and switch on")).toBeUndefined();
@@ -484,6 +492,76 @@ describe("Install panel: installing", () => {
     });
     // The panel showed a check of its own, so the new one takes its place in the address.
     expect(onMove).toHaveBeenCalledExactlyOnceWith("snap-2", true);
+  });
+
+  it("says a skill whose switch-on stopped is installed, and offers no Check again", async () => {
+    skip = true;
+    answerSteps("approved");
+    await render();
+    await press(button("Install and switch on"));
+    server = checked({ step: "installed_off" });
+    await beat(1_000);
+    server = checked({ step: "failed", failure: "GoatCitadel's checks stopped switching it on." });
+    await beat(1_000);
+
+    expect(steps()).toEqual(["Check Passed", "Install Done", "Switch on Didn't finish"]);
+    const alert = container.querySelector('[role="alert"]')!;
+    expect([...alert.querySelectorAll("p")].map((line) => [line.textContent, line.className])).toEqual([
+      ["GoatCitadel's checks stopped switching it on.", "text-status-failed"],
+      ["It's installed and switched off. It can't be switched on from here yet.", "text-fg"],
+    ]);
+    // A new check would only find it installed, and nothing here can switch it on: nothing is offered.
+    for (const name of ["Check again", "Switch on", "Install and switch on"]) expect(button(name)).toBeUndefined();
+    expect(text()).not.toMatch(/didn't pass|not installed/iu);
+  });
+
+  it("leads with the Gateway's own line for a stop found after a reload", async () => {
+    server = checked({ step: "failed", failure: "GoatCitadel's checks stopped switching it on." });
+    await render();
+
+    // The step that stopped isn't known here, so no claim is made about it beyond the Gateway's line.
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      "GoatCitadel's checks stopped switching it on.",
+    );
+    expect(text()).not.toContain("The install didn't finish.");
+    expect(steps()).toEqual([]);
+
+    // Without the Gateway's line, it only says it didn't finish.
+    act(() => root.unmount());
+    __resetSkillInstallsForTests();
+    client.clear();
+    root = createRoot(container);
+    server = checked({ step: "failed" });
+    await render();
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("It didn't finish.");
+  });
+
+  it("shows a check found at check_passed after a reload with no decline line", async () => {
+    await render();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(button("Install and switch on")?.disabled).toBe(false);
+  });
+
+  it("reads a step's approval in the workspace the check was made in", async () => {
+    answerSteps("waiting");
+    await render();
+    await press(button("Install and switch on"));
+    expect(dialog()).not.toBeNull();
+    await press(button("Close dialog", dialog()!));
+
+    // Another workspace is on screen now; the panel opens again on the same install.
+    act(() => root.unmount());
+    client.clear();
+    __resetSettingsApprovalDialogsForTests();
+    approvals.fetchApproval.mockClear();
+    prefs.activeWorkspaceId = "ws-2";
+    root = createRoot(container);
+    await render();
+
+    expect(approvals.fetchApproval).toHaveBeenCalled();
+    for (const [approvalId, options] of approvals.fetchApproval.mock.calls) {
+      expect([approvalId, options]).toEqual(["approval-install", expect.objectContaining({ workspaceId: "ws-1" })]);
+    }
   });
 
   it("says when an address names an install that can't be found", async () => {

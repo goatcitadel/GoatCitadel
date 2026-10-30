@@ -2,6 +2,7 @@ import type { CapabilitySkillInstall, CapabilitySkillInstallAsks } from "@goatci
 import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { toolLabel } from "../tools/tool-labels";
 import { joinLabels } from "./discover-view";
+import { onlyAlreadyInstalled } from "./skill-check-copy";
 import type { SkillInstallState, SkillInstallStepKind } from "./skill-install-store";
 
 // Wording for the install panel. Every step, blocker and request comes from the Gateway; nothing here decides whether
@@ -10,6 +11,8 @@ import type { SkillInstallState, SkillInstallStepKind } from "./skill-install-st
 export const NOTHING_ASKED = "Nothing beyond its instructions";
 export const SCRIPTS_LINE = "Includes scripts. Installing it doesn't run them.";
 export const INSTALLED_NOT_ON = "Installed, not switched on";
+/** After switching on stopped: the install itself finished, and nothing here can switch it on. */
+export const INSTALLED_CANT_SWITCH_ON = "It's installed and switched off. It can't be switched on from here yet.";
 export const SKIP_ON_NEXT =
   "Installs and switches on at once, because your setting to skip approvals for your own changes is on.";
 export const SKIP_OFF_NEXT = "Asks you twice: once to install it and once to switch it on.";
@@ -108,6 +111,9 @@ export function installSteps(flow: InstallFlowView): InstallStepRow[] {
     ];
   const install = "install" in state ? state.install : undefined;
   if (!install || (state.phase === "failed" && !flow.asked)) return [];
+  // Checked again after it was installed: nothing about it failed, and there is nothing left to do.
+  if (install.step === "blocked" && onlyAlreadyInstalled(install.blockers))
+    return [{ name: "Check", status: { label: "Already installed", tone: "neutral" } }];
   return [
     {
       name: "Check",

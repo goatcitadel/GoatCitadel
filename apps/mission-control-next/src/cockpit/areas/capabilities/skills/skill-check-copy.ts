@@ -46,14 +46,18 @@ export function blockerSentence(code: string): string {
     : UNKNOWN_BLOCKER_COPY;
 }
 
+/** Whether a check is blocked only because its source is installed already: nothing about the skill is wrong. */
+export function onlyAlreadyInstalled(codes: readonly string[]): boolean {
+  return codes.length > 0 && codes.every((code) => ALREADY_INSTALLED.has(code));
+}
+
 /**
  * The lines that explain a blocked check: one per sentence (codes that read the same say it once), then the closing
  * line, which a check blocked only because it is installed already doesn't get.
  */
 export function blockerLines(codes: readonly string[]): string[] {
   const sentences = [...new Set((codes.length > 0 ? codes : [""]).map(blockerSentence))];
-  const onlyInstalled = codes.length > 0 && codes.every((code) => ALREADY_INSTALLED.has(code));
-  return onlyInstalled ? sentences : [...sentences, CANT_BE_INSTALLED];
+  return onlyAlreadyInstalled(codes) ? sentences : [...sentences, CANT_BE_INSTALLED];
 }
 
 /** The refusals whose own wording names what was wrong. Anything else keeps the plain line the request came back with. */

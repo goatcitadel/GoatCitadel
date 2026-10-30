@@ -61,6 +61,7 @@ const STAGED: CapabilitySkillDiscoverItem = {
   name: "GitHub CLI",
   state: "installing",
   install: { kind: "pack", packId: "github-cli" },
+  installSnapshotId: "snap-9",
 };
 
 function checked(overrides: Partial<CapabilitySkillInstall> = {}): CapabilitySkillInstall {
@@ -254,16 +255,43 @@ describe("Opening the install panel", () => {
     expect(address()).toBe("/capabilities/skills?view=discover&shell=cockpit");
   });
 
-  it("continues an install from Discover at the step it reached", async () => {
-    installs = [checked({ snapshotId: "snap-9", name: "GitHub CLI", source: STAGED.install!, step: "installed_off" })];
+  it("continues the install Discover names, at the step it reached", async () => {
+    // A newer install of the same pack stopped; the Gateway names the one still on its way in.
+    installs = [
+      checked({ snapshotId: "snap-10", name: "GitHub CLI", source: STAGED.install!, step: "failed" }),
+      checked({ snapshotId: "snap-9", name: "GitHub CLI", source: STAGED.install!, step: "installed_off" }),
+    ];
     await renderTab("/capabilities/skills?view=discover&shell=cockpit");
     await press(button("Continue GitHub CLI"));
 
     expect(address()).toBe("/capabilities/skills?item=install%3Asnap-9&view=discover&shell=cockpit");
     expect(inspectorNamed("GitHub CLI")).not.toBeNull();
     expect(button("Switch on", body())).toBeDefined();
-    // Nothing was checked again.
+    // Nothing was checked again, and only the named check was read: the stopped one was never looked at.
     expect(api.reviewCapabilitySkill).not.toHaveBeenCalled();
+    const asked = api.fetchCapabilitySkillInstalls.mock.calls.map(([, options]) => options?.snapshotId);
+    expect(asked).toContain("snap-9");
+    expect(asked).not.toContain("snap-10");
+  });
+
+  it("makes one check when Install is pressed twice before it answers", async () => {
+    let answer!: (install: CapabilitySkillInstall) => void;
+    api.reviewCapabilitySkill.mockImplementation(
+      () =>
+        new Promise<CapabilitySkillInstall>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    await renderTab("/capabilities/skills?view=discover&shell=cockpit");
+    await press(button("Install Himalaya"));
+    await press(button("Install Himalaya"));
+
+    expect(api.reviewCapabilitySkill).toHaveBeenCalledTimes(1);
+    expect(inspectorNamed("Himalaya")).not.toBeNull();
+    installs = [checked()];
+    await act(async () => answer(checked()));
+    await settle();
+    expect(address()).toBe("/capabilities/skills?item=install%3Asnap-1&view=discover&shell=cockpit");
   });
 
   it("hands over to the installed skill's panel once switching on is done", async () => {

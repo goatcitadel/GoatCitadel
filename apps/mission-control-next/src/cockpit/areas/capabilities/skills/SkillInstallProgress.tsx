@@ -3,7 +3,13 @@ import { Button } from "../../../ui/Button";
 import { Section } from "../../../ui/Section";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
-import { approvalWords, installSteps, INSTALLED_NOT_ON, progressLine } from "./skill-install-view";
+import {
+  approvalWords,
+  INSTALLED_CANT_SWITCH_ON,
+  installSteps,
+  INSTALLED_NOT_ON,
+  progressLine,
+} from "./skill-install-view";
 import { installOf, type SkillInstall } from "./use-skill-install";
 
 const CANT_CHECK = "Can't check the install right now. It will try again.";
@@ -21,23 +27,15 @@ function waitingInstall(flow: SkillInstall): WaitingInstall | undefined {
 
 /**
  * The step's approval, decided in the panel: it opens on its own once per approval, and its "Review the change" button
- * opens it again. It belongs to the workspace the install was asked from, so it is read there. A decision is read back
- * at once rather than at the next check.
+ * opens it again. It belongs to the workspace the check was made in, so it is read there, whichever workspace is on
+ * screen now. A decision is read back at once rather than at the next check.
  */
-function ApprovalInPlace({
-  flow,
-  install,
-  workspaceId,
-}: {
-  flow: SkillInstall;
-  install: WaitingInstall;
-  workspaceId: string;
-}) {
+function ApprovalInPlace({ flow, install }: { flow: SkillInstall; install: WaitingInstall }) {
   const words = approvalWords(install.step, install.name);
   return (
     <SettingsApprovalDialog
       approvalId={install.approvalId}
-      workspaceId={workspaceId}
+      workspaceId={flow.workspaceId}
       title={words.title}
       summary={words.summary}
       reviewLabel="Review the change"
@@ -47,12 +45,31 @@ function ApprovalInPlace({
   );
 }
 
-/** Why the flow stopped or what the last request met, in plain words; none while all is well. */
-function stopLines(flow: SkillInstall): string[] {
+/** A line under the steps: why a check or step stopped (a failure), or what the last request met (a note). */
+interface StopLine {
+  text: string;
+  failure: boolean;
+}
+
+/** Whether switching on is the step that stopped: the install itself finished. */
+const switchOnStopped = (flow: SkillInstall) => flow.state.phase === "failed" && flow.asked === "activate";
+
+/**
+ * Why the flow stopped or what the last request met, in plain words; none while all is well. A stop has one failure
+ * line: the Gateway's own, which names the step, or the panel's when there is none. A decline or a refused request is
+ * a note, not a failure: declining is the operator's own choice.
+ */
+function stopLines(flow: SkillInstall): StopLine[] {
   const { state } = flow;
-  if (state.phase === "check_failed") return [state.message];
-  if (state.phase === "failed") return [state.message, ...(state.install?.failure ? [state.install.failure] : [])];
-  return [...(flow.notice ? [flow.notice] : []), ...(flow.unreadable ? [CANT_CHECK] : [])];
+  if (state.phase === "check_failed") return [{ text: state.message, failure: true }];
+  if (state.phase === "failed") {
+    const failure = { text: state.install?.failure ?? state.message, failure: true };
+    return switchOnStopped(flow) ? [failure, { text: INSTALLED_CANT_SWITCH_ON, failure: false }] : [failure];
+  }
+  return [
+    ...(flow.notice ? [{ text: flow.notice, failure: false }] : []),
+    ...(flow.unreadable ? [{ text: CANT_CHECK, failure: false }] : []),
+  ];
 }
 
 /**
@@ -60,25 +77,24 @@ function stopLines(flow: SkillInstall): string[] {
  * (Check, Install, Switch on) with the approval in place beside a step that waits, why it stopped, and the one action
  * the step offers: "Install and switch on" at a check that passed, "Switch on" for an install that isn't switched on,
  * "Check again" after a stop. `onCheckAgain` checks the source afresh; it is absent where the panel has its own way to
- * check (the Git address field). Nothing on the page names the install's steps, so the panel announces them wherever
- * the inspector shows it.
+ * check (the Git address field). After switching on stopped, nothing is offered: the install finished, a new check
+ * would only find it installed, and nothing here can switch it on. Nothing on the page names the install's steps, so
+ * the panel announces them wherever the inspector shows it.
  */
 export function SkillInstallProgress({
   flow,
   name,
-  workspaceId,
   onCheckAgain,
 }: {
   flow: SkillInstall;
   name: string;
-  workspaceId: string;
   onCheckAgain?: () => void;
 }) {
   const install = installOf(flow.state);
   const steps = installSteps(flow);
   const waiting = waitingInstall(flow);
   const stops = stopLines(flow);
-  const stopped = flow.state.phase === "failed" || flow.state.phase === "check_failed";
+  const checkAgain = (flow.state.phase === "failed" && !switchOnStopped(flow)) || flow.state.phase === "check_failed";
   const offerSwitchOn = install?.step === "installed_off" && !flow.chain && flow.state.phase === "following";
   return (
     <Section title="Progress" headingLevel={3}>
@@ -91,7 +107,7 @@ export function SkillInstallProgress({
                 <span className="flex flex-wrap items-center gap-2">
                   <StatusBadge status={row.status} />
                   {waiting && row.status.tone === "waiting" ? (
-                    <ApprovalInPlace key={waiting.approvalId} flow={flow} install={waiting} workspaceId={workspaceId} />
+                    <ApprovalInPlace key={waiting.approvalId} flow={flow} install={waiting} />
                   ) : null}
                 </span>
               </li>
@@ -100,9 +116,11 @@ export function SkillInstallProgress({
         ) : null}
         {offerSwitchOn && !flow.notice && !flow.asking ? <p className="text-fg-secondary">{INSTALLED_NOT_ON}</p> : null}
         {stops.length > 0 ? (
-          <div role="alert" className="space-y-1 text-status-failed">
+          <div role="alert" className="space-y-1">
             {stops.map((line) => (
-              <p key={line}>{line}</p>
+              <p key={line.text} className={line.failure ? "text-status-failed" : "text-fg"}>
+                {line.text}
+              </p>
             ))}
           </div>
         ) : null}
@@ -116,7 +134,7 @@ export function SkillInstallProgress({
             Switch on
           </Button>
         ) : null}
-        {stopped && onCheckAgain ? <Button onClick={onCheckAgain}>Check again</Button> : null}
+        {checkAgain && onCheckAgain ? <Button onClick={onCheckAgain}>Check again</Button> : null}
         {/* Always in place, so each new line is read out; the step badges carry it on screen. */}
         <p role="status" className="sr-only">
           {progressLine(flow, name)}

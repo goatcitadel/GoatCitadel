@@ -4,7 +4,7 @@ import type { CapabilitySkillDiscoverItem, CapabilitySkillSource } from "@goatci
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useInspector } from "../../../app/inspector";
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
-import { skillInstallQuery, skillInstallsQuery, skillListQuery } from "../../../data/capability-skills-query";
+import { skillInstallQuery, skillListQuery } from "../../../data/capability-skills-query";
 import { reopenSettingsApproval } from "../../settings/SettingsApprovalDialog";
 import { SkillInstallPanel } from "./SkillInstallPanel";
 import {
@@ -29,22 +29,10 @@ function sourceDraftKey(source: CapabilitySkillSource): string {
   return draftInstallKey(source.kind === "pack" ? `pack:${source.packId}` : `git:${source.sourceRef}`);
 }
 
-/**
- * Whether an install in progress is the one a Discover row stands for. The Gateway marked the row as on its way in;
- * this only finds which of its installs that is, by the same pack, or by the same address as the row's.
- */
-function sameSource(left: CapabilitySkillSource, right: CapabilitySkillSource): boolean {
-  if (left.kind === "pack" || right.kind === "pack") {
-    return left.kind === "pack" && right.kind === "pack" && left.packId === right.packId;
-  }
-  const plain = (ref: string) => ref.trim().toLowerCase().replace(/\/+$/u, "");
-  return plain(left.sourceRef) === plain(right.sourceRef);
-}
-
 export interface SkillInstallPanelOpener {
   /** Checks a Discover row's source and opens its install panel. */
   install(item: CapabilitySkillDiscoverItem): void;
-  /** Opens the install a Discover row has on its way in, at the step it reached. */
+  /** Opens the install a Discover row has on its way in (the check the Gateway names), at the step it reached. */
   resume(item: CapabilitySkillDiscoverItem): void;
   /** Opens the install panel with the Git address field. */
   importFromGit(): void;
@@ -132,26 +120,24 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
   const install = (item: CapabilitySkillDiscoverItem) => {
     if (!item.install) return;
     const key = sourceDraftKey(item.install);
-    resetSkillInstall(key);
-    startSkillInstallCheck(key, item.install, { client, workspaceId });
+    // A second press while the first check runs shows that check rather than making another.
+    if (readSkillInstall(key)?.state.phase !== "checking") {
+      resetSkillInstall(key);
+      startSkillInstallCheck(key, item.install, { client, workspaceId });
+    }
     show(key, item.name);
   };
 
   return {
     install,
     resume: (item) => {
-      const source = item.install;
-      if (!source) return;
-      void client
-        .fetchQuery({ ...skillInstallsQuery(workspaceId), staleTime: 0 })
-        .then((answer) => answer.installs.find((entry) => sameSource(entry.source, source)))
-        .catch(() => undefined)
-        .then((found) => {
-          if (!found) return install(item);
-          // A step that waits opens its approval at once, as a skill row's Review button does.
-          if (found.approvalId && !readSkillInstall(found.snapshotId)?.asking) reopenSettingsApproval(found.approvalId);
-          navigate(installItemHref(found.snapshotId, view));
-        });
+      const checkId = item.installSnapshotId;
+      // Every row on its way in names its check; one that doesn't (an older Gateway) is checked afresh instead.
+      if (!checkId) return install(item);
+      // A waiting step this page already follows opens its approval at once, as a skill row's Review button does.
+      const followed = installOf(readSkillInstall(checkId)?.state);
+      if (followed?.approvalId) reopenSettingsApproval(followed.approvalId);
+      navigate(installItemHref(checkId, view));
     },
     importFromGit: () => {
       resetSkillInstall(GIT_IMPORT_KEY);

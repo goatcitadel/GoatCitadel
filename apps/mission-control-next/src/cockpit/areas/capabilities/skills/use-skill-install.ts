@@ -26,12 +26,18 @@ import {
 
 export type { SkillInstallState, SkillInstallStepKind } from "./skill-install-store";
 
-/** Reads while a step is applied: every second for half a minute, then every 3 seconds (the read allows 60 a minute). */
+/**
+ * Waits between reads while a step is applied: a second for the first 30, then 3 seconds. The installs read allows 60
+ * a minute, which a steady read a second would use up. A read that fails counts as one, so failing reads slow too.
+ */
 const APPLYING_MS = 1_000;
-const APPLYING_FAST_READS = 30;
+const APPLYING_FAST_WAITS = 30;
 const APPLYING_SLOW_MS = 3_000;
-/** Reads while a step waits for its approval. */
-const WAITING_MS = 5_000;
+/**
+ * Waits between reads while a step waits for its approval, which never expires: 5 seconds at first, then less often,
+ * at most every 30, as the skill switch reads its own approval.
+ */
+const WAITING_MS = [5_000, 5_000, 5_000, 10_000, 20_000, 30_000] as const;
 /** Failed reads in a row before the panel says it can't check. */
 const MISSED_READS_LIMIT = 3;
 
@@ -42,7 +48,8 @@ const FAILED_STEP: Readonly<Record<SkillInstallStepKind, string>> = {
   install_inactive: "Installing didn't finish.",
   activate: "Switching on didn't finish.",
 };
-const FAILED_UNKNOWN = "The install didn't finish.";
+/** A stop whose step isn't known here and that comes without the Gateway's own line, which names the step. */
+const FAILED_UNKNOWN = "It didn't finish.";
 
 /** What a finished install changes: Discover's marks, the installed list and the installs. Hub installs send no event. */
 const DONE_KEYS: readonly QueryKey[] = [
@@ -95,20 +102,25 @@ function stateFor(install: CapabilitySkillInstall): SkillInstallState {
   }
 }
 
-/** How long until the next read at a step, or undefined when the step waits for nothing. */
-function paceOf(key: string, step: CapabilitySkillInstallStep): number | undefined {
-  if (step === "waiting_install" || step === "waiting_switch_on") return WAITING_MS;
-  if (step !== "installing" && step !== "switching_on") return undefined;
+/** How a step is read: `waiting` for its approval, `applying` while it is applied or its request is out, else not at all. */
+function paceOf(step: CapabilitySkillInstallStep | undefined, asking: boolean): "applying" | "waiting" | undefined {
+  if (step === "waiting_install" || step === "waiting_switch_on") return "waiting";
+  return asking || step === "installing" || step === "switching_on" ? "applying" : undefined;
+}
+
+/** Counts one more wait at the step, after a read or a failed one, and says how long it is. */
+function nextWait(key: string, step: CapabilitySkillInstallStep, pace: "applying" | "waiting"): number {
   const beat = beats.get(key);
-  return beat && beat.step === step && beat.count >= APPLYING_FAST_READS ? APPLYING_SLOW_MS : APPLYING_MS;
+  const count = beat?.step === step ? beat.count + 1 : 1;
+  beats.set(key, { step, count });
+  if (pace === "waiting") return WAITING_MS[Math.min(count, WAITING_MS.length) - 1] ?? WAITING_MS[0];
+  return count <= APPLYING_FAST_WAITS ? APPLYING_MS : APPLYING_SLOW_MS;
 }
 
 function schedule(key: string, step: CapabilitySkillInstallStep) {
-  const beat = beats.get(key);
-  beats.set(key, { step, count: beat?.step === step ? beat.count + 1 : 1 });
-  const ms = paceOf(key, step);
-  if (ms === undefined) cancelSkillInstallTick(key);
-  else scheduleSkillInstallTick(key, ms);
+  const pace = paceOf(step, false);
+  if (pace) scheduleSkillInstallTick(key, nextWait(key, step, pace));
+  else cancelSkillInstallTick(key);
 }
 
 const isFollowing = (entry: SkillInstallEntry | undefined) =>
@@ -166,8 +178,8 @@ function missedRead(key: string) {
   const missed = (misses.get(key) ?? 0) + 1;
   misses.set(key, missed);
   if (missed >= MISSED_READS_LIMIT && !entry.unreadable) setSkillInstall(key, { ...entry, unreadable: true });
-  const step = installOf(entry.state)?.step;
-  scheduleSkillInstallTick(key, entry.asking || !step ? APPLYING_MS : (paceOf(key, step) ?? WAITING_MS));
+  const step = installOf(entry.state)?.step ?? "check_passed";
+  scheduleSkillInstallTick(key, nextWait(key, step, paceOf(step, entry.asking === true) ?? "applying"));
 }
 
 /** Reads the check's install once. `force` reads it although nothing is followed (a refusal may have changed it). */
@@ -372,6 +384,8 @@ export interface SkillInstall {
   source?: CapabilitySkillSource;
   /** The check this panel should move to, once it has made a new one. */
   movedTo?: string;
+  /** The workspace the check was made in, where its approvals are read; the active one before any check. */
+  workspaceId: string;
   check(source: CapabilitySkillSource): void;
   /**
    * The panel's one confirmation. At a passed check it asks to install, then to switch on once installed; at an
@@ -409,6 +423,7 @@ export function useSkillInstall(key: string, seed?: CapabilitySkillInstall | nul
     unreadable: entry?.unreadable === true,
     source: entry?.source ?? (install ? checkSourceOf(install) : undefined),
     movedTo: entry?.movedTo,
+    workspaceId: contexts.get(key)?.workspaceId ?? workspaceId,
     check: (source) => startSkillInstallCheck(key, source, contexts.get(key) ?? { client, workspaceId }),
     confirm: () => {
       const current = readSkillInstall(key);

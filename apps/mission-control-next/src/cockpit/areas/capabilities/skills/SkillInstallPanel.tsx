@@ -88,7 +88,7 @@ export function SkillInstallPanel({ installKey, gitImport = false, onMove, onDon
   return (
     <div className="space-y-4">
       {install ? <SkillInstallAbout install={install} skip={skip} /> : null}
-      <SkillInstallProgress flow={flow} name={name} workspaceId={workspaceId} onCheckAgain={checkAgain} />
+      <SkillInstallProgress flow={flow} name={name} onCheckAgain={checkAgain} />
       {install ? (
         <TechnicalDetails>
           <p className="font-mono">{install.snapshotId}</p>

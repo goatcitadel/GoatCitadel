@@ -289,6 +289,62 @@ describe("useSkillInstall", () => {
     expect(shown.asked).toBe("install_inactive");
   });
 
+  it("reads a step that waits less often over time, down to every 30 seconds, after the panel closes too", async () => {
+    answerSteps({ install_inactive: "waiting", activate: "waiting" });
+    await render();
+    await checkPack();
+    await confirm();
+    expect(reads()).toBe(1);
+    // The flow outlasts the panel: nothing about the wait depends on a mounted view.
+    act(() => root.unmount());
+
+    const readAt: number[] = [];
+    for (let second = 1; second <= 135; second += 1) {
+      const before = reads();
+      await beat(1_000);
+      if (reads() > before) readAt.push(second);
+    }
+    // 5 seconds three times, then 10, 20 and every 30, as the skill switch reads its approval.
+    expect(readAt).toEqual([5, 10, 15, 25, 45, 75, 105, 135]);
+    root = createRoot(container);
+  });
+
+  it("reads a step being applied every second for 30 reads, then every 3 seconds", async () => {
+    answerSteps({ install_inactive: "approved", activate: "approved" });
+    await render();
+    await checkPack();
+    await confirm();
+    expect(reads()).toBe(1);
+
+    await beat(30_000);
+    expect(reads()).toBe(31);
+    await beat(2_999);
+    expect(reads()).toBe(31);
+    await beat(1);
+    expect(reads()).toBe(32);
+    await beat(3_000);
+    expect(reads()).toBe(33);
+  });
+
+  it("counts failed reads toward the slower pace, and says when it can't check", async () => {
+    answerSteps({ install_inactive: "approved", activate: "approved" });
+    await render();
+    await checkPack();
+    await confirm();
+    api.fetchCapabilitySkillInstalls.mockRejectedValue(new Error("offline"));
+
+    await beat(3_000);
+    expect(shown.unreadable).toBe(true);
+    expect(shown.state).toMatchObject({ phase: "following", install: { step: "installing" } });
+    // Thirty waits of a second, read or not, then every 3 seconds: a failing read doesn't hold the fast pace.
+    await beat(27_000);
+    expect(reads()).toBe(31);
+    await beat(2_999);
+    expect(reads()).toBe(31);
+    await beat(1);
+    expect(reads()).toBe(32);
+  });
+
   it("keeps the check's key only to retry a check whose answer never came", async () => {
     await render();
     api.reviewCapabilitySkill.mockRejectedValueOnce(
