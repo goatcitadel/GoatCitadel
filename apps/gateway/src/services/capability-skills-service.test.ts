@@ -6,6 +6,7 @@ import {
   type CapabilityCatalogEntry,
   type SkillListItem,
 } from "@goatcitadel/contracts";
+import { hubApproval, hubItem } from "./capability-skill-install.test-support.js";
 import { CATALOG_CANDIDATE_VERSION_LIMIT } from "./capability-skills-projection.js";
 import { CapabilitySkillsService, type CapabilitySkillsSources } from "./capability-skills-service.js";
 import {
@@ -91,6 +92,8 @@ function sources(overrides: Partial<CapabilitySkillsSources> = {}): CapabilitySk
     shippedSkillDirs: vi.fn(() => ({ folders: new Set<string>(), packs: new Set<string>() })),
     deploymentProfile: vi.fn(() => "trusted_local" as const),
     readApprovalSkipSetting: vi.fn(async () => false),
+    listSkillHub: vi.fn(async () => ({ items: [] })),
+    findSkillHubSnapshot: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -376,5 +379,160 @@ describe("CapabilitySkillsService.detail", () => {
         "bundled:research",
       ),
     ).rejects.toBeInstanceOf(ServiceUnavailableError);
+  });
+});
+
+describe("CapabilitySkillsService.list, for a pack switched on through Skill Hub", () => {
+  const PACK_FOLDER = "/srv/goatcitadel/skills/import-packs/himalaya";
+  /** A Hub activation records the check it came from as the skill's source, not the pack folder. */
+  const hubInstalled = skill({
+    skillId: "extra:himalaya",
+    name: "himalaya",
+    dir: "/srv/goatcitadel/skills/extra/himalaya",
+    callable: true,
+    lifecycle: {
+      skillId: "extra:himalaya",
+      category: "community_imported",
+      lifecycleState: "approved",
+      trustLabel: "Approved upstream snapshot",
+      provenance: { source: "extra", sourceRef: "skill-hub-review-pack" },
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-01T00:00:00.000Z",
+    },
+  });
+  const shipped = { folders: new Set<string>(), packs: new Set([PACK_FOLDER]) };
+
+  it.each([
+    ["a check of this install's pack folder", { sourceType: "local_path", sourceRef: PACK_FOLDER }, "built_in"],
+    [
+      "a check of a Git repository",
+      { sourceType: "git_url", sourceRef: "https://github.com/someone/himalaya" },
+      "imported",
+    ],
+    ["a check it can't find", undefined, "imported"],
+  ] as const)("reads it as GoatCitadel's own only after %s", async (_label, check, origin) => {
+    const reads = sources({
+      listSkills: vi.fn(async () => [hubInstalled, ...SKILLS]),
+      shippedSkillDirs: vi.fn(() => shipped),
+      findSkillHubSnapshot: vi.fn(async () => check),
+    });
+
+    const response = await new CapabilitySkillsService(reads).list(WORKSPACE_ID);
+
+    expect(response.items.find((item) => item.skillId === "extra:himalaya")?.origin).toBe(origin);
+    // Only the shipped skill's own check is read, once.
+    expect(reads.findSkillHubSnapshot).toHaveBeenCalledExactlyOnceWith("skill-hub-review-pack");
+  });
+
+  it("reads it as imported, and logs why, when its check can't be read", async () => {
+    const reportFailure = vi.fn();
+    const reads = sources({
+      listSkills: vi.fn(async () => [hubInstalled]),
+      shippedSkillDirs: vi.fn(() => shipped),
+      findSkillHubSnapshot: failing("database is locked"),
+    });
+
+    const response = await new CapabilitySkillsService(reads, reportFailure).list(WORKSPACE_ID);
+
+    expect(response.items[0]?.origin).toBe("imported");
+    expect(response.issues).toEqual([]);
+    expect(reportFailure).toHaveBeenCalledWith("skill_hub_check", expect.any(Error));
+  });
+});
+
+describe("CapabilitySkillsService.installs", () => {
+  const installed = hubItem({
+    snapshotId: "check-installed",
+    runtime: { inactiveCandidate: true },
+    approvals: { install_inactive: hubApproval("install_inactive", "approved", "applied") },
+    actions: { install_inactive: { allowed: false, blockers: ["SOURCE_ALREADY_INSTALLED"] } },
+  });
+  const waiting = hubItem({
+    snapshotId: "check-waiting",
+    approvals: { install_inactive: hubApproval("install_inactive", "pending") },
+  });
+
+  it("lists an install left between its two steps", async () => {
+    const reads = sources({
+      listSkillHub: vi.fn(async () => ({
+        items: [
+          installed,
+          hubItem({ snapshotId: "check-passed" }),
+          hubItem({ snapshotId: "check-done", runtime: { activeVersion: true, callable: true } }),
+          hubItem({ snapshotId: "check-blocked", snapshot: { blockerCodes: ["AUDIT_MISSING"] } }),
+          waiting,
+          // A legacy check of a folder that isn't a pack: it can't be named without its server path.
+          hubItem({
+            snapshotId: "check-local-folder",
+            snapshot: { sourceRef: "/srv/skills/my-skill" },
+            approvals: { install_inactive: hubApproval("install_inactive", "pending") },
+          }),
+        ],
+      })),
+    });
+
+    const response = await new CapabilitySkillsService(reads).installs(WORKSPACE_ID);
+
+    expect(reads.listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: WORKSPACE_ID, limit: 100 });
+    expect(response.workspaceId).toBe(WORKSPACE_ID);
+    // Newest first, as the checks are listed; finished, passed and blocked checks aren't installs in progress.
+    expect(response.installs.map((install) => [install.snapshotId, install.step])).toEqual([
+      ["check-installed", "installed_off"],
+      ["check-waiting", "waiting_install"],
+    ]);
+    expect(response.installs[1]).toMatchObject({ approvalId: "approval-install_inactive" });
+    expect(response.operatorApprovalSkip).toBe(false);
+    expect(Number.isNaN(Date.parse(response.generatedAt))).toBe(false);
+  });
+
+  it.each([
+    ["trusted_local", true, true],
+    ["trusted_local", false, false],
+    ["remote_hardened", true, false],
+  ] as const)("on %s with the setting %s, says the skip applies: %s", async (profile, setting, expected) => {
+    const reads = sources({
+      deploymentProfile: vi.fn(() => profile),
+      readApprovalSkipSetting: vi.fn(async () => setting),
+    });
+
+    const response = await new CapabilitySkillsService(reads).installs(WORKSPACE_ID);
+
+    expect(response.operatorApprovalSkip).toBe(expected);
+    expect(reads.readApprovalSkipSetting).toHaveBeenCalledTimes(profile === "remote_hardened" ? 0 : 1);
+  });
+
+  it("reads one install at any step by its snapshot", async () => {
+    // Done and declined both leave the in-progress list; read by its snapshot, a finished install still shows (R55).
+    const done = hubItem({ snapshotId: "check-done", runtime: { activeVersion: true, callable: true } });
+    const declined = hubItem({
+      snapshotId: "check-declined",
+      approvals: { install_inactive: hubApproval("install_inactive", "rejected") },
+    });
+    const blocked = hubItem({ snapshotId: "check-blocked", snapshot: { blockerCodes: ["AUDIT_MISSING"] } });
+    const reads = sources({ listSkillHub: vi.fn(async () => ({ items: [installed, done, declined, blocked] })) });
+    const service = new CapabilitySkillsService(reads);
+
+    const read = async (snapshotId: string) =>
+      (await service.installs(WORKSPACE_ID, snapshotId)).installs.map((install) => [install.snapshotId, install.step]);
+
+    expect(await read("check-done")).toEqual([["check-done", "done"]]);
+    expect(await read("check-declined")).toEqual([["check-declined", "check_passed"]]);
+    expect(await read("check-blocked")).toEqual([["check-blocked", "blocked"]]);
+    expect(await read("check-installed")).toEqual([["check-installed", "installed_off"]]);
+    expect(await read("check-elsewhere")).toEqual([]);
+    expect(reads.listSkillHub).toHaveBeenCalledWith({ workspaceId: WORKSPACE_ID, limit: 100 });
+  });
+
+  it("answers a plain 503 when the checks can't be read, and logs why", async () => {
+    const reportFailure = vi.fn();
+    const reads = sources({ listSkillHub: failing("database is locked at C:\\data\\goatcitadel.sqlite") });
+
+    const failure = await new CapabilitySkillsService(reads, reportFailure)
+      .installs(WORKSPACE_ID)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ServiceUnavailableError);
+    expect((failure as Error).message).toBe("Skill installs can't be read right now.");
+    expect(reportFailure).toHaveBeenCalledWith("skill_hub", expect.any(Error));
   });
 });

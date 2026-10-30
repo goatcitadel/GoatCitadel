@@ -9,13 +9,22 @@ import {
   type DeploymentProfile,
   type SkillListItem,
   type SkillRuntimeState,
+  type SkillSourceListResponse,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { SkillUseCount } from "@goatcitadel/storage";
 import { CapabilitySkillActionsService, type CapabilitySkillActionStep } from "./capability-skill-actions-service.js";
+import { CapabilitySkillDiscoverService } from "./capability-skill-discover-service.js";
 import { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
 import type { ShippedSkillDirs } from "./capability-skills-projection.js";
 import { CapabilitySkillsService, type CapabilitySkillsSource } from "./capability-skills-service.js";
+import type {
+  CreateSkillHubOperatorApprovalInput,
+  CreateSkillHubOperatorApprovalResponse,
+  SkillHubOperatorListResponse,
+} from "./skill-hub-operator-service.js";
+import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
+import type { InstalledSkillSource, SkillSourceCatalog, SkillSourceReadOptions } from "./skill-import-service.js";
 import type { SkillStateMutationAuthorityInput, SkillStateMutationOutcome } from "./skill-state-service.js";
 
 const log = logger.child("capability-skills");
@@ -26,9 +35,10 @@ const PENDING_APPROVAL_PAGE_LIMIT = 200;
 const PENDING_APPROVAL_MAX_PAGES = 25;
 
 /**
- * The existing owner of each source the Capabilities Skills tab reads, and of the approval its switch asks for. The
- * tab writes nothing itself: a switch only asks the skill state owner and, when the operator's skip applies, resolves
- * that owner's approval through the Inbox's own resolve.
+ * The existing owner of each source the Capabilities Skills tab reads, and of the approvals its switch and install
+ * steps ask for. The tab writes nothing itself: a switch only asks the skill state owner, and an install step only asks
+ * Skill Hub's approval owner, and when the operator's skip applies each resolves that owner's approval through the
+ * Inbox's own resolve.
  */
 export interface CapabilitySkillsOwners {
   chatTurnCapabilityProfiles: { countSkillUsesSince(sinceIso: string): Promise<readonly SkillUseCount[]> };
@@ -75,6 +85,31 @@ export interface CapabilitySkillsOwners {
   deploymentProfile(): DeploymentProfile;
   /** The install's root, under whose `skills` folder GoatCitadel's own skill folders and packs live. */
   rootDir: string;
+  /**
+   * Skill Hub's owners, as the old Skill Hub routes reach them: its source review, its operator list, and the approval
+   * owner each install step asks. None of them installs anything; only an approved step's effect does.
+   */
+  skillHub: {
+    reviewSkillHubSource(input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult>;
+    listSkillHub(input: { workspaceId: string; limit?: number }): Promise<SkillHubOperatorListResponse>;
+    createSkillHubApproval(input: CreateSkillHubOperatorApprovalInput): Promise<CreateSkillHubOperatorApprovalResponse>;
+  };
+  /** Skill Hub's checks, read one at a time to tell GoatCitadel's own pack from an import (Ruling R43). */
+  skillHubSnapshots: { find(snapshotId: string): Promise<{ sourceType: string; sourceRef: string } | undefined> };
+  /**
+   * The skill import owner's source reads, which Discover lists from: the curated entries and the marketplaces' listings
+   * (the marketplaces only when asked), a catalog ranked by a search term, and the skills installed at runtime with the
+   * sources they came from. Reading them installs nothing.
+   */
+  skillSources: {
+    readSourceCatalog(options: SkillSourceReadOptions): Promise<SkillSourceCatalog>;
+    presentSourceCatalog(
+      catalog: SkillSourceCatalog,
+      query: string | undefined,
+      limit: number,
+    ): SkillSourceListResponse;
+    listInstalledSources(): readonly InstalledSkillSource[];
+  };
 }
 
 /**
@@ -88,6 +123,7 @@ export interface CapabilitySkills {
   usage: CapabilitySkillUsageService;
   skills: CapabilitySkillsService;
   actions: CapabilitySkillActionsService;
+  discover: CapabilitySkillDiscoverService;
 }
 
 /** Wires the Skills tab to its owners. */
@@ -102,26 +138,32 @@ export function composeCapabilitySkills({
   features,
   deploymentProfile,
   rootDir,
+  skillHub,
+  skillHubSnapshots,
+  skillSources,
 }: CapabilitySkillsOwners): CapabilitySkills {
   const readApprovalSkipSetting = () => features.isFeatureEnabled("settingsApprovalSkipEnabled");
   const shipped = shippedSkillDirs(rootDir);
+  const skillsService = new CapabilitySkillsService(
+    {
+      // Every skill, whatever the workspace's choices, so the operator can see and switch the ones they leave out;
+      // `listWorkspaceTurnSkills` says which of them the workspace's turns may load.
+      listSkills: (workspaceId) => skills.listSkills("ALL", workspaceId),
+      listInspectableCatalog: (workspaceId) => capabilities.listCapabilityCatalog("inspectable", "ALL", workspaceId),
+      listPendingApprovals: () => readAllPendingApprovals((input) => approvals.listApprovalsPage(input)),
+      listSwitchableSkillIds: async () => loadedSkills().map((skill) => skill.skillId),
+      listWorkspaceTurnSkills,
+      shippedSkillDirs: () => shipped,
+      deploymentProfile,
+      readApprovalSkipSetting,
+      listSkillHub: (input) => skillHub.listSkillHub(input),
+      findSkillHubSnapshot: (snapshotId) => skillHubSnapshots.find(snapshotId),
+    },
+    reportFailedRead,
+  );
   return {
     usage: new CapabilitySkillUsageService((sinceIso) => chatTurnCapabilityProfiles.countSkillUsesSince(sinceIso)),
-    skills: new CapabilitySkillsService(
-      {
-        // Every skill, whatever the workspace's choices, so the operator can see and switch the ones they leave out;
-        // `listWorkspaceTurnSkills` says which of them the workspace's turns may load.
-        listSkills: (workspaceId) => skills.listSkills("ALL", workspaceId),
-        listInspectableCatalog: (workspaceId) => capabilities.listCapabilityCatalog("inspectable", "ALL", workspaceId),
-        listPendingApprovals: () => readAllPendingApprovals((input) => approvals.listApprovalsPage(input)),
-        listSwitchableSkillIds: async () => loadedSkills().map((skill) => skill.skillId),
-        listWorkspaceTurnSkills,
-        shippedSkillDirs: () => shipped,
-        deploymentProfile,
-        readApprovalSkipSetting,
-      },
-      reportFailedRead,
-    ),
+    skills: skillsService,
     actions: new CapabilitySkillActionsService(
       {
         // The switch carries no note; the approval's own preview shows the state change.
@@ -131,8 +173,22 @@ export function composeCapabilitySkills({
         appendApprovalAudit: (event, payload) => audit.append("approvals", { event, ...payload }),
         deploymentProfile,
         readApprovalSkipSetting,
+        reviewSkillHubSource: (input) => skillHub.reviewSkillHubSource(input),
+        listSkillHub: (input) => skillHub.listSkillHub(input),
+        createSkillHubApproval: (input) => skillHub.createSkillHubApproval(input),
       },
       reportFailedStep,
+    ),
+    discover: new CapabilitySkillDiscoverService(
+      {
+        readSourceCatalog: (options) => skillSources.readSourceCatalog(options),
+        presentSourceCatalog: (catalog, query, limit) => skillSources.presentSourceCatalog(catalog, query, limit),
+        listInstalledSources: () => skillSources.listInstalledSources(),
+        // The installs the Skills tab lists, so a source on its way in reads the same in Discover. That read logs a
+        // failed Skill Hub read itself, so Discover logs only what else it throws.
+        listInstalls: async (workspaceId) => (await skillsService.installs(workspaceId)).installs,
+      },
+      { reportFailure: (error) => reportFailedRead("skill_hub", error) },
     ),
   };
 }

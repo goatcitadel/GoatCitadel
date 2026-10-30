@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
+import type { SkillGovernanceBlockerCode } from "./skill-governance.js";
 import {
   SKILL_HUB_ARTIFACT_MAX_FILES,
+  SKILL_HUB_BLOCKER_CODES,
+  TRUSTED_GIT_FORGE_HOSTS,
   assertSkillHubArtifactManifest,
   assertSkillHubBoundedMetadata,
   isSkillHubOperationKind,
   isSkillHubOperationSettlementDisposition,
+  isTrustedGitForgeUrl,
+  namesGitRepository,
   skillHubArtifactBundleRelPath,
 } from "./skill-hub-lifecycle.js";
 
@@ -80,5 +85,89 @@ describe("Skill Hub lifecycle contracts", () => {
     expect(() => assertSkillHubBoundedMetadata({ blockerCodes: ["AUDIT_DOWNGRADE"] })).not.toThrow();
     expect(() => assertSkillHubBoundedMetadata({ nested: { constructor: "blocked" } })).toThrow(/invalid key/);
     expect(() => assertSkillHubBoundedMetadata({ detail: "x".repeat(2_049) })).toThrow(/oversized string/);
+  });
+});
+
+/**
+ * Every governance blocker code. Typed as a full record, so adding a code to `SkillGovernanceBlockerCode` fails the
+ * contracts build here until it is listed, and the test below then fails until `SKILL_HUB_BLOCKER_CODES` names it.
+ */
+const GOVERNANCE_BLOCKER_CODES: Record<SkillGovernanceBlockerCode, true> = {
+  AUDIT_MISSING: true,
+  AUDIT_DOWNGRADE: true,
+  UPSTREAM_VERSION_BYTE_DRIFT: true,
+  PERMISSION_WIDENED: true,
+  PERMISSION_UNKNOWN: true,
+  FOREIGN_SCOPE: true,
+  MALFORMED_SOURCE_REFERENCE: true,
+  SECRET_LIKE_CONTENT: true,
+  UNTRUSTED_CORRECTION_ORIGIN: true,
+  VALIDATION_FAILED: true,
+  CONFLICTING_CORRECTION: true,
+};
+
+describe("Skill Hub blocker codes", () => {
+  it("types every blocker the review can produce", () => {
+    // The review's own five (`standardizedBlockers` in skill-hub-review-service.ts, typed with SkillHubBlockerCode).
+    expect(SKILL_HUB_BLOCKER_CODES).toEqual(
+      expect.arrayContaining([
+        "CONDITIONAL_REVIEW_REQUIRED",
+        "PROMPT_INJECTION_DETECTED",
+        "PROMPTWARE_SCAN_INCOMPLETE",
+        "REFERENCE_ONLY_SOURCE",
+        "SUSPICIOUS_SCRIPT_INDICATOR",
+      ]),
+    );
+  });
+
+  it("lists every governance blocker a stored snapshot can carry", () => {
+    expect(SKILL_HUB_BLOCKER_CODES).toEqual(expect.arrayContaining(Object.keys(GOVERNANCE_BLOCKER_CODES)));
+  });
+
+  it("lists the install guard codes an operator can meet, once each", () => {
+    expect(SKILL_HUB_BLOCKER_CODES).toEqual(
+      expect.arrayContaining(["SOURCE_ALREADY_INSTALLED", "CANDIDATE_ALREADY_EXISTS", "RUNTIME_ALREADY_EXISTS"]),
+    );
+    expect(new Set(SKILL_HUB_BLOCKER_CODES).size).toBe(SKILL_HUB_BLOCKER_CODES.length);
+  });
+
+  it("names the four public forges Git review trusts, lower-case and exact", () => {
+    expect([...TRUSTED_GIT_FORGE_HOSTS].sort()).toEqual(["bitbucket.org", "codeberg.org", "github.com", "gitlab.com"]);
+  });
+
+  it("trusts a Git address only as https on a trusted forge, on the default port", () => {
+    for (const address of [
+      "https://github.com/owner/repo",
+      "https://GitLab.com/owner/repo",
+      "https://codeberg.org:443/owner/repo",
+    ]) {
+      expect(isTrustedGitForgeUrl(new URL(address)), address).toBe(true);
+    }
+    for (const address of [
+      "https://github.com:8443/owner/repo",
+      "https://bitbucket.org:22/owner/repo",
+      "http://github.com/owner/repo",
+      "ssh://github.com/owner/repo",
+      "https://www.github.com/owner/repo",
+      "https://github.com.example/owner/repo",
+      "https://example.com/owner/repo",
+    ]) {
+      expect(isTrustedGitForgeUrl(new URL(address)), address).toBe(false);
+    }
+  });
+
+  it("asks a Git address for an owner and a repository, however it is slashed", () => {
+    for (const pathname of [
+      "/owner/repo",
+      "/owner/repo/",
+      "owner/repo",
+      "/owner/repo/tree/main/skills/x",
+      "//owner//repo",
+    ]) {
+      expect(namesGitRepository(pathname), pathname).toBe(true);
+    }
+    for (const pathname of ["", "/", "/owner", "/owner/", "owner", "//"]) {
+      expect(namesGitRepository(pathname), pathname).toBe(false);
+    }
   });
 });

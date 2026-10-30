@@ -642,7 +642,9 @@ describe("Skills tab", () => {
       api.fetchCapabilitySkills.mockResolvedValue(listOf([]));
       await click(button("Retry"));
       expect(text()).toContain("No skills installed yet");
-      expect(container.querySelector('[role="search"]')).toBeNull();
+      // The search box is the tab's, shared with Discover, so it stays even when nothing is installed.
+      expect(container.querySelector('[role="search"]')).not.toBeNull();
+      expect(searchBox().placeholder).toBe("Search skills");
     });
   });
 

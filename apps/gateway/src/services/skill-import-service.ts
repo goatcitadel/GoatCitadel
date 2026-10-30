@@ -151,9 +151,33 @@ interface InstalledSkillSourceManifest {
   candidate?: {
     canonicalKey?: string;
     sourceRef?: string;
+    sourceType?: string;
     sourceUrl?: string;
     repositoryUrl?: string;
   };
+  provenance?: {
+    sourceRef?: string;
+    sourceType?: string;
+  };
+}
+
+/** What one read of the source catalog answered: the curated entries and the marketplaces', merged, before any search term ranks them. */
+export interface SkillSourceCatalog {
+  providers: SkillSourceSearchRecord[];
+  items: SkillMergedSourceResult[];
+}
+
+/** Whether a read of the source catalog goes to the marketplaces. Without it, only the curated entries are read. */
+export interface SkillSourceReadOptions {
+  network?: boolean;
+}
+
+/** An installed runtime skill and every reference its `source.json` recorded for where it came from, as written. */
+export interface InstalledSkillSource {
+  /** The skill's folder under `skills/extra`, which is its name. */
+  skillName: string;
+  sourceType?: string;
+  sourceRefs: string[];
 }
 
 interface SkillInstallDuplicateMatch {
@@ -912,23 +936,57 @@ export class SkillImportService {
     }
   }
 
-  public async listSources(query?: string, limit = 25): Promise<SkillSourceListResponse> {
+  public async listSources(
+    query?: string,
+    limit = 25,
+    options: SkillSourceReadOptions = {},
+  ): Promise<SkillSourceListResponse> {
+    return this.presentSourceCatalog(await this.readSourceCatalog(options, Math.max(50, limit * 4)), query, limit);
+  }
+
+  /**
+   * Reads the curated entries and, unless `options.network` is `false`, each marketplace's listing page, merged and in
+   * the order read. A marketplace that can't be read never throws: its status says so and its curated entries stand in.
+   * The answer does not depend on a search term, so a caller may keep it and rank it for each term.
+   */
+  public async readSourceCatalog(
+    options: SkillSourceReadOptions = {},
+    providerLimit = 400,
+  ): Promise<SkillSourceCatalog> {
+    const { providers, items } = await this.collectSourceCatalog(providerLimit, options.network !== false);
+    return { providers, items: mergeSourceItems(items) };
+  }
+
+  /** Ranks a catalog read earlier by a search term, as `listSources` does, and marks what is already installed. */
+  public presentSourceCatalog(catalog: SkillSourceCatalog, query?: string, limit = 25): SkillSourceListResponse {
     const normalizedQuery = query?.trim().toLowerCase() || undefined;
-    const { providers, items } = await this.collectSourceCatalog(Math.max(50, limit * 4));
-    const merged = normalizedQuery
-      ? rankSkillSourceItems(mergeSourceItems(items), normalizedQuery).slice(0, Math.max(1, Math.min(limit, 100)))
-      : mergeSourceItems(items).slice(0, Math.max(1, Math.min(limit, 100)));
+    const ranked = normalizedQuery ? rankSkillSourceItems(catalog.items, normalizedQuery) : catalog.items;
     const installedCanonicalKeys = this.readInstalledSourceCanonicalKeys();
 
     return {
       query: normalizedQuery,
       generatedAt: new Date().toISOString(),
-      providers,
-      items: merged.map((item) => ({
+      providers: catalog.providers,
+      items: ranked.slice(0, Math.max(1, Math.min(limit, 100))).map((item) => ({
         ...item,
         alreadyInstalled: installedCanonicalKeys.has(item.canonicalKey),
       })),
     };
+  }
+
+  /** The skills installed at runtime under `skills/extra`, with where each one's `source.json` says it came from. */
+  public listInstalledSources(): InstalledSkillSource[] {
+    return this.readInstalledSourceManifests().map(({ skillName, manifest }) => {
+      const recordedType = manifest.candidate?.sourceType ?? manifest.provenance?.sourceType;
+      const sourceType = typeof recordedType === "string" ? recordedType : undefined;
+      const refs = [
+        manifest.candidate?.repositoryUrl,
+        manifest.candidate?.sourceUrl,
+        manifest.candidate?.sourceRef,
+        manifest.provenance?.sourceRef,
+      ].filter((ref): ref is string => typeof ref === "string" && ref.trim() !== "");
+      return { skillName, ...(sourceType ? { sourceType } : {}), sourceRefs: [...new Set(refs)] };
+    });
   }
 
   public async lookupSources(queryOrUrl: string, limit = 10): Promise<SkillSourceLookupResponse> {
@@ -1188,15 +1246,20 @@ export class SkillImportService {
     await this.systemSettings.set(IMPORT_HISTORY_KEY, [record, ...rows].slice(0, MAX_IMPORT_HISTORY));
   }
 
-  private async collectSourceCatalog(limit: number): Promise<{
+  private async collectSourceCatalog(
+    limit: number,
+    network = true,
+  ): Promise<{
     providers: SkillSourceSearchRecord[];
     items: SkillSourceResultRecord[];
   }> {
     const boundedLimit = Math.max(25, Math.min(limit, 250));
-    const providerResults = await Promise.all([
-      this.searchProvider("agentskill", boundedLimit),
-      this.searchProvider("skillsmp", boundedLimit),
-    ]);
+    const providerResults = network
+      ? await Promise.all([
+          this.searchProvider("agentskill", boundedLimit),
+          this.searchProvider("skillsmp", boundedLimit),
+        ])
+      : [];
     return {
       providers: [...providerResults.map((item) => item.providerStatus), ...defaultLookupProviders()],
       items: [...providerResults.flatMap((item) => item.items), ...FALLBACK_SOURCE_ITEMS],
@@ -1205,23 +1268,9 @@ export class SkillImportService {
 
   private readInstalledSourceCanonicalKeys(): Set<string> {
     const keys = new Set<string>();
-    const extraRoot = path.resolve(this.rootDir, "skills", "extra");
-    if (!fsSync.existsSync(extraRoot)) {
-      return keys;
-    }
-    for (const entry of fsSync.readdirSync(extraRoot, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const sourceManifestPath = path.join(extraRoot, entry.name, "source.json");
-      if (!fsSync.existsSync(sourceManifestPath)) {
-        continue;
-      }
+    for (const { manifest } of this.readInstalledSourceManifests()) {
       try {
-        const parsed = readBoundedSkillSourceManifestSync(sourceManifestPath) as {
-          candidate?: { canonicalKey?: string; sourceRef?: string; repositoryUrl?: string; sourceUrl?: string };
-        };
-        const candidate = parsed.candidate;
+        const candidate = manifest.candidate;
         if (candidate?.canonicalKey) {
           keys.add(candidate.canonicalKey);
         }
@@ -1237,6 +1286,33 @@ export class SkillImportService {
       }
     }
     return keys;
+  }
+
+  /** Every readable `skills/extra/<name>/source.json`; a folder without one, or with a malformed one, is left out. */
+  private readInstalledSourceManifests(): Array<{ skillName: string; manifest: InstalledSkillSourceManifest }> {
+    const manifests: Array<{ skillName: string; manifest: InstalledSkillSourceManifest }> = [];
+    const extraRoot = path.resolve(this.rootDir, "skills", "extra");
+    if (!fsSync.existsSync(extraRoot)) {
+      return manifests;
+    }
+    for (const entry of fsSync.readdirSync(extraRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const sourceManifestPath = path.join(extraRoot, entry.name, "source.json");
+      if (!fsSync.existsSync(sourceManifestPath)) {
+        continue;
+      }
+      try {
+        manifests.push({
+          skillName: entry.name,
+          manifest: readBoundedSkillSourceManifestSync(sourceManifestPath) as InstalledSkillSourceManifest,
+        });
+      } catch {
+        // Ignore malformed import manifests during source lookup.
+      }
+    }
+    return manifests;
   }
 
   private findDuplicateInstallMatches(input: {
@@ -2146,7 +2222,7 @@ function buildCanonicalKey(input: {
   return `${input.sourceProvider}:${input.sourceType}:${hash}`;
 }
 
-function normalizeRepoReference(value: string): string | undefined {
+export function normalizeRepoReference(value: string): string | undefined {
   const sourceLocation = parseSkillSourceLocation(value);
   if (!sourceLocation) {
     return undefined;
@@ -3001,41 +3077,56 @@ function looksLikeLocalSource(value: string): boolean {
   );
 }
 
+/** Each marketplace's own host and the first path segments of its pages that list skills. */
+const MARKETPLACE_LISTING_PAGES = {
+  agentskill: { host: "agentskill.sh", segments: new Set(["skill", "skills", "learn", "readme"]) },
+  skillsmp: { host: "skillsmp.com", segments: new Set(["skill", "skills", "docs", "marketplace"]) },
+} as const;
+
 function extractMarketplaceLinks(provider: "agentskill" | "skillsmp", html: string): string[] {
   const hrefRegex = /href\s*=\s*["']([^"']+)["']/gi;
   const found = new Set<string>();
   let match: RegExpExecArray | null = hrefRegex.exec(html);
   while (match) {
-    const href = match[1] ?? "";
-    const absolute = toAbsoluteMarketplaceUrl(provider, href);
-    if (!absolute) {
-      match = hrefRegex.exec(html);
-      continue;
+    const listing = toMarketplaceListingUrl(provider, match[1] ?? "");
+    if (listing) {
+      found.add(listing);
     }
-    if (provider === "agentskill" && !/agentskill\.sh\/(skills?|learn|readme)/i.test(absolute)) {
-      match = hrefRegex.exec(html);
-      continue;
-    }
-    if (provider === "skillsmp" && !/skillsmp\.com\/(skills?|docs|marketplace)/i.test(absolute)) {
-      match = hrefRegex.exec(html);
-      continue;
-    }
-    found.add(absolute);
     match = hrefRegex.exec(html);
   }
   return [...found];
 }
 
-function toAbsoluteMarketplaceUrl(provider: "agentskill" | "skillsmp", href: string): string | undefined {
+/**
+ * A scraped link, kept only when it is an `https` link on the marketplace's own host (`www.` allowed) whose first path
+ * segment is one of its listing pages. The page is untrusted, so the scheme, host and path are read from the parsed URL,
+ * never searched for in the text: `javascript:void(agentskill.sh/skills/x)` and `https://evil.example/agentskill.sh/skills/x`
+ * both mention the marketplace, and neither is its link. A relative link resolves against the marketplace.
+ */
+function toMarketplaceListingUrl(provider: "agentskill" | "skillsmp", href: string): string | undefined {
   const trimmed = href.trim();
-  if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("mailto:")) {
+  if (!trimmed) {
     return undefined;
   }
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
+  const page = MARKETPLACE_LISTING_PAGES[provider];
+  let url: URL;
+  try {
+    url = new URL(trimmed, `https://${page.host}`);
+  } catch {
+    return undefined;
   }
-  const base = provider === "agentskill" ? "https://agentskill.sh" : "https://skillsmp.com";
-  return new URL(trimmed, base).toString();
+  // A port is not the marketplace's own address either: the parser drops the default one, so any port left is another.
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.hostname.toLowerCase().replace(/^www\./u, "") !== page.host
+  ) {
+    return undefined;
+  }
+  const firstSegment = url.pathname.split("/")[1]?.toLowerCase() ?? "";
+  return page.segments.has(firstSegment) ? url.toString() : undefined;
 }
 
 async function resolveSkillDir(rootDir: string): Promise<string> {

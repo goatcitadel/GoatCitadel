@@ -10,8 +10,11 @@ import {
   diffSkillPermissionEnvelopes,
   findShippedSkillPack,
   isGoatError,
+  isTrustedGitForgeUrl,
+  namesGitRepository,
   normalizeSkillPermissionEnvelope,
   type GovernanceJourneyEventRecord,
+  type SkillHubBlockerCode,
   type SkillHubSnapshotArtifactRecord,
   type SkillImportValidationResult,
   type SkillPermissionDiffV1,
@@ -50,8 +53,9 @@ const MARKETPLACE_HOSTS = new Set([
 // Hosted bundles flow through fetchAllowlisted, including guarded DNS
 // resolution. Git materialization uses the system Git client and cannot reuse
 // that dispatcher, so production review admits only exact public forge hosts
-// whose DNS is not controlled by the submitted source.
-const TRUSTED_GIT_FORGE_HOSTS = new Set(["bitbucket.org", "codeberg.org", "github.com", "gitlab.com"]);
+// on their default port, whose DNS is not controlled by the submitted source
+// (`isTrustedGitForgeUrl`, shared with Capabilities, which refuses any other
+// Git address before review).
 
 type ReviewStorage = Pick<
   Storage,
@@ -458,6 +462,10 @@ async function prepareReview(
       sourceType: validation.candidate.sourceType,
       sourceRef: validation.candidate.sourceRef,
       ...(context.resolvedGitCommit ? { resolvedGitCommit: context.resolvedGitCommit } : {}),
+      // The validated SKILL.md name. The operator resolves the approved skill id (`extra:<name>`) from it first, and
+      // applying the step requires exactly that id; a local or Git source's canonical key ends in a hash or the
+      // repository name, which the SKILL.md name need not match.
+      ...(validation.inferredSkillName ? { skillName: validation.inferredSkillName } : {}),
       nonCallableUntilActivated: true,
     },
     audit,
@@ -603,16 +611,17 @@ function buildAudit(
   };
 }
 
-function standardizedBlockers(validation: SkillImportValidationResult): string[] {
-  const blockers = [
-    ...(validation.suspiciousSignals.length ? ["SUSPICIOUS_SCRIPT_INDICATOR"] : []),
-    ...(validation.reviewDisposition === "reference_only" ? ["REFERENCE_ONLY_SOURCE"] : []),
-    ...(validation.reviewDisposition === "conditional" ? ["CONDITIONAL_REVIEW_REQUIRED"] : []),
+/** Typed with `SkillHubBlockerCode`, so a new code here fails to compile until the contracts list names it. */
+function standardizedBlockers(validation: SkillImportValidationResult): SkillHubBlockerCode[] {
+  const blockers: SkillHubBlockerCode[] = [
+    ...(validation.suspiciousSignals.length ? ["SUSPICIOUS_SCRIPT_INDICATOR" as const] : []),
+    ...(validation.reviewDisposition === "reference_only" ? ["REFERENCE_ONLY_SOURCE" as const] : []),
+    ...(validation.reviewDisposition === "conditional" ? ["CONDITIONAL_REVIEW_REQUIRED" as const] : []),
     ...(!validation.checks.promptwareSafe || validation.promptwareFindings.length > 0
-      ? ["PROMPT_INJECTION_DETECTED"]
+      ? ["PROMPT_INJECTION_DETECTED" as const]
       : []),
     ...(!validation.checks.promptwareScanComplete || validation.promptwareUnscannedPaths.length > 0
-      ? ["PROMPTWARE_SCAN_INCOMPLETE"]
+      ? ["PROMPTWARE_SCAN_INCOMPLETE" as const]
       : []),
   ];
   return [...new Set(blockers)].sort(compareStrings);
@@ -820,13 +829,13 @@ function normalizeHttpsSource(
     });
   }
   if (sourceType === "git_url") {
-    if (!TRUSTED_GIT_FORGE_HOSTS.has(host)) {
+    if (!isTrustedGitForgeUrl(parsed)) {
       throw new ValidationError({
         field: "sourceRef",
         message: "Production Git review supports exact trusted public forge hosts only.",
       });
     }
-    if (parsed.pathname.split("/").filter(Boolean).length < 2) {
+    if (!namesGitRepository(parsed.pathname)) {
       throw new ValidationError({ field: "sourceRef", message: "Git source URL does not identify a repository." });
     }
   }

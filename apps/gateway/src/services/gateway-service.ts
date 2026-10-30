@@ -3966,6 +3966,9 @@ export class GatewayService {
         features: this,
         deploymentProfile: () => this.config.assistant.deploymentProfile,
         rootDir: this.config.rootDir,
+        skillHub: composed.skills,
+        skillHubSnapshots: this.storage.skillHubSnapshots,
+        skillSources: this.skillImportService,
       }),
     };
   }

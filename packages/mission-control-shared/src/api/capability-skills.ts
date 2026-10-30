@@ -1,6 +1,11 @@
 import type {
   CapabilitySkillActionOutcome,
   CapabilitySkillDetail,
+  CapabilitySkillDiscoverResponse,
+  CapabilitySkillInstall,
+  CapabilitySkillInstallsResponse,
+  CapabilitySkillOperationRequest,
+  CapabilitySkillReviewRequest,
   CapabilitySkillStateRequest,
   CapabilitySkillsResponse,
   CapabilitySkillUsageResponse,
@@ -58,6 +63,65 @@ export async function setCapabilitySkillState(
   input: CapabilitySkillStateRequest,
 ): Promise<CapabilitySkillActionOutcome> {
   return request<CapabilitySkillActionOutcome>("/api/v1/capabilities/skills/state", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * The skills on offer to install. With no term the Gateway answers GoatCitadel's own packs and the curated listings and
+ * goes nowhere online; with `q` (2 to 100 characters) it also searches the marketplaces. `q` and `refresh` are sent
+ * only when asked, and an empty term is not a term.
+ */
+export async function fetchCapabilitySkillDiscover(
+  workspaceId: string,
+  options: { q?: string; refresh?: boolean; signal?: AbortSignal } = {},
+): Promise<CapabilitySkillDiscoverResponse> {
+  const query = new URLSearchParams({ workspaceId });
+  if (options.q) query.set("q", options.q);
+  if (options.refresh) query.set("refresh", "true");
+  return request<CapabilitySkillDiscoverResponse>(`/api/v1/capabilities/skills/discover?${query}`, {
+    cache: "no-store",
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
+}
+
+/**
+ * The installs still on their way in, or stopped, in a workspace, and whether the operator's skip applies. With
+ * `snapshotId` the Gateway answers just that check at whatever step it is on (done included), or none.
+ */
+export async function fetchCapabilitySkillInstalls(
+  workspaceId: string,
+  options: { snapshotId?: string; signal?: AbortSignal } = {},
+): Promise<CapabilitySkillInstallsResponse> {
+  const query = new URLSearchParams({ workspaceId });
+  if (options.snapshotId) query.set("snapshotId", options.snapshotId);
+  return request<CapabilitySkillInstallsResponse>(`/api/v1/capabilities/skills/installs?${query}`, {
+    cache: "no-store",
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
+}
+
+/**
+ * Checks a source (one of GoatCitadel's packs, or an https Git address) and answers the checked skill. The request's
+ * own `idempotencyKey` makes a retry hand back the same check; the client adds the Idempotency-Key header every
+ * non-GET carries. A refused source is a 422 the caller reads from the error body.
+ */
+export async function reviewCapabilitySkill(input: CapabilitySkillReviewRequest): Promise<CapabilitySkillInstall> {
+  return request<CapabilitySkillInstall>("/api/v1/capabilities/skills/reviews", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * Asks for one install step of a checked skill. The outcome says whether the step's approval was granted already or
+ * waits for the operator. No field chooses the operator's skip; the Gateway decides it.
+ */
+export async function requestCapabilitySkillOperation(
+  input: CapabilitySkillOperationRequest,
+): Promise<CapabilitySkillActionOutcome> {
+  return request<CapabilitySkillActionOutcome>("/api/v1/capabilities/skills/operations", {
     method: "POST",
     body: JSON.stringify(input),
   });

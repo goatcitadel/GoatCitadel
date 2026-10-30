@@ -6,22 +6,27 @@ import { describe, expect, it } from "vitest";
 import { OPERATOR_SKILL_SKIP_NOTES } from "./capability-skill-actions-service.js";
 
 /**
- * The operator's skip for a skill switch resolves the skill's own `skill.lifecycle` approval as the operator, with a
- * recorded note, and only the Capabilities switch may do that (HX-402: the approval effect stays the only executor).
- * Any other production file that writes one of the skip notes, or that both asks for a skill approval and resolves
- * one, could approve on the operator's behalf, so this guard fails on it. So does any file but the Capabilities skill
- * route that calls the switch, and any file but its composition that builds one. The old skills routes, Chat's skill
+ * The operator's skip for a skill switch or a skill install step resolves the skill's own `skill.lifecycle` approval, or
+ * the install step's `skill_hub.lifecycle` approval, as the operator, with a recorded note, and only the Capabilities
+ * skill actions may do that (HX-402: the approval effect stays the only executor). Any other production file that
+ * writes one of the skip notes, or that both asks for a skill or Skill Hub approval and resolves one, could approve on
+ * the operator's behalf, so this guard fails on it. So does any file but the Capabilities skill route that calls the
+ * actions, and any file but their composition that builds them. The old skills and Skill Hub routes, Chat's skill
  * commands, `change.request` and tool calls never skip.
  */
 const SKIP_SERVICE = "apps/gateway/src/services/capability-skill-actions-service.ts";
 const NOTE_TOKENS = ["OPERATOR_SKILL_SKIP_NOTES", ...Object.values(OPERATOR_SKILL_SKIP_NOTES)];
-/** The calls that ask the skill state owner for a `skill.lifecycle` approval. */
+/**
+ * The calls that ask the skill state owner for a `skill.lifecycle` approval, and the one that asks Skill Hub's approval
+ * owner for a `skill_hub.lifecycle` approval (by its composed name, not the generic `createApproval`).
+ */
 const REQUEST_METHODS = new Set([
   "setSkillState",
   "bulkSetSkillState",
   "requestSkillStateApproval",
   "requestSkillStateBulkApproval",
   "requestActivationPolicyApproval",
+  "createSkillHubApproval",
 ]);
 const RESOLVE_METHOD = "resolveApproval";
 const REQUEST_CALL = new RegExp(`\\.(?:${[...REQUEST_METHODS].join("|")})\\(`, "u");
@@ -39,8 +44,11 @@ const OWNER_FACADES = new Set([
 /** The one route that may call the composed switch, and the one composition that may build it. */
 const SWITCH_ROUTE = "apps/gateway/src/routes/capability-skills.ts";
 const SWITCH_COMPOSITION = "apps/gateway/src/services/capability-skills-composition.ts";
-/** A call of the composed switch, or a read of it off the composed services (the route reads it, then calls it). */
-const SWITCH_CALL = /\bactions\??\.setState\(|\bcapabilitySkills\??\.actions\b/u;
+/**
+ * A call of the composed switch or install steps (or the source check that starts them), or a read of them off the
+ * composed services (the route reads them, then calls them).
+ */
+const SWITCH_CALL = /\bactions\??\.(?:setState|checkSource|requestStep)\(|\bcapabilitySkills\??\.actions\b/u;
 const SWITCH_CONSTRUCTION = /\bnew\s+CapabilitySkillActionsService\b/u;
 const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", "build", "coverage", "out", "artifacts"]);
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
@@ -76,6 +84,12 @@ describe("Capabilities skill switch skip guard", () => {
       expect(file?.content, path).toMatch(REQUEST_CALL);
       expect(file?.content, path).toMatch(RESOLVE_CALL);
     }
+    // The install steps ask Skill Hub's approval owner through the composition, so the Hub rule is exercised too.
+    for (const path of [SKIP_SERVICE, SWITCH_COMPOSITION]) {
+      expect(inventory.find((item) => item.relativePath === path)?.content, path).toMatch(
+        /\.createSkillHubApproval\(/u,
+      );
+    }
     expect(() => assertOnlySwitchResolvesItsRequest(inventory)).not.toThrow();
   });
 
@@ -101,11 +115,17 @@ describe("Capabilities skill switch skip guard", () => {
           relativePath: "apps/gateway/src/routes/skills.ts",
           content: "const { actions } = composed;\nawait actions.setState(body);",
         },
+        // The old Skill Hub routes reusing the install steps, so their operations would skip too.
+        {
+          relativePath: "apps/gateway/src/services/skills-route-service.ts",
+          content: "return await this.actions.requestStep({ ...input, actorId });",
+        },
+        { relativePath: "apps/gateway/src/services/chat-skill-hub.ts", content: "await actions?.checkSource(input);" },
         // Something else's own setState is not the switch.
         { relativePath: "apps/mission-control-next/src/cockpit/store.ts", content: "store.setState({ open: true });" },
       ]),
     ).toThrow(
-      "The Capabilities skill switch is called outside its route: apps/gateway/src/services/chat-command-service.ts, apps/gateway/src/routes/skills.ts",
+      "The Capabilities skill switch is called outside its route: apps/gateway/src/services/chat-command-service.ts, apps/gateway/src/routes/skills.ts, apps/gateway/src/services/skills-route-service.ts, apps/gateway/src/services/chat-skill-hub.ts",
     );
   });
 
@@ -163,6 +183,30 @@ describe("Capabilities skill switch skip guard", () => {
       ]),
     ).toThrow(
       "A skill approval is resolved by code that also asks for it, outside the Capabilities skill switch: apps/gateway/src/services/gateway-service.ts, apps/gateway/src/routes/skills.ts",
+    );
+  });
+
+  it("names the offending file when anything else asks for a Skill Hub approval and resolves one", () => {
+    const hubSkip = [
+      "async function install(skills: any, approvals: any, input: any) {",
+      "  const created = await skills.createSkillHubApproval(input);",
+      "  await approvals.resolveApproval(created.approval.approvalId, { decision: 'approve', resolvedBy: 'x' });",
+      "}",
+    ].join("\n");
+    const separateFunctions = [
+      "const ask = (skillHub: any, input: any) => skillHub.createSkillHubApproval(input);",
+      "const approve = (approvals: any, id: string) => approvals.resolveApproval(id, { decision: 'approve' });",
+    ].join("\n");
+    expect(() =>
+      assertOnlySwitchResolvesItsRequest([
+        { relativePath: SKIP_SERVICE, content: hubSkip },
+        { relativePath: "apps/gateway/src/services/capability-skills-composition.ts", content: separateFunctions },
+        // The old Skill Hub operations route approving its own request would skip without the setting.
+        { relativePath: "apps/gateway/src/routes/skills.ts", content: hubSkip },
+        { relativePath: "apps/gateway/src/services/skills-route-service.ts", content: separateFunctions },
+      ]),
+    ).toThrow(
+      "A skill approval is resolved by code that also asks for it, outside the Capabilities skill switch: apps/gateway/src/routes/skills.ts, apps/gateway/src/services/skills-route-service.ts",
     );
   });
 });

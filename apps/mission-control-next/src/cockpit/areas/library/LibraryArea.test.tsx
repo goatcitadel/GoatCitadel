@@ -28,9 +28,6 @@ vi.mock("./MeshCapabilityPublications", () => ({
     <div>mesh publications in {workspaceId}</div>
   ),
 }));
-vi.mock("./LibrarySkillPacks", () => ({
-  LibrarySkillPacks: ({ workspaceId }: { workspaceId: string }) => <div>skill packs in {workspaceId}</div>,
-}));
 vi.mock("../settings/CitadelOverviewSettings", () => ({
   CitadelOverviewSettings: ({ citadelId }: { citadelId: string }) => <p>Overview for {citadelId}</p>,
 }));

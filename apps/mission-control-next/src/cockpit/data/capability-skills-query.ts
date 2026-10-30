@@ -1,6 +1,8 @@
 import { queryOptions } from "@tanstack/react-query";
 import {
   fetchCapabilitySkillDetail,
+  fetchCapabilitySkillDiscover,
+  fetchCapabilitySkillInstalls,
   fetchCapabilitySkillUsage,
   fetchCapabilitySkills,
 } from "@goatcitadel/mission-control-shared/api/capability-skills";
@@ -38,5 +40,45 @@ export function skillDetailQuery(workspaceId: string, skillId: string) {
   return queryOptions({
     queryKey: queryKeys.capabilitySkillDetail(workspaceId, skillId),
     queryFn: ({ signal }) => fetchCapabilitySkillDetail(workspaceId, skillId, { signal }),
+  });
+}
+
+/**
+ * The skills on offer to install. `q` is the search term the Gateway should search for, or empty for the list it gives
+ * without one (packs and curated listings, nothing online). Only a term of two or more characters may be passed: the
+ * Gateway refuses a shorter one. While a new term loads, the last list of the same workspace stands in for it
+ * (`isPlaceholderData`), so the list and its buttons stay on screen; another workspace's list never does, because its
+ * installed marks are that workspace's.
+ */
+export function skillDiscoverQuery(workspaceId: string, q: string) {
+  return queryOptions({
+    queryKey: queryKeys.capabilitySkillDiscover(workspaceId, q),
+    queryFn: ({ signal }) => fetchCapabilitySkillDiscover(workspaceId, { ...(q ? { q } : {}), signal }),
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[2] === workspaceId ? previous : undefined),
+  });
+}
+
+/**
+ * The installs still on their way in, with whether the operator's skip applies. Every observer of this key must use
+ * these options, for the same reason as the list.
+ */
+export function skillInstallsQuery(workspaceId: string) {
+  return queryOptions({
+    queryKey: queryKeys.capabilitySkillInstalls(workspaceId),
+    queryFn: ({ signal }) => fetchCapabilitySkillInstalls(workspaceId, { signal }),
+  });
+}
+
+/**
+ * One checked skill at whatever step its install is on (done included), or `undefined` when the workspace's newest
+ * checks don't hold it. The install panel reads it when an address names a check it isn't following already.
+ */
+export function skillInstallQuery(workspaceId: string, snapshotId: string) {
+  return queryOptions({
+    queryKey: queryKeys.capabilitySkillInstall(workspaceId, snapshotId),
+    queryFn: async ({ signal }) =>
+      (await fetchCapabilitySkillInstalls(workspaceId, { snapshotId, signal })).installs.find(
+        (install) => install.snapshotId === snapshotId,
+      ) ?? null,
   });
 }

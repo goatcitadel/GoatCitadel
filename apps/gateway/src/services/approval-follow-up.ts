@@ -1,4 +1,4 @@
-import type { ApprovalEffectRecord, ApprovalRequest } from "@goatcitadel/contracts";
+import { hasSealedApprovalLinkage, type ApprovalEffectRecord, type ApprovalRequest } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { withCanonicalApprovalOutcome } from "./approval-canonical-outcome.js";
 import { deriveApprovalResolutionEffectsResult } from "./approval-resolution-effects-service.js";
@@ -27,7 +27,9 @@ export async function buildApprovalResolveResult(
   const resolutionEffects = deriveApprovalResolutionEffectsResult(effects);
   const wakeRunId = resolutionEffects?.approvalWaitDurableRunId;
   let approval = approvalInput;
-  if (wakeRunId && approval.linkage?.durableRunId !== wakeRunId) {
+  // A sealed linkage (the Skill Hub lifecycle approval) stays exactly as its binding holds it; the wake run is in the
+  // result's `durableRunId` and the wait-run reservation (Ruling R56).
+  if (wakeRunId && !hasSealedApprovalLinkage(approval.kind) && approval.linkage?.durableRunId !== wakeRunId) {
     approval = await storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: wakeRunId });
   }
   approval = await withCanonicalApprovalOutcome(storage, withApprovalFollowUp(approval, effects));

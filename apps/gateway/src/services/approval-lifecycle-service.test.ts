@@ -36,7 +36,7 @@ import {
   ApprovalEffectsService,
   deriveApprovalResolutionEffectsResult,
 } from "./approval-resolution-effects-service.js";
-import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 
 describe("approval lifecycle service", () => {
   it("durably withdraws sibling approvals on denial and rejects late or duplicate decisions", async () => {
@@ -392,7 +392,9 @@ describe("approval lifecycle service", () => {
 
   it("leaves another turn's approval untouched during cancellation", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-other" } });
-    host.storage.approvals.listPendingBySessionPage.mockReturnValue({ items: [host.storage.approvals.get("approval-1")] } as never);
+    host.storage.approvals.listPendingBySessionPage.mockReturnValue({
+      items: [host.storage.approvals.get("approval-1")],
+    } as never);
     await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
@@ -400,10 +402,12 @@ describe("approval lifecycle service", () => {
   it("skips a foreign approval with invalid lineage and still withdraws the cancelled turn's approval", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
     const approval = host.storage.approvals.get("approval-1");
-    host.storage.approvals.listPendingBySessionPage.mockReturnValue({ items: [
-      { ...approval, approvalId: "approval-bad", linkage: { sessionId: "session-x", turnId: "turn-bad" } },
-      approval,
-    ] } as never);
+    host.storage.approvals.listPendingBySessionPage.mockReturnValue({
+      items: [
+        { ...approval, approvalId: "approval-bad", linkage: { sessionId: "session-x", turnId: "turn-bad" } },
+        approval,
+      ],
+    } as never);
     host.storage.chatTurnTraces.get.mockImplementation((turnId: string) => {
       if (turnId === "turn-bad") return { turnId: "turn-bad", sessionId: "session-elsewhere" };
       throw new NotFoundError({ message: "missing" });
@@ -432,11 +436,13 @@ describe("approval lifecycle service", () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
     const approval = host.storage.approvals.get("approval-1");
     const badLinkage = { sessionId: "session-x", turnId: "turn-bad" };
-    host.storage.approvals.listPendingBySessionPage.mockReturnValue({ items: [
-      { ...approval, approvalId: "approval-bad-1", linkage: badLinkage },
-      { ...approval, approvalId: "approval-bad-2", linkage: badLinkage },
-      approval,
-    ] } as never);
+    host.storage.approvals.listPendingBySessionPage.mockReturnValue({
+      items: [
+        { ...approval, approvalId: "approval-bad-1", linkage: badLinkage },
+        { ...approval, approvalId: "approval-bad-2", linkage: badLinkage },
+        approval,
+      ],
+    } as never);
     host.storage.chatTurnTraces.get.mockImplementation((turnId: string) => {
       if (turnId === "turn-bad") return { turnId: "turn-bad", sessionId: "session-elsewhere" };
       throw new NotFoundError({ message: "missing" });
@@ -455,9 +461,9 @@ describe("approval lifecycle service", () => {
   it("does not re-append the lineage-skipped event on a repeated cancellation", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
     const approval = host.storage.approvals.get("approval-1");
-    host.storage.approvals.listPendingBySessionPage.mockReturnValue({ items: [
-      { ...approval, approvalId: "approval-bad", linkage: { sessionId: "session-x", turnId: "turn-bad" } },
-    ] } as never);
+    host.storage.approvals.listPendingBySessionPage.mockReturnValue({
+      items: [{ ...approval, approvalId: "approval-bad", linkage: { sessionId: "session-x", turnId: "turn-bad" } }],
+    } as never);
     host.storage.chatTurnTraces.get.mockImplementation((turnId: string) => {
       if (turnId === "turn-bad") return { turnId: "turn-bad", sessionId: "session-elsewhere" };
       throw new NotFoundError({ message: "missing" });
@@ -492,10 +498,9 @@ describe("approval lifecycle service", () => {
   it("resolves each foreign turn owner once per cancellation", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-2", turnId: "turn-2" } });
     const approval = host.storage.approvals.get("approval-1");
-    host.storage.approvals.listPendingBySessionPage.mockReturnValue({ items: [
-      approval,
-      { ...approval, approvalId: "approval-2" },
-    ] } as never);
+    host.storage.approvals.listPendingBySessionPage.mockReturnValue({
+      items: [approval, { ...approval, approvalId: "approval-2" }],
+    } as never);
     host.storage.chatTurnTraces.get.mockImplementation(() => {
       throw new NotFoundError({ message: "missing" });
     });
@@ -515,7 +520,9 @@ describe("approval lifecycle service", () => {
 
   it("still propagates non-conflict errors from a foreign approval's lineage", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-2", turnId: "turn-2" } });
-    host.storage.approvals.listPendingBySessionPage.mockReturnValue({ items: [host.storage.approvals.get("approval-1")] } as never);
+    host.storage.approvals.listPendingBySessionPage.mockReturnValue({
+      items: [host.storage.approvals.get("approval-1")],
+    } as never);
     host.storage.chatTurnTraces.get.mockImplementation(() => {
       throw new Error("storage offline");
     });
@@ -573,7 +580,9 @@ describe("approval lifecycle service", () => {
 
   it("rolls back the rejection if its effect ledger cannot commit", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
-    host.storage.approvals.listPendingBySessionPage.mockReturnValue({ items: [host.storage.approvals.get("approval-1")] } as never);
+    host.storage.approvals.listPendingBySessionPage.mockReturnValue({
+      items: [host.storage.approvals.get("approval-1")],
+    } as never);
     host.enqueueApprovalResolutionEffects.mockRejectedValueOnce(new Error("effect commit failed") as never);
     await expect(
       host.storage.runImmediateTransaction(() =>
@@ -687,6 +696,40 @@ describe("approval lifecycle service", () => {
     expect(host.storage.remoteActionTokens.create).not.toHaveBeenCalled();
     expect(host.enqueueApprovalObservabilityEffects).not.toHaveBeenCalled();
     expect(host.enqueueApprovalRemoteTokenDelivery).not.toHaveBeenCalled();
+  });
+
+  it("refuses a remote token for an approval whose linkage is sealed, and issues one for any other kind", async () => {
+    // A token's resolve adds its connector and token ids to the linkage, which a Skill Hub approval's binding refuses.
+    const sealed = createApprovalHarness({
+      approvalKind: "skill_hub.lifecycle",
+      approvalLinkage: { workspaceId: "ws-1" },
+    });
+    sealed.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
+    sealed.storage.remoteActionTokens.create = vi.fn(() => createRemoteActionTokenRecord("token-sealed"));
+
+    const refusal = await createApprovalRemoteActionToken(sealed, "approval-1", { connectorId: "connector-1" }).catch(
+      (error: unknown) => error,
+    );
+    expect(refusal).toBeInstanceOf(ValidationError);
+    expect((refusal as Error).message).toBe(
+      "Approval approval-1 can only be decided in GoatCitadel and can't issue a remote action token.",
+    );
+    expect(sealed.storage.remoteActionTokens.createWithTtl).not.toHaveBeenCalled();
+    expect(sealed.enqueueApprovalObservabilityEffects).not.toHaveBeenCalled();
+    expect(sealed.enqueueApprovalRemoteTokenDelivery).not.toHaveBeenCalled();
+    expect(sealed.storage.approvals.get("approval-1")).toMatchObject({
+      status: "pending",
+      linkage: { workspaceId: "ws-1" },
+    });
+
+    for (const approvalKind of ["shell.exec", "skill.lifecycle", "capability.lifecycle"]) {
+      const host = createApprovalHarness({ approvalKind });
+      host.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
+      host.storage.remoteActionTokens.create = vi.fn(() => createRemoteActionTokenRecord(`token-${approvalKind}`));
+      await expect(
+        createApprovalRemoteActionToken(host, "approval-1", { connectorId: "connector-1" }),
+      ).resolves.toMatchObject({ approvalId: "approval-1", token: expect.stringMatching(/^grat_/u) });
+    }
   });
 
   it("rolls back remote-token issuance when the approval expires during locked observability work", async () => {

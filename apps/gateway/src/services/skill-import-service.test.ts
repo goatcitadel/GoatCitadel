@@ -313,6 +313,208 @@ describe("SkillImportService lookup", () => {
   });
 });
 
+describe("SkillImportService source catalog", () => {
+  let rootDir: string;
+
+  const marketplaces = () =>
+    vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      const body =
+        url === "https://agentskill.sh/"
+          ? '<a href="/skills/zebra-planner">Zebra</a>'
+          : '<a href="/skills/quokka-notes">Quokka</a>';
+      return new Response(`<html><body>${body}</body></html>`, { status: 200 });
+    });
+
+  beforeEach(() => {
+    rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-skill-catalog-"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("lists the curated entries and the default providers without a network call when asked not to", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("the marketplaces were asked");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+
+    const offline = await service.listSources(undefined, 100, { network: false });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(offline.providers.map((provider) => provider.provider)).toEqual(["local", "github", "clawhub", "external"]);
+    expect(offline.providers.every((provider) => provider.status === "ok")).toBe(true);
+    // All of the curated entries, not the first 25 of them.
+    expect(offline.items.length).toBeGreaterThan(25);
+    expect(offline.items.map((item) => item.name)).toContain("Chrome Devtools Mcp");
+    expect(offline.items.some((item) => item.sourceUrl.startsWith("https://agentskill.sh/skills/zebra"))).toBe(false);
+  });
+
+  it("still reads the marketplaces by default, so the sources route is unchanged", async () => {
+    const fetchMock = marketplaces();
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+
+    const listed = await service.listSources("zebra", 5);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(listed.items[0]).toMatchObject({ name: "Zebra Planner" });
+  });
+
+  it("ranks one catalog read for each term, as a search would, without reading again", async () => {
+    const fetchMock = marketplaces();
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+
+    const catalog = await service.readSourceCatalog();
+    const zebra = service.presentSourceCatalog(catalog, "Zebra", 5);
+    const quokka = service.presentSourceCatalog(catalog, " quokka ", 5);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(zebra.query).toBe("zebra");
+    expect(zebra.items[0]).toMatchObject({ name: "Zebra Planner" });
+    expect(zebra.items.map((item) => item.name)).not.toContain("Quokka Notes");
+    expect(quokka.items[0]).toMatchObject({ name: "Quokka Notes" });
+    // A search over the same catalog answers what the one-call search does.
+    const direct = await service.listSources("zebra", 5);
+    expect(zebra.items.map((item) => item.canonicalKey)).toEqual(direct.items.map((item) => item.canonicalKey));
+    // Ranking leaves the catalog it was given as it was.
+    expect(service.presentSourceCatalog(catalog, undefined, 100).items).toHaveLength(catalog.items.length);
+  });
+
+  it("keeps only a marketplace's own https links to its listing pages", async () => {
+    const hrefs = [
+      // Kept: relative to the marketplace, and absolute on its own host (www. included).
+      "/skills/zebra-planner",
+      "https://skillsmp.com/skills/quokka-notes",
+      "https://www.skillsmp.com/docs/getting-started",
+      "https://agentskill.sh/Learn/intro",
+      "https://agentskill.sh/skill/single-form",
+      // Kept: the default port is no port at all.
+      "https://agentskill.sh:443/skills/default-port",
+      // Dropped: on the marketplace's own host, but with credentials or another port.
+      "https://user@agentskill.sh/skills/hostile-own-host-user",
+      "https://user:secret@www.skillsmp.com/skills/hostile-own-host-password",
+      "https://agentskill.sh:8443/skills/hostile-port",
+      "https://skillsmp.com:80/skills/hostile-http-port",
+      // Dropped: a backslash reads as a slash, so the host is the one after it.
+      "https:\\\\evil.example\\agentskill.sh\\skills\\hostile-backslash",
+      "/\\evil.example/skills/hostile-backslash-relative",
+      "\\\\evil.example\\skills\\hostile-backslash-unc",
+      // Dropped: the marketplace's name only appears inside the link.
+      "javascript:void(agentskill.sh/skills/hostile-script)",
+      "data:text/html,agentskill.sh/skills/hostile-data",
+      "https://evil.example/agentskill.sh/skills/hostile-path",
+      "https://evil.example/skillsmp.com/skills/hostile-other",
+      "//evil.example/agentskill.sh/skills/hostile-relative",
+      "https://agentskill.sh.evil.example/skills/hostile-suffix",
+      "https://notagentskill.sh/skills/hostile-prefix",
+      "https://user:secret@evil.example/skills/hostile-credentials",
+      // Dropped: not https, or not a listing page.
+      "http://agentskill.sh/skills/plain-http",
+      "https://agentskill.sh/other/skills/not-first-segment",
+      "https://agentskill.sh/skills-extra/lookalike-segment",
+      "https://agentskill.sh/",
+      "#top",
+      "mailto:someone@agentskill.sh",
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(`<html><body>${hrefs.map((href) => `<a href="${href}">x</a>`).join("")}</body></html>`),
+      ),
+    );
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+
+    const catalog = await service.readSourceCatalog();
+
+    const marketplaceUrls = catalog.items
+      .filter((item) => item.sourceProvider === "agentskill" || item.sourceProvider === "skillsmp")
+      .map((item) => item.sourceUrl);
+    expect(marketplaceUrls).toEqual(
+      expect.arrayContaining([
+        "https://agentskill.sh/skills/zebra-planner",
+        "https://skillsmp.com/skills/quokka-notes",
+        "https://www.skillsmp.com/docs/getting-started",
+        "https://agentskill.sh/Learn/intro",
+        "https://agentskill.sh/skill/single-form",
+        "https://agentskill.sh/skills/default-port",
+      ]),
+    );
+    expect(marketplaceUrls.filter((url) => url.includes("hostile") || url.includes("lookalike"))).toEqual([]);
+    expect(marketplaceUrls.some((url) => /^(?:javascript|data|mailto):/u.test(url))).toBe(false);
+    expect(marketplaceUrls.some((url) => url.startsWith("http://"))).toBe(false);
+    expect(marketplaceUrls.some((url) => url.includes("plain-http") || url.includes("not-first-segment"))).toBe(false);
+    expect(marketplaceUrls.every((url) => new URL(url).protocol === "https:")).toBe(true);
+    // Every marketplace listing (curated or read) is on that marketplace's own host.
+    for (const item of catalog.items.filter((entry) => entry.sourceProvider === "agentskill")) {
+      expect(new URL(item.sourceUrl).hostname.replace(/^www\./u, ""), item.sourceUrl).toBe("agentskill.sh");
+    }
+    for (const item of catalog.items.filter((entry) => entry.sourceProvider === "skillsmp")) {
+      expect(new URL(item.sourceUrl).hostname.replace(/^www\./u, ""), item.sourceUrl).toBe("skillsmp.com");
+    }
+  });
+
+  it("lists the installed skills' recorded sources, leaving out a folder with no readable source file", async () => {
+    const extraRoot = path.join(rootDir, "skills", "extra");
+    fs.mkdirSync(path.join(extraRoot, "git-skill"), { recursive: true });
+    fs.writeFileSync(
+      path.join(extraRoot, "git-skill", "source.json"),
+      JSON.stringify({
+        candidate: {
+          sourceRef: "https://github.com/example/git-skill.git",
+          sourceType: "git_url",
+          repositoryUrl: "https://github.com/example/git-skill",
+        },
+        provenance: { sourceRef: "https://github.com/example/git-skill.git", sourceType: "git_url" },
+      }),
+    );
+    fs.mkdirSync(path.join(extraRoot, "pack-skill"), { recursive: true });
+    fs.writeFileSync(
+      path.join(extraRoot, "pack-skill", "source.json"),
+      JSON.stringify({ provenance: { sourceRef: "/srv/goat/skills/import-packs/himalaya", sourceType: "local_path" } }),
+    );
+    // A hand-edited manifest whose values aren't strings is read as having no recorded source, never as a failure.
+    fs.mkdirSync(path.join(extraRoot, "odd-types"), { recursive: true });
+    fs.writeFileSync(
+      path.join(extraRoot, "odd-types", "source.json"),
+      JSON.stringify({ candidate: { repositoryUrl: 5, sourceType: 7, canonicalKey: "odd" } }),
+    );
+    fs.mkdirSync(path.join(extraRoot, "no-source"), { recursive: true });
+    fs.mkdirSync(path.join(extraRoot, "broken"), { recursive: true });
+    fs.writeFileSync(path.join(extraRoot, "broken", "source.json"), "{bad json");
+    fs.writeFileSync(path.join(extraRoot, "a-file.txt"), "not a skill directory");
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+
+    const installed = service.listInstalledSources();
+
+    expect(installed).toHaveLength(3);
+    expect(installed).toContainEqual({ skillName: "odd-types", sourceRefs: [] });
+    await expect(service.listSources(undefined, 100, { network: false })).resolves.toMatchObject({ query: undefined });
+    expect(installed).toContainEqual({
+      skillName: "git-skill",
+      sourceType: "git_url",
+      sourceRefs: ["https://github.com/example/git-skill", "https://github.com/example/git-skill.git"],
+    });
+    expect(installed).toContainEqual({
+      skillName: "pack-skill",
+      sourceType: "local_path",
+      sourceRefs: ["/srv/goat/skills/import-packs/himalaya"],
+    });
+  });
+
+  it("lists no installed sources when nothing is installed", () => {
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+
+    expect(service.listInstalledSources()).toEqual([]);
+  });
+});
+
 describe("SkillImportService materialized review scope", () => {
   it("scrubs inherited Git configuration and permits only exact HTTPS transport without redirects", () => {
     const inherited = {

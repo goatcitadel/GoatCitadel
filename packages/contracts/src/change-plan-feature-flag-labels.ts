@@ -25,6 +25,6 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS: Partial<
   settingsApprovalSkipEnabled: {
     label: "Apply my Settings and Capabilities changes without asking first",
     description:
-      "When on, a change you save through the Settings forms, a connector you install from Capabilities, or a skill you switch on from Capabilities applies right away instead of waiting for your approval. Credential changes and change requests from Chat still need approval. Turning a skill off, or pausing one that is on, from Capabilities applies right away even when this is off.",
+      "When on, a change you save through the Settings forms, a connector you install from Capabilities, or a skill you switch on from Capabilities applies right away instead of waiting for your approval, and a skill you install from Capabilities installs and switches on without asking. Credential changes and change requests from Chat still need approval. Turning a skill off, or pausing one that is on, from Capabilities applies right away even when this is off.",
   },
 };

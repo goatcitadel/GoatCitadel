@@ -28,6 +28,74 @@ export type SkillHubOperationKind = (typeof SKILL_HUB_OPERATION_KINDS)[number];
 export type SkillHubOperationSettlementDisposition = (typeof SKILL_HUB_OPERATION_SETTLEMENT_DISPOSITIONS)[number];
 
 /**
+ * Whether an approval's linkage is sealed by its own binding, so the approvals owner must store it exactly as given:
+ * no request attribution (`correlationId`, `traceId`) and no wait-run id (`durableRunId`) merged in. Today that is the
+ * Skill Hub lifecycle approval: its operation intent is bound to the approval's exact linkage (`workspaceId`, plus
+ * `sessionId`/`turnId` when given), both in TypeScript (the operator's creation check and the operation repository's
+ * approval binding) and in the database (the trigger `trg_skill_hub_operation_intents_approval_binding`, in SQLite and in
+ * Postgres, where it runs the function `gc_validate_skill_hub_intent_approval`). Its wait run is still reserved, and found through the
+ * wait-run mapping instead (Ruling R56). Such an approval can't be resolved through a remote action token either, whose
+ * resolve adds the token's ids to the linkage: issuing one is refused (Ruling R61).
+ */
+export function hasSealedApprovalLinkage(kind: string): boolean {
+  return kind === SKILL_HUB_LIFECYCLE_APPROVAL_KIND;
+}
+
+/**
+ * The public forges production Git review admits, as exact lower-case hosts (no `www.`). Hosted bundles go through the
+ * guarded fetch allowlist instead; Git materialization uses the system Git client, which can't reuse that dispatcher,
+ * so only forges whose DNS the submitted source doesn't control are trusted.
+ */
+export const TRUSTED_GIT_FORGE_HOSTS: readonly string[] = ["bitbucket.org", "codeberg.org", "github.com", "gitlab.com"];
+
+/**
+ * Whether a Git address is `https` on one of `TRUSTED_GIT_FORGE_HOSTS`, on the default port: the forge's own Git
+ * service, not another one on its host. Review and anything that offers or checks a Git install ask the same.
+ */
+export function isTrustedGitForgeUrl(url: URL): boolean {
+  return url.protocol === "https:" && url.port === "" && TRUSTED_GIT_FORGE_HOSTS.includes(url.hostname.toLowerCase());
+}
+
+/**
+ * Whether a Git address's path names a repository, as production Git review requires: an owner and a repository, so at
+ * least two path segments (`/owner/repo`, `/owner/repo/tree/main/skills/x`; not `/owner`). Review refuses the rest, so
+ * anything that offers an install of a Git address asks the same.
+ */
+export function namesGitRepository(pathname: string): boolean {
+  return pathname.split("/").filter(Boolean).length >= 2;
+}
+
+/**
+ * The blocker codes an operator can meet on a Skill Hub source: the review's own (`standardizedBlockers`), every
+ * governance code a stored snapshot can carry (`SkillGovernanceBlockerCode`: the sticky audit floor, the permission
+ * diff and version drift), and the install guard's "already there" codes. A snapshot or guard can hold other codes;
+ * those pass through as stored, and this list only names the ones with their own meaning.
+ */
+export const SKILL_HUB_BLOCKER_CODES = [
+  "CONDITIONAL_REVIEW_REQUIRED",
+  "PROMPT_INJECTION_DETECTED",
+  "PROMPTWARE_SCAN_INCOMPLETE",
+  "REFERENCE_ONLY_SOURCE",
+  "SUSPICIOUS_SCRIPT_INDICATOR",
+  "AUDIT_MISSING",
+  "AUDIT_DOWNGRADE",
+  "UPSTREAM_VERSION_BYTE_DRIFT",
+  "PERMISSION_WIDENED",
+  "PERMISSION_UNKNOWN",
+  "FOREIGN_SCOPE",
+  "MALFORMED_SOURCE_REFERENCE",
+  "SECRET_LIKE_CONTENT",
+  "UNTRUSTED_CORRECTION_ORIGIN",
+  "VALIDATION_FAILED",
+  "CONFLICTING_CORRECTION",
+  "SOURCE_ALREADY_INSTALLED",
+  "CANDIDATE_ALREADY_EXISTS",
+  "RUNTIME_ALREADY_EXISTS",
+] as const;
+
+export type SkillHubBlockerCode = (typeof SKILL_HUB_BLOCKER_CODES)[number];
+
+/**
  * Immutable database linkage from an upstream review snapshot to the exact,
  * content-addressed bytes retained by the Gateway artifact store.
  */

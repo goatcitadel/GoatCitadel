@@ -64,6 +64,7 @@ import {
   buildToolEffectEvidence,
   canonicalJsonString,
   ConflictError,
+  hasSealedApprovalLinkage,
   isChatTurnTerminalStatus,
   NotFoundError,
   type CandidateLifecycleActionResult,
@@ -859,7 +860,7 @@ export class ApprovalEffectsService {
       );
     }
 
-    const approvalWaitRunId = await this.ctx.storage.approvalWaitRuns.getRunId(approval.approvalId);
+    const approvalWaitRunId = await this.readApprovalWaitRunId(approval.approvalId);
     if (approvalWaitRunId) {
       const delegatedScopeChildTurnId =
         approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND
@@ -1300,11 +1301,22 @@ export class ApprovalEffectsService {
     });
   }
 
+  /**
+   * The approval's reserved wait run. The wake always targets it, whatever the linkage says; wait-run materialization
+   * prefers the linkage's `durableRunId` and falls back to it only for a sealed linkage, which never carries that id.
+   */
+  private async readApprovalWaitRunId(approvalId: string): Promise<string | undefined> {
+    return await this.ctx.storage.approvalWaitRuns.getRunId(approvalId);
+  }
+
   public async enqueueApprovalWaitMaterialization(
     approval: ApprovalRequest,
     options: ApprovalEffectEnqueueOptions = {},
   ): Promise<ApprovalEffectRecord | undefined> {
-    const runId = asOptionalString(approval.linkage?.durableRunId);
+    // A sealed linkage (the Skill Hub lifecycle approval) never carries its wait run's id; its reservation does.
+    const runId =
+      asOptionalString(approval.linkage?.durableRunId) ??
+      (hasSealedApprovalLinkage(approval.kind) ? await this.readApprovalWaitRunId(approval.approvalId) : undefined);
     if (!runId) {
       return undefined;
     }

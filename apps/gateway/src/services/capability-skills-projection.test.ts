@@ -176,6 +176,38 @@ describe("skillOriginFor", () => {
   ] as const)("places %s", (_label, input, origin) => {
     expect(skillOriginFor(input, SHIPPED)).toBe(origin);
   });
+
+  // A pack switched on through Skill Hub records the Hub check it came from (its snapshot id), not the pack folder.
+  // It is GoatCitadel's own only when that check read one of this install's pack folders (Ruling R43).
+  describe("a pack switched on through Skill Hub", () => {
+    const hubInstalled = (name: string, snapshotId: string) => ({
+      skillId: `extra:${name}`,
+      source: "extra" as const,
+      dir: `/srv/goatcitadel/skills/extra/${name}`,
+      lifecycle: {
+        skillId: `extra:${name}`,
+        category: "community_imported" as const,
+        lifecycleState: "approved" as const,
+        trustLabel: "Approved upstream snapshot",
+        provenance: { source: "extra", sourceRef: snapshotId },
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+      },
+    });
+    const packChecks = new Set(["skill-hub-review-pack"]);
+
+    it.each([
+      ["from a check of GoatCitadel's own pack folder", hubInstalled("himalaya", "skill-hub-review-pack"), "built_in"],
+      ["from any other check, such as a Git repository", hubInstalled("himalaya", "skill-hub-review-git"), "imported"],
+      ["with a skill that isn't shipped", hubInstalled("pdf-tools", "skill-hub-review-pack"), "imported"],
+    ] as const)("reads %s", (_label, input, origin) => {
+      expect(skillOriginFor(input, SHIPPED, packChecks)).toBe(origin);
+    });
+
+    it("reads as imported when its check can't be told", () => {
+      expect(skillOriginFor(hubInstalled("himalaya", "skill-hub-review-pack"), SHIPPED)).toBe("imported");
+    });
+  });
 });
 
 describe("buildCapabilitySkillItems", () => {

@@ -740,7 +740,7 @@ export async function createApproval(
   const createInput = policyOutcome.elevatedRiskLevel
     ? { ...hookableInput, riskLevel: policyOutcome.elevatedRiskLevel }
     : hookableInput;
-  const approvalLinkage = host.approvalWaitRunService.buildApprovalLinkage(hookableInput.linkage);
+  const approvalLinkage = host.approvalWaitRunService.buildApprovalLinkage(hookableInput.linkage, hookableInput.kind);
   const transactionalCreateInput = approvalLinkage ? { ...createInput, linkage: approvalLinkage } : createInput;
 
   let approval!: ApprovalRequest;

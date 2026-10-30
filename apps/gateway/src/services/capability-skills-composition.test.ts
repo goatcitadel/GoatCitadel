@@ -1,13 +1,19 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { ApprovalListResponse, ApprovalRequest, SkillListItem } from "@goatcitadel/contracts";
+import type {
+  ApprovalListResponse,
+  ApprovalRequest,
+  SkillListItem,
+  SkillSourceListResponse,
+} from "@goatcitadel/contracts";
 import type { SkillUseCount } from "@goatcitadel/storage";
 import {
   composeCapabilitySkills,
   SHIPPED_EXTRA_SKILL_FOLDERS,
   type CapabilitySkillsOwners,
 } from "./capability-skills-composition.js";
+import { hubApproval, hubItem } from "./capability-skill-install.test-support.js";
 import {
   buildSkillLifecycleApprovalBinding,
   buildSkillLifecycleApprovalPayload,
@@ -89,6 +95,19 @@ function owners(overrides: Partial<CapabilitySkillsOwners> = {}): CapabilitySkil
     features: { isFeatureEnabled: vi.fn(async () => false) },
     deploymentProfile: () => "trusted_local",
     rootDir: ROOT_DIR,
+    skillHub: {
+      reviewSkillHubSource: vi.fn(async () => ({ snapshot: { snapshotId: "skill-hub-review-1" }, replayed: false })),
+      listSkillHub: vi.fn(async () => ({ items: [hubItem()] })),
+      createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("install_inactive", "pending") })),
+    },
+    skillHubSnapshots: { find: vi.fn(async () => undefined) },
+    skillSources: {
+      readSourceCatalog: vi.fn(async () => ({ providers: [], items: [] })),
+      presentSourceCatalog: vi.fn(
+        (): SkillSourceListResponse => ({ generatedAt: "2026-10-29T00:00:00.000Z", providers: [], items: [] }),
+      ),
+      listInstalledSources: vi.fn(() => []),
+    },
     ...overrides,
   };
 }
@@ -477,5 +496,164 @@ describe("composeCapabilitySkills", () => {
     expect(outcome).toEqual({ status: "waiting", approvalId: "approval-research" });
     expect(parts.approvals.getApproval).toHaveBeenCalledExactlyOnceWith("approval-research");
     expect(parts.approvals.resolveApproval).not.toHaveBeenCalled();
+  });
+});
+
+describe("composeCapabilitySkills install steps", () => {
+  it("checks a pack through Skill Hub's own review and reads the check back from its list", async () => {
+    const parts = owners();
+
+    const checked = await composeCapabilitySkills(parts).actions.checkSource({
+      workspaceId: "workspace-a",
+      source: { kind: "pack", packId: "himalaya" },
+      idempotencyKey: "check-1",
+      actorId: "operator-1",
+    });
+
+    expect(parts.skillHub.reviewSkillHubSource).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "workspace-a",
+      packId: "himalaya",
+      idempotencyKey: "check-1",
+      actorId: "operator-1",
+    });
+    expect(parts.skillHub.listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-a", limit: 100 });
+    expect(checked.install).toMatchObject({ step: "check_passed", source: { kind: "pack", packId: "himalaya" } });
+  });
+
+  it("asks Skill Hub's approval owner for a step, and the Inbox's resolve approves it with the setting on", async () => {
+    const parts = owners({ features: { isFeatureEnabled: vi.fn(async () => true) } });
+
+    const outcome = await composeCapabilitySkills(parts).actions.requestStep({
+      workspaceId: "workspace-a",
+      snapshotId: "skill-hub-review-1",
+      operationKind: "install_inactive",
+      actorId: "operator-1",
+    });
+
+    expect(outcome).toEqual({ status: "approved", approvalId: "approval-install_inactive" });
+    expect(parts.skillHub.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "workspace-a",
+      snapshotId: "skill-hub-review-1",
+      operationKind: "install_inactive",
+      actorId: "operator-1",
+    });
+    expect(parts.approvals.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-install_inactive", {
+      decision: "approve",
+      resolvedBy: "operator-1",
+      resolutionNote: "Applied without asking: your setting to skip approvals for your own changes is on.",
+    });
+    expect(parts.audit.append).toHaveBeenCalledExactlyOnceWith("approvals", {
+      event: "operator_approval_skipped",
+      approvalId: "approval-install_inactive",
+      kind: "skill_hub.lifecycle",
+      reason: "setting",
+      actorId: "operator-1",
+    });
+  });
+
+  it("lists the workspace's installs in progress from Skill Hub's list", async () => {
+    const parts = owners({
+      skillHub: {
+        reviewSkillHubSource: vi.fn(),
+        listSkillHub: vi.fn(async () => ({
+          items: [hubItem({ approvals: { install_inactive: hubApproval("install_inactive", "pending") } })],
+        })),
+        createSkillHubApproval: vi.fn(),
+      },
+    });
+
+    const response = await composeCapabilitySkills(parts).skills.installs("workspace-a");
+
+    expect(parts.skillHub.listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-a", limit: 100 });
+    expect(response.installs.map((install) => install.step)).toEqual(["waiting_install"]);
+    expect(response.operatorApprovalSkip).toBe(false);
+  });
+});
+
+describe("composeCapabilitySkills discover", () => {
+  it("lists the packs with no network call, through the source owner's offline read", async () => {
+    const parts = owners();
+
+    const response = await composeCapabilitySkills(parts).discover.list("workspace-a");
+
+    expect(parts.skillSources.readSourceCatalog).toHaveBeenCalledExactlyOnceWith({ network: false });
+    expect(parts.skillSources.presentSourceCatalog).toHaveBeenCalledExactlyOnceWith(
+      { providers: [], items: [] },
+      undefined,
+      100,
+    );
+    expect(response.items.map((item) => item.id)).toEqual(["pack:himalaya", "pack:github-cli"]);
+  });
+
+  it("marks a source installing from the same installs the Skills tab lists", async () => {
+    const parts = owners({
+      skillHub: {
+        reviewSkillHubSource: vi.fn(),
+        listSkillHub: vi.fn(async () => ({
+          items: [hubItem({ approvals: { install_inactive: hubApproval("install_inactive", "pending") } })],
+        })),
+        createSkillHubApproval: vi.fn(),
+      },
+    });
+
+    const response = await composeCapabilitySkills(parts).discover.list("workspace-a");
+
+    expect(parts.skillHub.listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-a", limit: 100 });
+    expect(response.items.find((item) => item.id === "pack:himalaya")).toMatchObject({ state: "installing" });
+  });
+
+  it("still lists when the installs can't be read, and writes the failure to the log", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const parts = owners({
+        skillHub: {
+          reviewSkillHubSource: vi.fn(),
+          listSkillHub: vi.fn(async () => {
+            throw new Error("storage is locked");
+          }),
+          createSkillHubApproval: vi.fn(),
+        },
+      });
+
+      const response = await composeCapabilitySkills(parts).discover.list("workspace-a");
+
+      expect(response.items.find((item) => item.id === "pack:himalaya")).toMatchObject({ state: "available" });
+      expect(JSON.stringify(response)).not.toContain("storage is locked");
+      // One line, from the read that failed; Discover adds none of its own.
+      const logged = stderr.mock.calls
+        .map(([chunk]) => String(chunk))
+        .filter((line) => line.includes("a Capabilities skills source could not be read"));
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain('"source":"skill_hub"');
+      expect(logged[0]).toContain("storage is locked");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("logs once an installs read that failed without logging itself", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const parts = owners({
+        skillHub: {
+          reviewSkillHubSource: vi.fn(),
+          // A check the installs can't be built from: it throws past the Hub read's own error handling.
+          listSkillHub: vi.fn(async () => ({ items: [{ snapshotId: "skill-hub-review-1" } as never] })),
+          createSkillHubApproval: vi.fn(),
+        },
+      });
+
+      const response = await composeCapabilitySkills(parts).discover.list("workspace-a");
+
+      expect(response.items.find((item) => item.id === "pack:himalaya")).toMatchObject({ state: "available" });
+      const logged = stderr.mock.calls
+        .map(([chunk]) => String(chunk))
+        .filter((line) => line.includes("a Capabilities skills source could not be read"));
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain('"source":"skill_hub"');
+      expect(logged[0]).toContain("TypeError");
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });

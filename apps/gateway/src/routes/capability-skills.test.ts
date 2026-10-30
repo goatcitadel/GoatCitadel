@@ -370,6 +370,9 @@ describe("capability skill state route", () => {
       appendApprovalAudit,
       deploymentProfile: () => "trusted_local",
       readApprovalSkipSetting: async () => true,
+      reviewSkillHubSource: vi.fn(),
+      listSkillHub: vi.fn(),
+      createSkillHubApproval: vi.fn(),
     });
     const { server } = await build(actions as unknown as Record<string, unknown>);
 

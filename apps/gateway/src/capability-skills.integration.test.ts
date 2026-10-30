@@ -9,6 +9,7 @@ import {
   WORKFLOW_SKILL_CAPTURE_MARKER,
   type CandidateSkillDetailRecord,
   type CapabilitySkillDetail,
+  type CapabilitySkillDiscoverResponse,
   type CapabilitySkillsResponse,
   type CapabilitySkillUsageResponse,
   type ChangePlanRecord,
@@ -319,6 +320,48 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
     );
     expect(published).toEqual([]);
     vi.restoreAllMocks();
+  });
+
+  it("lists the skills on offer to install with no network call, and names a marketplace that is down", async () => {
+    const published = recordPublishes();
+    const marketplaceCalls: string[] = [];
+    const realFetch = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("agentskill.sh") || url.includes("skillsmp.com")) {
+        marketplaceCalls.push(url);
+        throw new Error("marketplace offline");
+      }
+      return await realFetch(input, init);
+    });
+    try {
+      const offline = await inject("GET", `${SKILLS_URL}/discover?workspaceId=default`);
+      expect(offline.statusCode, offline.body).toBe(200);
+      expect(offline.headers["cache-control"]).toBe("no-store");
+      const listed = offline.json<CapabilitySkillDiscoverResponse>();
+      expect(marketplaceCalls).toEqual([]);
+      expect(listed.unavailableProviders).toEqual([]);
+      expect(listed.items.slice(0, 2)).toMatchObject([
+        { id: "pack:himalaya", state: "available", install: { kind: "pack", packId: "himalaya" } },
+        { id: "pack:github-cli", state: "available", install: { kind: "pack", packId: "github-cli" } },
+      ]);
+      expect(listed.items.length).toBeGreaterThan(20);
+      expect(listed.items.some((item) => item.id === "source:clawhub.ai/steipete/gog")).toBe(false);
+
+      // A search goes to the marketplaces; with both down the packs and curated listings still answer.
+      const searched = await inject("GET", `${SKILLS_URL}/discover?workspaceId=default&q=Mail`);
+      expect(searched.statusCode, searched.body).toBe(200);
+      const found = searched.json<CapabilitySkillDiscoverResponse>();
+      expect(marketplaceCalls).toHaveLength(2);
+      expect(found).toMatchObject({ query: "mail", unavailableProviders: ["AgentSkill", "SkillsMP"] });
+      expect(found.items.map((item) => item.id)).toContain("pack:himalaya");
+
+      const tooShort = await inject("GET", `${SKILLS_URL}/discover?workspaceId=default&q=m`);
+      expect(tooShort.statusCode).toBe(400);
+      expect(published).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("marks every skill a workspace's choices leave out, but never its own self-authored skill", async () => {
