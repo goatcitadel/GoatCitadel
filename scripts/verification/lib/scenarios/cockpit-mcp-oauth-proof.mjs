@@ -54,7 +54,7 @@ export async function runCockpitMcpOAuthProof({ context, browser, stack, citadel
           if (pathname === startRoute && request.method() === "POST") writes.push(request.postDataJSON());
           else unexpected.push(`${request.method()} ${pathname}`);
         });
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#mcp-servers"), { waitUntil: "domcontentloaded" });
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/capabilities/connectors/advanced?shell=cockpit#mcp-servers"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30000 });
         const panel = page.getByRole("region", { name: "MCP server configuration", exact: true });
         await panel.getByRole("searchbox", { name: "Search MCP servers", exact: true }).fill(label);
@@ -100,8 +100,8 @@ export async function runCockpitMcpOAuthProof({ context, browser, stack, citadel
         owner = await api(serverRoute); assertMcpOAuthStartAgreement({ before: beforeLost, request: writes[1], receipt: lostReceipt, owner });
         await page.unroute(`**${startRoute}`, lose);
         await inspection.getByRole("button", { name: "Close sheet", exact: true }).click();
-        const nav = page.getByRole("navigation", { name: "Settings pages", exact: true });
-        await nav.getByRole("link", { name: "General", exact: true }).click(); await nav.getByRole("link", { name: "Connections", exact: true }).click();
+        // Leave Advanced setup for the Connectors list and come back, so the MCP section mounts again.
+        await page.getByRole("link", { name: "Back to Connectors", exact: true }).click(); await page.getByRole("link", { name: "Advanced setup", exact: true }).click();
         await page.getByRole("tab", { name: "MCP servers", exact: true }).click();
         await panel.getByRole("searchbox", { name: "Search MCP servers", exact: true }).fill(label);
         assert.equal(await panel.getByRole("button", { name: `Edit ${label}`, exact: true }).isDisabled(), true);

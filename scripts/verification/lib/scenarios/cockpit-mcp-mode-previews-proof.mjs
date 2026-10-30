@@ -92,9 +92,12 @@ export async function runCockpitMcpModePreviewsProof({ context, browser, stack, 
             if (pathname.startsWith("/api/v1/") && ["POST", "PUT", "PATCH", "DELETE"].includes(request.method()))
               mutations.push({ pathname, method: request.method() });
           });
-          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#mcp-servers"), {
-            waitUntil: "domcontentloaded",
-          });
+          await page.goto(
+            buildVerificationUiUrl(stack.uiUrl, "/capabilities/connectors/advanced?shell=cockpit#mcp-servers"),
+            {
+              waitUntil: "domcontentloaded",
+            },
+          );
           const inspect = page.getByRole("button", { name: "Inspect MCP installation previews", exact: true });
           await inspect.waitFor({ timeout: 30_000 });
           assert.deepEqual(reads, [], "Mode projections must wait for explicit inspection");

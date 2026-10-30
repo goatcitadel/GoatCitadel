@@ -49,7 +49,7 @@ export async function runCockpitMcpServersProof({ context, browser, stack, citad
           if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) && pathname.startsWith("/api/v1/"))
             writes.push({ pathname, method: request.method(), body: request.postDataJSON() });
         });
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#mcp-servers"), { waitUntil: "domcontentloaded" });
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/capabilities/connectors/advanced?shell=cockpit#mcp-servers"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         await page.waitForFunction(value => document.documentElement.dataset.theme === value, theme);
         const panel = page.getByRole("region", { name: "MCP server configuration", exact: true });
