@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { CapabilitySkillItem, CapabilitySkillsResponse } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -29,6 +29,8 @@ export interface InstalledViewProps {
   filters: SkillFilterState;
   /** Opens a skill's panel. */
   onView: (skillId: string) => void;
+  /** The tab's own buttons beside the search box. */
+  searchActions?: ReactNode;
 }
 
 /**
@@ -38,7 +40,7 @@ export interface InstalledViewProps {
  * narrow the list. The search box shows while the list loads or fails to load, and only this view tells that story:
  * Discover doesn't depend on the installed list.
  */
-export function InstalledView({ query, counts, filters, onView }: InstalledViewProps) {
+export function InstalledView({ query, counts, filters, onView, searchActions }: InstalledViewProps) {
   // The loaded list stays while it is read again, and beside a failed recheck.
   const view = recordView(query);
   const response = view.record;
@@ -74,6 +76,7 @@ export function InstalledView({ query, counts, filters, onView }: InstalledViewP
       onSources={filters.setOrigins}
       // There are four origins at most; none of them goes under a "+N" button.
       sourceVisibleCount={originOptions.length}
+      actions={searchActions}
     />
   );
 

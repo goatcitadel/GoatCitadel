@@ -34,7 +34,9 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // 904: a skill panel's switch announces the note under it (what on and paused mean, or that the change waits).
 // 905: a skill panel's switch announces why a change did not happen, under the same one-place rule.
 // 906: the Skills tab's Discover view announces the one outcome that replaces its list, a read or search that failed.
-export const LIVE_REGION_BUDGET = 906;
+// 907: Library's skill-packs panel went (-1, its notice callout); a skill's install panel announces its progress line
+// and why a check or step stopped (+2). The Git address field's refusal uses Field's own alert.
+export const LIVE_REGION_BUDGET = 907;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

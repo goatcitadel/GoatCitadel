@@ -65,3 +65,17 @@ export function skillInstallsQuery(workspaceId: string) {
     queryFn: ({ signal }) => fetchCapabilitySkillInstalls(workspaceId, { signal }),
   });
 }
+
+/**
+ * One checked skill at whatever step its install is on (done included), or `undefined` when the workspace's newest
+ * checks don't hold it. The install panel reads it when an address names a check it isn't following already.
+ */
+export function skillInstallQuery(workspaceId: string, snapshotId: string) {
+  return queryOptions({
+    queryKey: queryKeys.capabilitySkillInstall(workspaceId, snapshotId),
+    queryFn: async ({ signal }) =>
+      (await fetchCapabilitySkillInstalls(workspaceId, { snapshotId, signal })).installs.find(
+        (install) => install.snapshotId === snapshotId,
+      ) ?? null,
+  });
+}

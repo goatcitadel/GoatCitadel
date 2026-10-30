@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { CapabilitySkillDiscoverItem } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -25,6 +25,8 @@ export interface DiscoverViewProps {
   onContinue: (item: CapabilitySkillDiscoverItem) => void;
   /** Opens the installed skill's panel. The name is for a skill the installed list doesn't hold. */
   onViewInstalled: (skillId: string, name: string) => void;
+  /** The tab's own buttons beside the search box. */
+  searchActions?: ReactNode;
 }
 
 const NO_ITEMS: readonly CapabilitySkillDiscoverItem[] = [];
@@ -36,7 +38,14 @@ const NO_ITEMS: readonly CapabilitySkillDiscoverItem[] = [];
  * merges lists or works a state out. The buttons narrow the list in the browser. A search that failed shows its error
  * and Try again, and never says nothing matched.
  */
-export function DiscoverView({ workspaceId, filters, onInstall, onContinue, onViewInstalled }: DiscoverViewProps) {
+export function DiscoverView({
+  workspaceId,
+  filters,
+  onInstall,
+  onContinue,
+  onViewInstalled,
+  searchActions,
+}: DiscoverViewProps) {
   const term = useSettledTerm(filters.search);
   const query = useQuery(skillDiscoverQuery(workspaceId, term));
   const view = recordView(query);
@@ -67,6 +76,7 @@ export function DiscoverView({ workspaceId, filters, onInstall, onContinue, onVi
       sourceOptions={providerOptions}
       sources={providers}
       onSources={filters.setProviders}
+      actions={searchActions}
     />
   );
 

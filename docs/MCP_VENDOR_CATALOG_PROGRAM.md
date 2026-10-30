@@ -54,11 +54,11 @@ Everything stays under the existing Gateway governance: deny-wins policy, the ne
 - A "Needs network access" notice with an explicit operator action that adds the named hosts to the network allowlist, following the Firecrawl settings precedent. The change goes through the governed settings patch, so it may wait for approval in Inbox.
 - The connect flow picks up the callback fragment, pre-fills the code and state, and leaves the reviewed completion step in place. Readiness (`needs_auth`, `ready`, `expired`) stays visible on each server.
 
-### E. Shipped skill packs (skills tree, Skill Hub, Cockpit Library)
+### E. Shipped skill packs (skills tree, Skill Hub, Cockpit Capabilities)
 
 - Adapted `himalaya` and `github` (as `github-cli`) skills live under `skills/import-packs/<packId>/` with an `UPSTREAM.md` and the upstream MIT licence. The skill loader does not scan this folder, so nothing becomes callable by being shipped.
 - Skill Hub source review accepts a `packId` from `SHIPPED_SKILL_PACKS` (contracts) as an alternative to an HTTPS source. The Gateway resolves the directory itself, then runs the unchanged production admission (validation, promptware scan, tool mapping, exact-byte CAS snapshot). Both packs pass admission.
-- The Cockpit Library (Skills and tools) shows an "Integration skill packs" panel: review, then the existing Skill Hub `install_inactive` and `activate` approvals, with the next step derived from the Gateway's Skill Hub projection.
+- The packs install from Capabilities › Skills › Discover: the install panel runs the Skill Hub review, then the existing Skill Hub `install_inactive` and `activate` approvals from one confirmation, each approved in place unless the operator's setting to skip approvals for their own changes applies, with every step read from the Gateway's Skill Hub projection. The Library no longer has its own skill-packs panel.
 - Each command runs through `shell.exec`, which requires approval by default. The skills tell the model never to request credentials in Chat, and to have the operator install and sign in to the CLI in a terminal. Multi-line bodies go through one explicit `sh -c` or `pwsh -Command` call, because imported skills cannot declare `fs.write`.
 - **`gog` is not shipped.** Native Google sign-in covers Google Workspace for the `gmail.*` and `calendar.*` tools (see [GOOGLE_WORKSPACE_SIGN_IN.md](./GOOGLE_WORKSPACE_SIGN_IN.md)), and no CLI skill ships for a service GoatCitadel integrates natively. The Skill Hub `google_cli_oauth` admission rule stays as it is, routing Google CLI/OAuth skills to the native integration.
 

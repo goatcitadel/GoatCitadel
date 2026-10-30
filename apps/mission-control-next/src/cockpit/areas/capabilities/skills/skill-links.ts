@@ -54,3 +54,36 @@ export function skillIdFromSource(source: string | undefined): string | undefine
   const id = source?.startsWith(SKILL_PANEL_SOURCE_PREFIX) ? source.slice(SKILL_PANEL_SOURCE_PREFIX.length) : "";
   return id || undefined;
 }
+
+/** The part of `?item=` that names a checked skill's install: `install:<check id>`. */
+const INSTALL_ITEM_PREFIX = "install:";
+
+/** The address that opens one checked skill's install panel, with the view it was opened from kept. */
+export function installItemHref(snapshotId: string, view: SkillsView = "installed"): string {
+  const item = `${SKILLS_HREF}?item=${encodeURIComponent(`${INSTALL_ITEM_PREFIX}${snapshotId}`)}`;
+  return view === "discover" ? `${item}&view=discover` : item;
+}
+
+/** The check an address names with `?item=install:<id>`, or undefined for anything else (a skill's item included). */
+export function installIdFromSearch(search: string | undefined): string | undefined {
+  const item = new URLSearchParams(search ?? "").get("item");
+  const id = item?.startsWith(INSTALL_ITEM_PREFIX) ? item.slice(INSTALL_ITEM_PREFIX.length) : "";
+  return id || undefined;
+}
+
+/**
+ * The inspector source of an install panel. Like a skill panel's, it must not start with the Connectors panel's
+ * `capabilities:`, nor with the skill panel's own prefix, so neither tab reads it as one of theirs.
+ */
+export const SKILL_INSTALL_SOURCE_PREFIX = "capabilities-skill-install:";
+
+/** The inspector source of the install panel that shows `key` (a check id, or a check not answered yet). */
+export function skillInstallSource(key: string): string {
+  return `${SKILL_INSTALL_SOURCE_PREFIX}${key}`;
+}
+
+/** The install panel's key inside an inspector source, or undefined for any other panel. */
+export function installKeyFromSource(source: string | undefined): string | undefined {
+  const key = source?.startsWith(SKILL_INSTALL_SOURCE_PREFIX) ? source.slice(SKILL_INSTALL_SOURCE_PREFIX.length) : "";
+  return key || undefined;
+}

@@ -49,6 +49,13 @@ export const queryKeys = {
   ],
   /** The installs still on their way in, for one workspace. Skill events and the skip setting refresh it. */
   capabilitySkillInstalls: (workspaceId: string): TopicKey => ["skills", "capability-skill-installs", workspaceId],
+  /** One checked skill at whatever step its install is on. It sits under the installs' prefix, so it refreshes with them. */
+  capabilitySkillInstall: (workspaceId: string, snapshotId: string): TopicKey => [
+    "skills",
+    "capability-skill-installs",
+    workspaceId,
+    snapshotId,
+  ],
   pendingApprovals: (): TopicKey => ["approvals", "pending"],
   inboxAll: (): TopicKey => ["approvals", "operator-inbox"],
   inbox: (workspaceId: string): TopicKey => [

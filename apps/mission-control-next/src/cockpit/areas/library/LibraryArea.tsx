@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { CapabilityCatalog } from "./CapabilityCatalog";
-import { LibrarySkillPacks } from "./LibrarySkillPacks";
 import { MeshCapabilityPublications } from "./MeshCapabilityPublications";
 import { LibraryPromptPacks } from "./LibraryPromptPacks";
 import { LibraryResources } from "./LibraryResources";
@@ -120,12 +119,9 @@ export function LibraryArea() {
           />
         ) : (
           <CapabilityCatalog
-            footer={(search) =>
+            footer={() =>
               route.rest.length === 0 ? (
-                <>
-                  <LibrarySkillPacks key={`packs-${workspaceId}`} workspaceId={workspaceId} search={search} />
-                  <MeshCapabilityPublications key={workspaceId} workspaceId={workspaceId} />
-                </>
+                <MeshCapabilityPublications key={workspaceId} workspaceId={workspaceId} />
               ) : null
             }
           />

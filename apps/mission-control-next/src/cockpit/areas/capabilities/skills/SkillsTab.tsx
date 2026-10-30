@@ -3,11 +3,13 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
 import { skillListQuery } from "../../../data/capability-skills-query";
 import { recordView } from "../../../data/record-view";
+import { Button } from "../../../ui/Button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../ui/Tabs";
 import { DiscoverView } from "./DiscoverView";
 import { InstalledView } from "./InstalledView";
 import { skillsHref, skillsViewFromSearch } from "./skill-links";
 import { useSkillFilters } from "./use-skill-filters";
+import { useSkillInstallPanel } from "./use-skill-install-panel";
 import { useSkillPanel } from "./use-skill-panel";
 import { useSkillUsage } from "./use-skill-usage";
 
@@ -15,9 +17,6 @@ import { useSkillUsage } from "./use-skill-usage";
 const SEGMENT_LIST = "w-fit gap-0.5 rounded-lg border-b-0 bg-sunken p-0.5";
 const SEGMENT = "min-h-8 rounded-md border-b-0 px-3 py-1 data-[state=active]:bg-raised";
 const SEGMENT_PANEL = "focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent";
-
-/** The install panel opens from here. Nothing opens it yet, so the two install buttons of Discover do nothing. */
-const openInstallPanel = () => undefined;
 
 /**
  * The Skills tab: the skills installed, and the skills on offer to install, as two views of one tab (Installed, the
@@ -27,8 +26,9 @@ const openInstallPanel = () => undefined;
  *
  * The tab, not a view, keeps the installed list read and the use counts read for as long as it is mounted, because the
  * switches and the open panel read the list again through it after a change, and a panel opened from Discover needs the
- * same list. The tab also owns the panel, so a skill's panel opens from either view and closing it returns to the view
- * it was opened from.
+ * same list. The tab also owns the panels, so a skill's panel or an install panel opens from either view and closing it
+ * returns to the view it was opened from. "Import from Git", beside the shared search, opens the install panel with an
+ * address field; Discover's Install and Continue open it for a source the Gateway offers.
  */
 export function SkillsTab() {
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
@@ -39,6 +39,8 @@ export function SkillsTab() {
   const query = useQuery(skillListQuery(workspaceId));
   const counts = useSkillUsage();
   const panel = useSkillPanel(recordView(query).record?.items, filters.setSearch);
+  const installs = useSkillInstallPanel(panel.open);
+  const importFromGit = <Button onClick={installs.importFromGit}>Import from Git</Button>;
 
   return (
     <Tabs
@@ -57,15 +59,22 @@ export function SkillsTab() {
         </TabsTrigger>
       </TabsList>
       <TabsContent value="installed" className={SEGMENT_PANEL}>
-        <InstalledView query={query} counts={counts} filters={filters} onView={panel.open} />
+        <InstalledView
+          query={query}
+          counts={counts}
+          filters={filters}
+          onView={panel.open}
+          searchActions={importFromGit}
+        />
       </TabsContent>
       <TabsContent value="discover" className={SEGMENT_PANEL}>
         <DiscoverView
           workspaceId={workspaceId}
           filters={filters}
-          onInstall={openInstallPanel}
-          onContinue={openInstallPanel}
+          onInstall={installs.install}
+          onContinue={installs.resume}
           onViewInstalled={panel.open}
+          searchActions={importFromGit}
         />
       </TabsContent>
     </Tabs>

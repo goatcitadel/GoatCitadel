@@ -1,4 +1,4 @@
-import type { Ref } from "react";
+import type { ReactNode, Ref } from "react";
 import { CapabilitySearch } from "../CapabilitySearch";
 import { CategoryFilter, type CategoryOption } from "../CategoryFilter";
 
@@ -17,6 +17,8 @@ export interface SkillsFilterBarProps {
   onSources: (ids: string[]) => void;
   /** How many source buttons show before the rest go under a "+N" button. */
   sourceVisibleCount?: number;
+  /** The tab's own buttons beside the search box, such as "Import from Git". */
+  actions?: ReactNode;
 }
 
 /**
@@ -35,10 +37,17 @@ export function SkillsFilterBar({
   sources,
   onSources,
   sourceVisibleCount,
+  actions,
 }: SkillsFilterBarProps) {
   return (
     <div ref={regionRef} className="space-y-3">
-      <CapabilitySearch tabLabel="Skills" value={search} onChange={onSearch} placeholder={placeholder} />
+      <CapabilitySearch
+        tabLabel="Skills"
+        value={search}
+        onChange={onSearch}
+        placeholder={placeholder}
+        actions={actions}
+      />
       {categoryOptions.length >= 2 ? (
         <CategoryFilter label="Categories" options={categoryOptions} selected={categories} onChange={onCategories} />
       ) : null}
