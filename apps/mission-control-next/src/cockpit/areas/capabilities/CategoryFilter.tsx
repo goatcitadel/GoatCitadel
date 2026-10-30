@@ -10,6 +10,7 @@ export interface CategoryOption {
 }
 
 const DEFAULT_VISIBLE_COUNT = 3;
+const DEFAULT_LABEL = "Categories";
 
 const CategoryChip = forwardRef<HTMLButtonElement, { label: string; pressed?: boolean; onClick: () => void }>(
   function CategoryChip({ label, pressed, onClick }, ref) {
@@ -43,11 +44,14 @@ export function CategoryFilter({
   selected,
   onChange,
   visibleCount = DEFAULT_VISIBLE_COUNT,
+  label = DEFAULT_LABEL,
 }: {
   options: readonly CategoryOption[];
   selected: readonly string[];
   onChange: (selected: string[]) => void;
   visibleCount?: number;
+  /** What the buttons choose, as the group's accessible name. A list with two groups names each one. */
+  label?: string;
 }) {
   const [open, setOpen] = useState(false);
   const allChip = useRef<HTMLButtonElement>(null);
@@ -88,7 +92,7 @@ export function CategoryFilter({
   });
 
   return (
-    <div role="group" aria-label="Categories" className="flex flex-wrap items-center gap-1.5">
+    <div role="group" aria-label={label} className="flex flex-wrap items-center gap-1.5">
       <CategoryChip ref={allChip} label="All" pressed={active.length === 0} onClick={() => onChange([])} />
       {visible.map((option) => (
         <CategoryChip

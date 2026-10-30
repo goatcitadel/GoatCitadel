@@ -3959,6 +3959,7 @@ export class GatewayService {
         chatTurnCapabilityProfiles: this.storage.chatTurnCapabilityProfiles,
         skills: this,
         loadedSkills: () => this.skillsService.list(),
+        listWorkspaceTurnSkills: (workspaceId) => this.workspaceTurnSkills.listSkills(workspaceId),
         capabilities: composed.capabilities,
         approvals: composed.approvals,
         audit: this.storage.audit,

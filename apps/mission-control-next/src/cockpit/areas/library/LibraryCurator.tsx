@@ -20,7 +20,7 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { curatorRecommendationLabel, skillStateLabel } from "./capability-vocabulary";
-import { catalogHref } from "./capability-catalog-route";
+import { SKILLS_HREF, skillItemHref } from "../capabilities/skills/skill-links";
 import { useLibraryOperation } from "./use-library-operation";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
 import { AreaHeader } from "../../ui/AreaHeader";
@@ -139,7 +139,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
         error: false,
         text: receipt.alreadyArchived
           ? `${target.name} was already archived; nothing changed.`
-          : `${target.name} archived. It is disabled until its state is changed in Skills and tools.`,
+          : `${target.name} archived. It is disabled until its state is changed in Capabilities › Skills.`,
       });
       await refresh();
     } catch (cause) {
@@ -335,13 +335,10 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
             </div>
             <p>
               GoatCitadel records the disable through its governed skill-state path and Journey. Curator has no restore:
-              re-enabling is a governed state change in Skills and tools, which may need approval.
+              re-enabling is a governed state change in Capabilities › Skills, which may need approval.
             </p>
-            <NativeOwnerLink
-              scope={workspaceId}
-              href={catalogHref({ search: review.name, kind: "skill", status: "all", trust: "all" } as never)}
-            >
-              Open this skill in Skills and tools
+            <NativeOwnerLink scope={workspaceId} href={review.skillId ? skillItemHref(review.skillId) : SKILLS_HREF}>
+              Open this skill in Capabilities › Skills
             </NativeOwnerLink>
             {outcome ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
             <div className="flex flex-wrap gap-2">

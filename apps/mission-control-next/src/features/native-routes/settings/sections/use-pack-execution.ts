@@ -16,6 +16,7 @@ import {
   validParentPackPlan,
   validWorkspacePlan,
 } from "./pack-plan-binding";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function usePackExecution(manifest: CapabilityPackManifest, workspaceId: string) {
   const base = getGatewayApiBaseUrl(),
@@ -159,7 +160,7 @@ export function usePackExecution(manifest: CapabilityPackManifest, workspaceId: 
     } catch (failure) {
       if (valid()) {
         setReview(null);
-        setError(failure instanceof Error ? failure.message : "The setup plan could not be confirmed.");
+        setError(describeApiError(failure, "The setup plan could not be confirmed.").summary);
       }
       return false;
     } finally {

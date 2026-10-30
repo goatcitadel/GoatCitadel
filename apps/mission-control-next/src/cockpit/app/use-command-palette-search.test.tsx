@@ -168,6 +168,8 @@ describe("cancellable cached palette search (NV-12)", () => {
     await settle();
     expect(owner.groups.find((group) => group.id === "inbox")?.items[0]?.label).toBe("Needle approval");
     expect(owner.groups.find((group) => group.id === "capabilities")?.error).toBeUndefined();
+    // Skills and tools are found here, so the group is not named for the Library.
+    expect(owner.groups.find((group) => group.id === "capabilities")?.label).toBe("Capabilities");
     expect(api.inbox).not.toHaveBeenCalled();
     expect(api.catalog).not.toHaveBeenCalled();
   });

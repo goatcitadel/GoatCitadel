@@ -27,6 +27,7 @@ import { EmptyState, NativeButton, NoticeBanner, StatusChip } from "../primitive
 import { formatDateTime, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryField, LibraryFieldGrid, LibraryMetricGrid, LibrarySectionShell } from "../shared/library-primitives";
 import { presentNativeRouteError } from "../shared/native-route-errors";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 const SOURCE_KINDS: Array<{ value: ExternalSourceKind; label: string }> = [
   { value: "codex_sessions", label: "Codex sessions" },
@@ -42,7 +43,7 @@ function shortHash(value: string): string {
 }
 
 function describeActionError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeApiError(error).summary;
   return message.length > 300 ? `${message.slice(0, 300)}…` : message;
 }
 

@@ -14,6 +14,7 @@ import {
   NotFoundError,
   ValidationError,
   canonicalJsonString,
+  isInstallWideApproval,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { randomUUID } from "node:crypto";
@@ -587,6 +588,8 @@ export class ApprovalRepository {
     cursor?: string;
     workspaceId?: string;
     includeExpired?: boolean;
+    /** With `workspaceId`, also keep approvals that belong to no workspace (see `isInstallWideApproval`). */
+    includeInstallWide?: boolean;
   }): ApprovalListResponse {
     const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 100), 200));
     const scopedWorkspaceId = input.workspaceId?.trim();
@@ -601,7 +604,11 @@ export class ApprovalRepository {
         : remaining + 1;
       const mapped = this.readApprovalPage(input.status, fetchLimit, cursor, input.includeExpired);
       const accepted = scopedWorkspaceId
-        ? mapped.filter((approval) => approval.linkage?.workspaceId === scopedWorkspaceId)
+        ? mapped.filter(
+            (approval) =>
+              approval.linkage?.workspaceId === scopedWorkspaceId ||
+              (input.includeInstallWide === true && isInstallWideApproval(approval)),
+          )
         : mapped;
       const acceptedCapacity = Math.max(0, limit - output.length);
       const appended = accepted.slice(0, acceptedCapacity);

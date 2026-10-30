@@ -39,42 +39,49 @@ vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
   fetchOperatorInbox: api.fetchOperatorInbox,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({ fetchDurableRun: api.fetchDurableRun }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
 const specialist = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("./specialist-approval-evidence", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./specialist-approval-evidence")>()),
   readSpecialistEvidence: specialist.read,
 }));
 const notFound = () => new ApiRequestError("API error 404", { kind: "http", method: "GET", path: "/x", status: 404 });
+// Records the props each render of the decision bar receives, so a test can check the scope and review step.
+const actions = vi.hoisted(() => ({ props: vi.fn() }));
 vi.mock("./InboxApprovalActions", () => ({
-  InboxApprovalActions: ({
-    checking,
-    onResolved,
-    onInvalidated,
-  }: {
+  InboxApprovalActions: (props: {
     checking?: boolean;
+    workspaceId: string | null;
+    reviewedInPlace?: boolean;
     onResolved: (message: string) => void;
     onInvalidated: (message?: string) => void;
-  }) => (
-    <>
-      <button type="button" disabled={checking}>
-        Decision controls
-      </button>
-      <button type="button" onClick={() => onResolved("Approved decision recorded.")}>
-        Record decision
-      </button>
-      <button type="button" onClick={() => onInvalidated()}>
-        Report changed record
-      </button>
-      <button
-        type="button"
-        onClick={() =>
-          onInvalidated("Specialist review changed. Refresh and review the current target before approving.")
-        }
-      >
-        Report specialist change
-      </button>
-    </>
-  ),
+  }) => {
+    actions.props(props);
+    const { checking, onResolved, onInvalidated } = props;
+    return (
+      <>
+        <button type="button" disabled={checking}>
+          Decision controls
+        </button>
+        <button type="button" onClick={() => onResolved("Approved decision recorded.")}>
+          Record decision
+        </button>
+        <button type="button" onClick={() => onInvalidated()}>
+          Report changed record
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            onInvalidated("Specialist review changed. Refresh and review the current target before approving.")
+          }
+        >
+          Report specialist change
+        </button>
+      </>
+    );
+  },
 }));
 
 const approval: ApprovalRequest = {
@@ -116,6 +123,7 @@ beforeEach(() => {
   api.fetchApproval.mockReset();
   api.fetchApprovals.mockReset();
   api.fetchOperatorInbox.mockReset();
+  actions.props.mockReset();
   api.fetchApproval.mockResolvedValue(approval);
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
@@ -266,7 +274,11 @@ describe("Inbox approval detail", () => {
 
   it.each([
     ["a missing approval", () => api.fetchApproval.mockRejectedValue(notFound())],
-    ["a decided approval", () => api.fetchApproval.mockResolvedValue({ ...approval, status: "approved" })],
+    [
+      "a decided approval",
+      () =>
+        api.fetchApproval.mockResolvedValue({ ...approval, status: "approved", linkage: { workspaceId: "default" } }),
+    ],
   ])("says %s is no longer waiting and offers no decision", async (_label, arrange) => {
     arrange();
     await act(async () =>
@@ -290,7 +302,7 @@ describe("Inbox approval detail", () => {
 });
 
 it("retains decided approval evidence without decision controls", async () => {
-  api.fetchApproval.mockResolvedValue({ ...approval, status: "approved" });
+  api.fetchApproval.mockResolvedValue({ ...approval, status: "approved", linkage: { workspaceId: "default" } });
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -478,5 +490,87 @@ describe("Inbox approval detail states (IN-05, IN-07, IN-16)", () => {
     expect(text.split(/Expires in|Expiry:/).length - 1).toBe(1);
     // The decision bar (mocked here) carries the one "does not prove the action ran" disclaimer.
     expect(text).not.toMatch(/does not prove (the|its) action ran/);
+  });
+});
+
+describe("Inbox approval detail for approvals of no workspace", () => {
+  // A skill change belongs to no workspace, so the Inbox lists it in every workspace and reads it without one.
+  const skillChange: ApprovalRequest = {
+    approvalId: "skill-a",
+    kind: "skill.lifecycle",
+    riskLevel: "danger",
+    status: "pending",
+    payload: {},
+    preview: {
+      title: "Approve skill state change",
+      action: "skill_state_set",
+      skillId: "planner",
+      state: "enabled",
+      currentState: "disabled",
+    },
+    createdAt: "2026-10-29T10:00:00Z",
+    explanationStatus: "not_requested",
+  };
+  const installWideItem: OperatorInboxItem = {
+    ...item,
+    id: "approval:skill-a",
+    title: "Turn on skill planner",
+    summary: "Applies to every workspace.",
+    riskLevel: "danger",
+    source: { workspaceId: "default", approvalId: "skill-a", installWide: true },
+  };
+  const renderItem = (target: OperatorInboxItem) =>
+    act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={target} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+  const lastActions = () =>
+    actions.props.mock.lastCall?.[0] as { workspaceId: string | null; reviewedInPlace?: boolean } | undefined;
+
+  it("reads an install-wide approval without a workspace and decides it in place", async () => {
+    api.fetchApproval.mockResolvedValue(skillChange);
+    await renderItem(installWideItem);
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    expect(container.textContent).toContain("Decision controls");
+    expect(api.fetchApproval).toHaveBeenCalledWith(
+      "skill-a",
+      expect.not.objectContaining({ workspaceId: expect.anything() }),
+    );
+    expect(lastActions()?.workspaceId).toBeNull();
+    expect(lastActions()?.reviewedInPlace).toBe(true);
+  });
+
+  it("treats an install-wide read that returns another workspace's approval as not available", async () => {
+    api.fetchApproval.mockResolvedValue({ ...skillChange, linkage: { workspaceId: "workspace-b" } });
+    await renderItem(installWideItem);
+    await settleUntil(() => Boolean(container.textContent?.includes("no longer waiting")));
+    expect(container.textContent).toContain("This approval is no longer waiting.");
+    expect(container.textContent).not.toContain("Decision controls");
+    expect(actions.props).not.toHaveBeenCalled();
+  });
+
+  it("keeps the danger review step for an install-wide approval that is not a skill change", async () => {
+    api.fetchApproval.mockResolvedValue({
+      ...approval,
+      approvalId: "skill-a",
+      kind: "auth.device_access",
+      riskLevel: "danger",
+    });
+    await renderItem(installWideItem);
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    expect(lastActions()?.workspaceId).toBeNull();
+    expect(lastActions()?.reviewedInPlace).toBe(false);
+  });
+
+  it("reads a linked approval in its workspace and keeps its review step", async () => {
+    api.fetchApproval.mockResolvedValue({ ...approval, riskLevel: "danger", linkage: { workspaceId: "default" } });
+    await renderItem(item);
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    expect(api.fetchApproval).toHaveBeenCalledWith("approval-a", expect.objectContaining({ workspaceId: "default" }));
+    expect(lastActions()?.workspaceId).toBe("default");
+    expect(lastActions()?.reviewedInPlace).toBeFalsy();
   });
 });

@@ -48,6 +48,12 @@ export interface CapabilitySkillsOwners {
    * the switch can reach exactly these. A workspace's self-authored skills are not in it.
    */
   loadedSkills(): readonly Pick<SkillListItem, "skillId">[];
+  /**
+   * The skills a workspace's turns may load: the list Chat, scheduled turns and remote workers read
+   * (`WorkspaceTurnSkills`), which keeps the skills its choices name and its own approved self-authored skills. A listed
+   * skill missing from it is one the workspace's choices leave out.
+   */
+  listWorkspaceTurnSkills(workspaceId: string): Promise<readonly SkillListItem[]>;
   /** The catalog route's owner. */
   capabilities: {
     listCapabilityCatalog(
@@ -89,6 +95,7 @@ export function composeCapabilitySkills({
   chatTurnCapabilityProfiles,
   skills,
   loadedSkills,
+  listWorkspaceTurnSkills,
   capabilities,
   approvals,
   audit,
@@ -102,11 +109,13 @@ export function composeCapabilitySkills({
     usage: new CapabilitySkillUsageService((sinceIso) => chatTurnCapabilityProfiles.countSkillUsesSince(sinceIso)),
     skills: new CapabilitySkillsService(
       {
-        // Every skill, whatever the workspace's choices: Chat doesn't filter by them, so the tab doesn't either.
+        // Every skill, whatever the workspace's choices, so the operator can see and switch the ones they leave out;
+        // `listWorkspaceTurnSkills` says which of them the workspace's turns may load.
         listSkills: (workspaceId) => skills.listSkills("ALL", workspaceId),
         listInspectableCatalog: (workspaceId) => capabilities.listCapabilityCatalog("inspectable", "ALL", workspaceId),
         listPendingApprovals: () => readAllPendingApprovals((input) => approvals.listApprovalsPage(input)),
         listSwitchableSkillIds: async () => loadedSkills().map((skill) => skill.skillId),
+        listWorkspaceTurnSkills,
         shippedSkillDirs: () => shipped,
         deploymentProfile,
         readApprovalSkipSetting,

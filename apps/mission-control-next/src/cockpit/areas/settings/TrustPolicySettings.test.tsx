@@ -137,9 +137,9 @@ describe("native Trust evidence", () => {
       expect(detail.textContent).toContain(value);
     expect(detail.textContent).toContain("secret value not shown");
     await act(async () =>
-      detail.querySelector<HTMLAnchorElement>('a[href="/library?type=skill&shell=cockpit"]')!.click(),
+      detail.querySelector<HTMLAnchorElement>('a[href="/capabilities/skills?shell=cockpit"]')!.click(),
     );
-    expect(api.navigate).toHaveBeenCalledExactlyOnceWith("/library?type=skill&shell=cockpit");
+    expect(api.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/skills?shell=cockpit");
     expect(fetch).not.toHaveBeenCalled();
   });
   it("carries native owner scope, query and fragment context without authorizing a mutation", async () => {
@@ -152,13 +152,13 @@ describe("native Trust evidence", () => {
     await act(async () => recordedSkillButton().click());
     const link = container.querySelector<HTMLAnchorElement>('[role="dialog"] a')!;
     const target = new URL(link.href);
-    expect(target.pathname).toBe("/library");
+    expect(target.pathname).toBe("/capabilities/skills");
     expect(target.searchParams.get("workspaceId")).toBe("workspace-a");
     expect(target.searchParams.get("citadelId")).toBe("citadel-a");
     expect(target.searchParams.get("runId")).toBe("run-a");
     expect(target.searchParams.get("sessionId")).toBe("session-a");
     expect(target.searchParams.getAll("keep")).toEqual(["one", "two"]);
-    expect(target.searchParams.get("type")).toBe("skill");
+    expect(target.searchParams.has("type")).toBe(false);
     expect(target.hash).toBe("#old-evidence");
     expect(target.searchParams.get("shell")).toBe("cockpit");
     const stateBefore = structuredClone(window.history.state);
@@ -166,6 +166,28 @@ describe("native Trust evidence", () => {
     expect(api.navigate).toHaveBeenCalledExactlyOnceWith(link.getAttribute("href"));
     expect(window.history.state).toEqual(stateBefore);
     expect(fetch).not.toHaveBeenCalled();
+  });
+  it("names Library's Candidates and mesh tab as the page that manages a capability record", async () => {
+    snapshot.capabilities.inspectable.push({
+      capabilityId: "skill:candidate-one",
+      kind: "skill",
+      category: "community_imported",
+      title: "Candidate one",
+      summary: "A candidate skill",
+      callable: false,
+      lifecycleState: "candidate",
+      candidateId: "candidate-one",
+      posture: "non_callable",
+      source: "capabilities.catalog",
+    });
+    await render();
+    const row = buttons().find((item) => item.querySelector("span")?.textContent === "Candidate one")!;
+    expect(row.textContent).toContain("Library / Candidates and mesh");
+    expect(row.textContent).not.toContain("Library / Capabilities");
+    await act(async () => row.click());
+    const link = container.querySelector<HTMLAnchorElement>('[role="dialog"] a')!;
+    expect(link.textContent).toBe("Open Library / Candidates and mesh");
+    expect(new URL(link.href).pathname).toBe("/library");
   });
   it("labels partial sources and replaces old posture with unavailable evidence after a failed refresh", async () => {
     snapshot.sources.push({

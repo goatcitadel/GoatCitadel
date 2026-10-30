@@ -113,6 +113,8 @@ export function buildChatThreadResponse(input: {
     .map((node): ChatThreadTurnRecord => {
       const siblingTurnIds = [...(siblingIdsByParent.get(toParentKey(node.parentTurnId)) ?? [node.turnId])];
       const newestLeafTurnId = resolveNewestLeafTurnId(node.turnId, byId, childrenByTurnId, newestLeafCache);
+      // Saved reasoning is shown as the turn's thinking; the trace leaves it out so it is not sent twice.
+      const { reasoning, ...trace } = node.trace;
       return {
         turnId: node.turnId,
         parentTurnId: node.parentTurnId,
@@ -120,7 +122,7 @@ export function buildChatThreadResponse(input: {
         sourceTurnId: node.trace.sourceTurnId,
         userMessage: node.userMessage!,
         assistantMessage: node.assistantMessage,
-        trace: node.trace,
+        trace,
         toolRuns: node.trace.toolRuns,
         citations: node.trace.citations,
         generatedArtifacts: node.generatedArtifacts,
@@ -131,6 +133,7 @@ export function buildChatThreadResponse(input: {
           isSelectedPath: true,
           newestLeafTurnId,
         },
+        ...(reasoning ? { thinking: reasoning } : {}),
       };
     });
 

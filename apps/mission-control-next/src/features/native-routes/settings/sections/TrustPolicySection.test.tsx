@@ -92,7 +92,7 @@ describe("TrustPolicySection", () => {
     expect(text).toContain("Owner action");
     expect(text).toContain("Settings / Tools");
     expect(text).toContain("Resolve the blocker in the owner surface before runtime use.");
-    expect(text).toContain("Library / Skills");
+    expect(text).toContain("Capabilities / Skills");
     expect(text).toContain("Evaluate and approve through the owner lifecycle before promotion.");
     expect(text).toContain("No last-use evidence");
   });

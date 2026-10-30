@@ -86,7 +86,18 @@ const INTEGRATION_KEYS: readonly QueryKey[] = [
 ];
 /** Connections and inbound channel messages also change Chat's Messaging overview (channels, status, counts). */
 const MESSAGING_INTEGRATION_KEYS: readonly QueryKey[] = [...INTEGRATION_KEYS, queryKeys.chatMessagingAll()];
-const CAPABILITY_KEYS: readonly QueryKey[] = [queryKeys.capabilities(), ["capability"], queryKeys.inboxAll()];
+// The Capabilities skill list and a skill's details. The prefixes cover every workspace's list and every skill's details,
+// but not the use counts, which sit under their own key.
+const CAPABILITY_SKILL_KEYS: readonly QueryKey[] = [
+  ["skills", "capability-skills"],
+  ["skills", "capability-skill-detail"],
+];
+const CAPABILITY_KEYS: readonly QueryKey[] = [
+  queryKeys.capabilities(),
+  ...CAPABILITY_SKILL_KEYS,
+  ["capability"],
+  queryKeys.inboxAll(),
+];
 
 const SYSTEM_SOURCE_TYPES = new Map<string, EventEffect | "ignore">([
   ["workspace_created", effect(DIRECTORY_KEYS, ["system"])],
@@ -135,7 +146,9 @@ const SOURCE_RULES = new Map<string, Rule>([
       ),
   ],
   ["capabilities", () => effect(CAPABILITY_KEYS, ["skills"])],
-  ["skills", () => effect([queryKeys.capabilities()], ["skills"])],
+  // A switch asking for approval and a change applying both publish here, so they refresh the list and the details,
+  // and the Inbox, where a skill approval waits in every workspace (its creation publishes no `approvals` event).
+  ["skills", () => effect([queryKeys.capabilities(), ...CAPABILITY_SKILL_KEYS, queryKeys.inboxAll()], ["skills"])],
   // A tool call inside a turn changes no catalog or grant; the turn's own chat events carry it.
   ["tools", (e) => (e.eventType === "tool_invoked" ? effect([], ["tools"]) : effect(TOOL_KEYS, ["tools"]))],
   ["policy", (e) => (e.eventType === "tool_invoked" ? effect([], ["tools"]) : effect(TOOL_KEYS, ["tools"]))],

@@ -12,7 +12,7 @@
   - one skill's details, including its `SKILL.md` text
   - in PR 3c: the Discover list, a source check, and the install steps
 - Operator actions go through new Capabilities routes that call the existing owners, so the same `skill.lifecycle` or `skill_hub.lifecycle` approval is created as today. When the operator's skip applies, the route resolves that approval at once as the operator, with a recorded reason. The existing approval effect then applies the change, so HX-402's "the approval effect is the only executor" rule and its Journey records stay unchanged. The old `/api/v1/skills/*` routes, Chat commands and the AI's tools never skip.
-- When a change does ask, the approval opens in the skill's panel and approves in one click (the #625 dialog), with "Open in Inbox" beside it.
+- When a change does ask, the approval opens in the skill's panel and approves in one click (the #625 dialog). The cockpit Inbox can't list skill approvals, which have no workspace (found in PR 3b), so the tab never points there.
 
 **Tech Stack:** TypeScript, React 19, TanStack Query, Tailwind (cockpit tokens), Fastify, zod, Vitest, node:test (storage), SQLite and Postgres storage.
 
@@ -40,7 +40,7 @@ After this phase, Library's catalog keeps only candidate skills, proposals and m
 
 ## Decided without asking (check these)
 
-- **Approvals open in the panel.** You asked on 2026-10-28 for approvals to pop up where you are and take one click. Skill changes that ask open the #625 approval dialog in the skill's panel, with "Open in Inbox" beside it. Connectors and Tools still link to Inbox; bringing them in line is a follow-up.
+- **Approvals open in the panel.** You asked on 2026-10-28 for approvals to pop up where you are and take one click. Skill changes that ask open the #625 approval dialog in the skill's panel. The tab never links to the Inbox, which can't list skill approvals (R37). Connectors and Tools still link to Inbox; bringing them in line is a follow-up.
 - **Use counts come from chats.** The spec names the skill's `usageCount`, but that field only moves on one rarely used route, never in a chat. Counting from chat turns is the honest number.
 - **Installing with the skip setting off asks twice:** once to install, once to switch it on. The spec keeps each Skill Hub operation's own approval. Both approvals open in the panel.
 - **Discover goes online only when you search.** Opening it shows GoatCitadel's own skill packs and the curated list. Typing a search also asks AgentSkill and SkillsMP, and each search is cached for 10 minutes.
@@ -54,7 +54,7 @@ Each PR is cut from a freshly fetched `origin/main` in its own worktree (superpo
 | PR | Tasks | Ships |
 |---|---|---|
 | 3a | 1–5 | Gateway: categories, use counts, the installed list and details, and the skill switch with the operator skip. No new UI: Task 5 only updates the skip setting's explanation in Settings (`SettingsApprovalSkipControl.tsx`) so it matches the switch. |
-| 3b | 6–11 | The Skills tab's Installed view: data layer, tab wiring, redirects and command palette, a slimmer Library, the switch, rows, the skill panel, public truth and browser proof. |
+| 3b | 6a, 6b, 6–11 | Two Gateway fixes (a fresh approval after a decline, and the left-out mark), then the Skills tab's Installed view: data layer, tab wiring, redirects and command palette, a slimmer Library, the switch, rows, the skill panel, public truth and browser proof. |
 | 3c | 12–16 | Discover and one-step install: the source check and install routes, the Discover list, the Discover view, the install panel with Import from Git, and proof. |
 
 ## Global Constraints
@@ -100,7 +100,7 @@ Each PR is cut from a freshly fetched `origin/main` in its own worktree (superpo
 ## Review Focus
 
 1. **The skip setting is off (the default) and the operator switches a skill on.**
-   - The approval opens in the panel, and the row says "Waiting on you in Inbox" with a link. The switch stays Off.
+   - The approval opens in the panel, and the row says "Waiting for your approval" with a "Review" button that opens the panel. The switch stays Off.
    - Approving in one click turns it On once the change applies. Declining says so and leaves it Off. After 15 minutes it says the request expired.
    - A reload while waiting still shows the wait, because the Gateway reports the pending approval.
    - *(Tasks 4, 8, 10)*
@@ -442,6 +442,61 @@ As built (final review, Ruling R10): a paused skill can still be used and loads 
 
 # PR 3b: The Installed view
 
+On 2026-10-29, before PR 3b, the operator answered three more questions with the recommended options:
+1. **"Fresh approval":** asking again after a decline or expiry makes a fresh approval, linked to the declined one (Task 6a).
+2. **R13 confirmed:** "Built in" applies only to skills that came from GoatCitadel itself. Everything else reads "Imported".
+3. **"Mark the row":** #640 made Chat follow a workspace's skill choices, so a row for a skill those choices leave out says so (Task 6b).
+
+### Task 6a: Ask again after a decline or expiry (Gateway)
+
+Today the `skill.lifecycle` approval id comes only from the request and the skill's state. A declined or expired request therefore replays the same decided approval until the skill changes some other way. That holds for every caller: the Capabilities switch, Library's state routes and Chat's `/skill` commands.
+
+**Files:**
+- Modify: `apps/gateway/src/services/skill-governance-journey-producer.ts`
+  - `SkillLifecycleApprovalBindingV1` gains `supersedesApprovalId?: string`.
+  - `parseSkillLifecycleApprovalBinding` allows it and checks it is a canonical id.
+  - `deriveSkillLifecycleApprovalId` hashes it only when present. An approval made before this change keeps its id.
+- Modify: `apps/gateway/src/services/skill-state-service.ts`: in `commitSkillLifecycleApproval`, inside the same transaction, walk the chain.
+  - A request whose approval was rejected (by a person or by expiry) or edited gets a new binding with `supersedesApprovalId` set to that approval. Edited counts because an edited skill approval never applies (R9a).
+  - Bound the walk. Stopping on a run of declines is an error, not a loop.
+  - A pending or approved approval still replays as today.
+- Modify: `capability-skill-actions-service.ts` only where the new owner answer changes its replay branch. `declined` stays for the expiry race (`ApprovalExpiredAfterCommitError`).
+- Modify the docs: the contract's `CapabilitySkillActionOutcome` doc ("Asking again makes a fresh approval, linked to this one"), and the approval identity note in `docs/CANONICAL_RUNTIME_STATE_MODEL.md`.
+- Test: `skill-state-service` tests, the journey producer tests, and the real-Gateway `capability-skill-actions.integration.test.ts`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `it("makes a fresh approval, linked to the rejected one, when the same change is asked again")`
+  - `it("makes a fresh approval after the first one expires")`
+  - `it("makes a fresh approval after an edited one")`
+  - `it("still replays a pending approval and an approved one")`
+  - `it("keeps the id of an approval made before the change")` (no `supersedesApprovalId` → same id as before)
+  - `it("applies the fresh approval through its own effect")` (real Gateway: decline, ask again, approve, the skill changes)
+  - `it("refuses a binding whose supersedesApprovalId is not a canonical id")`
+- [ ] **Step 2: Run them and confirm they fail.** **Step 3: Implement it.** **Step 4: Run them, the old skill route tests, `pnpm verify:journey:producers` and the Gateway typecheck (PASS).**
+- [ ] **Step 5: Commit:** `fix(gateway): asking again after a declined skill change makes a fresh approval`.
+
+### Task 6b: Left out of this workspace (Gateway)
+
+**Files:**
+- Modify: `packages/contracts/src/capability-skills.ts`. `CapabilitySkillItem` gains `leftOutOfWorkspace?: boolean`.
+  - It is true when the skill is not among those the workspace's turns may load, which is exactly the list `WorkspaceTurnSkills.listSkills(workspaceId)` returns (the resolver Chat uses).
+  - It is false for every skill when the workspace and its Citadel choose nothing (`"ALL"`).
+  - A workspace's own self-authored skills are never left out.
+  - It is absent when that list can't be read, and an issue line says so.
+- Modify: `capability-skills-composition.ts`, `capability-skills-service.ts` and `capability-skills-projection.ts`: one reader, `listWorkspaceTurnSkills: (workspaceId) => Promise<SkillListItem[]>`.
+- Modify: `gateway-service.ts`: one registration line, `this.workspaceTurnSkills.listSkills(workspaceId)`. GatewayService stays at or under 13132 counted lines. Run `verify:architecture:metrics`, and stop for a C0 allowance if any count rises.
+- Modify: `docs/CANONICAL_RUNTIME_STATE_MODEL.md:242`. The Skills tab marks the skills a workspace's choices leave out.
+- Test: the service, projection and composition tests, and `capability-skills.integration.test.ts`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `it("marks a skill the workspace's choices leave out")`
+  - `it("marks nothing when the workspace chooses all skills")`
+  - `it("never marks the workspace's own self-authored skills")`
+  - `it("leaves the mark out, with an issue line, when the workspace's skills can't be read")`
+  - real Gateway: choose one skill for a workspace, and every other row is marked.
+- [ ] **Step 2: Run them and confirm they fail.** **Step 3: Implement it, then rebuild contracts.** **Step 4: Run them, the Gateway typecheck, `verify:architecture:metrics` and `docs:check` (PASS).**
+- [ ] **Step 5: Commit:** `feat(gateway): mark the skills a workspace's choices leave out`.
+
 ### Task 6: Shared client and cockpit data
 
 **Files:**
@@ -562,6 +617,13 @@ export function useSkillSwitch(item: CapabilitySkillItem): SkillSwitch;
     - rejected → "Not changed. The change was declined."
     - expired → "Not changed. The request expired."
   - `unchanged`: refetch.
+  - `declined` (the expiry race): "Not changed. The request expired." when `expired`, otherwise "Not changed. The change was declined."
+  - A declined or expired line stays until the next click. That click sends the request again, and the Gateway makes a fresh approval (Task 6a).
+- **Polling.**
+  - It stops when `skill_state_mutation_applied` arrives for the skill.
+  - It backs off.
+  - Every switch shares one list refetch: the list route allows 60 requests a minute, and each one is heavy.
+- **Never send the current state.** A click that asks for the state the skill already has sends nothing, because the switch's request carries no note and would clear one.
 - **A waiting item survives a reload.** The list's `pendingApprovalId` is the truth: when it is set and the store is empty, the hook shows waiting for it.
 - **Errors:**
   - a 409 for a stale revision gives "Changed elsewhere. Reload to see the latest.", with `conflict: true`, and `reload()` refetches
@@ -608,9 +670,10 @@ export function skillSearchSuggestion(items: readonly CapabilitySkillItem[]): st
 
 | Condition (first match) | State word | Reason line |
 |---|---|---|
-| waiting | Waiting on you in Inbox | "Open in Inbox" link (`inboxApprovalLink`) |
+| waiting | Waiting for your approval | a "Review" button that opens the panel (R37: the Inbox can't list skill approvals) |
 | off | Off | The AI can't use it |
-| paused | Paused | Used only when you name it |
+| `leftOutOfWorkspace` (Task 6b) | Left out of this workspace | This workspace's skill choices leave it out, so the AI can't use it here. Links to the workspace's capability settings. The switch still works for the whole install. |
+| paused | Paused | Used when you name it, or on a close match if you allow it |
 | on, not callable | Not usable yet | It hasn't been reviewed, so the AI can't use it |
 | on, callable | On | the uses line |
 
@@ -619,6 +682,8 @@ export function skillSearchSuggestion(items: readonly CapabilitySkillItem[]): st
   - `Not used yet` when n is 0
   - `Uses unknown` when usage is missing or failed
 - **Pinned:** the switch is disabled with "Pinned. Change it through a proposal in Library."
+- **Not switchable** (`switchable: false`, a workspace's self-authored skill): no switch, and a plain line, "Can't be switched from here", with no skill id. Link to the place that can turn it off only if the implementer finds one in the code.
+- **Candidates:** the count is install-wide. The copy never implies it counts this workspace only.
 - **Candidates:** when `candidatesWaiting > 0`, one `NoticeLine` reads "`${plural(n, "candidate")}` waiting in Library", linking to `/library?type=candidate_skill`.
 - **Count trouble:** "Use counts can't be read right now." with "Try again". "Refresh counts" calls `fetchCapabilitySkillUsage({ refresh: true })` and writes the answer into the usage cache (P2 Task 8 note).
 
@@ -680,8 +745,8 @@ export function skillIdFromSearch(search: string): string | undefined;
    - the waiting or failure line under it
    - "Pause" when on, or "Resume" when paused, through `setPaused`
    - "Takes effect in new chats." when on
-   - "Paused skills are used only when you name them in Chat." when paused
-4. **The approval in place.** When `waitingApprovalId` is set, `SettingsApprovalDialog` opens once for it. "Open in Inbox" stays beside the waiting line.
+   - "Paused skills are used when you name them in Chat. Chat picks one on its own for a close match only if you've turned off first use confirmation." when paused
+4. **The approval in place.** When `waitingApprovalId` is set, `SettingsApprovalDialog` opens once for it, and "Review the change" reopens it (R37).
 5. "Uses": the uses line plus "last used `<relative time>`" when known.
 6. "Tags": each tag is a button that puts the tag in the tab's search and closes the panel.
 7. **"Instructions":** the `SKILL.md` body as safe markdown (`NativeMessageRenderer`, role assistant). Its container carries the class that scopes the markdown styles. It shows the first 12 lines, then "Show all".
@@ -704,7 +769,7 @@ export function skillIdFromSearch(search: string): string | undefined;
 
 - [ ] **Step 1: Write the failing tests:**
   - `it("renders a script tag in the instructions as text")`.
-  - `it("opens the approval in place once, and keeps Open in Inbox")`.
+  - `it("opens the approval in place once, and reopens it from the panel")`.
   - `it("pauses and resumes from the panel")`.
   - `it("searches the tab when a tag is pressed")`.
   - `it("keeps ids, URLs and hashes inside Technical details")`.

@@ -33,6 +33,7 @@ import {
   persistSkillSystemDisableEvidence,
   skillLifecycleRequestJourneyIdempotencyKey,
   SkillLifecycleApplyError,
+  supersedeSkillLifecycleApprovalBinding,
   type AsyncGovernedLifecycleEventRepository,
   type SkillGovernanceSystemAuthority,
   type SkillLifecycleApprovalAction,
@@ -44,6 +45,11 @@ const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const SKILL_STATE_METADATA_SETTING_KEY = "skill_state_metadata_v1";
 const SKILL_ACTIVATION_POLICY_AGGREGATE_ID = "global";
 const SKILL_LIFECYCLE_APPROVAL_TTL_MS = 15 * 60_000;
+/**
+ * How many declined approvals for one exact request against one exact state a request walks past. Asking again after
+ * that many in a row is refused, before anything is written, rather than chained further.
+ */
+export const SKILL_LIFECYCLE_APPROVAL_CHAIN_LIMIT = 32;
 const DEFAULT_SKILL_ACTIVATION_POLICY: Omit<SkillActivationPolicy, "revision"> = {
   guardedAutoThreshold: 0.72,
   requireFirstUseConfirmation: true,
@@ -137,9 +143,15 @@ export interface ActivationPolicyMutationAuthorityInput {
   requesterId?: string;
 }
 
+/**
+ * What a request hands back: an approval that waits, or one already approved. A rejected or edited approval never
+ * applies, so it is never handed back; asking again makes a fresh approval linked to it.
+ */
+export type SkillLifecycleOpenApprovalStatus = Extract<ApprovalRequest["status"], "pending" | "approved">;
+
 export interface SkillLifecyclePendingApproval {
   approvalId: string;
-  status: ApprovalRequest["status"];
+  status: SkillLifecycleOpenApprovalStatus;
   kind: typeof SKILL_LIFECYCLE_APPROVAL_KIND;
   action: SkillLifecycleApprovalAction;
   subjectKind: SkillLifecycleSubjectKind;
@@ -207,6 +219,22 @@ interface ActivationPolicyMutationV1 {
   selectionMode?: SkillActivationPolicy["selectionMode"];
 }
 
+/** One request verb's ask: the first binding for the exact request and reviewed state, and what its approval shows. */
+interface SkillLifecycleApprovalRequest {
+  binding: SkillLifecycleApprovalBindingV1;
+  requesterId: string;
+  mutation: unknown;
+  skillIds: string[];
+  preview: Record<string, unknown>;
+}
+
+interface StoredSkillLifecycleApproval {
+  approvalId: string;
+  approval: ApprovalRequest;
+  status: SkillLifecycleOpenApprovalStatus;
+  created: boolean;
+}
+
 /**
  * Owns the skill runtime-state substrate: the `skill_state` /
  * `skill_activation_events` tables, the system-settings-backed usage metadata and
@@ -214,8 +242,9 @@ interface ActivationPolicyMutationV1 {
  *
  * HX-402 P2: the operator mutation surface is approval-first. The request verbs
  * commit one canonical `skill.lifecycle` approval (deterministic payload-hash
- * UUID identity over the exact request AND the exact reviewed state) plus
- * immutable requester Journey evidence — and never mutate. The recovered
+ * UUID identity over the exact request AND the exact reviewed state, chained
+ * past any declined approval for that same pair) plus immutable requester
+ * Journey evidence — and never mutate. The recovered
  * `skill_lifecycle_apply` approval effect is the sole executor; fail-safe
  * internal disable runs only under the module-private branded system authority.
  */
@@ -500,73 +529,14 @@ export class SkillStateService {
     return { pendingApproval };
   }
 
-  private async commitSkillLifecycleApproval(input: {
-    binding: SkillLifecycleApprovalBindingV1;
-    requesterId: string;
-    mutation: unknown;
-    skillIds: string[];
-    preview: Record<string, unknown>;
-  }): Promise<SkillLifecyclePendingApproval> {
+  private async commitSkillLifecycleApproval(
+    input: SkillLifecycleApprovalRequest,
+  ): Promise<SkillLifecyclePendingApproval> {
     const authority = this.requireApprovalAuthority();
-    const approvalId = deriveSkillLifecycleApprovalId(input.binding);
-    const payload = buildSkillLifecycleApprovalPayload({
-      binding: input.binding,
-      requesterId: input.requesterId,
-      mutation: input.mutation,
-    });
-    const committed = await this.ctx.storage.runImmediateTransaction(async () => {
-      const stored = await authority.approvals.createDeterministicDetachedWithTtlDuration(
-        {
-          approvalId,
-          kind: SKILL_LIFECYCLE_APPROVAL_KIND,
-          riskLevel: "danger",
-          payload,
-          preview: { ...input.preview },
-        },
-        SKILL_LIFECYCLE_APPROVAL_TTL_MS,
-      );
-      if (stored.created) {
-        await authority.approvalEvents.append({
-          approvalId,
-          eventType: "created",
-          actorId: "system",
-          timestamp: stored.approval.createdAt,
-          payload: {
-            kind: stored.approval.kind,
-            riskLevel: stored.approval.riskLevel,
-            status: stored.approval.status,
-          },
-        });
-        await authority.governanceJourneyEvents.create(
-          buildSkillLifecycleRequestJourneyEvent({
-            approval: stored.approval,
-            binding: input.binding,
-            requesterId: input.requesterId,
-            targetCount: input.skillIds.length,
-          }),
-        );
-      } else {
-        // The original requester remains the immutable evidence. A byte-exact
-        // replay from the SAME requester converges; a different requester's
-        // identical mutation conflicts in the approvals owner because the
-        // requester is payload material. A missing evidence row self-heals so
-        // the recovered effect can never execute without requester evidence.
-        const evidence = await authority.governanceJourneyEvents.findByIdempotencyKey(
-          skillLifecycleRequestJourneyIdempotencyKey(approvalId),
-        );
-        if (!evidence) {
-          await authority.governanceJourneyEvents.create(
-            buildSkillLifecycleRequestJourneyEvent({
-              approval: stored.approval,
-              binding: input.binding,
-              requesterId: input.requesterId,
-              targetCount: input.skillIds.length,
-            }),
-          );
-        }
-      }
-      return stored;
-    });
+    const committed = await this.ctx.storage.runImmediateTransaction(
+      async () => await storeSkillLifecycleApproval(authority, input),
+    );
+    const { approvalId, approval } = committed;
     if (committed.created) {
       await this.host.publishRealtime?.("skill_mutation_approval_requested", "skills", {
         approvalId,
@@ -578,15 +548,15 @@ export class SkillStateService {
     }
     return {
       approvalId,
-      status: committed.approval.status,
+      status: committed.status,
       kind: SKILL_LIFECYCLE_APPROVAL_KIND,
       action: input.binding.action,
       subjectKind: input.binding.subjectKind,
       ...(input.binding.subjectId === undefined ? {} : { subjectId: input.binding.subjectId }),
       requestSha256: input.binding.requestSha256,
       expectedStateSha256: input.binding.expectedStateSha256,
-      ...(committed.approval.expiresAt ? { expiresAt: committed.approval.expiresAt } : {}),
-      createdAt: committed.approval.createdAt,
+      ...(approval.expiresAt ? { expiresAt: approval.expiresAt } : {}),
+      createdAt: approval.createdAt,
       replayed: !committed.created,
       skillIds: [...input.skillIds],
     };
@@ -1286,6 +1256,117 @@ export class SkillStateService {
     }
     return output;
   }
+}
+
+// ── the `skill.lifecycle` approval chain ───────────────────────────────
+
+/**
+ * Store the approval for one request, inside the caller's transaction. Its id follows from the request and the state
+ * it starts from, so a pending or approved approval is handed back as it is. A rejected (by a person or by expiry) or
+ * edited approval never applies, so the request walks past it to a fresh approval whose binding names it. The walk is
+ * deterministic, so concurrent requests converge on the same approval. A run of declines as long as the chain limit is
+ * refused before anything is written.
+ */
+async function storeSkillLifecycleApproval(
+  authority: SkillLifecycleApprovalAuthorityHost,
+  input: SkillLifecycleApprovalRequest,
+): Promise<StoredSkillLifecycleApproval> {
+  let binding = input.binding;
+  for (let link = 0; link < SKILL_LIFECYCLE_APPROVAL_CHAIN_LIMIT; link += 1) {
+    const approvalId = deriveSkillLifecycleApprovalId(binding);
+    const current = await readSkillLifecycleApprovalStatus(authority, approvalId);
+    if (current === undefined || isOpenSkillLifecycleApprovalStatus(current)) {
+      const stored = await authority.approvals.createDeterministicDetachedWithTtlDuration(
+        {
+          approvalId,
+          kind: SKILL_LIFECYCLE_APPROVAL_KIND,
+          riskLevel: "danger",
+          payload: buildSkillLifecycleApprovalPayload({
+            binding,
+            requesterId: input.requesterId,
+            mutation: input.mutation,
+          }),
+          preview: { ...input.preview },
+        },
+        SKILL_LIFECYCLE_APPROVAL_TTL_MS,
+      );
+      const { status } = stored.approval;
+      // Any other status means it was declined between the read above and the create's own read: walk past it too.
+      if (isOpenSkillLifecycleApprovalStatus(status)) {
+        await recordSkillLifecycleRequestEvidence(authority, { ...stored, binding, input });
+        return { approvalId, approval: stored.approval, status, created: stored.created };
+      }
+    }
+    binding = supersedeSkillLifecycleApprovalBinding(input.binding, approvalId);
+  }
+  throw new ConflictError({
+    code: "STATE_CONFLICT",
+    message: `This exact change was turned down ${SKILL_LIFECYCLE_APPROVAL_CHAIN_LIMIT} times in a row, so it can't be asked for again until the current state changes.`,
+  });
+}
+
+/**
+ * The request Journey evidence for a stored approval. A new approval writes it with the approval. For a replay, the
+ * original requester remains the immutable evidence: a byte-exact replay from the SAME requester converges, and a
+ * different requester's identical mutation conflicts in the approvals owner because the requester is payload material.
+ * A missing evidence row self-heals so the recovered effect can never execute without requester evidence.
+ */
+async function recordSkillLifecycleRequestEvidence(
+  authority: SkillLifecycleApprovalAuthorityHost,
+  stored: {
+    approval: ApprovalRequest;
+    created: boolean;
+    binding: SkillLifecycleApprovalBindingV1;
+    input: SkillLifecycleApprovalRequest;
+  },
+): Promise<void> {
+  const { approval, binding, input } = stored;
+  if (stored.created) {
+    await authority.approvalEvents.append({
+      approvalId: approval.approvalId,
+      eventType: "created",
+      actorId: "system",
+      timestamp: approval.createdAt,
+      payload: { kind: approval.kind, riskLevel: approval.riskLevel, status: approval.status },
+    });
+  } else if (
+    await authority.governanceJourneyEvents.findByIdempotencyKey(
+      skillLifecycleRequestJourneyIdempotencyKey(approval.approvalId),
+    )
+  ) {
+    return;
+  }
+  await authority.governanceJourneyEvents.create(
+    buildSkillLifecycleRequestJourneyEvent({
+      approval,
+      binding,
+      requesterId: input.requesterId,
+      targetCount: input.skillIds.length,
+    }),
+  );
+}
+
+/** The stored approval's status, or undefined when no approval has that id yet. */
+async function readSkillLifecycleApprovalStatus(
+  authority: SkillLifecycleApprovalAuthorityHost,
+  approvalId: string,
+): Promise<ApprovalRequest["status"] | undefined> {
+  try {
+    return (await authority.approvals.get(approvalId)).status;
+  } catch (error) {
+    if (error instanceof NotFoundError) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Only a waiting or approved approval is handed back again. Every other status is declined: rejected (by a person, or
+ * by expiry, whose rejection names the expiry actor) or edited, and none of them ever applies.
+ */
+function isOpenSkillLifecycleApprovalStatus(
+  status: ApprovalRequest["status"],
+): status is SkillLifecycleOpenApprovalStatus {
+  return status === "pending" || status === "approved";
 }
 
 // ── canonical reviewed-state material builders ─────────────────────────

@@ -105,12 +105,15 @@ export function countWaitingCandidates(catalog: readonly CapabilityCatalogEntry[
 
 /**
  * One row per loaded skill, ordered by name and then id in plain code-unit order, so no locale changes it. A skill is
- * switchable only when the skill state owner's own lookup holds it.
+ * switchable only when the skill state owner's own lookup holds it. A skill is left out of the workspace when the ids
+ * its turns may load (`turnSkillIds`) don't hold it; without them no row makes the claim.
  */
 export function buildCapabilitySkillItems(input: {
   skills: readonly SkillListItem[];
   pendingApprovalIds: ReadonlyMap<string, string>;
   switchableSkillIds: ReadonlySet<string>;
+  /** The ids of the skills the workspace's turns may load. Absent when they couldn't be read. */
+  turnSkillIds?: ReadonlySet<string>;
   shippedSkillDirs: ShippedSkillDirs;
 }): CapabilitySkillItem[] {
   return input.skills
@@ -127,6 +130,7 @@ export function buildCapabilitySkillItems(input: {
         callable: skill.callable === true,
         revision: skill.revision,
         switchable: input.switchableSkillIds.has(skill.skillId),
+        ...(input.turnSkillIds ? { leftOutOfWorkspace: !input.turnSkillIds.has(skill.skillId) } : {}),
         pinned: skill.pinned === true,
         ...(skill.lifecycleState ? { lifecycleState: skill.lifecycleState } : {}),
         tags: [...(skill.tags ?? [])],

@@ -11,6 +11,7 @@ import { StatusBadge } from "../../../ui/StatusBadge";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { GroupSwitch, GroupSwitchNotes, GroupSwitchState } from "./GroupSwitchParts";
 import { ToolGroupToolList } from "./ToolGroupToolList";
+import { ToolPolicyCheck } from "./ToolPolicyCheck";
 import { TOOL_GROUP_NOTES } from "./tool-group-notes";
 import { SAFETY_RULES_HREF } from "./tool-links";
 import { presentGroupBlockLines, presentToolGroupState } from "./tool-view";
@@ -109,6 +110,7 @@ function GroupDetails({
             </div>
           ))}
         </dl>
+        <ToolPolicyCheck group={group} />
       </TechnicalDetails>
     </div>
   );

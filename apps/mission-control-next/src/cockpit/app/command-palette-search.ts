@@ -1,12 +1,18 @@
-import type { CapabilityKind, OperatorInboxResponse } from "@goatcitadel/contracts";
+import type { CapabilityCatalogEntry, CapabilityKind, OperatorInboxResponse } from "@goatcitadel/contracts";
 import { fetchChatSessionSearch } from "@goatcitadel/mission-control-shared/api/chat";
 import { fetchWorkspaces } from "@goatcitadel/mission-control-shared/api/workspaces";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { presentCapabilityTitle } from "@goatcitadel/mission-control-shared/content/capability-rows";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { inboxMatchesWorkspace, inboxKnownCount, inboxItemKindLabel } from "../areas/inbox/inbox-presentation";
-import { filterCapabilities, type CapabilityCatalogView } from "../areas/library/capability-catalog";
+import {
+  filterCapabilities,
+  type CapabilityCatalogView,
+  type CatalogFilters,
+} from "../areas/library/capability-catalog";
 import { catalogHref } from "../areas/library/capability-catalog-route";
+import { skillIdFromCapabilityId, skillItemHref } from "../areas/capabilities/skills/skill-links";
+import { toolHref, toolNameFromCapabilityId } from "../areas/capabilities/tools/tool-links";
 import {
   loadLibraryResources,
   resourceId,
@@ -130,6 +136,28 @@ function capabilityKindLabel(kind: string): string {
   return CAPABILITY_KIND_LABELS[kind as CapabilityKind] ?? "Capability";
 }
 
+/** Skills and tools open in Capabilities; every other kind opens its Library record. */
+function capabilityResult(
+  item: CapabilityCatalogEntry,
+  filters: CatalogFilters,
+): Pick<PaletteObject, "description" | "target"> {
+  const kind = capabilityKindLabel(item.kind);
+  if (item.kind === "skill")
+    return {
+      description: `${kind} · Capabilities › Skills`,
+      target: { href: skillItemHref(item.skillId ?? skillIdFromCapabilityId(item.capabilityId)) },
+    };
+  if (item.kind === "tool")
+    return {
+      description: `${kind} · Capabilities › Tools`,
+      target: { href: toolHref(item.toolName ?? toolNameFromCapabilityId(item.capabilityId)) },
+    };
+  return {
+    description: `${kind} · Installation catalog; availability is reviewed in Library`,
+    target: { href: catalogHref(filters, item) },
+  };
+}
+
 /** Filters the installation capability catalog the cockpit already caches. */
 export function searchCapabilities(catalog: CapabilityCatalogView, text: string): PaletteSourceResult {
   const filters = { search: text, kind: "all", status: "all" as const, trust: "all" };
@@ -137,8 +165,7 @@ export function searchCapabilities(catalog: CapabilityCatalogView, text: string)
     items: filterCapabilities(catalog.items, filters).map((item) => ({
       id: `${item.kind}:${item.capabilityId}`,
       label: presentCapabilityTitle(item),
-      description: `${capabilityKindLabel(item.kind)} · Installation catalog; availability is reviewed in Library`,
-      target: { href: catalogHref(filters, item) },
+      ...capabilityResult(item, filters),
     })),
     coverage: [
       "Installation catalog, shared across workspaces. Search does not grant tool or skill access.",

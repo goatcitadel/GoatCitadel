@@ -80,6 +80,7 @@ import { recordRouteAction } from "../route-diagnostics";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 
 import type { NativeRoutePagesProps } from "../types";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import "../native-routes.css";
 
 export function RuntimeRoutePage({
@@ -381,7 +382,7 @@ export function RuntimeRoutePage({
       setAutomationNotice("Automation recipe drafted. No cron job was created.");
     } catch (error) {
       if (isMounted()) {
-        setAutomationNotice(error instanceof Error ? error.message : "Could not draft automation recipe.");
+        setAutomationNotice(describeApiError(error, "Could not draft automation recipe.").summary);
       }
     } finally {
       automationLock.current = false;
@@ -425,7 +426,7 @@ export function RuntimeRoutePage({
       setAutomationNotice(`Copied Activepieces template export ${exported.filename}.`);
     } catch (error) {
       if (stillCurrent()) {
-        setAutomationNotice(error instanceof Error ? error.message : "Could not export Activepieces template.");
+        setAutomationNotice(describeApiError(error, "Could not export Activepieces template.").summary);
       }
     } finally {
       automationExportLock.current = false;
@@ -469,7 +470,7 @@ export function RuntimeRoutePage({
       setAutomationNotice(`Copied n8n template export ${exported.filename}.`);
     } catch (error) {
       if (stillCurrent()) {
-        setAutomationNotice(error instanceof Error ? error.message : "Could not export n8n template.");
+        setAutomationNotice(describeApiError(error, "Could not export n8n template.").summary);
       }
     } finally {
       automationExportLock.current = false;

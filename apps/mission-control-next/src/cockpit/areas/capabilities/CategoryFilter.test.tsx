@@ -53,6 +53,16 @@ afterEach(() => {
 });
 
 describe("CategoryFilter", () => {
+  it("names its group Categories unless the list says what the buttons choose", async () => {
+    await renderFilter();
+    expect(container.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("Categories");
+
+    await renderFilter({ label: "Where it came from" });
+    expect(container.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("Where it came from");
+    // Naming the group changes nothing about the buttons.
+    expect(buttons().map((button) => button.textContent)).toEqual(["All", "Data", "Development", "Automation", "+2"]);
+  });
+
   it("shows All and the first three options, and presses All when nothing is selected", async () => {
     await renderFilter();
     expect(buttons().map((button) => button.textContent)).toEqual(["All", "Data", "Development", "Automation", "+2"]);

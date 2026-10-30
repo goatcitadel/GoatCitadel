@@ -41,7 +41,7 @@ const destinations: Record<string, string> = {
   "extension-sdk": "/settings/connections",
   "packaging-remote": "/system/health",
   "mobile-companion": "/settings/safety#device-access",
-  "canvas-a2ui": "/library/capabilities",
+  "canvas-a2ui": "/capabilities/skills",
 };
 export function FirstRunVerification() {
   const { navigate } = useCockpitRoute();

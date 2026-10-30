@@ -41,6 +41,12 @@ export interface OperatorInboxItem {
     runId?: string;
     deadLetterId?: string;
     approvalId?: string;
+    /**
+     * The approval belongs to no workspace (install-wide, such as a skill switch change). Every workspace's Inbox
+     * lists it, `workspaceId` is then the Inbox it is listed in, and its record is read without a workspace.
+     * Present only on approval items whose approval `isInstallWideApproval`.
+     */
+    installWide?: true;
     /** Server-authored tool id of a tool approval, so the Inbox can name the action in plain words. */
     toolName?: string;
     planId?: string;

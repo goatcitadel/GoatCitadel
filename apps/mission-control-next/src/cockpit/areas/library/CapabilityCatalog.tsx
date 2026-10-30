@@ -40,7 +40,9 @@ import {
   type WorkspacePolicyEvidence,
 } from "./CapabilityEvidence";
 import { CapabilityPolicyInspector } from "./CapabilityPolicyInspector";
+import { CapabilityCatalogEmpty } from "./CapabilityCatalogEmpty";
 import { CapabilityCatalogFilters } from "./CapabilityCatalogFilters";
+import { libraryCatalogItems } from "./library-catalog-kinds";
 import { CapabilitySettings } from "./CapabilitySettings";
 import { CapabilityLastUsed, CapabilityUsageEvidence } from "./CapabilityUsageEvidence";
 import {
@@ -164,7 +166,7 @@ function CatalogDetail({
 /** Above this many capabilities the list windows instead of rendering every row. */
 const CATALOG_WINDOW_THRESHOLD = 200;
 
-/** `footer` is page content under the catalog (the Mesh publications disclosure on the Skills and tools tab). */
+/** `footer` is page content under the catalog (the skill packs and Mesh publications on the Candidates and mesh tab). */
 export function CapabilityCatalog({ footer }: { footer?: ReactNode | ((search: string) => ReactNode) } = {}) {
   const route = useCockpitRoute();
   const location = readCatalogLocation(route.rest, route.search);
@@ -182,7 +184,8 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode | ((search: s
   });
   const isPhone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const view = catalog.isError ? undefined : catalog.data;
-  const items = view?.items ?? EMPTY_ITEMS;
+  // Skills and tools are listed in Capabilities; the Library lists the rest of the Gateway's catalog.
+  const items = useMemo(() => libraryCatalogItems(view?.items ?? EMPTY_ITEMS), [view?.items]);
   const callableKnown = view?.callableKnown ?? false;
   const kinds = useMemo(() => [...new Set(items.map((item) => item.kind))].sort(), [items]);
   const trustLabels = useMemo(() => [...new Set(items.map((item) => item.trustLabel ?? "unlabeled"))].sort(), [items]);
@@ -223,7 +226,7 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode | ((search: s
     <section className={`${AREA_COLUMN} flex flex-col gap-3 p-4 sm:p-6`}>
       <AreaHeader
         title={LIBRARY_SECTION_LABELS.capabilities}
-        description="Inspect skills, tools, and other capabilities available in GoatCitadel."
+        description="Review skill candidates, capability proposals, and what mesh nodes publish."
         actions={
           <Button
             size="sm"
@@ -356,7 +359,7 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode | ((search: s
               ) : null}
             </div>
           ) : (
-            <EmptyState title="No matching capabilities" description="Try a different search or filter." />
+            <CapabilityCatalogEmpty hasEntries={items.length > 0} />
           )}
           {isPhone && selected ? (
             <Sheet

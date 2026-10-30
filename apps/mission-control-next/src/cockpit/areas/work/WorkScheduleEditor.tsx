@@ -14,6 +14,7 @@ import { scheduleCadence, scheduleTimezoneSummary } from "./schedule-cadence";
 import { TimeText } from "../../ui/TimeText";
 import { presentScheduleAction } from "./work-vocabulary";
 import { ScheduleTiming } from "./ScheduleTiming";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function WorkScheduleEditor({
   job,
@@ -64,7 +65,7 @@ export function WorkScheduleEditor({
         review.value.base.action === review.value.action ? review.value.base.actionConfig : undefined,
       );
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Invalid advanced settings.");
+      setNotice(describeApiError(error, "Invalid advanced settings.").summary);
       return;
     }
     const receipt = await operations.execute({

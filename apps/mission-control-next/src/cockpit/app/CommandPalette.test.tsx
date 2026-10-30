@@ -266,14 +266,14 @@ describe("CommandPalette", () => {
     controls.search.groups = [
       {
         id: "library",
-        label: "Library capabilities",
+        label: "Capabilities",
         coverage: "Bounded window.",
         items: [
           {
             id: "c1",
             label: "Schedules capability",
             description: "Capability",
-            target: { href: "/library/capabilities" },
+            target: { href: "/capabilities/skills" },
           },
         ],
       },
@@ -286,7 +286,7 @@ describe("CommandPalette", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     const headings = [...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent);
-    expect(headings).toEqual(["Go to", "Library capabilities"]);
+    expect(headings).toEqual(["Go to", "Capabilities"]);
     expect(document.body.textContent).toContain("Go to Work › Schedules");
     expect(document.body.textContent).not.toContain("Go to Chat");
     expect(document.body.textContent).toContain("Schedules capability");
@@ -332,6 +332,7 @@ describe("CommandPalette", () => {
   });
 
   it.each([
+    ["Skills", "/capabilities/skills"],
     ["Connectors", "/capabilities/connectors"],
     ["Tools", "/capabilities/tools"],
   ])("lists Capabilities › %s as a tab destination", async (label, path) => {

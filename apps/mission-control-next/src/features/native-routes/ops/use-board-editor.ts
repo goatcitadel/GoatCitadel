@@ -10,6 +10,7 @@ import type { OpsSavedBoardsEditorSession } from "./OpsSavedBoardsEditor";
 import { BoardReviewConflict, commitReviewedBoard, type ReviewedBoardMutation } from "./board-mutation";
 import { useBoardMutationState } from "./board-mutation-state";
 import { useBoardMutationView } from "./use-board-mutation-view";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 export function useBoardEditor(
   workspaceId: string,
   board: OpsSavedBoardRecord | undefined,
@@ -86,7 +87,7 @@ export function useBoardEditor(
         });
       setMessage(null);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Review the board name and widget layout before saving.");
+      setMessage(describeApiError(error, "Review the board name and widget layout before saving.").summary);
     }
   }
   async function save() {
@@ -113,7 +114,7 @@ export function useBoardEditor(
     } catch (error) {
       if (current()) {
         setReview(null);
-        setMessage(error instanceof Error ? error.message : "The board could not be saved.");
+        setMessage(describeApiError(error, "The board could not be saved.").summary);
         if (error instanceof BoardReviewConflict) {
           if (base && error.current) setFoundNewer(error.current);
           else if (!base) setCreateIdentityTaken(true);

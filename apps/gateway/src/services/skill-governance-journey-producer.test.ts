@@ -22,6 +22,7 @@ import {
   persistSkillSystemDisableEvidence,
   SKILL_GOVERNANCE_SYSTEM_ACTOR_ID,
   SkillLifecycleApplyError,
+  supersedeSkillLifecycleApprovalBinding,
 } from "./skill-governance-journey-producer.js";
 
 const cleanups: Array<() => void> = [];
@@ -138,6 +139,61 @@ describe("skill governance producer approval identity", () => {
     ).toBeUndefined();
     expect(parseSkillLifecycleApprovalBinding({ ...binding, scopeKind: "workspace" })).toBeUndefined();
     expect(parseSkillLifecycleApprovalBinding({ ...binding, extra: true })).toBeUndefined();
+  });
+
+  it("keeps the id of an approval made before the change", () => {
+    const binding = skillBinding();
+    // Pinned from the derivation before `supersedesApprovalId` existed: a first request keeps its old id and bytes.
+    expect(deriveSkillLifecycleApprovalId(binding)).toBe("ad57f4f5-c2df-3dd0-0b04-4899ec135ad8");
+    expect(deriveSkillLifecycleApprovalId({ ...binding, supersedesApprovalId: undefined })).toBe(
+      "ad57f4f5-c2df-3dd0-0b04-4899ec135ad8",
+    );
+    expect(binding).not.toHaveProperty("supersedesApprovalId");
+    const payload = buildSkillLifecycleApprovalPayload({
+      binding,
+      requesterId: "operator-one",
+      mutation: { state: "enabled", note: null },
+    });
+    expect(payload.skillLifecycle).not.toHaveProperty("supersedesApprovalId");
+  });
+
+  it("derives a fresh id for asking again, linked to the declined approval", () => {
+    const binding = skillBinding();
+    const declinedId = deriveSkillLifecycleApprovalId(binding);
+    const again = supersedeSkillLifecycleApprovalBinding(binding, declinedId);
+    expect(again).toEqual({ ...binding, supersedesApprovalId: declinedId });
+    const freshId = deriveSkillLifecycleApprovalId(again);
+    expect(freshId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(freshId).not.toBe(declinedId);
+    // The link is identity material: each declined approval leads to its own next one.
+    expect(deriveSkillLifecycleApprovalId(supersedeSkillLifecycleApprovalBinding(binding, freshId))).not.toBe(freshId);
+    expect(deriveSkillLifecycleApprovalId(again)).toBe(freshId);
+    // The stored payload carries the link, so the executor re-derives the same id.
+    const payload = buildSkillLifecycleApprovalPayload({
+      binding: again,
+      requesterId: "operator-one",
+      mutation: { state: "enabled", note: null },
+    });
+    const parsed = parseSkillLifecycleApprovalBinding(payload.skillLifecycle);
+    expect(parsed).toEqual(again);
+    expect(deriveSkillLifecycleApprovalId(parsed!)).toBe(freshId);
+  });
+
+  it("refuses a binding whose supersedesApprovalId is not a canonical id", () => {
+    const binding = skillBinding();
+    // A canonical id is accepted…
+    expect(parseSkillLifecycleApprovalBinding({ ...binding, supersedesApprovalId: "approval-1" })).toEqual({
+      ...binding,
+      supersedesApprovalId: "approval-1",
+    });
+    // …and anything else fails closed.
+    for (const supersedesApprovalId of ["", " padded-id", "padded-id ", "x".repeat(257), 42, null, {}]) {
+      expect(parseSkillLifecycleApprovalBinding({ ...binding, supersedesApprovalId })).toBeUndefined();
+    }
+    expect(() => supersedeSkillLifecycleApprovalBinding(binding, " padded-id")).toThrow(
+      /superseded approval ID is invalid/,
+    );
+    expect(() => supersedeSkillLifecycleApprovalBinding(binding, "")).toThrow(/superseded approval ID is invalid/);
   });
 
   it("fail-closed parses the capability binding", () => {

@@ -16,7 +16,7 @@ vi.mock("./CapabilityCatalog", async () => {
   return {
     CapabilityCatalog: ({ footer }: { footer?: ReactNode | ((search: string) => ReactNode) }) => (
       <div>
-        <AreaHeader title="Skills and tools" />
+        <AreaHeader title="Candidates and mesh" />
         Capability directory
         {typeof footer === "function" ? footer("") : footer}
       </div>
@@ -151,6 +151,9 @@ describe("native Library prompt packs", () => {
     await navigate("/library?shell=cockpit");
     const tabs = [...container.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Library sections"] a')];
     expect(tabs.length).toBeGreaterThan(0);
+    // The first section lists what skills and tools do not: candidates, proposals and mesh entries.
+    expect(tabs[0]?.textContent).toBe("Candidates and mesh");
+    expect(LIBRARY_SECTION_LABELS.capabilities).toBe("Candidates and mesh");
     for (const tab of tabs) {
       const section = (new URL(tab.href, "http://cockpit.invalid").pathname.split("/")[2] ??
         "capabilities") as keyof typeof LIBRARY_SECTION_LABELS;
@@ -204,10 +207,10 @@ describe("native Library resource routes", () => {
   it("keeps exact capability links and unsupported resource suffixes with the existing catalog route owner", async () => {
     await navigate("/library?shell=cockpit");
     expect(container.textContent).toContain("mesh publications in scoped-workspace");
-    await navigate("/library/tool/tool%3Aread?shell=cockpit");
+    await navigate("/library/proposal/proposal%3Areview?shell=cockpit");
     expect(container.textContent).toContain("Capability directory");
     expect(container.textContent).not.toContain("mesh publications in");
-    expect(window.location.pathname).toBe("/library/tool/tool%3Aread");
+    expect(window.location.pathname).toBe("/library/proposal/proposal%3Areview");
     await navigate("/library/notes/unknown?shell=cockpit");
     // LB-N10: an unknown Library link says plainly that the page wasn't found and links back to Library.
     expect(container.querySelector("h1")?.textContent).toBe("Page not found");

@@ -6,6 +6,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/review-readiness";
 import { type AppRoute } from "@next/app/route-model";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function useRuntimeReviewReadiness(section: NonNullable<AppRoute["section"]>, supportPanel: string | null) {
   const [reviewReadiness, setReviewReadiness] = useState<ReviewReadinessSummary | null>(null);
@@ -25,7 +26,7 @@ export function useRuntimeReviewReadiness(section: NonNullable<AppRoute["section
         setReviewReadinessError(null);
       } catch (error) {
         if (isMounted()) {
-          setReviewReadinessError(error instanceof Error ? error.message : "Could not load review readiness.");
+          setReviewReadinessError(describeApiError(error, "Could not load review readiness.").summary);
         }
       } finally {
         if (isMounted()) {

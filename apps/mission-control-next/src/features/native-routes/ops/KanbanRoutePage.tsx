@@ -35,6 +35,7 @@ import { EmptyState, NativeButton, NoticeBanner, StatusChip } from "../primitive
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import type { NativeRoutePagesProps } from "../types";
 import { toKanbanCard, toTaskKanbanCard, type KanbanCardModel, type KanbanColumnId } from "./kanban-card-model";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import "../native-routes.css";
 
 const COLUMNS: Array<{ id: KanbanColumnId; label: string }> = [
@@ -139,11 +140,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
     if (runResult.status === "fulfilled") {
       setRuns(runResult.value.items);
       setRunCursor(runResult.value.nextCursor);
-    } else
-      issues.push(
-        "Run records unavailable: " +
-          String(runResult.reason instanceof Error ? runResult.reason.message : runResult.reason),
-      );
+    } else issues.push("Run records unavailable: " + describeApiError(runResult.reason).summary);
     if (taskResult.status === "fulfilled") {
       setTasks(
         linkedTask
@@ -151,11 +148,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
           : taskResult.value.items,
       );
       setTaskCursor(taskResult.value.nextCursor);
-    } else
-      issues.push(
-        "Task records unavailable: " +
-          String(taskResult.reason instanceof Error ? taskResult.reason.message : taskResult.reason),
-      );
+    } else issues.push("Task records unavailable: " + describeApiError(taskResult.reason).summary);
     if (linkedTask) {
       if (taskResult.status === "rejected")
         setTasks((current) => mergeKanbanRows(current, [linkedTask], (item) => item.taskId));
@@ -394,7 +387,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
           admission.uncertain(
             "The task action outcome is unconfirmed. Further actions for these tasks are locked in both shells for this app session.",
           );
-          setActionError(err instanceof Error ? err.message : String(err));
+          setActionError(describeApiError(err).summary);
         } else
           admission.uncertain(
             "The task action outcome is unconfirmed. Further actions for these tasks are locked in both shells for this app session.",

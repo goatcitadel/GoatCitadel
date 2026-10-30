@@ -9,6 +9,7 @@ import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayou
 import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import { formatDateTime, humanizeEnumToken } from "../shared/native-helpers";
 import type { NativeRoutePagesProps } from "../types";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import "../native-routes.css";
 
 export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId }: NativeRoutePagesProps) {
@@ -20,7 +21,13 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sort, setSort] = useState("usage");
   const selected = data?.items.find((item) => item.skillId === selectedId);
-  const ranked = [...(data?.items ?? [])].sort((a, b) => sort === "name" ? a.name.localeCompare(b.name) : sort === "score" ? b.score.mean - a.score.mean : b.usageCount - a.usageCount);
+  const ranked = [...(data?.items ?? [])].sort((a, b) =>
+    sort === "name"
+      ? a.name.localeCompare(b.name)
+      : sort === "score"
+        ? b.score.mean - a.score.mean
+        : b.usageCount - a.usageCount,
+  );
   const [pendingArchive, setPendingArchive] = useState<CuratorSkillStatusItem | null>(null);
 
   async function load() {
@@ -30,7 +37,7 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
       const result = await fetchCuratorStatus();
       setData(result);
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setLoading(false);
     }
@@ -59,7 +66,7 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
       setPendingArchive(null);
       await load();
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setActionBusy(false);
     }
@@ -75,7 +82,7 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
       );
       await load();
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeApiError(err).summary);
     } finally {
       setActionBusy(false);
     }
@@ -129,16 +136,34 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
           title="Skills (ranked by usage)"
           subtitle={data ? `${data.items.length} skills · generated ${formatDateTime(data.generatedAt)}` : "Loading…"}
         >
-          <label className="mc-next-mason-field"><span>Sort skills</span><select className="mc-next-settings-input" value={sort} onChange={(event) => setSort(event.target.value)}><option value="usage">Usage</option><option value="score">Score</option><option value="name">Name</option></select></label>
+          <label className="mc-next-mason-field">
+            <span>Sort skills</span>
+            <select className="mc-next-settings-input" value={sort} onChange={(event) => setSort(event.target.value)}>
+              <option value="usage">Usage</option>
+              <option value="score">Score</option>
+              <option value="name">Name</option>
+            </select>
+          </label>
           {data && data.items.length > 0 ? (
             <div className="mc-next-approvals-list">
               {ranked.map((item) => (
                 <div key={item.skillId} className="mc-next-directory-list-item" data-testid="curator-row">
                   <div className="mc-next-directory-list-head">
-                    <NativeButton variant="ghost" onClick={() => setSelectedId(item.skillId)}>{item.name}</NativeButton>
+                    <NativeButton variant="ghost" onClick={() => setSelectedId(item.skillId)}>
+                      {item.name}
+                    </NativeButton>
                     <span>{item.source}</span>
                   </div>
-                  <p>{item.usageCount} uses · {humanizeEnumToken(item.recommendation)} · {item.immune ? <span data-testid="curator-immune-badge">Immune: {item.immunityReason}</span> : item.archived ? "Archived" : humanizeEnumToken(item.state)}</p>
+                  <p>
+                    {item.usageCount} uses · {humanizeEnumToken(item.recommendation)} ·{" "}
+                    {item.immune ? (
+                      <span data-testid="curator-immune-badge">Immune: {item.immunityReason}</span>
+                    ) : item.archived ? (
+                      "Archived"
+                    ) : (
+                      humanizeEnumToken(item.state)
+                    )}
+                  </p>
                 </div>
               ))}
             </div>
@@ -156,12 +181,52 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
           )}
         </NativeCard>
       </NativeGrid>
-      <DetailInspector open={Boolean(selected)} title={selected?.name ?? "Skill review"} onClose={() => setSelectedId(null)}>
-        {selected ? <>
-          <dl className="mc-next-native-facts"><div><dt>Source</dt><dd>{selected.source}</dd></div><div><dt>Usage</dt><dd>{selected.usageCount}</dd></div><div><dt>Score</dt><dd>{selected.score.mean.toFixed(2)}</dd></div><div><dt>Recommendation</dt><dd>{humanizeEnumToken(selected.recommendation)}</dd></div><div><dt>Status</dt><dd>{selected.immune ? `Immune: ${selected.immunityReason}` : selected.archived ? "Archived" : humanizeEnumToken(selected.state)}</dd></div></dl>
-          <details className="mc-next-inline-disclosure"><summary>Usage and review evidence</summary><pre>{JSON.stringify(selected, null, 2)}</pre></details>
-          {!selected.immune && !selected.archived ? <NativeButton variant="destructive" onClick={() => handleArchive(selected)} disabled={actionBusy}><Archive size={16} /> Archive</NativeButton> : null}
-        </> : null}
+      <DetailInspector
+        open={Boolean(selected)}
+        title={selected?.name ?? "Skill review"}
+        onClose={() => setSelectedId(null)}
+      >
+        {selected ? (
+          <>
+            <dl className="mc-next-native-facts">
+              <div>
+                <dt>Source</dt>
+                <dd>{selected.source}</dd>
+              </div>
+              <div>
+                <dt>Usage</dt>
+                <dd>{selected.usageCount}</dd>
+              </div>
+              <div>
+                <dt>Score</dt>
+                <dd>{selected.score.mean.toFixed(2)}</dd>
+              </div>
+              <div>
+                <dt>Recommendation</dt>
+                <dd>{humanizeEnumToken(selected.recommendation)}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>
+                  {selected.immune
+                    ? `Immune: ${selected.immunityReason}`
+                    : selected.archived
+                      ? "Archived"
+                      : humanizeEnumToken(selected.state)}
+                </dd>
+              </div>
+            </dl>
+            <details className="mc-next-inline-disclosure">
+              <summary>Usage and review evidence</summary>
+              <pre>{JSON.stringify(selected, null, 2)}</pre>
+            </details>
+            {!selected.immune && !selected.archived ? (
+              <NativeButton variant="destructive" onClick={() => handleArchive(selected)} disabled={actionBusy}>
+                <Archive size={16} /> Archive
+              </NativeButton>
+            ) : null}
+          </>
+        ) : null}
       </DetailInspector>
       <ConfirmModal
         open={pendingArchive !== null}

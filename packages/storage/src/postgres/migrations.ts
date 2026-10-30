@@ -15262,6 +15262,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: CHANGE_PLAN_CONNECTOR_INSTALL_POSTGRES_SQL,
     integritySha256: "f7e015be2dbf1b2b9cbbda4f2331b6de14d35365aa05bb75d41af9896f4d1964",
   },
+  {
+    // Parity with SQLite v272: a turn's streamed model reasoning is saved with its trace.
+    version: 221,
+    name: "chat_turn_traces_reasoning_text",
+    sql: `ALTER TABLE chat_turn_traces ADD COLUMN IF NOT EXISTS reasoning_text TEXT;`,
+    integritySha256: "def735ddf240477f99514b1cb7832104fc39be55ce831a8b96cd0331253ab47f",
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

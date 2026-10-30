@@ -1,5 +1,7 @@
 import type { CapabilityKind } from "@goatcitadel/contracts";
 import { readCatalogLocation } from "../areas/library/capability-catalog-route";
+import { SKILLS_HREF, skillIdFromCapabilityId, skillItemHref } from "../areas/capabilities/skills/skill-links";
+import { TOOLS_HREF, toolHref, toolNameFromCapabilityId } from "../areas/capabilities/tools/tool-links";
 import { adaptLegacyUrl } from "../../app/legacy-route-adapter";
 import { buildAppHref, parseAppRoute } from "../../app/route-model";
 import { buildSettingsDestinations } from "../areas/settings/settings-destinations";
@@ -23,12 +25,12 @@ const systemViews = new Set([
   "improvement",
   "runtime",
 ]);
-// Connectors and Tools are the shipped Capabilities tabs; the other tabs resolve missing until they exist.
-const capabilitiesViews = new Set(["connectors", "tools"]);
-// The catalog filters the old Library tools address could carry. Tools has no such filters, so they stay behind.
+// Skills, Connectors and Tools are the shipped Capabilities tabs; the other tabs resolve missing until they exist.
+const capabilitiesViews = new Set(["skills", "connectors", "tools"]);
+// The catalog filters the old Library skills and tools addresses could carry. Capabilities has no such filters, so
+// they stay behind.
 const libraryCatalogFilterParams = ["q", "type", "status", "trust"];
 const libraryViews = new Set([
-  "capabilities",
   "memory",
   "notes",
   "files",
@@ -77,6 +79,29 @@ const opsNative: Record<string, string> = {
 };
 /** Legacy Cowork board and task inputs normalize to the Work board (`/cowork` itself normalizes to Chat). */
 const coworkWorkViews = new Set(["board", "tasks"]);
+
+/**
+ * Where an old Library address for skills or tools lives now, as a Capabilities path with the query it needs, or
+ * undefined for an address that stayed in the Library. A record link opens its own panel: a skill its skill, a tool
+ * the group it belongs to (or the Tools tab for a tool in no group).
+ */
+function capabilitiesAddressFor(parts: readonly string[], url: URL): string | undefined {
+  const section = parts[1];
+  if (parts.length === 1) {
+    const type = url.searchParams.get("type");
+    return type === "skill" ? SKILLS_HREF : type === "tool" ? TOOLS_HREF : undefined;
+  }
+  if (parts.length === 2)
+    return section === "skills" || section === "capabilities"
+      ? SKILLS_HREF
+      : section === "tools"
+        ? TOOLS_HREF
+        : undefined;
+  const { selection } = readCatalogLocation(parts.slice(1), url.search);
+  if (selection?.kind === "skill") return skillItemHref(skillIdFromCapabilityId(selection.id));
+  if (selection?.kind === "tool") return toolHref(toolNameFromCapabilityId(selection.id));
+  return undefined;
+}
 
 /** Conversation publication follows route coverage, including root/alias entries, but never Projects. */
 export function isCockpitConversationLocation(input: string): boolean {
@@ -223,19 +248,19 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
       url.searchParams.set("noteId", parts[2]!);
       return native("/library/notes");
     }
-    // Tools moved to the Capabilities area. The catalog filters and the fragment mean nothing there; the workspace and
-    // the shell keep travelling. (An explicit Classic rollback returned earlier and stays on the Library.)
-    if (section === "tools" && parts.length === 2) {
+    // Skills and tools moved to the Capabilities area. The catalog filters and the fragment mean nothing there; the
+    // workspace and the shell keep travelling. (An explicit Classic rollback returned earlier and stays on the Library.)
+    const moved = capabilitiesAddressFor(parts, url);
+    if (moved) {
       for (const key of libraryCatalogFilterParams) url.searchParams.delete(key);
       url.hash = "";
-      return native("/capabilities/tools");
+      const target = new URL(moved, url);
+      target.searchParams.forEach((value, key) => url.searchParams.set(key, value));
+      return native(target.pathname);
     }
     if (parts.length === 1 || (parts.length === 2 && libraryViews.has(section!))) return native();
     const catalog = readCatalogLocation(parts.slice(1), url.search);
-    if (
-      !catalog.invalidSelection &&
-      (catalog.selection ? Object.hasOwn(catalogKinds, catalog.selection.kind) : section === "skills")
-    )
+    if (!catalog.invalidSelection && catalog.selection !== null && Object.hasOwn(catalogKinds, catalog.selection.kind))
       return native();
   }
   if (area === "capabilities" && (parts.length === 1 || (parts.length === 2 && capabilitiesViews.has(section!))))

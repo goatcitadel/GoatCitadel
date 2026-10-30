@@ -2,8 +2,9 @@
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
+import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { ApprovalReviewSummary } from "./ApprovalReviewSummary";
 
 const markup = (node: ReactElement) =>
@@ -131,6 +132,60 @@ it("names the current workspace and shows expiry as a readable time, not an ISO 
   expect(text).not.toContain("ws_current");
   expect(text).not.toContain("2026-01-02T10:30:00.000Z");
   expect(host.querySelector("time")?.getAttribute("dateTime")).toBe("2026-01-02T10:30:00.000Z");
+});
+
+describe("scope of an approval that belongs to no workspace", () => {
+  const DETAILS_KEY = "goatcitadel.ui.technical_details.v1";
+  beforeEach(() => localStorage.setItem(DETAILS_KEY, "true"));
+  afterEach(() => localStorage.removeItem(DETAILS_KEY));
+
+  const review = (approval: ApprovalRequest) => {
+    const host = document.createElement("div");
+    host.innerHTML = markup(
+      <UiPreferencesProvider>
+        <ApprovalReviewSummary approval={approval} workspaceId="ws_current" />
+      </UiPreferencesProvider>,
+    );
+    const section = host.querySelector('section[aria-label="Approval scope and consequences"]')!;
+    const scope = [...section.querySelectorAll("p")].find((node) => node.textContent?.startsWith("Scope:"));
+    const identifiers = [...section.querySelectorAll("details")].find(
+      (node) => node.querySelector("summary")?.textContent === "Scope identifiers",
+    );
+    return { text: section.textContent ?? "", scope: scope?.textContent, identifiers: identifiers?.textContent };
+  };
+  const bulkSkills: ApprovalRequest = {
+    approvalId: "skills",
+    kind: "skill.lifecycle",
+    status: "pending",
+    riskLevel: "caution",
+    explanationStatus: "not_requested",
+    payload: { action: "skill_state_bulk_set", state: "enabled", skillIds: ["planner", "notes"] },
+    preview: {
+      title: "Approve bulk skill state change",
+      action: "skill_state_bulk_set",
+      state: "enabled",
+      skillCount: 2,
+    },
+    createdAt: "2026-01-01",
+    expiresAt: "2026-01-02T10:30:00.000Z",
+  };
+
+  it("states every workspace on this install as the scope and leaves the workspace id out", () => {
+    const { text, scope, identifiers } = review(bulkSkills);
+    expect(scope).toBe("Scope: Every workspace on this install. This decision authorizes this request once.");
+    expect(text).not.toContain("This workspace");
+    expect(text).not.toContain("ws_current");
+    expect(identifiers).toBe("Scope identifiersExpires 2026-01-02T10:30:00.000Z");
+  });
+
+  it("keeps a linked approval's workspace scope and identifiers", () => {
+    const linked = { ...bulkSkills, kind: "tool_invoke", linkage: { workspaceId: "ws_current", sessionId: "sess-1" } };
+    const { scope, identifiers } = review(linked);
+    expect(scope).toBe("Scope: This workspace · one linked conversation. This decision authorizes this request once.");
+    expect(identifiers).toBe(
+      "Scope identifiersWorkspace ws_current · Conversation sess-1 · Expires 2026-01-02T10:30:00.000Z",
+    );
+  });
 });
 
 it("keeps the owner-written consequence when a model explanation arrives, and labels the model's text (#499)", () => {

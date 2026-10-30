@@ -67,7 +67,16 @@ describe("cockpit Settings approval skip", () => {
     const { container, unmount } = await mount();
     try {
       await vi.waitFor(() => expect(container.textContent).toContain("Current: Off"));
-      expect(container.textContent).toContain("Apply my Settings and Capabilities changes without an Inbox approval");
+      // The heading and the checkbox both name the setting; neither sends skill approvals to the Inbox (a skill change
+      // is approved in the Skills tab, where it was asked for, and also waits in the Inbox).
+      expect(container.querySelector("h3")?.textContent).toBe(
+        "Apply my Settings and Capabilities changes without asking first",
+      );
+      expect(container.querySelector("label")?.textContent).toBe(
+        "Apply my Settings and Capabilities changes without asking first",
+      );
+      expect(container.textContent).toContain("apply right away instead of waiting for your approval.");
+      expect(container.textContent).not.toContain("Inbox");
       expect(container.textContent).toContain("connectors you install from Capabilities");
       expect(container.textContent).toContain("skills you switch on from Capabilities");
       // Off, and pausing a skill that is on, apply without asking whatever the setting says (Q1: A, Ruling R10),

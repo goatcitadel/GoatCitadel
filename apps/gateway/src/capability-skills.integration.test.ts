@@ -74,6 +74,8 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
   let app: FastifyInstance | undefined;
   let provider: FakeOpenAiServer | undefined;
   let sequence = 0;
+  /** The workspace the first capture test leaves with an approved self-authored skill. */
+  let captured: { workspaceId: string; skillId: string } | undefined;
   const headers = () => ({ authorization: `Bearer ${TOKEN}`, "idempotency-key": `capability-skills-${++sequence}` });
 
   beforeAll(async () => {
@@ -124,7 +126,7 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
     }
   });
 
-  async function inject(method: "GET" | "POST", url: string, payload?: Record<string, unknown>) {
+  async function inject(method: "GET" | "POST" | "PATCH" | "DELETE", url: string, payload?: Record<string, unknown>) {
     const response = await app!.inject({ method, url, headers: headers(), ...(payload ? { payload } : {}) });
     return response;
   }
@@ -214,15 +216,16 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
       reviewedContentSha256: sha256Hex(SKILL_MARKDOWN),
     });
     expect(staged.statusCode, staged.body).toBe(200);
-    const captured = staged.json<WorkflowSkillCaptureResult>();
-    const skillId = `extra:reviewed-${sha256Hex(captured.candidateId).slice(0, 12)}`;
+    const stagedCapture = staged.json<WorkflowSkillCaptureResult>();
+    const skillId = `extra:reviewed-${sha256Hex(stagedCapture.candidateId).slice(0, 12)}`;
 
     // Staged but not reviewed: a waiting candidate, and not yet a skill.
     const waiting = await readSkills(workspaceId);
     expect(waiting.candidatesWaiting).toBe(1);
     expect(waiting.items.some((item) => item.skillId === skillId)).toBe(false);
 
-    await approveCandidate(captured, workspaceId);
+    await approveCandidate(stagedCapture, workspaceId);
+    captured = { workspaceId, skillId };
 
     const listed = await readSkills(workspaceId);
     const item = listed.items.find((entry) => entry.skillId === skillId);
@@ -234,6 +237,8 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
       lifecycleState: "approved",
       // The skill state owner looks skills up without a workspace, so the switch can't reach this one.
       switchable: false,
+      // This workspace chose nothing, so its turns may load it.
+      leftOutOfWorkspace: false,
     });
     const refused = await inject("POST", `${SKILLS_URL}/state`, {
       workspaceId,
@@ -281,7 +286,8 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
       state: "on",
       switchable: true,
     });
-    expect(research).not.toHaveProperty("hiddenInWorkspace");
+    // The default workspace chose nothing, so its turns may load every one of them.
+    expect(listed.items.every((item) => item.leftOutOfWorkspace === false)).toBe(true);
     expect(listed.items.every((item) => item.switchable)).toBe(true);
     // A revision that moved on is refused before any approval exists, in plain words with its own code.
     const stale = await inject("POST", `${SKILLS_URL}/state`, {
@@ -315,13 +321,54 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
     vi.restoreAllMocks();
   });
 
+  it("marks every skill a workspace's choices leave out, but never its own self-authored skill", async () => {
+    // The shipped bundled skills are loaded by the test above; the first test left this workspace its own skill.
+    const { workspaceId, skillId: ownSkillId } = captured!;
+    const choose = async (resourceRef: string) => {
+      const response = await inject("PATCH", `/api/v1/workspaces/${workspaceId}/capabilities`, {
+        resourceType: "skill",
+        assignments: [{ resourceRef, enabled: true }],
+      });
+      expect(response.statusCode, response.body).toBe(200);
+    };
+    const marks = (response: CapabilitySkillsResponse) =>
+      Object.fromEntries(response.items.map((item) => [item.skillId, item.leftOutOfWorkspace]));
+
+    // Nothing chosen yet: every row, the workspace's own skill included, is one its turns may load.
+    const before = await readSkills(workspaceId);
+    expect(before.items.length).toBeGreaterThan(2);
+    expect(before.items.every((item) => item.leftOutOfWorkspace === false)).toBe(true);
+
+    await choose("bundled:research");
+
+    // Choosing one skill marks every other row; the list itself still shows them all.
+    const after = await readSkills(workspaceId);
+    expect(after.items.map((item) => item.skillId).sort()).toEqual(before.items.map((item) => item.skillId).sort());
+    expect(after.issues).toEqual([]);
+    expect(marks(after)).toEqual(
+      Object.fromEntries(
+        after.items.map((item) => [item.skillId, item.skillId !== "bundled:research" && item.skillId !== ownSkillId]),
+      ),
+    );
+    expect(marks(after)["bundled:research"]).toBe(false);
+    expect(marks(after)[ownSkillId]).toBe(false);
+
+    // Another workspace, which chose nothing, is not affected.
+    expect((await readSkills("default")).items.every((item) => item.leftOutOfWorkspace === false)).toBe(true);
+
+    // Clearing the choice gives every skill back.
+    const reset = await inject("DELETE", `/api/v1/workspaces/${workspaceId}/capabilities?type=skill`);
+    expect(reset.statusCode, reset.body).toBe(200);
+    expect((await readSkills(workspaceId)).items.every((item) => item.leftOutOfWorkspace === false)).toBe(true);
+  });
+
   /** Promotes the captured version through its Change Plan and approves it, as the operator does in the cockpit. */
-  async function approveCandidate(captured: WorkflowSkillCaptureResult, workspaceId: string): Promise<void> {
-    const candidateUrl = `/api/v1/capabilities/candidates/${captured.candidateId}`;
+  async function approveCandidate(capture: WorkflowSkillCaptureResult, workspaceId: string): Promise<void> {
+    const candidateUrl = `/api/v1/capabilities/candidates/${capture.candidateId}`;
     const readCandidate = async () => (await inject("GET", candidateUrl)).json<CandidateSkillDetailRecord>();
     const requested = await inject("POST", `${candidateUrl}/promote`, {
       expectedRevision: (await readCandidate()).revision,
-      versionId: captured.versionId,
+      versionId: capture.versionId,
     });
     expect(requested.statusCode, requested.body).toBe(202);
     const planUrl = `/api/v1/change-plans/${requested.json<{ changePlan: ChangePlanRecord }>().changePlan.planId}`;
@@ -346,7 +393,7 @@ describe("Capabilities skills over the real Gateway", { timeout: 300_000 }, () =
     expect(approved.statusCode, approved.body).toBe(200);
     await vi.waitFor(
       async () => {
-        const version = (await readCandidate()).versions.find((item) => item.versionId === captured.versionId);
+        const version = (await readCandidate()).versions.find((item) => item.versionId === capture.versionId);
         expect(version?.lifecycleState).toBe("approved");
       },
       { timeout: 20_000, interval: 100 },

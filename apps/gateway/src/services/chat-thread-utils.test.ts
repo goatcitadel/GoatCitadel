@@ -101,6 +101,29 @@ describe("chat thread utils", () => {
     expect(thread.systemNoticeHiddenCount).toBe(19);
   });
 
+  it("shows a turn's saved reasoning as its thinking and leaves it off the trace", () => {
+    const thread = buildChatThreadResponse({
+      sessionId: "sess-1",
+      activeLeafTurnId: "turn-2",
+      turns: [
+        {
+          trace: makeTrace("turn-1", { reasoning: "Check the calendar first." }),
+          userMessage: makeMessage("user-turn-1", "user", "When?"),
+          assistantMessage: makeMessage("assistant-turn-1", "assistant", "Tuesday."),
+        },
+        {
+          trace: makeTrace("turn-2", { parentTurnId: "turn-1", startedAt: "2026-03-07T00:01:00.000Z" }),
+          userMessage: makeMessage("user-turn-2", "user", "Thanks"),
+          assistantMessage: makeMessage("assistant-turn-2", "assistant", "Any time."),
+        },
+      ],
+    });
+
+    expect(thread.turns[0]?.thinking).toBe("Check the calendar first.");
+    expect(thread.turns[0]?.trace).not.toHaveProperty("reasoning");
+    expect(thread.turns[1]).not.toHaveProperty("thinking");
+  });
+
   it("builds the selected branch path and sibling metadata from an active leaf", () => {
     const thread = buildChatThreadResponse({
       sessionId: "sess-1",

@@ -42,7 +42,12 @@ interface ApprovalDecisionBarProps {
   item?: OperatorInboxItem;
   sessionId?: string;
   approval: ApprovalRequest;
-  workspaceId: string;
+  /**
+   * The workspace the approval belongs to. `null` is an approval that belongs to none (a skill change): it is read
+   * without a workspace, since a read scoped to one would not find it, and the active workspace stands in everywhere
+   * else (the review, the attempt lock, the Inbox it refreshes).
+   */
+  workspaceId: string | null;
   focusAction?: "approve" | "deny";
   /**
    * The owner record is being re-read in the background. Decisions stay available: every decision re-reads
@@ -56,7 +61,11 @@ interface ApprovalDecisionBarProps {
   compact?: boolean;
   /** Pin the Approve/Deny buttons to the bottom of the scrolling panel so they never need a scroll to reach. */
   stickyDecisions?: boolean;
-  /** The bar sits inside a dialog that is this approval's review, so a danger-level Approve is one click. */
+  /**
+   * The approval's full review is already in front of the operator, so a danger-level Approve is one click: the bar
+   * sits inside a dialog that is this approval's review (Settings), or in the Inbox inspector, below the full review of
+   * a skill change that belongs to no workspace and that the operator asked for themselves.
+   */
   reviewedInPlace?: boolean;
   onResolved: (message: string) => void;
   onInvalidated: (message?: string) => void;
@@ -66,6 +75,7 @@ export function ApprovalDecisionBar(props: ApprovalDecisionBarProps) {
   const { activeWorkspaceId } = useUiPreferences();
   const scope = activeWorkspaceId ?? "default";
   const access = useProjectAccess(scope);
+  const detached = props.workspaceId === null;
   return (
     <ApprovalDecisionReview
       key={canonicalJsonString([
@@ -78,10 +88,21 @@ export function ApprovalDecisionBar(props: ApprovalDecisionBarProps) {
         props.specialistEvidence ? specialistEvidenceKey(props.specialistEvidence) : undefined,
       ])}
       {...props}
+      // A detached approval is shown in the active workspace: the scope check below then follows only the session,
+      // and the review remounts (by its key) when the active workspace changes.
+      workspaceId={props.workspaceId ?? scope}
+      detached={detached}
       activeWorkspaceId={scope}
     />
   );
 }
+
+type ApprovalDecisionReviewProps = Omit<ApprovalDecisionBarProps, "workspaceId"> & {
+  workspaceId: string;
+  /** The approval belongs to no workspace, so it is re-read without one. */
+  detached: boolean;
+  activeWorkspaceId: string;
+};
 
 function ApprovalDecisionReview({
   item,
@@ -96,8 +117,9 @@ function ApprovalDecisionReview({
   reviewedInPlace = false,
   onResolved,
   onInvalidated,
+  detached,
   activeWorkspaceId,
-}: ApprovalDecisionBarProps & { activeWorkspaceId: string }) {
+}: ApprovalDecisionReviewProps) {
   const access = useProjectAccess(workspaceId);
   const queryClient = useQueryClient();
   const attempt = useInboxApprovalAttempt(workspaceId, approval.approvalId);
@@ -130,9 +152,16 @@ function ApprovalDecisionReview({
     if (focusAction === "deny") denyRef.current?.focus();
   }, [focusAction, approval.approvalId]);
 
+  /** The current record, read where it lives: in its workspace, or unscoped for a detached approval. */
+  function readCurrent() {
+    return nullWhenMissing(fetchApproval(approval.approvalId, detached ? {} : { workspaceId }));
+  }
+
   function invalidateOwnerReads() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
-    void queryClient.invalidateQueries({ queryKey: ["approvals", "record", workspaceId, approval.approvalId] });
+    void queryClient.invalidateQueries({
+      queryKey: ["approvals", "record", detached ? null : workspaceId, approval.approvalId],
+    });
     void queryClient.invalidateQueries({ queryKey: ["approval-settlement", workspaceId, approval.approvalId] });
   }
 
@@ -159,7 +188,7 @@ function ApprovalDecisionReview({
     let mutationAttempted = false;
     let resolvedMessage: string | undefined;
     try {
-      const latest = await nullWhenMissing(fetchApproval(approval.approvalId, { workspaceId }));
+      const latest = await readCurrent();
       // A different selection, workspace, or reviewed record unmounts this review.
       // Cancel before dispatch; after dispatch retain the original action's outcome.
       if (!current.current || !access.current()) return;
@@ -239,7 +268,7 @@ function ApprovalDecisionReview({
     setError("");
     setNotice("");
     try {
-      const latest = await nullWhenMissing(fetchApproval(approval.approvalId, { workspaceId }));
+      const latest = await readCurrent();
       if (!current.current || !access.current()) return;
       if (latest?.status === "pending") {
         releaseUncertainInboxApprovalAttempt(workspaceId, approval.approvalId);

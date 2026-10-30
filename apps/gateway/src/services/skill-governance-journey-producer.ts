@@ -94,6 +94,11 @@ export interface SkillLifecycleApprovalBindingV1 {
   action: SkillLifecycleApprovalAction;
   requestSha256: string;
   expectedStateSha256: string;
+  /**
+   * The approval for this same request against this same state that was rejected (by a person or by expiry) or edited
+   * before this one asked again. Absent on a first request, so an approval made before the field existed keeps its id.
+   */
+  supersedesApprovalId?: string;
 }
 
 export function buildSkillLifecycleRequestSha256(input: {
@@ -137,6 +142,17 @@ export function buildSkillLifecycleApprovalBinding(input: {
   };
 }
 
+/**
+ * The binding for asking again after `declinedApprovalId` was rejected (by a person or by expiry) or edited: the same
+ * request against the same state, linked to the declined approval, so it derives a fresh approval id.
+ */
+export function supersedeSkillLifecycleApprovalBinding(
+  binding: SkillLifecycleApprovalBindingV1,
+  declinedApprovalId: string,
+): SkillLifecycleApprovalBindingV1 {
+  return { ...binding, supersedesApprovalId: requireCanonicalId(declinedApprovalId, "superseded approval ID") };
+}
+
 /** Fail-closed parse of the immutable `skillLifecycle` approval binding from an approval payload. */
 export function parseSkillLifecycleApprovalBinding(value: unknown): SkillLifecycleApprovalBindingV1 | undefined {
   if (!isRecord(value)) return undefined;
@@ -148,6 +164,7 @@ export function parseSkillLifecycleApprovalBinding(value: unknown): SkillLifecyc
     "action",
     "requestSha256",
     "expectedStateSha256",
+    "supersedesApprovalId",
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return undefined;
   if (
@@ -161,7 +178,8 @@ export function parseSkillLifecycleApprovalBinding(value: unknown): SkillLifecyc
       value.action !== "skill_state_bulk_set" &&
       value.action !== "activation_policy_updated") ||
     !isSha256(value.requestSha256) ||
-    !isSha256(value.expectedStateSha256)
+    !isSha256(value.expectedStateSha256) ||
+    (value.supersedesApprovalId !== undefined && !isCanonicalId(value.supersedesApprovalId))
   ) {
     return undefined;
   }
@@ -175,12 +193,14 @@ export function parseSkillLifecycleApprovalBinding(value: unknown): SkillLifecyc
  * `POST /api/v1/approvals/:approvalId/resolve` surface can resolve it. The
  * request hash AND the expected-state hash are both identity material, so the
  * same mutation over drifted state is a different approval, while byte-exact
- * replays converge on the original approval row.
+ * replays converge on the original approval row. The declined approval a
+ * request asks again after is identity material only when present, so every
+ * approval made before `supersedesApprovalId` existed keeps its id.
  */
 export function deriveSkillLifecycleApprovalId(
   binding: Pick<
     SkillLifecycleApprovalBindingV1,
-    "subjectKind" | "subjectId" | "action" | "requestSha256" | "expectedStateSha256"
+    "subjectKind" | "subjectId" | "action" | "requestSha256" | "expectedStateSha256" | "supersedesApprovalId"
   >,
 ): string {
   return uuidFromDigest(
@@ -192,6 +212,7 @@ export function deriveSkillLifecycleApprovalId(
         action: binding.action,
         requestSha256: binding.requestSha256,
         expectedStateSha256: binding.expectedStateSha256,
+        ...(binding.supersedesApprovalId === undefined ? {} : { supersedesApprovalId: binding.supersedesApprovalId }),
       }),
     ),
   );

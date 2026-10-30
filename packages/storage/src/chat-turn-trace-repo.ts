@@ -44,6 +44,7 @@ interface ChatTurnTraceRow {
   capability_upgrade_suggestions_json: string | null;
   specialist_candidate_suggestions_json: string | null;
   failure_json: string | null;
+  reasoning_text?: string | null;
   capability_snapshot_id: string | null;
   capability_profile_id: string | null;
   capability_profile_hash: string | null;
@@ -113,6 +114,8 @@ export interface ChatTurnTracePatchInput {
   capabilityUpgradeSuggestions?: ChatCapabilityUpgradeSuggestion[];
   specialistCandidateSuggestions?: ChatSpecialistCandidateSuggestionRecord[];
   failure?: ChatTurnTraceRecord["failure"];
+  /** Streamed model reasoning, already redacted and capped by the caller. Written only by patches, never on create. */
+  reasoning?: string;
   capabilitySnapshotId?: string;
   capabilityProfileId?: string;
   capabilityProfileHash?: string;
@@ -187,6 +190,7 @@ export class ChatTurnTraceRepository {
         capability_profile_hash = @capabilityProfileHash,
         capability_upgrade_suggestions_json = @capabilityUpgradeSuggestionsJson,
         specialist_candidate_suggestions_json = @specialistCandidateSuggestionsJson,
+        reasoning_text = COALESCE(@reasoningText, reasoning_text),
         finished_at = @finishedAt
       WHERE turn_id = @turnId
     `);
@@ -217,6 +221,7 @@ export class ChatTurnTraceRepository {
         capability_profile_hash = @capabilityProfileHash,
         capability_upgrade_suggestions_json = @capabilityUpgradeSuggestionsJson,
         specialist_candidate_suggestions_json = @specialistCandidateSuggestionsJson,
+        reasoning_text = COALESCE(@reasoningText, reasoning_text),
         finished_at = @finishedAt
       WHERE turn_id = @turnId AND status = @expectedStatus
     `);
@@ -391,6 +396,7 @@ export class ChatTurnTraceRepository {
       specialistCandidateSuggestionsJson: JSON.stringify(
         input.specialistCandidateSuggestions ?? current.specialistCandidateSuggestions ?? [],
       ),
+      reasoningText: input.reasoning ?? null,
       finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
     };
   }
@@ -690,6 +696,7 @@ function mapRow(row: ChatTurnTraceRow): ChatTurnTraceRecord {
     toolRuns: [],
     citations: parseArrayJson<ChatCitationRecord>(row.citations_json),
     failure: parseOptionalObjectJson<ChatTurnTraceRecord["failure"]>(row.failure_json),
+    ...(row.reasoning_text ? { reasoning: row.reasoning_text } : {}),
     routing,
     retrieval: parseOptionalObjectJson<ChatTurnTraceRecord["retrieval"]>(row.retrieval_json),
     reflection: parseOptionalObjectJson<ChatTurnTraceRecord["reflection"]>(row.reflection_json),
@@ -867,6 +874,8 @@ function isChatTurnTraceRow(value: unknown): value is ChatTurnTraceRow {
     (typeof value.specialist_candidate_suggestions_json === "string" ||
       value.specialist_candidate_suggestions_json === null) &&
     (typeof value.failure_json === "string" || value.failure_json === null) &&
+    // Rows read through fixtures that predate the column carry no reasoning_text key at all.
+    (value.reasoning_text === undefined || typeof value.reasoning_text === "string" || value.reasoning_text === null) &&
     (typeof value.capability_snapshot_id === "string" || value.capability_snapshot_id === null) &&
     (typeof value.capability_profile_id === "string" || value.capability_profile_id === null) &&
     (typeof value.capability_profile_hash === "string" || value.capability_profile_hash === null) &&

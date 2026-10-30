@@ -130,7 +130,7 @@ function RecordsAndCapabilitiesSection({ workspaceId }: { workspaceId: string })
           Mesh capabilities: published tools, activation requests and revocations.
           <br />
           <SystemOwnerLink href="/library" scope={[workspaceId, "mesh"]} className={LINK}>
-            Open Library › Skills and tools
+            Open Library › Candidates and mesh
           </SystemOwnerLink>
         </li>
       </ul>

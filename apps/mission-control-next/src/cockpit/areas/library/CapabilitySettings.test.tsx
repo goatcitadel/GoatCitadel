@@ -121,6 +121,32 @@ describe("Library skill state requests", () => {
     expect(updateSkillState).not.toHaveBeenCalled();
   });
 
+  it("opens a skill in its Capabilities panel, in the current document and with the scope", async () => {
+    renderSettings(vi.fn(), { ...item, skillId: undefined });
+    const link = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (anchor) => anchor.textContent === "Open this skill in Capabilities",
+    )!;
+    const target = new URL(link.href);
+    expect(target.pathname).toBe("/capabilities/skills");
+    expect(target.searchParams.get("item")).toBe("skill:review");
+    expect(target.searchParams.get("workspaceId")).toBe("workspace-a");
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+    expect(target.searchParams.has("type")).toBe(false);
+    const documentBefore = window.document;
+    await act(async () => link.click());
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/capabilities/skills"));
+    expect(window.document).toBe(documentBefore);
+    expect(switchShell).not.toHaveBeenCalled();
+  });
+
+  it("names the skill by its skill id when the record carries one", () => {
+    renderSettings(vi.fn(), { ...item, capabilityId: "skill:review-2", skillId: "review" }, null as never);
+    const link = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (anchor) => anchor.textContent === "Open this skill in Capabilities",
+    )!;
+    expect(new URL(link.href).searchParams.get("item")).toBe("skill:review");
+  });
+
   it("uses an exact native capability owner without erasing an uncertain skill attempt", async () => {
     vi.mocked(updateSkillState).mockRejectedValue(new Error("Connection lost"));
     renderSettings();

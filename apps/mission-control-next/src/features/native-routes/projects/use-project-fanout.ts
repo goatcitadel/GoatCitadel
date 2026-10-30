@@ -7,6 +7,7 @@ import {
   revokeAutonomousActivationGrant,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { useProjectAccess } from "./use-project-access";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function defaultExpiryValue(hours = 1): string {
   const future = new Date(Date.now() + hours * 60 * 60_000);
@@ -57,7 +58,7 @@ export function useProjectFanout(project: ChatProjectRecord, workspaceId: string
       }
     } catch (cause) {
       if (isCurrent() && read === reads.current)
-        setError(cause instanceof Error ? cause.message : "Unable to load automatic fan-out grants.");
+        setError(describeApiError(cause, "Unable to load automatic fan-out grants.").summary);
     } finally {
       if (isCurrent() && read === reads.current) setLoading(false);
     }
@@ -144,7 +145,7 @@ export function useProjectFanout(project: ChatProjectRecord, workspaceId: string
       setMessage("Automatic fan-out is now available only for this active project until the recorded expiry.");
       await load();
     } catch (cause) {
-      if (isCurrent()) setError(cause instanceof Error ? cause.message : "Unable to create the project grant.");
+      if (isCurrent()) setError(describeApiError(cause, "Unable to create the project grant.").summary);
     } finally {
       if (isCurrent()) {
         pending.current = false;
@@ -174,7 +175,7 @@ export function useProjectFanout(project: ChatProjectRecord, workspaceId: string
       setMessage("Grant revoked. Active fan-out aggregates were asked to stop durably.");
       await load();
     } catch (cause) {
-      if (isCurrent()) setError(cause instanceof Error ? cause.message : "Unable to revoke the project grant.");
+      if (isCurrent()) setError(describeApiError(cause, "Unable to revoke the project grant.").summary);
     } finally {
       if (isCurrent()) {
         pending.current = false;

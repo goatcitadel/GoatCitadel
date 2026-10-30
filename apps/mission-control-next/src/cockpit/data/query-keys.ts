@@ -23,6 +23,20 @@ export const queryKeys = {
    * query) and the Tools tab's own refresh do.
    */
   capabilityToolUsage: (): TopicKey => ["tools", "capability-tool-usage"],
+  /** The Capabilities installed skills for one workspace. Skill events and Settings change plans refresh it. */
+  capabilitySkills: (workspaceId: string): TopicKey => ["skills", "capability-skills", workspaceId],
+  /**
+   * A year of skill use counts. No event refreshes it; only a replay gap (which re-reads every `skills` query) and the
+   * Skills tab's own refresh do.
+   */
+  capabilitySkillUsage: (): TopicKey => ["skills", "capability-skill-usage"],
+  /** One skill's details for its panel. Every workspace's and skill's details share the prefix, so a skill event refreshes them. */
+  capabilitySkillDetail: (workspaceId: string, skillId: string): TopicKey => [
+    "skills",
+    "capability-skill-detail",
+    workspaceId,
+    skillId,
+  ],
   pendingApprovals: (): TopicKey => ["approvals", "pending"],
   inboxAll: (): TopicKey => ["approvals", "operator-inbox"],
   inbox: (workspaceId: string): TopicKey => [
@@ -104,4 +118,6 @@ export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["mcp", "capability-connectors"],
   // The Capabilities tool list shows which tool groups are switched off, and a group's switch saves through Settings.
   ["tools", "capability-tools"],
+  // The Capabilities skill list carries `operatorApprovalSkip`, which decides whether switching a skill on asks the operator.
+  ["skills", "capability-skills"],
 ];

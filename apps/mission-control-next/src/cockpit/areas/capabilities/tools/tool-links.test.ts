@@ -7,6 +7,8 @@ import {
   toolGroupIdFromSearch,
   toolGroupIdFromSource,
   toolGroupItemHref,
+  toolHref,
+  toolNameFromCapabilityId,
   toolPanelSource,
 } from "./tool-links";
 
@@ -37,6 +39,28 @@ describe("tool group addresses", () => {
     ["?item=group%3A__proto__"],
   ])("ignores %j", (search) => {
     expect(toolGroupIdFromSearch(search)).toBeUndefined();
+  });
+});
+
+describe("the address of one tool", () => {
+  it("opens the group the tool belongs to", () => {
+    expect(toolHref("fs.read")).toBe("/capabilities/tools?item=group%3Afiles");
+    expect(toolHref("shell.exec")).toBe("/capabilities/tools?item=group%3Ashell_and_code");
+    expect(toolHref("capabilities.search")).toBe("/capabilities/tools?item=group%3Acore");
+  });
+
+  it("opens the Tools tab for a tool that is in no group", () => {
+    expect(toolHref("linear.create_issue")).toBe("/capabilities/tools");
+    expect(toolHref("")).toBe("/capabilities/tools");
+    // An inherited property name is not a tool.
+    expect(toolHref("constructor")).toBe("/capabilities/tools");
+  });
+
+  it("reads the tool name out of a Library tool record id", () => {
+    expect(toolNameFromCapabilityId("tool:fs.read")).toBe("fs.read");
+    // An id without the prefix is already a name.
+    expect(toolNameFromCapabilityId("fs.write")).toBe("fs.write");
+    expect(toolNameFromCapabilityId("tool:")).toBe("");
   });
 });
 
