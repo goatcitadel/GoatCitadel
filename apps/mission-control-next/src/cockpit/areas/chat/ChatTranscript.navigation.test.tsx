@@ -8,6 +8,7 @@ import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/thre
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InspectorProvider } from "../../app/inspector";
 import { ChatTranscript } from "./ChatTranscript";
+import { ChatTurnRail, TURN_RAIL_WINDOW } from "./ChatTurnRail";
 
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/approvals")>()),
@@ -163,6 +164,29 @@ describe("turn rail", () => {
     scroller.scrollTop = 0;
     await act(async () => ticks[2]!.click());
     expect(scroller.scrollTop).toBe(800);
+  });
+
+  it("keeps a long conversation's rail bounded around the current message, with both ends reachable", async () => {
+    const entries = Array.from({ length: 300 }, (_, index) => ({
+      turnId: `t${index + 1}`,
+      promptStart: `Question ${index + 1}`,
+    }));
+    const labels = () =>
+      [...container.querySelectorAll("[data-chat-turn-rail] button")].map((tick) => tick.getAttribute("aria-label"));
+
+    await render(<ChatTurnRail entries={entries} currentTurnId="t150" onJump={vi.fn()} />);
+    expect(labels()).toHaveLength(TURN_RAIL_WINDOW + 2);
+    expect(labels()[0]).toBe("Message 1: Question 1");
+    expect(labels()).toContain("Message 150: Question 150");
+    expect(labels().at(-1)).toBe("Message 300: Question 300");
+    expect(container.querySelector('[aria-current="location"]')?.getAttribute("aria-label")).toBe(
+      "Message 150: Question 150",
+    );
+
+    // Near the end, the window stops at the last message instead of running past it.
+    await render(<ChatTurnRail entries={entries} currentTurnId="t299" onJump={vi.fn()} />);
+    expect(labels()).toHaveLength(TURN_RAIL_WINDOW + 2);
+    expect(labels().slice(-2)).toEqual(["Message 299: Question 299", "Message 300: Question 300"]);
   });
 });
 
